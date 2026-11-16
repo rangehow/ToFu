@@ -884,7 +884,8 @@ def _boot_projection() -> dict:
     runner = current_app.extensions.get("tofu_boot_runner")
     if runner is None:
         return {"status": "ready"}
-    snapshot = runner.snapshot()
+    from lib.server.server_boot_readiness import application_boot_snapshot
+    snapshot = application_boot_snapshot(current_app)
     return {
         "status": snapshot["status"],
         "currentPhase": snapshot["currentPhase"],

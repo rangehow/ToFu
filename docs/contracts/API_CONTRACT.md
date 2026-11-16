@@ -1664,3 +1664,16 @@ Unknown capacity stays null; missing pending is not zero. Missing ownership retu
 Authenticated ownership is rechecked after external reads. No endpoint submits,
 reserves, cancels or reallocates compute. Existing Turn commands remain the sole
 form-answer write path; read-only resource data grants no write authority.
+
+### Execution dependency and boot availability
+
+`GET /api/v4/boot` and `/api/health`'s `boot` projection share the
+application's boot verdict, including the verified resident execution dependency.
+When the API boot is ready but its executor is unavailable, the existing boot
+snapshot reports `status=failed` with `failedPhase.key=execution_service`.
+Mutating API requests receive the existing `503 server_boot_failed` envelope
+before handler admission; read-only APIs, probes and lifecycle recovery remain
+available. The message directs the operator to `serverctl status`; boot retry
+does not authorize a lifecycle restart. A recovered execution incarnation
+automatically restores readiness. Existing accepted Turns retain their durable
+identity and are not replayed by this availability gate.

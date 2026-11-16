@@ -212,3 +212,24 @@ signal.pause()
         if service.host_matches(remaining):
             os.kill(remaining['pid'], signal.SIGUSR1)
             service.stop(30)
+
+
+def test_resident_launch_uses_prepared_interpreter_after_marker_changes(tmp_path):
+    import shlex
+    service = ProbeService(str(tmp_path), '/unusable-manager/python')
+    target = tmp_path / 'prepared-python'
+    target.write_text('#!/bin/sh\n'
+                      + 'touch ' + shlex.quote(str(tmp_path / 'prepared-interpreter-used')) + '\n'
+                      + 'exec ' + shlex.quote(sys.executable) + ' "$@"\n')
+    target.chmod(0o755)
+    plan = {'python': str(target)}
+    (tmp_path / '.tofu_env.json').write_text('{"python": "/later-install/python"}')
+    try:
+        service.ensure(plan, environment(tmp_path))
+        record = wait_for(lambda: (value if (value := service.record()).get('state') == 'ready' else None))
+        assert (tmp_path / 'prepared-interpreter-used').exists()
+        assert record['plan'] == plan
+    finally:
+        record = service.record()
+        if service.host_matches(record):
+            _stop_releasing_drain(service, record)

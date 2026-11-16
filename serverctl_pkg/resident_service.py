@@ -154,6 +154,10 @@ class ResidentService:
     def process_environment(self, environment: dict[str, str]) -> dict[str, str]:
         return dict(environment)
 
+    def launch_python(self, plan: dict) -> str:
+        """Interpreter admitted by the resource policy for this prepared launch."""
+        return self.python
+
     def working_directory(self, plan: dict) -> Path:
         return self.project
 
@@ -236,7 +240,7 @@ class ResidentService:
             log.parent.mkdir(parents=True, exist_ok=True)
             with log.open('ab') as output:
                 process = subprocess.Popen([
-                    self.python, '-m', self.host_module, '--service-id', service_id,
+                    self.launch_python(plan), '-m', self.host_module, '--service-id', service_id,
                     '--manager-pid', str(os.getpid()), '--manager-start', str(manager_ticks),
                     '--manager-fd', str(manager_read),
                     '--lease-fd', str(descriptor), '--state-file', str(self.state_path),

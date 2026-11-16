@@ -308,3 +308,72 @@ def test_boot_endpoints_project_runner_state():
     assert stub.retried == 1
     # A running boot fences storage routes but never the probes above.
     assert fenced_status == 503
+
+
+class _ExecutorAvailability:
+    error = 'Execution service unavailable; inspect serverctl status'
+
+    def readiness_error(self):
+        return self.error
+
+
+def test_executor_outage_blocks_new_writes_but_preserves_reads_and_recovery():
+    app = _gated_app(_StubRunner('ready'))
+    availability = _ExecutorAvailability()
+    app.extensions['tofu_command_controls'] = availability
+    calls = []
+
+    @app.post('/api/some-command')
+    async def command():
+        calls.append('accepted')
+        return {'ok': True}
+
+    @app.post('/api/v4/update/restart')
+    @app.post('/api/v4/update/lifecycle-approvals/example/decide')
+    @app.post('/api/v4/update/shutdown')
+    async def restart():
+        return {'ok': True}
+
+    async def call():
+        async with app.test_app():
+            async with app.test_client() as client:
+                blocked = await client.post('/api/some-command')
+                assert blocked.status_code == 503
+                body = await blocked.get_json()
+                assert body['boot']['failedPhase']['key'] == 'execution_service'
+                assert 'serverctl status' in body['boot']['error']
+                assert calls == []
+                assert (await client.get('/api/some-resource')).status_code == 200
+                assert (await client.post('/api/v4/update/restart')).status_code == 200
+                assert (await client.post('/api/v4/update/lifecycle-approvals/example/decide')).status_code == 200
+                assert (await client.post('/api/v4/update/shutdown')).status_code == 200
+                availability.error = ''
+                assert (await client.post('/api/some-command')).status_code == 200
+                assert calls == ['accepted']
+
+    asyncio.run(call())
+
+
+def test_boot_and_health_never_report_ready_with_a_departed_executor():
+    from routes.api_v4.bootstrap import api_v4_bp
+    app = _gated_app(_StubRunner('ready'))
+    availability = _ExecutorAvailability()
+    app.extensions['tofu_command_controls'] = availability
+    app.register_blueprint(api_v4_bp)
+    # The compact health projection shares the full boot endpoint's verdict.
+    from routes.common import _boot_projection
+
+    async def call():
+        async with app.test_app():
+            async with app.test_client() as client:
+                response = await client.get('/api/v4/boot')
+                body = await response.get_json()
+                assert body['status'] == 'failed'
+                assert body['failedPhase']['key'] == 'execution_service'
+                async with app.app_context():
+                    assert _boot_projection()['status'] == 'failed'
+                availability.error = ''
+                recovered = await client.get('/api/v4/boot')
+                assert (await recovered.get_json())['status'] == 'ready'
+
+    asyncio.run(call())

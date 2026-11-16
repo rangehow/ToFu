@@ -224,12 +224,48 @@ with this identity definition replaces storage once.
 Verify `tests/server/test_execution_plan.py` and
 `tests/server/test_native_storage_host_plan.py`.
 
+Problem: a manager started in an older environment prepared and launched the
+executor with its own interpreter, while importing the application activated
+`.tofu_env.json` later. This changed executable identity inside an already
+published resident process; the former file-style re-exec also lost the module
+import root. Decision: execution preparation resolves the installer's executable
+marker first (an absent or unusable optional marker retains the supplied
+interpreter), and the resident launch uses the interpreter recorded in that
+prepared plan. The module invocation and inherited manager/lease descriptors
+remain unchanged. A marker edit after preparation cannot silently select another
+launch interpreter. Recovery re-prepares against the current marker and retains
+the existing generation fence. Refusals identify changed plan fields without
+printing their values. Alternatives rejected: disabling environment activation
+runs with stale dependencies; ignoring interpreter mismatches admits another
+executable policy; removing the recovery fence can replay tasks under new code.
+Verify `tests/server/test_execution_preparation.py`,
+`tests/server/test_execution_service.py`, and
+`tests/bootstrap/test_module_env_reexec.py`.
+
 The personal Linux manager now composes the selected storage, a headless execution
 host and an API host. An automatic native transport resolves to the shared daemon;
 an explicitly embedded transport or separately assigned role retains its declared
 topology. Both generations prepare before any old process drains. An unchanged
 execution host survives API restart; storage replacement joins execution first,
 and full stop joins execution before storage. No configured backend is substituted.
+
+Browser and admission truth: the shared application boot projection also
+consults the existing command-control owner's verified resident incarnation.
+A ready API boot cannot report the whole application ready while that executor
+is absent, departed, still starting, or has a mismatched control endpoint.
+The full boot endpoint and health's compact boot block share this projection;
+its existing failed phase identifies `execution_service` and points to
+`serverctl status`, preserving the manager's recovery/restart authority. The
+existing boot gate refuses new mutating API requests before their handlers
+while this dependency is unavailable. Read-only APIs, probes, lifecycle approval,
+restart and shutdown remain available, and no accepted Turn is rewritten or
+replayed by this gate. Readiness returns automatically when verified execution
+returns. No second poller, recovery budget or persistent task state is added.
+Alternatives rejected: storage readiness alone let every conversation wait
+forever; blocking reads hides saved conversations during recovery; restarting
+inside the request gate bypasses the lifecycle owner. Specifications:
+`tests/app_factory/test_boot_gate.py` and
+`tests/tasks_pkg/test_command_control_runtime.py`.
 
 Problem: a healthy API can hide a dead executor. Decision: execution host exits
 consume the manager's existing windowed failure budget once per service identity.

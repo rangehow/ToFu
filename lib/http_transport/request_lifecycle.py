@@ -198,19 +198,30 @@ async def enforce_boot_gate():
     runner = current_app.extensions.get('tofu_boot_runner')
     if runner is None:
         return None
-    status = runner.status
+    from lib.server.server_boot_readiness import application_boot_snapshot
+    snapshot = application_boot_snapshot(current_app)
+    status = snapshot['status']
     if status == 'ready':
+        return None
+    # After API startup, saved state stays readable through an executor outage.
+    if runner.status == 'ready' and request.method in {'GET', 'HEAD', 'OPTIONS'}:
         return None
     path = request.path
     if not path.startswith('/api/') or path in _BOOT_GATE_OPEN_PATHS:
         return None
+    if runner.status == 'ready' and (
+            path in _STORAGE_WRITE_FENCE_EXEMPT_PATHS
+            or (path.endswith('/decide') and path.startswith(
+                _STORAGE_WRITE_FENCE_EXEMPT_DECIDE_PREFIXES))):
+        return None
     from lib.api_response import api_error
     if status == 'failed':
-        snapshot = runner.snapshot()
+        execution_unavailable = (snapshot.get('failedPhase') or {}).get('key') == 'execution_service'
         return api_error(
             'server_boot_failed',
             status=503,
             message=(
+                snapshot['error'] if execution_unavailable else
                 'Server boot failed; POST /api/v4/boot/retry re-runs from the '
                 'failed phase'),
             retryAfter=5,
@@ -221,7 +232,6 @@ async def enforce_boot_gate():
                 'retryCount': snapshot['retryCount'],
             },
         )
-    snapshot = runner.snapshot()
     return api_error(
         'server_booting',
         status=503,

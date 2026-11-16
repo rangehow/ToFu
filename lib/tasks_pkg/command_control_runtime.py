@@ -27,6 +27,16 @@ class CommandControls:
             raise CommandControlUnavailable('The execution control incarnation differs')
         return endpoint
 
+    def readiness_error(self):
+        """Read verified process evidence; never send work or trigger recovery."""
+        if self._service is None:
+            return ''
+        try:
+            self._endpoint()
+        except CommandControlUnavailable as error:
+            return f'{error}; inspect serverctl status for recovery or restart instructions'
+        return ''
+
     def execute(self, method, task_id, *, user_id, **params):
         result = apply_command_control(method, task_id, user_id=user_id, **params)
         if result is not None or self._service is None:

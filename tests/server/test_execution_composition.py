@@ -233,6 +233,9 @@ def test_only_source_drift_before_boot_can_reprepare_automatically(
     assert manager._state['worker'] == before
     assert manager._state['failureHistory'] == [1000.0]
     assert bool(manager._state['executionRecovery'].get('requiresRestart')) is not permitted
+    if not permitted:
+        assert changed_field in manager._state['lastError']
+        assert 'installed' not in manager._state['lastError']
     assert [name for name, _ in calls] == (
         ['prepare-storage', 'stop-execution', 'ensure-execution'] if permitted else [])
 

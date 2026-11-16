@@ -108,3 +108,43 @@ test('the accessible target layer follows the world while HUD insets ease, not o
  assert.ok(Math.abs(parseFloat(button().style.left)-400)>100,'the docked window moved the world');
  stage.dispose();d.window.close();
 });
+
+test('spatial navigation picks the nearest target inside the pressed direction, else the nearest on that side',()=>{
+ const {nearestInDirection}=load('engine/targets.ts');
+ const targets=[{x:0,y:0,id:'a'},{x:100,y:4,id:'b'},{x:60,y:200,id:'c'},{x:-90,y:0,id:'d'}];
+ assert.equal(nearestInDirection(targets[0],targets.slice(1),'right')?.id,'b');
+ assert.equal(nearestInDirection(targets[0],targets.slice(1),'down')?.id,'c');
+ assert.equal(nearestInDirection(targets[0],targets.slice(1),'left')?.id,'d');
+ assert.equal(nearestInDirection(targets[0],targets.slice(1),'up'),null);
+});
+
+test('a camera that fits the view keeps its scale under a docked panel and pans within what stays visible',()=>{
+ const c=camera.createCamera(1600,900);c.fit='contain';c.fitTo='view';camera.resizeCamera(c,1600,900);
+ near(camera.cameraScale(c),1);assert.equal(camera.overflows(c),false);
+ camera.setInsets(c,{top:0,right:600,bottom:0,left:0});
+ near(camera.cameraScale(c),1);assert.equal(camera.overflows(c),true,'the panel crops the floor');
+ camera.panBy(c,-10_000,0);near(c.x,1600-500);
+ const framed=camera.createCamera(1600,900);framed.fit='contain';camera.resizeCamera(framed,1600,900);
+ camera.setInsets(framed,{top:0,right:600,bottom:0,left:0});near(camera.cameraScale(framed),1000/1600);
+});
+
+test('arrow keys move focus between targets on a targets stage and the camera follows it again',async()=>{
+ const d=new JSDOM('<div id="host"></div>',{pretendToBeVisual:true});
+ Object.assign(global,{window:d.window,document:d.window.document});
+ d.window.HTMLCanvasElement.prototype.getContext=()=>null;
+ const stage=loadTree('engine/stage').mountStage(document.getElementById('host'),{label:'Stage',fontFamily:'sans-serif',gestures:'camera',navigation:'targets'});
+ const targets=[{id:'left',label:'Left',x:100,y:300,width:40,height:20},{id:'right',label:'Right',x:700,y:310,width:40,height:20},
+  {id:'below',label:'Below',x:120,y:600,width:40,height:20}];
+ let steps=0;
+ stage.setScene({width:960,height:720,backdrop:()=>undefined,step(_dt,input){if(input.axis.x||input.axis.y)steps++;},draw(){},nextWake:()=>Infinity,
+  hit:()=>'',activate(){},targets:()=>targets});
+ const deadline=Date.now()+20000;
+ while(Date.now()<deadline&&!document.querySelector('.evo-target[data-target=below]'))await new Promise(resolve=>setTimeout(resolve,16));
+ const press=key=>document.activeElement.dispatchEvent(new d.window.KeyboardEvent('keydown',{key,code:key,bubbles:true}));
+ document.querySelector('.evo-target[data-target=left]').focus();
+ press('ArrowRight');assert.equal(document.activeElement.dataset.target,'right');
+ press('ArrowLeft');assert.equal(document.activeElement.dataset.target,'left');
+ press('ArrowDown');assert.equal(document.activeElement.dataset.target,'below');
+ press('KeyD');assert.equal(steps,0,'a targets stage has no held movement');
+ stage.dispose();d.window.close();
+});

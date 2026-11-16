@@ -14,8 +14,9 @@ import {
   busyOf, memberPerson, newestAssignments, projectOffice, type DeskDocument, type Office, type Person, type PersonLabels, type TeamInput,
 } from './model';
 import { assignmentStatus } from '../project-coordination-graph';
-import { createOffice, type OpenTarget } from './office';
+import { createOffice } from './office';
 import { createPanel } from './panel';
+import type { OpenTarget } from './scene';
 
 export type ConversationDock = 'closed' | 'brief' | 'chat';
 /** What the world asks of the application shell; it never reaches into chat chrome itself. */
@@ -65,10 +66,10 @@ export function mountWorld(root: HTMLElement, shell: WorldShell, options: WorldO
       const id = panel.person();
       if (!id) return;
       panel.setTab('chat');
-      shell.dock('chat');
+      dock('chat');
       shell.openChat(id, turn);
     },
-    brief: () => shell.dock('brief'),
+    brief: () => dock('brief'),
   });
   const empty = document.createElement('p');
   empty.className = 'w-empty';
@@ -87,6 +88,18 @@ export function mountWorld(root: HTMLElement, shell: WorldShell, options: WorldO
   root.append(hud.element, stage, panel.head, panel.body);
 
   function schedule() { if (!frame) frame = requestAnimationFrame(render); }
+
+  /** The docked column lies over the right of the floor: the camera keeps its scale and frames what stays
+   * visible. A column that covers the whole floor (narrow windows) hides it, so the view is left as it was. */
+  function syncInsets() {
+    const box = stage.getBoundingClientRect();
+    const edge = panel.head.hidden ? box.right : panel.head.getBoundingClientRect().left;
+    scene.setInsets({ top: 0, right: edge > box.left ? Math.max(0, box.right - edge) : 0, bottom: 0, left: 0 });
+  }
+  function dock(mode: ConversationDock) {
+    shell.dock(mode);
+    syncInsets();
+  }
 
   /** The panel's person: seated in the office, or any member of the team that owns the opened document. */
   let panelTeam = '';
@@ -138,7 +151,7 @@ export function mountWorld(root: HTMLElement, shell: WorldShell, options: WorldO
     if (!showBrief(personId, true)) return;
     if (target.kind === 'document') panel.body.dataset.document = target.id;
     else delete panel.body.dataset.document;
-    shell.dock('brief');
+    dock('brief');
     scene.select(personId);
     panel.focus();
     schedule();
@@ -146,7 +159,7 @@ export function mountWorld(root: HTMLElement, shell: WorldShell, options: WorldO
 
   function closePanel() {
     panel.hide();
-    shell.dock('closed');
+    dock('closed');
     scene.select(null);
     scene.restoreFocus();
   }
@@ -213,14 +226,14 @@ export function mountWorld(root: HTMLElement, shell: WorldShell, options: WorldO
     const leadDocuments = new Set(office.documents.map(document => document.id));
     office.documents = [...office.documents, ...arrived.filter(document => !leadDocuments.has(document.id))]
       .filter(document => !opened.has(document.id));
-    for (const plan of plans) scene.walk(plan, schedule, schedule);
-    scene.update(office);
-    const onDesk = scene.documentCounts();
-    const push: PushState = !shell.push ? 'offline' : shell.push.connected() ? 'live' : 'connecting';
     // Until every first read answers (a cold office facts baseline takes seconds), the office says so
-    // rather than passing an empty or provisional floor off as the truth.
+    // rather than passing an empty or provisional floor off as the truth, and people fade in where they sit.
     const loading = !live.state.error && (live.state.loading
       || live.state.teams.some(team => sourcesOf(team).some(source => source.status === 'loading')));
+    for (const plan of plans) scene.walk(plan, schedule, schedule);
+    scene.update(office, loading);
+    const onDesk = scene.documentCounts();
+    const push: PushState = !shell.push ? 'offline' : shell.push.connected() ? 'live' : 'connecting';
     let working = 0, exceptions = 0;
     for (const person of office.people.values()) {
       if (person.state === 'working') working += 1;
@@ -254,10 +267,16 @@ export function mountWorld(root: HTMLElement, shell: WorldShell, options: WorldO
     empty.hidden = !live.state.error;
   }
 
-  // The floor plan follows the window, not the scene column: opening a panel narrows the view (the camera
-  // pans to the chosen person) without rearranging the office.
-  const onResize = () => { scene.resize(window.innerWidth, scene.element.clientHeight || window.innerHeight); schedule(); };
+  // The floor plan follows the stage, which spans the workspace under the HUD: a docked panel is an inset over
+  // the floor (the camera pans to the chosen person) and never rearranges the office.
+  const onResize = () => {
+    scene.resize(scene.element.clientWidth || window.innerWidth, scene.element.clientHeight || window.innerHeight);
+    syncInsets();
+    schedule();
+  };
   window.addEventListener('resize', onResize);
+  const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(onResize) : undefined;
+  resizeObserver?.observe(stage);
   onResize();
 
   function onKey(event: KeyboardEvent) {
@@ -274,6 +293,7 @@ export function mountWorld(root: HTMLElement, shell: WorldShell, options: WorldO
   return {
     dispose() {
       live.stop();
+      resizeObserver?.disconnect();
       scene.destroy();
       window.removeEventListener('resize', onResize);
       document.removeEventListener('keydown', onKey);
@@ -284,5 +304,7 @@ export function mountWorld(root: HTMLElement, shell: WorldShell, options: WorldO
     },
     route(_path: string) { schedule(); },
     office: () => office,
+    /** The scene's read-only state (who rests where, who walks, the floor plan) for specifications and audits. */
+    inspect: () => scene.inspect(),
   };
 }

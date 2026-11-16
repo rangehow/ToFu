@@ -66,8 +66,8 @@ def office_page(browser, live_server):
 
 def test_office_is_the_landing_and_the_classic_choice_persists(office_page, live_server):
     page = office_page
-    # Painted, not merely mounted: the floor art comes from the published graph (its worker included).
-    page.wait_for_selector('.w-world[data-art="ready"][data-sprites="ready"]', state='attached', timeout=30000)
+    # Painted, not merely mounted: the office art (atlas, sprites) decodes from the published graph.
+    page.wait_for_selector('.w-office[data-art="ready"]', state='attached', timeout=30000)
     landed = page.evaluate(SHELL)
     assert landed['workspace'] == 'world' and landed['hash'] == '#/world' and landed['office'], landed
     assert landed['classicSwitch'] and not landed['sidebar'] and not landed['topbar'] and not landed['chat'], landed
@@ -106,7 +106,8 @@ def test_a_person_opens_their_real_conversation_and_the_classic_composer_sends(o
     page.on('request', lambda request: writes.append(f'{request.method} {request.url}') if request.method not in ('GET', 'HEAD') else None)
     try:
         _boot(page, live_server)
-        person = page.locator(f'.w-person[data-person="{router_id}"]')
+        # People are drawn on the canvas; each has an accessible button over them for the keyboard.
+        person = page.locator(f'.evo-target[data-person="{router_id}"]')
         person.wait_for(timeout=30000)
 
         person.focus()
@@ -117,7 +118,9 @@ def test_a_person_opens_their_real_conversation_and_the_classic_composer_sends(o
         page.wait_for_function("document.body.dataset.conversationDock === 'closed'")
         assert page.evaluate("document.activeElement?.dataset.person") == router_id
 
-        person.click()
+        # A pointer clicks the canvas where the person is drawn; the scene hit-tests it.
+        box = person.bounding_box()
+        page.mouse.click(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
         page.wait_for_selector('.w-panel-head:not([hidden])')
         page.wait_for_timeout(500)
         assert writes == [], 'the office itself reads only'
@@ -157,7 +160,7 @@ def test_a_cold_office_read_is_awaited_while_the_office_shows_it_is_loading(offi
         _boot(page, live_server)
         failed = []
         page.on('requestfailed', lambda request: failed.append(request.failure) if '/api/v4/router/office' in request.url else None)
-        page.locator(f'.w-person[data-person="{router_id}"]').wait_for(timeout=30000)
+        page.locator(f'.evo-target[data-person="{router_id}"]').wait_for(timeout=30000)
         assert page.evaluate(LOADING) == {'busy': 'true', 'loading': True, 'empty': False}
 
         page.wait_for_timeout(13_000)
@@ -167,7 +170,7 @@ def test_a_cold_office_read_is_awaited_while_the_office_shows_it_is_loading(offi
         held[0].fulfill(response=held[0].fetch())
         page.wait_for_selector('.w-stage[aria-busy="false"]', timeout=15000)
         assert page.evaluate(LOADING) == {'busy': 'false', 'loading': False, 'empty': False}
-        assert failed == [] and page.locator(f'.w-person[data-person="{router_id}"]').is_visible()
+        assert failed == [] and page.locator(f'.evo-target[data-person="{router_id}"]').is_visible()
     finally:
         page.unroute('**/api/v4/router/office')
         page.request.delete(f'{live_server}/api/v4/conversations/{router_id}')

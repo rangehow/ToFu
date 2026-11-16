@@ -18,6 +18,9 @@ export interface Camera {
   /** Zoom 1: 'height' fits the world's height (a room game; the default);
    * 'contain' fits the whole world inside the frame (a floor plan shown whole). */
   fit?:'height'|'contain';
+  /** What zoom 1 fits: the 'frame' (the default: insets shrink the world) or the whole
+   * 'view' (insets are covered space: a docked panel crops the world and the camera pans). */
+  fitTo?:'frame'|'view';
 }
 /** Interaction bound for illustrated art: beyond this one art pixel blurs
  * across several screen pixels without revealing detail. */
@@ -34,7 +37,7 @@ function frame(camera:Camera){
   return {width,height,cx:insets.left+width/2,cy:insets.top+height/2};
 }
 export function fitScale(camera:Camera):number {
-  const {width,height}=frame(camera);
+  const {width,height}=camera.fitTo==='view'?{width:camera.viewWidth,height:camera.viewHeight}:frame(camera);
   return camera.fit==='contain'?Math.min(height/camera.worldHeight,width/camera.worldWidth):height/camera.worldHeight;
 }
 /** True when the scaled world is larger than the frame on some axis. */

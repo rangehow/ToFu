@@ -1964,6 +1964,24 @@ can do itself). Specification: the on-demand install tests in
 `tests/browser/test_chromium_env.py`, `tests/frontend/test_frontend_bundle_canary.py`,
 `tests/server/test_frontend_preparation_lock.py` and `tests/deploy/test_migrate_host.py`.
 
+**A lifecycle rebuild follows sources that change under it (2026-11-16).**
+Problem: an in-app restart found the graph stale and rebuilt it; a landing
+merged `frontend/src` changes while Vite ran, so the freshly published graph
+was stale again when validated and the restart refused with "remained invalid
+after rebuild" until someone rebuilt by hand. Decision:
+`serverctl._rebuild_frontend_until_sources_settle` fingerprints the build
+inputs (`vite_assets.source_authoring_fingerprint`, read in a fresh interpreter
+through `verify_frontend_dist.py --source-fingerprint`) before each attempt.
+When the build or the post-build validation fails, a changed fingerprint means
+the failure belongs to sources that moved under the attempt, so the new
+sources are built; an unchanged fingerprint returns the failure. Cancellation
+and a builder that cannot start never retry. Alternatives rejected: a retry
+count (a tuning knob; a fixed count still refuses a busy landing sequence and
+retries a genuinely broken build); taking the landing lock during builds
+(couples lifecycle to `git_land.py` and misses uncommitted edits by other
+writers). Specification: the rebuild cases in
+`tests/server/test_frontend_preparation_lock.py`.
+
 ## Extension checklist
 
 Locate the owner, change wire contracts first, implement typed behavior with

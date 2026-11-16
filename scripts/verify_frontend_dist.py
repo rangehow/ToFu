@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Fail packaging early unless every Vite entry and referenced file exists."""
+"""Fail packaging early unless every Vite entry and referenced file exists.
+
+``--source-fingerprint`` instead prints the current build-input fingerprint
+(``lib.vite_assets.source_authoring_fingerprint``) for lifecycle preparation.
+"""
 
 from __future__ import annotations
 
@@ -14,21 +18,26 @@ if ROOT not in sys.path:
 from lib.vite_assets import (  # noqa: E402
     VITE_MANIFEST,
     ViteAssetError,
+    source_authoring_fingerprint,
     validate_source_vite_artifact,
     validate_vite_artifact,
 )
 
+_OPTIONS = ('--authoring-freshness', '--source-fingerprint')
+
 
 def main() -> int:
     arguments = sys.argv[1:]
-    unknown = [argument for argument in arguments
-               if argument != '--authoring-freshness']
+    unknown = [argument for argument in arguments if argument not in _OPTIONS]
     if unknown:
         print(
             f'unknown frontend validation option(s): {", ".join(unknown)}',
             file=sys.stderr,
         )
         return 2
+    if '--source-fingerprint' in arguments:
+        print(source_authoring_fingerprint())
+        return 0
     validator = (
         validate_source_vite_artifact
         if '--authoring-freshness' in arguments else

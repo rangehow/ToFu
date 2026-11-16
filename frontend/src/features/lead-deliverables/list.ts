@@ -13,7 +13,7 @@ import { createButton } from '../../ui';
 import { apiFailure } from '../../api/errors';
 import { appendDeliverables, deliverableAge, deliverableProject, type LeadDeliverable, type LeadDeliverablePage } from './model';
 import { sourceButton, type DeliverableOpener } from './open';
-import './lead-deliverables.css';
+import '../../styles/application/36-lead-deliverables.css';
 
 export interface LeadDeliverablesTarget { leadId: string; path: string }
 export interface LeadDeliverablesPushFrame { kind?: unknown; conversationId?: unknown }

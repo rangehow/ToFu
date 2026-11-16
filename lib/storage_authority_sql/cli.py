@@ -403,6 +403,11 @@ def _validated_backup(config: SidecarConfig, requested: Path) -> Path:
     return path
 
 
+def _fsync_file(path: Path) -> None:
+    with path.open('rb') as stream:
+        os.fsync(stream.fileno())
+
+
 def _restore_sqlite(config: SidecarConfig, backup: Path) -> dict:
     manifest = load_manifest(backup)
     if manifest is not None:
@@ -426,7 +431,7 @@ def _restore_sqlite(config: SidecarConfig, backup: Path) -> dict:
     candidate = config.data_dir / f'.tofu-restore-{stamp}.new'
     previous = config.data_dir / 'backups' / f'pre-restore-{stamp}.sqlite3'
     shutil.copy2(backup, candidate)
-    fsync_file(candidate)
+    _fsync_file(candidate)
     moved_current = False
     moved_sidecars: list[tuple[Path, Path]] = []
     try:
@@ -441,7 +446,7 @@ def _restore_sqlite(config: SidecarConfig, backup: Path) -> dict:
                 os.replace(active_sidecar, archived_sidecar)
                 moved_sidecars.append((active_sidecar, archived_sidecar))
         os.replace(candidate, config.sqlite_path)
-        fsync_file(config.sqlite_path)
+        _fsync_file(config.sqlite_path)
         fsync_directory(config.data_dir)
         fsync_directory(previous.parent)
     except BaseException:

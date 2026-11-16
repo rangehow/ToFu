@@ -1,4 +1,4 @@
-import './panel.css';
+import '../../styles/application/14-memory-panel.css';
 import { featureRegistry } from '../../feature-registry';
 import { escapeHtmlText as escape } from '../../html-safety';
 import type { I18nKey } from '../../i18n';

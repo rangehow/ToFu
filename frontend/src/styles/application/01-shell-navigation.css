@@ -65,23 +65,44 @@ html[data-rail] .folder-quickadd{display:none}
 .new-chat-btn:active{background:var(--bg-active)}
 /* new-folder-btn removed — folders use tab bar with "+" button */
 /* ── Folder create/rename dialog ── */
+.folder-dialog-overlay{position:fixed;inset:0;height:var(--vh100,100vh);background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;animation:fadeIn 0.15s ease}
 .folder-dialog{background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:var(--radius);padding:var(--space-5) var(--space-6);width:340px;max-width:90vw;box-shadow:0 8px 32px rgba(0,0,0,0.5)}
 .folder-dialog-title{font-size:15px;font-weight:600;color:var(--text-primary);margin-bottom:14px}
+.folder-dialog-input{width:100%;padding:9px var(--space-3);background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius-xs);color:var(--text-primary);font-size:var(--font-size-lg);font-family:inherit;outline:none;transition:border-color var(--transition)}
+.folder-dialog-input:focus{border-color:var(--accent)}
 .folder-dialog-path{margin-top:var(--space-2)}
 .folder-dialog-label{font-size:var(--font-size-md);font-weight:600;color:var(--text-secondary);margin:12px 1px 6px}
 .folder-dialog-hint{font-size:var(--font-size-sm);color:var(--text-tertiary);margin:6px 1px 0}
 /* ── Multi-path default-root picker ── */
 .fpp{margin-top:2px}
+.fpp-chips{display:flex;flex-wrap:wrap;gap:var(--space-1);min-height:26px;padding:var(--space-1);background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius-xs)}
+.fpp-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 6px 3px 9px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:999px;font-size:var(--font-size-sm);color:var(--text-primary);max-width:100%}
+.fpp-chip-primary{border-color:var(--accent)}
 .fpp-chip-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px}
+.fpp-chip-badge{font-size:10px;line-height:14px;padding:0 5px;border-radius:6px;background:var(--accent-subtle);color:var(--accent);font-weight:600}
 .fpp-chip-x{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;padding:0;border:none;background:transparent;color:var(--text-tertiary);cursor:pointer;border-radius:50%;font-size:14px;line-height:1}
 .fpp-chip-x:hover{color:var(--text-primary);background:var(--bg-hover)}
+.fpp-empty{font-size:var(--font-size-sm);color:var(--text-tertiary);padding:2px 4px}
+.fpp-toolbar{display:flex;gap:var(--space-2);margin-top:var(--space-2)}
+.fpp-path-input{flex:1;min-width:0;padding:6px var(--space-2);background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius-xs);color:var(--text-primary);font-size:var(--font-size-md);font-family:inherit;outline:none}
+.fpp-path-input:focus{border-color:var(--accent)}
+.fpp-add-btn{flex:none;padding:6px var(--space-3);background:var(--bg-tertiary);border:1px solid var(--border);border-radius:var(--radius-xs);color:var(--text-primary);font-size:var(--font-size-md);cursor:pointer}
+.fpp-add-btn:hover{background:var(--bg-hover)}
+.fpp-browse-btn{flex:none;padding:6px var(--space-3);background:var(--bg-tertiary);border:1px solid var(--border);border-radius:var(--radius-xs);color:var(--text-primary);font-size:var(--font-size-md);cursor:pointer}
 .fpp-recent-label{font-size:var(--font-size-sm);font-weight:600;color:var(--text-tertiary);margin:10px 1px 4px}
+.fpp-recent{display:flex;flex-direction:column;gap:var(--space-1);max-height:150px;overflow-y:auto;scrollbar-width:thin}
 .fpp-recent-item{display:flex;align-items:center;gap:var(--space-2);padding:6px 8px;background:transparent;border:1px solid transparent;border-radius:var(--radius-xs);cursor:pointer;text-align:left;font-family:inherit;min-width:0}
 .fpp-recent-item:hover{background:var(--bg-hover);border-color:var(--border)}
+.fpp-recent-plus{flex:none;width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;background:var(--accent-subtle);color:var(--accent);font-size:14px;font-weight:600}
+.fpp-recent-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
 .fpp-recent-name{font-size:var(--font-size-md);font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fpp-recent-full{font-size:10.5px;color:var(--text-tertiary);font-family:'JetBrains Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:rtl;text-align:left}
+.folder-dialog-colors{display:flex;gap:var(--space-2);margin:14px 0 18px;flex-wrap:wrap}
 .folder-color-dot{width:22px;height:22px;border-radius:50%;cursor:pointer;border:2px solid transparent;transition:border-color 0.15s,transform 0.15s;flex-shrink:0}
 .folder-color-dot:hover{transform:scale(1.15)}
 .folder-color-dot.selected{border-color:var(--text-primary);transform:scale(1.15)}
+.folder-dialog-actions{display:flex;gap:var(--space-2);justify-content:flex-end}
+.folder-dialog-cancel{padding:7px var(--space-4);background:var(--bg-tertiary);color:var(--text-secondary);border:1px solid var(--border);border-radius:var(--radius-xs);font-size:var(--font-size-md);font-family:inherit;cursor:pointer;transition:background var(--transition)}.folder-dialog-cancel:hover{background:var(--bg-hover)}
 .folder-dialog-ok{padding:7px var(--space-4);background:var(--accent);color:white;border:none;border-radius:var(--radius-xs);font-size:var(--font-size-md);font-weight:600;font-family:inherit;cursor:pointer;transition:background var(--transition)}.folder-dialog-ok:hover{background:var(--accent-hover)}.folder-dialog-ok:disabled{opacity:0.6;cursor:not-allowed}
 
 /* ── Conversation rename dialog (dedicated, redesigned) ── */
@@ -206,6 +227,7 @@ html[data-rail] .folder-quickadd{display:none}
 /* Folder empty state */
 .folder-view-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:var(--space-12) var(--space-4);text-align:center}
 /* Folder members still loading (C4 — distinct from "genuinely empty") */
+.folder-view-spinner{width:20px;height:20px;margin-bottom:10px;border:2px solid var(--border);border-top-color:var(--text-secondary);border-radius:50%;animation:folderSpin .7s linear infinite}
 @keyframes folderSpin{to{transform:rotate(360deg)}}
 /* Sidebar "N earlier not loaded · Load more" affordance (C4) */
 .conv-load-more{display:block;width:calc(100% - 16px);margin:var(--space-2) auto;padding:var(--space-2) 10px;font-size:var(--font-size-xs);color:var(--text-tertiary);background:var(--bg-secondary);border:1px dashed var(--border);border-radius:var(--radius-sm);cursor:pointer;text-align:center}
@@ -273,6 +295,7 @@ html[data-rail] .folder-quickadd{display:none}
 .conv-summary-badge:hover{opacity:1;color:var(--accent,#6ea8fe)}
 /* Embedded memory list inside the Memory & Preferences settings tab — slightly
  * tighter than the modal, with a soft cap + scroll so it never dominates. */
+.memory-list-embedded{margin-top:var(--space-2);max-height:340px;overflow-y:auto}
 .settings-section-divider{height:1px;background:var(--border,rgba(255,255,255,.08));margin:18px 0 14px}
 /* A foreground tag and the background tag can share the date line: wrap, never overflow a narrow sidebar. */
 .conv-item .conv-date{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-1);margin-top:3px}
@@ -347,10 +370,23 @@ html[data-rail] .folder-quickadd{display:none}
  *   project mode with collaborative state to surface. */
 .presence-strip{flex:0 0 auto;width:100%;font-size:var(--font-size-sm);animation:fadeIn .2s ease}
 .presence-strip[hidden]{display:none}
+.collab-bar-inner{display:flex;align-items:center;gap:var(--space-2);width:100%;height:28px;padding:0 var(--space-4);background:var(--bg-secondary);border:none;border-bottom:1px solid var(--border);color:var(--text-secondary);font-size:var(--font-size-sm);font-family:inherit;cursor:pointer;text-align:left;overflow:hidden;white-space:nowrap;transition:background var(--transition)}
+.collab-bar-inner:hover{background:var(--bg-hover)}
+.collab-brain{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:6px;background:var(--accent-subtle);color:var(--accent);flex:0 0 auto}
+.collab-brain-ico{display:block}
 .collab-label{font-weight:600;color:var(--text-secondary);flex:0 0 auto;letter-spacing:.02em}
 /* Pillar #7 ambient status headline — the leading, flexible, truncating slot.
    Unlike the fixed-width count segments it takes the remaining space and
    ellipsizes so a long narrative never pushes the counts off the bar. */
+.collab-sep{color:var(--text-tertiary);opacity:.5;flex:0 0 auto}
+.collab-seg{flex:0 0 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.collab-seg-decisions{color:#e0a13a;font-weight:600}
+.collab-seg-progress{color:var(--accent)}
+.collab-seg-open{color:var(--text-secondary)}
+.collab-seg-peers{color:var(--text-tertiary)}
+.collab-has-decisions{box-shadow:inset 3px 0 0 #e0a13a}
+.collab-peer-epics{display:inline-flex;align-items:center;gap:10px;min-width:0;overflow:hidden;margin-left:var(--space-1)}
+.collab-peer-epic{display:inline-flex;align-items:center;gap:5px;min-width:0;overflow:hidden;color:var(--text-tertiary)}
 .collab-peer-dot{width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 0 var(--accent);animation:presencePulse 2s infinite;flex:0 0 auto}
 .collab-epic-title{color:var(--text-primary);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}
 @keyframes presencePulse{0%{box-shadow:0 0 0 0 rgba(110,86,207,.5)}70%{box-shadow:0 0 0 5px rgba(110,86,207,0)}100%{box-shadow:0 0 0 0 rgba(110,86,207,0)}}

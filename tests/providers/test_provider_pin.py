@@ -34,7 +34,7 @@ class ProviderPinTest(unittest.TestCase):
             key_name='operator_key', api_key='sk-operator',
             model='deepseek-v4-pro', capabilities={'text', 'cheap'},
             base_url='https://gateway.internal/v1',
-            provider_id='default', latency_ema=10.0,
+            provider_id='example-corp', latency_ema=10.0,
         )
         with self.d._lock:
             self.d.slots.append(self._operator)

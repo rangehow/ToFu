@@ -31,7 +31,7 @@ def _bundle(path, *, secret='carried-key'):
         'contract_version': CONTRACT_VERSION,
         'document': {
             **empty_document(),
-            'providers': [{'provider_id': 'example-corp', 'name': 'Default',
+            'providers': [{'provider_id': 'example-corp', 'name': 'YourProvider',
                            'scope': 'public'}],
             'provider_accesses': [{
                 'provider_access_id': 'access_1',

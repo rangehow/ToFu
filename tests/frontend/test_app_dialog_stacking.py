@@ -28,7 +28,8 @@ def _z_index(css: str, selector: str) -> int:
 
 
 def test_app_dialog_overlay_stacks_above_settings_sub_overlay_tiers() -> None:
-    app_css = (ROOT / "frontend/src/app-dialogs.css").read_text(encoding="utf-8")
+    app_css = (ROOT / "frontend/src/styles/application"
+               / "08-app-dialogs.css").read_text(encoding="utf-8")
     settings_css = (ROOT / "frontend/src/styles/settings"
                     / "06-model-routing-v2.css").read_text(encoding="utf-8")
     dialog = _z_index(app_css, ".app-dialog-overlay")

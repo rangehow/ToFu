@@ -563,6 +563,91 @@ def test_vault_reader_decrypts_what_the_vault_module_stores_and_never_mints(tmp_
     assert list(empty.iterdir()) == []
 
 
+class _FakeOpenPlatform:
+    """Token endpoint and group send of the 大象 open platform, in memory."""
+
+    def __init__(self, *, token_status=200, post=None):
+        self.requests: list[tuple[str, dict, bytes]] = []
+        self.token_status = token_status
+        self.post = post
+
+    def __call__(self, method, url, headers, body):
+        self.requests.append((url, headers, body))
+        if url.endswith('/token'):
+            if self.token_status != 200:
+                return self.token_status, b'{"error": "invalid_client"}'
+            return 200, json.dumps({'access_token': 'access', 'token_type': 'Bearer', 'expires_in': 3600}).encode()
+        if self.post is not None:
+            return self.post(url, body)
+        gid = str(json.loads(body)['gid'])
+        return 200, json.dumps({'status': {'code': 0}, 'data': {'messageMap': {gid: 'msg-1'}}}).encode()
+
+
+def _robot_config(tmp_path):
+    return _config(tmp_path, dx_robot={'enabled': True, 'clientId': 'client-1', 'gid': '71158539432',
+                                       'credentialName': 'channel.u1.dx.robot'})
+
+
+def test_robot_sender_posts_the_text_to_the_bound_group(tmp_path):
+    platform = _FakeOpenPlatform()
+    sender = oob_alert.DxRobotSender(_robot_config(tmp_path), transport=platform, secret=lambda: 'secret')
+    outcome, detail = sender.send('告警文本')
+    assert outcome == 'sent' and detail.startswith('gid 71158539432 message msg-1; HTTP 200 ')
+    assert '"messageMap": {"71158539432": "msg-1"}' in detail
+    assert 'access' not in detail  # the token endpoint's answer is never kept
+    token_url, _, token_form = platform.requests[0]
+    assert token_url == 'https://ssosv.internal.example.com/sson/auth/oidc/v1/token' and b'client_id=client-1' in token_form
+    send_url, headers, body = platform.requests[1]
+    assert send_url == 'https://xopen.internal.example.com/open-apis/dx-msg/sendGroupMsgByRobot'
+    assert headers['Authorization'] == 'Bearer access'
+    sent = json.loads(body)
+    assert sent['gid'] == 71158539432 and json.loads(sent['sendMsgInfo']['body']) == {'text': '告警文本'}
+
+
+def test_robot_sender_maps_refusal_to_retry_and_a_lost_answer_to_unknown(tmp_path):
+    refused = oob_alert.DxRobotSender(_robot_config(tmp_path), transport=_FakeOpenPlatform(token_status=401),
+                                      secret=lambda: 'secret')
+    assert refused.send('x')[0] == 'not_sent'
+
+    def lost(url, body):
+        raise TimeoutError('read timed out')
+    unknown = oob_alert.DxRobotSender(_robot_config(tmp_path), transport=_FakeOpenPlatform(post=lost),
+                                      secret=lambda: 'secret')
+    assert unknown.send('x')[0] == 'unknown'
+
+    def missing_secret():
+        raise LookupError('vault entry channel.u1.dx.robot is empty')
+    no_secret = oob_alert.DxRobotSender(_robot_config(tmp_path), transport=_FakeOpenPlatform(),
+                                        secret=missing_secret)
+    assert no_secret.send('x')[0] == 'not_sent'
+
+
+def test_the_watcher_and_its_robot_path_never_import_the_storage_client(tmp_path):
+    script = f"""
+import json, sys
+sys.path.insert(0, {str(REPO)!r})
+from pathlib import Path
+from serverctl_pkg import oob_alert
+config = oob_alert.Config(tofu_root=Path({str(tmp_path)!r}), api_url='http://127.0.0.1:9',
+                          manager_url='http://127.0.0.1:9',
+                          dx_robot={{'enabled': True, 'clientId': 'c', 'gid': '1', 'credentialName': 'n'}})
+def transport(method, url, headers, body):
+    if url.endswith('/token'):
+        return 200, b'{{"access_token": "a", "token_type": "Bearer", "expires_in": 60}}'
+    return 200, b'{{"status": {{"code": 0}}, "data": {{"messageMap": {{"1": "m"}}}}}}'
+sender = oob_alert.DxRobotSender(config, transport=transport, secret=lambda: 's')
+watcher = oob_alert.Watcher(config, Path({str(tmp_path / 'state')!r}), sender=sender)
+watcher.tick()
+print(json.dumps({{'outcome': sender.send('x')[0],
+                  'storage': sorted(m for m in sys.modules if m.startswith('lib.storage'))}}))
+"""
+    env = {key: value for key, value in os.environ.items() if key != 'PYTHONPATH'}
+    result = subprocess.run([sys.executable, '-c', script], capture_output=True, text=True, env=env, timeout=120,
+                            check=True)
+    answer = json.loads(result.stdout.strip().splitlines()[-1])
+    assert answer == {'outcome': 'sent', 'storage': []}
+
+
 def test_named_constants_match_their_owning_sources():
     import server_manager
     from lib.http_transport import client
@@ -1061,9 +1146,17 @@ def test_the_default_state_dir_is_off_the_root_overlay_and_private(tmp_path):
     assert (os.stat(loose).st_mode & 0o777) == 0o700
 
 
-# The 大象 robot sender's own cases drive the dx adapter, which only the YourProvider
-# bundle ships: bundles/yourprovider/tests/channels/test_dx_robot_oob_alert.py.
-def test_preflight_without_a_delivery_path_reports_it():
+def test_preflight_proves_the_robot_credentials_without_posting(tmp_path, capsys):
+    platform = _FakeOpenPlatform()
+    sender = oob_alert.DxRobotSender(_robot_config(tmp_path), transport=platform, secret=lambda: 'robot-secret-abcd')
+    passed, detail = sender.preflight()
+    assert passed and 'token minted' in detail and detail.endswith('…abcd; group 71158539432')
+    assert 'robot-secret' not in detail
+    assert [url for url, _, _ in platform.requests] == ['https://ssosv.internal.example.com/sson/auth/oidc/v1/token']
+    refused = oob_alert.DxRobotSender(_robot_config(tmp_path), transport=_FakeOpenPlatform(token_status=401),
+                                      secret=lambda: 'robot-secret-abcd')
+    passed, detail = refused.preflight()
+    assert not passed and detail.startswith('token_rejected')
     assert oob_alert.NoSender().preflight() == (False, 'no delivery path is enabled in config.json')
 
 

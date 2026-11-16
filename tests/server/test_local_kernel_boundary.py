@@ -184,11 +184,7 @@ class _UnfinishedBoot:
         self.status = status
 
     def snapshot(self):
-        phase = {'index': 3, 'key': 'storage', 'label': 'Storage', 'status': self.status,
-                 'duration_s': None, 'error': 'storage refused'}
-        return {'status': self.status, 'phaseTotal': 8, 'phases': [phase],
-                'currentPhase': phase if self.status == 'running' else None,
-                'failedPhase': phase if self.status == 'failed' else None,
+        return {'currentPhase': 3, 'phaseTotal': 8, 'failedPhase': 3,
                 'error': 'storage refused', 'retryCount': 0}
 
 

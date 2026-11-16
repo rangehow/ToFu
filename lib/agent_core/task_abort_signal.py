@@ -48,12 +48,9 @@ _watcher_thread: threading.Thread | None = None
 
 
 def _distributed_mode() -> bool:
-    # Only the mode is needed on this per-task path; the full deployment
-    # parse copies and scans the whole process environment (boot already
-    # validated it).
-    from runtime_guards import resolve_deployment_mode
+    from runtime_guards import load_deployment_configuration
     try:
-        return resolve_deployment_mode() == 'distributed'
+        return load_deployment_configuration().mode == 'distributed'
     except Exception as e:
         logger.debug('[task-abort-signal] deployment probe failed: %s', e)
         return False

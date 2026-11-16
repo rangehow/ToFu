@@ -25,7 +25,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from tests.support.overlay import requires_private_overlay
+from tests.support.overlay import requires_yourprovider_overlay
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -85,7 +85,7 @@ def test_internal_helpers_reachable():
     is_opensource_build(),
     reason="'friday' is an internal provider whose gateway host is sanitized "
            'away in opensource builds — there is nothing to detect there')
-@requires_private_overlay
+@requires_yourprovider_overlay
 def test_friday_provider_detection():
     import lib.image_gen as ig
     assert ig._is_friday_provider(_FakeSlot('https://api.openai.com/v1')) is True

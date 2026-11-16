@@ -479,7 +479,7 @@ def test_bubble_anchor_static_pins():
         os.path.join(os.path.dirname(os.path.dirname(HERE)), 'static'), 'styles.css')
     assert static_read is not None
     css = static_read[0].decode('utf-8')
-    drawer_css = open(os.path.join(ROOT, 'frontend/src/features/inspector/drawer.css'), encoding='utf-8').read()
+    drawer_css = open(os.path.join(ROOT, 'frontend/src/styles/application/02-inspector-drawer.css'), encoding='utf-8').read()
     assert '.ri-anchor' in drawer_css and '.ri-feed-turn' in drawer_css
     assert "'ri.openTip'" in renderer
 

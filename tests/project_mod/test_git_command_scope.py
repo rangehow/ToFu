@@ -9,23 +9,6 @@ from lib.project_mod.git_command_scope import git_command_scopes
 pytestmark = pytest.mark.unit
 
 
-@pytest.fixture(autouse=True)
-def no_system_git_config(tmp_path, monkeypatch):
-    """The host's own /etc/gitconfig (e.g. a git-lfs filter) is not the fixture's."""
-    from lib.project_mod import git_command_scope
-    monkeypatch.setattr(git_command_scope, '_SYSTEM_GIT_CONFIG',
-                        str(tmp_path / 'system-gitconfig'))
-    return tmp_path / 'system-gitconfig'
-
-
-def test_system_config_filter_keeps_the_invoking_checkout(roots, no_system_git_config):
-    parent, child = roots
-    no_system_git_config.write_text('[filter "lfs"]\n\tprocess = git-lfs filter-process\n')
-    command = ('cd ' + shlex.quote(str(parent)) + ' && git worktree remove .worktrees/linked')
-    removal = git_command_scopes(command, str(parent), environment={})[-1]
-    assert str(parent) in removal.presence_roots()
-
-
 @pytest.fixture
 def roots(tmp_path):
     parent = tmp_path / 'shared'

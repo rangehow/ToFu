@@ -118,7 +118,7 @@ import {
   createModelBrandResolver,
   detectModelBrand,
 } from '../core/model-brand-detection';
-import { brandBadgeHtml } from '../core/model-brand-badge';
+import { brandIconHtml } from '../core/model-brand-icons';
 import { createModelDisplayNames } from '../core/model-display-names';
 import { createModelGroupPolicy } from '../core/model-group';
 import { modelDisplayUnits } from '../core/model-display-fold';
@@ -286,10 +286,10 @@ import {
 } from '../conversation/ui/human-guidance-actions';
 import { isBootSendBlocked, setBootSendBlocked, subscribeBootReadiness } from '../boot-readiness';
 import { updateComposerSendControls } from '../conversation/ui/composer-send-controls';
-// The inline turn editor loads on the first edit; until then no editor exists to reconcile.
-let turnInlineEditorModule = null;
-const loadTurnInlineEditor = async () => (
-  turnInlineEditorModule ??= await import('../conversation/ui/turn-inline-editor'));
+import {
+  openTurnInlineEditor,
+  reconcileTurnInlineEditors,
+} from '../conversation/ui/turn-inline-editor';
 
 import { presentConversationActivity } from '../conversation/presentation/conversation-activity';
 import { createConversationReviewTracker, isReviewedReply } from '../conversation-review';
@@ -357,7 +357,7 @@ import {
 // Temporary tool-card port; remove with retained tool dispatch.
 import { createToolCardPresentation, handleToolCardClick } from '../conversation/ui/tool-cards';
 import { paperDocumentsApi } from '../api/paper-documents';
-import { installPaperProposalObserver } from '../features/paper/proposal-observer';
+import { installPaperProposalObserver } from '../features/paper/proposal-card';
 import { nudgePreviewRebuild } from '../features/paper/preview-rebuild';
 import {
   createToolSearchPresentation,
@@ -396,7 +396,7 @@ import {
 } from '../core/send-startup';
 import { sendFailureToastDetail } from '../conversation/presentation/send-failure-message';
 import {
-  DOMPurify, canEnsureHljsLanguage, ensureHljsLanguage, hljs, loadHljs, loadHtml2Canvas, loadKatex, marked,
+  DOMPurify, canEnsureHljsLanguage, ensureHljsLanguage, hljs, loadHtml2Canvas, loadKatex, marked,
 } from '../vendor-runtime';
 // The retained service registry is infrastructure, not a feature initialized
 // in manifest order. Declare it before any eager composition so adding a new
@@ -1089,7 +1089,7 @@ import {
 // migrated. The policy and asset registries are typed, module-private, and
 // composed once; no compatibility name is published to `window`.
 const _detectBrand = detectModelBrand;
-const _brandSvg = brandBadgeHtml;
+const _brandSvg = brandIconHtml;
 // The one brand-resolution interface for every model surface: explicit
 // Creator identity wins, the registered-models catalog covers id-only
 // callers, and name-pattern detection remains as the fallback for ids the

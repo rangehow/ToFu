@@ -59,7 +59,7 @@ def _joined(names):
 def _config(tmp_path):
     path = tmp_path / 'server_config.json'
     path.write_text(json.dumps({'providers': [{
-        'id': 'default', 'enabled': True, 'api_keys': _KEYS,
+        'id': 'example-corp', 'enabled': True, 'api_keys': _KEYS,
         'base_url': 'https://gateway.example/v1/openai/native',
         'faces': {
             'anthropic': {'protocol': 'anthropic', 'base_url': _BASE_URL},

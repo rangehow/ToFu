@@ -32,12 +32,11 @@ import unittest
 from pathlib import Path
 
 import pytest
-from tests.support.export_toolchain import require_export_toolchain
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 # export.py is the maintainer's release tool; not shipped in opensource builds.
-export = require_export_toolchain()
+export = pytest.importorskip('export', reason='export.py is not shipped in opensource builds')
 
 import export_pkg._handoff as handoff  # noqa: E402
 import export_pkg._internal as internal  # noqa: E402
@@ -61,7 +60,7 @@ def _make_fake_project(root: Path):
     (root / 'data' / 'config').mkdir(parents=True)
     (root / 'data' / 'config' / 'server_config.json').write_text(json.dumps({
         'providers': [
-            {'id': 'default', 'name': 'Default', 'api_keys': ['shared-key']},
+            {'id': 'example-corp', 'name': 'YourProvider', 'api_keys': ['shared-key']},
             {'id': 'openai', 'name': 'Personal', 'api_keys': ['personal-key']},
         ],
         'proxy_config': {'http_proxy': 'http://proxy.corp:3128'},

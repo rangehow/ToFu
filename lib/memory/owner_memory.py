@@ -42,15 +42,12 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from typing import Any
 
-from lib.memory.contracts import MEMORY_SEARCH_BODY_MAX_CHARS, memory_trust_class
+from lib.memory.contracts import (
+    MEMORY_SEARCH_BODY_MAX_CHARS,
+    context_item_source_class,
+    memory_trust_class,
+)
 from lib.memory.secret_scan import redact_secret_shapes
-
-_CONTEXT_SOURCE_CLASSES = {
-    # Items written before provenance existed carry the write path's ``source``.
-    'manual': 'owner_stated',
-    'assistant': 'agent_report',
-    'legacy_migration': 'legacy_import',
-}
 
 TRUST_LEGEND = (
     'Trust: owner-stated = the owner said it; verified = the owner confirmed or edited it, or '
@@ -66,8 +63,7 @@ def _trust(status: str, source_class: str, provenance: Mapping) -> str:
 def _context_record(item: Mapping, *, score: float = 0.0) -> dict:
     provenance = dict(item.get('provenance') or {})
     status = item.get('status') or 'active'
-    source_class = (provenance.get('source_class')
-                    or _CONTEXT_SOURCE_CLASSES.get(item.get('source', ''), 'unrecorded'))
+    source_class = context_item_source_class(item)
     record = {
         'kind': 'context',
         'id': item.get('id', ''),

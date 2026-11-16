@@ -794,7 +794,6 @@
     "conn.storageUnavailableSince": "928e267357064620",
     "conn.storageUnavailableTitle": "b69be0d7920bcd82",
     "context.alwaysOn": "8965c58c8e267888",
-    "context.capacity": "2f5788e5eca605ad",
     "context.clearConfirm": "3dc919311af7697d",
     "context.clearDone": "036b5e3fd7dd0737",
     "context.clearFailed": "3202946c19f9787f",
@@ -815,7 +814,6 @@
     "context.memoryIntro": "f9cb5b3de5a27985",
     "context.memoryTitle": "e87120f635cbfbd6",
     "context.noMemories": "9603839cdd3647bb",
-    "context.overCap": "f3e0258869706632",
     "context.preferenceAdd": "df73270b4bb32349",
     "context.preferenceDesc": "da5c6e16f82bb353",
     "context.preferenceEmpty": "30945a8649405179",
@@ -6689,7 +6687,6 @@
     "toolCard.debug.turn": "da3e313abb8c38f7",
     "toolCard.debug.command": "50e77b6103a42a88",
     "toolCard.debug.message": "0463ec8cd73d05bc",
-    "toolCard.review.refusedResultChanged": "468b8af63cf18055",
     "leadDeliverables.title": "a2abc0f01d3fdab8",
     "leadDeliverables.more": "a2223cb090ac9c62",
     "leadDeliverables.retry": "19a00f0ab63df45b",
@@ -6702,6 +6699,10 @@
     "leadDeliverables.kind.file": "5be84a41cfc9f9e5",
     "leadDeliverables.kind.deck": "c1a5916f8322d479",
     "leadDeliverables.kind.document": "30a81bbd95e2aa6b",
-    "leadDeliverables.kind.merge": "2d5ab6327b616395"
+    "leadDeliverables.kind.merge": "2d5ab6327b616395",
+    "context.grantAdd": "622820b083b3febc",
+    "context.grantDesc": "d71250688ab562f2",
+    "context.grantEmpty": "0bd99a00f2bb156d",
+    "context.grantTitle": "256ceeb343327080"
   }
 }

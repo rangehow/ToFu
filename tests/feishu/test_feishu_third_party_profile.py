@@ -67,7 +67,8 @@ def owner_data(monkeypatch):
             return value
         return read
     monkeypatch.setattr(user_profile, 'load_context', source('my_context', {'items': [{'id': 'c1'}]}))
-    monkeypatch.setattr(user_profile, 'context_markdown', lambda items: OWNER_CONTEXT)
+    monkeypatch.setattr(user_profile, 'profile_items', lambda items, identity=True: list(items))
+    monkeypatch.setattr(user_profile, 'profile_body', lambda items: OWNER_CONTEXT)
     monkeypatch.setattr(user_profile, 'render_profile_block',
                         lambda body=None, scope='': f'[USER CONTEXT]\n{body}')
     monkeypatch.setattr(user_profile, 'context_items_for_event', lambda **kwargs: [])

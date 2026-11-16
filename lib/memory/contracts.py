@@ -95,6 +95,32 @@ def memory_trust_class(status: Any, source_class: Any,
     return 'inferred'
 
 
+# My Context items written before provenance existed carry only their write
+# path's ``source``; this is the source class each one stands for. The
+# owner-memory lookup and the always-present profile read it from here, so
+# they can never disagree about who stands behind an item.
+CONTEXT_SOURCE_CLASSES = {
+    'manual': 'owner_stated',
+    'assistant': 'agent_report',
+    'legacy_migration': 'legacy_import',
+}
+
+
+def context_item_source_class(item: Mapping) -> str:
+    """The recorded source class of one My Context item, else its write path's."""
+    provenance = item.get('provenance') or {}
+    return str(provenance.get('source_class')
+               or CONTEXT_SOURCE_CLASSES.get(item.get('source', ''), 'unrecorded'))
+
+
+def context_item_trust_class(item: Mapping) -> str:
+    """``memory_trust_class`` of one My Context item."""
+    provenance = item.get('provenance') or {}
+    return memory_trust_class(item.get('status') or 'active', context_item_source_class(item),
+                              provenance.get('edited_source_class'),
+                              provenance.get('verified_by'))
+
+
 def lesson_trust_class(memory: Mapping) -> str:
     """``memory_trust_class`` of one stored lesson record."""
     provenance = memory.get('provenance') or {}
@@ -339,6 +365,7 @@ def truncate_utf8(value: str, max_bytes: int) -> str:
 
 
 __all__ = [
+    'CONTEXT_SOURCE_CLASSES',
     'MEMORY_BODY_MAX_CHARS',
     'MEMORY_DESCRIPTION_MAX_CHARS',
     'MEMORY_GENERATED_ID_MAX_BYTES',
@@ -361,6 +388,8 @@ __all__ = [
     'MEMORY_TAG_MAX_CHARS',
     'MEMORY_TAG_MAX_ITEMS',
     'MEMORY_TRUST_CLASSES',
+    'context_item_source_class',
+    'context_item_trust_class',
     'MEMORY_RECORD_AS_NEW',
     'MEMORY_VERDICTS',
     'MEMORY_VERIFIED_BY_ACCEPTED_RESULT',

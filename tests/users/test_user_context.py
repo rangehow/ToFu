@@ -42,7 +42,7 @@ def test_legacy_profile_migrates_to_three_type_store(context_data_dir):
     assert os.path.isfile(up.context_path())
 
 
-def test_work_rule_roundtrip_and_hard_cap(context_data_dir):
+def test_work_rule_roundtrip_and_no_size_cap(context_data_dir):
     import lib.memory.user_profile as up
     result = up.create_context_item({
         'type': 'work_rule',
@@ -53,11 +53,10 @@ def test_work_rule_roundtrip_and_hard_cap(context_data_dir):
     assert item['id'].startswith('ctx_')
     assert up.load_context()['items'][0]['condition'].startswith('submitting')
 
-    with pytest.raises(up.ContextValidationError):
-        up.create_context_item({
-            'type': 'identity',
-            'text': 'x' * (up.CONTEXT_CHAR_CAP + 10),
-        })
+    # The owner profile is sized by the owner's statements, never capped (Phase 1).
+    long_text = 'x' * 10_000
+    up.create_context_item({'type': 'identity', 'text': long_text})
+    assert up.load_context()['items'][1]['text'] == long_text
 
 
 def test_assistant_change_can_be_undone_and_conflicts_are_safe(context_data_dir):

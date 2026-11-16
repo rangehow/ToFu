@@ -14,8 +14,11 @@ A personal preference needs to be BOTH always-on AND cache-stable. The trick
 Composer-owned head/tail ``_isMeta`` messages rather than rewriting real user
 history. When the profile changes, only the synthetic context carrier changes.
 
-Design choices (locked by the user):
-  * Hard-capped (~800 tokens ≈ 2.5 KB).
+Design choices:
+  * Sized by its content, never capped or truncated: the always-present owner
+    profile (Phase 1, docs/modules/context_engineering.md "Owner profile
+    (Phase 1)") is exactly the owner's active statements. The former
+    2.5 KB hard cap was removed with Phase 1 (AGENTS.md principle 5).
   * NOT part of the BM25 corpus — it is never "searched", it is always present.
   * SCOPED by owner. Every task's scope is its ``owner_user_id`` (``'1'`` for
     the personal owner, including open mode) → a per-owner file
@@ -27,12 +30,12 @@ Design choices (locked by the user):
     and captured onto the task at creation (the consolidation daemon has no
     request context). The ``.tofu`` prefix (per the artifact registry — see
     ``lib/agent_loop/agent_artifacts.py``) is preserved on the filename either way.
-  * Bullet-list markdown under headers (Hermes/OpenClaw ``USER.md`` shape).
-  * The hard cap is the forcing function for refinement: the consolidation
-    pass (layer 3) must ``replace`` in place rather than append.
+  * Rendered in experiment 1c's directive form (``_render.profile_body``):
+    only items the owner stated or confirmed, each with its date and source;
+    grants only inside their bound.
 
 This package is storage + rendering ONLY. The propose-confirm capture loop
-(layer 3) builds on ``load_profile`` / ``save_profile`` / ``profile_over_cap``.
+(layer 3) builds on ``load_profile`` / ``save_profile``.
 
 No code lives in this file — it is a pure re-export facade. All implementations
 live in the sub-modules (``_paths`` / ``_io`` / ``_render`` / ``_mutate`` /
@@ -59,7 +62,6 @@ from lib.memory.user_profile._paths import (  # noqa: E402,F401
 
 # ── Structured user context + undo history (._context) ──
 from lib.memory.user_profile._context import (  # noqa: E402,F401
-    CONTEXT_CHAR_CAP,
     CONTEXT_STATUS_REASONS,
     CONTEXT_STATUSES,
     CONTEXT_TYPES,
@@ -85,11 +87,9 @@ from lib.memory.user_profile._io import (  # noqa: E402,F401
     _CORE_HEADERS,
     _PROFILE_DETAIL_MARKER,
     _PROFILE_MARKER,
-    USER_PROFILE_CHAR_CAP,
     load_profile,
     parse_items,
     profile_char_count,
-    profile_over_cap,
     save_items,
     save_profile,
     serialize_items,
@@ -97,8 +97,13 @@ from lib.memory.user_profile._io import (  # noqa: E402,F401
 
 # ── Rendering + tiering (._render) ──
 from lib.memory.user_profile._render import (  # noqa: E402,F401
+    DELEGATION_BOUND,
+    PROFILE_TRUST_CLASSES,
+    USAGE_RULE,
     context_ids_for_event,
     context_items_for_event,
+    profile_body,
+    profile_items,
     profile_summary_for_event,
     render_profile_block,
 )
@@ -118,12 +123,10 @@ from lib.memory.user_profile._pending import (  # noqa: E402,F401
 )
 
 __all__ = [
-    'USER_PROFILE_CHAR_CAP',
     'resolve_profile_scope',
     'profile_path',
     'context_path',
     'context_changes_path',
-    'CONTEXT_CHAR_CAP',
     'CONTEXT_TYPES',
     'CONTEXT_STATUSES',
     'CONTEXT_STATUS_REASONS',
@@ -145,7 +148,11 @@ __all__ = [
     'load_profile',
     'save_profile',
     'profile_char_count',
-    'profile_over_cap',
+    'DELEGATION_BOUND',
+    'PROFILE_TRUST_CLASSES',
+    'USAGE_RULE',
+    'profile_body',
+    'profile_items',
     'render_profile_block',
     'context_ids_for_event',
     'context_items_for_event',

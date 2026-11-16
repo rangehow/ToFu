@@ -8,12 +8,26 @@ Report only: no code was changed.
 Verdicts were checked against the shared branch `eval/opencode-glm53-tb21` at `b38b99f700` and re-checked at `c00ac710fe` (fast-forward,
 no memory-path change in between).
 
+## Resolution (2026-11-17)
+
+All three gaps below are closed:
+
+1. Phase 1 is ported (`4250f8c566`, `75e4fc604e`, `a4e11e0d64`, `5ffb087afa` cherry-picked; i18n catalogs regenerated).
+   Its time-matched output cost was measured on a synthetic My Context: see `docs/modules/context_engineering.md`,
+   "Owner profile (Phase 1)", "Measured, time-matched". The grants section does not drive the cost.
+2. The three bundles are fetched into `refs/recovered/memory-design/{exp1,exp1b,exp1c,exp1c-harness,fm2x2}` (not merged).
+   `exp1c-proto-prev` was in no bundle and stays superseded. The docs name these refs.
+3. The private tree is copied (content-identical by `rsync -c`, modes tightened to 0700/0600) to the current
+   `.eval-runs/owner-memory/`, which `.gitignore` (`/.eval-runs/`) excludes.
+
+The sections below are the audit as found and keep its wording.
+
 ## Answer
 
 Most of the work was picked up. Three parts were not:
 
 1. **Phase 1, the always-present owner profile, is implemented and tested but NOT merged.** It is on two recovered WIP refs only.
-   The current docs still say "Phase 1: not yet authorized". The unmerged source says the Coordinator dispatched it on 2026-11-13.
+   The docs then still described Phase 1 as unauthorized. The unmerged source says the Coordinator dispatched it on 2026-11-13.
 2. **The experiment arm code is missing from this repository.** That covers experiments 1, 1b and 1c, the K3 resolution and FM-2x2
    (`evaluations/owner_profile_arm/`, PREREG/RESULTS/RUN).
    - Its five `refs/worktree/memory-design/*` refs are per-worktree refs. The recovery's `for-each-ref` import did not see them.
@@ -199,7 +213,7 @@ Caveats recorded with FM-2x2:
    - Gate before shipping: the measured +75% output-length cost on the full-context Coordinator, and the time-matched run that never ran
      (401/429). Confirm with the Coordinator that the +75% is acceptable, or ship the directives without the bounded delegation section
      (1b's +7%) as a smaller first step. This is a product decision, not an agent's.
-   - Also: the current docs' "Phase 1: not yet authorized" (`docs/modules/context_engineering.md`) contradicts the 11-13 dispatch.
+   - Also: the docs then described Phase 1 as unauthorized (`docs/modules/context_engineering.md`), contradicting the 11-13 dispatch.
      The port replaces that text.
    - Also: My Context today holds no active owner item, because the audit activated 0 of 17. Phase 1 renders nothing until the owner
      confirms or enters items. Importing the benchmark ledger is a production write that needs the owner's go-ahead

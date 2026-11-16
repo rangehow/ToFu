@@ -1,0 +1,2267 @@
+{
+  "_action-registry-BG2lWHJ2.js": {
+    "file": "assets/action-registry-BG2lWHJ2.js",
+    "name": "action-registry"
+  },
+  "_application-BAZTnswv.css": {
+    "file": "assets/application-BAZTnswv.css",
+    "src": "_application-BAZTnswv.css"
+  },
+  "_application-BT5nFDZc.js": {
+    "file": "assets/application-BT5nFDZc.js",
+    "name": "application",
+    "isDynamicEntry": true,
+    "imports": [
+      "frontend/src/main.ts",
+      "_transport-CIrfFgnv.js",
+      "_index-BSpFQY5P.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "dynamicImports": [
+      "frontend/src/dialog-controller.ts",
+      "frontend/src/features/voice/recording.ts",
+      "frontend/src/core/model-brand-icons.ts",
+      "frontend/src/features/router-instructions.ts",
+      "frontend/src/features/turn-review/dialog.ts",
+      "frontend/src/features/working-facts/dialog.ts",
+      "frontend/src/features/paper/proposal-card.ts",
+      "frontend/src/hljs-core.ts",
+      "frontend/src/hljs-lazy-langs.ts",
+      "node_modules/katex/dist/katex.mjs",
+      "node_modules/html2canvas/dist/html2canvas.esm.js",
+      "frontend/src/features/project-coordination.ts",
+      "frontend/src/features/coordinator-task-history.ts",
+      "frontend/src/features/lead-office/office.ts",
+      "frontend/src/features/lead-deliverables/classic.ts",
+      "frontend/src/conversation/ui/folder-settings.ts",
+      "frontend/src/conversation/ui/turn-inline-editor.ts",
+      "frontend/src/core/conversation-metadata-cache.ts",
+      "frontend/src/rich-response/artifact-review.ts",
+      "_task-request-D96wQ_ik.js",
+      "frontend/src/features/world.ts",
+      "_settings-Cb2c7pIj.js",
+      "frontend/src/features/memory.ts",
+      "frontend/src/features/skills.ts",
+      "_paper-CwBsft6k.js",
+      "frontend/src/features/paper-preview.ts",
+      "frontend/src/features/image.ts",
+      "frontend/src/features/project-brain.ts",
+      "frontend/src/features/myday.ts",
+      "frontend/src/features/utility-panels.ts",
+      "frontend/src/features/project.ts",
+      "frontend/src/features/local-control.ts",
+      "frontend/src/features/diagnostics-presenters.ts",
+      "frontend/src/features/compaction-viewer.ts",
+      "frontend/src/features/misc.ts",
+      "frontend/src/features/slides.ts",
+      "frontend/src/features/orchestration.ts",
+      "frontend/src/features/infrastructure.ts",
+      "frontend/src/features/diagnostics.ts",
+      "frontend/src/features/background.ts"
+    ],
+    "css": [
+      "assets/application-BAZTnswv.css"
+    ]
+  },
+  "_channels-geoxRt5x.css": {
+    "file": "assets/channels-geoxRt5x.css",
+    "src": "_channels-geoxRt5x.css"
+  },
+  "_channels.generated-C7YCwnQp.js": {
+    "file": "assets/channels.generated-C7YCwnQp.js",
+    "name": "channels.generated",
+    "imports": [
+      "_application-BT5nFDZc.js",
+      "_index-BSpFQY5P.js"
+    ],
+    "css": [
+      "assets/channels-geoxRt5x.css"
+    ]
+  },
+  "_fonts-DCADp7Ph.css": {
+    "file": "assets/fonts-DCADp7Ph.css",
+    "src": "_fonts-DCADp7Ph.css"
+  },
+  "_index-BSpFQY5P.js": {
+    "file": "assets/index-BSpFQY5P.js",
+    "name": "index",
+    "assets": [
+      "assets/zh.generated-B8ptC7DW.json",
+      "assets/en.generated-OYj6DlYw.json",
+      "assets/ja.generated-aXlM8nNt.json",
+      "assets/ko.generated-B9P8bI4j.json",
+      "assets/fr.generated-xAZ5WF0I.json",
+      "assets/de.generated-J8m8dkEY.json",
+      "assets/ru.generated-D7e7SwP1.json"
+    ]
+  },
+  "_index-D0E_tUjN.js": {
+    "file": "assets/index-D0E_tUjN.js",
+    "name": "index",
+    "isDynamicEntry": true,
+    "imports": [
+      "node_modules/@codemirror/state/dist/index.js"
+    ]
+  },
+  "_index-DwFhY3XE.js": {
+    "file": "assets/index-DwFhY3XE.js",
+    "name": "index",
+    "isDynamicEntry": true,
+    "imports": [
+      "node_modules/@codemirror/state/dist/index.js",
+      "_index-D0E_tUjN.js"
+    ]
+  },
+  "_marked.esm-CJ-DXE3u.js": {
+    "file": "assets/marked.esm-CJ-DXE3u.js",
+    "name": "marked.esm",
+    "imports": [
+      "_transport-CIrfFgnv.js"
+    ]
+  },
+  "_office-character-9bamc_Z1.js": {
+    "file": "assets/office-character-9bamc_Z1.js",
+    "name": "office-character"
+  },
+  "_open-BClclGq6.js": {
+    "file": "assets/open-BClclGq6.js",
+    "name": "open",
+    "imports": [
+      "_index-BSpFQY5P.js",
+      "_application-BT5nFDZc.js"
+    ]
+  },
+  "_package-installer-DUpjkpnH.js": {
+    "file": "assets/package-installer-DUpjkpnH.js",
+    "name": "package-installer",
+    "imports": [
+      "_application-BT5nFDZc.js"
+    ]
+  },
+  "_paper-CwBsft6k.js": {
+    "file": "assets/paper-CwBsft6k.js",
+    "name": "paper",
+    "isDynamicEntry": true,
+    "imports": [
+      "frontend/src/main.ts",
+      "_runtime-bridge-DCrnQV9v.js",
+      "_application-BT5nFDZc.js",
+      "_index-BSpFQY5P.js"
+    ],
+    "dynamicImports": [
+      "frontend/src/features/paper/panel-owners.ts"
+    ],
+    "css": [
+      "assets/paper-D_k9hlrW.css"
+    ]
+  },
+  "_paper-D_k9hlrW.css": {
+    "file": "assets/paper-D_k9hlrW.css",
+    "src": "_paper-D_k9hlrW.css"
+  },
+  "_pdf-reader-0jENnGDv.css": {
+    "file": "assets/pdf-reader-0jENnGDv.css",
+    "src": "_pdf-reader-0jENnGDv.css"
+  },
+  "_pdf-reader-kWLASzNR.js": {
+    "file": "assets/pdf-reader-kWLASzNR.js",
+    "name": "pdf-reader",
+    "imports": [
+      "_application-BT5nFDZc.js",
+      "frontend/src/main.ts"
+    ],
+    "dynamicImports": [
+      "node_modules/pdfjs-dist/legacy/build/pdf.mjs",
+      "node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs?url"
+    ],
+    "css": [
+      "assets/pdf-reader-0jENnGDv.css"
+    ]
+  },
+  "_project-coordination-graph-BlhKrXmu.js": {
+    "file": "assets/project-coordination-graph-BlhKrXmu.js",
+    "name": "project-coordination-graph"
+  },
+  "_runtime-bridge-DCrnQV9v.js": {
+    "file": "assets/runtime-bridge-DCrnQV9v.js",
+    "name": "runtime-bridge",
+    "imports": [
+      "_application-BT5nFDZc.js"
+    ]
+  },
+  "_settings-C7Au1P8Q.css": {
+    "file": "assets/settings-C7Au1P8Q.css",
+    "src": "_settings-C7Au1P8Q.css"
+  },
+  "_settings-Cb2c7pIj.js": {
+    "file": "assets/settings-Cb2c7pIj.js",
+    "name": "settings",
+    "isDynamicEntry": true,
+    "imports": [
+      "frontend/src/main.ts",
+      "_runtime-bridge-DCrnQV9v.js",
+      "_application-BT5nFDZc.js",
+      "_transport-CIrfFgnv.js",
+      "_index-BSpFQY5P.js",
+      "frontend/src/core/model-brand-icons.ts",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "dynamicImports": [
+      "frontend/src/runtime/knowledge-presenters.generated.js",
+      "frontend/src/features/settings/database.ts",
+      "frontend/src/features/settings/dx-channel.ts",
+      "frontend/src/features/settings/github-channel.ts",
+      "frontend/src/features/settings/bot-channel.ts",
+      "frontend/src/features/settings/bot-channel.ts",
+      "frontend/src/features/settings/bot-channel.ts",
+      "frontend/src/features/model-catalog/panel.ts"
+    ],
+    "css": [
+      "assets/settings-C7Au1P8Q.css"
+    ]
+  },
+  "_task-request-D96wQ_ik.js": {
+    "file": "assets/task-request-D96wQ_ik.js",
+    "name": "task-request",
+    "isDynamicEntry": true,
+    "imports": [
+      "_application-BT5nFDZc.js"
+    ]
+  },
+  "_transport-CIrfFgnv.js": {
+    "file": "assets/transport-CIrfFgnv.js",
+    "name": "transport"
+  },
+  "_workspace-rail-B-fIgtin.js": {
+    "file": "assets/workspace-rail-B-fIgtin.js",
+    "name": "workspace-rail",
+    "imports": [
+      "_application-BT5nFDZc.js"
+    ]
+  },
+  "frontend/src/admin.ts": {
+    "file": "assets/admin-XFVURcNV.js",
+    "name": "admin",
+    "src": "frontend/src/admin.ts",
+    "isEntry": true,
+    "imports": [
+      "_action-registry-BG2lWHJ2.js",
+      "_transport-CIrfFgnv.js",
+      "_index-BSpFQY5P.js"
+    ]
+  },
+  "frontend/src/conversation/ui/folder-settings.ts": {
+    "file": "assets/folder-settings-D8gQjtEP.js",
+    "name": "folder-settings",
+    "src": "frontend/src/conversation/ui/folder-settings.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_application-BT5nFDZc.js",
+      "_workspace-rail-B-fIgtin.js",
+      "frontend/src/main.ts",
+      "_index-BSpFQY5P.js",
+      "_transport-CIrfFgnv.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/conversation/ui/turn-inline-editor.ts": {
+    "file": "assets/turn-inline-editor-IEaSwWRj.js",
+    "name": "turn-inline-editor",
+    "src": "frontend/src/conversation/ui/turn-inline-editor.ts",
+    "isDynamicEntry": true
+  },
+  "frontend/src/core/conversation-metadata-cache.ts": {
+    "file": "assets/conversation-metadata-cache-B0JKPFvw.js",
+    "name": "conversation-metadata-cache",
+    "src": "frontend/src/core/conversation-metadata-cache.ts",
+    "isDynamicEntry": true
+  },
+  "frontend/src/core/model-brand-icons.ts": {
+    "file": "assets/model-brand-icons-BpBukK_u.js",
+    "name": "model-brand-icons",
+    "src": "frontend/src/core/model-brand-icons.ts",
+    "isDynamicEntry": true
+  },
+  "frontend/src/dialog-controller.ts": {
+    "file": "assets/dialog-controller-Bnf9IMjv.js",
+    "name": "dialog-controller",
+    "src": "frontend/src/dialog-controller.ts",
+    "isDynamicEntry": true,
+    "css": [
+      "assets/dialog-controller-CO_1GaDn.css"
+    ]
+  },
+  "frontend/src/features/background.ts": {
+    "file": "assets/background-DggC_w_R.js",
+    "name": "background",
+    "src": "frontend/src/features/background.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_index-BSpFQY5P.js",
+      "_transport-CIrfFgnv.js",
+      "_application-BT5nFDZc.js",
+      "frontend/src/main.ts",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/compaction-viewer.ts": {
+    "file": "assets/compaction-viewer-DgF2l2wM.js",
+    "name": "compaction-viewer",
+    "src": "frontend/src/features/compaction-viewer.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_application-BT5nFDZc.js",
+      "_index-BSpFQY5P.js",
+      "_runtime-bridge-DCrnQV9v.js",
+      "frontend/src/main.ts",
+      "_transport-CIrfFgnv.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/compaction-viewer-BC9k41XO.css",
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/coordinator-task-history.ts": {
+    "file": "assets/coordinator-task-history-CohtdHHT.js",
+    "name": "coordinator-task-history",
+    "src": "frontend/src/features/coordinator-task-history.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_application-BT5nFDZc.js",
+      "_index-BSpFQY5P.js",
+      "frontend/src/main.ts",
+      "_transport-CIrfFgnv.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/coordinator-task-history-BURDobly.css",
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/diagnostics-presenters.ts": {
+    "file": "assets/diagnostics-presenters-C_L0Yq2M.js",
+    "name": "diagnostics-presenters",
+    "src": "frontend/src/features/diagnostics-presenters.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_application-BT5nFDZc.js",
+      "_index-BSpFQY5P.js",
+      "_runtime-bridge-DCrnQV9v.js",
+      "frontend/src/main.ts",
+      "_transport-CIrfFgnv.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/diagnostics-presenters-CnLlMp0d.css",
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/diagnostics.ts": {
+    "file": "assets/diagnostics-7ycIq0H-.js",
+    "name": "diagnostics",
+    "src": "frontend/src/features/diagnostics.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_application-BT5nFDZc.js",
+      "frontend/src/main.ts",
+      "_index-BSpFQY5P.js",
+      "_transport-CIrfFgnv.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/image.ts": {
+    "file": "assets/image-C2h-M4Ou.js",
+    "name": "image",
+    "src": "frontend/src/features/image.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_application-BT5nFDZc.js",
+      "_runtime-bridge-DCrnQV9v.js",
+      "frontend/src/main.ts",
+      "_index-BSpFQY5P.js",
+      "_transport-CIrfFgnv.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/infrastructure.ts": {
+    "file": "assets/infrastructure-C1faDS0t.js",
+    "name": "infrastructure",
+    "src": "frontend/src/features/infrastructure.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_runtime-bridge-DCrnQV9v.js",
+      "_application-BT5nFDZc.js",
+      "frontend/src/main.ts",
+      "_index-BSpFQY5P.js",
+      "_transport-CIrfFgnv.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/lead-deliverables/classic.ts": {
+    "file": "assets/classic-DrCVQAVe.js",
+    "name": "classic",
+    "src": "frontend/src/features/lead-deliverables/classic.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_index-BSpFQY5P.js",
+      "_application-BT5nFDZc.js",
+      "_transport-CIrfFgnv.js",
+      "_open-BClclGq6.js",
+      "frontend/src/main.ts",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/classic-Cu8ReGIm.css",
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/lead-office/office.ts": {
+    "file": "assets/office-CgLVdoCm.js",
+    "name": "office",
+    "src": "frontend/src/features/lead-office/office.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_application-BT5nFDZc.js",
+      "_index-BSpFQY5P.js",
+      "_transport-CIrfFgnv.js",
+      "_office-character-9bamc_Z1.js",
+      "_project-coordination-graph-BlhKrXmu.js",
+      "frontend/src/main.ts",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/office-MJwkJl1W.css",
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/local-control.ts": {
+    "file": "assets/local-control-BbBwuQll.js",
+    "name": "local-control",
+    "src": "frontend/src/features/local-control.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_application-BT5nFDZc.js",
+      "_index-BSpFQY5P.js",
+      "_runtime-bridge-DCrnQV9v.js",
+      "frontend/src/main.ts",
+      "_transport-CIrfFgnv.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/local-control-BKpsYi6O.css",
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/memory.ts": {
+    "file": "assets/memory-QnBYnCWV.js",
+    "name": "memory",
+    "src": "frontend/src/features/memory.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_runtime-bridge-DCrnQV9v.js",
+      "_application-BT5nFDZc.js",
+      "_package-installer-DUpjkpnH.js",
+      "frontend/src/main.ts",
+      "_index-BSpFQY5P.js",
+      "_transport-CIrfFgnv.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/memory-TDtjdjSB.css",
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/misc.ts": {
+    "file": "assets/misc-uFXT4tNw.js",
+    "name": "misc",
+    "src": "frontend/src/features/misc.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_application-BT5nFDZc.js",
+      "_index-BSpFQY5P.js",
+      "_runtime-bridge-DCrnQV9v.js",
+      "frontend/src/main.ts",
+      "_transport-CIrfFgnv.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/model-catalog/panel.ts": {
+    "file": "assets/panel-Bdj1Vf0X.js",
+    "name": "panel",
+    "src": "frontend/src/features/model-catalog/panel.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "frontend/src/core/model-brand-icons.ts",
+      "_application-BT5nFDZc.js",
+      "_index-BSpFQY5P.js",
+      "_settings-Cb2c7pIj.js",
+      "_transport-CIrfFgnv.js",
+      "frontend/src/main.ts",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js",
+      "_runtime-bridge-DCrnQV9v.js"
+    ],
+    "css": [
+      "assets/panel-D5f70xYy.css",
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/myday.ts": {
+    "file": "assets/myday-BY7Kxevz.js",
+    "name": "myday",
+    "src": "frontend/src/features/myday.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "frontend/src/main.ts",
+      "_application-BT5nFDZc.js",
+      "_index-BSpFQY5P.js",
+      "_runtime-bridge-DCrnQV9v.js",
+      "_transport-CIrfFgnv.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "dynamicImports": [
+      "frontend/src/features/background.ts"
+    ],
+    "css": [
+      "assets/myday-DqwDkiui.css",
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/orchestration.ts": {
+    "file": "assets/orchestration-CFq6O6Lh.js",
+    "name": "orchestration",
+    "src": "frontend/src/features/orchestration.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_runtime-bridge-DCrnQV9v.js",
+      "_task-request-D96wQ_ik.js",
+      "_application-BT5nFDZc.js",
+      "_index-BSpFQY5P.js",
+      "frontend/src/main.ts",
+      "_transport-CIrfFgnv.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/paper-preview.ts": {
+    "file": "assets/paper-preview-CkmAXAZE.js",
+    "name": "paper-preview",
+    "src": "frontend/src/features/paper-preview.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_runtime-bridge-DCrnQV9v.js",
+      "_application-BT5nFDZc.js",
+      "_transport-CIrfFgnv.js",
+      "_index-BSpFQY5P.js",
+      "_pdf-reader-kWLASzNR.js",
+      "frontend/src/main.ts",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "dynamicImports": [
+      "node_modules/@codemirror/state/dist/index.js",
+      "_index-D0E_tUjN.js",
+      "_index-DwFhY3XE.js",
+      "node_modules/@codemirror/commands/dist/index.js",
+      "node_modules/@codemirror/search/dist/index.js",
+      "node_modules/@codemirror/autocomplete/dist/index.js",
+      "node_modules/@codemirror/legacy-modes/mode/stex.js",
+      "_application-BT5nFDZc.js"
+    ],
+    "css": [
+      "assets/paper-preview-CwRJDnxR.css",
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/paper/panel-owners.ts": {
+    "file": "assets/panel-owners-D5dX5bpx.js",
+    "name": "panel-owners",
+    "src": "frontend/src/features/paper/panel-owners.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_application-BT5nFDZc.js",
+      "_action-registry-BG2lWHJ2.js",
+      "_transport-CIrfFgnv.js",
+      "_index-BSpFQY5P.js",
+      "_paper-CwBsft6k.js",
+      "frontend/src/main.ts",
+      "_pdf-reader-kWLASzNR.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_runtime-bridge-DCrnQV9v.js"
+    ],
+    "css": [
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/paper/proposal-card.ts": {
+    "file": "assets/proposal-card-DhonMIfx.js",
+    "name": "proposal-card",
+    "src": "frontend/src/features/paper/proposal-card.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_transport-CIrfFgnv.js",
+      "_application-BT5nFDZc.js",
+      "frontend/src/main.ts",
+      "_index-BSpFQY5P.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/project-brain.ts": {
+    "file": "assets/project-brain-uaEkRt3P.js",
+    "name": "project-brain",
+    "src": "frontend/src/features/project-brain.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_application-BT5nFDZc.js",
+      "_index-BSpFQY5P.js",
+      "_runtime-bridge-DCrnQV9v.js",
+      "frontend/src/main.ts",
+      "_transport-CIrfFgnv.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/project-brain-OdHqGDLg.css",
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/project-coordination.ts": {
+    "file": "assets/project-coordination-BcaDwn9W.js",
+    "name": "project-coordination",
+    "src": "frontend/src/features/project-coordination.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_application-BT5nFDZc.js",
+      "_index-BSpFQY5P.js",
+      "_project-coordination-graph-BlhKrXmu.js",
+      "frontend/src/main.ts",
+      "_transport-CIrfFgnv.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/project.ts": {
+    "file": "assets/project-gbbb3qNz.js",
+    "name": "project",
+    "src": "frontend/src/features/project.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_application-BT5nFDZc.js",
+      "_index-BSpFQY5P.js",
+      "_workspace-rail-B-fIgtin.js",
+      "_runtime-bridge-DCrnQV9v.js",
+      "frontend/src/main.ts",
+      "_transport-CIrfFgnv.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/project-D3SKI1Jy.css",
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/router-instructions.ts": {
+    "file": "assets/router-instructions-3K9_qZlS.js",
+    "name": "router-instructions",
+    "src": "frontend/src/features/router-instructions.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_application-BT5nFDZc.js",
+      "_index-BSpFQY5P.js",
+      "frontend/src/main.ts",
+      "_transport-CIrfFgnv.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/settings/bot-channel.ts": {
+    "file": "assets/bot-channel-CrP7WA6W.js",
+    "name": "bot-channel",
+    "src": "frontend/src/features/settings/bot-channel.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_application-BT5nFDZc.js",
+      "_index-BSpFQY5P.js",
+      "_channels.generated-C7YCwnQp.js",
+      "frontend/src/main.ts",
+      "_transport-CIrfFgnv.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/settings/database.ts": {
+    "file": "assets/database-Bj_r_b9L.js",
+    "name": "database",
+    "src": "frontend/src/features/settings/database.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_application-BT5nFDZc.js",
+      "frontend/src/main.ts",
+      "_index-BSpFQY5P.js",
+      "_transport-CIrfFgnv.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/database-DmPg-gVc.css",
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/settings/dx-channel.ts": {
+    "file": "assets/dx-channel-VJR_W1I4.js",
+    "name": "dx-channel",
+    "src": "frontend/src/features/settings/dx-channel.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_application-BT5nFDZc.js",
+      "_index-BSpFQY5P.js",
+      "_channels.generated-C7YCwnQp.js",
+      "_transport-CIrfFgnv.js",
+      "frontend/src/main.ts",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/settings/github-channel.ts": {
+    "file": "assets/github-channel-CWuCvq7l.js",
+    "name": "github-channel",
+    "src": "frontend/src/features/settings/github-channel.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_application-BT5nFDZc.js",
+      "_index-BSpFQY5P.js",
+      "_transport-CIrfFgnv.js",
+      "_channels.generated-C7YCwnQp.js",
+      "frontend/src/main.ts",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/skills.ts": {
+    "file": "assets/skills-BVOzU3V8.js",
+    "name": "skills",
+    "src": "frontend/src/features/skills.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_runtime-bridge-DCrnQV9v.js",
+      "_application-BT5nFDZc.js",
+      "_package-installer-DUpjkpnH.js",
+      "frontend/src/main.ts",
+      "_index-BSpFQY5P.js",
+      "_transport-CIrfFgnv.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/skills-CIjBR0M9.css",
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/slides.ts": {
+    "file": "assets/slides-6YrfHVOB.js",
+    "name": "slides",
+    "src": "frontend/src/features/slides.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_runtime-bridge-DCrnQV9v.js",
+      "_application-BT5nFDZc.js",
+      "_index-BSpFQY5P.js",
+      "frontend/src/main.ts",
+      "_transport-CIrfFgnv.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/slides-CrAaNcHJ.css",
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/turn-review/dialog.ts": {
+    "file": "assets/dialog-DQGM-Evv.js",
+    "name": "dialog",
+    "src": "frontend/src/features/turn-review/dialog.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_application-BT5nFDZc.js",
+      "frontend/src/rich-response/artifact-review.ts",
+      "frontend/src/main.ts",
+      "_index-BSpFQY5P.js",
+      "_transport-CIrfFgnv.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/utility-panels.ts": {
+    "file": "assets/utility-panels-t--vwfqK.js",
+    "name": "utility-panels",
+    "src": "frontend/src/features/utility-panels.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_application-BT5nFDZc.js",
+      "_index-BSpFQY5P.js",
+      "_runtime-bridge-DCrnQV9v.js",
+      "frontend/src/main.ts",
+      "_transport-CIrfFgnv.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/utility-panels-CGPsId49.css",
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/voice/recording.ts": {
+    "file": "assets/recording-CEqurs9F.js",
+    "name": "recording",
+    "src": "frontend/src/features/voice/recording.ts",
+    "isDynamicEntry": true
+  },
+  "frontend/src/features/working-facts/dialog.ts": {
+    "file": "assets/dialog-BCbHLgqE.js",
+    "name": "dialog",
+    "src": "frontend/src/features/working-facts/dialog.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_application-BT5nFDZc.js",
+      "frontend/src/main.ts",
+      "_index-BSpFQY5P.js",
+      "_transport-CIrfFgnv.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/dialog-DsrjTkyE.css",
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/world.ts": {
+    "file": "assets/world-B7mMidNF.js",
+    "name": "world",
+    "src": "frontend/src/features/world.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_runtime-bridge-DCrnQV9v.js",
+      "_application-BT5nFDZc.js",
+      "_index-BSpFQY5P.js",
+      "_project-coordination-graph-BlhKrXmu.js",
+      "_office-character-9bamc_Z1.js",
+      "_transport-CIrfFgnv.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_open-BClclGq6.js",
+      "frontend/src/main.ts",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/world-CSDmjfcr.css",
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/owner-1.light-DbtnpFVA.webp",
+      "assets/owner-1.dark-7KdR3VJx.webp",
+      "assets/router-1.light-6XvaymcF.webp",
+      "assets/router-1.dark-CJZBUhCS.webp",
+      "assets/lead-1.light-BauilP6c.webp",
+      "assets/lead-1.dark-DLSBfEdj.webp",
+      "assets/lead-2.light-CCrh3Agz.webp",
+      "assets/lead-2.dark-CFwJPgB1.webp",
+      "assets/watchdog-1.light-Bt6Vj8e9.webp",
+      "assets/watchdog-1.dark-I_CIAupv.webp",
+      "assets/engineer-1.light-DDhaJ-qK.webp",
+      "assets/engineer-1.dark-CpuV9_87.webp",
+      "assets/engineer-2.light-LGNTDwZz.webp",
+      "assets/engineer-2.dark-BRVPO49m.webp",
+      "assets/researcher-1.light-2Y_CMnM0.webp",
+      "assets/researcher-1.dark-x90DU4fD.webp",
+      "assets/researcher-2.light-DGCbT8SB.webp",
+      "assets/researcher-2.dark-S7V3eXio.webp",
+      "assets/reviewer-1.light-3zoagPAH.webp",
+      "assets/reviewer-1.dark-DpxzpBZX.webp",
+      "assets/reviewer-2.light-9ttic07f.webp",
+      "assets/reviewer-2.dark-DAHU9o9P.webp",
+      "assets/writer-1.light-B7qgw4h6.webp",
+      "assets/writer-1.dark-CwF6HYCD.webp",
+      "assets/writer-2.light-B1dxQHpU.webp",
+      "assets/writer-2.dark-CVtMIKea.webp",
+      "assets/analyst-1.light-NnrEWXf_.webp",
+      "assets/analyst-1.dark-ZDtvYT2L.webp",
+      "assets/analyst-2.light-CmAz1CcC.webp",
+      "assets/analyst-2.dark-xSw4Qy5Q.webp",
+      "assets/executor-1.light-BIVmpFlr.webp",
+      "assets/executor-1.dark-BsFYf9f0.webp",
+      "assets/executor-2.light-35uPY-L1.webp",
+      "assets/executor-2.dark-B9YPUzhU.webp",
+      "assets/general-1.light-zcnSB0a0.webp",
+      "assets/general-1.dark-BICXdXHu.webp",
+      "assets/general-2.light-s8_itI_7.webp",
+      "assets/general-2.dark-GHuZkin0.webp",
+      "assets/props.light-D6i4hIUL.webp",
+      "assets/props.dark-qyjDz3Bt.webp",
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/features/world/assets/atlas/props.dark.webp": {
+    "file": "assets/props.dark-qyjDz3Bt.webp",
+    "src": "frontend/src/features/world/assets/atlas/props.dark.webp"
+  },
+  "frontend/src/features/world/assets/atlas/props.light.webp": {
+    "file": "assets/props.light-D6i4hIUL.webp",
+    "src": "frontend/src/features/world/assets/atlas/props.light.webp"
+  },
+  "frontend/src/features/world/assets/people/analyst-1.dark.webp": {
+    "file": "assets/analyst-1.dark-ZDtvYT2L.webp",
+    "src": "frontend/src/features/world/assets/people/analyst-1.dark.webp"
+  },
+  "frontend/src/features/world/assets/people/analyst-1.light.webp": {
+    "file": "assets/analyst-1.light-NnrEWXf_.webp",
+    "src": "frontend/src/features/world/assets/people/analyst-1.light.webp"
+  },
+  "frontend/src/features/world/assets/people/analyst-2.dark.webp": {
+    "file": "assets/analyst-2.dark-xSw4Qy5Q.webp",
+    "src": "frontend/src/features/world/assets/people/analyst-2.dark.webp"
+  },
+  "frontend/src/features/world/assets/people/analyst-2.light.webp": {
+    "file": "assets/analyst-2.light-CmAz1CcC.webp",
+    "src": "frontend/src/features/world/assets/people/analyst-2.light.webp"
+  },
+  "frontend/src/features/world/assets/people/engineer-1.dark.webp": {
+    "file": "assets/engineer-1.dark-CpuV9_87.webp",
+    "src": "frontend/src/features/world/assets/people/engineer-1.dark.webp"
+  },
+  "frontend/src/features/world/assets/people/engineer-1.light.webp": {
+    "file": "assets/engineer-1.light-DDhaJ-qK.webp",
+    "src": "frontend/src/features/world/assets/people/engineer-1.light.webp"
+  },
+  "frontend/src/features/world/assets/people/engineer-2.dark.webp": {
+    "file": "assets/engineer-2.dark-BRVPO49m.webp",
+    "src": "frontend/src/features/world/assets/people/engineer-2.dark.webp"
+  },
+  "frontend/src/features/world/assets/people/engineer-2.light.webp": {
+    "file": "assets/engineer-2.light-LGNTDwZz.webp",
+    "src": "frontend/src/features/world/assets/people/engineer-2.light.webp"
+  },
+  "frontend/src/features/world/assets/people/executor-1.dark.webp": {
+    "file": "assets/executor-1.dark-BsFYf9f0.webp",
+    "src": "frontend/src/features/world/assets/people/executor-1.dark.webp"
+  },
+  "frontend/src/features/world/assets/people/executor-1.light.webp": {
+    "file": "assets/executor-1.light-BIVmpFlr.webp",
+    "src": "frontend/src/features/world/assets/people/executor-1.light.webp"
+  },
+  "frontend/src/features/world/assets/people/executor-2.dark.webp": {
+    "file": "assets/executor-2.dark-B9YPUzhU.webp",
+    "src": "frontend/src/features/world/assets/people/executor-2.dark.webp"
+  },
+  "frontend/src/features/world/assets/people/executor-2.light.webp": {
+    "file": "assets/executor-2.light-35uPY-L1.webp",
+    "src": "frontend/src/features/world/assets/people/executor-2.light.webp"
+  },
+  "frontend/src/features/world/assets/people/general-1.dark.webp": {
+    "file": "assets/general-1.dark-BICXdXHu.webp",
+    "src": "frontend/src/features/world/assets/people/general-1.dark.webp"
+  },
+  "frontend/src/features/world/assets/people/general-1.light.webp": {
+    "file": "assets/general-1.light-zcnSB0a0.webp",
+    "src": "frontend/src/features/world/assets/people/general-1.light.webp"
+  },
+  "frontend/src/features/world/assets/people/general-2.dark.webp": {
+    "file": "assets/general-2.dark-GHuZkin0.webp",
+    "src": "frontend/src/features/world/assets/people/general-2.dark.webp"
+  },
+  "frontend/src/features/world/assets/people/general-2.light.webp": {
+    "file": "assets/general-2.light-s8_itI_7.webp",
+    "src": "frontend/src/features/world/assets/people/general-2.light.webp"
+  },
+  "frontend/src/features/world/assets/people/lead-1.dark.webp": {
+    "file": "assets/lead-1.dark-DLSBfEdj.webp",
+    "src": "frontend/src/features/world/assets/people/lead-1.dark.webp"
+  },
+  "frontend/src/features/world/assets/people/lead-1.light.webp": {
+    "file": "assets/lead-1.light-BauilP6c.webp",
+    "src": "frontend/src/features/world/assets/people/lead-1.light.webp"
+  },
+  "frontend/src/features/world/assets/people/lead-2.dark.webp": {
+    "file": "assets/lead-2.dark-CFwJPgB1.webp",
+    "src": "frontend/src/features/world/assets/people/lead-2.dark.webp"
+  },
+  "frontend/src/features/world/assets/people/lead-2.light.webp": {
+    "file": "assets/lead-2.light-CCrh3Agz.webp",
+    "src": "frontend/src/features/world/assets/people/lead-2.light.webp"
+  },
+  "frontend/src/features/world/assets/people/owner-1.dark.webp": {
+    "file": "assets/owner-1.dark-7KdR3VJx.webp",
+    "src": "frontend/src/features/world/assets/people/owner-1.dark.webp"
+  },
+  "frontend/src/features/world/assets/people/owner-1.light.webp": {
+    "file": "assets/owner-1.light-DbtnpFVA.webp",
+    "src": "frontend/src/features/world/assets/people/owner-1.light.webp"
+  },
+  "frontend/src/features/world/assets/people/researcher-1.dark.webp": {
+    "file": "assets/researcher-1.dark-x90DU4fD.webp",
+    "src": "frontend/src/features/world/assets/people/researcher-1.dark.webp"
+  },
+  "frontend/src/features/world/assets/people/researcher-1.light.webp": {
+    "file": "assets/researcher-1.light-2Y_CMnM0.webp",
+    "src": "frontend/src/features/world/assets/people/researcher-1.light.webp"
+  },
+  "frontend/src/features/world/assets/people/researcher-2.dark.webp": {
+    "file": "assets/researcher-2.dark-S7V3eXio.webp",
+    "src": "frontend/src/features/world/assets/people/researcher-2.dark.webp"
+  },
+  "frontend/src/features/world/assets/people/researcher-2.light.webp": {
+    "file": "assets/researcher-2.light-DGCbT8SB.webp",
+    "src": "frontend/src/features/world/assets/people/researcher-2.light.webp"
+  },
+  "frontend/src/features/world/assets/people/reviewer-1.dark.webp": {
+    "file": "assets/reviewer-1.dark-DpxzpBZX.webp",
+    "src": "frontend/src/features/world/assets/people/reviewer-1.dark.webp"
+  },
+  "frontend/src/features/world/assets/people/reviewer-1.light.webp": {
+    "file": "assets/reviewer-1.light-3zoagPAH.webp",
+    "src": "frontend/src/features/world/assets/people/reviewer-1.light.webp"
+  },
+  "frontend/src/features/world/assets/people/reviewer-2.dark.webp": {
+    "file": "assets/reviewer-2.dark-DAHU9o9P.webp",
+    "src": "frontend/src/features/world/assets/people/reviewer-2.dark.webp"
+  },
+  "frontend/src/features/world/assets/people/reviewer-2.light.webp": {
+    "file": "assets/reviewer-2.light-9ttic07f.webp",
+    "src": "frontend/src/features/world/assets/people/reviewer-2.light.webp"
+  },
+  "frontend/src/features/world/assets/people/router-1.dark.webp": {
+    "file": "assets/router-1.dark-CJZBUhCS.webp",
+    "src": "frontend/src/features/world/assets/people/router-1.dark.webp"
+  },
+  "frontend/src/features/world/assets/people/router-1.light.webp": {
+    "file": "assets/router-1.light-6XvaymcF.webp",
+    "src": "frontend/src/features/world/assets/people/router-1.light.webp"
+  },
+  "frontend/src/features/world/assets/people/watchdog-1.dark.webp": {
+    "file": "assets/watchdog-1.dark-I_CIAupv.webp",
+    "src": "frontend/src/features/world/assets/people/watchdog-1.dark.webp"
+  },
+  "frontend/src/features/world/assets/people/watchdog-1.light.webp": {
+    "file": "assets/watchdog-1.light-Bt6Vj8e9.webp",
+    "src": "frontend/src/features/world/assets/people/watchdog-1.light.webp"
+  },
+  "frontend/src/features/world/assets/people/writer-1.dark.webp": {
+    "file": "assets/writer-1.dark-CwF6HYCD.webp",
+    "src": "frontend/src/features/world/assets/people/writer-1.dark.webp"
+  },
+  "frontend/src/features/world/assets/people/writer-1.light.webp": {
+    "file": "assets/writer-1.light-B7qgw4h6.webp",
+    "src": "frontend/src/features/world/assets/people/writer-1.light.webp"
+  },
+  "frontend/src/features/world/assets/people/writer-2.dark.webp": {
+    "file": "assets/writer-2.dark-CVtMIKea.webp",
+    "src": "frontend/src/features/world/assets/people/writer-2.dark.webp"
+  },
+  "frontend/src/features/world/assets/people/writer-2.light.webp": {
+    "file": "assets/writer-2.light-B1dxQHpU.webp",
+    "src": "frontend/src/features/world/assets/people/writer-2.light.webp"
+  },
+  "frontend/src/hljs-core.ts": {
+    "file": "assets/hljs-core-ZElTz_so.js",
+    "name": "hljs-core",
+    "src": "frontend/src/hljs-core.ts",
+    "isDynamicEntry": true
+  },
+  "frontend/src/hljs-lazy-langs.ts": {
+    "file": "assets/hljs-lazy-langs-BSBw95UA.js",
+    "name": "hljs-lazy-langs",
+    "src": "frontend/src/hljs-lazy-langs.ts",
+    "isDynamicEntry": true
+  },
+  "frontend/src/i18n/generated/de.generated.json": {
+    "file": "assets/de.generated-J8m8dkEY.json",
+    "src": "frontend/src/i18n/generated/de.generated.json"
+  },
+  "frontend/src/i18n/generated/en.generated.json": {
+    "file": "assets/en.generated-OYj6DlYw.json",
+    "src": "frontend/src/i18n/generated/en.generated.json"
+  },
+  "frontend/src/i18n/generated/fr.generated.json": {
+    "file": "assets/fr.generated-xAZ5WF0I.json",
+    "src": "frontend/src/i18n/generated/fr.generated.json"
+  },
+  "frontend/src/i18n/generated/ja.generated.json": {
+    "file": "assets/ja.generated-aXlM8nNt.json",
+    "src": "frontend/src/i18n/generated/ja.generated.json"
+  },
+  "frontend/src/i18n/generated/ko.generated.json": {
+    "file": "assets/ko.generated-B9P8bI4j.json",
+    "src": "frontend/src/i18n/generated/ko.generated.json"
+  },
+  "frontend/src/i18n/generated/ru.generated.json": {
+    "file": "assets/ru.generated-D7e7SwP1.json",
+    "src": "frontend/src/i18n/generated/ru.generated.json"
+  },
+  "frontend/src/i18n/generated/zh.generated.json": {
+    "file": "assets/zh.generated-B8ptC7DW.json",
+    "src": "frontend/src/i18n/generated/zh.generated.json"
+  },
+  "frontend/src/main.ts": {
+    "file": "assets/main-BeeN8PTm.js",
+    "name": "main",
+    "src": "frontend/src/main.ts",
+    "isEntry": true,
+    "imports": [
+      "_index-BSpFQY5P.js"
+    ],
+    "dynamicImports": [
+      "_application-BT5nFDZc.js"
+    ],
+    "css": [
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ],
+    "tofuI18nCatalogSha256": "a280ba0ed510db4260de13dc3f384405870595a557bfee82ba490859a2edefdc",
+    "tofuAuthoringSha256": "11f10eea42bdeb09edb0a3ba9f771fabe685da83c75f892c1d796de4d753cda2"
+  },
+  "frontend/src/plugin.ts": {
+    "file": "assets/plugin-PXNsfFkT.js",
+    "name": "plugin",
+    "src": "frontend/src/plugin.ts",
+    "isEntry": true,
+    "imports": [
+      "_marked.esm-CJ-DXE3u.js",
+      "_transport-CIrfFgnv.js"
+    ],
+    "css": [
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/rich-response/artifact-review.ts": {
+    "file": "assets/artifact-review-C0_nIYfd.js",
+    "name": "artifact-review",
+    "src": "frontend/src/rich-response/artifact-review.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_application-BT5nFDZc.js",
+      "frontend/src/main.ts",
+      "_index-BSpFQY5P.js",
+      "_transport-CIrfFgnv.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/runtime/knowledge-presenters.generated.js": {
+    "file": "assets/knowledge-presenters.generated-cy5OeyJx.js",
+    "name": "knowledge-presenters.generated",
+    "src": "frontend/src/runtime/knowledge-presenters.generated.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_application-BT5nFDZc.js",
+      "_index-BSpFQY5P.js",
+      "frontend/src/main.ts",
+      "_transport-CIrfFgnv.js",
+      "_marked.esm-CJ-DXE3u.js",
+      "_action-registry-BG2lWHJ2.js"
+    ],
+    "css": [
+      "assets/fonts-DCADp7Ph.css"
+    ],
+    "assets": [
+      "assets/Newsreader-latin-s-izfB6B.woff2",
+      "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+      "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+      "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+      "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+      "assets/Inter-latin-Dx4kXJAl.woff2",
+      "assets/Inter-latin-ext-DO1Apj_S.woff2",
+      "assets/Sora-latin-CIFTEUp5.woff2",
+      "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+      "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2"
+    ]
+  },
+  "frontend/src/styles/fonts/Inter-latin-ext.woff2": {
+    "file": "assets/Inter-latin-ext-DO1Apj_S.woff2",
+    "src": "frontend/src/styles/fonts/Inter-latin-ext.woff2"
+  },
+  "frontend/src/styles/fonts/Inter-latin.woff2": {
+    "file": "assets/Inter-latin-Dx4kXJAl.woff2",
+    "src": "frontend/src/styles/fonts/Inter-latin.woff2"
+  },
+  "frontend/src/styles/fonts/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg.woff2": {
+    "file": "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg-CuZzjZib.woff2",
+    "src": "frontend/src/styles/fonts/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_907NSg.woff2"
+  },
+  "frontend/src/styles/fonts/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg.woff2": {
+    "file": "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg-Cndjl-RQ.woff2",
+    "src": "frontend/src/styles/fonts/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_TknNSg.woff2"
+  },
+  "frontend/src/styles/fonts/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg.woff2": {
+    "file": "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg-Burzeo0R.woff2",
+    "src": "frontend/src/styles/fonts/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_d0nNSg.woff2"
+  },
+  "frontend/src/styles/fonts/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg.woff2": {
+    "file": "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg-CKR7EymU.woff2",
+    "src": "frontend/src/styles/fonts/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_m07NSg.woff2"
+  },
+  "frontend/src/styles/fonts/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg.woff2": {
+    "file": "assets/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg-BWnRHtGZ.woff2",
+    "src": "frontend/src/styles/fonts/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU7NSg.woff2"
+  },
+  "frontend/src/styles/fonts/Newsreader-Italic-latin.woff2": {
+    "file": "assets/Newsreader-Italic-latin-CJDneadR.woff2",
+    "src": "frontend/src/styles/fonts/Newsreader-Italic-latin.woff2"
+  },
+  "frontend/src/styles/fonts/Newsreader-latin.woff2": {
+    "file": "assets/Newsreader-latin-s-izfB6B.woff2",
+    "src": "frontend/src/styles/fonts/Newsreader-latin.woff2"
+  },
+  "frontend/src/styles/fonts/PixelifySans-Bold.woff2": {
+    "file": "assets/PixelifySans-Bold-Cbhn5ptY.woff2",
+    "src": "frontend/src/styles/fonts/PixelifySans-Bold.woff2"
+  },
+  "frontend/src/styles/fonts/PressStart2P-Regular.woff2": {
+    "file": "assets/PressStart2P-Regular-C7mdBMtF.woff2",
+    "src": "frontend/src/styles/fonts/PressStart2P-Regular.woff2"
+  },
+  "frontend/src/styles/fonts/Sora-latin-ext.woff2": {
+    "file": "assets/Sora-latin-ext-CHFYM7AZ.woff2",
+    "src": "frontend/src/styles/fonts/Sora-latin-ext.woff2"
+  },
+  "frontend/src/styles/fonts/Sora-latin.woff2": {
+    "file": "assets/Sora-latin-CIFTEUp5.woff2",
+    "src": "frontend/src/styles/fonts/Sora-latin.woff2"
+  },
+  "frontend/src/styles/fonts/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ.woff2": {
+    "file": "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ-qB6lq5JB.woff2",
+    "src": "frontend/src/styles/fonts/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ.woff2"
+  },
+  "frontend/src/styles/fonts/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ.woff2": {
+    "file": "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ-DTdp6RaC.woff2",
+    "src": "frontend/src/styles/fonts/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ.woff2"
+  },
+  "frontend/src/styles/fonts/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ.woff2": {
+    "file": "assets/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ-D8RtCfa8.woff2",
+    "src": "frontend/src/styles/fonts/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ.woff2"
+  },
+  "node_modules/@codemirror/autocomplete/dist/index.js": {
+    "file": "assets/index-VStVOoX8.js",
+    "name": "index",
+    "src": "node_modules/@codemirror/autocomplete/dist/index.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "node_modules/@codemirror/state/dist/index.js",
+      "_index-D0E_tUjN.js",
+      "_index-DwFhY3XE.js"
+    ]
+  },
+  "node_modules/@codemirror/commands/dist/index.js": {
+    "file": "assets/index-Bu3jtoI7.js",
+    "name": "index",
+    "src": "node_modules/@codemirror/commands/dist/index.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "node_modules/@codemirror/state/dist/index.js",
+      "_index-D0E_tUjN.js",
+      "_index-DwFhY3XE.js"
+    ]
+  },
+  "node_modules/@codemirror/legacy-modes/mode/stex.js": {
+    "file": "assets/stex-C3f8Ysf7.js",
+    "name": "stex",
+    "src": "node_modules/@codemirror/legacy-modes/mode/stex.js",
+    "isDynamicEntry": true
+  },
+  "node_modules/@codemirror/search/dist/index.js": {
+    "file": "assets/index-B7NegqaM.js",
+    "name": "index",
+    "src": "node_modules/@codemirror/search/dist/index.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_index-D0E_tUjN.js",
+      "node_modules/@codemirror/state/dist/index.js"
+    ]
+  },
+  "node_modules/@codemirror/state/dist/index.js": {
+    "file": "assets/index-CnpNcRwM.js",
+    "name": "index",
+    "src": "node_modules/@codemirror/state/dist/index.js",
+    "isDynamicEntry": true
+  },
+  "node_modules/html2canvas/dist/html2canvas.esm.js": {
+    "file": "assets/html2canvas.esm-DXEQVQnt.js",
+    "name": "html2canvas.esm",
+    "src": "node_modules/html2canvas/dist/html2canvas.esm.js",
+    "isDynamicEntry": true
+  },
+  "node_modules/katex/dist/fonts/KaTeX_AMS-Regular.ttf": {
+    "file": "assets/KaTeX_AMS-Regular-DRggAlZN.ttf",
+    "src": "node_modules/katex/dist/fonts/KaTeX_AMS-Regular.ttf"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_AMS-Regular.woff": {
+    "file": "assets/KaTeX_AMS-Regular-DMm9YOAa.woff",
+    "src": "node_modules/katex/dist/fonts/KaTeX_AMS-Regular.woff"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_AMS-Regular.woff2": {
+    "file": "assets/KaTeX_AMS-Regular-BQhdFMY1.woff2",
+    "src": "node_modules/katex/dist/fonts/KaTeX_AMS-Regular.woff2"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Caligraphic-Bold.ttf": {
+    "file": "assets/KaTeX_Caligraphic-Bold-ATXxdsX0.ttf",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Caligraphic-Bold.ttf"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Caligraphic-Bold.woff": {
+    "file": "assets/KaTeX_Caligraphic-Bold-BEiXGLvX.woff",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Caligraphic-Bold.woff"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Caligraphic-Bold.woff2": {
+    "file": "assets/KaTeX_Caligraphic-Bold-Dq_IR9rO.woff2",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Caligraphic-Bold.woff2"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Caligraphic-Regular.ttf": {
+    "file": "assets/KaTeX_Caligraphic-Regular-wX97UBjC.ttf",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Caligraphic-Regular.ttf"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Caligraphic-Regular.woff": {
+    "file": "assets/KaTeX_Caligraphic-Regular-CTRA-rTL.woff",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Caligraphic-Regular.woff"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Caligraphic-Regular.woff2": {
+    "file": "assets/KaTeX_Caligraphic-Regular-Di6jR-x-.woff2",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Caligraphic-Regular.woff2"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Fraktur-Bold.ttf": {
+    "file": "assets/KaTeX_Fraktur-Bold-BdnERNNW.ttf",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Fraktur-Bold.ttf"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Fraktur-Bold.woff": {
+    "file": "assets/KaTeX_Fraktur-Bold-BsDP51OF.woff",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Fraktur-Bold.woff"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Fraktur-Bold.woff2": {
+    "file": "assets/KaTeX_Fraktur-Bold-CL6g_b3V.woff2",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Fraktur-Bold.woff2"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Fraktur-Regular.ttf": {
+    "file": "assets/KaTeX_Fraktur-Regular-CB_wures.ttf",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Fraktur-Regular.ttf"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Fraktur-Regular.woff": {
+    "file": "assets/KaTeX_Fraktur-Regular-Dxdc4cR9.woff",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Fraktur-Regular.woff"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Fraktur-Regular.woff2": {
+    "file": "assets/KaTeX_Fraktur-Regular-CTYiF6lA.woff2",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Fraktur-Regular.woff2"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Main-Bold.ttf": {
+    "file": "assets/KaTeX_Main-Bold-waoOVXN0.ttf",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Main-Bold.ttf"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Main-Bold.woff": {
+    "file": "assets/KaTeX_Main-Bold-Jm3AIy58.woff",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Main-Bold.woff"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Main-Bold.woff2": {
+    "file": "assets/KaTeX_Main-Bold-Cx986IdX.woff2",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Main-Bold.woff2"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Main-BoldItalic.ttf": {
+    "file": "assets/KaTeX_Main-BoldItalic-DzxPMmG6.ttf",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Main-BoldItalic.ttf"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Main-BoldItalic.woff": {
+    "file": "assets/KaTeX_Main-BoldItalic-SpSLRI95.woff",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Main-BoldItalic.woff"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Main-BoldItalic.woff2": {
+    "file": "assets/KaTeX_Main-BoldItalic-DxDJ3AOS.woff2",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Main-BoldItalic.woff2"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Main-Italic.ttf": {
+    "file": "assets/KaTeX_Main-Italic-3WenGoN9.ttf",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Main-Italic.ttf"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Main-Italic.woff": {
+    "file": "assets/KaTeX_Main-Italic-BMLOBm91.woff",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Main-Italic.woff"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Main-Italic.woff2": {
+    "file": "assets/KaTeX_Main-Italic-NWA7e6Wa.woff2",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Main-Italic.woff2"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Main-Regular.ttf": {
+    "file": "assets/KaTeX_Main-Regular-ypZvNtVU.ttf",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Main-Regular.ttf"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Main-Regular.woff": {
+    "file": "assets/KaTeX_Main-Regular-Dr94JaBh.woff",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Main-Regular.woff"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Main-Regular.woff2": {
+    "file": "assets/KaTeX_Main-Regular-B22Nviop.woff2",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Main-Regular.woff2"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Math-BoldItalic.ttf": {
+    "file": "assets/KaTeX_Math-BoldItalic-B3XSjfu4.ttf",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Math-BoldItalic.ttf"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Math-BoldItalic.woff": {
+    "file": "assets/KaTeX_Math-BoldItalic-iY-2wyZ7.woff",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Math-BoldItalic.woff"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Math-BoldItalic.woff2": {
+    "file": "assets/KaTeX_Math-BoldItalic-CZnvNsCZ.woff2",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Math-BoldItalic.woff2"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Math-Italic.ttf": {
+    "file": "assets/KaTeX_Math-Italic-flOr_0UB.ttf",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Math-Italic.ttf"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Math-Italic.woff": {
+    "file": "assets/KaTeX_Math-Italic-DA0__PXp.woff",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Math-Italic.woff"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Math-Italic.woff2": {
+    "file": "assets/KaTeX_Math-Italic-t53AETM-.woff2",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Math-Italic.woff2"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_SansSerif-Bold.ttf": {
+    "file": "assets/KaTeX_SansSerif-Bold-CFMepnvq.ttf",
+    "src": "node_modules/katex/dist/fonts/KaTeX_SansSerif-Bold.ttf"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_SansSerif-Bold.woff": {
+    "file": "assets/KaTeX_SansSerif-Bold-DbIhKOiC.woff",
+    "src": "node_modules/katex/dist/fonts/KaTeX_SansSerif-Bold.woff"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_SansSerif-Bold.woff2": {
+    "file": "assets/KaTeX_SansSerif-Bold-D1sUS0GD.woff2",
+    "src": "node_modules/katex/dist/fonts/KaTeX_SansSerif-Bold.woff2"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_SansSerif-Italic.ttf": {
+    "file": "assets/KaTeX_SansSerif-Italic-YYjJ1zSn.ttf",
+    "src": "node_modules/katex/dist/fonts/KaTeX_SansSerif-Italic.ttf"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_SansSerif-Italic.woff": {
+    "file": "assets/KaTeX_SansSerif-Italic-DN2j7dab.woff",
+    "src": "node_modules/katex/dist/fonts/KaTeX_SansSerif-Italic.woff"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_SansSerif-Italic.woff2": {
+    "file": "assets/KaTeX_SansSerif-Italic-C3H0VqGB.woff2",
+    "src": "node_modules/katex/dist/fonts/KaTeX_SansSerif-Italic.woff2"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_SansSerif-Regular.ttf": {
+    "file": "assets/KaTeX_SansSerif-Regular-BNo7hRIc.ttf",
+    "src": "node_modules/katex/dist/fonts/KaTeX_SansSerif-Regular.ttf"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_SansSerif-Regular.woff": {
+    "file": "assets/KaTeX_SansSerif-Regular-CS6fqUqJ.woff",
+    "src": "node_modules/katex/dist/fonts/KaTeX_SansSerif-Regular.woff"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_SansSerif-Regular.woff2": {
+    "file": "assets/KaTeX_SansSerif-Regular-DDBCnlJ7.woff2",
+    "src": "node_modules/katex/dist/fonts/KaTeX_SansSerif-Regular.woff2"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Script-Regular.ttf": {
+    "file": "assets/KaTeX_Script-Regular-C5JkGWo-.ttf",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Script-Regular.ttf"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Script-Regular.woff": {
+    "file": "assets/KaTeX_Script-Regular-D5yQViql.woff",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Script-Regular.woff"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Script-Regular.woff2": {
+    "file": "assets/KaTeX_Script-Regular-D3wIWfF6.woff2",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Script-Regular.woff2"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Size1-Regular.ttf": {
+    "file": "assets/KaTeX_Size1-Regular-Dbsnue_I.ttf",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Size1-Regular.ttf"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Size1-Regular.woff": {
+    "file": "assets/KaTeX_Size1-Regular-C195tn64.woff",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Size1-Regular.woff"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Size1-Regular.woff2": {
+    "file": "assets/KaTeX_Size1-Regular-mCD8mA8B.woff2",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Size1-Regular.woff2"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Size2-Regular.ttf": {
+    "file": "assets/KaTeX_Size2-Regular-B7gKUWhC.ttf",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Size2-Regular.ttf"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Size2-Regular.woff": {
+    "file": "assets/KaTeX_Size2-Regular-oD1tc_U0.woff",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Size2-Regular.woff"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Size2-Regular.woff2": {
+    "file": "assets/KaTeX_Size2-Regular-Dy4dx90m.woff2",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Size2-Regular.woff2"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Size3-Regular.ttf": {
+    "file": "assets/KaTeX_Size3-Regular-DgpXs0kz.ttf",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Size3-Regular.ttf"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Size3-Regular.woff": {
+    "file": "assets/KaTeX_Size3-Regular-CTq5MqoE.woff",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Size3-Regular.woff"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Size4-Regular.ttf": {
+    "file": "assets/KaTeX_Size4-Regular-DWFBv043.ttf",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Size4-Regular.ttf"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Size4-Regular.woff": {
+    "file": "assets/KaTeX_Size4-Regular-BF-4gkZK.woff",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Size4-Regular.woff"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Size4-Regular.woff2": {
+    "file": "assets/KaTeX_Size4-Regular-Dl5lxZxV.woff2",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Size4-Regular.woff2"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Typewriter-Regular.ttf": {
+    "file": "assets/KaTeX_Typewriter-Regular-D3Ib7_Hf.ttf",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Typewriter-Regular.ttf"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Typewriter-Regular.woff": {
+    "file": "assets/KaTeX_Typewriter-Regular-C0xS9mPB.woff",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Typewriter-Regular.woff"
+  },
+  "node_modules/katex/dist/fonts/KaTeX_Typewriter-Regular.woff2": {
+    "file": "assets/KaTeX_Typewriter-Regular-CO6r4hn1.woff2",
+    "src": "node_modules/katex/dist/fonts/KaTeX_Typewriter-Regular.woff2"
+  },
+  "node_modules/katex/dist/katex.min.css": {
+    "file": "assets/katex-DDY15Z93.css",
+    "src": "node_modules/katex/dist/katex.min.css"
+  },
+  "node_modules/katex/dist/katex.mjs": {
+    "file": "assets/katex-DLSO0Xi6.js",
+    "name": "katex",
+    "src": "node_modules/katex/dist/katex.mjs",
+    "isDynamicEntry": true
+  },
+  "node_modules/pdfjs-dist/legacy/build/pdf.mjs": {
+    "file": "assets/pdf-z6sF223D.js",
+    "name": "pdf",
+    "src": "node_modules/pdfjs-dist/legacy/build/pdf.mjs",
+    "isDynamicEntry": true
+  },
+  "node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs": {
+    "file": "assets/pdf.worker.min-rsCePomN.mjs",
+    "src": "node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs"
+  },
+  "node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs?url": {
+    "file": "assets/pdf.worker.min-7WEkucD6.js",
+    "name": "pdf.worker.min",
+    "src": "node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs?url",
+    "isDynamicEntry": true,
+    "assets": [
+      "assets/pdf.worker.min-rsCePomN.mjs"
+    ]
+  }
+}

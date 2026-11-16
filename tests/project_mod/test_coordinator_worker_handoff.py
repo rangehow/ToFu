@@ -97,22 +97,82 @@ def test_new_human_steering_can_find_review_and_cancel_prior_work(run):
     assert len(r.created) == 2
 
 
-def test_automatic_continuation_can_read_but_cannot_control_another_human_request(run):
+def _audited(monkeypatch):
+    from lib import log
+    audited = []
+    monkeypatch.setattr(log, 'audit_log', lambda event, **fields: audited.append((event, fields)))
+    return audited
+
+
+def test_automatic_continuation_reviews_and_cancels_another_requests_workers_of_its_binding(
+        run, monkeypatch):
+    """2026-11-16 (coordinator-4950501b, Turn 35df2aa7): the continuation of the first request was
+    refused review of a Worker the same Coordinator dispatched in a later owner-forwarded request
+    ('Automatic continuation may control only its original request workers'), so finished work
+    waited for that request's own wake. Review and cancel are scoped by the Coordinator binding,
+    like session control, and each call is audited."""
     r = run; first = delegate(r); end(r, first)
     original = next_human_attempt(r, new_input=True)
-    other = delegate(r, 'other-request')
+    other, stray = delegate(r, 'other-request'), delegate(r, 'stray')
     r.attempts['resumed-attempt']['status'] = 'completed'
     r.task = original
     assert r.wake() == ['accepted']
     activate(r)
     history = r.call('get_project_workers', scope='project')
     assert other['id'] in {item['assignment_id'] for item in history['workers']}
-    assert 'only its original request' in r.call('cancel_project_work', assignment_id=other['id'])['error']
+    audited = _audited(monkeypatch)
     end(r, other)
-    assert 'only its original request' in r.call('review_project_work', assignment_id=other['id'],
-        result_revision=1, decision='accept', note='Not my request')['error']
-    assert not r.c.repo.read(other['id'])['grant']['revoked']
-    assert r.c.repo.read(other['id'])['review'] is None
+    reviewed = r.call('review_project_work', assignment_id=other['id'], result_revision=1,
+                      decision='accept', note='Checked the later request\u2019s delivery')
+    assert reviewed.get('decision') == 'accept', reviewed
+    assert r.c.repo.read(other['id'])['review']['decision'] == 'accept'
+    cancelled = r.call('cancel_project_work', assignment_id=stray['id'])
+    assert cancelled.get('revoked') is True, cancelled
+    assert r.attempts[stray['execution']['attemptId']]['status'] == 'interrupted'
+    records = [fields for event, fields in audited if event == 'coordinator_session_control']
+    assert [(f['action'], f['assignment_id'], f['outcome']) for f in records] == [
+        ('review_project_work', other['id'], 'accepted'), ('cancel_project_work', stray['id'], 'accepted')]
+    assert all(f['principal_kind'] == 'system' and f['coordinator_conversation_id'] == 'coordinator'
+               and f['coordinator_turn_id'] == r.task['_turnId'] for f in records)
+
+
+def _as_another_coordinators(r, monkeypatch, assignment_id):
+    """Reads of ``assignment_id`` return it as another Coordinator's Worker."""
+    for name in ('read', 'read_point'):
+        def read(identity, *args, _original=getattr(r.c.repo, name), **kwargs):
+            row = _original(identity, *args, **kwargs)
+            if identity == assignment_id:
+                row = {**row, 'request': {**row['request'], 'coordinatorId': 'other-coordinator'}}
+            return row
+        monkeypatch.setattr(r.c.repo, name, read)
+
+
+@pytest.mark.parametrize('tool', ['review_project_work', 'cancel_project_work'])
+@pytest.mark.parametrize('owner', ['another_coordinator', 'another_project'])
+def test_review_and_cancel_of_another_coordinators_or_projects_worker_stay_refused_and_audited(
+        run, monkeypatch, tool, owner):
+    r = run
+    earlier = _later_request_continuation(r, 'superseded')
+    end(r, earlier)
+    before = r.c.repo.read(earlier['id'])
+    assignment_id = earlier['id']
+    if owner == 'another_coordinator':
+        _as_another_coordinators(r, monkeypatch, assignment_id)
+    else:
+        # The Coordinator's binding names one project; another project's assignment is not in it.
+        assignment_id = 'project-worker:assignment-of-another-project'
+    audited = _audited(monkeypatch)
+    arguments = {'assignment_id': assignment_id}
+    if tool == 'review_project_work':
+        arguments.update(result_revision=1, decision='accept', note='Not my Worker')
+    refused = r.call(tool, **arguments)
+    assert 'error' in refused, refused
+    if owner == 'another_coordinator':
+        assert 'another Coordinator' in refused['error'], refused
+    after = r.c.repo.read(earlier['id'])
+    assert after['review'] == before['review'] and after['grant'] == before['grant']
+    [fields] = [fields for event, fields in audited if event == 'coordinator_session_control']
+    assert (fields['action'], fields['assignment_id'], fields['outcome']) == (tool, assignment_id, 'refused')
 
 
 OWNER_WORDS = '现在进展如何？之前那个没用的 Worker 停掉。'
@@ -176,45 +236,17 @@ def test_an_owner_message_in_a_continuation_controls_every_worker_of_its_project
     c4bbe78a): the Global Router forwarded the owner's 「现在进展如何」 into the running
     continuation, which then twice failed to cancel stranded row 1be49eb0 of an earlier
     request: 'Automatic continuation may control only its original request workers'. A reply
-    the owner's message reached carries his request (as for a nonhuman wake), so it controls
-    every Worker of this Coordinator binding; the continuation alone still cannot."""
+    the owner's message reached controls every Worker of this Coordinator binding (since
+    2026-11-16 the continuation alone does too)."""
     r = run
     earlier = _later_request_continuation(r, worker)
     attempt = earlier['execution']['attemptId']
-    refused = r.call('cancel_project_work', assignment_id=earlier['id'])
-    assert 'only its original request' in refused['error'], refused
-    assert r.attempts[attempt]['status'] == 'running'
-    assert r.c.repo.read(earlier['id'])['grant']['revoked'] is (worker == 'revoked_stranded')
-
     _steer_into_reply(r, monkeypatch, message)
     cancelled = r.call('cancel_project_work', assignment_id=earlier['id'])
     assert cancelled.get('revoked') is True, cancelled
     assert r.attempts[attempt]['status'] == 'interrupted'
     assert r.c.repo.read(earlier['id'])['grant']['revoked']
     assert 'calling cancel_project_work' in r.cancel_provenance
-
-
-@pytest.mark.parametrize('case', ['nonhuman', 'forged-forward', 'queued', 'not-yet-delivered'])
-def test_a_continuation_without_an_owner_message_still_controls_only_its_request(run, monkeypatch, case):
-    """Only an owner message the model received lifts the continuation's scope: a notice steered
-    in, a forward whose words are not the owner's, an owner message that missed the reply
-    (queued as the next request) or one not yet delivered leaves it controlling only its own
-    request's Workers."""
-    r = run
-    earlier = _later_request_continuation(r, 'superseded')
-    if case == 'nonhuman':
-        _steer_into_reply(r, monkeypatch, 'nonhuman')
-    elif case == 'forged-forward':
-        _steer_into_reply(r, monkeypatch, 'forwarded', router_words='只是问问进展。')
-    elif case == 'queued':
-        _steer_into_reply(r, monkeypatch, 'owner', state='queued')
-    else:
-        _steer_into_reply(r, monkeypatch, 'owner')
-        r.task['_userSteerInjects'] = []
-    refused = r.call('cancel_project_work', assignment_id=earlier['id'])
-    assert 'only its original request' in refused['error'], refused
-    assert r.attempts[earlier['execution']['attemptId']]['status'] == 'running'
-    assert not r.c.repo.read(earlier['id'])['grant']['revoked']
 
 
 def _session_control(r, monkeypatch, earlier, action):
@@ -268,8 +300,6 @@ def test_a_continuation_controls_the_sessions_of_its_coordinators_earlier_reques
     assert event == 'coordinator_session_control' and fields['outcome'] == 'accepted'
     assert (fields['action'], fields['coordinator_conversation_id'], fields['principal_kind']) == (
         action, 'coordinator', 'system')
-    # Cancelling the assignment (its grant) stays a request-scoped act of that request.
-    assert 'only its original request' in r.call('cancel_project_work', assignment_id=earlier['id'])['error']
 
 
 def test_session_control_of_another_coordinators_worker_stays_refused_and_is_audited(run, monkeypatch):

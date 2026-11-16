@@ -14,7 +14,7 @@ recorded without a pin on purpose ('accepted as evidence', the code shipping
 elsewhere) hold the same way and stay unpublished. Re-affirming an accepted review
 with the registered checkpoint at the current result revision now publishes it,
 exactly as it already re-pinned a published accept; only the same request's
-attempts or the owner's own steering may do it.
+attempts, or any Turn of the Coordinator binding that dispatched it, may do it.
 """
 import threading
 from types import SimpleNamespace
@@ -112,11 +112,11 @@ def test_a_resumed_request_publishes_its_accepted_review_at_the_current_result(
     assert _receiver_verdict(r, worker, monkeypatch) == ''
 
 
-def _accepted_by_another_request(r):
-    """A continuation of the first request, and an accepted Worker of a later human request."""
+def _continuation_with_another_requests_worker(r):
+    """A continuation of the first request, and a completed Worker of a later human request."""
     first = delegate(r); end(r, first)
     original = next_human_attempt(r, new_input=True)
-    later, other = r.task, delegate(r, 'other-request')
+    other = delegate(r, 'other-request')
     r.attempts['resumed-attempt']['status'] = 'completed'
     r.task = original
     assert r.wake() == ['accepted']
@@ -125,45 +125,53 @@ def _accepted_by_another_request(r):
     workspace = r.workspaces[other['execution']['taskId']]
     workspace.update(checkpoint_sha='a' * 40, state='integrated')
     workspace['origin']['delivery']['checkpointSha'] = workspace['checkpoint_sha']
-    # The later request's own attempt accepted it without a pin.
-    continuation, r.task = r.task, later
-    r.attempts['resumed-attempt']['status'] = 'running'
-    accepted = r.call('review_project_work', assignment_id=other['id'], result_revision=1,
-                      decision='accept', note=NOTE)
-    assert 'error' not in accepted, accepted
-    r.attempts['resumed-attempt']['status'] = 'completed'
-    r.task = continuation
     return other
 
 
+def test_a_continuation_publishes_its_review_of_another_requests_worker(run, monkeypatch):
+    """Review is scoped by the Coordinator binding (coordinator-4950501b, 2026-11-16): an accept
+    recorded by another request's continuation publishes under the reviewed assignment's own
+    grant, never held as project_publication_authority_missing."""
+    r = run
+    worker = _continuation_with_another_requests_worker(r)
+    woken, released = _publishing(r)
+    published = r.call('review_project_work', assignment_id=worker['id'], result_revision=1,
+                       decision='accept', note=NOTE, checkpoint_sha='a' * 40)
+    assert 'error' not in published, published
+    assert published['checkpoint_sha'] == 'a' * 40 and published['canonical_delivery'], published
+    task_id = worker['execution']['taskId']
+    assert woken == [True] and released == [task_id]
+    row = r.c.repo.read(worker['id'])
+    # The pin's subject is the reviewed Worker's own delegation, not the reviewing continuation.
+    assert row['publication']['subject'] == 'coordinator:' + worker['request']['delegation']['taskId']
+    assert row['publication']['subject'] != 'coordinator:' + r.task['id']
+    assert r.c.repo.validate_publication(r.c.repo.admission(worker['id']), task_id)['id'] == worker['id']
+    assert _receiver_verdict(r, worker, monkeypatch) == ''
+
+
 @pytest.mark.parametrize('refusal', [
-    'nonhuman_request', 'another_request', 'revoked_grant', 'other_decision', 'owner_review',
+    'nonhuman_request', 'revoked_grant', 'other_decision', 'owner_review',
     'changed_note', 'unregistered_checkpoint', 'earlier_result'])
 def test_publishing_an_accepted_review_keeps_every_authority_refusal(run, monkeypatch, refusal):
     r = run
-    if refusal == 'another_request':
-        worker, checkpoint = _accepted_by_another_request(r), 'a' * 40
+    worker, pin = completed(r)
+    checkpoint = pin['checkpointSha']
+    if refusal == 'owner_review':
+        # The owner's own review route records an accept the Coordinator never made.
+        r.c.repo.record_review(worker['id'], 'accept', NOTE, 1, worker['grant']['revision'])
     else:
-        worker, pin = completed(r)
-        checkpoint = pin['checkpointSha']
-        if refusal == 'owner_review':
-            # The owner's own review route records an accept the Coordinator never made.
-            r.c.repo.record_review(worker['id'], 'accept', NOTE, 1, worker['grant']['revision'])
-        else:
-            decision = 'rework' if refusal == 'other_decision' else 'accept'
-            recorded = r.call('review_project_work', assignment_id=worker['id'], result_revision=1,
-                              decision=decision, note=NOTE)
-            assert 'error' not in recorded, recorded
-        _restart_resume(r)
-        r.turns[worker['execution']['turnId']]['projectionRevision'] = 3
+        decision = 'rework' if refusal == 'other_decision' else 'accept'
+        recorded = r.call('review_project_work', assignment_id=worker['id'], result_revision=1,
+                          decision=decision, note=NOTE)
+        assert 'error' not in recorded, recorded
+    _restart_resume(r)
+    r.turns[worker['execution']['turnId']]['projectionRevision'] = 3
     before = r.c.repo.read(worker['id'])
     woken, _ = _publishing(r)
     arguments = {'assignment_id': worker['id'], 'result_revision': 3, 'decision': 'accept', 'note': NOTE,
                  'checkpoint_sha': checkpoint}
     if refusal == 'nonhuman_request':
         _commitment_wake(r)
-    elif refusal == 'another_request':
-        arguments['result_revision'] = 1
     elif refusal == 'revoked_grant':
         r.c.repo.revoke(worker['id'], expected_revision=worker['grant']['revision'])
         before = r.c.repo.read(worker['id'])
@@ -182,8 +190,6 @@ def test_publishing_an_accepted_review_keeps_every_authority_refusal(run, monkey
     assert woken == []
     if refusal == 'nonhuman_request':
         assert refused['code'] == 'nonhuman_request', refused
-    elif refusal == 'another_request':
-        assert 'only its original request' in refused['error'], refused
     elif refusal == 'changed_note':
         # Publishing repeats the recorded judgment; the refusal names how.
         assert refused['execution_started'] is False, refused

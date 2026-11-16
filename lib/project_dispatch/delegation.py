@@ -171,17 +171,17 @@ def issued_worker_policy(repository, task):
 
 
 def worker_control(repository, task, row, *, session=False):
-    """Human steering may control old work; automatic continuations stay scoped.
+    """Whether this Coordinator Turn may act on the Worker ``row``.
 
-    A continuation cancels or reviews only its original request's Workers, unless
-    an owner message, his own or a Global Router forward of it, was steered into
-    this reply and reached its model: that reply carries his request, as the Turn
-    his message starts would, so it controls every Worker of this Coordinator
-    binding. ``session``: session control (checkpoint_resume, stop, follow_up of
-    a Worker session) is scoped by the Coordinator binding alone, for every Turn
-    of the Coordinator, so a continuation can resume or stop a Worker an earlier
-    request of the same binding dispatched (docs/PROJECT_COORDINATION.md,
-    "Session control is scoped by the Coordinator binding").
+    ``session``: the Coordinator's own controls (control_conversation,
+    follow_up, review_project_work, cancel_project_work) are scoped by the
+    Coordinator binding alone, for every Turn of the Coordinator, so an
+    automatic continuation can resume, stop, review or cancel a Worker an
+    earlier request of the same binding dispatched (docs/PROJECT_COORDINATION.md,
+    "Worker control is scoped by the Coordinator binding"). Without it (the
+    Router's delegated control of a nonhuman principal) a continuation acts only
+    on its original request's Workers, unless an owner message, his own or a
+    Global Router forward of it, was steered into this reply and reached its model.
     """
     principal, source, _ = source_for_task(repository, task)
     from .continuation import original_delegation, current_continuation
@@ -197,6 +197,31 @@ def worker_control(repository, task, row, *, session=False):
                 repository, task, {'conversationId': source['conversationId'], 'turnId': task.get('_turnId')}) is None:
         raise PermissionError('Automatic continuation may control only its original request workers')
     return origin
+
+
+def coordinator_control_record(task, scope, action, *, delegated=False, **target):
+    """The ``coordinator_session_control`` audit fields of one Coordinator control call."""
+    return {'user_id': scope.get('user_id'), 'project_path': scope.get('project_path'),
+            'coordinator_conversation_id': scope.get('conversation_id'), 'coordinator_task_id': task.get('id'),
+            'coordinator_turn_id': task.get('_turnId'),
+            'principal_kind': (task.get('_principalContext') or {}).get('kind'),
+            'delegated': delegated, 'action': action, **target}
+
+
+def audited_coordinator_control(record, act, accepted=lambda result: {}):
+    """Run ``act`` and write one ``coordinator_session_control`` record of its outcome.
+
+    ``accepted`` names the extra fields an accepted result records.
+    """
+    from lib.log import audit_log
+    try:
+        result = act()
+    except Exception as error:
+        audit_log('coordinator_session_control', **record, outcome='refused',
+                  reason=f'{type(error).__name__}: {error}')
+        raise
+    audit_log('coordinator_session_control', **record, outcome='accepted', **accepted(result))
+    return result
 
 
 def capture_worker_policy(task, config, catalog, model, *, worker_model=None):
@@ -592,7 +617,7 @@ def review_worker(repository, task, arguments):
         raise ValueError('Only accepted work may request checkpoint publication')
     def record(value):
         row = repository._find(value, arguments['assignment_id'])
-        worker_control(repository, task, row)
+        worker_control(repository, task, row, session=True)
         repository.validate_own(repository._admission(row), value=value)
         execution = row['execution'] or {}
         attempt = repository.get_attempt(execution.get('attemptId'))

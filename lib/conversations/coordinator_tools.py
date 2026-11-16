@@ -122,6 +122,15 @@ def _work_receipt(view: dict, decision: str, next_step: str) -> dict:
             'next_step': next_step}
 
 
+def _audited_worker_control(task, scope, name, arguments, act):
+    """review/cancel act on any Worker of this binding; each call is one audit record."""
+    from lib.project_dispatch.delegation import audited_coordinator_control, coordinator_control_record
+    record = coordinator_control_record(task, scope, name, assignment_id=arguments.get('assignment_id'),
+                                        decision=arguments.get('decision'),
+                                        checkpoint_sha=arguments.get('checkpoint_sha'))
+    return audited_coordinator_control(record, act)
+
+
 def _review_receipt(view: dict) -> dict:
     decision = view['review']['decision']
     if decision != 'accept':
@@ -181,11 +190,11 @@ def execute_coordinator_tool(task: dict, name: str, arguments: dict, *, runtime_
         elif name == 'review_project_work':
             from lib.project_dispatch.repository import ProjectDispatchRepository
             from lib.project_dispatch.service import ProjectDispatchService
-            result = _review_receipt(reread_on_contention(
+            result = _review_receipt(_audited_worker_control(task, scope, name, arguments, lambda: reread_on_contention(
                 task, lambda: ProjectDispatchService(
                     ProjectDispatchRepository(scope['user_id'], scope['project_path'])
                 ).review_for_coordinator(task, scope, arguments),
-                label='coordinator review'))
+                label='coordinator review')))
         elif name == 'get_project_workers':
             from .coordinator_workers import get_workers
             result = reread_on_contention(task, lambda: get_workers(task, scope, arguments),
@@ -212,7 +221,10 @@ def execute_coordinator_tool(task: dict, name: str, arguments: dict, *, runtime_
                     'cancelled', 'Grant withdrawn and live Worker attempts stopped; results and receipts '
                     'are preserved. Cancel other unwanted work before finish_project_request.')
 
-            result = reread_on_contention(task, command, label='coordinator ' + name)
+            result = reread_on_contention(task, command, label='coordinator ' + name) \
+                if name != 'cancel_project_work' else _audited_worker_control(
+                    task, scope, name, arguments,
+                    lambda: reread_on_contention(task, command, label='coordinator ' + name))
         elif name == 'report_to_user':
             from lib.conversations.coordinator_reports import CoordinatorReports
             result = CoordinatorReports(scope['user_id'], scope['project_path']).publish({

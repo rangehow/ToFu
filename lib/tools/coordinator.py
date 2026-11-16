@@ -49,8 +49,8 @@ COORDINATOR_TOOLS = [
           'review decision=rework when the same Worker should fix its own result; then poll its assignment_id. '
           'Never send a synthetic human message or approve '
           'a human question. Project Coordinators control their project; the Global Router can control any owned '
-          'conversation. An automatic continuation may control only its original request dispatched Workers '
-          'until an owner message reaches that reply. '
+          'conversation. Any Turn of this Coordinator, an automatic continuation included, controls the Workers '
+          'its binding dispatched in any request. '
           'Global Router only: when your current request has no owner message of its own (a standing instruction '
           'or a nonhuman notice), pass owner_delegation with the reason and the owner trigger to act under the '
           'delegation the owner granted you ("Act for me"); it allows continue, checkpoint_resume, stop and '
@@ -166,7 +166,7 @@ for _name, _definition, _description in (
      'Use scope=project on new human input to find earlier work in this Coordinator binding (history pages of up to 32 rows). A page keeps only the rows that fit one readable result; use next_cursor as after_id to continue exactly after the last row shown. An empty filtered page can still have a cursor. Source Turn and current_request distinguish earlier objectives. '
      'Delegations whose Worker is still starting, or could not start, are listed under starting_workers. Passive facts only; get_project_assignment reads full evidence.'),
     ('cancel_project_work', 'cancelProjectWork',
-     'Cancel an owned Worker in this Coordinator binding when handling human steering; automatic continuations may cancel only their original request Workers until an owner message reaches that reply. Withdraws its grant and stops every live attempt in its Worker conversation, including turns that ran without the assignment binding. '
+     'Cancel a Worker this Coordinator binding dispatched, in any of its requests (an automatic continuation included). Withdraws its grant and stops every live attempt in its Worker conversation, including turns that ran without the assignment binding. '
      'Late background-command results stay attached to the cancelled attempt as assignment evidence and never start another automatic Worker turn; running commands are not killed. '
      'Preserves results and receipts. Cancel failed or superseded work before marking the request complete. '
      'Returns a compact receipt: assignment_id, decision, grant_revision, revoked, execution_status, delivery and next_step.'),
@@ -183,7 +183,7 @@ for _name, _definition, _description in (
      'If they have not replied within wait_seconds (default 30 minutes), you are resumed automatically to apply '
      'the recommendation. Use this instead of stopping whenever a sensible default exists.'),
     ('review_project_work', 'coordinatorReviewRequest',
-     'Review an exact completed Worker result in this Coordinator binding when handling human steering; automatic continuations may review only their original request Workers until an owner message reaches that reply. '
+     'Review an exact completed Worker result this Coordinator binding dispatched, in any of its requests (an automatic continuation included). '
      'Read the evidence first. Accept, reject or request rework with a concrete note. '
      'When the assignment has acceptance checks (request.acceptance in get_project_assignment), judge each '
      'by its number in acceptance_results with the evidence you read: met only when the evidence shows it, '

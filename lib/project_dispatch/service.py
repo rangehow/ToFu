@@ -553,13 +553,13 @@ class ProjectDispatchService:
         return {'assignments': views, 'olderCursor': page['olderCursor'], 'newerCursor': page['newerCursor']}
 
     def cancel_for_coordinator(self, task, scope, arguments):
-        """Withdraw an owned worker under human steering or its original continuation."""
+        """Withdraw a Worker this Coordinator binding dispatched, in any of its requests."""
         from .repository import _validate_schema
         from .delegation import worker_control
         _validate_schema(arguments, 'cancelProjectWork')
         with self._publication_lock():
             assignment = self.repository.read(arguments['assignment_id'])
-            worker_control(self.repository, task, assignment)
+            worker_control(self.repository, task, assignment, session=True)
             revision = assignment['grant']['revision'] - int(assignment['grant']['revoked'])
             execution = self.repository.revoke(assignment['id'], expected_revision=revision)
             self._cancel_worker(assignment, execution, (

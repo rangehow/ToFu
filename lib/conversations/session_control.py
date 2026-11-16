@@ -149,23 +149,14 @@ def control_session(task, scope, arguments, *, acting_principal=None):
     Every action, accepted or refused, is recorded in the audit log
     (``coordinator_session_control``).
     """
-    from lib.log import audit_log
-    record = {'user_id': scope.get('user_id'), 'project_path': scope.get('project_path'),
-              'coordinator_conversation_id': scope.get('conversation_id'), 'coordinator_task_id': task.get('id'),
-              'coordinator_turn_id': task.get('_turnId'),
-              'principal_kind': (task.get('_principalContext') or {}).get('kind'),
-              'delegated': acting_principal is not None, 'action': arguments.get('action'),
-              'conversation_id': arguments.get('conversation_id'), 'turn_id': arguments.get('turn_id'),
-              'attempt_id': arguments.get('attempt_id')}
-    try:
-        result = _control_session(task, scope, arguments, acting_principal=acting_principal)
-    except Exception as error:
-        audit_log('coordinator_session_control', **record, outcome='refused',
-                  reason=f'{type(error).__name__}: {error}')
-        raise
-    audit_log('coordinator_session_control', **record, outcome='accepted',
-              command_id=result.get('command_id') if isinstance(result, Mapping) else None)
-    return result
+    from lib.project_dispatch.delegation import audited_coordinator_control, coordinator_control_record
+    record = coordinator_control_record(
+        task, scope, arguments.get('action'), delegated=acting_principal is not None,
+        conversation_id=arguments.get('conversation_id'), turn_id=arguments.get('turn_id'),
+        attempt_id=arguments.get('attempt_id'))
+    return audited_coordinator_control(
+        record, lambda: _control_session(task, scope, arguments, acting_principal=acting_principal),
+        lambda result: {'command_id': result.get('command_id') if isinstance(result, Mapping) else None})
 
 
 def _control_session(task, scope, arguments, *, acting_principal=None):

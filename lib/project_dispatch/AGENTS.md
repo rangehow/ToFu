@@ -92,10 +92,12 @@ Physical resumes retain the first shared-request delegation. A delegation
 returns before its birth ("Delegation returns at once" in
 PROJECT_COORDINATION.md): `admit_in_memory` holds the refusals that need no
 storage, `origin_attempt` keys it from the task, and `source_for_task(issued=True)`
-admits a birth whose issuing attempt completed meanwhile, never one after Stop. `worker_control`
-admits current human steering over the same binding epoch while keeping automatic
-continuations scoped to their original request until an owner message reaches their
-reply (`_steered_owner_source`). Verify the handoff contracts on
+admits a birth whose issuing attempt completed meanwhile, never one after Stop. `worker_control(session=True)`
+admits every Turn of the Coordinator (an automatic continuation included) over the
+Workers its binding dispatched in any request: session control, follow_up, review
+and cancel, each audited as `coordinator_session_control`. Its request-scoped form
+(Router owner delegation of a nonhuman principal) keeps a continuation to its
+original request until an owner message reaches the reply (`_steered_owner_source`). Verify the handoff contracts on
 all three selected authorities; passive project history grants no control rights.
 
 `acceptance.py` owns acceptance checks: a request's immutable numbered checks,

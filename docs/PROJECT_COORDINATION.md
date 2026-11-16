@@ -1079,8 +1079,10 @@ of an earlier request ("Automatic continuation may control only its original
 request workers"). A revoked row whose attempt was never stopped could then never
 be closed, and every restart reported it (Tofu's FRONTIER-HARNESS-1 3d589822 too),
 although the role guidance tells a lead to cancel obsolete Workers on every new
-owner message. Decision: `worker_control`, the one gate of `cancel_project_work`,
-`review_project_work`, `control_conversation` and `follow_up`, keeps an automatic
+owner message. Decision (since narrowed: Coordinator Turns now control, review
+and cancel every Worker of their binding without an owner message, "Worker
+control is scoped by the Coordinator binding"; the steered-message rule below
+still decides the request-scoped gate): `worker_control` keeps an automatic
 continuation to its original request's Workers unless an owner message reached
 that reply, judged by the predicate above (`_steered_owner_source`: a user-steer
 record whose committed author `require_human_turn` admits, a Global Router forward
@@ -1101,8 +1103,7 @@ Worker's result could then stop another request's work with no owner message); a
 owner-only path to close stranded rows (the lead could not use it, while the
 owner's message already authorizes the lead). Specifications:
 `tests/project_mod/test_coordinator_worker_handoff.py` (the owner's own and a
-forwarded message × a superseded and a revoked-stranded earlier-request Worker;
-nonhuman, forged-forward, queued and undelivered steers still refused).
+forwarded message × a superseded and a revoked-stranded earlier-request Worker).
 
 A request the Global Router forwarded (`origin.forwardedFrom`, ROUTER.md R2) is
 genuine human input once `verify_forwarded_turn` admits it: the owner's verbatim
@@ -2651,8 +2652,8 @@ by the browser. Resumes retain the target's accepted model/config and identity;
 they add no human message, answer, approval or enlarged tool grant. Dispatch
 attempts retain their exact `TrustedDispatch` admission.
 
-**Session control is scoped by the Coordinator binding (owner follow-up
-2026-11-15).** Problem: every server restart interrupted several Workers with
+**Worker control is scoped by the Coordinator binding (owner follow-up
+2026-11-15; review and cancel 2026-11-16).** Problem: every server restart interrupted several Workers with
 `worker_effect_outcome_unknown`; each waited for its Coordinator's
 `checkpoint_resume`, and when the Coordinator was running as an automatic
 continuation it was refused ("Automatic continuation may control only its
@@ -2671,17 +2672,43 @@ before; the Router's owner delegation keeps its own gate. Every
 conversation/task/Turn, principal kind, action, target conversation/Turn/
 Attempt, outcome, refusal reason). Acting on a session neither creates nor
 widens a grant: it resumes or stops the execution the Worker's grant already
-runs under. Cancelling or reviewing an assignment (`cancel_project_work`,
-`review_project_work`) stays scoped to the request as before, since it decides
-that request's result and account. Alternatives rejected: rebinding a
+runs under.
+
+`review_project_work` and `cancel_project_work` pass the same
+`worker_control(..., session=True)` gate. Problem (2026-11-16, Coordinator
+coordinator-4950501b): the automatic continuation of a Coordinator's first
+request was refused review of a finished Worker the same Coordinator had
+dispatched in a later, owner-forwarded request, so the result waited behind
+that request's own wake or the owner's next message ("finished work waits
+behind others"). Decision: any Turn of the Coordinator conversation reviews or
+cancels any Worker its binding dispatched in any request of its project. Each
+call, accepted or refused, writes one `coordinator_session_control` record
+(`action` `review_project_work`/`cancel_project_work`, `assignment_id`,
+`decision`, `checkpoint_sha`, outcome, refusal reason; same Coordinator fields).
+Another Coordinator's Workers are refused by the Coordinator-identity fence;
+another project's assignment is not in this binding's project repository. A
+review changes no account or policy of the reviewing request, and the accept's
+publication stays the reviewed assignment's own: its pin subject is that
+assignment's original delegation (`coordinator:<its taskId>`) and
+`validate_publication` checks it against that assignment's grant, so the
+delivery publishes instead of holding `project_publication_authority_missing`.
+The request-scoped `worker_control` (no `session`) remains only for a nonhuman
+principal acting under the Router's owner delegation.
+
+Alternatives rejected: rebinding a
 continuation to every earlier request (one reply would carry several requests'
 accounts and policies); requiring an owner message to reach the continuation
 ("An owner message in an automatic continuation controls every Worker of its
-project": exactly the manual step this removes); widening to the Global Router
+project": exactly the manual step this removes); keeping review and cancel
+request-scoped (a finished Worker of another request then waits for that
+request's continuation); widening to the Global Router
 or across projects (outside the owner's delegation to his own Coordinator).
 Specifications: `tests/project_mod/test_coordinator_worker_handoff.py`
 (`test_a_continuation_controls_the_sessions_of_its_coordinators_earlier_request_workers`,
-`test_session_control_of_another_coordinators_worker_stays_refused_and_is_audited`).
+`test_session_control_of_another_coordinators_worker_stays_refused_and_is_audited`,
+`test_automatic_continuation_reviews_and_cancels_another_requests_workers_of_its_binding`,
+`test_review_and_cancel_of_another_coordinators_or_projects_worker_stay_refused_and_audited`)
+and `tests/project_mod/test_coordinator_resumed_publication.py::test_a_continuation_publishes_its_review_of_another_requests_worker`.
 Ordinary session resumes retain their existing human-authorized execution.
 Nonhuman notifications without an authorized request cannot issue controls,
 with one exception: the Global Router acting under the owner's delegation
@@ -2848,9 +2875,9 @@ A replay with identical arguments reports the accepted Turn and starts nothing; 
 the session moved on, an older pin is refused. Human messages and steers in the
 Worker conversation keep their ordinary paths: a queued human input supersedes the
 follow-up, and a running Worker takes context through `send_project_message`, not
-`follow_up`. Workers gain no authority. Automatic continuations follow up only
-their original request's Workers (`worker_control`) unless an owner message reached
-the reply, and the owner's delegation (Router R9) never follows up.
+`follow_up`. Workers gain no authority. Any Turn of the Coordinator, an automatic
+continuation included, follows up the Workers its binding dispatched
+(`worker_control(session=True)`), and the owner's delegation (Router R9) never follows up.
 
 #### Attachments on lead messages
 

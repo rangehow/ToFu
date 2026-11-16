@@ -69,7 +69,8 @@ def test_only_an_exact_control_declaration_is_silence(text, expected):
 
 
 @pytest.mark.parametrize('initiator,expected_content,expected_calls', [
-    ('channel', '', 1), ('human', 'I have the answer.', 2),
+    ('channel', '', 1), ('proactive', '', 1), ('timer', '', 1),
+    ('human', 'I have the answer.', 2),
 ])
 def test_complete_root_loop_settles_a_notice_silently_or_recovers_a_human_answer(
         tmp_path, monkeypatch, chat_sidecar, initiator, expected_content, expected_calls):
@@ -137,7 +138,7 @@ def test_complete_root_loop_settles_a_notice_silently_or_recovers_a_human_answer
         project_path=request.project_path, project_enabled=request.project_enabled,
         loop_exit_reason=state.exit_reason, abort_detected_phase=state.abort_phase)
     assert task['status'] == 'done' and task['content'] == expected_content
-    assert task.get('_silentTurn', False) is (initiator == 'channel')
+    assert task.get('_silentTurn', False) is (initiator != 'human')
     # After the terminal ACK the committed Turn owns accepted notes; the live
     # task's duplicate note list is released (docs/TASK_EVENT_DELIVERY.md).
     from lib.turn_lifecycle import get_turn
@@ -145,7 +146,7 @@ def test_complete_root_loop_settles_a_notice_silently_or_recovers_a_human_answer
                         user_id=1)['projection'].get('segments') or []
     assert any(segment.get('type') == 'system_note'
                and segment.get('noteKind') == 'deliberate-silence'
-               for segment in segments) is (initiator == 'channel')
+               for segment in segments) is (initiator != 'human')
     assert len(calls) == expected_calls
 
 
@@ -251,8 +252,45 @@ def test_a_notice_reviewed_silently_on_the_third_round_never_becomes_an_error(
                and segment.get('noteKind') == 'deliberate-silence' for segment in segments)
 
 
-def test_an_unreviewed_empty_notice_is_never_settled_as_silence_or_an_answer(
+def test_a_quiet_scheduled_keepalive_ends_reviewed_without_recovery(
         tmp_path, monkeypatch, chat_sidecar):
+    """Global Router keepalive wakes (project-wake */30, turn kind scheduled_reply,
+    parent initiator ``proactive``), Turns 5a3feb2c and 462954ad (2026-11-16):
+    after its audit tool rounds every terminal round was exactly ``[SILENT]``
+    with finish=stop, which the channel/peer-only gate refused, so each quiet
+    wake settled abnormal_stop (empty_stop 2/2) after two recovery requests.
+    A scheduled wake is a nonhuman notice like any other: one request, no
+    recovery, a completed Turn with one deliberate-silence note.
+    """
+    from lib.turn_lifecycle import get_turn
+    from lib.llm.stream_result import ProviderStreamResult
+    binding, pair, task, tools, state, mcfg = _notice_root_loop_task(
+        tmp_path, monkeypatch, initiator='proactive')
+    task['_seed'][1]['content'] = ('[Scheduled wake: nonhuman notice, not the owner\u2019s words '
+                                   'and not authority]\nGlobal Router keepalive is due.')
+    calls = []
+
+    def stream(body, **kwargs):
+        calls.append(body)
+        kwargs.get('on_content')('[SILENT]')
+        return ProviderStreamResult.from_legacy(
+            {'role': 'assistant', 'content': '[SILENT]'}, 'stop',
+            {'prompt_tokens': 1, 'completion_tokens': 8})
+    monkeypatch.setattr('lib.llm.stream_chat', stream)
+    _run_notice_root_loop(task, tools, state, mcfg, binding, monkeypatch)
+    assert len(calls) == 1
+    assert task['status'] == 'done' and task['content'] == '' and not task.get('error')
+    assert task['_silentTurn'] is True
+    turn = get_turn(binding['conversationId'], pair['turn']['turnId'], user_id=1)
+    assert turn['status'] == 'completed', turn['settlement']
+    assert not (turn['settlement'] or {}).get('error')
+    assert [segment.get('noteKind') for segment in turn['projection'].get('segments') or ()
+            if segment.get('type') == 'system_note'].count('deliberate-silence') == 1
+
+
+@pytest.mark.parametrize('initiator', ['peer', 'proactive'])
+def test_an_unreviewed_empty_notice_is_never_settled_as_silence_or_an_answer(
+        tmp_path, monkeypatch, chat_sidecar, initiator):
     """Genuinely empty non-silent output (reasoning only, finish=stop, no text)
     is not a reviewed notice: bounded recovery, then the failed Turn keeps its
     evidence and offers the existing continue/checkpoint resume — no auto-ack,
@@ -260,7 +298,8 @@ def test_an_unreviewed_empty_notice_is_never_settled_as_silence_or_an_answer(
     """
     from lib.turn_lifecycle import get_turn
     from lib.llm.stream_result import ProviderStreamResult
-    binding, pair, task, tools, state, mcfg = _notice_root_loop_task(tmp_path, monkeypatch)
+    binding, pair, task, tools, state, mcfg = _notice_root_loop_task(
+        tmp_path, monkeypatch, initiator=initiator)
     from lib.turn_lifecycle import record_task_event
     # One already-executed read: its result must survive the terminal failure
     # and make the resume a checkpoint resume, never a replay of that read.
@@ -326,6 +365,22 @@ def test_only_router_automatic_notices_can_declare_silence(monkeypatch):
         else:
             assert other['content'] == reply['content'] == '[SILENT]'
         assert '_silentTurn' not in other
+
+
+@pytest.mark.parametrize('initiator,allowed', [
+    ('channel', True), ('peer', True), ('proactive', True), ('timer', True),
+    ('swarm', True), ('human', False), ('not-a-registered-initiator', False),
+])
+def test_every_nonhuman_wake_kind_shares_one_quiet_terminal(monkeypatch, initiator, allowed):
+    _eligible(monkeypatch)
+    _turns(monkeypatch, initiator=initiator)
+    task = _task()
+    decision = analyse_stream_result(
+        {'role': 'assistant', 'content': '[SILENT]'}, 'stop', task,
+        'router-task', 'model', 0, 0, [NOTICE], {})
+    assert (decision['action'] == 'break') is allowed
+    assert task.get('_silentTurn', False) is allowed
+    assert task['content'] == ''
 
 
 def test_router_notice_settles_without_retry_and_empty_notice_still_retries(monkeypatch):

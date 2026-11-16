@@ -117,6 +117,17 @@ def resolve_turn_initiator(turn: Mapping[str, Any] | None) -> str:
     return initiator
 
 
+def is_nonhuman_notice_turn(turn: Mapping[str, Any] | None) -> bool:
+    """Whether a durable input Turn is a nonhuman notice of any kind.
+
+    This is the one parent test of the Global Router's quiet terminal
+    (``[SILENT]``, docs/ROUTER.md): channel events, peer reports, scheduled
+    wakes, timers and every other nonhuman initiator qualify alike; human
+    and unknown initiators never do.
+    """
+    return resolve_turn_initiator(turn) in NON_HUMAN_INITIATORS
+
+
 def is_auto_initiated(message: dict[str, Any]) -> bool:
     """Return whether the turn was initiated outside the human input box."""
     return resolve_initiator(message) != INITIATOR_HUMAN

@@ -108,9 +108,7 @@ def silence_declaration_allowed(task: dict, messages) -> bool:
     if same_turn and cached.get('eligible') is False:
         return False
     try:
-        from lib.turn_initiation import (
-            INITIATOR_CHANNEL, INITIATOR_PEER, resolve_turn_initiator,
-        )
+        from lib.turn_initiation import is_nonhuman_notice_turn
         from lib import agent_inbox
         from lib.turn_lifecycle import get_turn
         for item in agent_inbox.pending_items(task['convId'], modes=['user-steer']):
@@ -128,7 +126,7 @@ def silence_declaration_allowed(task: dict, messages) -> bool:
             return False
         if not same_turn:
             source = get_turn(conversation_id, parent_id, user_id=owner)
-            if resolve_turn_initiator(source) not in (INITIATOR_CHANNEL, INITIATOR_PEER):
+            if not is_nonhuman_notice_turn(source):
                 task[SILENT_ELIGIBILITY_FIELD] = {
                     'conversationId': conversation_id, 'turnId': turn_id,
                     'attemptId': attempt_id, 'eligible': False,

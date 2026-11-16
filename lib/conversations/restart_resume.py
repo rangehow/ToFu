@@ -44,7 +44,7 @@ validated against its durable Turn before anything starts.
 The same ordinary resume command also recovers a Global Router notice whose
 review exhausted the terminal-response budget (empty_stop) and settled failed
 with no answer. ``failed_notice_resume_option`` admits only that class — a
-durable nonhuman channel/peer parent, no current-Turn owner steer, no
+durable nonhuman parent of any kind, no current-Turn owner steer, no
 deliverable answer or deliberate-silence note, and a settlement that already
 offers continue/checkpoint_resume — and ``resume_failed_notice_turn`` issues
 it with command id ``notice-review-resume:<failed Attempt>``. The failed Turn
@@ -467,8 +467,7 @@ def failed_notice_resume_option(turn: Mapping | None) -> tuple[Mapping | None, s
     is not an unreviewed notice either.
     """
     from lib.turn_initiation import (
-        INITIATOR_CHANNEL, INITIATOR_PEER, require_human_turn, resolve_turn_initiator,
-        steer_author_turn,
+        is_nonhuman_notice_turn, require_human_turn, steer_author_turn,
     )
     if not isinstance(turn, Mapping):
         return None, 'no Turn was supplied'
@@ -492,8 +491,8 @@ def failed_notice_resume_option(turn: Mapping | None) -> tuple[Mapping | None, s
               or turn.get('_noticeSourceTurn'))
     if not isinstance(source, Mapping) or not source.get('turnId'):
         return None, 'the notice input Turn is required to prove nonhuman authorship'
-    if resolve_turn_initiator(source) not in {INITIATOR_CHANNEL, INITIATOR_PEER}:
-        return None, 'only a nonhuman channel/peer notice resumes here; owner-authored Turns keep Continue'
+    if not is_nonhuman_notice_turn(source):
+        return None, 'only a nonhuman notice resumes here; owner-authored Turns keep Continue'
     for record in projection.get('_userSteerInjects') or ():
         if not isinstance(record, Mapping) or not record.get('author'):
             continue

@@ -310,7 +310,17 @@ lose its usage account and fences).
 
 **Reviewed notices can conclude without an answer.** An exact `[SILENT]` is a
 declared outcome only for a bound Global Router Turn whose parent is a
-nonhuman channel/peer notice. The engine checks the durable parent and every
+nonhuman notice of any kind (`turn_initiation.is_nonhuman_notice_turn`):
+a channel event, a project report or question relay, a scheduled wake such
+as the keepalive, a timer or any other nonhuman initiator. One quiet-terminal
+contract covers every wake kind; human and unknown initiators never qualify.
+Problem: the gate admitted only channel/peer parents while the Router prompt
+prescribes `[SILENT]` for any event that needs nothing, so every quiet
+`*/30` keepalive (a `proactive` scheduled wake) was refused, burned both
+terminal-recovery attempts and settled `abnormal_stop` (empty_stop).
+Decision: the parent test is "nonhuman", shared with the empty_stop resume
+below. Alternative rejected: listing wake initiators one by one (the next
+wake kind would fail the same way). The engine checks the durable parent and every
 steer of this Turn by its recorded author: committed, pending in the inbox,
 or drained into this request before its consumption is confirmed. Model
 history is never steer evidence: it keeps earlier Turns' labelled owner-steer

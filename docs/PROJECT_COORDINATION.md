@@ -1961,9 +1961,14 @@ unchanged list-render signature suppresses reads and the project subscription
 missed reconnects. A later successful binding also left the warning visible
 while optional board/report reads were pending. Decision: failed surfaces retry
 on browser online/visible recovery, and the existing project subscription also
-revalidates after push reconnect. Recovery uses the same single flight and
-scope fencing; healthy online/visibility events and ordinary list renders start
-no reads. A successful binding immediately replaces the failed row, independent
+revalidates after push reconnect. The application's shared revalidation
+(`_revalidateOnResume`: backend-availability recovery and its periodic
+reconcile, besides those signals) calls each surface's `recover()` through
+`runtimeScope.recoverProjectCoordination`, so a binding read that timed out
+while the API host stalled is retried without a click and without a surface
+timer. Recovery uses the same single flight and scope fencing; a read already
+in flight is the retry, so one signal heard on both paths reads once. Healthy
+signals and ordinary list renders start no reads. A successful binding immediately replaces the failed row, independent
 of optional data. Teardown removes both browser and reconnect listeners.
 Failure copy distinguishes transport timeout/network errors and logs only the
 canonical code/status/request ID, not response bodies. Alternatives rejected:

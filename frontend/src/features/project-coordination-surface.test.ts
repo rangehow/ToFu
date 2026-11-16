@@ -117,6 +117,28 @@ it.each(['online', 'visible'])('recovers a failed binding when the browser becom
   expect(f.ports.binding).toHaveBeenCalledTimes(2);
 });
 
+it('retries a timed-out first binding read on the shared revalidation, once per signal and never without a failure', async () => {
+  const f = fixture('sidebar');
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  vi.mocked(f.ports.binding).mockRejectedValueOnce(Object.assign(new Error('timed out'), { code: 'timeout', status: 0 }));
+  try {
+    await f.surface.refresh();
+    expect(f.sidebar.textContent).toContain('err.k.timeout.chip');
+    // The shared revalidation and this surface's own listener hear one visibility signal.
+    f.surface.recover();
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.waitFor(() => expect(f.sidebar.querySelector('[role="button"]')).not.toBeNull());
+    expect(f.sidebar.querySelector('.coordination-read-error')).toBeNull();
+    await f.surface.refresh();
+    expect(f.ports.binding).toHaveBeenCalledTimes(2);
+    f.surface.recover();
+    await f.surface.refresh();
+    expect(f.ports.binding).toHaveBeenCalledTimes(2);
+  } finally { f.surface.destroy(); warning.mockRestore(); }
+  f.surface.recover();
+  expect(f.ports.binding).toHaveBeenCalledTimes(2);
+});
+
 it('keeps a failed recovery explicit without spinning retries and reports a safe request witness', async () => {
   const f = fixture('sidebar');
   const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});

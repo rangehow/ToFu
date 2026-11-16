@@ -205,6 +205,7 @@ function _revalidateOnResume(trigger) {
   // a boot load already in flight must not hold its replay cursor asleep.
   // The coordinator coalesces snapshots and preserves stream retry backoff.
   void identityReady.then(() => _activeConversationWake()).catch(failed);
+  runtimeScope.recoverProjectCoordination?.();
   if (refreshCatalog) {
     void identityReady.then(() => loadConversationCatalog())
       .catch(failed).finally(_releaseBootLoad);

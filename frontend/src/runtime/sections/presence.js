@@ -438,6 +438,10 @@
   runtimeScope.observeCoordinatorProgress = function (progress) {
     surface.observeProgress(progress); sidebarSurface.observeProgress(progress); headquartersSurface.observeProgress(progress);
   };
+  // The shared revalidation (core/conversation_invalidation.js) retries failed binding reads.
+  runtimeScope.recoverProjectCoordination = function () {
+    surface.recover(); sidebarSurface.recover(); headquartersSurface.recover();
+  };
   // Reached from the main coordinator's card and settings, never as list rows.
   runtimeScope.routerConversationIds = function () {
     return [globalRouter.conversationId(), routerWatchdog.conversationId()].filter(Boolean);
@@ -527,6 +531,7 @@
   };
   window.addEventListener('pagehide', function (event) {
     if (!event.persisted) {
+      delete runtimeScope.recoverProjectCoordination;
       surface.destroy(); sidebarSurface.destroy(); headquartersSurface.destroy(); globalRouter.destroy(); routerWatchdog.destroy();
       coordinatorConversationGroups.destroy(); leadOffice?.destroy(); stopLandingWatch();
     }

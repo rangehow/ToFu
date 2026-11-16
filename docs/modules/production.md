@@ -449,6 +449,43 @@ sample embeds 124 glyphs in 28,968 font bytes (50,097-byte PPTX). Both pass real
 Chromium layout/label containment and native-package checks. These samples do
 not establish native Office rendering or model-generated deck quality.
 
+### Slide motion
+
+**Problem:** every exported slide got the same fade transition and nothing
+else. A deck could not build an argument point by point, land its key
+number, or show that two slides show the same object, so the PPTX carried
+none of the pacing a presenter adds by hand. Decorative motion, such as
+fly-ins, spins or random effects, would make decks worse, and some effects do
+not survive PowerPoint, LibreOffice and WPS alike.
+**Decision:** PPTD pages may declare an optional `motion` mapping chosen by
+content purpose: `reveal` (ordered element or component targets, one click
+per step, and one click per paragraph for a multi-paragraph text box),
+`emphasize` (one element or component; a `metric` resolves to its value),
+and `continues` (Morph from the previous page; an elementId shared by both
+pages is the same object). `lib/slides/motion.py` owns validation and the only
+OOXML mapping. The fixed effects are Fade entrance (preset 10), Pulse emphasis
+(preset 26), the default fade transition, and Morph `byObject` inside
+`mc:AlternateContent` with a fade Fallback. Shared objects are renamed
+`!!<elementId>` on both slides. Every effect uses the PowerPoint built-in
+preset with its default duration, so the deck stays editable in the
+Animation pane. There is no per-page speed, effect-choice or delay field and
+no setting. `validate_deck` (and therefore the author's page gate) reports
+unknown keys, unknown targets, double reveals and bad types. `continues` on
+the first page is a no-op, because pages are authored one at a time.
+`pptx_qa` treats the Morph `AlternateContent` as the transition slot when it
+checks `CT_Slide` order, refuses a second transition, and refuses animation or
+build targets that name no shape. Previews render a page's final build state.
+**Alternatives considered:** free-form effect names or OOXML passthrough
+(decorative effects and viewer-specific breakage come back, and the model
+would tune timing); a deck-level "animation style" setting (a knob with no
+content purpose); duplicating slides to fake builds (breaks speaker notes,
+editability and page counts); Morph without a Fallback (readers without
+`p159`, such as LibreOffice and PowerPoint 2016 MSI, would get no transition).
+Research, viewer behaviour and evidence: [`SLIDE_MOTION.md`](../SLIDE_MOTION.md).
+Verify with `tests/slides/test_slides_motion.py`; its LibreOffice import test
+runs when `soffice` is on `PATH`. Keynote, WPS and real PowerPoint
+playback are unverified.
+
 ## Stage contract
 
 A `Stage` declares:

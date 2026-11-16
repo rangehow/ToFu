@@ -1,7 +1,9 @@
 """Bounded native PPTX package QA, independent of Office installation.
 
 Entry point: inspect_pptx_package. Dependencies: stdlib and lazy defusedxml.
-Checks ZIP integrity, XML, relationship targets, slide order, shape identity,
+Checks ZIP integrity, XML, relationship targets, slide order (a Morph
+mc:AlternateContent counts as the transition), animation/build shape targets,
+shape identity,
 editable-object counts and native chart axes before publication. No external
 relationship is fetched. Actual Office rendering remains separate evidence.
 """
@@ -24,6 +26,7 @@ _C = '{http://schemas.openxmlformats.org/drawingml/2006/chart}'
 _R = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}'
 _REL = '{http://schemas.openxmlformats.org/package/2006/relationships}'
 _CT = '{http://schemas.openxmlformats.org/package/2006/content-types}'
+_MC = '{http://schemas.openxmlformats.org/markup-compatibility/2006}'
 
 
 def inspect_pptx_package(path: str, *, expected_pages: int | None = None) -> dict:
@@ -33,7 +36,7 @@ def inspect_pptx_package(path: str, *, expected_pages: int | None = None) -> dic
 
     result = {'ok': False, 'bytes': 0, 'slides': 0, 'parts': 0,
               'editableTextBoxes': 0, 'nativeTables': 0, 'nativeCharts': 0,
-              'findings': []}
+              'animationSteps': 0, 'findings': []}
     try:
         result['bytes'] = os.path.getsize(path)
         if not 0 < result['bytes'] <= _MAX_PACKAGE_BYTES:
@@ -142,7 +145,26 @@ def inspect_pptx_package(path: str, *, expected_pages: int | None = None) -> dic
                 shape_ids = [node.get('id') for node in root.iter(_P + 'cNvPr')]
                 if None in shape_ids or len(set(shape_ids)) != len(shape_ids):
                     raise ValueError(f'{name}: duplicate or absent shape id')
-                order = [child.tag for child in root]
+                # A Morph transition is an mc:AlternateContent standing in
+                # the transition slot; rank it as the transition it wraps.
+                order = [_P + 'transition' if child.tag == _MC + 'AlternateContent'
+                         and child.find('.//' + _P + 'transition') is not None
+                         else child.tag for child in root]
+                if order.count(_P + 'transition') > 1:
+                    raise ValueError(f'{name}: more than one slide transition')
+                present = set(shape_ids)
+                for target in root.iter(_P + 'spTgt'):
+                    if target.get('spid') not in present:
+                        raise ValueError(f'{name}: animation targets missing shape '
+                                         f'{target.get("spid")}')
+                for build in root.iter(_P + 'bldP'):
+                    if build.get('spid') not in present:
+                        raise ValueError(f'{name}: build list names missing shape '
+                                         f'{build.get("spid")}')
+                result['animationSteps'] += len(root.findall(
+                    _P + 'timing/' + _P + 'tnLst/' + _P + 'par/' + _P + 'cTn/'
+                    + _P + 'childTnLst/' + _P + 'seq/' + _P + 'cTn/'
+                    + _P + 'childTnLst/' + _P + 'par'))
                 allowed = [_P + tag for tag in ('cSld', 'clrMapOvr', 'transition', 'timing', 'extLst')]
                 ranks = [allowed.index(tag) for tag in order if tag in allowed]
                 if not order or order[0] != _P + 'cSld' or ranks != sorted(set(ranks)):

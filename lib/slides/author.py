@@ -106,7 +106,7 @@ def _validate_page_text(deck, page_path: str, text: str) -> list:
                 page_type=str(data.get('pageType') or 'content'),
                 background=data.get('background')
                            or {'type': 'solid', 'color': '#FFFFFF'},
-                elements=elements, raw=data)
+                elements=elements, raw=data, motion=data.get('motion'))
     trial = Deck(title=deck.title, size=deck.size, theme=deck.theme,
                  pages=[page], root=deck.root)
     findings = validate_deck(trial)

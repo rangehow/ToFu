@@ -163,6 +163,24 @@ components:
 `values` 数量必须等于 `categories` 数量。图表系列色只用主题色板
 ($primary/$accent/$muted/$ink),网格线/边框已由导出器按设计纪律处理。
 
+## motion (optional, page level — only when it serves the content)
+
+```yaml
+motion:
+  reveal: [points, chart]   # build an argument: one click per target, in order;
+                            # a multi-paragraph text box reveals one paragraph per click
+  emphasize: kpi            # one final click pulses THE key number (element/component id)
+  continues: true           # this page continues the previous one: Morph moves every
+                            # element whose elementId appears on both pages
+```
+
+Omit `motion` on most pages. Use `reveal` only for a sequential argument or a
+build-up, `emphasize` only for one decisive number, and `continues` only when
+the page shows the same objects in a new state (zoom in, re-arrange,
+highlight). For `continues`, keep the shared objects' `elementId` values
+identical. Effects and timing are fixed by the exporter; there is nothing to
+tune.
+
 ## Hard rules (the validator enforces these)
 
 1. `bounds` fully inside the page (bleed allowed only for background images).

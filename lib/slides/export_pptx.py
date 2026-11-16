@@ -20,9 +20,12 @@ Mapping contract (1 px = 1 pt = 12700 EMU):
   * table  → add_table; merged cells via cell.merge; borders via tcPr XML;
   * icon   → rasterised PNG (cached in the design asset store).
 
-Every slide gets a fade transition post-written into the slide XML — the
+Motion (transitions and click builds) is the PPTD page ``motion`` vocabulary,
+mapped by ``lib.slides.motion``: every slide gets a subtle fade transition, a
+page that ``continues`` the previous one gets Morph (fade fallback), and
+``reveal``/``emphasize`` become built-in PowerPoint build effects.  The
 CT_Slide child order (cSld → clrMapOvr → transition → timing/extLst) is
-validated after the rewrite, because Office silently ignores a misplaced
+validated by package QA, because Office silently ignores a misplaced
 transition.
 """
 
@@ -1065,9 +1068,12 @@ def _write_pptx(deck: Deck, out_path: str, *, transition: str = 'fade',
     prs.slide_height = Emu(_emu(deck.height))
     blank = prs.slide_layouts[6]
 
+    motion_slides: list = []
     for pi, page in enumerate(deck.pages):
         slide = prs.slides.add_slide(blank)
         _set_background(slide, page, deck)
+        shapes_by_id: dict = {}
+        motion_slides.append((slide, page, shapes_by_id))
         for el in page.elements:
             if not isinstance(el, dict):
                 raise ExportError(f'page {pi + 1}: invalid element')
@@ -1092,6 +1098,8 @@ def _write_pptx(deck: Deck, out_path: str, *, transition: str = 'fade',
                     raise ExportError(f'unsupported element type: {etype!r}')
                 if len(slide.shapes) <= before_shapes:
                     raise ExportError('element produced no native slide object')
+                shapes_by_id[str(el.get('elementId') or '')] = list(
+                    slide.shapes)[before_shapes:]
             except Exception as e:
                 logger.error('[Slides→PPTX] page %d element %s failed: %s',
                              pi + 1, el.get('elementId'), e, exc_info=True)
@@ -1100,11 +1108,11 @@ def _write_pptx(deck: Deck, out_path: str, *, transition: str = 'fade',
         if page.notes:
             slide.notes_slide.notes_text_frame.text = page.notes
 
+    from lib.slides.motion import apply_deck_motion
+    motion_summary = apply_deck_motion(motion_slides,
+                                       transitions=transition == 'fade')
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     prs.save(out_path)
-    patched = 0
-    if transition == 'fade':
-        patched = _patch_fade_transitions(out_path)
     font_summary = {
         'typefaces': 0, 'parts': 0, 'bytes': 0, 'glyphs': 0,
         'subset': False, 'used_families': [], 'embedded_families': [],
@@ -1129,7 +1137,7 @@ def _write_pptx(deck: Deck, out_path: str, *, transition: str = 'fade',
             'family/style slots: ' + ', '.join(font_summary['missing_slots']))
     summary = _verify(out_path, expected_pages=len(deck.pages))
     summary.update({'output': out_path, 'slides': len(deck.pages),
-                    'fadeTransitions': patched,
+                    **motion_summary,
                     'embeddedFonts': font_summary['typefaces'],
                     'embeddedFontParts': font_summary['parts'],
                     'embeddedFontBytes': font_summary['bytes'],
@@ -1142,8 +1150,8 @@ def _write_pptx(deck: Deck, out_path: str, *, transition: str = 'fade',
                     'embeddedFontStyleSlots': font_summary['embedded_slots'],
                     'unembeddedFontStyleSlots': font_summary['missing_slots'],
                     'fontEmbeddingComplete': not font_summary['missing_slots']})
-    logger.info('[Slides→PPTX] %s: %d slides, %d fade transitions, %d bytes',
-                out_path, len(deck.pages), patched, summary['bytes'])
+    logger.info('[Slides→PPTX] %s: %d slides, motion %s, %d bytes',
+                out_path, len(deck.pages), motion_summary, summary['bytes'])
     return summary
 
 
@@ -1610,46 +1618,7 @@ def _embed_fonts(pptx_path: str, deck: Deck) -> dict:
             'missing_slots': missing_slots}
 
 
-# ── Transitions + verification ────────────────────────────
-
-_FADE_XML = '<p:transition spd="fast" advClick="1"><p:fade/></p:transition>'
-_SLIDE_RE = re.compile(r'ppt/slides/slide\d+\.xml$')
-_TRANSITION_RE = re.compile(r'<p:transition\b[^>]*(?:/>|>.*?</p:transition>)',
-                            re.DOTALL)
-
-
-def _patch_fade_transitions(pptx_path: str) -> int:
-    """Insert one root-level fade transition per slide (CT_Slide order:
-    after cSld/clrMapOvr, before timing/extLst — anywhere else Office
-    silently ignores it)."""
-    count = 0
-    from lib.json_store import atomic_output_path
-    with atomic_output_path(pptx_path) as tmp:
-        with zipfile.ZipFile(pptx_path, 'r') as src, \
-                zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as dst:
-            for info in src.infolist():
-                data = src.read(info.filename)
-                if _SLIDE_RE.match(info.filename):
-                    text = data.decode('utf-8')
-                    text = _TRANSITION_RE.sub('', text)
-                    anchor = None
-                    for tag in ('clrMapOvr', 'cSld'):
-                        m = re.search(
-                            rf'<p:{tag}\b[^>]*(?:/>|>.*?</p:{tag}>)',
-                            text, re.DOTALL)
-                        if m:
-                            anchor = m
-                            break
-                    if anchor is None:
-                        raise ExportError(
-                            f'{info.filename}: no cSld anchor for transition')
-                    text = (text[:anchor.end()] + _FADE_XML
-                            + text[anchor.end():])
-                    data = text.encode('utf-8')
-                    count += 1
-                dst.writestr(info, data)
-    return count
-
+# ── Verification ──────────────────────────────────────
 
 def _verify(pptx_path: str, *, expected_pages: int | None = None) -> dict:
     from lib.slides.pptx_qa import inspect_pptx_package

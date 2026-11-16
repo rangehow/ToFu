@@ -82,6 +82,7 @@ class Page:
     elements: list = field(default_factory=list)
     notes: str = ''
     raw: dict = field(default_factory=dict)
+    motion: dict | None = None                  # lib.slides.motion vocabulary
 
 
 @dataclass
@@ -163,7 +164,8 @@ def _page_from_data(data, *, path: str) -> Page:
     raw['elements'] = elements
     return Page(path=path, page_type=str(data.get('pageType') or 'content'),
                 background=data.get('background') or {'type': 'solid', 'color': '#FFFFFF'},
-                elements=elements, notes=str(data.get('notes') or ''), raw=raw)
+                elements=elements, notes=str(data.get('notes') or ''), raw=raw,
+                motion=data.get('motion'))
 
 
 def parse_deck(manifest_path: str) -> Deck:
@@ -371,9 +373,12 @@ def validate_deck(deck: Deck) -> list:
         if not _valid_color(value):
             out.append(f'theme.colors.{name}: invalid color {value!r}')
 
+    from lib.slides.motion import validate_page_motion
     for pi, page in enumerate(deck.pages, 1):
         where = f'page {pi} ({page.path})'
         _check_fill(page.background, f'{where} background', out)
+        out.extend(validate_page_motion(page.motion, page.elements,
+                                        where=where))
         seen_ids: set = set()
         for ei, el in enumerate(page.elements):
             ewhere = f'{where} element {ei}'

@@ -46,10 +46,12 @@ afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); document.body.repla
 function shown(root: HTMLElement) {
   for (const paint of frames.splice(0)) paint(0);
   const loading = root.querySelector<HTMLElement>('.w-hud .w-chip[data-tone="loading"]')!;
+  const loader = root.querySelector<HTMLElement>('.w-loader')!;
   return {
     busy: root.querySelector('.w-stage')!.getAttribute('aria-busy'),
     loading: loading.hidden ? null : loading.textContent,
     empty: !root.querySelector<HTMLElement>('.w-empty')!.hidden,
+    progress: loader.hidden ? null : loader.querySelector('span')!.textContent,
   };
 }
 
@@ -58,18 +60,44 @@ it('shows a loading state, never an empty office or an error, until a cold 20 s 
   document.body.append(root);
   const page = mountWorld(root, { openChat() {}, dock() {}, classic() {}, push: null });
   const loading = { busy: 'true', loading: t('common.loading'), empty: false };
-  expect(shown(root)).toEqual(loading);
+  expect(shown(root)).toEqual({ ...loading, progress: t('world.loading.progress', { done: 0, total: 1 }) });
   expect(page.office()!.people.size).toBe(0);
 
-  // The team reads answered at once: the floor is filled from them while the office facts are still read.
+  // The team reads answered at once: the floor is filled from them while the office facts are still read, and
+  // the loading card counts the five answered team reads against the one step still open.
   await vi.advanceTimersByTimeAsync(1_000);
-  expect(shown(root)).toEqual(loading);
+  const waiting = { ...loading, progress: t('world.loading.progress', { done: 5, total: 6 }) };
+  expect(shown(root)).toEqual(waiting);
   expect([...page.office()!.people.keys()].sort()).toEqual([LEAD, RUNNER].sort());
   await vi.advanceTimersByTimeAsync(COLD_OFFICE_READ_MS - 1_001);
-  expect(shown(root)).toEqual(loading);
+  expect(shown(root)).toEqual(waiting);
 
   await vi.advanceTimersByTimeAsync(1);
-  expect(shown(root)).toEqual({ busy: 'false', loading: null, empty: false });
+  expect(shown(root)).toEqual({ busy: 'false', loading: null, empty: false, progress: null });
   expect([...page.office()!.people.keys()].sort()).toEqual([LEAD, RUNNER].sort());
+  page.dispose();
+});
+
+it('seats the Global Router as soon as it answers, without waiting for the folder list', async () => {
+  const ROUTER = 'coordinator-router';
+  const base = fetch as unknown as (url: string, init: RequestInit) => Promise<Response>;
+  vi.stubGlobal('fetch', vi.fn((url: string, init: RequestInit) => {
+    const path = new URL(url, 'http://tofu.invalid').pathname;
+    if (path === '/api/v4/router') return Promise.resolve(answer({ availability: 'available', conversationId: ROUTER, projectPath: '/router' }));
+    if (path === '/api/v4/folders') return new Promise(resolve => setTimeout(() => resolve(base(url, init)), 10_000));
+    if (path === '/api/v4/project/coordination/conversations' && new URL(url, 'http://tofu.invalid').searchParams.get('path') === '/router') {
+      return Promise.resolve(answer({ conversations: [{ conversationId: ROUTER, title: 'Router', turnCount: 1, coordinatorId: null, folderId: null }], nextCursor: null, coverage: 'complete' }));
+    }
+    return base(url, init);
+  }));
+  const root = document.createElement('div');
+  document.body.append(root);
+  const page = mountWorld(root, { openChat() {}, dock() {}, classic() {}, push: null });
+  await vi.advanceTimersByTimeAsync(1_000);
+  shown(root);
+  expect([...page.office()!.people.keys()]).toEqual([ROUTER]);
+  await vi.advanceTimersByTimeAsync(10_000);
+  shown(root);
+  expect([...page.office()!.people.keys()].sort()).toEqual([LEAD, ROUTER, RUNNER].sort());
   page.dispose();
 });

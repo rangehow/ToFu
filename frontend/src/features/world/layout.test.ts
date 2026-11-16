@@ -93,6 +93,30 @@ describe('open-plan floor', () => {
     expect(fitOffice(768, 900, small).scale).toBeCloseTo(0.6, 5);
   });
 
+  it('lays the teams out as justified rows of equal-height rooms that reach the right wall', () => {
+    for (const width of [1920, 1440, 1024]) {
+      const layout = layoutOffice(width, TEAMS);
+      const rows = new Map<number, typeof layout.zones>();
+      for (const zone of layout.zones) rows.set(zone.row, [...(rows.get(zone.row) || []), zone]);
+      for (const zones of rows.values()) {
+        const last = zones[zones.length - 1];
+        expect(last.x + last.w).toBeCloseTo(layout.width - 40, 5);
+        for (const zone of zones) expect(zone.h).toBe(zones[0].h);
+      }
+    }
+  });
+
+  it('stacks a team\'s pods when that lets the following teams share its row', () => {
+    const teams: TeamShape[] = [
+      { key: '/router', kind: 'router', seats: 0 }, { key: '/tofu', kind: 'project', seats: 16 },
+      { key: '/parallel', kind: 'project', seats: 8 }, { key: '/knowledge', kind: 'project', seats: 8 },
+    ];
+    const layout = layoutOffice(1920, teams, 0, 1);
+    expect(new Set(layout.zones.map(zone => zone.row))).toEqual(new Set([0]));
+    const tofu = layout.zones.find(zone => zone.key === '/tofu')!;
+    expect(new Set(tofu.pods.map(pod => pod.x)).size).toBe(1);
+  });
+
   it('keeps every seat while its person stays and fills the lowest vacancy', () => {
     const first = allocateSlots(new Map(), ['a', 'b', 'c']);
     const second = allocateSlots(first, ['c', 'd']);

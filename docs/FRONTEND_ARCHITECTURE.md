@@ -2898,9 +2898,20 @@ unless the chat is docked, and a turn in the hidden column has no paint opportun
   production, 2026-11-13), and a 12 s deadline only abandoned that finished work and left the office
   without facts until the next frame. Leaving the office cancels it through the WorldLive lifetime.
   Until the teams are discovered, each source's first read and that snapshot have answered, the stage is
-  `aria-busy` and the HUD shows a loading chip, so an empty or provisional floor never passes for truth.
+  `aria-busy`, the HUD shows a loading chip and a loading card over the floor counts the answered reads
+  (`world.loading.progress`), so an empty or provisional floor never passes for truth. The Global Router
+  and the Watchdog are seated as soon as each answers, without waiting for the folder list.
+- `layout.ts` packs the team rooms into rows beside and below the owner's office. Each row is justified
+  (its rooms share the leftover width and the row's height, desks centred), and pod blocks narrow one
+  column at a time while that shortens the plan, so a team stacks its pods when that lets the next team
+  share its row. Rejected: a greedy ragged layout (holes beside a short last row) and stretching only a
+  lone last room (a near-empty room the width of the floor).
 - `office.ts` draws the static floor once per layout in `art-worker.ts` (`paint.ts` on an OffscreenCanvas
-  at device pixel ratio) and keeps people, lit screens, documents and walkers as keyed DOM sprites from
+  at device pixel ratio): the procedural base (long-board floor, window wall, carpeted team rooms with a
+  header band, daylight from the windows, wall shade, vignette and night lamp pools at the lead desks)
+  paints at once (`data-art="base"` shows the world), the furniture follows when the atlas has decoded
+  (`data-art="ready"`). A person stays hidden until its sheet has decoded, so no empty box or bodiless
+  emblem shows while art arrives. It keeps people, lit screens, documents and walkers as keyed DOM sprites from
   the office game's authored sheets (`sprites.ts`). Seats keep their slot while their person stays. One
   shared typing beat restyles all running people at once; reduced motion and hidden tabs stop it.
   Arrows move focus spatially between people and documents, Enter opens, Esc closes the panel.

@@ -18,14 +18,14 @@ export interface Atlas { image: CanvasImageSource; props: Readonly<Record<string
 /** Procedural surfaces per theme; the props carry their own night colours in the dark atlas. */
 const PALETTE = {
   light: {
-    wood: '#d7a86e', woodAlt: '#c9975c', woodLight: '#ddb27a', seam: '#a8763f', grain: 'rgba(120, 72, 32, 0.16)', plankLight: 'rgba(255, 236, 205, 0.12)',
-    wall: '#efe3cf', wallLine: '#e4d5bd', rail: '#9b6a42', railLight: '#b07c50', skirting: '#6e4a2f', side: '#5e4130',
-    rugBase: '#e6dccb', rugEdge: '#4a3a2c', rugLine: '#ffffff', rugShadow: 'rgba(60, 35, 15, 0.16)', daylight: true,
+    wood: '#d4a873', woodAlt: '#cb9d66', woodLight: '#dbb27f', seam: 'rgba(122, 78, 38, 0.30)', grain: 'rgba(120, 72, 32, 0.07)', plankLight: 'rgba(255, 240, 214, 0.22)',
+    wall: '#efe5d3', wallLine: 'rgba(160, 128, 88, 0.10)', rail: '#9b6a42', railLight: '#b5835a', skirting: '#6e4a2f', side: '#4a3324',
+    rugBase: '#efe7da', rugEdge: '#4a3a2c', rugLine: '#ffffff', shade: '58, 34, 14', glow: '255, 236, 196', ambient: 'rgba(0, 0, 0, 0)', daylight: true,
   },
   dark: {
-    wood: '#4a3426', woodAlt: '#43301f', woodLight: '#523a2b', seam: '#2e2017', grain: 'rgba(0, 0, 0, 0.18)', plankLight: 'rgba(255, 220, 180, 0.05)',
-    wall: '#2b3045', wallLine: '#272b3f', rail: '#3e2a1d', railLight: '#4b3424', skirting: '#24180f', side: '#1e1510',
-    rugBase: '#3b302a', rugEdge: '#1e1712', rugLine: '#d8c3a0', rugShadow: 'rgba(0, 0, 0, 0.25)', daylight: false,
+    wood: '#4b3528', woodAlt: '#463125', woodLight: '#513a2c', seam: 'rgba(16, 9, 5, 0.45)', grain: 'rgba(0, 0, 0, 0.10)', plankLight: 'rgba(255, 220, 180, 0.05)',
+    wall: '#2b3045', wallLine: 'rgba(255, 255, 255, 0.03)', rail: '#3e2a1d', railLight: '#55392a', skirting: '#1c130d', side: '#15100c',
+    rugBase: '#3a312c', rugEdge: '#1e1712', rugLine: '#d8c3a0', shade: '0, 0, 0', glow: '255, 196, 120', ambient: 'rgba(14, 18, 44, 0.20)', daylight: false,
   },
 } as const;
 type Palette = typeof PALETTE[ArtTheme];
@@ -61,25 +61,61 @@ function stamp(ctx: Ctx, atlas: Atlas, name: string, x: number, y: number) {
   ctx.drawImage(atlas.image, sx, sy, sw, sh, x - prop.anchor[0], y - prop.anchor[1], prop.size[0], prop.size[1]);
 }
 
+/** Long boards in a staggered bond: neighbouring boards differ only slightly in tone, seams are soft, and a
+ * thin top highlight gives each board a bevel, so the floor reads as one calm surface under the furniture. */
 function floor(ctx: Ctx, layout: OfficeLayout, palette: Palette) {
   const { width, height, wall } = layout;
   ctx.fillStyle = palette.wood; ctx.fillRect(0, wall, width, height - wall);
   const random = seeded(41);
-  const plank = 14;
+  const plank = 18;
   for (let y = wall; y < height; y += plank) {
-    let x = -random() * 120;
+    let x = -random() * 200;
     while (x < width) {
-      const length = 70 + random() * 110;
+      const length = 150 + random() * 170;
       const tone = random();
-      ctx.fillStyle = tone < 0.33 ? palette.woodAlt : tone < 0.66 ? palette.wood : palette.woodLight;
+      ctx.fillStyle = tone < 0.5 ? mix(palette.wood, palette.woodAlt, tone * 2) : mix(palette.wood, palette.woodLight, (tone - 0.5) * 2);
       ctx.fillRect(x, y, length, plank);
       ctx.fillStyle = palette.grain;
-      for (let g = 0; g < 3; g += 1) ctx.fillRect(x + 6 + random() * (length - 18), y + 3 + random() * (plank - 6), 6 + random() * 18, 1);
-      ctx.fillStyle = palette.seam; ctx.fillRect(x + length - 1, y, 1, plank);
+      for (let g = 0; g < 2; g += 1) ctx.fillRect(x + 10 + random() * (length - 50), y + 4 + random() * (plank - 8), 24 + random() * 30, 1);
+      ctx.fillStyle = palette.seam; ctx.fillRect(x + length - 1, y + 1, 1, plank - 2);
       x += length;
     }
     ctx.fillStyle = palette.seam; ctx.fillRect(0, y + plank - 1, width, 1);
     ctx.fillStyle = palette.plankLight; ctx.fillRect(0, y, width, 1);
+  }
+}
+
+const rgba = (rgb: string, alpha: number) => `rgba(${rgb}, ${alpha})`;
+
+/** Ambient light over the finished floor: daylight falls in from the window wall, the walls cast a soft
+ * contact shade, the edges of the room fall off (vignette); at night the room cools and every lead's
+ * desk and the owner's desk keep a warm pool of lamp light. */
+function lighting(ctx: Ctx, layout: OfficeLayout, palette: Palette, night: boolean) {
+  const { width, height, wall } = layout;
+  const day = ctx.createLinearGradient(0, wall, 0, wall + 320);
+  day.addColorStop(0, rgba(palette.glow, night ? 0.04 : 0.20)); day.addColorStop(1, rgba(palette.glow, 0));
+  ctx.fillStyle = day; ctx.fillRect(0, wall, width, 320);
+  const shade = ctx.createLinearGradient(0, wall, 0, wall + 30);
+  shade.addColorStop(0, rgba(palette.shade, 0.28)); shade.addColorStop(1, rgba(palette.shade, 0));
+  ctx.fillStyle = shade; ctx.fillRect(0, wall, width, 30);
+  for (const [from, to] of [[12, 40], [width - 12, width - 40]]) {
+    const side = ctx.createLinearGradient(from, 0, to, 0);
+    side.addColorStop(0, rgba(palette.shade, 0.22)); side.addColorStop(1, rgba(palette.shade, 0));
+    ctx.fillStyle = side; ctx.fillRect(Math.min(from, to), wall, 28, height - wall);
+  }
+  const radius = Math.hypot(width, height) / 2;
+  const vignette = ctx.createRadialGradient(width / 2, height * 0.45, radius * 0.45, width / 2, height * 0.45, radius);
+  vignette.addColorStop(0, rgba(palette.shade, 0)); vignette.addColorStop(1, rgba(palette.shade, palette.daylight ? 0.20 : 0.42));
+  ctx.fillStyle = vignette; ctx.fillRect(0, 0, width, height);
+  if (!night) return;
+  ctx.fillStyle = palette.daylight ? 'rgba(20, 24, 56, 0.14)' : palette.ambient; ctx.fillRect(0, 0, width, height);
+  const lamps = [layout.owner.desk, ...layout.zones.map(zone => zone.lead.desk)];
+  if (layout.watchdog) lamps.push(layout.watchdog.seat.desk);
+  for (const desk of lamps) {
+    const x = desk.x + desk.w / 2, y = desk.y + desk.h / 2;
+    const pool = ctx.createRadialGradient(x, y, 10, x, y, 190);
+    pool.addColorStop(0, rgba(palette.glow, palette.daylight ? 0.16 : 0.12)); pool.addColorStop(1, rgba(palette.glow, 0));
+    ctx.fillStyle = pool; ctx.fillRect(x - 190, y - 190, 380, 380);
   }
 }
 
@@ -90,6 +126,8 @@ function sky(ctx: Ctx, x: number, y: number, w: number, h: number, hour: number,
   if (night) { gradient.addColorStop(0, '#101736'); gradient.addColorStop(1, '#2b2c55'); }
   else if (dusk) { gradient.addColorStop(0, '#6f86c9'); gradient.addColorStop(0.6, '#f0a77a'); gradient.addColorStop(1, '#f7cf8e'); }
   else { gradient.addColorStop(0, '#7ec2ea'); gradient.addColorStop(1, '#cfeaf6'); }
+  ctx.save();
+  ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
   ctx.fillStyle = gradient; ctx.fillRect(x, y, w, h);
   const random = seeded(seed);
   if (night) {
@@ -110,42 +148,62 @@ function sky(ctx: Ctx, x: number, y: number, w: number, h: number, hour: number,
       bx += bw + 2 + random() * 6;
     }
   }
+  ctx.restore();
 }
 
 /** The window wall: procedural skies by local hour inside the atlas window frames (their glass is clear). */
-function backWall(ctx: Ctx, layout: OfficeLayout, hour: number, palette: Palette, atlas: Atlas) {
+function backWall(ctx: Ctx, layout: OfficeLayout, hour: number, palette: Palette, atlas: Atlas | null) {
   const { width, wall } = layout;
   ctx.fillStyle = palette.wall; ctx.fillRect(0, 0, width, wall);
   ctx.fillStyle = palette.wallLine; for (let x = 0; x < width; x += 24) ctx.fillRect(x, 0, 1, wall - 22);
   ctx.fillStyle = palette.rail; ctx.fillRect(0, wall - 22, width, 16);
   ctx.fillStyle = palette.railLight; ctx.fillRect(0, wall - 22, width, 3);
   ctx.fillStyle = palette.skirting; ctx.fillRect(0, wall - 6, width, 6);
-  const glass = atlas.props.window?.slots?.glass ?? [0, 0, 196, 44];
+  const glass = atlas?.props.window?.slots?.glass ?? [0, 0, 196, 44];
   const count = Math.max(3, Math.floor((width - 80) / 300));
   const span = (width - 80) / count;
   for (let index = 0; index < count; index += 1) {
     const w = glass[2], h = glass[3], x = 40 + span * index + (span - w) / 2, y = 10;
     sky(ctx, x, y, w, h, hour, 97 + index * 31);
-    stamp(ctx, atlas, 'window', x, y);
+    if (atlas) stamp(ctx, atlas, 'window', x, y);
     if (palette.daylight && hour >= 7 && hour < 18) {
-      const light = ctx.createLinearGradient(0, wall, 0, wall + 96);
-      light.addColorStop(0, 'rgba(255, 238, 190, 0.16)'); light.addColorStop(1, 'rgba(255, 238, 190, 0)');
+      // A light shaft from each window onto the floor, slanting away from the morning or afternoon sun.
+      const lean = hour < 12 ? 70 : -70;
+      const light = ctx.createLinearGradient(0, wall, 0, wall + 150);
+      light.addColorStop(0, 'rgba(255, 238, 190, 0.20)'); light.addColorStop(1, 'rgba(255, 238, 190, 0)');
       ctx.fillStyle = light;
-      ctx.beginPath(); ctx.moveTo(x, wall); ctx.lineTo(x + w, wall); ctx.lineTo(x + w + 40, wall + 96); ctx.lineTo(x + 40, wall + 96); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(x, wall); ctx.lineTo(x + w, wall); ctx.lineTo(x + w + lean, wall + 150); ctx.lineTo(x + lean, wall + 150); ctx.fill();
     }
   }
   ctx.fillStyle = palette.side; ctx.fillRect(0, 0, 12, layout.height); ctx.fillRect(width - 12, 0, 12, layout.height);
   ctx.fillRect(0, layout.height - 10, width, 10);
 }
 
+/** A team's room: a low-pile carpet in a muted tint of the team colour with a soft drop shadow, a woven
+ * inner border and a header band in the team colour where the team's sign hangs. */
 function rug(ctx: Ctx, zone: ZoneLayout, color: string, palette: Palette) {
-  const fill = mix(color, palette.rugBase, 0.72);
-  const edge = mix(color, palette.rugEdge, 0.4);
-  rr(ctx, zone.x, zone.y, zone.w, zone.h, 14); ctx.fillStyle = palette.rugShadow; ctx.fill();
-  fillRR(ctx, zone.x + 2, zone.y, zone.w - 4, zone.h - 3, 12, edge);
-  fillRR(ctx, zone.x + 6, zone.y + 4, zone.w - 12, zone.h - 11, 9, fill);
-  ctx.strokeStyle = mix(color, palette.rugLine, 0.35); ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
-  rr(ctx, zone.x + 11, zone.y + 9, zone.w - 22, zone.h - 21, 7); ctx.stroke(); ctx.setLineDash([]);
+  const { x, y, w, h } = zone;
+  for (const [grow, alpha] of [[8, 0.05], [5, 0.07], [2, 0.10]] as const) {
+    rr(ctx, x - grow / 2, y - grow / 4 + 3, w + grow, h + grow / 2, 12 + grow / 2); ctx.fillStyle = rgba(palette.shade, alpha); ctx.fill();
+  }
+  fillRR(ctx, x, y, w, h, 12, mix(color, palette.rugEdge, palette.daylight ? 0.30 : 0.62));
+  const pile = mix(color, palette.rugBase, palette.daylight ? 0.80 : 0.84);
+  fillRR(ctx, x + 4, y + 4, w - 8, h - 8, 9, pile);
+  ctx.save();
+  rr(ctx, x + 4, y + 4, w - 8, h - 8, 9); ctx.clip();
+  const random = seeded(Math.round(x * 13 + y * 7));
+  ctx.fillStyle = rgba(palette.shade, 0.035);
+  for (let i = 0; i < (w * h) / 220; i += 1) ctx.fillRect(x + random() * w, y + random() * h, 1.5, 1.5);
+  const band = ctx.createLinearGradient(0, y, 0, y + 44);
+  band.addColorStop(0, mix(color, pile, 0.35)); band.addColorStop(1, mix(color, pile, 0.75));
+  ctx.fillStyle = band; ctx.fillRect(x, y, w, 44);
+  ctx.fillStyle = rgba(palette.shade, 0.10); ctx.fillRect(x, y + 44, w, 1);
+  const sheen = ctx.createLinearGradient(0, y + 45, 0, y + h);
+  sheen.addColorStop(0, rgba(palette.glow, palette.daylight ? 0.10 : 0.03)); sheen.addColorStop(1, rgba(palette.shade, 0.06));
+  ctx.fillStyle = sheen; ctx.fillRect(x, y + 45, w, h - 45);
+  ctx.restore();
+  ctx.strokeStyle = mix(color, palette.rugLine, palette.daylight ? 0.55 : 0.25); ctx.globalAlpha = 0.55; ctx.lineWidth = 1;
+  rr(ctx, x + 9.5, y + 9.5, w - 19, h - 19, 6); ctx.stroke(); ctx.globalAlpha = 1;
 }
 
 const CLUTTER = ['clutter-mug', 'clutter-papers', 'clutter-books', 'clutter-mini-plant'] as const;
@@ -183,13 +241,20 @@ function decor(ctx: Ctx, atlas: Atlas, items: ReadonlyArray<DecorItem>) {
   }
 }
 
-export function paintOffice(ctx: Ctx, input: PaintInput, atlas: Atlas): void {
+/** `atlas` null paints the procedural base alone (floor, walls, skies, rooms and light), so the office shows
+ * at once while the furniture atlas is still loading; the next paint with the atlas adds the furniture. */
+export function paintOffice(ctx: Ctx, input: PaintInput, atlas: Atlas | null): void {
   const { layout, zones, hour, theme } = input;
   const palette = PALETTE[theme];
   floor(ctx, layout, palette);
   backWall(ctx, layout, hour, palette, atlas);
   const colors = new Map(zones.map(zone => [zone.key, zone]));
   for (const zone of layout.zones) rug(ctx, zone, colors.get(zone.key)?.color || '#8f7ae6', palette);
+  if (atlas) furniture(ctx, layout, colors, atlas);
+  lighting(ctx, layout, palette, !palette.daylight || hour < 7 || hour >= 19);
+}
+
+function furniture(ctx: Ctx, layout: OfficeLayout, colors: ReadonlyMap<string, PaintZone>, atlas: Atlas) {
   const { room, whiteboard, shelf } = layout.owner;
   stamp(ctx, atlas, 'owner-office', room.x, room.y);
   stamp(ctx, atlas, 'whiteboard', whiteboard.x, whiteboard.y);
@@ -205,7 +270,4 @@ export function paintOffice(ctx: Ctx, input: PaintInput, atlas: Atlas): void {
   stamp(ctx, atlas, 'coffee-bar', layout.bar.x, layout.bar.y);
   stamp(ctx, atlas, 'entrance', layout.entrance.x, layout.entrance.y);
   decor(ctx, atlas, layout.decor);
-  if (palette.daylight && (hour < 7 || hour >= 19)) {
-    ctx.fillStyle = 'rgba(16, 20, 48, 0.16)'; ctx.fillRect(0, 0, layout.width, layout.height);
-  }
 }

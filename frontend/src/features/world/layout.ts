@@ -135,11 +135,13 @@ function podSeats(pod: Pod): Seat[] {
 }
 
 /** A team without unfinished work keeps only its head desk; desks appear in pods of two facing rows. */
-function zoneShape(shape: TeamShape, width: number) {
+type ZoneShape = ReturnType<typeof zoneShape>;
+/** `columns` asks for at most that many pods side by side; by default the pods form a near-square block. */
+function zoneShape(shape: TeamShape, width: number, wanted?: number) {
   const pods = Math.ceil(shape.seats / SEATS_PER_POD);
   if (!pods) return { pods, columns: 1, w: IDLE_ZONE_W, h: HEAD_H + ZONE_PAD };
   const fit = Math.max(1, Math.floor((width - ZONE_PAD * 2 + POD_GAP) / (POD_W + POD_GAP)));
-  const columns = Math.min(fit, pods <= 2 ? pods : Math.ceil(Math.sqrt(pods)));
+  const columns = Math.min(fit, wanted ?? (pods <= 2 ? pods : Math.ceil(Math.sqrt(pods))));
   const rows = Math.ceil(pods / columns);
   return {
     pods, columns,
@@ -148,23 +150,70 @@ function zoneShape(shape: TeamShape, width: number) {
   };
 }
 
-function buildZone(key: string, x: number, y: number, row: number, shape: ReturnType<typeof zoneShape>): ZoneLayout {
+interface ZoneRow { start: number; y: number; height: number; items: Array<{ key: string; shape: ZoneShape }> }
+
+/** Rows fill greedily left to right, the first one beside the owner's office. */
+function arrangeRows(teams: ReadonlyArray<TeamShape>, width: number, floorTop: number, columns: ReadonlyMap<string, number>): ZoneRow[] {
+  let x = MARGIN + OFFICE_W + ZONE_GAP;
+  let current: ZoneRow = { start: x, y: floorTop, height: OFFICE_H, items: [] };
+  const rows = [current];
+  for (const team of teams) {
+    const shape = zoneShape(team, width - MARGIN * 2, columns.get(team.key));
+    if (x > MARGIN && x + shape.w > width - MARGIN) {
+      x = MARGIN;
+      current = { start: x, y: current.y + current.height + CORRIDOR, height: 0, items: [] };
+      rows.push(current);
+    }
+    current.items.push({ key: team.key, shape });
+    x += shape.w + ZONE_GAP;
+    current.height = Math.max(current.height, shape.h);
+  }
+  return rows;
+}
+
+const rowsBottom = (rows: ReadonlyArray<ZoneRow>) => rows[rows.length - 1].y + rows[rows.length - 1].height;
+
+/** The shortest floor plan found by narrowing pod blocks one column at a time: a team whose pods stack
+ * instead of spreading can let the next team share its row, which shortens the whole office. Each step
+ * takes the single narrowing that shortens the plan most and stops when none does. */
+function compactRows(teams: ReadonlyArray<TeamShape>, width: number, floorTop: number): ZoneRow[] {
+  const columns = new Map<string, number>();
+  let rows = arrangeRows(teams, width, floorTop, columns);
+  for (;;) {
+    let best: { key: string; columns: number; rows: ZoneRow[] } | null = null;
+    for (const row of rows) for (const item of row.items) {
+      if (item.shape.columns <= 1) continue;
+      const trial = new Map(columns).set(item.key, item.shape.columns - 1);
+      const candidate = arrangeRows(teams, width, floorTop, trial);
+      if (rowsBottom(candidate) < rowsBottom(best?.rows ?? rows)) best = { key: item.key, columns: item.shape.columns - 1, rows: candidate };
+    }
+    if (!best) return rows;
+    columns.set(best.key, best.columns);
+    rows = best.rows;
+  }
+}
+
+/** `w` and `h` may exceed the shape's own size (a justified row); its pods stay centred under the head desk. */
+function buildZone(key: string, x: number, y: number, row: number, shape: ZoneShape, w: number, h: number): ZoneLayout {
   const pods: Pod[] = [];
+  const left = x + (w - shape.w) / 2;
+  // The head desk and its pods sit in the middle of a taller room; the team sign stays at the top.
+  const top = y + (h - shape.h) / 2;
   for (let index = 0; index < shape.pods; index += 1) {
     const column = index % shape.columns;
     const line = Math.floor(index / shape.columns);
-    pods.push({ x: x + ZONE_PAD + column * (POD_W + POD_GAP), y: y + HEAD_H + line * (POD_H + POD_GAP / 2),
+    pods.push({ x: left + ZONE_PAD + column * (POD_W + POD_GAP), y: top + HEAD_H + line * (POD_H + POD_GAP / 2),
       w: POD_W, h: POD_H, columns: POD_COLUMNS });
   }
-  const leadX = x + shape.w / 2;
-  const leadDesk = { x: leadX - 46, y: y + 92, w: 92, h: 32 };
+  const leadX = x + w / 2;
+  const leadDesk = { x: leadX - 46, y: top + 92, w: 92, h: 32 };
   const lead: Seat = {
-    x: leadX, y: y + 78, facing: 'down', cut: leadDesk.y + 3, stand: { x: leadX, y: y + HEAD_H - 4 },
+    x: leadX, y: top + 78, facing: 'down', cut: leadDesk.y + 3, stand: { x: leadX, y: top + HEAD_H - 4 },
     desk: leadDesk, screen: { x: leadX + 14, y: leadDesk.y + 2, w: 20, h: 10 },
   };
   return {
-    key, x, y, w: shape.w, h: shape.h, row, banner: { x: x + ZONE_PAD, y: y + 12 }, lead, pods,
-    seats: pods.flatMap(podSeats), routine: { x: x + shape.w - ZONE_PAD, y: y + 16 },
+    key, x, y, w, h, row, banner: { x: x + ZONE_PAD, y: y + 12 }, lead, pods,
+    seats: pods.flatMap(podSeats), routine: { x: x + w - ZONE_PAD, y: y + 16 },
   };
 }
 
@@ -173,26 +222,23 @@ function buildZone(key: string, x: number, y: number, row: number, shape: Return
 export function layoutOffice(viewportWidth: number, teams: ReadonlyArray<TeamShape>, viewportHeight = 0,
   scale = sceneScale(viewportWidth)): OfficeLayout {
   const width = Math.max(MIN_WIDTH, Math.round(viewportWidth / scale));
-  const inner = width - MARGIN * 2;
   const floorTop = WALL + 22;
+  // Each row is justified: its zones share the leftover width and take the row's height, so the teams read
+  // as one even block of rooms with no ragged holes in the floor.
+  const rows = compactRows(teams.filter(each => each.kind !== 'watchdog'), width, floorTop);
   const zones: ZoneLayout[] = [];
   const rowBottoms: number[] = [];
-  let row = 0;
-  let x = MARGIN + OFFICE_W + ZONE_GAP;
-  let y = floorTop;
-  let rowHeight = OFFICE_H;
-  const placed = teams.filter(team => team.kind !== 'watchdog');
-  for (const team of placed) {
-    const shape = zoneShape(team, inner);
-    if (x > MARGIN && x + shape.w > width - MARGIN) {
-      rowBottoms.push(y + rowHeight);
-      row += 1; y += rowHeight + CORRIDOR; x = MARGIN; rowHeight = 0;
+  rows.forEach((line, row) => {
+    const used = line.items.reduce((sum, item) => sum + item.shape.w + ZONE_GAP, -ZONE_GAP);
+    const extra = line.items.length ? Math.max(0, width - MARGIN - line.start - used) / line.items.length : 0;
+    let left = line.start;
+    for (const item of line.items) {
+      const w = item.shape.w + extra;
+      zones.push(buildZone(item.key, left, line.y, row, item.shape, w, line.height));
+      left += w + ZONE_GAP;
     }
-    zones.push(buildZone(team.key, x, y, row, shape));
-    x += shape.w + ZONE_GAP;
-    rowHeight = Math.max(rowHeight, shape.h);
-  }
-  rowBottoms.push(y + rowHeight);
+    rowBottoms.push(line.y + line.height);
+  });
   const corridors = rowBottoms.map(bottom => bottom + CORRIDOR / 2);
   const height = Math.max(rowBottoms[rowBottoms.length - 1] + CORRIDOR + BOTTOM_H + MARGIN, Math.floor(viewportHeight / scale));
   const bottomTop = height - BOTTOM_H - MARGIN;

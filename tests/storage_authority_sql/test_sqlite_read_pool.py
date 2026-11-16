@@ -366,3 +366,29 @@ def test_connect_refused_at_server_limit_reuses_a_released_sibling_connection():
     assert time.monotonic() - started < 1
     assert lonely.snapshot()['active'] == 0
     lonely.close()
+
+
+def test_a_sibling_released_while_the_connect_is_refused_still_serves_the_lease():
+    """The last sibling may hand its connection back before the refused lease
+    starts waiting; that release must not be missed."""
+    from lib.storage_authority_sql.adapters.connection_pool import DemandConnectionPool
+    created = []
+    holder = {}
+
+    def connect(deadline):
+        if created:
+            # The only sibling returns its connection while this connect is refused.
+            pool.release(holder.pop('sibling'))
+            raise _ServerConnectionLimit('too many clients already')
+        return _CountedConnection(created)
+
+    pool = DemandConnectionPool(connect, idle_reuse_hint=1, driver_errors=(_ServerConnectionLimit,),
+                                classify_error=lambda error, deadline: StorageError(
+                                    'database_unavailable', 'refused', True, 100))
+    deadline = time.monotonic() + 5
+    holder['sibling'] = pool.acquire(deadline)
+    lease = pool.acquire(deadline)
+    assert lease.connection is created[0] and len(created) == 1
+    pool.release(lease)
+    assert pool.snapshot()['active'] == 0
+    pool.close()

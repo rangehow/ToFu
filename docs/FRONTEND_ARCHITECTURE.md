@@ -1918,6 +1918,32 @@ loop hangs exactly when the page is too busy. Specification:
 `tests/frontend/test_frontend_bundle_canary.py` (slow, hung and broken boots in
 a real Chromium page).
 
+**The canary's browser is provided, never assumed (2026-11-16).** Problem: on
+a moved CodeLab whose `~/.cache/ms-playwright` had not been restored (the owner
+ran `python server.py` instead of `scripts/migrate_host.py --start`), the canary
+found no Chromium, so every startup build failed with a Node stack trace from
+`build_frontend.mjs`. A colleague's fresh laptop would fail the same way.
+Decision: `chromium_env.ensure_headless_shell()` is the one authority that
+resolves the canary's browser; when none is installed it runs
+`<python> -m playwright install --only-shell chromium` once, into the registry
+Playwright launches from (`playwright_registry`). The installer inherits the
+process network policy through its environment (`HTTPS_PROXY`/`NO_PROXY`, the
+pre-dependency port in `docs/NETWORK.md`). The canary calls it before every
+run, and `serverctl` runs `chromium_env.py --ensure-headless-shell` in the
+build's own interpreter and environment before a startup/restart rebuild, so an
+impossible install refuses the start with one line naming the install command
+and `migrate_host.py --start`, before any build output. The canary exits 69
+(`EXIT_CHROMIUM_UNAVAILABLE`) for that case and the build prints one line
+instead of a stack trace. Missing CJK fonts stay a warning
+(`describe_chromium_env()['font_issues']`); `migrate_host.py --check` reports
+both as WARN findings with the remedy. Alternatives rejected: skipping or
+weakening the canary without a browser (publishes an unjudged graph); a setting
+or env flag to disable the install (a knob on a correctness gate); failing
+early without installing (every fresh host would need a manual step the build
+can do itself). Specification: the on-demand install tests in
+`tests/browser/test_chromium_env.py`, `tests/frontend/test_frontend_bundle_canary.py`,
+`tests/server/test_frontend_preparation_lock.py` and `tests/deploy/test_migrate_host.py`.
+
 ## Extension checklist
 
 Locate the owner, change wire contracts first, implement typed behavior with

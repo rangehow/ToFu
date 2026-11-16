@@ -334,6 +334,32 @@ def _source_frontend_build_command() -> list[str] | None:
     return None
 
 
+def _ensure_canary_browser(build_environment: dict[str, str]) -> str:
+    """Have the browser authority provide the canary's Chromium before a build.
+
+    The bundle canary is never skipped, so a fresh host without
+    ``~/.cache/ms-playwright`` (a host move before ``migrate_host --start``,
+    a new laptop) installs the headless shell here, in the canary's own
+    interpreter and environment. When that is impossible the start refuses
+    with the authority's one actionable line instead of a whole build log.
+    """
+    python = (build_environment.get('TOFU_PYTHON')
+              or build_environment.get('PYTHON') or sys.executable)
+    try:
+        completed = subprocess.run(
+            [python, str(Path(PROJECT) / 'chromium_env.py'), '--ensure-headless-shell'],
+            cwd=PROJECT, env=build_environment, stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+            timeout=_FRONTEND_REPAIR_TIMEOUT_SECONDS, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f'the frontend bundle canary needs a headless Chromium: {exc}'
+    if completed.returncode == 0:
+        return ''
+    lines = (completed.stderr or '').strip().splitlines()
+    return ('the frontend bundle canary needs a headless Chromium: '
+            + (lines[-1] if lines else f'browser check exited {completed.returncode}'))
+
+
 def _captured_build_output_tail(output: object) -> str:
     """Bound captured build output for surfacing on the browser error page."""
     if output is None:
@@ -425,6 +451,9 @@ def prepare_source_frontend_artifact(
             # Detached managers may have no Python on PATH. The Node canary
             # uses these existing overrides; otherwise retain this interpreter.
             build_environment['TOFU_PYTHON'] = sys.executable
+        browser_error = _ensure_canary_browser(build_environment)
+        if browser_error:
+            return browser_error
         try:
             from serverctl_pkg.native_engine import _run
             _run(

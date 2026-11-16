@@ -33,6 +33,7 @@ Judged by: "if the production logic were deleted today, would this go red?"
 Yes — remove the export and the scrubbed-env launch fails.
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -925,3 +926,87 @@ def test_playwright_automatic_node_probe_respects_operator_and_platform(
     chromium_env.ensure_chromium_env(env=env)
 
     assert env.get('PLAYWRIGHT_NODEJS_PATH') == override
+
+
+# ── On-demand headless shell (fresh host / host move) ─────────────────
+# 2026-11-16: the moved CodeLab had no ~/.cache/ms-playwright because
+# `python server.py` skipped `migrate_host.py --start`, so the bundle canary
+# found no browser and every startup build failed.
+
+_FAKE_INSTALLER = '''
+import json, os, sys
+from pathlib import Path
+Path(os.environ['INSTALL_RECORD']).write_text(json.dumps({
+    'argv': sys.argv[1:], 'https_proxy': os.environ.get('HTTPS_PROXY', '')}))
+if os.environ.get('INSTALL_FAILS'):
+    print('Downloading Chrome Headless Shell')
+    print('Error: getaddrinfo ENOTFOUND cdn.playwright.dev')
+    print('    at GetAddrInfoReqWrap.onlookupall (node:dns:120:26)')
+    print('Error: Download failure, code=1')
+    sys.exit(1)
+shell = Path(os.environ['PLAYWRIGHT_BROWSERS_PATH'], 'chromium_headless_shell-1234',
+             'chrome-headless-shell-linux64', 'chrome-headless-shell')
+shell.parent.mkdir(parents=True)
+shell.write_text('')
+'''
+
+
+@pytest.fixture
+def empty_registry(tmp_path, monkeypatch):
+    registry = tmp_path / 'ms-playwright'
+    installer = tmp_path / 'installer.py'
+    installer.write_text(_FAKE_INSTALLER)
+    record = tmp_path / 'record.json'
+    monkeypatch.setenv('PLAYWRIGHT_BROWSERS_PATH', str(registry))
+    monkeypatch.setenv('INSTALL_RECORD', str(record))
+    monkeypatch.setenv('HTTPS_PROXY', 'http://proxy.test:8080')
+    monkeypatch.delenv('HYPERFRAMES_BROWSER_PATH', raising=False)
+    monkeypatch.setattr(chromium_env, '_SYSTEM_BROWSERS', ())
+    real_command = chromium_env.headless_shell_install_command
+    monkeypatch.setattr(chromium_env, 'headless_shell_install_command',
+                        lambda python=None: [sys.executable, str(installer),
+                                             *real_command()[2:]])
+    return registry, record
+
+
+@pytest.mark.skipif(not sys.platform.startswith('linux'), reason='linux layout')
+def test_missing_browser_is_installed_into_the_launch_registry_through_the_proxy(empty_registry):
+    registry, record = empty_registry
+    executable = chromium_env.ensure_headless_shell()
+    assert executable.startswith(str(registry))
+    assert chromium_env.is_headless_shell(executable)
+    installed = json.loads(record.read_text())
+    assert installed['argv'] == ['playwright', 'install', '--only-shell', 'chromium']
+    assert installed['https_proxy'] == 'http://proxy.test:8080'
+    record.unlink()
+    assert chromium_env.ensure_headless_shell() == executable
+    assert not record.exists(), 'an installed browser is never reinstalled'
+
+
+def test_impossible_install_is_one_actionable_line(empty_registry, monkeypatch):
+    registry, _record = empty_registry
+    monkeypatch.setenv('INSTALL_FAILS', '1')
+    with pytest.raises(chromium_env.ChromiumUnavailable) as raised:
+        chromium_env.ensure_headless_shell()
+    message = str(raised.value)
+    assert '\n' not in message
+    assert str(registry) in message
+    assert 'getaddrinfo ENOTFOUND' in message
+    assert 'node:dns' not in message
+    assert 'Download failure' not in message
+    assert 'playwright install --only-shell chromium' in message
+    assert 'scripts/migrate_host.py --start' in message
+    assert 'Downloading Chrome Headless Shell' in raised.value.installer_output
+
+
+def test_cli_exits_unavailable_with_the_actionable_line_last(empty_registry, monkeypatch, capsys):
+    monkeypatch.setenv('INSTALL_FAILS', '1')
+    monkeypatch.setattr(chromium_env, 'ensure_chromium_env', lambda: None)
+    assert chromium_env.main(['--ensure-headless-shell']) == chromium_env.EXIT_CHROMIUM_UNAVAILABLE
+    last = capsys.readouterr().err.strip().splitlines()[-1]
+    assert last.startswith('headless Chromium is not installed')
+
+
+def test_the_named_install_command_is_this_interpreters_playwright_headless_shell():
+    assert chromium_env.headless_shell_install_command() == [
+        sys.executable, '-m', 'playwright', 'install', '--only-shell', 'chromium']

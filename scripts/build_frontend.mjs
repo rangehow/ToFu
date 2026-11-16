@@ -158,6 +158,12 @@ function playwrightNodePath() {
   return /(^|[\\/])node(\.exe)?$/.test(process.execPath) ? process.execPath : '';
 }
 
+/** Mirrors ``EXIT_CHROMIUM_UNAVAILABLE`` in scripts/frontend_bundle_canary.py. */
+const CANARY_EXIT_CHROMIUM_UNAVAILABLE = 69;
+
+/** A missing host prerequisite, reported as one message, not a stack trace. */
+class BuildPrerequisiteError extends Error {}
+
 async function runBundleCanary(artifactDir) {
   const python = process.env.TOFU_PYTHON || process.env.PYTHON || 'python3';
   const script = join(root, 'scripts', 'frontend_bundle_canary.py');
@@ -184,7 +190,13 @@ async function runBundleCanary(artifactDir) {
     child.once('error', rejectPromise);
     child.once('exit', (code, signal) => {
       if (code === 0) resolvePromise();
-      else rejectPromise(new Error(
+      else if (code === CANARY_EXIT_CHROMIUM_UNAVAILABLE) {
+        // The canary already printed the one actionable message.
+        rejectPromise(new BuildPrerequisiteError(
+          'frontend build stopped before publication: the bundle canary needs '
+          + 'a headless Chromium (see the message above); nothing was published',
+        ));
+      } else rejectPromise(new Error(
         `frontend bundle canary rejected unpublished graph `
         + `(exit=${String(code)}, signal=${String(signal)})`,
       ));
@@ -287,4 +299,10 @@ async function main() {
   }
 }
 
-await main();
+try {
+  await main();
+} catch (error) {
+  if (!(error instanceof BuildPrerequisiteError)) throw error;
+  process.stderr.write(`${error.message}\n`);
+  process.exitCode = 1;
+}

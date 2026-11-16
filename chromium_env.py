@@ -79,6 +79,9 @@ __all__ = [
     'chromium_executable',
     'is_headless_shell',
     'headed_chromium_executable',
+    'ChromiumUnavailable',
+    'headless_shell_install_command',
+    'ensure_headless_shell',
 ]
 
 #: Libs whose presence proves a directory really carries Chromium's GUI deps.
@@ -505,6 +508,73 @@ def headed_chromium_executable():
     return ''
 
 
+class ChromiumUnavailable(RuntimeError):
+    """No headless Chromium is installed and the on-demand install failed.
+
+    ``str()`` is one actionable line; ``installer_output`` keeps the
+    installer's complete output for a terminal that can show it.
+    """
+
+    def __init__(self, message, installer_output=''):
+        super().__init__(message)
+        self.installer_output = installer_output
+
+
+def headless_shell_install_command(python=None):
+    """The one command that installs the browser every launch here needs."""
+    return [python or sys.executable, '-m', 'playwright', 'install',
+            '--only-shell', 'chromium']
+
+
+def ensure_headless_shell():
+    """Return a Chromium executable, installing the headless shell if none is.
+
+    A fresh host (a moved CodeLab whose ``~/.cache/ms-playwright`` was not
+    restored, a colleague's laptop) has the Python ``playwright`` package but
+    no browser. Playwright installs into the registry it launches from, so the
+    install runs under ``os.environ`` and the result is re-resolved with
+    :func:`chromium_executable`. The installer inherits the process's network
+    policy through that environment (``HTTPS_PROXY``/``NO_PROXY``: the
+    pre-dependency port in docs/NETWORK.md); it adds no route of its own.
+
+    Raises:
+        ChromiumUnavailable: one actionable message naming the install command
+            and the host-move restore, with the installer's own output.
+    """
+    executable = chromium_executable()
+    if executable:
+        return executable
+    registry = playwright_registry(os.environ)
+    command = headless_shell_install_command()
+    print(f'No headless Chromium in {registry}; installing it once: '
+          f'{" ".join(command)}', file=sys.stderr, flush=True)
+    try:
+        completed = subprocess.run(
+            command, env=os.environ, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            check=False)
+        output = (completed.stdout or '').strip()
+        failed = completed.returncode != 0
+    except OSError as error:
+        output, failed = str(error), True
+    executable = '' if failed else chromium_executable()
+    if executable:
+        return executable
+    proxy = ('' if any(os.environ.get(name) for name in (
+        'HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy'))
+        else ' with HTTPS_PROXY set on a proxied host')
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    # Playwright's installer follows its root-cause error (the first) with a
+    # Node stack trace, retries and a generic "Download failure" summary.
+    errors = [line for line in lines if line.startswith('Error:')]
+    reason = (errors[:1] or lines[-1:] or ['the installer produced no browser'])[0]
+    raise ChromiumUnavailable(
+        f'headless Chromium is not installed in {registry} and installing it '
+        f'failed ({reason}). Install it with: {" ".join(command)}{proxy}; '
+        f'after a host move, scripts/migrate_host.py --start restores '
+        f'~/.cache/ms-playwright.', output)
+
+
 def describe_chromium_env(env_prefix=None):
     """Diagnose the Chromium runtime env WITHOUT mutating anything.
 
@@ -540,19 +610,51 @@ def describe_chromium_env(env_prefix=None):
             'xorg-libxdamage xorg-libxfixes xorg-libxrandr libxkbcommon nspr '
             'nss mesa-libgbm-cos7-x86_64 fontconfig font-ttf-dejavu-sans-mono, '
             'or with root: python -m playwright install-deps chromium')
+    font_issues = []
     if not system_fc and not conf_file:
-        issues.append(
+        font_issues.append(
             'no /etc/fonts and no fontconfig config in the env prefix — '
             'Chromium will render every glyph as nothing (blank-but-styled '
             'screenshots). Install: conda install -c conda-forge fontconfig '
             'font-ttf-dejavu-sans-mono font-ttf-noto-cjk')
     elif not conf_file and not _fontconfig_supports_chinese('/etc/fonts/fonts.conf'):
-        issues.append(
+        font_issues.append(
             'the system fontconfig has no Chinese font coverage — rendered '
             'screenshots will show missing-glyph boxes. Install: conda install '
             '-c conda-forge fontconfig font-ttf-noto-cjk, or with root: '
             'apt-get install fonts-noto-cjk')
+    issues += font_issues
     return {'lib_dirs': lib_dirs, 'fontconfig': conf_file,
             'system_fontconfig': system_fc, 'executable': executable,
             'headed_executable': headed, 'binaries': binaries,
-            'issues': issues}
+            'issues': issues, 'font_issues': font_issues}
+
+
+#: sysexits EX_UNAVAILABLE; shared with scripts/frontend_bundle_canary.py.
+EXIT_CHROMIUM_UNAVAILABLE = 69
+
+
+def main(argv=None):
+    """``python chromium_env.py --ensure-headless-shell``: one line, one verdict.
+
+    Launchers that are not themselves the browser's consumer (``serverctl``
+    before a frontend build) run this in a child with the exact environment the
+    canary will inherit, so their own process environment is never mutated.
+    """
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args != ['--ensure-headless-shell']:
+        print('usage: chromium_env.py --ensure-headless-shell', file=sys.stderr)
+        return 2
+    ensure_chromium_env()
+    try:
+        print(ensure_headless_shell())
+    except ChromiumUnavailable as error:
+        if error.installer_output:
+            print(error.installer_output, file=sys.stderr)
+        print(str(error), file=sys.stderr)
+        return EXIT_CHROMIUM_UNAVAILABLE
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

@@ -504,7 +504,11 @@ DolphinFS 上，新机的 `--start` 在旧机还在服务时直接拒绝。所�
    期望除"serving host: <旧主机> still serves"这一条 INFO 外全部 PASS（DolphinFS
    读写、Python 依赖、Node 版本、两个 GitHub 代理、模型服务商、端口 15000 空闲、
    存储 authority 不在本地 front、引擎能在新机执行且可准入）。有 FAIL 就先修，旧机
-   不要停。每一步都先 `cd` 到上面的 checkout：`.venv/bin/python` 是相对路径，在别的
+   不要停。`headless browser` / `CJK fonts` 是 WARN，不阻止启动：缺 Chromium 时
+   `--start` 先恢复 `~/.cache/ms-playwright`，没有副本时第一次前端构建经
+   `HTTPS_PROXY` 自动安装 headless shell（也可手动 `.venv/bin/python -m playwright
+   install --only-shell chromium`）。直接 `python server.py` / `serverctl.py start`
+   不会恢复 home 状态（`.codex` 等），换机后第一次启动请用 `--start`。每一步都先 `cd` 到上面的 checkout：`.venv/bin/python` 是相对路径，在别的
    目录会报 No such file。
 
    `storage engine build` 报 source identity unreadable on this host … disappeared

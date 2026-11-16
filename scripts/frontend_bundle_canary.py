@@ -30,6 +30,9 @@ CANARY_ORIGIN = 'http://tofu-frontend-canary.test'
 BOOT_TIMEOUT_MS = 20_000
 _BOOT_POLL_MS = 1_000
 MAX_ASSET_BYTES = 16 * 1024 * 1024
+# The build reports the canary's own message instead of a stack trace,
+# because the graph was never judged.
+EXIT_CHROMIUM_UNAVAILABLE = chromium_env.EXIT_CHROMIUM_UNAVAILABLE
 
 
 class BootNoProgress(TimeoutError):
@@ -144,10 +147,7 @@ def run_canary(artifact_dir: Path, manifest_path: Path | None = None) -> None:
     entry = _entry_file(artifact_dir, manifest_path or artifact_dir / 'manifest.json')
     shell = _shell(entry)
     chromium_env.ensure_chromium_env()
-    executable = chromium_env.chromium_executable()
-    if not executable:
-        issues = '; '.join(chromium_env.describe_chromium_env()['issues'])
-        raise RuntimeError(f'frontend canary requires Chromium: {issues}')
+    executable = chromium_env.ensure_headless_shell()
 
     from playwright.sync_api import sync_playwright
 
@@ -293,6 +293,11 @@ def main() -> int:
     args = parser.parse_args()
     try:
         run_canary(args.artifact_dir, args.manifest)
+    except chromium_env.ChromiumUnavailable as exc:
+        if exc.installer_output:
+            print(exc.installer_output, file=sys.stderr)
+        print(f'frontend bundle canary cannot run: {exc}', file=sys.stderr)
+        return EXIT_CHROMIUM_UNAVAILABLE
     except Exception as exc:
         print(str(exc), file=sys.stderr)
         return 1

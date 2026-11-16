@@ -217,3 +217,20 @@ def test_a_real_boot_error_fails_immediately(tmp_path, small_window):
         resources.browser.close()
         resources.server.stop()
         resources.playwright.stop()
+
+
+def test_missing_browser_stops_with_the_authority_message_not_a_trace(tmp_path, monkeypatch, capsys):
+    _artifact(tmp_path)
+    def unavailable():
+        raise canary.chromium_env.ChromiumUnavailable(
+            'headless Chromium is not installed in /r and installing it failed (offline). '
+            'Install it with: python -m playwright install --only-shell chromium',
+            'installer log')
+    monkeypatch.setattr(canary.chromium_env, 'ensure_chromium_env', lambda: None)
+    monkeypatch.setattr(canary.chromium_env, 'ensure_headless_shell', unavailable)
+    monkeypatch.setattr(sys, 'argv', ['canary', '--artifact-dir', str(tmp_path)])
+    assert canary.main() == canary.EXIT_CHROMIUM_UNAVAILABLE
+    err = capsys.readouterr().err.strip().splitlines()
+    assert err[0] == 'installer log'
+    assert err[-1].startswith('frontend bundle canary cannot run: headless Chromium')
+    assert 'Traceback' not in '\n'.join(err)

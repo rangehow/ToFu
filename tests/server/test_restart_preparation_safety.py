@@ -45,6 +45,7 @@ def test_frontend_timeout_joins_descendants_and_releases_build_lock(tmp_path, mo
     monkeypatch.setattr(serverctl, '_lifecycle_owns_frontend', lambda: True)
     monkeypatch.setattr(serverctl, '_validate_frontend_artifact', lambda: (_ for _ in ()).throw(RuntimeError('stale')))
     monkeypatch.setattr(serverctl, '_FRONTEND_REPAIR_TIMEOUT_SECONDS', 0.7)
+    monkeypatch.setattr(serverctl, '_ensure_canary_browser', lambda _environment: '')
     pid_file = tmp_path / 'builder.pid'
     child = ('import os,signal,time; from pathlib import Path; '
              'signal.signal(signal.SIGTERM,signal.SIG_IGN); '
@@ -94,6 +95,7 @@ def test_frontend_output_budget_rejects_noisy_builder(tmp_path, monkeypatch):
             raise RuntimeError('stale')
     monkeypatch.setattr(serverctl, '_validate_frontend_artifact', validate)
     monkeypatch.setattr(native_engine, 'MAX_LOG_BYTES', 128)
+    monkeypatch.setattr(serverctl, '_ensure_canary_browser', lambda _environment: '')
     monkeypatch.setattr(serverctl, '_source_frontend_build_command',
                         lambda: [sys.executable, '-c', 'print("x"*1024)'])
     assert 'log budget' in serverctl.prepare_source_frontend_artifact('test', capture_output=True)

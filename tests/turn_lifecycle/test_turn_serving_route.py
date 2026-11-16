@@ -37,7 +37,7 @@ const kimi = resolveTurnServingRoute({
   model: 'kimi-k3',
   lastRoundUsage: {round: 50, model: 'kimi-k3', tokensIn: 100000, tokensOut: 50},
   apiRounds: [
-    {round: 50, tag: 'R50', ...dispatch('kimi-k3', 'sankuai', 'sankuai_key_0', 'k123')},
+    {round: 50, tag: 'R50', ...dispatch('kimi-k3', 'example-corp', 'example_corp_key_0', 'k123')},
     compaction('gemini-3.5-flash-lite', 'gemini'),
   ],
 });
@@ -57,7 +57,7 @@ const fallback = resolveTurnServingRoute({
     tokensIn: 30000, tokensOut: 100,
   },
   apiRounds: [
-    {round: 1, tag: 'R1', ...dispatch('kimi-k3', 'sankuai', 'sankuai_0', 'k123')},
+    {round: 1, tag: 'R1', ...dispatch('kimi-k3', 'example-corp', 'example_corp_0', 'k123')},
     {round: 1, tag: 'R1-FALLBACK', ...dispatch('glm-5.3', 'zhipu', 'zhipu_0', 'f123')},
     compaction('gemini-3.5-flash-lite', 'gemini'),
   ],
@@ -65,7 +65,7 @@ const fallback = resolveTurnServingRoute({
 const billed = resolveTurnServingRoute({
   model: 'kimi-k3',
   apiRounds: [
-    {round: 1, tag: 'R1', ...dispatch('kimi-k3', 'sankuai', 'sankuai_0', 'k123')},
+    {round: 1, tag: 'R1', ...dispatch('kimi-k3', 'example-corp', 'example_corp_0', 'k123')},
     {round: 1, tag: 'R1-BILLED', responseAuthoring: false,
       ...dispatch('gemini-discarded', 'gemini', 'g_0', 'd123')},
     compaction('gemini-3.5-flash-lite', 'gemini'),
@@ -112,7 +112,7 @@ console.log(JSON.stringify({kimi, sol, fallback, billed, legacyFallback, snapsho
     assert routes['kimi'] == {
         'model': 'kimi-k3', 'logicalModel': 'kimi-k3',
         'brandModel': 'kimi-k3', 'brandCreatorId': '',
-        'providerId': 'sankuai', 'keyName': 'sankuai_key_0',
+        'providerId': 'example-corp', 'keyName': 'example_corp_key_0',
         'keyTail': 'k123', 'source': 'last-round',
     }
     assert routes['sol']['model'] == 'gpt-5.6-sol'
@@ -120,7 +120,7 @@ console.log(JSON.stringify({kimi, sol, fallback, billed, legacyFallback, snapsho
     assert routes['fallback']['model'] == 'glm-5.3'
     assert routes['fallback']['providerId'] == 'zhipu'
     assert routes['billed']['model'] == 'kimi-k3'
-    assert routes['billed']['providerId'] == 'sankuai'
+    assert routes['billed']['providerId'] == 'example-corp'
     assert routes['legacyFallback']['model'] == 'glm-5.3'
     assert routes['snapshot'] == {
         'model': 'beta-wire-b', 'logicalModel': 'alpha',
@@ -194,7 +194,7 @@ const kimi = renderFinishInfo({...base,
   model: 'kimi-k3',
   lastRoundUsage: {round: 50, model: 'kimi-k3', tokensIn: 10, tokensOut: 5},
   apiRounds: [
-    {round: 50, tag: 'R50', ...dispatch('kimi-k3', 'sankuai', 'sankuai_0', '1234')},
+    {round: 50, tag: 'R50', ...dispatch('kimi-k3', 'example-corp', 'example_corp_0', '1234')},
     {kind: 'compaction', tag: 'COMPACTION-L2', ...dispatch('gemini-3.5-flash-lite', 'gemini', 'g_0', '9999')},
   ],
 }, false);
@@ -216,19 +216,19 @@ const hostedDeepseek = renderFinishInfo({...base,
   routeSnapshot: {
     contract_version: 'tofu.route-snapshot/v2',
     selected_model: {creator_id: 'deepseek', model_id: 'deepseek-v4.1-flash'},
-    provider_scoped_selection: null, preferred_provider_id: 'sankuai',
+    provider_scoped_selection: null, preferred_provider_id: 'example-corp',
     actual_model: {creator_id: 'deepseek', model_id: 'deepseek-v4.1-flash'},
-    provider_id: 'sankuai', offering_id: 'deepseek-v4.1-flash',
-    deployment_id: 'deepseek-v4.1-flash', connection_id: 'meituan',
-    credential: null, wire_model_id: 'deepseek-v4-flash-meituan',
+    provider_id: 'example-corp', offering_id: 'deepseek-v4.1-flash',
+    deployment_id: 'deepseek-v4.1-flash', connection_id: 'yourprovider',
+    credential: null, wire_model_id: 'deepseek-v4-flash-yourprovider',
     transitions: [], degradation_reasons: [], recorded_at: 1,
   },
 }, false);
 const legacyHostedDeepseek = renderFinishInfo({...base,
-  model: 'deepseek-v4-flash-meituan',
+  model: 'deepseek-v4-flash-yourprovider',
   lastRoundUsage: {
-    model: 'deepseek-v4-flash-meituan',
-    resolvedModel: 'deepseek-v4-flash-meituan',
+    model: 'deepseek-v4-flash-yourprovider',
+    resolvedModel: 'deepseek-v4-flash-yourprovider',
   },
 }, false);
 const routed = renderFinishInfo({...base,
@@ -248,7 +248,7 @@ console.log(JSON.stringify({kimi, sol, fallback, hostedDeepseek, legacyHostedDee
     rendered = json.loads(run.stdout.strip().splitlines()[-1])
 
     assert 'kimi-k3' in rendered['kimi']
-    assert 'sankuai' in rendered['kimi']
+    assert 'example-corp' in rendered['kimi']
     assert 'gemini' not in rendered['kimi']
     assert 'gpt-5.6-sol' in rendered['sol']
     assert 'gpt-5.6-terra' not in rendered['sol']
@@ -257,7 +257,7 @@ console.log(JSON.stringify({kimi, sol, fallback, hostedDeepseek, legacyHostedDee
     for key in ('hostedDeepseek', 'legacyHostedDeepseek'):
         assert 'data-preset="deepseek"' in rendered[key]
         assert '<span class="stg-brand-icon" data-brand="deepseek">' in rendered[key]
-        assert 'deepseek-v4-flash-meituan' in rendered[key]
+        assert 'deepseek-v4-flash-yourprovider' in rendered[key]
     assert 'finish-tag warn model-route' in rendered['routed']
     assert 'kimi-k3' in rendered['routed']
     assert 'deepseek-v4-pro' in rendered['routed']

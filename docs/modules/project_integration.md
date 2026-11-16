@@ -929,8 +929,8 @@ test command mutate a shared environment. Specification:
 **Test roots (2026-11-13).** Problem: the inventory (`verification_index.py`)
 read only `tests/`, so 179 test files with 2,610 cases in package suites were
 outside `make test`, `record` and the CI candidate check: `packages/*/tests`,
-`plugins/tofu-trading/tests`, `bundles/meituan/tests`,
-`bundles/meituan/environment-provider/tests`, `android/tests`,
+`plugins/tofu-trading/tests`, `bundles/yourprovider/tests`,
+`bundles/yourprovider/environment-provider/tests`, `android/tests`,
 `android/runtime/tests` and `benchmarks/*/tests`. CI ran only tofu-search and
 tofu-trading, separately; the other 54 files ran only by hand, and 20 of them
 could not even import from a source checkout. Decision: every `test_*.py`

@@ -232,6 +232,7 @@ __pycache__/
 /propaganda/
 /scripts/*
 !/scripts/prepare_project_folder.py
+!/scripts/generated_rust.py
 !/scripts/migrate_host.py
 !/scripts/benchmark_verification.py
 !/scripts/verify.py
@@ -335,9 +336,6 @@ __pycache__/
 !/scripts/gen_storage_operation_catalog.py
 !/scripts/generated_storage_operations.py
 !/scripts/gen_storage_v2_contract.py
-# Shared rustfmt const layout imported by gen_storage_v2_contract.py and
-# tofudb_contract_codegen/generation.py.
-!/scripts/rust_const_layout.py
 !/scripts/gen_tofudb_ir_contract.py
 
 # Storage engine certification (docs/NATIVE_STORAGE_LIFECYCLE.md, "Engine certification gate").

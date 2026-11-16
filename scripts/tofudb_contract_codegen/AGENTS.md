@@ -12,6 +12,9 @@ See `docs/modules/data_tier.md` for the architectural decision.
   make a changed contract pass.
 - `native*.py`, `paper.py`, `python_outputs.py` and `search.py` own output
   projections. Worker and automation validation live in `auxiliary.py`.
+- `generation.py` runs every `.rs` output through
+  `scripts/generated_rust.py` (rustfmt), because `cargo fmt` formats
+  generated files too.
 - `generation.py` builds the complete output map before publication. The CLI
   retains normal sequential writes and a read-only `--check`; this is not a
   multi-file transactional publisher or an atomic cross-file input snapshot.

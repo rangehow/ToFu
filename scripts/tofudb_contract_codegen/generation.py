@@ -8,7 +8,7 @@ from .native import render_native
 from .paper import render_paper
 from .search import render_search
 from .python_outputs import render_migration, render_receipts, render_worker, render_billing
-from scripts.rust_const_layout import rustfmt_const_items
+from scripts.generated_rust import format_generated_rust
 
 OUTPUT_PATHS = {
     'receipts': 'lib/storage_authority_sql/generated_storage_receipts.py',
@@ -32,13 +32,13 @@ def build_outputs(inputs: ContractInputs) -> dict[str, str]:
     worker_text, clock = render_worker(contract, worker)
     outputs = {
         OUTPUT_PATHS['receipts']: receipts,
-        OUTPUT_PATHS['paper']: rustfmt_const_items(
-            render_paper(inputs.contract('paper_build_v1.schema.json'), contract)),
-        OUTPUT_PATHS['ir']: rustfmt_const_items(render_native(contract, worker, inputs)),
+        OUTPUT_PATHS['paper']: render_paper(inputs.contract('paper_build_v1.schema.json'), contract),
+        OUTPUT_PATHS['ir']: render_native(contract, worker, inputs),
         OUTPUT_PATHS['migration']: '\n'.join(migration) + '\n',
-        OUTPUT_PATHS['search']: rustfmt_const_items(search),
+        OUTPUT_PATHS['search']: search,
         OUTPUT_PATHS['worker']: worker_text,
         OUTPUT_PATHS['clock']: clock,
         OUTPUT_PATHS['billing']: render_billing(contract),
     }
-    return outputs
+    return {path: format_generated_rust(text, inputs.root / path) if path.endswith('.rs') else text
+            for path, text in outputs.items()}

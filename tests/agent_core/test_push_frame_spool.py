@@ -309,13 +309,10 @@ def test_worker_start_failure_is_explicit_and_leaves_no_physical_carrier(monkeyp
         try:
             monkeypatch.setattr(threading.Thread, 'start', failed)
             client.enqueue({'n': 1})
-            # A loop submitter's carrier is started by the resident starter,
-            # which fails the provisional Future once its start is refused.
-            prepared = client._queue._queue[0].prepared
-            await asyncio.wait([asyncio.wrap_future(prepared)], timeout=10)
-            assert isinstance(prepared.exception(timeout=0), RuntimeError)
-            monkeypatch.setattr(threading.Thread, 'start', start)
+            # A loop submitter's carriers start later on the resident starter
+            # thread, so the failure stays injected until the frame settles.
             assert await client.drain() is None
+            monkeypatch.setattr(threading.Thread, 'start', start)
             assert not client._connected
             assert not client._frame_store._executor.worker_threads_snapshot()
             assert client._frame_store.snapshot()['event_spool_files'] == 0

@@ -58,6 +58,11 @@ Python generated modules live beside their consumer under a package-local
 `tool_*` module name that hides its generated status. The generator’s
 `--check` mode and the owning contract test must agree on the path.
 
+Generated Rust (`packages/*/src/generated_*.rs`) is covered by the crates'
+`cargo fmt --check` gate, so a generator passes its output through
+`scripts/generated_rust.py` (rustfmt from the resolved toolchain) before it
+writes or compares; otherwise its `--check` and the fmt gate disagree.
+
 Product copy is authored only in the source locales
 (`frontend/src/i18n/locales/{zh,en}.json`). After adding or editing source
 copy, run the translation tool above: it translates only missing, stale or

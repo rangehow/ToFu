@@ -1737,6 +1737,51 @@ sets are released when each wait returns.
 SQLite/PostgreSQL COMMIT-fault tests, native generation tests and independent
 producer/client tests cover gaps, scope coalescing, rollback and cancellation.
 
+**Problem:** both native wire paths (`WorkerControl::respond_cancelled` serves
+the daemon dispatch and the embedded C ABI watch token) answered every
+commit-watch failure as a non-retryable `worker_control_refused`. A control
+closed for a stop or restart, a wait cancelled by its owner and an elapsed
+deadline looked like caller bugs, and the shared watcher loop
+(`lib/storage/commit_wake.py`) logged every interruption alike at WARNING with
+only the exception type, so a real refusal repeating at each failure backoff
+looked like shutdown noise.
+**Decision:** a watch the caller must correct still answers
+`worker_control_refused`, non-retryable: its binding (schema, receipt, owner and
+tenant, the transport's permission check) or its payload (cursor shape, unknown
+watch). Every other failure answers what `map_storage_error` answers for the
+same error. A closed or cancelled control is the retryable
+`database_unavailable`, which the restarted authority's next watch outlives; an
+engine fault (a poisoned wait) is the non-retryable `database_internal`. An
+elapsed watch deadline answers `deadline_elapsed`, non-retryable, like every
+storage request past its deadline (semantic admission and execution, checkpoint
+control): the flag says whether the identical request may be replayed, it also
+gates command replay, and a request past its deadline never succeeds. The
+watcher's next watch carries a new deadline; clients map the code to
+`database_timeout`. The watcher classifies with the shared
+`is_transient_storage_error` (`database_timeout`, `database_busy`,
+`database_unavailable`, the codes the clients' own read retry accepts). These
+log at DEBUG with the source's running count of retryable interruptions;
+anything else logs at ERROR through `describe_storage_failure` (code, message,
+retryable flag). Clients keep no `worker_control_refused` code, so a refusal
+arrives as `database_internal` with its reason as the message. The loop is
+unchanged: cursor reset, claim or scope invalidation, the existing failure
+backoff, the next watch. The SQL authority already answers
+`database_unavailable` for a closed control and `database_timeout` for an
+expired deadline, so all three authorities log alike. No wire code, constant,
+deadline or retry setting is added, and no contract changes.
+**Alternatives rejected:** a retryable `deadline_elapsed` for watches only,
+which would give one operation's flag a meaning no other storage response has;
+mapping binding and payload refusals through `map_storage_error` as well
+(`authority_scope_mismatch`, `database_protocol_error`), which changes the
+refusal's wire code for no caller benefit; classifying in the watcher by the
+wire `retryable` flag, which would log the SQL authority's closed control and
+every elapsed deadline at ERROR; ending the loop at a non-retryable failure,
+which would lose every later wake until a restart instead of reporting the
+failure at each backoff. Specifications: the commit-watch specs at the end of
+the `server.rs` and `embed_ffi/tests.rs` test modules in `packages/tofu-db/src/`,
+and `test_watch_interruptions_log_by_retry_class_and_keep_the_backoff_loop` in
+`tests/storage/test_worker_control.py`.
+
 [Worker lifecycle](../contracts/worker_job_lifecycle_v1.json) owns the states.
 Live-fenced `worker_job.defer` sets `suspended`, releases the lease and indexes
 availability. Resume advances the fence. Exact replay cannot extend the wait;
@@ -1953,6 +1998,11 @@ Process-local completed predecessors and the 30-second owner cache are not distr
   each write declares an expiry, reads/searches reject the wrong owner and
   expired rows, and maintenance prunes expired rows in bounded batches.
 - Non-terminal attempt-event payload: maximum 4 MiB.
+- Every attempt event, terminal settlements and the checkpoint-resume
+  bootstrap included: at most `maximumAttemptEventDocumentBytes` (32 MiB,
+  `contracts/tofudb_ir_v1.json`), the bound native reads and the SQL-to-native
+  import admit; a larger event is refused as `storage_payload_too_large`
+  ([STORAGE_EVENT_REPLAY.md](STORAGE_EVENT_REPLAY.md#attempt-event-document-bound-at-write)).
 - Storage RPC frame: maximum 64 MiB; personal-mode active RPCs adapt from 2..12
   using effective CPU and memory, while distributed mode defaults to 64. A
   separate serialized-frame budget is resolved independently per Sidecar and
@@ -2021,6 +2071,29 @@ are:
 - `database_invalid_payload`;
 - `conversation_authority_conflict`, `storage_payload_too_large`;
 - `plugin_storage_incompatible`.
+
+**Unclassified native engine failures (decision 2026-11-13).** Problem: the
+native engine answered every failure its semantic mapper did not recognize
+(a poisoned lock, a panicked worker, an invariant it checks) as the retryable
+`database_unavailable`, so clients retried a fault that cannot pass before
+the process restarts for as long as the authority kept answering; one
+coordinator stayed down for 5 hours that way. Decision:
+`semantic_executor::map_storage_error` answers such a failure as the
+non-retryable `database_internal` (status 500, `contracts/storage_v2.json`
+`serverSession.statusCodes.internal`) with a bounded diagnostic naming its
+cause. Failures a retry can outlive stay the retryable `database_unavailable`:
+the authority's latch (`engine::requires_reopen`; the recycle reopens it), OS
+errors (also through `vfs::PathIoError`), a WAL write or sync failure the
+barrier latched (`wal::LatchedFlushFailure`; receipts resolve the commit), a
+component closed or cancelled for a stop or restart, an index still opening,
+and a write that made no progress. Alternatives rejected: keeping the
+retryable default hides persistent faults behind silent retries; a
+non-retryable `database_unavailable` would contradict the transient meaning
+every caller gives that code; an integrity code would page for corruption
+that did not happen. Verify
+`semantic_executor::tests::an_unclassified_engine_error_is_a_non_retryable_internal_error_naming_its_cause`,
+`failures_a_retry_can_outlive_stay_retryable_database_unavailable` and
+`server::tests::an_unclassified_engine_error_answers_a_non_retryable_internal_error_naming_its_cause`.
 
 **Search input classification (decision 2026-11-01).** Problem: both
 authorities answered a rejected `conversation.search` cursor with

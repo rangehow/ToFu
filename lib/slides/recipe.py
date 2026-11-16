@@ -62,7 +62,8 @@ _DEFAULT_PAGES = DEFAULT_SLIDE_PAGES
 _MIN_PAGES = MIN_SLIDE_PAGES
 _MAX_PAGES = MAX_SLIDE_PAGES
 _RESEARCH_RESUME_TTL_S = RESEARCH_RESUME_TTL_S
-_RESEARCH_CHECKPOINT_VERSION = evidence_checkpoint_version(freshness='month')
+_RESEARCH_CHECKPOINT_VERSION = (
+    evidence_checkpoint_version(freshness='month') + '-material-units-v1')
 _AUTHOR_CACHE_NAME = '.tofu-slide-author.json'
 _AUTHOR_CACHE_VERSION = 'slide-page-cache-v1'
 _MAX_AUTHOR_CACHE_BYTES = 256 * 1024
@@ -83,14 +84,15 @@ _VISUAL_QA_CACHE_NAME = '.tofu-slide-visual-qa.json'
 _VISUAL_QA_CACHE_VERSION = 'slide-visual-qa-v1'
 _MAX_VISUAL_QA_CACHE_BYTES = 512 * 1024
 _MAX_VISUAL_QA_FINDINGS = 64
-_OUTLINE_CHECKPOINT_VERSION = 'slide-outline-v4'
+_OUTLINE_CHECKPOINT_VERSION = 'slide-outline-v5-evidence-units'
 _DIRECTOR_LENSES = (
     ('evidence-editorial',
      'Prioritize concrete evidence, native charts/diagrams, annotated imagery, '
      'and meaningful visual modalities. Avoid generic card grids.'),
-    ('spatial-narrative',
-     'Prioritize a strong opening-to-resolution spatial story, recurring '
-     'visual anchors, page handoffs, and deliberately contrasting layouts.'),
+    ('audience-argument',
+     'Prioritize the argument the audience must leave with: open with the '
+     'decisive result, order pages by importance, one claim per page, and '
+     'state limits and counter-evidence explicitly.'),
 )
 
 
@@ -117,20 +119,68 @@ def _raise_if_aborted(ctx: dict, stage: str) -> None:
 # ── Stage: research ───────────────────────────────────────
 
 def _run_research(ctx: dict) -> dict:
-    from lib.production.research import research_topic
-    # Caller-supplied evidence is the authority for this deck: the short
-    # topic only steers web research, and the material itself is what the
-    # outline and page authors must ground every number and claim in.
-    research = research_topic(ctx['topic'])
+    """Collect the deck's evidence: supplied material, else web research.
+
+    Caller-supplied material is the authority for its deck. It becomes
+    verbatim evidence units ``[M#]`` (``lib/slides/material.py``) and web
+    research is skipped: a search on a short title (a person's project, an
+    internal system) returns same-name or generic pages that the planner
+    then mixes into the owner's own results.
+    """
     material = str(ctx.get('material') or '').strip()
     if material:
-        research['supplied_material'] = material
-    return research
+        from lib.slides.material import material_cards
+        return {'cards': [], 'as_of': '', 'degraded': False,
+                'supplied_material': material,
+                'material_cards': material_cards(material),
+                'reason': 'supplied material is the evidence authority; '
+                          'web research not used'}
+    from lib.production.research import research_topic
+    return research_topic(ctx['topic'])
 
 
 # ── Stage: outline ────────────────────────────────────────
 
 _OUTLINE_JSON_RE = re.compile(r'\{.*\}', re.DOTALL)
+
+
+_OUTLINE_CONTENT_RULES_ZH = (
+    '内容纪律(最高优先级,先于版式):\n'
+    'a. 先通读全部证据,找出最重要的结论与结果,按受众需要组织成一条主线:'
+    '问题/背景 → 做法 → 关键结果(带数字) → 局限/没做成的 → 结论;'
+    '页面围绕这些结果,而不是平均覆盖每一节;\n'
+    'b. content 页的 key_message 是一句带具体数字或具体对象的判断,可直接作页标题'
+    '(如“新检索器把召回率从 61% 提到 78%,延迟不变”),'
+    '禁止“结果”“概览”“设计理念”式的栏目名;\n'
+    'c. content_notes 逐条列出本页要放的证据:每条写出原样的数字、单位、对照、'
+    '条件和限定语,并标注 [M#]/[S#];不写泛泛的描述;\n'
+    'd. 有证据时,每个 content 页至少引用一个证据编号;\n'
+    'e. 不规划关于演示本身的页(议程、讲述路线、怎么读、致谢、Q&A);'
+    'final 页用 2-4 条带数字的结论收束,回答开篇问题;\n'
+    'f. 面试/工作汇报:区分本人做的决定和贡献与团队结果,讲清问题、取舍和实测证据,'
+    '并说明没做成或落后的地方。\n')
+_OUTLINE_CONTENT_RULES_EN = (
+    'Content discipline (highest priority, before layout): read all the '
+    'evidence first and build one storyline around its most important '
+    'results for this audience (problem/context -> approach -> key results '
+    'with numbers -> limits / what did not work -> conclusion) rather than '
+    'covering every section evenly. Every content page key_message is one '
+    'assertion carrying its specific number or object, usable as the slide '
+    'title (e.g. "The new retriever lifts recall from 61% to 78% at equal '
+    'latency"), never a topic label such as "Results" or "Overview". '
+    'content_notes lists the page evidence item by item with the exact '
+    'numbers, units, baselines, conditions and qualifiers, each citing '
+    '[M#]/[S#]; no generic description. When evidence exists every content '
+    'page cites at least one id. Plan no pages about the presentation '
+    'itself (agenda, roadmap, how to read, thanks, Q&A); the final page '
+    'closes with 2-4 numbered conclusions that answer the opening question. '
+    'For interviews and work reviews separate the speaker\'s own decisions '
+    'and contributions from team results, state trade-offs and measured '
+    'evidence, and say where it lost.\n')
+#: Output allowance for one outline reply: a material-grounded brief for the
+#: maximum page count with verbatim evidence notes; 4096 truncated 10-page
+#: Chinese outlines mid-JSON (slides benchmark finding F0).
+_OUTLINE_MAX_TOKENS = 16384
 
 
 def _build_outline_prompt(topic: str, *, lang: str, max_pages: int,
@@ -158,15 +208,16 @@ def _build_outline_prompt(topic: str, *, lang: str, max_pages: int,
         '## Research status\nNo grounded cards were available. Do not invent '
         'specific facts, dates, quotations or statistics.\n\n'))
     if material:
-        research_block += (
+        research_block = (
             '## Caller-supplied source material (AUTHORITATIVE — read fully)\n'
-            'This is the primary evidence for this deck. Treat its facts, '
-            'figures, dates and attributions as ground truth: reproduce them '
-            'faithfully, do NOT replace them with numbers from web research '
-            'cards or from memory, and do NOT invent or inflate any metric. '
-            'Where the material marks something a team result, keep that '
-            'attribution; where a number is absent, use a qualitative '
-            'statement instead of inventing one.\n'
+            'This is the only evidence for this deck, split into verbatim '
+            'units [M#] (with their section). Treat its facts, figures, dates, '
+            'conditions and attributions as ground truth: reproduce them '
+            'exactly, never from memory, and never invent, round or inflate a '
+            'metric. Keep every qualifier the material attaches (not '
+            'significant, single run, estimate, component-level, unverified). '
+            'Where the material marks a team result, keep that attribution; '
+            'where a number is absent, use a qualitative statement.\n'
             + material + '\n\n')
     research_block += (
         '## Audience and evidence guidance\n'
@@ -195,8 +246,7 @@ def _build_outline_prompt(topic: str, *, lang: str, max_pages: int,
             'closing-resolve", "asset_mode": "generate|code|none",'
             ' "visual_modality": "hero-image|annotated-evidence|native-chart|'
             'native-diagram|timeline|comparison|table|quote|code|formula|map|'
-            'minimal-type", "visual_anchor": "贯穿前后页的可见对象/图形",'
-            ' "handoff": "本页如何把视觉或问题交给下一页",'
+            'minimal-type",'
             ' "asset_prompt": "若 generate,用英文写无文字的主视觉提示词"}]}\n'
             f'要求:\n1. pages 数量 {_MIN_PAGES} 到 {max_pages};\n'
             f'2. scenario 从以下选择: {scenarios_doc};theme_id 只能从下列'
@@ -220,8 +270,10 @@ def _build_outline_prompt(topic: str, *, lang: str, max_pages: int,
             '擅自修正或四舍五入;\n'
             '11. generate 只用于照片感/编辑插画主视觉;数据图表、流程和对比必须'
             '由 PPTD 原生元素绘制(asset_mode=code),避免图生文字和虚构数据;\n'
-            '12. 每页选择一个 visual_modality。整套至少使用 4 种,并用 visual_anchor'
-            '和 handoff 形成跨页连续性；只有证据充分时才能选择 chart/table/map。\n')
+            '12. 每页选择一个 visual_modality:引用的证据里有可比数字才选 '
+            'native-chart/table/comparison,真实流程才选 native-diagram/timeline,'
+            '否则用 minimal-type,不要为了版式多样编造图形。\n'
+            + _OUTLINE_CONTENT_RULES_ZH)
     return (
         f'You are a presentation editor. Design the outline of a deck about '
         f'"{topic}".\n'
@@ -239,8 +291,7 @@ def _build_outline_prompt(topic: str, *, lang: str, max_pages: int,
         'closing-resolve", "asset_mode": "generate|code|none",'
         ' "visual_modality": "hero-image|annotated-evidence|native-chart|'
         'native-diagram|timeline|comparison|table|quote|code|formula|map|'
-        'minimal-type", "visual_anchor": "visible cross-page anchor",'
-        ' "handoff": "visual/question handoff to the next page",'
+        'minimal-type",'
         ' "asset_prompt": "English, text-free hero visual prompt if generate"}]}\n'
         f'Rules: {_MIN_PAGES}..{max_pages} pages; scenario one of '
         f'{scenarios_doc}; theme_id one of the themes registered for that '
@@ -261,9 +312,11 @@ def _build_outline_prompt(topic: str, *, lang: str, max_pages: int,
         'secondary sources—never silently round or repair one secondary '
         'snippet; use generate only for photographic/editorial '
         'hero art, while charts, flows and comparisons use native PPTD '
-        'elements (asset_mode=code); choose one visual_modality per page, use '
-        'at least four across the deck, and connect pages with visual_anchor '
-        'and handoff. Use chart/table/map only when evidence supports it.')
+        'elements (asset_mode=code); choose one visual_modality per page: '
+        'native-chart/table/comparison only when the cited evidence has '
+        'comparable numbers, native-diagram/timeline only for a real process '
+        'in the source, otherwise minimal-type; never invent a graphic for '
+        'layout variety.\n' + _OUTLINE_CONTENT_RULES_EN)
 
 
 def _outline_candidate(content: str, *, topic: str, research: dict,
@@ -300,11 +353,19 @@ def _outline_candidate(content: str, *, topic: str, research: dict,
     from lib.slides._creative_plan import normalise_deck_plan
     normalise_deck_plan(out)
     cards_by_id = {str(card.get('id') or ''): card for card in cards}
+    material_by_id = {card['id']: card
+                      for card in research.get('material_cards') or []}
     for page in out['pages']:
-        source_ids = re.findall(
-            r'\bS\d+\b', str(page.get('content_notes') or ''))
+        notes = str(page.get('content_notes') or '')
+        source_ids = re.findall(r'\bS\d+\b', notes)
         page['sources'] = [cards_by_id[source_id] for source_id in source_ids
                            if source_id in cards_by_id][:4]
+        # Every cited material unit travels verbatim: it is the page's
+        # evidence, so it is not truncated to the web-card budget.
+        page['sources'].extend(
+            material_by_id[unit_id]
+            for unit_id in dict.fromkeys(re.findall(r'\bM\d+\b', notes))
+            if unit_id in material_by_id)
     return out
 
 
@@ -317,21 +378,17 @@ def _outline_errors(ctx: dict, artifact: dict) -> list:
     for i, p in enumerate(pages):
         if not (p.get('key_message') or p.get('purpose')):
             return [f'outline page {i + 1} has neither key_message nor purpose']
-    if len(pages) >= 3:
-        minimum_variety = min(4, len(pages))
-        layouts = {str(page.get('layout_archetype') or '') for page in pages}
-        modalities = {str(page.get('visual_modality') or '') for page in pages}
-        layouts.discard('')
-        modalities.discard('')
-        if len(layouts) < minimum_variety:
-            errors.append(
-                f'layout variety too low ({len(layouts)}; need '
-                f'{minimum_variety})')
-        if len(modalities) < minimum_variety:
-            errors.append(
-                f'visual modality variety too low ({len(modalities)}; need '
-                f'{minimum_variety})')
     research = ctx.get('artifacts', {}).get('research') or {}
+    if research.get('material_cards'):
+        uncited = [index + 1 for index, page in enumerate(pages)
+                   if page.get('pageType') == 'content'
+                   and not any(source.get('kind') == 'material'
+                               for source in page.get('sources') or [])]
+        if uncited:
+            errors.append(
+                f'content pages {uncited} cite no supplied-material evidence '
+                '[M#]; every content page must carry the exact facts it '
+                'presents from the material')
     cards = research.get('cards') or []
     if not cards:
         return errors
@@ -352,12 +409,12 @@ def _outline_score(candidate: dict) -> int:
     layouts = [str(page.get('layout_archetype') or '') for page in pages]
     modalities = [str(page.get('visual_modality') or '') for page in pages]
     cited = sum(bool(page.get('sources')) for page in pages)
-    handoffs = sum(bool(page.get('handoff')) for page in pages[:-1])
+
     consecutive_repeats = sum(
         layouts[index] == layouts[index - 1]
         for index in range(1, len(layouts)))
     return (len(pages) * 2 + len(set(layouts)) * 5
-            + len(set(modalities)) * 6 + cited * 3 + handoffs * 2
+            + len(set(modalities)) * 6 + cited * 3
             - consecutive_repeats * 8)
 
 
@@ -365,7 +422,7 @@ def _outline_digest(candidate: dict) -> dict:
     """Bounded critic input: plan semantics only, never full research cards."""
     fields = (
         'pageType', 'purpose', 'key_message', 'content_notes',
-        'layout_archetype', 'visual_modality', 'visual_anchor', 'handoff',
+        'layout_archetype', 'visual_modality',
         'asset_mode', 'narrative_role',
     )
     return {
@@ -418,6 +475,15 @@ def _critic_choice(ctx: dict, candidates: list[dict]) -> tuple[int, str, dict]:
     }
 
 
+def _material_prompt_text(research: dict) -> str:
+    """Supplied material as citable [M#] units (raw text for old checkpoints)."""
+    units = research.get('material_cards') or []
+    if units:
+        from lib.slides.material import format_material_cards
+        return format_material_cards(units)
+    return str(research.get('supplied_material') or '')
+
+
 def _run_outline(ctx: dict) -> dict:
     topic = ctx['topic']
     lang = ctx.get('lang', 'zh')
@@ -450,7 +516,7 @@ def _run_outline(ctx: dict) -> dict:
         scenarios_doc=scenarios_doc, style_hint=ctx.get('style') or '',
         research_doc=signal_doc + format_research_cards(research),
         research_as_of=str(research.get('as_of') or ''),
-        material=str(research.get('supplied_material') or ''))
+        material=_material_prompt_text(research))
     lenses = _DIRECTOR_LENSES if mode == 'director' else (('standard', ''),)
     candidates: list[dict] = []
     rejected: list[str] = []
@@ -465,7 +531,8 @@ def _run_outline(ctx: dict) -> dict:
         try:
             _raise_if_aborted(ctx, f'outline candidate {lens_name}')
             content, usage = _llm_chat(
-                [{'role': 'user', 'content': prompt}], max_tokens=4096,
+                [{'role': 'user', 'content': prompt}],
+                max_tokens=_OUTLINE_MAX_TOKENS,
                 temperature=0.45, prefer_model=ctx.get('model') or None,
                 strict_model=bool(ctx.get('model')),
                 owner_user_id=ctx.get('owner_user_id'),
@@ -886,6 +953,22 @@ def _author_cache_row(input_sha256: str, name: str, result: dict) -> dict:
             'rounds': rounds, 'yaml_bytes': len(data),
             'yaml_sha256': hashlib.sha256(data).hexdigest()}
 
+def _author_briefs(ctx: dict, outline: dict) -> list[dict]:
+    """Page briefs plus the deck's evidence numbers for the grounding check.
+
+    Every number written in the supplied material units and research cards
+    is admissible on any page (a closing page may restate an earlier
+    result); a visible number outside that set was invented.
+    """
+    research = ctx['artifacts'].get('research') or {}
+    from lib.slides.material import evidence_numbers
+    numbers = sorted(str(number) for number in evidence_numbers(
+        [card.get('point') for card in research.get('material_cards') or []]
+        + [card.get('point') for card in research.get('cards') or []]))
+    return [dict(page, deck_evidence_numbers=numbers)
+            for page in outline['pages']]
+
+
 def _run_author(ctx: dict) -> dict:
     from lib.design_sys.themes import get_theme
     from lib.slides.author import (
@@ -901,7 +984,7 @@ def _run_author(ctx: dict) -> dict:
     deck = Deck(title=outline['title'], size=ctx['size'],
                 theme=design['theme_tokens'], pages=[], root=deck_dir)
 
-    briefs = outline['pages']
+    briefs = _author_briefs(ctx, outline)
     total = len(briefs)
     authored = 0
     fallback_pages: list[int] = []
@@ -1450,11 +1533,34 @@ def _run_layout_qa(ctx: dict) -> dict:
     if not initial.get('ran') or initial.get('ok'):
         return {**initial, 'initialFindings': len(initial.get('findings') or []),
                 'repaired': 0}
+    initial_finding_count = len(initial.get('findings') or [])
+    # Growing one box can expose the next deficit on the same page; repeat
+    # until a round keeps nothing. Each kept round strictly lowers that
+    # page's finding count, so this terminates.
+    grown: set = set()
+    while True:
+        kept = _grow_short_text_boxes(ctx, deck, initial)
+        if not kept:
+            break
+        grown |= kept
+        deck = parse_deck(manifest)
+        initial = inspect_deck_layout(deck)
+        if not initial.get('ran'):
+            raise RuntimeError('layout QA could not remeasure grown text boxes')
+        if initial.get('ok'):
+            break
+    if grown:
+        if initial.get('ok'):
+            _refresh_previews(ctx, deck, grown)
+            return {**initial, 'initialFindings': initial_finding_count,
+                    'repaired': len(grown),
+                    'repairedPages': [i + 1 for i in sorted(grown)]}
 
     from lib.design_sys.themes import get_theme
     from lib.json_store import write_text_atomic
     from lib.slides.author import author_page
     outline = _effective_outline(ctx['artifacts'])
+    briefs = _author_briefs(ctx, outline)
     design = ctx['artifacts']['design']
     author_artifact = ctx['artifacts'].get('author') or {}
     assets_by_page = author_artifact.get('assets_by_page') or {}
@@ -1474,7 +1580,7 @@ def _run_layout_qa(ctx: dict) -> dict:
             seed = fh.read()
         originals[index] = seed
         fix = author_page(
-            deck, outline['pages'][index], index, len(deck.pages),
+            deck, briefs[index], index, len(deck.pages),
             theme=theme,
             image_urls=(list(assets_by_page.get(index, []) or
                               assets_by_page.get(str(index), []))
@@ -1493,8 +1599,9 @@ def _run_layout_qa(ctx: dict) -> dict:
         candidates.add(index)
 
     if not candidates:
-        return {**initial, 'initialFindings': len(initial['findings']),
-                'repaired': 0}
+        return {**initial, 'initialFindings': initial_finding_count,
+                'repaired': len(grown),
+                'repairedPages': [i + 1 for i in sorted(grown)]}
 
     deck = parse_deck(manifest)
     candidate_result = inspect_deck_layout(deck)
@@ -1504,7 +1611,9 @@ def _run_layout_qa(ctx: dict) -> dict:
                               originals[index])
         return {**initial, 'reason': candidate_result.get('reason') or
                 'repair could not be remeasured',
-                'initialFindings': len(initial['findings']), 'repaired': 0}
+                'initialFindings': initial_finding_count,
+                'repaired': len(grown),
+                'repairedPages': [i + 1 for i in sorted(grown)]}
 
     initial_counts = {i: len(findings) for i, findings in by_page.items()}
     final_counts = {p['index']: len(p.get('findings') or [])
@@ -1520,9 +1629,21 @@ def _run_layout_qa(ctx: dict) -> dict:
         deck = parse_deck(manifest)
         candidate_result = inspect_deck_layout(deck)
 
+    accepted |= set(grown)
+    _refresh_previews(ctx, deck, accepted)
+    remaining = candidate_result.get('findings') or []
+    logger.info('[Slides:layout-qa] %d initial, %d repaired page(s), %d remain',
+                initial_finding_count, len(accepted), len(remaining))
+    return {**candidate_result,
+            'initialFindings': initial_finding_count,
+            'repaired': len(accepted),
+            'repairedPages': [i + 1 for i in sorted(accepted)]}
+
+
+def _refresh_previews(ctx: dict, deck, indexes) -> None:
     from lib.slides.render_png import render_page_png
     emit = ctx.get('emit')
-    for index in accepted:
+    for index in sorted(indexes):
         preview = os.path.join(ctx['deck_dir'], 'preview', 'pages',
                                f'{index + 1:02d}.png')
         try:
@@ -1533,13 +1654,60 @@ def _run_layout_qa(ctx: dict) -> dict:
         except Exception as exc:
             logger.warning('[Slides:layout-qa] page %d preview refresh failed: '
                            '%s', index + 1, exc)
-    remaining = candidate_result.get('findings') or []
-    logger.info('[Slides:layout-qa] %d initial, %d repaired page(s), %d remain',
-                len(initial['findings']), len(accepted), len(remaining))
-    return {**candidate_result,
-            'initialFindings': len(initial['findings']),
-            'repaired': len(accepted),
-            'repairedPages': [i + 1 for i in sorted(accepted)]}
+
+
+def _grow_short_text_boxes(ctx: dict, deck, measured: dict) -> set:
+    """Apply the zero-LLM height repair; keep a page only if it improves.
+
+    Small vertical overflows (a box a few pixels shorter than its line box,
+    or missing PowerPoint's CJK metric reserve) used to go through an LLM
+    rewrite that often left them in place, and the zero-finding gate then
+    refused the whole deck. Growing the measured box is exact.
+    """
+    import yaml
+    from lib.json_store import write_text_atomic
+    from lib.slides.layout_qa import (inspect_deck_layout,
+                                      vertical_growth_repairs)
+    from lib.slides.pptd import parse_deck
+    by_page: dict = {}
+    for finding in measured.get('findings') or []:
+        by_page.setdefault(int(finding['page']) - 1, []).append(finding)
+    originals: dict = {}
+    for index, findings in by_page.items():
+        page_path = os.path.join(ctx['deck_dir'], deck.pages[index].path)
+        with open(page_path, encoding='utf-8') as fh:
+            text = fh.read()
+        data = yaml.safe_load(text)
+        if not isinstance(data, dict):
+            continue
+        repairs = vertical_growth_repairs(data, findings,
+                                          page_height=deck.height)
+        if not repairs:
+            continue
+        for element in data.get('elements') or []:
+            if isinstance(element, dict) and element.get('elementId') in repairs:
+                element['bounds'] = repairs[element['elementId']]
+        originals[index] = text
+        write_text_atomic(page_path, yaml.safe_dump(
+            data, allow_unicode=True, sort_keys=False))
+    if not originals:
+        return set()
+    manifest = os.path.join(ctx['deck_dir'], 'deck.pptd')
+    result = inspect_deck_layout(parse_deck(manifest),
+                                 page_indexes=tuple(sorted(originals)),
+                                 abort_check=_context_abort_check(ctx))
+    after = {page['index']: len(page.get('findings') or [])
+             for page in result.get('pages') or []}
+    kept = set()
+    for index, text in originals.items():
+        if result.get('ran') and after.get(index, 10**6) < len(by_page[index]):
+            kept.add(index)
+        else:
+            write_text_atomic(os.path.join(ctx['deck_dir'],
+                                           deck.pages[index].path), text)
+    logger.info('[Slides:layout-qa] grew text boxes on %d of %d page(s)',
+                len(kept), len(originals))
+    return kept
 
 
 def _gate_layout_qa(ctx: dict, artifact: dict) -> list:
@@ -1698,6 +1866,7 @@ def _run_visual_qa(ctx: dict) -> dict:
     if not qa_model:
         return {'ran': False, 'reason': 'no vision-capable model slot'}
     outline = _effective_outline(ctx['artifacts'])
+    briefs = _author_briefs(ctx, outline)
     theme = get_theme(ctx['artifacts']['design']['theme_id'])
     deck = parse_deck(os.path.join(ctx['deck_dir'], 'deck.pptd'))
     previews = (ctx['artifacts'].get('render') or {}).get('previews') or []
@@ -1780,7 +1949,7 @@ def _run_visual_qa(ctx: dict) -> dict:
                 if len(seed.encode('utf-8')) > _MAX_PAGE_YAML_BYTES:
                     raise ValueError('visual repair source exceeds YAML byte limit')
                 candidate = author_page(
-                    deck, outline['pages'][index], index, len(deck.pages), theme=theme,
+                    deck, briefs[index], index, len(deck.pages), theme=theme,
                     image_urls=(list(assets_by_page.get(index, []) or
                                      assets_by_page.get(str(index), []))
                                 + list(author_artifact.get('input_images') or [])),

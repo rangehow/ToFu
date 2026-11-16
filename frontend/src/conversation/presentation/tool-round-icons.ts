@@ -8,6 +8,7 @@
  * translations, or mutable browser state.
  */
 
+import { DISCLOSURE_CHEVRON_SVG } from '../../ui/disclosure';
 import {
   imageGenerationMode,
   isBrowserToolRound,
@@ -22,7 +23,8 @@ type UnknownRecord = Readonly<Record<string, unknown>>;
 
 const EMPTY_RECORD: UnknownRecord = Object.freeze({});
 
-export const TOOL_ROUND_CHEVRON_RIGHT_SVG = '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true"><path d="m6.5 5 3 3-3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+/** The app-wide fold chevron (ui/disclosure.ts), under the tool-round name. */
+export const TOOL_ROUND_CHEVRON_RIGHT_SVG = DISCLOSURE_CHEVRON_SVG;
 
 function record(value: unknown): UnknownRecord {
   return value !== null && typeof value === 'object' && !Array.isArray(value)

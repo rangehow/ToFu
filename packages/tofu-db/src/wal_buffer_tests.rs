@@ -42,6 +42,48 @@ fn enqueue_does_no_write_and_sync_cannot_credit_unwritten_or_failed_frames() {
         .is_err());
 }
 
+/// The buffer refuses only when it cannot copy the frame; the next append then
+/// takes the original synchronous write, leaving a gap between queued frames.
+fn refuse_next_frame(barrier: &WalBarrier) {
+    barrier.state.lock().unwrap().writes.refuse_next_for_test = true;
+}
+
+/// 2026-11-13 06:04:53: a commit's `wal` stage held the authority for 7.8 s.
+/// A frame past the byte budget was written physically by the appender, the
+/// authority holder, behind the worker's stalled fdatasync (on Linux 4.18
+/// fuse_fsync holds the inode lock every FUSE write takes). The budget sizes
+/// copying, never admission: the frame still queues and the appender writes
+/// nothing.
+#[test]
+fn a_frame_past_the_byte_budget_still_queues_and_the_appender_writes_nothing() {
+    let (vfs, mut log, barrier) = log(1024);
+    vfs.arm_fault(None).unwrap();
+    let first = log.append(1, [0; 32], b"queued").unwrap();
+    let large = vec![9; 8192];
+    log.append(2, first, &large).unwrap();
+    let trace = vfs.trace().unwrap();
+    assert!(
+        !trace.contains(&Operation::Write),
+        "the appender wrote a frame itself: {trace:?}"
+    );
+    let metrics = barrier.write_buffer_metrics();
+    assert_eq!(metrics["queuedFrames"], 2);
+    assert_eq!(metrics["synchronousFallbacks"], 0);
+    assert!(metrics["retainedFrameBytes"].as_u64().unwrap() > 1024);
+    barrier.sync_for_test(vfs.as_ref()).unwrap();
+    assert_eq!(barrier.synced_len(), log.len());
+    assert_eq!(barrier.write_buffer_metrics()["retainedFrameBytes"], 0);
+    log.detach_barrier();
+    drop(log);
+    vfs.crash().unwrap();
+    let mut recovered = ActiveLog::open_with_vfs(Path::new("/data"), vfs).unwrap();
+    let rows = recovered.recover_from(0, [0; 32], 2).unwrap().records;
+    assert_eq!(
+        rows.iter().map(|r| r.payload.clone()).collect::<Vec<_>>(),
+        vec![b"queued".to_vec(), large]
+    );
+}
+
 #[test]
 fn buffered_runs_and_large_synchronous_gaps_preserve_exact_framing_after_power_loss() {
     let (vfs, mut log, barrier) = log(1024);
@@ -49,6 +91,7 @@ fn buffered_runs_and_large_synchronous_gaps_preserve_exact_framing_after_power_l
     let large = vec![17; 8192];
     let third = b"third small".to_vec();
     let hash = log.append(1, [0; 32], &first).unwrap();
+    refuse_next_frame(&barrier);
     let hash = log.append(2, hash, &large).unwrap();
     log.append(3, hash, &third).unwrap();
     assert_eq!(barrier.write_buffer_metrics()["queuedFrames"], 2);
@@ -300,6 +343,7 @@ fn normal_inline_overflow_behind_queued_frames_waits_for_their_write() {
     let (vfs, mut log, barrier) = log(1024);
     log.set_durability(WalDurability::Normal);
     let first = log.append(1, [0; 32], b"queued").unwrap();
+    refuse_next_frame(&barrier);
     log.append(2, first, &[9; 4096]).unwrap();
     assert_eq!(barrier.write_buffer_metrics()["synchronousFallbacks"], 1);
     let witness = barrier.witness(log.len()).unwrap();

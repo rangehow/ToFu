@@ -910,6 +910,8 @@ struct SimulatedState {
     concurrent_file_publication: bool,
     #[cfg(test)]
     directory_entry_caps: BTreeMap<PathBuf, usize>,
+    #[cfg(test)]
+    directory_held_entries: BTreeMap<PathBuf, usize>,
 }
 
 /// Refuses a new name in a directory holding at least its cap of names, as a
@@ -929,7 +931,12 @@ fn refuse_name_past_cap(state: &SimulatedState, path: &Path) -> io::Result<()> {
         .keys()
         .chain(state.working_directories.iter())
         .filter(|candidate| candidate.parent() == Some(directory))
-        .count();
+        .count()
+        + state
+            .directory_held_entries
+            .get(directory)
+            .copied()
+            .unwrap_or(0);
     if names < cap {
         return Ok(());
     }
@@ -1038,6 +1045,18 @@ impl DeterministicVfs {
         Ok(())
     }
 
+    /// Counts `names` more entries in `directory` toward its entry cap
+    /// without creating them: no listing, read or crash image shows them. A
+    /// DolphinFS shard holding a million names is modelled without a million
+    /// simulated files.
+    #[cfg(test)]
+    pub(crate) fn hold_directory_entries(&self, directory: &Path, names: usize) -> io::Result<()> {
+        state(&self.shared)?
+            .directory_held_entries
+            .insert(directory.to_path_buf(), names);
+        Ok(())
+    }
+
     pub fn new(fault: Option<FaultRule>) -> Self {
         let root = PathBuf::from("/");
         Self {
@@ -1059,6 +1078,8 @@ impl DeterministicVfs {
                 concurrent_file_publication: false,
                 #[cfg(test)]
                 directory_entry_caps: BTreeMap::new(),
+                #[cfg(test)]
+                directory_held_entries: BTreeMap::new(),
             })),
         }
     }
@@ -1088,6 +1109,8 @@ impl DeterministicVfs {
                 concurrent_file_publication: false,
                 #[cfg(test)]
                 directory_entry_caps: BTreeMap::new(),
+                #[cfg(test)]
+                directory_held_entries: BTreeMap::new(),
             })),
         })
     }

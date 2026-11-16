@@ -9,6 +9,10 @@ from __future__ import annotations
 CONTRACT_ID = 'tofu.conversation-sync/v3'
 STREAM_POLICY = {'capacityStopStatus': 204,
  'cursor': 'opaque',
+ 'cursorLineage': {'names': ['authorityEpoch', 'syncSeq', 'changeDigest'],
+                   'resetReasons': {'changeReplaced': 'cursor_invalid',
+                                    'lineageUnproven': 'cursor_expired',
+                                    'withoutLineage': 'protocol_mismatch'}},
  'eventSource': '/api/v4/conversations/{conversationId}/events',
  'gapEvent': 'sync.reset_required',
  'heartbeatIntervalMs': 15000,
@@ -296,7 +300,12 @@ OPENAPI_SCHEMAS = {'AbortAttemptResponse': {'additionalProperties': True,
                                      'conversation.activity'],
                             'type': 'string'},
  'ConversationEventSubscription': {'additionalProperties': False,
-                                   'properties': {'after': {'type': 'string'},
+                                   'properties': {'after': {'description': 'The '
+                                                                           'single-conversation '
+                                                                           "stream's replay "
+                                                                           'cursor, with the same '
+                                                                           'lineage resets.',
+                                                            'type': 'string'},
                                                   'conversationId': {'maxLength': 256,
                                                                      'minLength': 1,
                                                                      'type': 'string'},
@@ -305,7 +314,16 @@ OPENAPI_SCHEMAS = {'AbortAttemptResponse': {'additionalProperties': True,
                                                   'streamGeneration': {'maximum': 2147483647,
                                                                        'minimum': 1,
                                                                        'type': 'integer'},
-                                                  'windowBytes': {'maximum': 16777216,
+                                                  'windowBytes': {'description': 'The '
+                                                                                 'single-conversation '
+                                                                                 "stream's "
+                                                                                 'windowBytes: '
+                                                                                 'catch-up budget '
+                                                                                 'and change-page '
+                                                                                 'bound, with the '
+                                                                                 'same page '
+                                                                                 'measure.',
+                                                                  'maximum': 16777216,
                                                                   'minimum': 65536,
                                                                   'type': 'integer'}},
                                    'required': ['conversationId', 'streamGeneration'],
@@ -317,7 +335,15 @@ OPENAPI_SCHEMAS = {'AbortAttemptResponse': {'additionalProperties': True,
                               'properties': {'channel': {'const': 'notify'},
                                              'contract': {'const': 'tofu.conversation-sync.invalidation/v1'},
                                              'conversationId': {'type': 'string'},
-                                             'cursorHint': {'type': 'string'},
+                                             'cursorHint': {'description': 'Ordering hint naming '
+                                                                           'the committed sequence '
+                                                                           'only. It carries no '
+                                                                           'lineage and never '
+                                                                           'resumes replay; a '
+                                                                           'stream reads canonical '
+                                                                           'changes from its own '
+                                                                           'cursor.',
+                                                            'type': 'string'},
                                              'taskId': {'type': 'string'},
                                              'type': {'const': 'conversation.invalidated'},
                                              'userId': {'oneOf': [{'type': 'string'},
@@ -418,7 +444,10 @@ OPENAPI_SCHEMAS = {'AbortAttemptResponse': {'additionalProperties': True,
                                              'conversationId': {'type': 'string'},
                                              'conversationRevision': {'minimum': 0,
                                                                       'type': 'integer'},
-                                             'cursor': {'type': 'string'},
+                                             'cursor': {'description': 'Lineage cursor at syncSeq, '
+                                                                       "captured in the snapshot's "
+                                                                       'read transaction.',
+                                                        'type': 'string'},
                                              'hasArtifacts': {'description': 'True when the owner '
                                                                              'conversation has any '
                                                                              'live chat artifact. '
@@ -532,7 +561,9 @@ OPENAPI_SCHEMAS = {'AbortAttemptResponse': {'additionalProperties': True,
                                          'contract': {'const': 'tofu.conversation-sync.turn-page/v1'},
                                          'conversationId': {'type': 'string'},
                                          'conversationRevision': {'minimum': 0, 'type': 'integer'},
-                                         'cursor': {'type': 'string'},
+                                         'cursor': {'description': 'Lineage cursor at the head '
+                                                                   'this page is exact for.',
+                                                    'type': 'string'},
                                          'hasMore': {'type': 'boolean'},
                                          'laneId': {'maxLength': 128,
                                                     'minLength': 1,
@@ -1185,7 +1216,10 @@ OPENAPI_SCHEMAS = {'AbortAttemptResponse': {'additionalProperties': True,
  'SyncHeartbeat': {'additionalProperties': False,
                    'properties': {'contract': {'const': 'tofu.conversation-sync.event/v1'},
                                   'conversationId': {'type': 'string'},
-                                  'cursor': {'type': 'string'},
+                                  'cursor': {'description': "The stream's last delivered cursor, "
+                                                            'verbatim: the cursor it resumed from '
+                                                            'until it delivers a change.',
+                                             'type': 'string'},
                                   'degraded': {'type': 'boolean'},
                                   'pushWithheld': {'type': 'boolean'},
                                   'serverBootId': {'type': 'string'},
@@ -1200,8 +1234,30 @@ OPENAPI_SCHEMAS = {'AbortAttemptResponse': {'additionalProperties': True,
  'SyncResetRequired': {'additionalProperties': False,
                        'properties': {'contract': {'const': 'tofu.conversation-sync.event/v1'},
                                       'conversationId': {'type': 'string'},
-                                      'cursor': {'type': 'string'},
-                                      'reason': {'enum': ['cursor_expired',
+                                      'cursor': {'description': 'Lineage cursor at the authority '
+                                                                'head the reset was decided at. '
+                                                                'The client re-anchors with one '
+                                                                'snapshot; this cursor never '
+                                                                'acknowledges the changes it '
+                                                                'skipped.',
+                                                 'type': 'string'},
+                                      'reason': {'description': "cursor_expired: the cursor's "
+                                                                'change, or one after it, left '
+                                                                'replay retention and its lineage '
+                                                                'cannot be proven in this '
+                                                                'authority open. cursor_invalid: '
+                                                                'this authority does not hold the '
+                                                                "cursor's change at its sequence, "
+                                                                'either beyond the head or because '
+                                                                'crash recovery or a restore gave '
+                                                                'the sequence to another change. '
+                                                                'protocol_mismatch: the cursor was '
+                                                                'issued before cursors carried '
+                                                                'lineage. replay_exceeds_window: '
+                                                                'the missed suffix outgrew the '
+                                                                'catch-up budget. server_restarted '
+                                                                'is reserved.',
+                                                 'enum': ['cursor_expired',
                                                           'cursor_invalid',
                                                           'server_restarted',
                                                           'protocol_mismatch',
@@ -2923,7 +2979,41 @@ OPENAPI_PATHS = {'/api/v4/attempts/{attemptId}/abort': {'post': {'operationId': 
                                          'x-tofu-contract': 'tofu.conversation-sync.multiplexed-events/v1'}},
  '/api/v4/conversations/{conversationId}/events': {'get': {'operationId': 'conversationSyncEvents',
                                                            'parameters': [{'$ref': '#/components/parameters/ConversationId'},
-                                                                          {'in': 'query',
+                                                                          {'description': 'Opaque '
+                                                                                          'replay '
+                                                                                          'cursor; '
+                                                                                          'Last-Event-ID '
+                                                                                          'takes '
+                                                                                          'precedence. '
+                                                                                          'A '
+                                                                                          'cursor '
+                                                                                          'whose '
+                                                                                          'change '
+                                                                                          'this '
+                                                                                          'authority '
+                                                                                          'no '
+                                                                                          'longer '
+                                                                                          'holds '
+                                                                                          'at its '
+                                                                                          'sequence, '
+                                                                                          'or one '
+                                                                                          'issued '
+                                                                                          'before '
+                                                                                          'cursors '
+                                                                                          'carried '
+                                                                                          'lineage, '
+                                                                                          'answers '
+                                                                                          'sync.reset_required '
+                                                                                          '(x-tofu-stream.cursorLineage) '
+                                                                                          'instead '
+                                                                                          'of a '
+                                                                                          'replay. '
+                                                                                          'Omission '
+                                                                                          'starts '
+                                                                                          'at the '
+                                                                                          'first '
+                                                                                          'change.',
+                                                                           'in': 'query',
                                                                            'name': 'after',
                                                                            'required': False,
                                                                            'schema': {'type': 'string'}},
@@ -3018,7 +3108,70 @@ OPENAPI_PATHS = {'/api/v4/attempts/{attemptId}/abort': {'post': {'operationId': 
                                                                                           'replays '
                                                                                           'every '
                                                                                           'retained '
-                                                                                          'change.',
+                                                                                          'change. '
+                                                                                          'windowBytes '
+                                                                                          'also '
+                                                                                          'bounds '
+                                                                                          'every '
+                                                                                          'change '
+                                                                                          'page '
+                                                                                          'the '
+                                                                                          'stream '
+                                                                                          'reads, '
+                                                                                          'the '
+                                                                                          'schema '
+                                                                                          'maximum '
+                                                                                          'when '
+                                                                                          'omitted: '
+                                                                                          'a page '
+                                                                                          'holds '
+                                                                                          'the '
+                                                                                          'longest '
+                                                                                          'prefix '
+                                                                                          'of '
+                                                                                          'changes '
+                                                                                          'whose '
+                                                                                          'sizes '
+                                                                                          'sum to '
+                                                                                          'at most '
+                                                                                          'the '
+                                                                                          'bound, '
+                                                                                          'and '
+                                                                                          'always '
+                                                                                          'at '
+                                                                                          'least '
+                                                                                          'one '
+                                                                                          'change. '
+                                                                                          'A '
+                                                                                          "change's "
+                                                                                          'size is '
+                                                                                          'the '
+                                                                                          'byte '
+                                                                                          'length '
+                                                                                          'of its '
+                                                                                          'compact '
+                                                                                          'UTF-8 '
+                                                                                          'JSON '
+                                                                                          'exactly '
+                                                                                          'as the '
+                                                                                          'storage '
+                                                                                          'page '
+                                                                                          'read '
+                                                                                          'returns '
+                                                                                          'it, '
+                                                                                          'before '
+                                                                                          'the '
+                                                                                          'stream '
+                                                                                          'omits '
+                                                                                          'diagnostic '
+                                                                                          'bodies; '
+                                                                                          'both '
+                                                                                          'storage '
+                                                                                          'authorities '
+                                                                                          'apply '
+                                                                                          'this '
+                                                                                          'one '
+                                                                                          'measure.',
                                                                            'in': 'query',
                                                                            'name': 'windowBytes',
                                                                            'required': False,
@@ -3413,6 +3566,88 @@ OPENAPI_PATHS = {'/api/v4/attempts/{attemptId}/abort': {'post': {'operationId': 
                                                                                   'schema': {'maximum': 9223372036854775807,
                                                                                              'minimum': 0,
                                                                                              'type': 'integer'}},
+                                                                                 {'description': 'The '
+                                                                                                 'replay '
+                                                                                                 'cursor '
+                                                                                                 'the '
+                                                                                                 'caller '
+                                                                                                 'holds '
+                                                                                                 'at '
+                                                                                                 'syncSeq. '
+                                                                                                 'The '
+                                                                                                 'page '
+                                                                                                 'then '
+                                                                                                 'answers '
+                                                                                                 'only '
+                                                                                                 'in '
+                                                                                                 'that '
+                                                                                                 "cursor's "
+                                                                                                 'lineage '
+                                                                                                 '(x-tofu-stream.cursorLineage), '
+                                                                                                 'decided '
+                                                                                                 'as '
+                                                                                                 'for '
+                                                                                                 'a '
+                                                                                                 'change '
+                                                                                                 'page: '
+                                                                                                 'when '
+                                                                                                 'the '
+                                                                                                 'change '
+                                                                                                 'at '
+                                                                                                 'syncSeq '
+                                                                                                 'is '
+                                                                                                 'no '
+                                                                                                 'longer '
+                                                                                                 'the '
+                                                                                                 'one '
+                                                                                                 'the '
+                                                                                                 'cursor '
+                                                                                                 'names, '
+                                                                                                 'cannot '
+                                                                                                 'be '
+                                                                                                 'proven '
+                                                                                                 'by '
+                                                                                                 'another '
+                                                                                                 'authority '
+                                                                                                 'open, '
+                                                                                                 'or '
+                                                                                                 'lies '
+                                                                                                 'beyond '
+                                                                                                 'the '
+                                                                                                 'head, '
+                                                                                                 'the '
+                                                                                                 'read '
+                                                                                                 'is '
+                                                                                                 'history_page_stale '
+                                                                                                 'without '
+                                                                                                 'currentSyncSeq '
+                                                                                                 'and '
+                                                                                                 'the '
+                                                                                                 'caller '
+                                                                                                 'repairs '
+                                                                                                 'from '
+                                                                                                 'one '
+                                                                                                 'snapshot. '
+                                                                                                 'Omitted '
+                                                                                                 'by '
+                                                                                                 'callers '
+                                                                                                 'loaded '
+                                                                                                 'before '
+                                                                                                 'history '
+                                                                                                 'pages '
+                                                                                                 'carried '
+                                                                                                 'lineage, '
+                                                                                                 'which '
+                                                                                                 'keep '
+                                                                                                 'the '
+                                                                                                 'sequence-only '
+                                                                                                 'fence.',
+                                                                                  'in': 'query',
+                                                                                  'name': 'cursor',
+                                                                                  'required': False,
+                                                                                  'schema': {'maxLength': 128,
+                                                                                             'minLength': 1,
+                                                                                             'type': 'string'}},
                                                                                  {'in': 'query',
                                                                                   'name': 'beforeOrdinal',
                                                                                   'required': False,

@@ -14,7 +14,9 @@ the scheduler family (schedule_create, schedule_list, schedule_manage) the Proje
 Coordinator's human Turn is 28 role tools, 520 bytes; the first two stay in its
 core by owner request, and the Claude route hides dispatch_project_assignment,
 create_conversation, await_device and the scheduler family (440 bytes with the
-discovery pair).
+discovery pair). create_memory, a lead's lesson record (2026-11-16, docs/modules/
+context_engineering.md "Memory compounding"), makes it 29 tools, 534 bytes; it
+stays out of the core, so that route hides it too and the wire is unchanged.
 Assemblies keep the memory group enabled, as in production, so a fixture cannot
 hide a ceiling change behind a fail-closed memory group.
 
@@ -126,18 +128,18 @@ def watchdog(homes, monkeypatch):
 
 
 CLAUDE_HIDDEN = {'dispatch_project_assignment', 'create_conversation', 'await_device',
-                 'schedule_create', 'schedule_list', 'schedule_manage'}
+                 'schedule_create', 'schedule_list', 'schedule_manage', 'create_memory'}
 
 
 def test_project_coordinator_human_turn_fits_the_budget_with_leads_and_memory_direct(coordinator):
-    """The 28 role tools join to 520 bytes. list_project_leads and search_memories are
+    """The 29 role tools join to 534 bytes. list_project_leads and search_memories are
     in the core by owner request; to fit, the Claude route hides the three least used
-    tools and the scheduler family, which stay reachable through Tool Search and by
-    exact name."""
+    tools, the scheduler family and the lesson record, which stay reachable through
+    Tool Search and by exact name."""
     task, _ = coordinator
     tools = assemble(task)
     assert set(_names(tools)) == COORDINATOR_TOOLS - DISCOVERY
-    assert _joined_bytes(_names(tools)) == 520 > BUDGET
+    assert _joined_bytes(_names(tools)) == 534 > BUDGET
     assert set(task['_requiredDirectToolNames']) == COORDINATOR_DIRECT_TOOLS
     body, projection = _wire(task, tools)
     wire = _names(body['tools'])

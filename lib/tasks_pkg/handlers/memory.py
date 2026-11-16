@@ -21,22 +21,98 @@ _MODEL_UPDATE_FIELDS = frozenset(
     UPDATE_MEMORY_TOOL['function']['parameters']['properties']) - {'memory_id'}
 
 
+def _lead_role(task):
+    """``global_router``/``project_coordinator`` for a project lead, else ``''``.
+
+    A failed role lookup raises: a write must not proceed on an unknown role.
+    """
+    from lib.tasks_pkg.coordinator_policy import coordinator_scope
+    scope = coordinator_scope(task or {})
+    if not scope:
+        return ''
+    from lib.router.policy import is_router_scope
+    return 'global_router' if is_router_scope(scope) else 'project_coordinator'
+
+
 def _agent_provenance(task):
-    """The write path's provenance for a model's memory tool call."""
+    """The write path's provenance for a model's memory tool call.
+
+    Every model write is an agent report bound to its Turn, whoever wrote it;
+    a project lead's write also names its role (``recorded_by``). Nothing a
+    model passes can make it owner speech.
+    """
     from datetime import datetime, timezone
     task = task or {}
-    return {'source_class': 'agent_report',
-            'conversation_id': str(task.get('convId') or ''),
-            'turn_id': str(task.get('_turnId') or ''),
-            'at': datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')}
+    provenance = {'source_class': 'agent_report',
+                  'conversation_id': str(task.get('convId') or ''),
+                  'turn_id': str(task.get('_turnId') or ''),
+                  'at': datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')}
+    role = _lead_role(task)
+    if role:
+        provenance['recorded_by'] = role
+    return provenance
+
+
+def _refuse_third_party_write(task):
+    """Text from other people never becomes a durable lesson (structural taint gate)."""
+    from lib.tasks_pkg.execution_profile import is_third_party_text
+    if is_third_party_text(task):
+        raise ValueError('Memory writes are unavailable while handling third-party text')
 
 
 # ── Memory operation handlers (registry pattern) ────────────────────
 
+def _nearest_lessons(fn_args, project_path, extra_paths):
+    """The ordinary lesson search for the new lesson's own title and description."""
+    from lib.memory.contracts import MEMORY_SEARCH_TOP_K_DEFAULT
+    from lib.memory.relevance._search import search_memories_scored
+    query = f"{fn_args.get('name', '')}\n{fn_args.get('description', '')}"
+    return search_memories_scored(query, project_path, top_k=MEMORY_SEARCH_TOP_K_DEFAULT,
+                                  extra_paths=extra_paths)
+
+
 def _memory_create(fn_args, project_path, extra_paths=None, *, task=None):
-    # New memories are always written to the PRIMARY project_path;
-    # extra_paths is accepted for a uniform handler signature but ignored.
-    from lib.memory.storage import create_memory
+    """Write a lesson as new or as a repeat, after the writer saw the nearest ones.
+
+    Without ``repeat_of`` and with matching lessons, nothing is written: the
+    result shows them and asks for the decision. ``repeat_of='new'`` (or no
+    match) writes a new lesson to the PRIMARY project_path; a lesson id writes
+    the text as that lesson's new version and counts the repeat in its store.
+    """
+    from lib.memory.contracts import MEMORY_RECORD_AS_NEW
+    from lib.memory.storage import create_memory, supersede_memory
+    _refuse_third_party_write(task)
+    repeat_of = fn_args.get('repeat_of')
+    if not repeat_of:
+        nearest = _nearest_lessons(fn_args, project_path, extra_paths)
+        if nearest:
+            from lib.memory.relevance._search import format_memory_matches
+            from lib.memory.contracts import MEMORY_SEARCH_TOP_K_DEFAULT
+            content = (
+                'Nothing saved yet: existing lessons match this one. Decide, then call '
+                'create_memory again with the same fields plus repeat_of: '
+                f'"{MEMORY_RECORD_AS_NEW}" if none describes this problem, or the id of the '
+                'lesson whose mistake happened again (your complete text becomes its new '
+                'version and its repeat count rises). To only fix a lesson without a '
+                'repeat, use update_memory.\n\n'
+                + format_memory_matches(nearest, MEMORY_SEARCH_TOP_K_DEFAULT))
+            return content, '🔎 check repeats', f"🔎 Memory: {fn_args.get('name', '?')}"
+    provenance = _agent_provenance(task)
+    if repeat_of and repeat_of != MEMORY_RECORD_AS_NEW:
+        updates = {key: fn_args[key] for key in ('name', 'description', 'body', 'tags')
+                   if fn_args.get(key) is not None}
+        result = supersede_memory(repeat_of, updates, project_path, extra_paths,
+                                  provenance={**provenance, 'recorded_as': 'repeat'},
+                                  recurrence=True)
+        if result is None:
+            raise ValueError(f'No lesson has id {repeat_of!r}; use an id the check showed, '
+                             f'or repeat_of="{MEMORY_RECORD_AS_NEW}"')
+        successor, _old = result
+        repeats = len(successor['recurrences'])
+        return (f"Recorded as a repeat of {repeat_of}: its mistake has now happened {repeats} "
+                f"time(s) after it was recorded. Current version: **{successor['name']}** "
+                f"(id: {successor['id']}, scope: {successor['scope']}); {repeat_of} is kept "
+                'as superseded history.', '🔁 repeat', f"🔁 Memory: {successor['name']}")
     mem = create_memory(
         name=fn_args.get('name', 'Untitled Memory'),
         description=fn_args.get('description', ''),
@@ -45,7 +121,7 @@ def _memory_create(fn_args, project_path, extra_paths=None, *, task=None):
         scope=(fn_args.get('scope')
                or ('project' if project_path else 'global')),
         project_path=project_path,
-        provenance=_agent_provenance(task),
+        provenance={**provenance, 'recorded_as': 'new'},
     )
     content = (
         f"Memory created: **{mem['name']}** "
@@ -55,12 +131,56 @@ def _memory_create(fn_args, project_path, extra_paths=None, *, task=None):
     return content, '💡 saved', f"💡 Memory: {fn_args.get('name', '?')}"
 
 
+_CLAIM_FIELDS = ('name', 'description', 'body')
+_LIFECYCLE_FIELDS = ('status', 'status_reason', 'superseded_by')
+
+
+def _memory_verdict(fn_args, project_path, extra_paths, task):
+    """Record a pending verdict; it settles when this Worker's result is accepted."""
+    from lib.memory.verification import record_verdict
+    from lib.project_dispatch.admission import is_dispatch_task
+    task = task or {}
+    others = [key for key in _MODEL_UPDATE_FIELDS - {'verdict'} if fn_args.get(key) is not None]
+    if others:
+        raise ValueError('verdict is recorded alone; change ' + ', '.join(sorted(others))
+                         + ' in a separate update_memory call')
+    if not is_dispatch_task(task) or _lead_role(task):
+        raise ValueError('A verdict settles only when a reviewer accepts a project Worker '
+                         'result; outside one, disprove with status=disproved and evidence')
+    lesson = record_verdict(fn_args.get('memory_id', ''), fn_args['verdict'],
+                            project_path=project_path, extra_paths=extra_paths,
+                            conversation_id=str(task.get('convId') or ''),
+                            turn_id=str(task.get('_turnId') or ''))
+    effect = ('verified' if fn_args['verdict']['result'] == 'confirmed' else 'disproved')
+    return (f"Verdict recorded for **{lesson['name']}** (id: {lesson['id']}): it becomes "
+            f"{effect} when a reviewer accepts this result; until then nothing changes.",
+            '🧾 verdict', f"🧾 Memory: {lesson['name']}")
+
+
 def _memory_update(fn_args, project_path, extra_paths=None, *, task=None):
-    from lib.memory.storage import update_memory
+    from lib.memory.storage import supersede_memory, update_memory
+    _refuse_third_party_write(task)
+    if fn_args.get('verdict') is not None:
+        return _memory_verdict(fn_args, project_path, extra_paths, task)
     sid = fn_args.get('memory_id', '')
+    updates = {k: v for k, v in fn_args.items() if k in _MODEL_UPDATE_FIELDS and v is not None}
+    if any(key in updates for key in _CLAIM_FIELDS):
+        if any(key in updates for key in _LIFECYCLE_FIELDS):
+            raise ValueError('A correction (name, description or body) is saved as a new '
+                             'version; change status in a separate update_memory call')
+        result = supersede_memory(sid, updates, project_path, extra_paths,
+                                  provenance=_agent_provenance(task))
+        if result is None:
+            logger.warning('[Memory] supersede_memory found no memory_id=%s', sid)
+            return f"Memory not found: {sid}", '❌ not found', f"✏️ Memory: {sid}"
+        successor, _old = result
+        return (f"Correction saved as a new version: **{successor['name']}** "
+                f"(id: {successor['id']}). {sid} is kept as superseded history and is no "
+                'longer injected; use the new id from now on.', '✏️ new version',
+                f"✏️ Memory: {successor['name']}")
     mem = update_memory(
         memory_id=sid,
-        updates={k: v for k, v in fn_args.items() if k in _MODEL_UPDATE_FIELDS and v is not None},
+        updates=updates,
         project_path=project_path,
         extra_paths=extra_paths,
         provenance=_agent_provenance(task),
@@ -76,6 +196,7 @@ def _memory_update(fn_args, project_path, extra_paths=None, *, task=None):
 
 def _memory_delete(fn_args, project_path, extra_paths=None, *, task=None):
     from lib.memory.storage import delete_memory
+    _refuse_third_party_write(task)
     sid = fn_args.get('memory_id', '')
     deleted = delete_memory(memory_id=sid, project_path=project_path,
                             extra_paths=extra_paths)
@@ -86,6 +207,7 @@ def _memory_delete(fn_args, project_path, extra_paths=None, *, task=None):
 
 def _memory_merge(fn_args, project_path, extra_paths=None, *, task=None):
     from lib.memory.storage import merge_memories
+    _refuse_third_party_write(task)
     result = merge_memories(
         provenance=_agent_provenance(task),
         memory_ids=fn_args.get('memory_ids', []),

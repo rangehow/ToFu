@@ -986,6 +986,9 @@ pub enum TransactionIrStep {
     TurnProjectionUpdate {
         preserve_activity: bool,
         human_guidance_answer_json: Option<Vec<u8>>,
+        /// Retires the queue rows of the round-0 receipt block the projection
+        /// holds, in this transaction; never together with a guidance answer.
+        background_command_retirement_json: Option<Vec<u8>>,
         conversation_id: String,
         turn_id: String,
         projection_json: Vec<u8>,
@@ -1016,6 +1019,7 @@ pub enum TransactionIrStep {
         before_ordinal: u64,
         limit: usize,
         sync_sequence: u64,
+        anchor_sequence: u64,
         max_projection_bytes: usize,
         slot: usize,
     },
@@ -1023,6 +1027,7 @@ pub enum TransactionIrStep {
         conversation_id: String,
         after: u64,
         limit: usize,
+        max_bytes: Option<usize>,
         slot: usize,
     },
     TurnSyncPrune {
@@ -5128,6 +5133,7 @@ impl TransactionIr {
                 TransactionIrStep::TurnProjectionUpdate {
                     preserve_activity: _,
                     human_guidance_answer_json,
+                    background_command_retirement_json,
                     conversation_id,
                     turn_id,
                     projection_json,
@@ -5154,6 +5160,14 @@ impl TransactionIr {
                                     .ok()
                                     .is_none_or(|value| !value.is_object())
                         })
+                        || background_command_retirement_json
+                            .as_ref()
+                            .is_some_and(|bytes| {
+                                human_guidance_answer_json.is_some()
+                                    || serde_json::from_slice::<serde_json::Value>(bytes)
+                                        .ok()
+                                        .is_none_or(|value| !value.is_object())
+                            })
                         || serde_json::from_slice::<serde_json::Value>(projection_json)
                             .ok()
                             .and_then(|value| value.as_object().cloned())
@@ -5168,6 +5182,13 @@ impl TransactionIr {
                         .and_then(|bytes| {
                             bytes.checked_add(
                                 human_guidance_answer_json.as_ref().map_or(0, Vec::len),
+                            )
+                        })
+                        .and_then(|bytes| {
+                            bytes.checked_add(
+                                background_command_retirement_json
+                                    .as_ref()
+                                    .map_or(0, Vec::len),
                             )
                         })
                         .ok_or_else(|| {
@@ -5263,6 +5284,7 @@ impl TransactionIr {
                 TransactionIrStep::TurnSyncChanges {
                     conversation_id,
                     limit,
+                    max_bytes,
                     slot,
                     ..
                 } => {
@@ -5271,9 +5293,15 @@ impl TransactionIr {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
                     *initialized = true;
+                    use crate::generated_conversation_change_page::{
+                        CHANGE_PAGE_MAX_BYTES, CHANGE_PAGE_MIN_BYTES,
+                    };
                     if conversation_id.is_empty()
                         || conversation_id.chars().count() > 256
                         || !(1..=2_000).contains(limit)
+                        || max_bytes.is_some_and(|bytes| {
+                            !(CHANGE_PAGE_MIN_BYTES..=CHANGE_PAGE_MAX_BYTES).contains(&bytes)
+                        })
                     {
                         return Err(invalid_input("invalid Turn sync changes page"));
                     }
@@ -6285,11 +6313,14 @@ fn prepare_transaction_ir_mode(
         )
     }) || ir.steps.iter().any(|step| match step {
         // Scoped live answers resolve the owned attempt and update its existing
-        // recovery sizing; ordinary settled projection edits retain their scope.
+        // recovery sizing. A receipt retirement removes queue rows, whose claims
+        // and summaries are tenant-global, as an ACK does. Ordinary settled
+        // projection edits retain their scope.
         TransactionIrStep::TurnProjectionUpdate {
             human_guidance_answer_json,
+            background_command_retirement_json,
             ..
-        } => human_guidance_answer_json.is_some(),
+        } => human_guidance_answer_json.is_some() || background_command_retirement_json.is_some(),
         // Every stream resolves immutable task ancestry before deciding whether
         // it is fenced. Omitting a caller claim cannot select a weaker scope.
         TransactionIrStep::IndexedStreamAppend { .. }
@@ -8062,6 +8093,7 @@ fn prepare_transaction_ir_mode(
             TransactionIrStep::TurnProjectionUpdate {
                 preserve_activity,
                 human_guidance_answer_json,
+                background_command_retirement_json,
                 conversation_id,
                 turn_id,
                 projection_json,
@@ -8081,6 +8113,11 @@ fn prepare_transaction_ir_mode(
                     )?));
                     continue;
                 }
+                let retirement = background_command_retirement_json
+                    .as_deref()
+                    .map(serde_json::from_slice::<Value>)
+                    .transpose()
+                    .map_err(|_| invalid_input("invalid background receipt retirement"))?;
                 slots[*slot] = Some(Some(crate::turn::update_projection(
                     database,
                     &mut transaction,
@@ -8093,6 +8130,7 @@ fn prepare_transaction_ir_mode(
                         updated_at_ms: *updated_at_ms,
                         committed_at_ms: *committed_at_ms,
                     },
+                    retirement.as_ref(),
                 )?));
             }
             TransactionIrStep::TurnSyncSnapshot {
@@ -8149,6 +8187,7 @@ fn prepare_transaction_ir_mode(
                 before_ordinal,
                 limit,
                 sync_sequence,
+                anchor_sequence,
                 max_projection_bytes,
                 slot,
             } => {
@@ -8160,6 +8199,7 @@ fn prepare_transaction_ir_mode(
                     *before_ordinal,
                     *limit,
                     *sync_sequence,
+                    *anchor_sequence,
                     *max_projection_bytes,
                     &mut deadline_elapsed,
                 )?);
@@ -8168,14 +8208,16 @@ fn prepare_transaction_ir_mode(
                 conversation_id,
                 after,
                 limit,
+                max_bytes,
                 slot,
             } => {
-                slots[*slot] = Some(crate::turn::sync_changes(
+                slots[*slot] = Some(crate::turn::sync_change_page(
                     database,
                     &mut transaction,
                     conversation_id,
                     *after,
                     *limit,
+                    *max_bytes,
                     &mut deadline_elapsed,
                 )?);
             }
@@ -9629,6 +9671,7 @@ mod tests {
                 conversation_id: "deadline-conversation".to_owned(),
                 after: 0,
                 limit: 500,
+                max_bytes: None,
                 slot: 0,
             }],
             TransactionIrResult::SlotOrLiteral {

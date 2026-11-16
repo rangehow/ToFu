@@ -21,6 +21,7 @@ export { createTabs } from './tabs';
 export type { TabItem, TabsHandle, TabsOptions } from './tabs';
 export { createDropdown, createMenuItem } from './dropdown';
 export type { DropdownHandle, DropdownOptions, MenuEntry, MenuItem } from './dropdown';
+export { createDisclosureSummary, DISCLOSURE_CHEVRON_SVG, DISCLOSURE_CLASS } from './disclosure';
 export { dismissAllToasts, toast } from './toast';
 export type { ToastHandle, ToastOptions, ToastVariant } from './toast';
 export { createAlert } from './alert';

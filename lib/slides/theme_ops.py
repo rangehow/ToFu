@@ -75,7 +75,7 @@ def build_theme_tokens(theme) -> dict:
             'body': {'fontSize': 18, 'color': '$ink',
                      'fontFamily': body_f.family if body_f else 'MiSans',
                      'lineHeight': 1.5},
-            'caption': {'fontSize': 12, 'color': '$muted', 'letterSpacing': 2,
+            'caption': {'fontSize': 14, 'color': '$muted',
                         'fontFamily': body_f.family if body_f else 'MiSans'},
             'bignum': {'fontSize': 88, 'color': '$accent', 'bold': True,
                        'fontFamily': latin_f.family if latin_f else 'MiSans'},

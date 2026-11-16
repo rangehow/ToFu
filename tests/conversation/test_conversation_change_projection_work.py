@@ -16,8 +16,10 @@ from copy import deepcopy
 import pytest
 
 import lib.turn_projection_segments as projection_segments
+from lib.conversation_sync.cursor import STREAM_START
 from lib.conversation_sync.service import ConversationSyncService
 from lib.turn_projection_segments import public_value_with_stable_segments
+from tests.support.conversation_replay import with_lineage
 
 
 pytestmark = pytest.mark.unit
@@ -151,8 +153,8 @@ class _Repository:
     def changes(self, conversation_id, user_id, *, after_sequence, limit):
         page = [event for event in self.events
                 if event["syncSeq"] > after_sequence][:limit]
-        return {"head": self.events[-1]["syncSeq"], "events": page,
-                "hasMore": False}
+        return with_lineage({"head": self.events[-1]["syncSeq"], "events": page,
+                             "hasMore": False}, after_sequence)
 
 
 @pytest.fixture()
@@ -174,7 +176,7 @@ def stabilized(monkeypatch):
 def _page(events, **options) -> list[dict]:
     service = ConversationSyncService(_Repository(events))
     return service.changes(
-        CONVERSATION, USER, after_sequence=0, limit=500, **options)["events"]
+        CONVERSATION, USER, after=STREAM_START, limit=500, **options)["events"]
 
 
 @pytest.mark.parametrize("diagnostic_payload", ["full", "none"])

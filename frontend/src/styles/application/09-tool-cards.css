@@ -125,10 +125,27 @@
   transition: transform var(--motion-fast) var(--ease-standard);
 }
 details[open] > .ptool-coord-toggle > svg { transform: rotate(90deg); }
-:is(.ptool-coord-more, .ptool-coord-original, .ptool-coord-debug, .ptool-coord-raw) > :not(summary) {
+:is(.ptool-coord-more, .ptool-coord-original, .ptool-coord-debug, .ptool-coord-raw, .ptool-todo-history, .ptool-work-receipt) > :not(summary) {
   margin-inline-start: calc(var(--space-4) + var(--space-1));
 }
-:is(.ptool-coord-more, .ptool-coord-original, .ptool-coord-debug)[open] > summary { margin-bottom: var(--space-1); }
+:is(.ptool-coord-more, .ptool-coord-original, .ptool-coord-debug, .ptool-work-receipt)[open] > summary { margin-bottom: var(--space-1); }
+/* Tool rows outside the conversation surface (paper panels) carry the same
+   turning chevron after their label; inside the surface,
+   23-reading-process.css draws it at the row's end and hides this one. */
+:is(.ptool-result-block, .ptool-memory-block, .ptool-convmeta-block, .ptool-todo-block, .sw-inbox-row) > summary .ptool-text::after {
+  content: '';
+  display: inline-block;
+  box-sizing: border-box;
+  width: calc(var(--space-1) * 1.5);
+  height: calc(var(--space-1) * 1.5);
+  margin-inline: var(--space-2) var(--space-1);
+  vertical-align: middle;
+  border-inline-end: var(--control-edge-inset) solid var(--text-tertiary);
+  border-block-end: var(--control-edge-inset) solid var(--text-tertiary);
+  transform: rotate(-45deg);
+  transition: transform var(--motion-fast) var(--ease-standard);
+}
+:is(.ptool-result-block, .ptool-memory-block, .ptool-convmeta-block, .ptool-todo-block, .sw-inbox-row)[open] > summary .ptool-text::after { transform: rotate(45deg); }
 .ptool-coord-prose { min-width: 0; overflow-wrap: anywhere; }
 /* A translated text's authored original, one click away. */
 .ptool-coord-original > .ptool-coord-toggle { color: var(--text-tertiary); font-size: var(--conversation-font-size-caption); }

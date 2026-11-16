@@ -1,11 +1,14 @@
 //! Independent, disposable conversation-search projection.
 //!
-//! This module owns a separate Tofu-DB authority directory. Projection pages
-//! are built under an invisible generation and become queryable in one atomic
-//! header swap, so a long rebuild never exposes a partial conversation. Small
-//! per-chunk n-gram summaries reject most candidates before any text chunk is
-//! materialized. The source authority remains the sole owner of durable user
-//! state; this store may always be deleted and rebuilt from its dirty set.
+//! This module owns a separate Tofu-DB authority directory. Each conversation
+//! has one stable scope: per-item rows (a Turn at its projection revision, or
+//! an immutable archive) are added and retracted individually, so a dirty
+//! event costs what changed, never the whole conversation. A new scope stays
+//! invisible until its first publish; afterwards every scope write bumps the
+//! header revision that query continuations bind to. Small per-chunk n-gram
+//! summaries reject most candidates before any text chunk is materialized.
+//! The source authority remains the sole owner of durable user state; this
+//! store may always be deleted and rebuilt from its dirty set.
 
 use std::io;
 use std::path::Path;
@@ -33,13 +36,24 @@ pub use query::ConversationSearchPage;
 
 const HEADER_NAMESPACE: &str = "search_header_v1";
 const ACTIVE_NAMESPACE: &str = "search_active_v1";
+// The header of a scope that has never been published (first indexing).
 const BUILD_NAMESPACE: &str = "search_build_v1";
 const TURN_META_NAMESPACE: &str = "search_turn_meta_v1";
 const TURN_TEXT_NAMESPACE: &str = "search_turn_text_v1";
+// One state row per indexed item of a scope: the source revision it was read
+// at and the rows it wrote. Pending and running Turns have none.
+const ITEM_NAMESPACE: &str = "search_items_v1";
+const ITEM_TURN: u8 = 0;
+const ITEM_ARCHIVE: u8 = 1;
+const ITEM_SCAN_BATCH: usize = crate::generated_tofudb_ir::MAX_ENTITY_RANGE_ROWS;
+// Per-owner, beside the format marker: the newest source backfill generation
+// observed. Every backfill keeps its rebuild contract: a scope built before
+// it is rebuilt from nothing once (`Header::built_generation`).
+const REBUILD_KEY: &[u8] = b"rebuild";
 const USAGE_NAMESPACE: &str = "search_usage_v1";
 const USAGE_KEY: &[u8] = b"logical_bytes";
 // Owner-level gram posting index: one packed row per width-1/2/3 gram digest
-// with stable IDs for the conversation generations whose
+// with stable IDs for the conversation scopes whose
 // title, id, or some chunk emitted it. A query resolves its candidate
 // conversations through a handful of prefix scans here instead of opening
 // every conversation's meta namespace. The index is a candidate filter only:
@@ -56,14 +70,14 @@ const GRAM_STATE_BUILDING: u8 = 0;
 const GRAM_STATE_READY: u8 = 1;
 const GRAM_STATE_DEGRADED: u8 = 2;
 const GRAM_RETIRE_SCAN_BATCH: usize = 64;
-// Conversation generations whose gram emission overflowed a write bound are
+// Conversation scopes whose gram emission overflowed a write bound are
 // listed here so the reader treats them as unconditional candidates (the
 // exact legacy walk verifies them); the rest of the owner keeps the index.
 const GRAM_EXCLUSION_NAMESPACE: &str = "search_gram_excluded_v1";
-// One full entity-scan page; an owner with this many excluded generations
+// One full entity-scan page; an owner with this many excluded scopes
 // takes the unfiltered walk (the index is not earning its keep there).
 const GRAM_EXCLUSION_SCAN_CAP: usize = crate::generated_tofudb_ir::MAX_ENTITY_RANGE_ROWS;
-// Posting lists preserve the existing 255-generation selectivity boundary,
+// Posting lists preserve the existing 255-scope selectivity boundary,
 // encoding stable owner-scoped IDs as canonical delta varints; a gram in more conversations promotes to a universal marker the
 // reader treats as unfilterable for that gram.
 const GRAM_LIST_MAX_ENTRIES: usize = 255;
@@ -71,8 +85,8 @@ const GRAM_LIST_MAX_ENTRIES: usize = 255;
 // engine's 14,336-distinct-write and 6,144-point-witness ceilings: an append
 // emits at most this many posting updates before excluding the conversation
 // (one read-modify-write each, plus the page's ordinary reads), and a
-// generation retirement retracts at most this many (leftovers stay charged
-// and linger as false candidates until the next versioned wipe).
+// retraction removes at most this many (leftovers stay charged and linger as
+// false candidates until the next versioned wipe).
 const GRAM_APPEND_OP_CAP: usize = 5_500;
 const GRAM_REMOVE_OP_CAP: usize = 6_000;
 const FORMAT_VERSION: u8 = crate::generated_conversation_search::PROJECTION_FORMAT_VERSION;
@@ -129,37 +143,68 @@ pub(crate) struct OpenTurnSearchProjection {
     // validated the source UUID or checked the authority's pending work.
     admission_source: Option<uuid::Uuid>,
     admitted_owners: std::collections::BTreeSet<(u64, u64)>,
+    // Runtime-only copy of each owner's durable `REBUILD_KEY` row once this
+    // launch has read or written it, so an unchanged generation costs no read.
+    observed_rebuild_generations: std::collections::BTreeMap<(u64, u64), u64>,
     stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
+/// A conversation scope's header, stored as the ordered HEADER row and the
+/// ACTIVE row once published, and as the BUILD row before.
 #[derive(Clone)]
 struct Header {
     conversation_id: String,
-    generation: String,
+    /// Stable for the life of the conversation's index: keys every item row,
+    /// the posting dictionary entry and the exclusion marker.
+    scope: String,
+    /// Bumped by every scope write; query continuations bind to it.
+    revision: u64,
     updated_at_ms: u64,
-    generation_bytes: u64,
     title: String,
-    source_incomplete: bool,
-    // Derived from exact generation accounting on decode, never persisted.
-    has_chunks: bool,
+    /// Logical bytes of the scope's item rows (meta, text and state rows).
+    item_bytes: u64,
+    /// Items reported as partial coverage (larger than one source page).
+    incomplete_items: u64,
     chunk_count: u64,
+    /// The source backfill generation this scope was last built from nothing
+    /// at; an older one than the newest observed makes the next diff a
+    /// complete rebuild.
+    built_generation: u64,
     bloom: [u8; BLOOM_BYTES],
 }
 
-struct Build {
-    conversation_id: String,
-    generation: String,
-    updated_at_ms: u64,
-    generation_bytes: u64,
-    title: String,
-    source_incomplete: bool,
-    chunk_count: u64,
-    bloom: [u8; BLOOM_BYTES],
+/// The newest source backfill generation observed for this owner.
+fn read_rebuild_generation(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+) -> io::Result<u64> {
+    let stored_key = key(transaction, "search_format", REBUILD_KEY)?;
+    match database.entity_get(transaction, &stored_key)? {
+        None => Ok(0),
+        Some(raw) if raw.len() == 8 => Ok(u64::from_be_bytes(raw.try_into().unwrap())),
+        Some(_) => Err(invalid_data("search rebuild generation is malformed")),
+    }
+}
+
+impl Header {
+    /// The continuation binding: a pending conversation restarts whenever
+    /// its scope was written after the cursor was issued.
+    fn generation(&self) -> String {
+        format!("{}.{}", self.scope, self.revision)
+    }
+
+    fn has_chunks(&self) -> bool {
+        self.chunk_count != 0
+    }
+
+    fn source_incomplete(&self) -> bool {
+        self.incomplete_items != 0
+    }
 }
 
 struct TurnMeta {
     conversation_id: String,
-    generation: String,
+    scope: String,
     turn_id: String,
     ordinal: u64,
     chunk_count: u16,
@@ -201,11 +246,15 @@ fn conversation_digest(conversation_id: &str) -> [u8; 32] {
     )
 }
 
-fn generation_digest(conversation_id: &str, generation: &str) -> [u8; 32] {
+fn scope_digest(conversation_id: &str, scope: &str) -> [u8; 32] {
     digest(
-        b"tofu-db:turn-search:generation:v1\0",
-        &[conversation_id.as_bytes(), generation.as_bytes()],
+        b"tofu-db:turn-search:scope:v1\0",
+        &[conversation_id.as_bytes(), scope.as_bytes()],
     )
+}
+
+fn item_digest(id: &str) -> [u8; 32] {
+    digest(b"tofu-db:turn-search:item:v1\0", &[id.as_bytes()])
 }
 
 fn turn_digest(turn_id: &str) -> [u8; 32] {
@@ -269,7 +318,8 @@ fn read_gram_state(
 }
 
 // Posting values are candidate hints, encoded by posting_codec using stable
-// generation_dictionary IDs. Exact verification re-reads title, id and text.
+// generation_dictionary IDs of scopes. Exact verification re-reads title, id
+// and text.
 
 fn key(transaction: &AuthorityTransaction, namespace: &str, raw: &[u8]) -> io::Result<EntityKey> {
     EntityKey::new(
@@ -296,21 +346,21 @@ fn active_key(transaction: &AuthorityTransaction, conversation_id: &str) -> io::
     )
 }
 
-fn generation_prefix(conversation_id: &str, generation: &str) -> Vec<u8> {
-    generation_digest(conversation_id, generation).to_vec()
+fn scope_prefix(conversation_id: &str, scope: &str) -> Vec<u8> {
+    scope_digest(conversation_id, scope).to_vec()
 }
 
-fn generation_range(
+fn scope_range(
     transaction: &AuthorityTransaction,
     namespace: &str,
     conversation_id: &str,
-    generation: &str,
+    scope: &str,
 ) -> io::Result<(EntityKey, EntityKey)> {
     EntityKey::prefix_range(
         transaction.tenant_id(),
         transaction.owner_user_id(),
         namespace,
-        &generation_prefix(conversation_id, generation),
+        &scope_prefix(conversation_id, scope),
     )
 }
 
@@ -326,37 +376,61 @@ fn header_key(
     key(transaction, HEADER_NAMESPACE, &raw)
 }
 
+// Every chunk document of one (ordinal, turn) pair shares this META prefix;
+// a Turn ID never contains NUL, so the prefix names exactly that pair.
+fn turn_meta_prefix(conversation_id: &str, scope: &str, ordinal: u64, turn_id: &str) -> Vec<u8> {
+    let mut raw = scope_prefix(conversation_id, scope);
+    raw.extend_from_slice(&ordinal.to_be_bytes());
+    raw.extend_from_slice(turn_id.as_bytes());
+    raw.push(0);
+    raw
+}
+
 fn turn_meta_key(
     transaction: &AuthorityTransaction,
     conversation_id: &str,
-    generation: &str,
+    scope: &str,
     ordinal: u64,
     turn_id: &str,
     chunk_index: u32,
 ) -> io::Result<EntityKey> {
-    let mut raw = generation_prefix(conversation_id, generation);
-    raw.extend_from_slice(&ordinal.to_be_bytes());
-    raw.extend_from_slice(turn_id.as_bytes());
-    raw.push(0);
+    let mut raw = turn_meta_prefix(conversation_id, scope, ordinal, turn_id);
     raw.extend_from_slice(&chunk_index.to_be_bytes());
     key(transaction, TURN_META_NAMESPACE, &raw)
+}
+
+fn turn_text_prefix(conversation_id: &str, scope: &str, ordinal: u64, turn_id: &str) -> Vec<u8> {
+    let mut raw = scope_prefix(conversation_id, scope);
+    raw.extend_from_slice(&ordinal.to_be_bytes());
+    raw.extend_from_slice(&turn_digest(turn_id));
+    raw
 }
 
 fn turn_text_key(
     transaction: &AuthorityTransaction,
     conversation_id: &str,
-    generation: &str,
+    scope: &str,
     ordinal: u64,
     turn_id: &str,
     chunk_index: u32,
     chunk: u16,
 ) -> io::Result<EntityKey> {
-    let mut raw = generation_prefix(conversation_id, generation);
-    raw.extend_from_slice(&ordinal.to_be_bytes());
-    raw.extend_from_slice(&turn_digest(turn_id));
+    let mut raw = turn_text_prefix(conversation_id, scope, ordinal, turn_id);
     raw.extend_from_slice(&chunk_index.to_be_bytes());
     raw.extend_from_slice(&chunk.to_be_bytes());
     key(transaction, TURN_TEXT_NAMESPACE, &raw)
+}
+
+fn item_key(
+    transaction: &AuthorityTransaction,
+    conversation_id: &str,
+    scope: &str,
+    item: &ScopeItemKey,
+) -> io::Result<EntityKey> {
+    let mut raw = scope_prefix(conversation_id, scope);
+    raw.push(item.kind);
+    raw.extend_from_slice(&item_digest(&item.id));
+    key(transaction, ITEM_NAMESPACE, &raw)
 }
 
 fn push_string(output: &mut Vec<u8>, value: &str) -> io::Result<()> {
@@ -411,15 +485,27 @@ fn finish_decode(input: &[u8]) -> io::Result<()> {
 
 fn encode_header(header: &Header) -> io::Result<Vec<u8>> {
     let mut output = vec![FORMAT_VERSION];
-    output.extend_from_slice(&header.updated_at_ms.to_be_bytes());
-    output.extend_from_slice(&header.generation_bytes.to_be_bytes());
+    for value in [
+        header.updated_at_ms,
+        header.revision,
+        header.item_bytes,
+        header.incomplete_items,
+        header.chunk_count,
+        header.built_generation,
+    ] {
+        output.extend_from_slice(&value.to_be_bytes());
+    }
     push_string(&mut output, &header.conversation_id)?;
-    push_string(&mut output, &header.generation)?;
+    push_string(&mut output, &header.scope)?;
     push_string(&mut output, &header.title)?;
-    output.push(u8::from(header.source_incomplete));
-    output.extend_from_slice(&header.chunk_count.to_be_bytes());
     output.extend_from_slice(&header.bloom);
     Ok(output)
+}
+
+/// Owner bytes reserved for one scope header: its ordered, active and build
+/// copies plus their keys. Item rows are charged separately (`item_bytes`).
+fn header_charge(header: &Header) -> io::Result<u64> {
+    reserved_header_bytes(encode_header(header)?.len(), header.conversation_id.len())
 }
 
 fn reserved_header_bytes(encoded_bytes: usize, id_bytes: usize) -> io::Result<u64> {
@@ -434,70 +520,195 @@ fn reserved_header_bytes(encoded_bytes: usize, id_bytes: usize) -> io::Result<u6
 }
 
 fn decode_header(mut input: &[u8]) -> io::Result<Header> {
-    let encoded_bytes = input.len();
     if input.first().copied() != Some(FORMAT_VERSION) {
         return Err(invalid_data("search header version is unsupported"));
     }
     input = &input[1..];
     let updated_at_ms = take_u64(&mut input)?;
-    let generation_bytes = take_u64(&mut input)?;
-    let conversation_id = read_string(&mut input)?;
-    let generation = read_string(&mut input)?;
-    let title = read_string(&mut input)?;
-    let source_incomplete = match input.first() {
-        Some(0) => false,
-        Some(1) => true,
-        _ => return Err(invalid_data("invalid search source coverage")),
-    };
-    input = &input[1..];
+    let revision = take_u64(&mut input)?;
+    let item_bytes = take_u64(&mut input)?;
+    let incomplete_items = take_u64(&mut input)?;
     let chunk_count = take_u64(&mut input)?;
+    let built_generation = take_u64(&mut input)?;
+    let conversation_id = read_string(&mut input)?;
+    let scope = read_string(&mut input)?;
+    let title = read_string(&mut input)?;
     if input.len() < BLOOM_BYTES {
         return Err(invalid_data("search conversation bloom is truncated"));
     }
     let mut bloom = [0; BLOOM_BYTES];
     bloom.copy_from_slice(&input[..BLOOM_BYTES]);
     finish_decode(&input[BLOOM_BYTES..])?;
-    let chunk_bytes = generation_bytes
-        .checked_sub(reserved_header_bytes(encoded_bytes, conversation_id.len())?)
-        .ok_or_else(|| invalid_data("search header generation size is invalid"))?;
+    if scope.is_empty() || scope.len() > MAX_GENERATION_BYTES {
+        return Err(invalid_data("search header scope is malformed"));
+    }
     Ok(Header {
         conversation_id,
-        generation,
+        scope,
+        revision,
         updated_at_ms,
-        generation_bytes,
         title,
-        source_incomplete,
-        has_chunks: chunk_bytes != 0,
+        item_bytes,
+        incomplete_items,
         chunk_count,
+        built_generation,
         bloom,
     })
 }
 
-fn encode_build(build: &Build) -> io::Result<Vec<u8>> {
-    encode_header(&Header {
-        conversation_id: build.conversation_id.clone(),
-        generation: build.generation.clone(),
-        updated_at_ms: build.updated_at_ms,
-        generation_bytes: build.generation_bytes,
-        title: build.title.clone(),
-        source_incomplete: build.source_incomplete,
-        has_chunks: false, // Encoding only; derived when the header is read.
-        chunk_count: build.chunk_count,
-        bloom: build.bloom,
-    })
+/// The (identity, kind) of one source item a scope indexes: a Turn by its
+/// Turn ID, or a compaction archive by its archive ID.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) struct ScopeItemKey {
+    pub kind: u8,
+    pub id: String,
 }
 
-fn decode_build(input: &[u8]) -> io::Result<Build> {
-    let header = decode_header(input)?;
-    Ok(Build {
-        conversation_id: header.conversation_id,
-        generation: header.generation,
-        updated_at_ms: header.updated_at_ms,
-        generation_bytes: header.generation_bytes,
-        title: header.title,
-        source_incomplete: header.source_incomplete,
-        chunk_count: header.chunk_count,
-        bloom: header.bloom,
+impl ScopeItemKey {
+    pub(crate) fn turn(id: &str) -> Self {
+        Self {
+            kind: ITEM_TURN,
+            id: id.to_owned(),
+        }
+    }
+
+    pub(crate) fn archive(id: &str) -> Self {
+        Self {
+            kind: ITEM_ARCHIVE,
+            id: id.to_owned(),
+        }
+    }
+}
+
+/// The difference between a scope and its source (`diff_scope`).
+#[derive(Debug, Default, Eq, PartialEq)]
+pub(crate) struct ScopeDiff {
+    /// Recorded items to retract before anything is indexed again.
+    pub retract: Vec<ScopeItemKey>,
+    /// Turns to read at the revision their updated-index row names.
+    pub turns: Vec<(String, u64)>,
+    /// Archives to read.
+    pub archives: Vec<String>,
+    /// The scope predates the newest explicit backfill: `retract` holds every
+    /// recorded item and the retraction marks the scope rebuilt.
+    pub rebuild: bool,
+}
+
+/// One source item's contribution to a scope write.
+pub(crate) enum ScopeItemContent<'a> {
+    /// Settled but never searchable (outside the main lane).
+    Hidden,
+    /// Reported as partial coverage; nothing was read.
+    Oversized,
+    /// A run of the item's documents; `last` when no later run follows.
+    Documents {
+        documents: &'a [TurnSearchDocument],
+        last: bool,
+    },
+}
+
+pub(crate) struct ScopeItem<'a> {
+    pub key: &'a ScopeItemKey,
+    pub revision: u64,
+    pub content: ScopeItemContent<'a>,
+}
+
+/// The chunk documents one item wrote under one (ordinal, turn) identity.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ItemEntry {
+    ordinal: u64,
+    turn_id: String,
+    documents: u32,
+}
+
+/// What a scope recorded for one item: the source revision it was read at
+/// (Turns; archives are immutable and record zero), whether it was reported
+/// as partial coverage, the rows it wrote, the bytes charged for them, and
+/// whether its last document is written. An item whose documents span
+/// several transactions is recorded after each one; an incomplete record
+/// (an interrupted write) is retracted and read again.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ItemState {
+    item: ScopeItemKey,
+    revision: u64,
+    oversized: bool,
+    complete: bool,
+    charged_bytes: u64,
+    entries: Vec<ItemEntry>,
+}
+
+impl ItemState {
+    fn documents(&self) -> u64 {
+        self.entries
+            .iter()
+            .map(|entry| u64::from(entry.documents))
+            .sum()
+    }
+}
+
+fn encode_item(state: &ItemState) -> io::Result<Vec<u8>> {
+    let flags = u8::from(state.oversized) | u8::from(state.complete) << 1;
+    let mut output = vec![FORMAT_VERSION, state.item.kind, flags];
+    output.extend_from_slice(&state.revision.to_be_bytes());
+    output.extend_from_slice(&state.charged_bytes.to_be_bytes());
+    push_string(&mut output, &state.item.id)?;
+    let entries = u32::try_from(state.entries.len())
+        .map_err(|_| invalid_input("search item has too many entries"))?;
+    output.extend_from_slice(&entries.to_be_bytes());
+    for entry in &state.entries {
+        output.extend_from_slice(&entry.ordinal.to_be_bytes());
+        push_string(&mut output, &entry.turn_id)?;
+        output.extend_from_slice(&entry.documents.to_be_bytes());
+    }
+    Ok(output)
+}
+
+fn take_u32(input: &mut &[u8]) -> io::Result<u32> {
+    if input.len() < 4 {
+        return Err(invalid_data("search projection integer is truncated"));
+    }
+    let value = u32::from_be_bytes(input[..4].try_into().unwrap());
+    *input = &input[4..];
+    Ok(value)
+}
+
+fn decode_item(mut input: &[u8]) -> io::Result<ItemState> {
+    if input.len() < 3 || input[0] != FORMAT_VERSION {
+        return Err(invalid_data("search item state version is unsupported"));
+    }
+    let kind = input[1];
+    if input[2] > 3 {
+        return Err(invalid_data("search item flags are malformed"));
+    }
+    let oversized = input[2] & 1 != 0;
+    let complete = input[2] & 2 != 0;
+    if !matches!(kind, ITEM_TURN | ITEM_ARCHIVE) {
+        return Err(invalid_data("search item kind is malformed"));
+    }
+    input = &input[3..];
+    let revision = take_u64(&mut input)?;
+    let charged_bytes = take_u64(&mut input)?;
+    let id = read_string(&mut input)?;
+    let count = take_u32(&mut input)?;
+    let mut entries = Vec::new();
+    for _ in 0..count {
+        let ordinal = take_u64(&mut input)?;
+        let turn_id = read_string(&mut input)?;
+        let documents = take_u32(&mut input)?;
+        entries.push(ItemEntry {
+            ordinal,
+            turn_id,
+            documents,
+        });
+    }
+    finish_decode(input)?;
+    Ok(ItemState {
+        item: ScopeItemKey { kind, id },
+        revision,
+        oversized,
+        complete,
+        charged_bytes,
+        entries,
     })
 }
 
@@ -507,7 +718,7 @@ fn encode_meta(meta: &TurnMeta) -> io::Result<Vec<u8>> {
     output.extend_from_slice(&meta.chunk_count.to_be_bytes());
     output.extend_from_slice(&meta.bloom);
     push_string(&mut output, &meta.conversation_id)?;
-    push_string(&mut output, &meta.generation)?;
+    push_string(&mut output, &meta.scope)?;
     push_string(&mut output, &meta.turn_id)?;
     output.extend_from_slice(&meta.chunk_index.to_be_bytes());
     push_string(&mut output, &meta.role)?;
@@ -532,7 +743,7 @@ fn decode_meta(mut input: &[u8]) -> io::Result<TurnMeta> {
     bloom.copy_from_slice(&input[..BLOOM_BYTES]);
     input = &input[BLOOM_BYTES..];
     let conversation_id = read_string(&mut input)?;
-    let generation = read_string(&mut input)?;
+    let scope = read_string(&mut input)?;
     let turn_id = read_string(&mut input)?;
     if input.len() < 4 {
         return Err(invalid_data("search chunk index is truncated"));
@@ -544,7 +755,7 @@ fn decode_meta(mut input: &[u8]) -> io::Result<TurnMeta> {
     finish_decode(input)?;
     Ok(TurnMeta {
         conversation_id,
-        generation,
+        scope,
         turn_id,
         ordinal,
         chunk_count,
@@ -610,7 +821,7 @@ fn visit_posting_grams(value: &str, consume: impl FnMut(&[u8])) {
     visit_gram_widths(value, &[1, 2, 3], consume);
 }
 
-// Read-modify-write one conversation-generation into one gram's packed
+// Read-modify-write one conversation scope into one gram's packed
 // posting list, charging the row growth against the owner budget. The first
 // update that would push the owner past its budget stops emission with
 // `tripped` set, and the caller durably marks the index DEGRADED so readers
@@ -622,7 +833,7 @@ fn add_gram_posting(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
     gram: &[u8; 32],
-    generation_id: u64,
+    scope_id: u64,
     base_bytes: u64,
     maximum_logical_bytes_per_owner: u64,
     gram_delta: &mut i64,
@@ -638,13 +849,13 @@ fn add_gram_posting(
             GramList::Entries(entries) => (entries, raw.len()),
         },
     };
-    if entries.contains(&generation_id) {
+    if entries.contains(&scope_id) {
         return Ok(());
     }
     let (value, value_bytes) = if entries.len() >= GRAM_LIST_MAX_ENTRIES {
         (vec![FORMAT_VERSION, 1], 2usize)
     } else {
-        entries.push(generation_id);
+        entries.push(scope_id);
         entries.sort_unstable();
         let value = encode_gram_entries(&entries)?;
         let value_bytes = value.len();
@@ -673,14 +884,14 @@ fn add_gram_posting(
     Ok(())
 }
 
-// Retract one conversation-generation from one gram's packed posting list.
+// Retract one conversation scope from one gram's packed posting list.
 // Universal lists stay universal (conservative false candidates), missing
 // rows are tolerated (partial emission), and an emptied list row is deleted.
 fn remove_gram_posting(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
     gram: &[u8; 32],
-    generation_id: u64,
+    scope_id: u64,
     gram_delta: &mut i64,
 ) -> io::Result<()> {
     let posting_key = key(transaction, GRAM_NAMESPACE, gram)?;
@@ -690,7 +901,7 @@ fn remove_gram_posting(
     let GramList::Entries(mut entries) = decode_gram_list(&raw)? else {
         return Ok(());
     };
-    let Ok(position) = entries.binary_search(&generation_id) else {
+    let Ok(position) = entries.binary_search(&scope_id) else {
         return Ok(());
     };
     entries.remove(position);
@@ -732,7 +943,7 @@ fn emit_text_grams(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
     lowered: &str,
-    generation_digest: &[u8; 32],
+    scope_digest: &[u8; 32],
     base_bytes: u64,
     maximum_logical_bytes_per_owner: u64,
     gram_delta: &mut i64,
@@ -742,8 +953,8 @@ fn emit_text_grams(
     if emission.excluded || emission.tripped {
         return Ok(());
     }
-    let generation_id = generation_dictionary::lookup(database, transaction, generation_digest)?
-        .ok_or_else(|| invalid_data("search generation dictionary assignment is missing"))?;
+    let scope_id = generation_dictionary::lookup(database, transaction, scope_digest)?
+        .ok_or_else(|| invalid_data("search scope dictionary assignment is missing"))?;
     let mut grams = Vec::new();
     visit_posting_grams(lowered, |gram| grams.push(gram_digest(gram)));
     for gram in grams {
@@ -753,7 +964,7 @@ fn emit_text_grams(
         }
         emission.ops += 1;
         if emission.ops > GRAM_APPEND_OP_CAP {
-            let exclusion_key = key(transaction, GRAM_EXCLUSION_NAMESPACE, generation_digest)?;
+            let exclusion_key = key(transaction, GRAM_EXCLUSION_NAMESPACE, scope_digest)?;
             *gram_delta += exclusion_key.key_bytes().len() as i64;
             database.entity_put(transaction, exclusion_key, Vec::new())?;
             emission.excluded = true;
@@ -763,7 +974,7 @@ fn emit_text_grams(
             database,
             transaction,
             &gram,
-            generation_id,
+            scope_id,
             base_bytes,
             maximum_logical_bytes_per_owner,
             gram_delta,
@@ -781,14 +992,14 @@ fn retract_text_grams(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
     lowered: &str,
-    generation_digest: &[u8; 32],
+    scope_digest: &[u8; 32],
     gram_delta: &mut i64,
     ops: &mut usize,
     seen: &mut std::collections::HashSet<[u8; 32]>,
     stop: &Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> io::Result<()> {
-    let generation_id = generation_dictionary::lookup(database, transaction, generation_digest)?
-        .ok_or_else(|| invalid_data("search generation dictionary assignment is missing"))?;
+    let scope_id = generation_dictionary::lookup(database, transaction, scope_digest)?
+        .ok_or_else(|| invalid_data("search scope dictionary assignment is missing"))?;
     let mut grams = Vec::new();
     visit_posting_grams(lowered, |gram| grams.push(gram_digest(gram)));
     for gram in grams {
@@ -800,9 +1011,15 @@ fn retract_text_grams(
             continue;
         }
         *ops += 1;
-        remove_gram_posting(database, transaction, &gram, generation_id, gram_delta)?;
+        remove_gram_posting(database, transaction, &gram, scope_id, gram_delta)?;
     }
     Ok(())
+}
+
+fn insert_posting_grams(lowered: &str, grams: &mut std::collections::HashSet<[u8; 32]>) {
+    visit_posting_grams(lowered, |gram| {
+        grams.insert(gram_digest(gram));
+    });
 }
 
 fn bloom_add(bloom: &mut [u8; BLOOM_BYTES], value: &str) {
@@ -1003,24 +1220,6 @@ impl OpenTurnSearchProjection {
         Ok(())
     }
 
-    pub(crate) fn is_published(
-        &self,
-        tenant: u64,
-        owner: u64,
-        conversation: &str,
-        generation: &str,
-    ) -> io::Result<bool> {
-        let mut transaction = self.database.begin(tenant, owner)?;
-        let stored_key = active_key(&transaction, conversation)?;
-        let Some(raw) = self.database.entity_get(&mut transaction, &stored_key)? else {
-            return Ok(false);
-        };
-        let header = decode_header(&raw)?;
-        if header.conversation_id != conversation {
-            return Err(invalid_data("search header identity mismatch"));
-        }
-        Ok(header.generation == generation)
-    }
     pub(crate) fn source_incomplete(&self, tenant: u64, owner: u64) -> io::Result<bool> {
         if !self.owner_admitted(tenant, owner) {
             return Ok(false);
@@ -1029,31 +1228,37 @@ impl OpenTurnSearchProjection {
         Ok(partial_count(&self.database, &mut transaction)? > 0)
     }
 
-    pub(crate) fn mark_rebuild_incomplete(
+    /// Observe the source's current backfill generation for this owner. A
+    /// backfill rebuilds every conversation: each scope built before the
+    /// newest generation is rebuilt from nothing once (`diff_scope`), then
+    /// diffed as usual. One small row write per new generation.
+    pub(crate) fn observe_backfill_generation(
         &mut self,
         tenant: u64,
         owner: u64,
-        conversation: &str,
-        generation: &str,
+        generation: u64,
     ) -> io::Result<()> {
-        let mut transaction = self.database.begin(tenant, owner)?;
-        let stored_key = build_key(&transaction, conversation)?;
-        let raw = self
-            .database
-            .entity_get(&mut transaction, &stored_key)?
-            .ok_or_else(|| invalid_input("search rebuild was not begun"))?;
-        let mut build = decode_build(&raw)?;
-        if build.conversation_id != conversation || build.generation != generation {
-            return Err(invalid_input("search rebuild generation is stale"));
-        }
-        if build.source_incomplete {
+        if self
+            .observed_rebuild_generations
+            .get(&(tenant, owner))
+            .is_some_and(|observed| *observed >= generation)
+        {
             return Ok(());
         }
-        build.source_incomplete = true;
-        self.database
-            .entity_put(&mut transaction, stored_key, encode_build(&build)?)?;
-        check_search_stop(&self.stop)?;
-        self.database.commit(transaction)?;
+        let mut transaction = self.database.begin(tenant, owner)?;
+        let observed = read_rebuild_generation(&self.database, &mut transaction)?;
+        if generation > observed {
+            let stored_key = key(&transaction, "search_format", REBUILD_KEY)?;
+            self.database.entity_put(
+                &mut transaction,
+                stored_key,
+                generation.to_be_bytes().to_vec(),
+            )?;
+            check_search_stop(&self.stop)?;
+            self.database.commit(transaction)?;
+        }
+        self.observed_rebuild_generations
+            .insert((tenant, owner), generation.max(observed));
         Ok(())
     }
     /// Reset only this owner's disposable projection on a source/activation
@@ -1108,6 +1313,7 @@ impl OpenTurnSearchProjection {
             BUILD_NAMESPACE,
             TURN_META_NAMESPACE,
             TURN_TEXT_NAMESPACE,
+            ITEM_NAMESPACE,
             USAGE_NAMESPACE,
             GRAM_NAMESPACE,
             GRAM_EXCLUSION_NAMESPACE,
@@ -1130,8 +1336,13 @@ impl OpenTurnSearchProjection {
         let gram_key = gram_state_key(&transaction)?;
         self.database
             .entity_put(&mut transaction, gram_key, vec![GRAM_STATE_BUILDING])?;
+        // Backfill generations count per source activation: the new source's
+        // counter is unrelated to anything observed before this wipe.
+        let rebuild_key = key(&transaction, "search_format", REBUILD_KEY)?;
+        self.database.entity_delete(&mut transaction, rebuild_key)?;
         check_search_stop(&self.stop)?;
         self.database.commit(transaction)?;
+        self.observed_rebuild_generations.remove(&(tenant, owner));
         Ok((activation, true))
     }
 
@@ -1210,48 +1421,6 @@ impl OpenTurnSearchProjection {
         Ok(())
     }
 
-    pub(crate) fn set_conversation_title(
-        &mut self,
-        tenant: u64,
-        owner: u64,
-        conversation: &str,
-        generation: &str,
-        title: &str,
-    ) -> io::Result<()> {
-        let mut transaction = self.database.begin(tenant, owner)?;
-        let build_key = build_key(&transaction, conversation)?;
-        let raw = self
-            .database
-            .entity_get(&mut transaction, &build_key)?
-            .ok_or_else(|| invalid_input("search rebuild was not begun"))?;
-        let mut build = decode_build(&raw)?;
-        if build.conversation_id != conversation || build.generation != generation {
-            return Err(invalid_input("search rebuild generation is stale"));
-        }
-        let old_title_bytes = build.title.len() as u64 * 3;
-        let new_title_bytes = title.len() as u64 * 3;
-        let next_usage = read_usage(&self.database, &mut transaction)?
-            .checked_sub(old_title_bytes)
-            .and_then(|n| n.checked_add(new_title_bytes))
-            .filter(|n| *n <= self.maximum_logical_bytes_per_owner)
-            .ok_or_else(|| {
-                crate::resource_exhaustion::domain_bound("search title exceeds its resource budget")
-            })?;
-        build.generation_bytes = build
-            .generation_bytes
-            .checked_sub(old_title_bytes)
-            .and_then(|n| n.checked_add(new_title_bytes))
-            .ok_or_else(|| invalid_data("search header usage overflow"))?;
-        bloom_add(&mut build.bloom, &title.to_lowercase());
-        build.title = title.to_owned();
-        write_usage(&self.database, &mut transaction, next_usage)?;
-        self.database
-            .entity_put(&mut transaction, build_key, encode_build(&build)?)?;
-        check_search_stop(&self.stop)?;
-        self.database.commit(transaction)?;
-        Ok(())
-    }
-
     pub fn initialize(data_dir: &Path, maximum_logical_bytes_per_owner: u64) -> io::Result<Self> {
         if maximum_logical_bytes_per_owner == 0 {
             return Err(invalid_input("search projection budget must be positive"));
@@ -1268,6 +1437,7 @@ impl OpenTurnSearchProjection {
             maximum_logical_bytes_per_owner,
             admission_source: None,
             admitted_owners: std::collections::BTreeSet::new(),
+            observed_rebuild_generations: std::collections::BTreeMap::new(),
             stop: None,
         })
     }
@@ -1301,6 +1471,7 @@ impl OpenTurnSearchProjection {
             maximum_logical_bytes_per_owner,
             admission_source: None,
             admitted_owners: std::collections::BTreeSet::new(),
+            observed_rebuild_generations: std::collections::BTreeMap::new(),
             stop: None,
         })
     }
@@ -1322,6 +1493,7 @@ impl OpenTurnSearchProjection {
             maximum_logical_bytes_per_owner,
             admission_source: None,
             admitted_owners: std::collections::BTreeSet::new(),
+            observed_rebuild_generations: std::collections::BTreeMap::new(),
             stop: None,
         })
     }
@@ -1353,235 +1525,293 @@ impl OpenTurnSearchProjection {
             maximum_logical_bytes_per_owner,
             admission_source: None,
             admitted_owners: std::collections::BTreeSet::new(),
+            observed_rebuild_generations: std::collections::BTreeMap::new(),
             stop: None,
         })
     }
 
-    pub fn begin_conversation_rebuild(
-        &mut self,
-        tenant_id: u64,
-        owner_user_id: u64,
+    /// The conversation's scope header and whether it is published.
+    fn current_scope(
+        &self,
+        transaction: &mut AuthorityTransaction,
         conversation_id: &str,
-        generation: &str,
-        updated_at_ms: u64,
-    ) -> io::Result<()> {
-        validate_identity(
-            conversation_id,
-            "invalid search conversation ID",
-            MAX_ID_BYTES,
-        )?;
-        validate_identity(
-            generation,
-            "invalid search generation",
-            MAX_GENERATION_BYTES,
-        )?;
-        let mut transaction = self.database.begin(tenant_id, owner_user_id)?;
-        let build_key = build_key(&transaction, conversation_id)?;
-        let mut usage = read_usage(&self.database, &mut transaction)?;
-        if let Some(raw) = self.database.entity_get(&mut transaction, &build_key)? {
-            let previous = decode_build(&raw)?;
-            if previous.conversation_id != conversation_id {
-                return Err(invalid_data("search build digest collision"));
-            }
-            usage = usage
-                .checked_sub(previous.generation_bytes)
-                .ok_or_else(|| invalid_data("search projection usage underflow"))?;
-            let mut gram_delta = 0i64;
-            self.retire_generation_postings(
-                &mut transaction,
-                conversation_id,
-                &previous.generation,
-                None,
-                &mut gram_delta,
-            )?;
-            usage = usage
-                .checked_add_signed(gram_delta)
-                .ok_or_else(|| invalid_data("search gram posting usage underflow"))?;
-            for namespace in [TURN_META_NAMESPACE, TURN_TEXT_NAMESPACE] {
-                let (start, end) = generation_range(
-                    &transaction,
-                    namespace,
-                    conversation_id,
-                    &previous.generation,
-                )?;
-                self.database
-                    .entity_retire_range(&mut transaction, &start, &end)?;
+    ) -> io::Result<Option<(Header, bool)>> {
+        for (stored_key, published) in [
+            (active_key(transaction, conversation_id)?, true),
+            (build_key(transaction, conversation_id)?, false),
+        ] {
+            if let Some(raw) = self.database.entity_get(transaction, &stored_key)? {
+                let header = decode_header(&raw)?;
+                if header.conversation_id != conversation_id {
+                    return Err(invalid_data("search scope header digest collision"));
+                }
+                return Ok(Some((header, published)));
             }
         }
-        let mut build = Build {
+        Ok(None)
+    }
+
+    /// Gram emission for one scope write: none while the owner index is
+    /// DEGRADED or the scope is excluded from the posting index.
+    fn scope_emission(
+        &self,
+        transaction: &mut AuthorityTransaction,
+        scope_digest: &[u8; 32],
+    ) -> io::Result<GramEmission> {
+        let mut emission = GramEmission::new();
+        if read_gram_state(&self.database, transaction)? == Some(GRAM_STATE_DEGRADED) {
+            emission.excluded = true;
+        } else {
+            let exclusion_key = key(transaction, GRAM_EXCLUSION_NAMESPACE, scope_digest)?;
+            emission.excluded = self
+                .database
+                .entity_get(transaction, &exclusion_key)?
+                .is_some();
+        }
+        Ok(emission)
+    }
+
+    /// The conversation's scope for a write, staging a new unpublished one
+    /// (header, posting dictionary entry, title and identity postings) when
+    /// the conversation has none. `usage` and `gram_delta` receive the charges.
+    fn scope_for_write(
+        &self,
+        transaction: &mut AuthorityTransaction,
+        conversation_id: &str,
+        title: &str,
+        usage: &mut u64,
+        gram_delta: &mut i64,
+    ) -> io::Result<(Header, bool, [u8; 32], GramEmission)> {
+        if let Some((header, published)) = self.current_scope(transaction, conversation_id)? {
+            let digest = scope_digest(conversation_id, &header.scope);
+            let emission = self.scope_emission(transaction, &digest)?;
+            return Ok((header, published, digest, emission));
+        }
+        // A scope built from nothing satisfies every rebuild observed so far.
+        let built_generation = read_rebuild_generation(&self.database, transaction)?;
+        let mut header = Header {
             conversation_id: conversation_id.to_owned(),
-            generation: generation.to_owned(),
-            updated_at_ms,
-            generation_bytes: 0,
-            title: String::new(),
-            source_incomplete: false,
+            scope: uuid::Uuid::new_v4().simple().to_string(),
+            revision: 0,
+            updated_at_ms: 0,
+            title: title.to_owned(),
+            item_bytes: 0,
+            incomplete_items: 0,
             chunk_count: 0,
+            built_generation,
             bloom: [0; BLOOM_BYTES],
         };
-        bloom_add(&mut build.bloom, &conversation_id.to_lowercase());
-        build.generation_bytes =
-            reserved_header_bytes(encode_build(&build)?.len(), conversation_id.len())?;
-        usage = usage
-            .checked_add(build.generation_bytes)
+        bloom_add(&mut header.bloom, &conversation_id.to_lowercase());
+        bloom_add(&mut header.bloom, &title.to_lowercase());
+        *usage = usage
+            .checked_add(header_charge(&header)?)
             .filter(|n| *n <= self.maximum_logical_bytes_per_owner)
             .ok_or_else(|| {
                 crate::resource_exhaustion::domain_bound(
                     "search header exceeds its resource budget",
                 )
             })?;
+        let digest = scope_digest(conversation_id, &header.scope);
         let (_, dictionary_bytes) = generation_dictionary::allocate(
             &self.database,
-            &mut transaction,
-            &generation_digest(conversation_id, generation),
-            self.maximum_logical_bytes_per_owner - usage,
+            transaction,
+            &digest,
+            self.maximum_logical_bytes_per_owner - *usage,
         )?;
-        usage = usage.checked_add(dictionary_bytes).ok_or_else(|| {
+        *usage = usage.checked_add(dictionary_bytes).ok_or_else(|| {
             crate::resource_exhaustion::accounting_overflow("search dictionary usage overflow")
         })?;
-        self.database
-            .entity_put(&mut transaction, build_key, encode_build(&build)?)?;
-        write_usage(&self.database, &mut transaction, usage)?;
-        check_search_stop(&self.stop)?;
-        self.database.commit(transaction)?;
+        let mut emission = self.scope_emission(transaction, &digest)?;
+        for lowered in [title.to_lowercase(), conversation_id.to_lowercase()] {
+            emit_text_grams(
+                &self.database,
+                transaction,
+                &lowered,
+                &digest,
+                *usage,
+                self.maximum_logical_bytes_per_owner,
+                gram_delta,
+                &mut emission,
+                &self.stop,
+            )?;
+        }
+        Ok((header, false, digest, emission))
+    }
+
+    /// Persist a scope header after a write. A published scope rewrites its
+    /// ordered row (same order key) and its active row; an unpublished one its
+    /// build row. The revision always advances so continuations restart.
+    fn store_scope_header(
+        &self,
+        transaction: &mut AuthorityTransaction,
+        header: &mut Header,
+        published: bool,
+    ) -> io::Result<()> {
+        header.revision = header
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| invalid_data("search scope revision overflow"))?;
+        let encoded = encode_header(header)?;
+        if published {
+            let ordered = header_key(transaction, header.updated_at_ms, &header.conversation_id)?;
+            self.database
+                .entity_put(transaction, ordered, encoded.clone())?;
+            let active = active_key(transaction, &header.conversation_id)?;
+            self.database.entity_put(transaction, active, encoded)?;
+        } else {
+            let build = build_key(transaction, &header.conversation_id)?;
+            self.database.entity_put(transaction, build, encoded)?;
+        }
         Ok(())
     }
 
-    pub fn append_conversation_page(
+    fn load_item(
+        &self,
+        transaction: &mut AuthorityTransaction,
+        header: &Header,
+        item: &ScopeItemKey,
+    ) -> io::Result<Option<ItemState>> {
+        let stored_key = item_key(transaction, &header.conversation_id, &header.scope, item)?;
+        let Some(raw) = self.database.entity_get(transaction, &stored_key)? else {
+            return Ok(None);
+        };
+        let state = decode_item(&raw)?;
+        if &state.item != item {
+            return Err(invalid_data("search item digest collision"));
+        }
+        Ok(Some(state))
+    }
+
+    /// The items a scope must retract and the source items it must read so
+    /// that it equals the source: `turns` maps every live Turn of the
+    /// conversation to its projection revision, `archives` lists its retained
+    /// archives. A recorded item whose revision differs, whose source is gone
+    /// or whose write did not complete is retracted (and read again when the
+    /// source still has it); a recorded item at the source's revision costs
+    /// nothing. Pending and running Turns are never recorded, so they are
+    /// always read again. A scope built before the newest explicit backfill
+    /// is rebuilt: every recorded item is retracted and every source item
+    /// read (`ScopeDiff::rebuild`). Read-only.
+    pub(crate) fn diff_scope(
+        &self,
+        tenant_id: u64,
+        owner_user_id: u64,
+        conversation_id: &str,
+        turns: &std::collections::BTreeMap<String, u64>,
+        archives: &[String],
+    ) -> io::Result<ScopeDiff> {
+        let mut transaction = self.database.begin(tenant_id, owner_user_id)?;
+        let mut unread_turns: std::collections::BTreeMap<&str, u64> = turns
+            .iter()
+            .map(|(turn_id, revision)| (turn_id.as_str(), *revision))
+            .collect();
+        let mut unread_archives: std::collections::BTreeSet<&str> =
+            archives.iter().map(String::as_str).collect();
+        let mut retract = Vec::new();
+        let mut rebuild = false;
+        if let Some((header, _)) = self.current_scope(&mut transaction, conversation_id)? {
+            rebuild = header.built_generation
+                < read_rebuild_generation(&self.database, &mut transaction)?;
+            let (mut start, end) =
+                scope_range(&transaction, ITEM_NAMESPACE, conversation_id, &header.scope)?;
+            loop {
+                let rows =
+                    self.database
+                        .entity_scan(&mut transaction, &start, &end, ITEM_SCAN_BATCH)?;
+                for (_, raw) in &rows {
+                    let state = decode_item(raw)?;
+                    let current = !rebuild
+                        && state.complete
+                        && match state.item.kind {
+                            ITEM_TURN => {
+                                unread_turns.get(state.item.id.as_str()) == Some(&state.revision)
+                            }
+                            _ => unread_archives.contains(state.item.id.as_str()),
+                        };
+                    if !current {
+                        retract.push(state.item);
+                    } else if state.item.kind == ITEM_TURN {
+                        unread_turns.remove(state.item.id.as_str());
+                    } else {
+                        unread_archives.remove(state.item.id.as_str());
+                    }
+                }
+                if rows.len() < ITEM_SCAN_BATCH {
+                    break;
+                }
+                let mut next = rows.last().unwrap().0.key_bytes().to_vec();
+                next.push(0);
+                start = key(&transaction, ITEM_NAMESPACE, &next)?;
+            }
+        }
+        Ok(ScopeDiff {
+            retract,
+            turns: unread_turns
+                .into_iter()
+                .map(|(turn_id, revision)| (turn_id.to_owned(), revision))
+                .collect(),
+            archives: unread_archives.into_iter().map(str::to_owned).collect(),
+            rebuild,
+        })
+    }
+
+    /// Index items into the conversation's scope in one transaction, staging a
+    /// new unpublished scope (with `title`) when the conversation has none.
+    /// Each item must be absent from the scope, except an incomplete record
+    /// of the same revision that this run of documents continues: changed and
+    /// interrupted items are retracted first (`diff_scope`). At most
+    /// SOURCE_PAGE_ROWS documents per call keep every transaction within the
+    /// engine's write bounds; an item with more spans several calls.
+    pub(crate) fn index_scope_items(
         &mut self,
         tenant_id: u64,
         owner_user_id: u64,
         conversation_id: &str,
-        generation: &str,
-        documents: &[TurnSearchDocument],
+        title: &str,
+        items: &[ScopeItem<'_>],
     ) -> io::Result<()> {
-        if documents.len() > SOURCE_PAGE_ROWS {
-            return Err(invalid_input("search projection page exceeds eight turns"));
+        validate_identity(
+            conversation_id,
+            "invalid search conversation ID",
+            MAX_ID_BYTES,
+        )?;
+        let documents: usize = items
+            .iter()
+            .map(|item| match &item.content {
+                ScopeItemContent::Documents { documents, .. } => documents.len(),
+                _ => 0,
+            })
+            .sum();
+        if documents > SOURCE_PAGE_ROWS {
+            return Err(invalid_input(
+                "search projection page exceeds eight documents",
+            ));
+        }
+        if items.is_empty() {
+            return Ok(());
         }
         let mut transaction = self.database.begin(tenant_id, owner_user_id)?;
-        let build_key = build_key(&transaction, conversation_id)?;
-        let raw = self
-            .database
-            .entity_get(&mut transaction, &build_key)?
-            .ok_or_else(|| invalid_input("search rebuild was not begun"))?;
-        let mut build = decode_build(&raw)?;
-        if build.conversation_id != conversation_id || build.generation != generation {
-            return Err(invalid_input("search rebuild generation is stale"));
-        }
-        let usage = read_usage(&self.database, &mut transaction)?;
-        let gram_state = read_gram_state(&self.database, &mut transaction)?;
-        let generation_digest = generation_digest(conversation_id, generation);
-        let mut emission = GramEmission::new();
-        if gram_state != Some(GRAM_STATE_DEGRADED) {
-            let exclusion_key = key(&transaction, GRAM_EXCLUSION_NAMESPACE, &generation_digest)?;
-            emission.excluded = self
-                .database
-                .entity_get(&mut transaction, &exclusion_key)?
-                .is_some();
-        } else {
-            emission.excluded = true;
-        }
+        let mut usage = read_usage(&self.database, &mut transaction)?;
         let mut gram_delta = 0i64;
+        let (mut header, published, digest, mut emission) = self.scope_for_write(
+            &mut transaction,
+            conversation_id,
+            title,
+            &mut usage,
+            &mut gram_delta,
+        )?;
+        let was_incomplete = header.source_incomplete();
         let mut added_bytes = 0u64;
-        build.chunk_count = build
-            .chunk_count
-            .checked_add(documents.len() as u64)
-            .ok_or_else(|| invalid_data("search chunk count overflow"))?;
-        for document in documents {
-            check_search_stop(&self.stop)?;
-            validate_identity(&document.turn_id, "invalid search turn ID", MAX_ID_BYTES)?;
-            if document.search_text.len() > MAX_SEARCH_TEXT_BYTES
-                || document.search_text.chars().count() > CHUNK_CHARACTERS
-                || !matches!(document.role.as_str(), "user" | "assistant")
-                || !matches!(
-                    document.match_field.as_str(),
-                    "content" | "thinking" | "originalContent" | "translatedContent"
-                )
-            {
-                return Err(invalid_input("invalid bounded search chunk"));
-            }
-            let lowered = document.search_text.to_lowercase();
-            let mut bloom = [0; BLOOM_BYTES];
-            bloom_add(&mut bloom, &lowered);
-            for (target, source) in build.bloom.iter_mut().zip(bloom) {
-                *target |= source;
-            }
-            let chunks: Vec<&[u8]> = document
-                .search_text
-                .as_bytes()
-                .chunks(TEXT_CHUNK_BYTES)
-                .collect();
-            let chunk_count = u16::try_from(chunks.len())
-                .map_err(|_| invalid_input("search text has too many chunks"))?;
-            let meta = TurnMeta {
-                conversation_id: conversation_id.to_owned(),
-                generation: generation.to_owned(),
-                turn_id: document.turn_id.clone(),
-                ordinal: document.ordinal,
-                chunk_count,
-                bloom,
-                chunk_index: document.chunk_index,
-                role: document.role.clone(),
-                match_field: document.match_field.clone(),
-            };
-            let meta_key = turn_meta_key(
-                &transaction,
-                conversation_id,
-                generation,
-                document.ordinal,
-                &document.turn_id,
-                document.chunk_index,
-            )?;
-            if self
-                .database
-                .entity_get(&mut transaction, &meta_key)?
-                .is_some()
-            {
-                return Err(invalid_input("search projection page repeats a turn"));
-            }
-            let meta_bytes = encode_meta(&meta)?;
-            added_bytes = added_bytes
-                .checked_add((meta_key.key_bytes().len() + meta_bytes.len()) as u64)
-                .ok_or_else(|| {
-                    crate::resource_exhaustion::accounting_overflow(
-                        "search projection usage overflow",
-                    )
-                })?;
-            self.database
-                .entity_put(&mut transaction, meta_key, meta_bytes)?;
-            for (index, chunk) in chunks.into_iter().enumerate() {
-                let chunk_key = turn_text_key(
-                    &transaction,
-                    conversation_id,
-                    generation,
-                    document.ordinal,
-                    &document.turn_id,
-                    document.chunk_index,
-                    index as u16,
-                )?;
-                added_bytes = added_bytes
-                    .checked_add((chunk_key.key_bytes().len() + chunk.len()) as u64)
-                    .ok_or_else(|| {
-                        crate::resource_exhaustion::accounting_overflow(
-                            "search projection usage overflow",
-                        )
-                    })?;
-                self.database
-                    .entity_put(&mut transaction, chunk_key, chunk.to_vec())?;
-            }
-            emit_text_grams(
-                &self.database,
+        for item in items {
+            self.write_item(
                 &mut transaction,
-                &lowered,
-                &generation_digest,
-                usage.checked_add(added_bytes).ok_or_else(|| {
-                    crate::resource_exhaustion::accounting_overflow(
-                        "search projection usage overflow",
-                    )
-                })?,
-                self.maximum_logical_bytes_per_owner,
+                &mut header,
+                &digest,
+                item,
+                usage,
+                &mut added_bytes,
                 &mut gram_delta,
                 &mut emission,
-                &self.stop,
             )?;
         }
         if emission.tripped {
@@ -1598,112 +1828,512 @@ impl OpenTurnSearchProjection {
                     "conversation search projection reached its resource budget",
                 )
             })?;
-        build.generation_bytes =
-            build
-                .generation_bytes
-                .checked_add(added_bytes)
-                .ok_or_else(|| {
-                    crate::resource_exhaustion::accounting_overflow(
-                        "search projection generation size overflow",
-                    )
-                })?;
-        self.database
-            .entity_put(&mut transaction, build_key, encode_build(&build)?)?;
+        if published {
+            replace_partial(
+                &self.database,
+                &mut transaction,
+                was_incomplete,
+                header.source_incomplete(),
+            )?;
+        }
+        self.store_scope_header(&mut transaction, &mut header, published)?;
         write_usage(&self.database, &mut transaction, next_usage)?;
         check_search_stop(&self.stop)?;
         self.database.commit(transaction)?;
         Ok(())
     }
 
-    pub fn finalize_conversation_rebuild(
+    /// Write one item's documents (rows, header bloom and count, postings)
+    /// and its state row, charging `added_bytes` exactly.
+    #[allow(clippy::too_many_arguments)]
+    fn write_item(
+        &self,
+        transaction: &mut AuthorityTransaction,
+        header: &mut Header,
+        digest: &[u8; 32],
+        item: &ScopeItem<'_>,
+        usage: u64,
+        added_bytes: &mut u64,
+        gram_delta: &mut i64,
+        emission: &mut GramEmission,
+    ) -> io::Result<()> {
+        validate_identity(&item.key.id, "invalid search item ID", MAX_ID_BYTES)?;
+        let stored_key = item_key(
+            transaction,
+            &header.conversation_id,
+            &header.scope,
+            item.key,
+        )?;
+        let mut state = match self.load_item(transaction, header, item.key)? {
+            Some(state) if !state.complete && state.revision == item.revision => state,
+            Some(_) => return Err(invalid_input("search scope item is already recorded")),
+            None => ItemState {
+                item: item.key.clone(),
+                revision: item.revision,
+                oversized: false,
+                complete: false,
+                charged_bytes: 0,
+                entries: Vec::new(),
+            },
+        };
+        let previous_charge = state.charged_bytes;
+        // The charge covers the item's rows and its own state row; the state
+        // row only grows, and its fixed-width charge field never changes size.
+        let previous_rows = if previous_charge == 0 {
+            0
+        } else {
+            let previous_state_bytes =
+                (stored_key.key_bytes().len() + encode_item(&state)?.len()) as u64;
+            previous_charge
+                .checked_sub(previous_state_bytes)
+                .ok_or_else(|| invalid_data("search item charge is malformed"))?
+        };
+        let mut row_bytes = 0u64;
+        match &item.content {
+            ScopeItemContent::Hidden => state.complete = true,
+            ScopeItemContent::Oversized => {
+                state.oversized = true;
+                state.complete = true;
+                header.incomplete_items = header
+                    .incomplete_items
+                    .checked_add(1)
+                    .ok_or_else(|| invalid_data("search coverage count overflow"))?;
+            }
+            ScopeItemContent::Documents { documents, last } => {
+                // The state row's final size is known before any document is
+                // written; postings are emitted against the budget it leaves.
+                for document in documents.iter() {
+                    if item.key.kind == ITEM_TURN && document.turn_id != item.key.id {
+                        return Err(invalid_input("search document does not belong to its Turn"));
+                    }
+                    match state.entries.last_mut() {
+                        Some(entry)
+                            if entry.ordinal == document.ordinal
+                                && entry.turn_id == document.turn_id =>
+                        {
+                            entry.documents = entry.documents.checked_add(1).ok_or_else(|| {
+                                invalid_data("search item document count overflow")
+                            })?;
+                        }
+                        _ => {
+                            if state.entries.iter().any(|entry| {
+                                entry.ordinal == document.ordinal
+                                    && entry.turn_id == document.turn_id
+                            }) {
+                                return Err(invalid_input("search item documents are not grouped"));
+                            }
+                            state.entries.push(ItemEntry {
+                                ordinal: document.ordinal,
+                                turn_id: document.turn_id.clone(),
+                                documents: 1,
+                            });
+                        }
+                    }
+                }
+                state.complete = *last;
+                let state_bytes =
+                    (stored_key.key_bytes().len() + encode_item(&state)?.len()) as u64;
+                let state_growth = state_bytes
+                    .checked_sub(previous_charge.saturating_sub(previous_rows))
+                    .ok_or_else(|| invalid_data("search item state shrank"))?;
+                for document in documents.iter() {
+                    check_search_stop(&self.stop)?;
+                    let base = usage
+                        .checked_add(*added_bytes)
+                        .and_then(|n| n.checked_add(state_growth))
+                        .and_then(|n| n.checked_add(row_bytes))
+                        .ok_or_else(|| {
+                            crate::resource_exhaustion::accounting_overflow(
+                                "search projection usage overflow",
+                            )
+                        })?;
+                    row_bytes = row_bytes
+                        .checked_add(self.write_document(
+                            transaction,
+                            header,
+                            digest,
+                            document,
+                            base,
+                            gram_delta,
+                            emission,
+                        )?)
+                        .ok_or_else(|| {
+                            crate::resource_exhaustion::accounting_overflow(
+                                "search projection usage overflow",
+                            )
+                        })?;
+                }
+            }
+        }
+        let state_bytes = (stored_key.key_bytes().len() + encode_item(&state)?.len()) as u64;
+        state.charged_bytes = previous_rows
+            .checked_add(row_bytes)
+            .and_then(|n| n.checked_add(state_bytes))
+            .ok_or_else(|| invalid_data("search item usage overflow"))?;
+        let delta = state
+            .charged_bytes
+            .checked_sub(previous_charge)
+            .ok_or_else(|| invalid_data("search item charge shrank"))?;
+        self.database
+            .entity_put(transaction, stored_key, encode_item(&state)?)?;
+        header.item_bytes = header
+            .item_bytes
+            .checked_add(delta)
+            .ok_or_else(|| invalid_data("search item usage overflow"))?;
+        *added_bytes = added_bytes
+            .checked_add(delta)
+            .ok_or_else(|| invalid_data("search item usage overflow"))?;
+        Ok(())
+    }
+
+    /// Write one chunk document's meta and text rows, fold its bloom into the
+    /// header and emit its postings. Returns the row bytes it added.
+    #[allow(clippy::too_many_arguments)]
+    fn write_document(
+        &self,
+        transaction: &mut AuthorityTransaction,
+        header: &mut Header,
+        digest: &[u8; 32],
+        document: &TurnSearchDocument,
+        usage: u64,
+        gram_delta: &mut i64,
+        emission: &mut GramEmission,
+    ) -> io::Result<u64> {
+        validate_identity(&document.turn_id, "invalid search turn ID", MAX_ID_BYTES)?;
+        if document.search_text.len() > MAX_SEARCH_TEXT_BYTES
+            || document.search_text.chars().count() > CHUNK_CHARACTERS
+            || !matches!(document.role.as_str(), "user" | "assistant")
+            || !matches!(
+                document.match_field.as_str(),
+                "content" | "thinking" | "originalContent" | "translatedContent"
+            )
+        {
+            return Err(invalid_input("invalid bounded search chunk"));
+        }
+        let lowered = document.search_text.to_lowercase();
+        let mut bloom = [0; BLOOM_BYTES];
+        bloom_add(&mut bloom, &lowered);
+        for (target, source) in header.bloom.iter_mut().zip(bloom) {
+            *target |= source;
+        }
+        header.chunk_count = header
+            .chunk_count
+            .checked_add(1)
+            .ok_or_else(|| invalid_data("search chunk count overflow"))?;
+        let chunks: Vec<&[u8]> = document
+            .search_text
+            .as_bytes()
+            .chunks(TEXT_CHUNK_BYTES)
+            .collect();
+        let chunk_count = u16::try_from(chunks.len())
+            .map_err(|_| invalid_input("search text has too many chunks"))?;
+        let meta = TurnMeta {
+            conversation_id: header.conversation_id.clone(),
+            scope: header.scope.clone(),
+            turn_id: document.turn_id.clone(),
+            ordinal: document.ordinal,
+            chunk_count,
+            bloom,
+            chunk_index: document.chunk_index,
+            role: document.role.clone(),
+            match_field: document.match_field.clone(),
+        };
+        let meta_key = turn_meta_key(
+            transaction,
+            &header.conversation_id,
+            &header.scope,
+            document.ordinal,
+            &document.turn_id,
+            document.chunk_index,
+        )?;
+        if self.database.entity_get(transaction, &meta_key)?.is_some() {
+            return Err(invalid_input("search projection page repeats a turn"));
+        }
+        let meta_bytes = encode_meta(&meta)?;
+        let mut added = (meta_key.key_bytes().len() + meta_bytes.len()) as u64;
+        self.database
+            .entity_put(transaction, meta_key, meta_bytes)?;
+        for (index, chunk) in chunks.into_iter().enumerate() {
+            let chunk_key = turn_text_key(
+                transaction,
+                &header.conversation_id,
+                &header.scope,
+                document.ordinal,
+                &document.turn_id,
+                document.chunk_index,
+                index as u16,
+            )?;
+            added += (chunk_key.key_bytes().len() + chunk.len()) as u64;
+            self.database
+                .entity_put(transaction, chunk_key, chunk.to_vec())?;
+        }
+        emit_text_grams(
+            &self.database,
+            transaction,
+            &lowered,
+            digest,
+            usage.checked_add(added).ok_or_else(|| {
+                crate::resource_exhaustion::accounting_overflow("search projection usage overflow")
+            })?,
+            self.maximum_logical_bytes_per_owner,
+            gram_delta,
+            emission,
+            &self.stop,
+        )?;
+        Ok(added)
+    }
+
+    /// Retract items from the conversation's scope and apply a title change,
+    /// in one transaction. Postings stay exact: grams of the retracted text
+    /// (and of a replaced title) that no remaining text, the title or the
+    /// conversation ID still emits leave the scope's posting lists, and the
+    /// header bloom is rebuilt from what remains. The remaining grams and the
+    /// exact rows to delete come from a read snapshot taken under this same
+    /// exclusive call, so the write transaction reads only rows it changes;
+    /// rows go as point deletes, which no per-transaction range-retirement
+    /// bound limits however many items a compaction or rebuild retracts.
+    /// Returns the logical bytes retracted.
+    pub(crate) fn retract_scope_items(
         &mut self,
         tenant_id: u64,
         owner_user_id: u64,
         conversation_id: &str,
-        generation: &str,
-    ) -> io::Result<()> {
-        let mut transaction = self.database.begin(tenant_id, owner_user_id)?;
-        let build_key = build_key(&transaction, conversation_id)?;
-        let build = decode_build(
-            &self
-                .database
-                .entity_get(&mut transaction, &build_key)?
-                .ok_or_else(|| invalid_input("search rebuild was not begun"))?,
+        items: &[ScopeItemKey],
+        title: &str,
+        rebuild: bool,
+    ) -> io::Result<u64> {
+        validate_identity(
+            conversation_id,
+            "invalid search conversation ID",
+            MAX_ID_BYTES,
         )?;
-        if build.conversation_id != conversation_id || build.generation != generation {
-            return Err(invalid_input("search rebuild generation is stale"));
+        let mut snapshot = self.database.begin(tenant_id, owner_user_id)?;
+        let Some((header, _)) = self.current_scope(&mut snapshot, conversation_id)? else {
+            return Ok(0);
+        };
+        let retitle = header.title != title;
+        if items.is_empty() && !retitle && !rebuild {
+            return Ok(0);
         }
-        let mut usage = read_usage(&self.database, &mut transaction)?;
-        let active_key = active_key(&transaction, conversation_id)?;
-        let mut old_incomplete = false;
-        if let Some(raw) = self.database.entity_get(&mut transaction, &active_key)? {
-            let old = decode_header(&raw)?;
-            old_incomplete = old.source_incomplete;
-            if old.conversation_id != conversation_id {
-                return Err(invalid_data("search active-header digest collision"));
+        let mut states = Vec::with_capacity(items.len());
+        let mut retracted_pairs = std::collections::HashSet::new();
+        let mut removed_grams = std::collections::HashSet::new();
+        let mut doomed_rows = Vec::new();
+        for item in items {
+            let state = self
+                .load_item(&mut snapshot, &header, item)?
+                .ok_or_else(|| invalid_input("search scope item is not recorded"))?;
+            for entry in &state.entries {
+                retracted_pairs.insert((entry.ordinal, entry.turn_id.clone()));
+                let prefix = turn_meta_prefix(
+                    conversation_id,
+                    &header.scope,
+                    entry.ordinal,
+                    &entry.turn_id,
+                );
+                self.visit_scope_metas(&mut snapshot, &prefix, |projection, transaction, meta| {
+                    let text = projection.load_text(transaction, &meta)?;
+                    insert_posting_grams(&text.to_lowercase(), &mut removed_grams);
+                    doomed_rows.push(turn_meta_key(
+                        transaction,
+                        &meta.conversation_id,
+                        &meta.scope,
+                        meta.ordinal,
+                        &meta.turn_id,
+                        meta.chunk_index,
+                    )?);
+                    for chunk in 0..meta.chunk_count {
+                        doomed_rows.push(turn_text_key(
+                            transaction,
+                            &meta.conversation_id,
+                            &meta.scope,
+                            meta.ordinal,
+                            &meta.turn_id,
+                            meta.chunk_index,
+                            chunk,
+                        )?);
+                    }
+                    Ok(())
+                })?;
             }
-            let old_header_key = header_key(&transaction, old.updated_at_ms, conversation_id)?;
-            self.database
-                .entity_delete(&mut transaction, old_header_key)?;
-            usage = usage
-                .checked_sub(old.generation_bytes)
-                .ok_or_else(|| invalid_data("search projection usage underflow"))?;
-            let mut gram_delta = 0i64;
-            self.retire_generation_postings(
-                &mut transaction,
-                conversation_id,
-                &old.generation,
-                Some(&old.title),
-                &mut gram_delta,
+            states.push(state);
+        }
+        if retitle {
+            insert_posting_grams(&header.title.to_lowercase(), &mut removed_grams);
+        }
+        let mut rebuilt_bloom = None;
+        let mut vanished = Vec::new();
+        // An excluded scope whose remaining grams fit one emission is posted
+        // in full again and leaves the exclusion set.
+        let mut reinclude = None;
+        if !removed_grams.is_empty() {
+            let mut remaining = std::collections::HashSet::new();
+            let mut bloom = [0; BLOOM_BYTES];
+            for lowered in [conversation_id.to_lowercase(), title.to_lowercase()] {
+                bloom_add(&mut bloom, &lowered);
+                insert_posting_grams(&lowered, &mut remaining);
+            }
+            let prefix = scope_prefix(conversation_id, &header.scope);
+            self.visit_scope_metas(&mut snapshot, &prefix, |projection, transaction, meta| {
+                if !retracted_pairs.contains(&(meta.ordinal, meta.turn_id.clone())) {
+                    for (target, source) in bloom.iter_mut().zip(meta.bloom) {
+                        *target |= source;
+                    }
+                    let text = projection.load_text(transaction, &meta)?;
+                    insert_posting_grams(&text.to_lowercase(), &mut remaining);
+                }
+                Ok(())
+            })?;
+            vanished = removed_grams.difference(&remaining).copied().collect();
+            vanished.sort_unstable();
+            rebuilt_bloom = Some(bloom);
+            let exclusion_key = key(
+                &snapshot,
+                GRAM_EXCLUSION_NAMESPACE,
+                &scope_digest(conversation_id, &header.scope),
             )?;
-            usage = usage
-                .checked_add_signed(gram_delta)
-                .ok_or_else(|| invalid_data("search gram posting usage underflow"))?;
-            for namespace in [TURN_META_NAMESPACE, TURN_TEXT_NAMESPACE] {
-                let (start, end) =
-                    generation_range(&transaction, namespace, conversation_id, &old.generation)?;
-                self.database
-                    .entity_retire_range(&mut transaction, &start, &end)?;
+            if remaining.len() <= GRAM_APPEND_OP_CAP
+                && self
+                    .database
+                    .entity_get(&mut snapshot, &exclusion_key)?
+                    .is_some()
+            {
+                let mut grams: Vec<[u8; 32]> = remaining.into_iter().collect();
+                grams.sort_unstable();
+                reinclude = Some(grams);
             }
         }
-        replace_partial(
-            &self.database,
-            &mut transaction,
-            old_incomplete,
-            build.source_incomplete,
-        )?;
-        // Title and identity postings publish atomically with the generation
-        // they describe (document postings were emitted page by page).
-        let generation_digest = generation_digest(conversation_id, generation);
+        drop(snapshot);
+
+        let mut transaction = self.database.begin(tenant_id, owner_user_id)?;
+        let (mut header, published) = self
+            .current_scope(&mut transaction, conversation_id)?
+            .ok_or_else(|| invalid_data("search scope disappeared during retraction"))?;
+        if rebuild {
+            // Every recorded item is in `items`: the scope is empty again
+            // and counts as built at the newest explicit backfill.
+            header.built_generation = read_rebuild_generation(&self.database, &mut transaction)?;
+        }
+        let was_incomplete = header.source_incomplete();
+        let mut usage = read_usage(&self.database, &mut transaction)?;
+        let mut retracted_bytes = 0u64;
+        for row in doomed_rows {
+            self.database.entity_delete(&mut transaction, row)?;
+        }
+        for state in &states {
+            check_search_stop(&self.stop)?;
+            let stored_key = item_key(&transaction, conversation_id, &header.scope, &state.item)?;
+            self.database.entity_delete(&mut transaction, stored_key)?;
+            header.chunk_count = header
+                .chunk_count
+                .checked_sub(state.documents())
+                .ok_or_else(|| invalid_data("search chunk count underflow"))?;
+            header.item_bytes = header
+                .item_bytes
+                .checked_sub(state.charged_bytes)
+                .ok_or_else(|| invalid_data("search item usage underflow"))?;
+            if state.oversized {
+                header.incomplete_items = header
+                    .incomplete_items
+                    .checked_sub(1)
+                    .ok_or_else(|| invalid_data("search coverage count underflow"))?;
+            }
+            usage = usage
+                .checked_sub(state.charged_bytes)
+                .ok_or_else(|| invalid_data("search projection usage underflow"))?;
+            retracted_bytes += state.charged_bytes;
+        }
         let mut gram_delta = 0i64;
-        if read_gram_state(&self.database, &mut transaction)? != Some(GRAM_STATE_DEGRADED) {
-            let exclusion_key = key(&transaction, GRAM_EXCLUSION_NAMESPACE, &generation_digest)?;
-            let mut emission = GramEmission::new();
-            emission.excluded = self
-                .database
-                .entity_get(&mut transaction, &exclusion_key)?
-                .is_some();
-            for lowered in [build.title.to_lowercase(), conversation_id.to_lowercase()] {
-                emit_text_grams(
+        let digest = scope_digest(conversation_id, &header.scope);
+        if let Some(bloom) = rebuilt_bloom {
+            header.bloom = bloom;
+            // Retraction always runs, even for a DEGRADED index: it alone
+            // keeps stored rows and charged usage in lockstep. Only the
+            // transaction write bound may leave charged leftovers behind.
+            let scope_id =
+                generation_dictionary::lookup(&self.database, &mut transaction, &digest)?
+                    .ok_or_else(|| invalid_data("search scope dictionary assignment is missing"))?;
+            for gram in vanished.iter().take(GRAM_REMOVE_OP_CAP) {
+                check_search_stop(&self.stop)?;
+                remove_gram_posting(
                     &self.database,
                     &mut transaction,
-                    &lowered,
-                    &generation_digest,
-                    usage,
-                    self.maximum_logical_bytes_per_owner,
+                    gram,
+                    scope_id,
                     &mut gram_delta,
-                    &mut emission,
-                    &self.stop,
                 )?;
-                if emission.tripped {
+            }
+            if let Some(grams) = reinclude.filter(|_| {
+                !matches!(
+                    read_gram_state(&self.database, &mut transaction),
+                    Ok(Some(GRAM_STATE_DEGRADED))
+                )
+            }) {
+                let mut tripped = false;
+                for gram in &grams {
+                    check_search_stop(&self.stop)?;
+                    add_gram_posting(
+                        &self.database,
+                        &mut transaction,
+                        gram,
+                        scope_id,
+                        usage,
+                        self.maximum_logical_bytes_per_owner,
+                        &mut gram_delta,
+                        &mut tripped,
+                    )?;
+                    if tripped {
+                        break;
+                    }
+                }
+                if tripped {
                     let stored_key = gram_state_key(&transaction)?;
                     self.database.entity_put(
                         &mut transaction,
                         stored_key,
                         vec![GRAM_STATE_DEGRADED],
                     )?;
-                    break;
+                } else {
+                    let exclusion_key = key(&transaction, GRAM_EXCLUSION_NAMESPACE, &digest)?;
+                    gram_delta -= exclusion_key.key_bytes().len() as i64;
+                    self.database
+                        .entity_delete(&mut transaction, exclusion_key)?;
                 }
+            }
+        }
+        if retitle {
+            let previous_charge = header_charge(&header)?;
+            header.title = title.to_owned();
+            usage = usage
+                .checked_sub(previous_charge)
+                .and_then(|n| n.checked_add(header_charge(&header).ok()?))
+                .filter(|n| *n <= self.maximum_logical_bytes_per_owner)
+                .ok_or_else(|| {
+                    crate::resource_exhaustion::domain_bound(
+                        "search title exceeds its resource budget",
+                    )
+                })?;
+            let lowered = title.to_lowercase();
+            bloom_add(&mut header.bloom, &lowered);
+            let mut emission = self.scope_emission(&mut transaction, &digest)?;
+            emit_text_grams(
+                &self.database,
+                &mut transaction,
+                &lowered,
+                &digest,
+                usage,
+                self.maximum_logical_bytes_per_owner,
+                &mut gram_delta,
+                &mut emission,
+                &self.stop,
+            )?;
+            if emission.tripped {
+                let stored_key = gram_state_key(&transaction)?;
+                self.database.entity_put(
+                    &mut transaction,
+                    stored_key,
+                    vec![GRAM_STATE_DEGRADED],
+                )?;
             }
         }
         usage = usage
@@ -1714,28 +2344,125 @@ impl OpenTurnSearchProjection {
                     "search gram postings exceed their resource budget",
                 )
             })?;
-        let header = Header {
-            conversation_id: conversation_id.to_owned(),
-            generation: generation.to_owned(),
-            updated_at_ms: build.updated_at_ms,
-            generation_bytes: build.generation_bytes,
-            title: build.title.clone(),
-            source_incomplete: build.source_incomplete,
-            has_chunks: false, // Encoding only; derived when the header is read.
-            chunk_count: build.chunk_count,
-            bloom: build.bloom,
-        };
-        let new_header_key = header_key(&transaction, build.updated_at_ms, conversation_id)?;
-        let encoded_header = encode_header(&header)?;
-        self.database
-            .entity_put(&mut transaction, new_header_key, encoded_header.clone())?;
-        self.database
-            .entity_put(&mut transaction, active_key, encoded_header)?;
-        self.database.entity_delete(&mut transaction, build_key)?;
+        if published {
+            replace_partial(
+                &self.database,
+                &mut transaction,
+                was_incomplete,
+                header.source_incomplete(),
+            )?;
+        }
+        self.store_scope_header(&mut transaction, &mut header, published)?;
         write_usage(&self.database, &mut transaction, usage)?;
         check_search_stop(&self.stop)?;
         self.database.commit(transaction)?;
-        Ok(())
+        Ok(retracted_bytes)
+    }
+
+    /// Every meta row under `prefix` (within one scope), in key order.
+    fn visit_scope_metas(
+        &self,
+        transaction: &mut AuthorityTransaction,
+        prefix: &[u8],
+        mut visit: impl FnMut(&Self, &mut AuthorityTransaction, TurnMeta) -> io::Result<()>,
+    ) -> io::Result<()> {
+        let (mut start, end) = EntityKey::prefix_range(
+            transaction.tenant_id(),
+            transaction.owner_user_id(),
+            TURN_META_NAMESPACE,
+            prefix,
+        )?;
+        loop {
+            let rows =
+                self.database
+                    .entity_scan(transaction, &start, &end, GRAM_RETIRE_SCAN_BATCH)?;
+            for (_, raw) in &rows {
+                check_search_stop(&self.stop)?;
+                visit(self, transaction, decode_meta(raw)?)?;
+            }
+            if rows.len() < GRAM_RETIRE_SCAN_BATCH {
+                return Ok(());
+            }
+            let mut next = rows.last().unwrap().0.key_bytes().to_vec();
+            next.push(0);
+            start = key(transaction, TURN_META_NAMESPACE, &next)?;
+        }
+    }
+
+    /// Make the conversation's scope current for `updated_at_ms`: publish an
+    /// unpublished scope (staging an empty one, titled `title`, when the
+    /// conversation has none), or move a published scope's ordered row to its
+    /// new update time. A title change is applied before this call
+    /// (`retract_scope_items`). Returns whether the scope became visible for
+    /// the first time.
+    pub(crate) fn publish_scope(
+        &mut self,
+        tenant_id: u64,
+        owner_user_id: u64,
+        conversation_id: &str,
+        updated_at_ms: u64,
+        title: &str,
+    ) -> io::Result<bool> {
+        validate_identity(
+            conversation_id,
+            "invalid search conversation ID",
+            MAX_ID_BYTES,
+        )?;
+        let mut transaction = self.database.begin(tenant_id, owner_user_id)?;
+        let initial_usage = read_usage(&self.database, &mut transaction)?;
+        let mut usage = initial_usage;
+        let mut gram_delta = 0i64;
+        let (mut header, published, _, emission) = self.scope_for_write(
+            &mut transaction,
+            conversation_id,
+            title,
+            &mut usage,
+            &mut gram_delta,
+        )?;
+        if header.title != title {
+            return Err(invalid_input(
+                "search scope title changes before it is published",
+            ));
+        }
+        if published && header.updated_at_ms == updated_at_ms {
+            return Ok(false);
+        }
+        if emission.tripped {
+            let stored_key = gram_state_key(&transaction)?;
+            self.database
+                .entity_put(&mut transaction, stored_key, vec![GRAM_STATE_DEGRADED])?;
+        }
+        if published {
+            let ordered = header_key(&transaction, header.updated_at_ms, conversation_id)?;
+            self.database.entity_delete(&mut transaction, ordered)?;
+        } else {
+            let build = build_key(&transaction, conversation_id)?;
+            self.database.entity_delete(&mut transaction, build)?;
+            replace_partial(
+                &self.database,
+                &mut transaction,
+                false,
+                header.source_incomplete(),
+            )?;
+        }
+        header.updated_at_ms = updated_at_ms;
+        self.store_scope_header(&mut transaction, &mut header, true)?;
+        usage = usage
+            .checked_add_signed(gram_delta)
+            .filter(|n| *n <= self.maximum_logical_bytes_per_owner)
+            .ok_or_else(|| {
+                crate::resource_exhaustion::capacity_quota(
+                    "search gram postings exceed their resource budget",
+                )
+            })?;
+        // A re-key of a published scope (every streaming event) changes no
+        // charge: leave the usage row untouched.
+        if usage != initial_usage {
+            write_usage(&self.database, &mut transaction, usage)?;
+        }
+        check_search_stop(&self.stop)?;
+        self.database.commit(transaction)?;
+        Ok(!published)
     }
 
     pub fn remove_conversation(
@@ -1750,74 +2477,65 @@ impl OpenTurnSearchProjection {
             MAX_ID_BYTES,
         )?;
         let mut transaction = self.database.begin(tenant_id, owner_user_id)?;
-        let active_key = active_key(&transaction, conversation_id)?;
-        let active = self.database.entity_get(&mut transaction, &active_key)?;
-        let mut removed = false;
+        let Some((header, published)) = self.current_scope(&mut transaction, conversation_id)?
+        else {
+            return Ok(false);
+        };
         let mut usage = read_usage(&self.database, &mut transaction)?;
-        if let Some(raw) = active {
-            let header = decode_header(&raw)?;
+        if published {
             replace_partial(
                 &self.database,
                 &mut transaction,
-                header.source_incomplete,
+                header.source_incomplete(),
                 false,
             )?;
-            if header.conversation_id != conversation_id {
-                return Err(invalid_data("search active-header digest collision"));
-            }
-            let candidate_key = header_key(&transaction, header.updated_at_ms, conversation_id)?;
+            let ordered = header_key(&transaction, header.updated_at_ms, conversation_id)?;
+            self.database.entity_delete(&mut transaction, ordered)?;
+            let active = active_key(&transaction, conversation_id)?;
+            self.database.entity_delete(&mut transaction, active)?;
+        } else {
+            let build = build_key(&transaction, conversation_id)?;
+            self.database.entity_delete(&mut transaction, build)?;
+        }
+        usage = usage
+            .checked_sub(header_charge(&header)?)
+            .and_then(|n| n.checked_sub(header.item_bytes))
+            .ok_or_else(|| invalid_data("search projection usage underflow"))?;
+        let mut gram_delta = 0i64;
+        self.retire_scope_postings(&mut transaction, &header, &mut gram_delta)?;
+        usage = usage
+            .checked_add_signed(gram_delta)
+            .ok_or_else(|| invalid_data("search gram posting usage underflow"))?;
+        for namespace in [TURN_META_NAMESPACE, TURN_TEXT_NAMESPACE, ITEM_NAMESPACE] {
+            let (start, end) =
+                scope_range(&transaction, namespace, conversation_id, &header.scope)?;
             self.database
-                .entity_delete(&mut transaction, candidate_key)?;
-            self.database.entity_delete(&mut transaction, active_key)?;
-            usage = usage
-                .checked_sub(header.generation_bytes)
-                .ok_or_else(|| invalid_data("search projection usage underflow"))?;
-            let mut gram_delta = 0i64;
-            self.retire_generation_postings(
-                &mut transaction,
-                conversation_id,
-                &header.generation,
-                Some(&header.title),
-                &mut gram_delta,
-            )?;
-            usage = usage
-                .checked_add_signed(gram_delta)
-                .ok_or_else(|| invalid_data("search gram posting usage underflow"))?;
-            for namespace in [TURN_META_NAMESPACE, TURN_TEXT_NAMESPACE] {
-                let (range_start, range_end) =
-                    generation_range(&transaction, namespace, conversation_id, &header.generation)?;
-                self.database
-                    .entity_retire_range(&mut transaction, &range_start, &range_end)?;
-            }
-            removed = true;
+                .entity_retire_range(&mut transaction, &start, &end)?;
         }
-        if removed {
-            write_usage(&self.database, &mut transaction, usage)?;
-            check_search_stop(&self.stop)?;
-            self.database.commit(transaction)?;
-        }
-        Ok(removed)
+        write_usage(&self.database, &mut transaction, usage)?;
+        check_search_stop(&self.stop)?;
+        self.database.commit(transaction)?;
+        Ok(true)
     }
 
-    /// Retract every gram posting of one generation: its exclusion marker
-    /// (always, so markers never outlive their generation), its title/id
-    /// postings (emitted at finalize, so only active generations have them),
-    /// and the per-document postings recomputed from each reassembled chunk
-    /// text. Runs inside the same transaction that retires the generation's
-    /// meta and text ranges, so postings and content move atomically. A
-    /// DEGRADED index keeps its frozen rows and their usage (the next
-    /// versioned wipe reclaims both); the write bound may leave charged
-    /// leftovers, which only ever become false candidates.
-    fn retire_generation_postings(
+    /// Retract every gram posting of one scope: its exclusion marker (always,
+    /// so markers never outlive their scope), its title/id postings and the
+    /// per-document postings recomputed from each reassembled chunk text.
+    /// Runs inside the same transaction that retires the scope's rows, so
+    /// postings and content move atomically. A DEGRADED index keeps its
+    /// frozen rows and their usage (the next versioned wipe reclaims both);
+    /// the write bound may leave charged leftovers, which only ever become
+    /// false candidates.
+    fn retire_scope_postings(
         &self,
         transaction: &mut AuthorityTransaction,
-        conversation_id: &str,
-        generation: &str,
-        title: Option<&str>,
+        header: &Header,
         gram_delta: &mut i64,
     ) -> io::Result<()> {
-        let generation_digest = generation_digest(conversation_id, generation);
-        let exclusion_key = key(transaction, GRAM_EXCLUSION_NAMESPACE, &generation_digest)?;
+        let conversation_id = header.conversation_id.as_str();
+        let scope = header.scope.as_str();
+        let digest = scope_digest(conversation_id, scope);
+        let exclusion_key = key(transaction, GRAM_EXCLUSION_NAMESPACE, &digest)?;
         if self
             .database
             .entity_get(transaction, &exclusion_key)?
@@ -1832,34 +2550,20 @@ impl OpenTurnSearchProjection {
         // charged leftovers behind.
         let mut ops = 0usize;
         let mut seen = std::collections::HashSet::new();
-        if let Some(title) = title {
+        for lowered in [header.title.to_lowercase(), conversation_id.to_lowercase()] {
             retract_text_grams(
                 &self.database,
                 transaction,
-                &title.to_lowercase(),
-                &generation_digest,
-                gram_delta,
-                &mut ops,
-                &mut seen,
-                &self.stop,
-            )?;
-            retract_text_grams(
-                &self.database,
-                transaction,
-                &conversation_id.to_lowercase(),
-                &generation_digest,
+                &lowered,
+                &digest,
                 gram_delta,
                 &mut ops,
                 &mut seen,
                 &self.stop,
             )?;
         }
-        let (mut start, end) = generation_range(
-            transaction,
-            TURN_META_NAMESPACE,
-            conversation_id,
-            generation,
-        )?;
+        let (mut start, end) =
+            scope_range(transaction, TURN_META_NAMESPACE, conversation_id, scope)?;
         loop {
             let rows =
                 self.database
@@ -1868,20 +2572,20 @@ impl OpenTurnSearchProjection {
             for (_, raw) in &rows {
                 check_search_stop(&self.stop)?;
                 let meta = decode_meta(raw)?;
-                if meta.conversation_id != conversation_id || meta.generation != generation {
-                    return Err(invalid_data("search generation digest collision"));
+                if meta.conversation_id != conversation_id || meta.scope != scope {
+                    return Err(invalid_data("search scope digest collision"));
                 }
                 // Text chunk loads spend point witnesses from the same
                 // per-transaction budget as the retraction reads; charge them
-                // so a gram-diverse mega generation stops with charged
-                // leftovers instead of failing its publish.
+                // so a gram-diverse mega scope stops with charged leftovers
+                // instead of failing its removal.
                 ops = ops.saturating_add(usize::from(meta.chunk_count));
                 let text = self.load_text(transaction, &meta)?;
                 retract_text_grams(
                     &self.database,
                     transaction,
                     &text.to_lowercase(),
-                    &generation_digest,
+                    &digest,
                     gram_delta,
                     &mut ops,
                     &mut seen,
@@ -1890,8 +2594,7 @@ impl OpenTurnSearchProjection {
             }
             if row_count < GRAM_RETIRE_SCAN_BATCH {
                 *gram_delta -=
-                    generation_dictionary::retire(&self.database, transaction, &generation_digest)?
-                        as i64;
+                    generation_dictionary::retire(&self.database, transaction, &digest)? as i64;
                 return Ok(());
             }
             let mut next = rows.last().unwrap().0.key_bytes().to_vec();
@@ -1910,7 +2613,7 @@ impl OpenTurnSearchProjection {
             let chunk_key = turn_text_key(
                 transaction,
                 &meta.conversation_id,
-                &meta.generation,
+                &meta.scope,
                 meta.ordinal,
                 &meta.turn_id,
                 meta.chunk_index,
@@ -1926,6 +2629,142 @@ impl OpenTurnSearchProjection {
             }
         }
         String::from_utf8(text).map_err(|_| invalid_data("search projection text is not UTF-8"))
+    }
+}
+
+#[cfg(test)]
+impl OpenTurnSearchProjection {
+    /// Fixture: make the conversation's scope hold exactly `documents` (one
+    /// Turn item per turn ID, in order, at revision 1) titled `title`, and
+    /// publish it at `updated_at_ms`. Uses the worker's own write path.
+    pub(crate) fn replace_conversation(
+        &mut self,
+        tenant_id: u64,
+        owner_user_id: u64,
+        conversation_id: &str,
+        updated_at_ms: u64,
+        title: &str,
+        documents: &[TurnSearchDocument],
+    ) -> io::Result<()> {
+        self.stage_conversation(tenant_id, owner_user_id, conversation_id, title, documents)?;
+        self.publish_scope(
+            tenant_id,
+            owner_user_id,
+            conversation_id,
+            updated_at_ms,
+            title,
+        )?;
+        Ok(())
+    }
+
+    /// `replace_conversation` without the publish: a conversation indexed
+    /// for the first time stays invisible.
+    pub(crate) fn stage_conversation(
+        &mut self,
+        tenant_id: u64,
+        owner_user_id: u64,
+        conversation_id: &str,
+        title: &str,
+        documents: &[TurnSearchDocument],
+    ) -> io::Result<()> {
+        let source = std::collections::BTreeMap::new();
+        let stale = self
+            .diff_scope(tenant_id, owner_user_id, conversation_id, &source, &[])?
+            .retract;
+        self.retract_scope_items(
+            tenant_id,
+            owner_user_id,
+            conversation_id,
+            &stale,
+            title,
+            false,
+        )?;
+        let mut groups: Vec<(ScopeItemKey, Vec<&TurnSearchDocument>)> = Vec::new();
+        for document in documents {
+            match groups.last_mut() {
+                Some((key, group)) if key.id == document.turn_id => group.push(document),
+                _ => groups.push((ScopeItemKey::turn(&document.turn_id), vec![document])),
+            }
+        }
+        let mut page: Vec<(usize, TurnSearchDocument, bool)> = Vec::new();
+        for (index, (_, group)) in groups.iter().enumerate() {
+            for (position, document) in group.iter().enumerate() {
+                page.push((index, (*document).clone(), position + 1 == group.len()));
+                if page.len() == SOURCE_PAGE_ROWS {
+                    self.index_fixture_page(
+                        tenant_id,
+                        owner_user_id,
+                        conversation_id,
+                        title,
+                        &groups,
+                        &page,
+                    )?;
+                    page.clear();
+                }
+            }
+        }
+        if groups.is_empty() {
+            // An empty conversation still has a scope: stage its header.
+            let mut transaction = self.database.begin(tenant_id, owner_user_id)?;
+            let mut usage = read_usage(&self.database, &mut transaction)?;
+            let mut gram_delta = 0i64;
+            let (mut header, published, _, _) = self.scope_for_write(
+                &mut transaction,
+                conversation_id,
+                title,
+                &mut usage,
+                &mut gram_delta,
+            )?;
+            self.store_scope_header(&mut transaction, &mut header, published)?;
+            write_usage(
+                &self.database,
+                &mut transaction,
+                usage.checked_add_signed(gram_delta).unwrap(),
+            )?;
+            self.database.commit(transaction)?;
+            return Ok(());
+        }
+        self.index_fixture_page(
+            tenant_id,
+            owner_user_id,
+            conversation_id,
+            title,
+            &groups,
+            &page,
+        )
+    }
+
+    fn index_fixture_page(
+        &mut self,
+        tenant_id: u64,
+        owner_user_id: u64,
+        conversation_id: &str,
+        title: &str,
+        groups: &[(ScopeItemKey, Vec<&TurnSearchDocument>)],
+        page: &[(usize, TurnSearchDocument, bool)],
+    ) -> io::Result<()> {
+        let mut runs: Vec<(usize, Vec<TurnSearchDocument>, bool)> = Vec::new();
+        for (group, document, last) in page {
+            match runs.last_mut() {
+                Some((index, documents, run_last)) if index == group => {
+                    documents.push(document.clone());
+                    *run_last = *last;
+                }
+                _ => runs.push((*group, vec![document.clone()], *last)),
+            }
+        }
+        let items: Vec<ScopeItem<'_>> = runs
+            .iter()
+            .map(|(group, documents, last)| ScopeItem {
+                key: &groups[*group].0,
+                revision: 1,
+                content: ScopeItemContent::Documents {
+                    documents,
+                    last: *last,
+                },
+            })
+            .collect();
+        self.index_scope_items(tenant_id, owner_user_id, conversation_id, title, &items)
     }
 }
 
@@ -1990,7 +2829,9 @@ mod tests {
         use crate::test_stop_vfs::StopVfs;
         use crate::vfs::Vfs;
         use std::path::Path;
-        for phase in ["append", "publish"] {
+        // "append" stops while a new item emits its postings; "retract" stops
+        // while a changed item's remaining postings are recomputed.
+        for phase in ["append", "retract"] {
             let vfs = Arc::new(StopVfs::new());
             vfs.create_dir(Path::new("/index")).unwrap();
             let mut projection = OpenTurnSearchProjection::initialize_with_vfs(
@@ -2004,42 +2845,42 @@ mod tests {
                 &mut projection,
                 11,
                 "conversation",
-                "old",
                 1,
                 &[document("old-turn", 1, &text)],
             );
             projection.checkpoint_wal_window_for_shutdown().unwrap();
+            // Committed search work in the new WAL window, before the stop.
             projection
-                .begin_conversation_rebuild(7, 11, "conversation", "new", 2)
+                .publish_scope(7, 11, "conversation", 2, "")
                 .unwrap();
-            if phase == "publish" {
-                projection
-                    .append_conversation_page(
-                        7,
-                        11,
-                        "conversation",
-                        "new",
-                        &[document("new-turn", 1, "newneedle")],
-                    )
-                    .unwrap();
-            }
             projection.database.configure_hot_data_caches(0, 0).unwrap();
             projection.install_stop(Arc::clone(&vfs.stop));
             vfs.arm(if phase == "append" { 15 } else { 3 });
+            let new_turn = ScopeItemKey::turn("new-turn");
+            let new_documents = [document(
+                "new-turn",
+                2,
+                &text.replace("oldneedle", "newneedle"),
+            )];
             let result = if phase == "append" {
-                projection.append_conversation_page(
+                projection.index_scope_items(
                     7,
                     11,
                     "conversation",
-                    "new",
-                    &[document(
-                        "new-turn",
-                        1,
-                        &text.replace("oldneedle", "newneedle"),
-                    )],
+                    "",
+                    &[turn_item(&new_turn, &new_documents)],
                 )
             } else {
-                projection.finalize_conversation_rebuild(7, 11, "conversation", "new")
+                projection
+                    .retract_scope_items(
+                        7,
+                        11,
+                        "conversation",
+                        &[ScopeItemKey::turn("old-turn")],
+                        "",
+                        false,
+                    )
+                    .map(|_| ())
             };
             assert!(
                 vfs.stop.load(std::sync::atomic::Ordering::Acquire),
@@ -2103,21 +2944,23 @@ mod tests {
         projection: &mut OpenTurnSearchProjection,
         owner: u64,
         conversation: &str,
-        generation: &str,
         updated_at: u64,
         documents: &[TurnSearchDocument],
     ) {
         projection
-            .begin_conversation_rebuild(7, owner, conversation, generation, updated_at)
+            .replace_conversation(7, owner, conversation, updated_at, "", documents)
             .unwrap();
-        for page in documents.chunks(8) {
-            projection
-                .append_conversation_page(7, owner, conversation, generation, page)
-                .unwrap();
+    }
+
+    fn turn_item<'a>(key: &'a ScopeItemKey, documents: &'a [TurnSearchDocument]) -> ScopeItem<'a> {
+        ScopeItem {
+            key,
+            revision: 1,
+            content: ScopeItemContent::Documents {
+                documents,
+                last: true,
+            },
         }
-        projection
-            .finalize_conversation_rebuild(7, owner, conversation, generation)
-            .unwrap();
     }
 
     #[test]
@@ -2135,7 +2978,6 @@ mod tests {
             &mut projection,
             11,
             "secret",
-            "g1",
             100,
             &[document("t1", 1, "old secret")],
         );
@@ -2163,7 +3005,6 @@ mod tests {
             &mut projection,
             11,
             "new",
-            "g2",
             200,
             &[document("t2", 1, "new phrase")],
         );
@@ -2192,7 +3033,6 @@ mod tests {
                 &mut projection,
                 owner,
                 "shared-id",
-                "g1",
                 100,
                 &[document("t1", 1, "needle")],
             );
@@ -2237,7 +3077,6 @@ mod tests {
             &mut projection,
             11,
             "older",
-            "g1",
             100,
             &[document("t1", 1, "the quick brown fox")],
         );
@@ -2245,7 +3084,6 @@ mod tests {
             &mut projection,
             11,
             "newer",
-            "g2",
             200,
             &[
                 document("t2", 1, "alpha here"),
@@ -2256,7 +3094,6 @@ mod tests {
             &mut projection,
             12,
             "private",
-            "g3",
             300,
             &[document("t4", 1, "fox")],
         );
@@ -2283,40 +3120,61 @@ mod tests {
     }
 
     #[test]
-    fn generation_is_invisible_until_atomic_publish_and_retracts_old_text() {
+    fn a_new_scope_is_invisible_until_published_and_a_changed_item_retracts_old_text() {
         let directory = tempdir().unwrap();
         let mut projection =
             OpenTurnSearchProjection::initialize(directory.path(), BUDGET).unwrap();
-        replace(
-            &mut projection,
-            11,
-            "conversation",
-            "old",
-            100,
-            &[document("t1", 1, "old phrase")],
-        );
         projection
-            .begin_conversation_rebuild(7, 11, "conversation", "new", 200)
-            .unwrap();
-        projection
-            .append_conversation_page(
+            .stage_conversation(
                 7,
                 11,
                 "conversation",
-                "new",
-                &[document("t1", 1, "new phrase")],
+                "",
+                &[document("t1", 1, "old phrase")],
             )
+            .unwrap();
+        assert!(projection
+            .search(&request(11, "old phrase"))
+            .unwrap()
+            .is_empty());
+        projection
+            .publish_scope(7, 11, "conversation", 100, "")
             .unwrap();
         assert_eq!(
             projection.search(&request(11, "old phrase")).unwrap().len(),
             1
         );
-        assert!(projection
-            .search(&request(11, "new phrase"))
-            .unwrap()
-            .is_empty());
+        // The source moved the Turn to a new revision: the scope retracts the
+        // recorded item and indexes the new text under the same scope.
+        let source = std::collections::BTreeMap::from([("t1".to_owned(), 2)]);
+        let diff = projection
+            .diff_scope(7, 11, "conversation", &source, &[])
+            .unwrap();
+        assert_eq!(diff.retract, [ScopeItemKey::turn("t1")]);
+        assert_eq!(diff.turns, [("t1".to_owned(), 2)]);
         projection
-            .finalize_conversation_rebuild(7, 11, "conversation", "new")
+            .retract_scope_items(7, 11, "conversation", &diff.retract, "", diff.rebuild)
+            .unwrap();
+        let key = ScopeItemKey::turn("t1");
+        let documents = [document("t1", 1, "new phrase")];
+        projection
+            .index_scope_items(
+                7,
+                11,
+                "conversation",
+                "",
+                &[ScopeItem {
+                    key: &key,
+                    revision: 2,
+                    content: ScopeItemContent::Documents {
+                        documents: &documents,
+                        last: true,
+                    },
+                }],
+            )
+            .unwrap();
+        projection
+            .publish_scope(7, 11, "conversation", 200, "")
             .unwrap();
         assert!(projection
             .search(&request(11, "old phrase"))
@@ -2326,6 +3184,11 @@ mod tests {
             projection.search(&request(11, "new phrase")).unwrap().len(),
             1
         );
+        assert!(projection
+            .diff_scope(7, 11, "conversation", &source, &[])
+            .unwrap()
+            .retract
+            .is_empty());
         drop(projection);
         let reopened = OpenTurnSearchProjection::open(directory.path(), BUDGET).unwrap();
         assert_eq!(
@@ -2343,7 +3206,6 @@ mod tests {
             &mut projection,
             11,
             "z-word-only",
-            "g1",
             300,
             &[
                 document("t1", 1, "alpha apart"),
@@ -2354,7 +3216,6 @@ mod tests {
             &mut projection,
             11,
             "a-phrase",
-            "g2",
             100,
             &[document("t3", 1, "literal alpha gamma phrase")],
         );
@@ -2362,7 +3223,6 @@ mod tests {
             replace(
                 &mut projection,
                 11,
-                id,
                 id,
                 200,
                 &[document(id, 1, "same_time_literal_%")],
@@ -2394,11 +3254,10 @@ mod tests {
     fn logical_budget_rejects_page_without_exposing_it() {
         let directory = tempdir().unwrap();
         let mut projection = OpenTurnSearchProjection::initialize(directory.path(), 8192).unwrap();
-        projection
-            .begin_conversation_rebuild(7, 11, "conversation", "g1", 100)
-            .unwrap();
+        let key = ScopeItemKey::turn("t1");
+        let documents = [document("t1", 1, &"bounded ".repeat(512))];
         let error = projection
-            .append_conversation_page(7, 11, "conversation", "g1", &[document("t1", 1, "bounded")])
+            .index_scope_items(7, 11, "conversation", "", &[turn_item(&key, &documents)])
             .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::OutOfMemory);
         assert!(projection
@@ -2421,7 +3280,6 @@ mod tests {
             &mut projection,
             11,
             "old",
-            "g",
             1,
             &[document("t", 1, "oldneedle")],
         );
@@ -2433,7 +3291,6 @@ mod tests {
             &mut projection,
             22,
             "other",
-            "g",
             1,
             &[document("t", 1, "otherneedle")],
         );
@@ -2527,7 +3384,6 @@ mod tests {
                         &mut projection,
                         11,
                         "stale",
-                        "g",
                         1,
                         &[document("t", 1, "staleneedle")],
                     );
@@ -2581,7 +3437,6 @@ mod tests {
             &mut projection,
             11,
             "kept",
-            "g",
             1,
             &[document("t", 1, "keptneedle")],
         );
@@ -2626,7 +3481,6 @@ mod tests {
             &mut projection,
             11,
             "local",
-            "g",
             1,
             &[document("t", 1, "needle")],
         );
@@ -2634,7 +3488,6 @@ mod tests {
             &mut projection,
             12,
             "foreign",
-            "g",
             1,
             &[document("t", 1, "needle")],
         );
@@ -2677,7 +3530,6 @@ mod tests {
                 &mut projection,
                 11,
                 "local",
-                "g",
                 1,
                 &[document("t", 1, "oldneedle")],
             );
@@ -2685,7 +3537,6 @@ mod tests {
                 &mut projection,
                 12,
                 "foreign",
-                "g",
                 1,
                 &[document("t", 1, "foreignneedle")],
             );
@@ -2712,11 +3563,7 @@ mod tests {
                 .entity_put(
                     &mut tx,
                     posting_key,
-                    [
-                        &[old_version, 0],
-                        generation_digest("local", "g").as_slice(),
-                    ]
-                    .concat(),
+                    [&[old_version, 0], scope_digest("local", "g").as_slice()].concat(),
                 )
                 .unwrap();
             projection.database.commit(tx).unwrap();
@@ -2744,7 +3591,7 @@ mod tests {
                 generation_dictionary::lookup(
                     &projection.database,
                     &mut tx,
-                    &generation_digest("local", "g")
+                    &scope_digest("local", "g")
                 )
                 .unwrap(),
                 None
@@ -2766,7 +3613,6 @@ mod tests {
                 &mut projection,
                 11,
                 "local",
-                "new",
                 2,
                 &[document("t", 1, "newneedle")],
             );
@@ -2793,14 +3639,9 @@ mod tests {
         let mut inserted = 0;
         for index in 0..100 {
             let id = format!("header-{index}");
-            match projection.begin_conversation_rebuild(7, 11, &id, "g", index) {
-                Ok(()) => projection
-                    .finalize_conversation_rebuild(7, 11, &id, "g")
-                    .unwrap(),
-                Err(error) => {
-                    assert_eq!(error.kind(), io::ErrorKind::OutOfMemory);
-                    break;
-                }
+            if let Err(error) = projection.publish_scope(7, 11, &id, index, "") {
+                assert_eq!(error.kind(), io::ErrorKind::OutOfMemory);
+                break;
             }
             inserted += 1;
         }
@@ -2833,12 +3674,17 @@ mod tests {
                 .unwrap()
         );
         drop(transaction);
-        projection
-            .begin_conversation_rebuild(7, 11, "title", "g", 1)
-            .unwrap();
+        projection.publish_scope(7, 11, "title", 1, "").unwrap();
         assert_eq!(
             projection
-                .set_conversation_title(7, 11, "title", "g", &"x".repeat(2000))
+                .retract_scope_items(7, 11, "title", &[], &"x".repeat(2000), false)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::OutOfMemory
+        );
+        assert_eq!(
+            projection
+                .publish_scope(7, 11, "fresh", 1, &"x".repeat(2000))
                 .unwrap_err()
                 .kind(),
             io::ErrorKind::OutOfMemory
@@ -2861,14 +3707,46 @@ mod tests {
         }
     }
 
+    fn scope_of(
+        projection: &OpenTurnSearchProjection,
+        owner: u64,
+        conversation_id: &str,
+    ) -> String {
+        let mut transaction = projection.database.begin(7, owner).unwrap();
+        projection
+            .current_scope(&mut transaction, conversation_id)
+            .unwrap()
+            .expect("conversation has a scope")
+            .0
+            .scope
+    }
+
+    fn excluded(projection: &OpenTurnSearchProjection, owner: u64, conversation_id: &str) -> bool {
+        let scope = scope_of(projection, owner, conversation_id);
+        let mut transaction = projection.database.begin(7, owner).unwrap();
+        let exclusion_key = key(
+            &transaction,
+            GRAM_EXCLUSION_NAMESPACE,
+            &scope_digest(conversation_id, &scope),
+        )
+        .unwrap();
+        projection
+            .database
+            .entity_get(&mut transaction, &exclusion_key)
+            .unwrap()
+            .is_some()
+    }
+
     fn gram_contains(
         projection: &OpenTurnSearchProjection,
         owner: u64,
         gram: &str,
         conversation_id: &str,
-        generation: &str,
     ) -> bool {
-        let digest = generation_digest(conversation_id, generation);
+        let digest = scope_digest(
+            conversation_id,
+            &scope_of(projection, owner, conversation_id),
+        );
         match gram_list_for(projection, owner, gram).unwrap() {
             Some(GramList::Entries(entries)) => {
                 let mut transaction = projection.database.begin(7, owner).unwrap();
@@ -2912,62 +3790,51 @@ mod tests {
     }
 
     #[test]
-    fn gram_postings_follow_the_generation_lifecycle() {
+    fn gram_postings_follow_the_scope_lifecycle() {
         let directory = tempdir().unwrap();
         let mut projection =
             OpenTurnSearchProjection::initialize(directory.path(), BUDGET).unwrap();
         projection
-            .begin_conversation_rebuild(7, 11, "conversation", "g1", 100)
-            .unwrap();
-        projection
-            .set_conversation_title(7, 11, "conversation", "g1", "alpha title")
-            .unwrap();
-        projection
-            .append_conversation_page(
+            .replace_conversation(
                 7,
                 11,
                 "conversation",
-                "g1",
+                100,
+                "alpha title",
                 &[
                     document("t1", 1, "needle body"),
                     document("t2", 2, "second turn"),
                 ],
             )
             .unwrap();
-        projection
-            .finalize_conversation_rebuild(7, 11, "conversation", "g1")
-            .unwrap();
         for gram in ["eed", "tur", "alp", "con", "n"] {
             assert!(
-                gram_contains(&projection, 11, gram, "conversation", "g1"),
+                gram_contains(&projection, 11, gram, "conversation"),
                 "{gram} posting missing after build"
             );
         }
         assert!(gram_list_for(&projection, 11, "zzq").unwrap().is_none());
-        // A replacement generation retracts the old postings and emits its
-        // own in the same transaction.
+        let scope = scope_of(&projection, 11, "conversation");
+        // Retracting both items and retitling removes exactly the grams no
+        // remaining text, title or ID emits; the new item adds its own.
         projection
-            .begin_conversation_rebuild(7, 11, "conversation", "g2", 200)
-            .unwrap();
-        projection
-            .set_conversation_title(7, 11, "conversation", "g2", "other")
-            .unwrap();
-        projection
-            .append_conversation_page(
+            .replace_conversation(
                 7,
                 11,
                 "conversation",
-                "g2",
+                200,
+                "other",
                 &[document("t3", 1, "fresh content")],
             )
             .unwrap();
-        projection
-            .finalize_conversation_rebuild(7, 11, "conversation", "g2")
-            .unwrap();
-        assert!(!gram_contains(&projection, 11, "eed", "conversation", "g1"));
-        assert!(gram_contains(&projection, 11, "esh", "conversation", "g2"));
-        assert!(gram_contains(&projection, 11, "oth", "conversation", "g2"));
-        assert!(!gram_contains(&projection, 11, "alp", "conversation", "g2"));
+        assert_eq!(scope_of(&projection, 11, "conversation"), scope);
+        assert!(!gram_contains(&projection, 11, "eed", "conversation"));
+        assert!(gram_contains(&projection, 11, "esh", "conversation"));
+        assert!(gram_contains(&projection, 11, "oth", "conversation"));
+        assert!(!gram_contains(&projection, 11, "alp", "conversation"));
+        assert!(gram_contains(&projection, 11, "con", "conversation"));
+        // A gram shared by retracted and remaining text stays posted.
+        assert!(gram_contains(&projection, 11, "t", "conversation"));
         // Removal retracts the rest.
         projection
             .remove_conversation(7, 11, "conversation")
@@ -2982,40 +3849,103 @@ mod tests {
     }
 
     #[test]
-    fn unfinished_build_postings_retract_on_rebuild() {
+    fn one_retraction_removes_more_items_than_a_transaction_can_retire_as_ranges() {
+        // A compaction or an explicit rebuild retracts many items at once;
+        // each item's rows are two key ranges, and one transaction retires at
+        // most MAX_ENTITY_RETIRED_RANGES of them.
+        let items = crate::generated_tofudb_ir::MAX_ENTITY_RETIRED_RANGES as u64;
         let directory = tempdir().unwrap();
         let mut projection =
             OpenTurnSearchProjection::initialize(directory.path(), BUDGET).unwrap();
+        let many: Vec<_> = (0..items)
+            .map(|index| document(&format!("t{index:03}"), index, &format!("oldneedle{index}")))
+            .collect();
+        replace(&mut projection, 11, "conversation", 100, &many);
+        assert_eq!(
+            projection.search(&request(11, "oldneedle7")).unwrap().len(),
+            1
+        );
+        replace(
+            &mut projection,
+            11,
+            "conversation",
+            200,
+            &[document("fresh", 1, "freshneedle")],
+        );
+        assert!(projection
+            .search(&request(11, "oldneedle"))
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            projection
+                .search(&request(11, "freshneedle"))
+                .unwrap()
+                .len(),
+            1
+        );
+        // Exact accounting: the same owner bytes as a projection that only
+        // ever indexed the remaining Turn.
+        let fresh_directory = tempdir().unwrap();
+        let mut fresh =
+            OpenTurnSearchProjection::initialize(fresh_directory.path(), BUDGET).unwrap();
+        replace(
+            &mut fresh,
+            11,
+            "conversation",
+            200,
+            &[document("fresh", 1, "freshneedle")],
+        );
+        let usage = |projection: &OpenTurnSearchProjection| {
+            let mut transaction = projection.database.begin(7, 11).unwrap();
+            read_usage(&projection.database, &mut transaction).unwrap()
+        };
+        assert_eq!(usage(&projection), usage(&fresh));
+    }
+
+    #[test]
+    fn interrupted_item_postings_retract_before_it_is_indexed_again() {
+        let directory = tempdir().unwrap();
+        let mut projection =
+            OpenTurnSearchProjection::initialize(directory.path(), BUDGET).unwrap();
+        // The first page of a two-page item: its record stays incomplete.
+        let key = ScopeItemKey::turn("t1");
+        let documents = [document("t1", 1, "abandoned text")];
         projection
-            .begin_conversation_rebuild(7, 11, "conversation", "g1", 100)
-            .unwrap();
-        projection
-            .append_conversation_page(
+            .index_scope_items(
                 7,
                 11,
                 "conversation",
-                "g1",
-                &[document("t1", 1, "abandoned text")],
+                "",
+                &[ScopeItem {
+                    key: &key,
+                    revision: 1,
+                    content: ScopeItemContent::Documents {
+                        documents: &documents,
+                        last: false,
+                    },
+                }],
             )
             .unwrap();
-        assert!(gram_contains(&projection, 11, "ban", "conversation", "g1"));
-        projection
-            .begin_conversation_rebuild(7, 11, "conversation", "g2", 200)
+        assert!(gram_contains(&projection, 11, "ban", "conversation"));
+        // Even at an unchanged source revision the incomplete item is retracted.
+        let source = std::collections::BTreeMap::from([("t1".to_owned(), 1)]);
+        let diff = projection
+            .diff_scope(7, 11, "conversation", &source, &[])
             .unwrap();
-        assert!(!gram_contains(&projection, 11, "ban", "conversation", "g1"));
+        assert_eq!(diff.retract, [ScopeItemKey::turn("t1")]);
+        assert_eq!(diff.turns, [("t1".to_owned(), 1)]);
         projection
-            .append_conversation_page(
-                7,
-                11,
-                "conversation",
-                "g2",
-                &[document("t2", 1, "replacement text")],
-            )
+            .retract_scope_items(7, 11, "conversation", &diff.retract, "", diff.rebuild)
+            .unwrap();
+        assert!(!gram_contains(&projection, 11, "ban", "conversation"));
+        let replacement = [document("t1", 1, "replacement text")];
+        projection
+            .index_scope_items(7, 11, "conversation", "", &[turn_item(&key, &replacement)])
             .unwrap();
         projection
-            .finalize_conversation_rebuild(7, 11, "conversation", "g2")
+            .publish_scope(7, 11, "conversation", 200, "")
             .unwrap();
-        assert!(gram_contains(&projection, 11, "pla", "conversation", "g2"));
+        assert!(gram_contains(&projection, 11, "pla", "conversation"));
         assert_eq!(
             projection.search(&request(11, "abandoned")).unwrap().len(),
             0
@@ -3036,24 +3966,17 @@ mod tests {
         // postings; the emission must trip into DEGRADED, never overspend.
         let mut projection =
             OpenTurnSearchProjection::initialize(directory.path(), 16 * 1024).unwrap();
+        let key = ScopeItemKey::turn("t1");
+        let documents = [document(
+            "t1",
+            1,
+            &(0..200)
+                .map(|i| format!("distinct{i} search"))
+                .collect::<Vec<_>>()
+                .join(" "),
+        )];
         projection
-            .begin_conversation_rebuild(7, 11, "conversation", "g", 100)
-            .unwrap();
-        projection
-            .append_conversation_page(
-                7,
-                11,
-                "conversation",
-                "g",
-                &[document(
-                    "t1",
-                    1,
-                    &(0..200)
-                        .map(|i| format!("distinct{i} search"))
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                )],
-            )
+            .index_scope_items(7, 11, "conversation", "", &[turn_item(&key, &documents)])
             .unwrap();
         let mut transaction = projection.database.begin(7, 11).unwrap();
         assert_eq!(
@@ -3063,7 +3986,7 @@ mod tests {
         assert!(read_usage(&projection.database, &mut transaction).unwrap() <= 16 * 1024);
         drop(transaction);
         projection
-            .finalize_conversation_rebuild(7, 11, "conversation", "g")
+            .publish_scope(7, 11, "conversation", 100, "")
             .unwrap();
         // Degraded means the exact legacy walk, with the same answer.
         assert_eq!(
@@ -3092,7 +4015,6 @@ mod tests {
                 &mut projection,
                 11,
                 &format!("conversation-{index:03}"),
-                "g",
                 index as u64,
                 &[document("t1", 1, "commonterm payload")],
             );
@@ -3161,43 +4083,25 @@ mod tests {
         let mut projection =
             OpenTurnSearchProjection::initialize(directory.path(), BUDGET).unwrap();
         projection
-            .begin_conversation_rebuild(7, 11, "huge", "g", 100)
-            .unwrap();
-        projection
-            .append_conversation_page(
+            .replace_conversation(
                 7,
                 11,
                 "huge",
-                "g",
+                100,
+                "",
                 &(0..4u64)
                     .map(|i| diverse_document(&format!("t{i}"), i, 77 + i, 4_096))
                     .collect::<Vec<_>>(),
             )
             .unwrap();
-        projection
-            .finalize_conversation_rebuild(7, 11, "huge", "g")
-            .unwrap();
-        let mut transaction = projection.database.begin(7, 11).unwrap();
-        let exclusion_key = key(
-            &transaction,
-            GRAM_EXCLUSION_NAMESPACE,
-            &generation_digest("huge", "g"),
-        )
-        .unwrap();
         assert!(
-            projection
-                .database
-                .entity_get(&mut transaction, &exclusion_key)
-                .unwrap()
-                .is_some(),
-            "overflowing append must exclude the conversation generation"
+            excluded(&projection, 11, "huge"),
+            "an overflowing page must exclude the conversation scope"
         );
-        drop(transaction);
         replace(
             &mut projection,
             11,
             "small",
-            "g",
             200,
             &[document("t1", 1, "needle")],
         );
@@ -3227,29 +4131,18 @@ mod tests {
             1,
             "excluded conversation must still answer through the exact walk"
         );
-        // Rebuilding the excluded generation with fittable content clears the
-        // exclusion marker.
+        // Retracting the overflowing items leaves content whose grams fit one
+        // emission: the scope is indexed again and its exclusion is cleared.
         replace(
             &mut projection,
             11,
             "huge",
-            "g2",
             300,
             &[document("t9", 1, "needle")],
         );
-        let mut transaction = projection.database.begin(7, 11).unwrap();
-        let exclusion_key = key(
-            &transaction,
-            GRAM_EXCLUSION_NAMESPACE,
-            &generation_digest("huge", "g2"),
-        )
-        .unwrap();
-        assert!(projection
-            .database
-            .entity_get(&mut transaction, &exclusion_key)
-            .unwrap()
-            .is_none());
-        assert!(gram_contains(&projection, 11, "eed", "huge", "g2"));
+        assert!(!excluded(&projection, 11, "huge"));
+        assert!(gram_contains(&projection, 11, "eed", "huge"));
+        assert!(gram_contains(&projection, 11, "hug", "huge"));
         assert_eq!(
             projection
                 .search(&request(11, &huge_text_probe))
@@ -3269,29 +4162,35 @@ mod tests {
             &mut projection,
             11,
             "conversation",
-            "old",
             100,
             &[document("turn", 1, "old durable phrase")],
         );
         projection
-            .begin_conversation_rebuild(7, 11, "conversation", "new", 200)
-            .unwrap();
-        projection
-            .append_conversation_page(
-                7,
-                11,
-                "conversation",
-                "new",
-                &[document("turn", 1, "new durable phrase")],
-            )
-            .unwrap();
-        projection
-            .mark_rebuild_incomplete(7, 11, "conversation", "new")
-            .unwrap();
-        projection
     }
 
-    fn assert_recovered_generation(vfs: Arc<DeterministicVfs>) {
+    /// The write under test: a new item plus an oversized one, so its rows,
+    /// item records, header and the coverage counter move in one commit.
+    fn index_new_items(projection: &mut OpenTurnSearchProjection) -> io::Result<()> {
+        let new_turn = ScopeItemKey::turn("new-turn");
+        let oversized = ScopeItemKey::turn("oversized-turn");
+        let documents = [document("new-turn", 2, "new durable phrase")];
+        projection.index_scope_items(
+            7,
+            11,
+            "conversation",
+            "",
+            &[
+                turn_item(&new_turn, &documents),
+                ScopeItem {
+                    key: &oversized,
+                    revision: 1,
+                    content: ScopeItemContent::Oversized,
+                },
+            ],
+        )
+    }
+
+    fn assert_recovered_scope_write(vfs: Arc<DeterministicVfs>) {
         vfs.arm_fault(None).unwrap();
         vfs.crash().unwrap();
         let projection =
@@ -3302,25 +4201,41 @@ mod tests {
         let new = projection
             .search(&request(11, "new durable phrase"))
             .unwrap();
+        assert_eq!(old.len(), 1, "recovery lost committed text");
         assert_eq!(
             projection.source_incomplete(7, 11).unwrap(),
             !new.is_empty()
         );
         assert!(!projection.source_incomplete(7, 12).unwrap());
-        assert!(
-            (old.len() == 1 && new.is_empty()) || (old.is_empty() && new.len() == 1),
-            "recovery exposed neither or both projection generations"
-        );
+        let source = std::collections::BTreeMap::from([
+            ("new-turn".to_owned(), 1),
+            ("oversized-turn".to_owned(), 1),
+            ("turn".to_owned(), 1),
+        ]);
+        let diff = projection
+            .diff_scope(7, 11, "conversation", &source, &[])
+            .unwrap();
+        assert!(diff.retract.is_empty());
+        if new.is_empty() {
+            assert_eq!(
+                diff.turns,
+                [("new-turn".to_owned(), 1), ("oversized-turn".to_owned(), 1)],
+                "item records disagree with the recovered rows"
+            );
+        } else {
+            assert!(
+                diff.turns.is_empty(),
+                "item records disagree with the recovered rows"
+            );
+        }
     }
 
     #[test]
-    fn every_publish_io_fault_recovers_exactly_one_complete_generation() {
+    fn every_scope_write_io_fault_recovers_the_state_before_or_after_it() {
         let baseline_vfs = Arc::new(DeterministicVfs::new(None));
         let mut baseline = prepared_simulated_projection(Arc::clone(&baseline_vfs));
         baseline_vfs.arm_fault(None).unwrap();
-        baseline
-            .finalize_conversation_rebuild(7, 11, "conversation", "new")
-            .unwrap();
+        index_new_items(&mut baseline).unwrap();
         let trace = baseline_vfs.trace().unwrap();
         drop(baseline);
 
@@ -3332,9 +4247,9 @@ mod tests {
                 action: FaultAction::ErrorBefore(io::ErrorKind::Interrupted),
             }))
             .unwrap();
-            let _ = projection.finalize_conversation_rebuild(7, 11, "conversation", "new");
+            let _ = index_new_items(&mut projection);
             drop(projection);
-            assert_recovered_generation(vfs);
+            assert_recovered_scope_write(vfs);
         }
 
         for (index, operation) in trace.iter().enumerate() {
@@ -3348,9 +4263,9 @@ mod tests {
                 action: FaultAction::ShortWrite(7),
             }))
             .unwrap();
-            let _ = projection.finalize_conversation_rebuild(7, 11, "conversation", "new");
+            let _ = index_new_items(&mut projection);
             drop(projection);
-            assert_recovered_generation(vfs);
+            assert_recovered_scope_write(vfs);
         }
     }
     #[test]
@@ -3400,9 +4315,6 @@ mod tests {
             }
             let before = crate::fsync_stats::stage_calls(crate::fsync_stats::STAGE_STORE_PAGE);
             let conversation = format!("dense-{index:04}");
-            projection
-                .begin_conversation_rebuild(7, 11, &conversation, "g1", index + 1)
-                .unwrap();
             let documents: Vec<_> = text
                 .as_bytes()
                 .chunks(CHUNK_CHARACTERS)
@@ -3413,18 +4325,14 @@ mod tests {
                     value
                 })
                 .collect();
-            let result = documents.chunks(8).try_for_each(|page| {
-                projection.append_conversation_page(7, 11, &conversation, "g1", page)
-            });
+            let result =
+                projection.replace_conversation(7, 11, &conversation, index + 1, "", &documents);
             let pages =
                 crate::fsync_stats::stage_calls(crate::fsync_stats::STAGE_STORE_PAGE) - before;
             eprintln!("dense_search_reference_probe conversation={index} stored_pages={pages} append_error={:?}", result.as_ref().err());
             result.unwrap_or_else(|error| {
                 panic!("dense conversation {index} failed after {pages} page stores: {error}")
             });
-            projection
-                .finalize_conversation_rebuild(7, 11, &conversation, "g1")
-                .unwrap();
         }
         set_gram_state(&mut projection, 11, GRAM_STATE_READY);
         assert_eq!(projection.search(&request(11, "dense-")).unwrap().len(), 50);

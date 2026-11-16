@@ -93,7 +93,8 @@
 .ptc-head::-webkit-details-marker { display: none; }
 .ptc-head:hover { background: var(--bg-hover); }
 .ptc-head:focus-visible, .ptc-detail summary:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-.ptc-chevron { color: var(--text-tertiary); transition: transform var(--motion-fast) var(--ease-standard); }
+.ptc-chevron { display: inline-flex; flex: none; align-items: center; justify-content: center; width: var(--space-4); height: var(--space-4); color: var(--text-tertiary); transition: transform var(--motion-fast) var(--ease-standard); }
+.ptc-chevron > svg { width: var(--space-4); height: var(--space-4); }
 .ptc-card[open] > .ptc-head > .ptc-chevron { transform: rotate(90deg); }
 .ptc-body { margin: var(--space-1) var(--space-3) var(--space-2) var(--space-4); padding-inline-start: var(--space-3); border-inline-start: var(--control-edge-inset) solid var(--border); }
 .ptc-title { font-weight: var(--weight-semibold); color: var(--text-primary); }

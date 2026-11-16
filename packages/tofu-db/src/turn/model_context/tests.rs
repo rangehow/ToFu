@@ -110,6 +110,7 @@ fn edit(db: &AuthorityDatabase, tx: &mut AuthorityTransaction, index: usize, pro
             updated_at_ms: 9999,
             committed_at_ms: 9999,
         },
+        None,
     )
     .unwrap();
 }

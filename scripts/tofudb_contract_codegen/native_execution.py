@@ -130,8 +130,6 @@ def render_execution(tables, worker, inputs) -> list[str]:
         f'"{turns["attemptEventSyncReferenceNamespace"]}";',
         "pub const MAX_SYNC_PRUNE_ROWS_PER_TRANSACTION: usize = "
         f'{turns["maximumSyncPruneRowsPerTransaction"]};',
-        "pub const MAX_SYNC_PRUNE_MATERIALIZED_BYTES: usize = "
-        f'{turns["maximumSyncPruneMaterializedBytes"]};',
         f'pub const GENERATION_ATTEMPT_NAMESPACE: &str = "{turns["attemptNamespace"]}";',
         "pub const ATTEMPT_DISPATCHABLE_INDEX_NAMESPACE: &str = "
         f'"{turns["attemptDispatchableIndexNamespace"]}";',

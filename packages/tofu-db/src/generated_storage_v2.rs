@@ -56,6 +56,7 @@ pub const STATUS_FORBIDDEN: u16 = 403;
 pub const STATUS_DEADLINE_ELAPSED: u16 = 408;
 pub const STATUS_CONFLICT: u16 = 409;
 pub const STATUS_RESOURCE_EXHAUSTED: u16 = 429;
+pub const STATUS_INTERNAL: u16 = 500;
 pub const STATUS_NOT_IMPLEMENTED: u16 = 501;
 pub const STATUS_UNAVAILABLE: u16 = 503;
 pub const STATUS_INTEGRITY_FAILURE: u16 = 550;
@@ -94,6 +95,11 @@ pub const NATIVE_RESOURCE_EXHAUSTION_REASON_NAMES: [&str; 9] = [
 ];
 pub const NATIVE_RESOURCE_EXHAUSTION_REASON_RETRYABLE: [bool; 9] =
     [true, true, true, false, true, true, true, true, true];
+pub(crate) const CONVERSATION_SYNC_EPOCH_FIELD: &str = "authorityEpoch";
+pub(crate) const CONVERSATION_SYNC_HEAD_DIGEST_FIELD: &str = "headDigest";
+pub(crate) const CONVERSATION_SYNC_CHANGE_DIGESTS_FIELD: &str = "changeDigests";
+pub(crate) const CONVERSATION_SYNC_ANCHOR_DIGEST_FIELD: &str = "anchorDigest";
+pub(crate) const CONVERSATION_SYNC_LINEAGE_HEX_DIGITS: usize = 16;
 pub(crate) const REQUIRED_HELLO_FIELDS: &[u8] = &[0, 2, 17, 18, 19, 20];
 pub(crate) const REQUIRED_REQUEST_FIELDS: &[u8] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 pub(crate) const REQUIRED_RESPONSE_FIELDS: &[u8] = &[0, 1, 2, 7, 9, 10, 11, 12, 13];

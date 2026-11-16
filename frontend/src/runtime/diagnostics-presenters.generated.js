@@ -13,6 +13,7 @@ import { createInspectorDetails } from '../features/inspector-details';
 import { t } from '../i18n/index';
 import { escapeHtml } from '../html-safety';
 import { createInspectorDisclosure, syncInspectorDisclosure } from '../features/diagnostics-message-disclosure';
+import { DISCLOSURE_CHEVRON_SVG } from '../ui/index';
 
 const Api = runtimeScope.Api;
 if (!Api || typeof Api !== 'object') throw new Error('diagnostics-presenters runtime dependency is unavailable: Api');
@@ -341,8 +342,10 @@ function _debugToolCallHtml(tc) {
     (id ? '<span class="debug-tc-id">' + escapeHtml(id) + "</span>" : "") +
     '</div><div class="debug-tc-args">' + argsHtml + "</div></div>";
 }
+/* Message rows open from the app's one fold chevron (ui/disclosure.ts). */
+const _DEBUG_CHEVRON_STYLE = "display:inline-flex;flex:0 0 auto;transition:transform 0.2s;color:var(--text-tertiary)";
 function _debugSecHtml(label, inner, open) {
-  return '<details class="debug-sec"' + (open ? " open" : "") + "><summary>" +
+  return '<details class="debug-sec"' + (open ? " open" : "") + "><summary class=\"ui-disclosure\">" +
     escapeHtml(label) + '</summary><div class="debug-sec-body">' + inner +
     "</div></details>";
 }
@@ -494,9 +497,8 @@ function createBlock(msg, i) {
   summary.textContent = msgSummary(msg, i);
   header.appendChild(summary);
   const arrow = document.createElement("span");
-  arrow.textContent = "▶";
-  arrow.style.cssText =
-    "font-size:9px;transition:transform 0.2s;color:var(--text-tertiary)";
+  arrow.innerHTML = DISCLOSURE_CHEVRON_SVG;
+  arrow.style.cssText = _DEBUG_CHEVRON_STYLE;
   header.appendChild(arrow);
   // Store msg ref on block element so incremental updates can swap it
   block._msgRef = msg;
@@ -532,6 +534,7 @@ function createBlock(msg, i) {
   const raw = document.createElement("details");
   raw.className = "debug-raw";
   const rawSummary = document.createElement("summary");
+  rawSummary.className = "ui-disclosure";
   rawSummary.textContent = t("debug.structRawJson");
   raw.appendChild(rawSummary);
   raw.appendChild(document.createElement("pre"));
@@ -568,8 +571,8 @@ function _createDebugToolsBlock() {
   tSummary.className = 'debug-msg-summary';
   tHeader.appendChild(tSummary);
   const tArrow = document.createElement('span');
-  tArrow.textContent = '▶';
-  tArrow.style.cssText = 'font-size:9px;transition:transform 0.2s;color:var(--text-tertiary)';
+  tArrow.innerHTML = DISCLOSURE_CHEVRON_SVG;
+  tArrow.style.cssText = _DEBUG_CHEVRON_STYLE;
   tHeader.appendChild(tArrow);
   const tBody = document.createElement('div');
   tBody.className = 'debug-msg-body';
@@ -630,8 +633,8 @@ function _createDebugContextBlock() {
   summary.className = 'debug-msg-summary';
   header.appendChild(summary);
   const arrow = document.createElement('span');
-  arrow.textContent = '▶';
-  arrow.style.cssText = 'font-size:9px;transition:transform 0.2s;color:var(--text-tertiary)';
+  arrow.innerHTML = DISCLOSURE_CHEVRON_SVG;
+  arrow.style.cssText = _DEBUG_CHEVRON_STYLE;
   header.appendChild(arrow);
   const body = document.createElement('div');
   body.className = 'debug-msg-body';

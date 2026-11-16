@@ -124,8 +124,7 @@
     },
     {
       "path": "03-paper-reader.css",
-      "responsibility": "Paper sidebar, workbench and report reading",
-      "legacyTokenSha256": "743043e1b69e41f6c65d329c3ad1910afd5fad896ef2a5250beef3f00597a7f4"
+      "responsibility": "Paper sidebar, workbench and report reading"
     },
     {
       "path": "03-paper-reader-streaming.css"
@@ -176,8 +175,7 @@
     },
     {
       "path": "08-injection-receipts.css",
-      "responsibility": "Sub-agent, peer and steering receipts",
-      "legacyTokenSha256": "89b57803199528972fe77d26c72b19f035f3f864f3538fe74f769c4813c9bc60"
+      "responsibility": "Sub-agent, peer and steering receipts"
     },
     {
       "path": "08-agent-rounds.css",
@@ -315,13 +313,11 @@
     },
     {
       "path": "09-tool-memory.css",
-      "responsibility": "Memory preview cards",
-      "legacyTokenSha256": "2131589421671252b020df1c34c49ea6af3dd723449f710f40b1213723dd7466"
+      "responsibility": "Memory preview cards"
     },
     {
       "path": "09-tool-results.css",
-      "responsibility": "Generic result expansion and syntax tokens",
-      "legacyTokenSha256": "248afebbe0f4282e4185b64f44762586701226a249e2ad67d45af190c7f377c5"
+      "responsibility": "Generic result expansion and syntax tokens"
     },
     {
       "path": "09-tool-progress.css",
@@ -699,7 +695,6 @@
     {
       "path": "14-local-control.css",
       "responsibility": "Local Control dialog capability cards and connection evidence",
-      "legacyTokenSha256": "28856229c1375b9df36c36ccfca3160181be1c1f73975dd5aeee78e085995132",
       "featureEntry": "frontend/src/features/local-control.ts"
     },
     {

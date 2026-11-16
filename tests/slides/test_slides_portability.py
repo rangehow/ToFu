@@ -115,7 +115,9 @@ def test_process_chevrons_pin_browser_and_powerpoint_adjustment():
     assert all(item['adjustments'] == [25000] for item in chevrons)
 
 
-def test_outline_gate_rejects_layout_monoculture():
+def test_outline_gate_accepts_evidence_driven_layout_repetition():
+    # A forced-variety gate made outlines invent decorative charts and
+    # diagrams (slides benchmark); modality follows the evidence instead.
     from lib.slides.recipe import _outline_errors
 
     pages = [{
@@ -126,5 +128,4 @@ def test_outline_gate_rejects_layout_monoculture():
     } for index in range(4)]
     errors = _outline_errors(
         {'artifacts': {'research': {'cards': []}}}, {'pages': pages})
-    assert 'layout variety too low (1; need 4)' in errors
-    assert 'visual modality variety too low (1; need 4)' in errors
+    assert not any('variety' in error for error in errors)

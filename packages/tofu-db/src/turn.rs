@@ -60,9 +60,8 @@ use crate::generated_tofudb_ir::{
     MAX_ATTEMPT_TOMBSTONE_BYTES, MAX_ATTEMPT_TURN_DIRECTORY_BYTES,
     MAX_CLEANUP_INDEX_SCAN_ROWS_PER_TRANSACTION, MAX_DISPATCHABLE_ATTEMPTS_PER_QUERY,
     MAX_LEGACY_DOCUMENT_BYTES, MAX_RECOVERY_INDEX_ROWS_PER_OWNER,
-    MAX_SYNC_PRUNE_MATERIALIZED_BYTES, MAX_SYNC_PRUNE_ROWS_PER_TRANSACTION,
-    MAX_TIMING_TRACE_CLIENT_OBSERVATIONS, MAX_TIMING_TRACE_COUNTER,
-    MAX_TIMING_TRACE_PERSISTED_BYTES, MAX_TIMING_TRACE_ROWS_PER_QUERY,
+    MAX_SYNC_PRUNE_ROWS_PER_TRANSACTION, MAX_TIMING_TRACE_CLIENT_OBSERVATIONS,
+    MAX_TIMING_TRACE_COUNTER, MAX_TIMING_TRACE_PERSISTED_BYTES, MAX_TIMING_TRACE_ROWS_PER_QUERY,
     MAX_TIMING_TRACE_TASK_CANDIDATES, MAX_TURN_COMPACTION_MATERIALIZED_BYTES,
     MAX_TURN_COMPACTION_METADATA_ROWS, MAX_TURN_COMPACTION_PROJECTION_UPDATES,
     MAX_TURN_COMPACTION_REPARENTED_TURNS, MAX_TURN_PROJECTION_HEAD_PATCHES,
@@ -100,7 +99,6 @@ pub(crate) const MAX_VISIBLE_TURNS_PER_SYNCHRONIZATION: usize = 2_000;
 pub(crate) const MAX_VISIBLE_PHASE_INDEX: u64 = 4_096;
 const MAX_DELETE_BRANCH_LANES: usize = 256;
 const MAX_TOMBSTONE_PRUNE_ROWS: usize = 256;
-const SEARCH_PROJECTION_PAGE_ROWS: usize = crate::generated_conversation_search::SOURCE_PAGE_ROWS;
 const SEARCH_PROJECTION_PAGE_BYTES: u64 =
     crate::generated_conversation_search::SOURCE_PAGE_BYTES as u64;
 const TOMBSTONE_RETENTION_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
@@ -120,16 +118,6 @@ pub(crate) struct ConversationIdentityRecord {
 pub(crate) struct CloneTurnSummary {
     pub turn_count: usize,
     pub main_count: u64,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct SearchProjectionPage {
-    pub turns: Vec<crate::turn_search_projection::TurnSearchDocument>,
-    pub next_cursor: Vec<u8>,
-    pub complete: bool,
-    pub skipped_oversized: usize,
-    pub source_bytes: u64,
-    pub source_turns: usize,
 }
 
 enum AttemptLocator {
@@ -2862,6 +2850,25 @@ fn retire_projection_head(
     Ok(())
 }
 
+/// One head's range and its rows, read up to one row past a normal head (one
+/// checkpoint, at most 64 patches and its text pages). The scan is the rows'
+/// OCC witness: an insertion into the range refuses the commit. `None` rows
+/// mean an unexpectedly larger head, which callers retire structurally.
+fn scan_projection_head(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    conversation_id: &str,
+    turn_id: &str,
+    head: &ProjectionHeadDescriptor,
+) -> io::Result<(EntityKey, EntityKey, Option<Vec<EntityKey>>)> {
+    let (start, end) = projection_head_range(transaction, conversation_id, turn_id, &head.head_id)?;
+    let text_pages = head.text_tail.as_ref().map_or(0, |tail| tail.page_count());
+    let maximum_rows = MAX_TURN_PROJECTION_HEAD_PATCHES + 1 + text_pages;
+    let rows = database.entity_scan(transaction, &start, &end, maximum_rows + 1)?;
+    let rows = (rows.len() <= maximum_rows).then(|| rows.into_iter().map(|(key, _)| key).collect());
+    Ok((start, end, rows))
+}
+
 /// Single-event cleanup only. Bulk recovery keeps structural retirement so
 /// hundreds of heads cannot expand past the transaction's point-write budget.
 fn retire_event_projection_head(
@@ -2872,24 +2879,53 @@ fn retire_event_projection_head(
     head: Option<&ProjectionHeadDescriptor>,
 ) -> io::Result<()> {
     if let Some(head) = head {
-        let (start, end) =
-            projection_head_range(transaction, conversation_id, turn_id, &head.head_id)?;
-        // A normal head is one checkpoint plus at most 64 patches. Structural
-        // range retirement drains the authority-wide overlay before committing,
-        // coupling each settled Turn to every other conversation's pending work.
-        // Exact tombstones keep bounded cleanup in the same ordinary WAL delta.
-        // Scan one extra row: unexpected larger ranges retain the structural
-        // fallback, and the scan witness preserves concurrent-insert conflicts.
-        let text_pages = head.text_tail.as_ref().map_or(0, |tail| tail.page_count());
-        let maximum_rows = MAX_TURN_PROJECTION_HEAD_PATCHES + 1 + text_pages;
-        let rows = database.entity_scan(transaction, &start, &end, maximum_rows + 1)?;
-        if rows.len() > maximum_rows {
-            database.entity_retire_range(transaction, &start, &end)?;
-        } else {
-            for (key, _) in rows {
+        // Structural range retirement drains the authority-wide overlay before
+        // committing, coupling each settled Turn to every other conversation's
+        // pending work. Exact tombstones keep bounded cleanup in the same
+        // ordinary WAL delta; unexpected larger ranges stay structural.
+        let (start, end, rows) =
+            scan_projection_head(database, transaction, conversation_id, turn_id, head)?;
+        match rows {
+            Some(rows) => {
+                for key in rows {
+                    database.entity_delete(transaction, key)?;
+                }
+            }
+            None => database.entity_retire_range(transaction, &start, &end)?,
+        }
+    }
+    Ok(())
+}
+
+/// A single-Turn projection update (steer, branch, compaction or mode edit)
+/// retires the head it replaces with exact tombstones while they fit the
+/// transaction's remaining overlay envelope (`entity_overlay_delta_room`), so
+/// the edit stays an overlay commit instead of draining every pending overlay
+/// write under the writer. Otherwise it keeps the structural retirement these
+/// updates always used.
+fn retire_updated_projection_head(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    conversation_id: &str,
+    turn_id: &str,
+    head: Option<&ProjectionHeadDescriptor>,
+) -> io::Result<()> {
+    let Some(head) = head else { return Ok(()) };
+    let (start, end, rows) =
+        scan_projection_head(database, transaction, conversation_id, turn_id, head)?;
+    let fitting = rows.filter(|rows| {
+        rows.iter()
+            .map(|key| crate::entity::overlay_write_bytes(key.encoded().len(), None))
+            .sum::<usize>()
+            <= database.entity_overlay_delta_room(transaction)
+    });
+    match fitting {
+        Some(rows) => {
+            for key in rows {
                 database.entity_delete(transaction, key)?;
             }
         }
+        None => database.entity_retire_range(transaction, &start, &end)?,
     }
     Ok(())
 }
@@ -3346,6 +3382,111 @@ fn conversation_sync_event_key(
     let mut encoded = conversation_prefix(conversation_id)?;
     encoded.extend_from_slice(&sync_sequence.to_be_bytes());
     entity_key(transaction, CONVERSATION_SYNC_EVENT_NAMESPACE, &encoded)
+}
+
+fn sync_lineage_hex(value: u64) -> String {
+    format!(
+        "{value:0width$x}",
+        width = crate::generated_storage_v2::CONVERSATION_SYNC_LINEAGE_HEX_DIGITS
+    )
+}
+
+/// Separates a reference's framed digest input from any stored value's bytes.
+const SYNC_ATTEMPT_REFERENCE_DIGEST_DOMAIN: &[u8] =
+    b"tofu.conversation-sync.attempt-reference-lineage/v1\0";
+
+/// The digest a replay cursor names (contracts/storage_v2.json
+/// `conversationSyncLineage`): SHA-256 of the change's committed value bytes
+/// exactly as stored for its key. A blob-backed row stores its manifest, so
+/// overlay merges, checkpoints and history retirement, which move bytes
+/// physically, never change a digest; a different change at a reused
+/// sequence always does. A compact attempt-event reference stores only its
+/// event's identity and commit time, which an event recovery appends at the
+/// same attempt and sync sequences within one millisecond reproduces, so its
+/// digest also covers the referenced event's stored value bytes; the
+/// retained reference keeps that event immutable.
+fn sync_change_digest(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    stored: &[u8],
+) -> io::Result<String> {
+    let digest = match sync_attempt_reference::referenced_event(database, transaction, stored)? {
+        None => Sha256::digest(stored),
+        Some(event) => {
+            let mut hasher = Sha256::new();
+            hasher.update(SYNC_ATTEMPT_REFERENCE_DIGEST_DOMAIN);
+            for part in [Some(stored), event.as_deref()] {
+                match part {
+                    Some(bytes) => {
+                        hasher.update((bytes.len() as u64).to_be_bytes());
+                        hasher.update(bytes);
+                    }
+                    None => hasher.update(u64::MAX.to_be_bytes()),
+                }
+            }
+            hasher.finalize()
+        }
+    };
+    Ok(sync_lineage_hex(u64::from_be_bytes(
+        digest[..8].try_into().unwrap(),
+    )))
+}
+
+/// The digest of the change committed at `sync_sequence`, or null when the
+/// sequence names no change (0) or its change left replay retention.
+fn sync_change_digest_at(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    conversation_id: &str,
+    sync_sequence: u64,
+) -> io::Result<Value> {
+    if sync_sequence == 0 {
+        return Ok(Value::Null);
+    }
+    let key = conversation_sync_event_key(transaction, conversation_id, sync_sequence)?;
+    Ok(match database.entity_get(transaction, &key)? {
+        Some(stored) => Value::String(sync_change_digest(database, transaction, &stored)?),
+        None => Value::Null,
+    })
+}
+
+/// Report this open's epoch and the head change's digest beside rows read in
+/// the same transaction; `head_digest` reuses a digest the caller computed.
+fn insert_sync_lineage(
+    response: &mut Value,
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    conversation_id: &str,
+    head: u64,
+    head_digest: Option<String>,
+) -> io::Result<()> {
+    let head_digest = match head_digest {
+        Some(digest) => Value::String(digest),
+        None => sync_change_digest_at(database, transaction, conversation_id, head)?,
+    };
+    response[crate::generated_storage_v2::CONVERSATION_SYNC_EPOCH_FIELD] =
+        Value::String(sync_lineage_hex(database.sync_lineage_epoch()));
+    response[crate::generated_storage_v2::CONVERSATION_SYNC_HEAD_DIGEST_FIELD] = head_digest;
+    Ok(())
+}
+
+/// Logical state comparisons across opens or databases leave out replay
+/// lineage: each open draws a fresh epoch, and a digest names one database's
+/// stored record, which carries that database's generated identifiers.
+/// `turn_sync_lineage_tests.rs` specifies the lineage facts themselves.
+#[cfg(test)]
+pub(crate) fn without_sync_lineage(mut value: Value) -> Value {
+    if let Some(object) = value.as_object_mut() {
+        for field in [
+            crate::generated_storage_v2::CONVERSATION_SYNC_EPOCH_FIELD,
+            crate::generated_storage_v2::CONVERSATION_SYNC_HEAD_DIGEST_FIELD,
+            crate::generated_storage_v2::CONVERSATION_SYNC_CHANGE_DIGESTS_FIELD,
+            crate::generated_storage_v2::CONVERSATION_SYNC_ANCHOR_DIGEST_FIELD,
+        ] {
+            object.remove(field);
+        }
+    }
+    value
 }
 
 fn conversation_sync_age_index_key(
@@ -4082,6 +4223,16 @@ pub(crate) fn append_attempt_event(
     });
     let event_json =
         serde_json::to_vec(&event).map_err(|_| invalid_data("attempt event cannot be encoded"))?;
+    // `events_list` materializes each event document within this bound; an
+    // acknowledged larger event could never be read back.
+    if event_json.len() > MAX_ATTEMPT_EVENT_DOCUMENT_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "storage_payload_too_large: attempt event exceeds {MAX_ATTEMPT_EVENT_DOCUMENT_BYTES} bytes"
+            ),
+        ));
+    }
     crate::versioned_document::put(
         database,
         transaction,
@@ -4141,6 +4292,7 @@ pub(crate) fn append_attempt_event(
     Ok(event)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn store_projection_sync_event(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
@@ -4149,6 +4301,7 @@ fn store_projection_sync_event(
     after: &Map<String, Value>,
     conversation_revision: u64,
     deleted_turn_ids: &[String],
+    removed_queue_ids: &[String],
 ) -> io::Result<()> {
     let conversation_id = &request.conversation_id;
     let base_projection_revision = request.expected_projection_revision;
@@ -4182,6 +4335,13 @@ fn store_projection_sync_event(
             "deletedTurnIds".to_owned(),
             serde_json::to_value(deleted_turn_ids)
                 .map_err(|_| invalid_data("deleted Turn identities cannot be encoded"))?,
+        );
+    }
+    if !removed_queue_ids.is_empty() {
+        payload.insert(
+            "removedQueueIds".to_owned(),
+            serde_json::to_value(removed_queue_ids)
+                .map_err(|_| invalid_data("removed queue identities cannot be encoded"))?,
         );
     }
     let event = conversation_sync_event(
@@ -5918,16 +6078,22 @@ pub(crate) fn queue_cancel(
     }))
 }
 
+/// A settled-Turn edit. `background_retirement` retires the queue rows of a
+/// round-0 late background receipt the next projection holds, in this same
+/// transaction (`crate::queue::retire_background_receipts`); the change and
+/// the response then name them in `removedQueueIds`, as an ACK's event does.
 pub(crate) fn update_projection(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
     request: &ProjectionUpdateRequest,
+    background_retirement: Option<&Value>,
 ) -> io::Result<Vec<u8>> {
     update_projection_mode(
         database,
         transaction,
         request,
         ProjectionUpdateMode::TypedSettledEdit,
+        background_retirement,
     )
 }
 
@@ -5936,8 +6102,19 @@ fn update_projection_mode(
     transaction: &mut AuthorityTransaction,
     request: &ProjectionUpdateRequest,
     mode: ProjectionUpdateMode,
+    background_retirement: Option<&Value>,
 ) -> io::Result<Vec<u8>> {
     let staged = stage_projection_update(database, transaction, request, mode)?;
+    let removed_queue_ids = match background_retirement {
+        Some(retirement) => Some(crate::queue::retire_background_receipts(
+            database,
+            transaction,
+            &request.conversation_id,
+            retirement,
+            &staged.after,
+        )?),
+        None => None,
+    };
     let activity_at_ms = if request.preserve_activity {
         crate::conversation_header::activity_timestamp(
             database,
@@ -5963,11 +6140,16 @@ fn update_projection_mode(
         &staged.after,
         conversation_revision,
         &[],
+        removed_queue_ids.as_deref().unwrap_or(&[]),
     )?;
-    encode_response(&json!({
+    let mut response = json!({
         "turn": staged.turn,
         "conversationRevision": conversation_revision
-    }))
+    });
+    if let Some(removed) = removed_queue_ids {
+        response["removedQueueIds"] = json!(removed);
+    }
+    encode_response(&response)
 }
 
 /// Scoped command acceptance uses the owned Turn transaction and its sync publication.
@@ -6093,6 +6275,7 @@ pub(crate) fn answer_guidance(
         transaction,
         &request,
         ProjectionUpdateMode::FencedLiveSteer,
+        None,
     )
 }
 
@@ -8377,7 +8560,7 @@ fn stage_projection_update(
     );
     document.insert("updatedAt".to_owned(), Value::from(request.updated_at_ms));
     recovery_index::refresh_live_projection(database, transaction, &document, &next_projection)?;
-    retire_projection_head(
+    retire_updated_projection_head(
         database,
         transaction,
         &request.conversation_id,
@@ -9507,6 +9690,7 @@ pub(crate) fn branch_create(
         &staged.after,
         conversation_revision,
         &[],
+        &[],
     )?;
     encode_response(&json!({
         "turn": staged.turn,
@@ -9629,6 +9813,7 @@ pub(crate) fn branch_delete(
         &staged.after,
         conversation_revision,
         &deleted_turn_ids,
+        &[],
     )?;
     encode_response(&json!({
         "turn": staged.turn,
@@ -10106,102 +10291,136 @@ fn legacy_role(actor: &str) -> &'static str {
     }
 }
 
-pub(crate) fn search_projection_page(
+/// One conversation's live Turns and their projection revisions, from the
+/// updated index (`turns_by_updated`). Every Turn-document writer moves that
+/// row in the same transaction, and every writer that changes what search
+/// reads (projection, status, lane, ordinal, actor) advances the revision
+/// (`search_projection_revision_tests`), so an equal revision proves
+/// unchanged search content and a missing row a deleted Turn. Reads index
+/// rows only, never a document.
+pub(crate) fn search_projection_revisions(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
     conversation_id: &str,
-    cursor: &[u8],
-) -> io::Result<SearchProjectionPage> {
+) -> io::Result<BTreeMap<String, u64>> {
     let prefix = conversation_prefix(conversation_id)?;
-    let (prefix_start, end) = EntityKey::prefix_range(
+    let (mut start, end) = EntityKey::prefix_range(
         transaction.tenant_id(),
         transaction.owner_user_id(),
-        TURN_DOCUMENT_NAMESPACE,
+        TURN_UPDATED_INDEX_NAMESPACE,
         &prefix,
     )?;
-    let start = if cursor.is_empty() {
-        prefix_start
-    } else {
-        if !cursor.starts_with(&prefix) {
-            return Err(invalid_input(
-                "turn search source cursor escaped conversation",
-            ));
+    let mut revisions = BTreeMap::new();
+    loop {
+        let rows = database.entity_scan(transaction, &start, &end, INDEX_PAGE_ROWS)?;
+        let Some((last, _)) = rows.last() else {
+            return Ok(revisions);
+        };
+        let continuation = after_key(last, transaction, TURN_UPDATED_INDEX_NAMESPACE)?;
+        let row_count = rows.len();
+        for (_, value) in rows {
+            let (turn_id, revision) = decode_updated_index_value(&value)?;
+            if revisions.insert(turn_id, revision).is_some() {
+                return Err(invalid_data("turn updated index names one Turn twice"));
+            }
         }
-        let mut successor = cursor.to_vec();
-        successor.push(0);
-        entity_key(transaction, TURN_DOCUMENT_NAMESPACE, &successor)?
-    };
-    let rows = database.entity_scan(transaction, &start, &end, SEARCH_PROJECTION_PAGE_ROWS + 1)?;
-    let candidate_count = rows.len().min(SEARCH_PROJECTION_PAGE_ROWS);
-    let mut turns = Vec::with_capacity(candidate_count);
-    let mut next_cursor = cursor.to_vec();
-    let mut skipped_oversized = 0usize;
-    let mut source_bytes = 0u64;
-    let mut consumed = 0usize;
-    let mut source_turns = 0usize;
-    for (document_key, stored) in rows.iter().take(candidate_count) {
-        let logical_bytes =
-            crate::versioned_document::stored_document_logical_bytes(stored, DOCUMENT_IDENTITY)?;
-        if logical_bytes > SEARCH_PROJECTION_PAGE_BYTES {
-            skipped_oversized += 1;
-            next_cursor = document_key.key_bytes().to_vec();
-            consumed += 1;
-            continue;
+        if row_count < INDEX_PAGE_ROWS {
+            return Ok(revisions);
         }
-        if source_bytes
-            .checked_add(logical_bytes)
-            .filter(|bytes| *bytes <= SEARCH_PROJECTION_PAGE_BYTES)
-            .is_none()
-        {
-            break;
-        }
-        let document = materialize_turn(database, transaction, stored)?;
-        let turn_id = document
-            .get("turnId")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| invalid_data("turn search source identity is malformed"))?
-            .to_owned();
-        if document.get("conversationId").and_then(Value::as_str) != Some(conversation_id)
-            || document_key != &turn_key(transaction, conversation_id, &turn_id)?
-        {
-            return Err(invalid_data("turn search source identity is inconsistent"));
-        }
-        let lane_id = document
-            .get("laneId")
-            .and_then(Value::as_str)
-            .ok_or_else(|| invalid_data("turn search source lane is malformed"))?;
-        let status = document
-            .get("status")
-            .and_then(Value::as_str)
-            .ok_or_else(|| invalid_data("turn search source status is malformed"))?;
-        if lane_id == "main" && !matches!(status, "pending" | "running") {
-            let actor = document
-                .get("actor")
-                .and_then(Value::as_str)
-                .ok_or_else(|| invalid_data("turn search source actor is malformed"))?;
-            let projection = document
-                .get("projection")
-                .and_then(Value::as_object)
-                .ok_or_else(|| invalid_data("turn search source projection is malformed"))?;
-            let ordinal = document
-                .get("ordinal")
-                .and_then(Value::as_u64)
-                .ok_or_else(|| invalid_data("turn search source ordinal is malformed"))?;
-            source_turns += 1;
-            crate::search_text::chunks_for_turn(&turn_id, ordinal, actor, projection, &mut turns);
-        }
-        source_bytes += logical_bytes;
-        next_cursor = document_key.key_bytes().to_vec();
-        consumed += 1;
+        start = continuation;
     }
-    Ok(SearchProjectionPage {
-        turns,
-        next_cursor,
-        complete: consumed == rows.len(),
-        skipped_oversized,
-        source_bytes,
-        source_turns,
+}
+
+/// What one Turn contributes to conversation search.
+pub(crate) enum SearchSourceTurn {
+    /// Pending or running: no documents until it settles.
+    Transient,
+    /// Settled outside the main lane: never searchable.
+    Hidden,
+    /// Larger than one source page: not read, reported as partial coverage.
+    Oversized,
+    Documents {
+        documents: Vec<crate::turn_search_projection::TurnSearchDocument>,
+        source_bytes: u64,
+    },
+}
+
+/// The search documents of one Turn as this snapshot stores it. A Turn's
+/// header-bound metadata summary, when it names this exact envelope, answers
+/// status and lane, so a pending, running or off-lane Turn costs one summary
+/// read and is never materialized. The whole document stays authoritative
+/// for every Turn that is materialized. An oversized document is reported
+/// whatever its lane or status, and only settled main-lane Turns produce
+/// documents.
+pub(crate) fn search_projection_turn(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    conversation_id: &str,
+    turn_id: &str,
+) -> io::Result<SearchSourceTurn> {
+    let document_key = turn_key(transaction, conversation_id, turn_id)?;
+    let stored = database
+        .entity_get(transaction, &document_key)?
+        .ok_or_else(|| invalid_data("turn updated index target is missing"))?;
+    let logical_bytes =
+        crate::versioned_document::stored_document_logical_bytes(&stored, DOCUMENT_IDENTITY)?;
+    if logical_bytes > SEARCH_PROJECTION_PAGE_BYTES {
+        return Ok(SearchSourceTurn::Oversized);
+    }
+    let logical_key = turn_logical_key(conversation_id, turn_id);
+    if let Some(summary) =
+        metadata_summary::bound(database, transaction, &document_key, &stored, &logical_key)?
+    {
+        if let Ok(metadata) = serde_json::from_slice::<Map<String, Value>>(&summary) {
+            match (
+                metadata.get("status").and_then(Value::as_str),
+                metadata.get("laneId").and_then(Value::as_str),
+            ) {
+                (Some("pending" | "running"), _) => return Ok(SearchSourceTurn::Transient),
+                (Some(_), Some(lane_id)) if lane_id != "main" => {
+                    return Ok(SearchSourceTurn::Hidden)
+                }
+                _ => {}
+            }
+        }
+    }
+    let document = materialize_turn_at(database, transaction, Some(&document_key), &stored)?;
+    if document.get("conversationId").and_then(Value::as_str) != Some(conversation_id)
+        || document.get("turnId").and_then(Value::as_str) != Some(turn_id)
+    {
+        return Err(invalid_data("turn search source identity is inconsistent"));
+    }
+    let lane_id = document
+        .get("laneId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid_data("turn search source lane is malformed"))?;
+    let status = document
+        .get("status")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid_data("turn search source status is malformed"))?;
+    if matches!(status, "pending" | "running") {
+        return Ok(SearchSourceTurn::Transient);
+    }
+    if lane_id != "main" {
+        return Ok(SearchSourceTurn::Hidden);
+    }
+    let actor = document
+        .get("actor")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid_data("turn search source actor is malformed"))?;
+    let projection = document
+        .get("projection")
+        .and_then(Value::as_object)
+        .ok_or_else(|| invalid_data("turn search source projection is malformed"))?;
+    let ordinal = document
+        .get("ordinal")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| invalid_data("turn search source ordinal is malformed"))?;
+    let mut documents = Vec::new();
+    crate::search_text::chunks_for_turn(turn_id, ordinal, actor, projection, &mut documents);
+    Ok(SearchSourceTurn::Documents {
+        documents,
+        source_bytes: logical_bytes,
     })
 }
 
@@ -13581,6 +13800,7 @@ pub(crate) fn attempt_create(
             &staged.after,
             revision,
             &[],
+            &[],
         )?;
     }
     if !deleted_turn_ids.is_empty() {
@@ -16325,6 +16545,12 @@ fn max_receipt_write_bytes(transaction: &AuthorityTransaction) -> io::Result<usi
     ))
 }
 
+/// Every Attempt age locator written since history root 91b4c7e205
+/// (2026-10-22T09:49:43Z) carries attemptId and attemptSequence. An older
+/// locator without them may still belong to an Attempt event, so retention
+/// reads such a row before deleting it.
+const SYNC_LOCATOR_ATTEMPT_IDENTITY_SINCE_MS: u64 = 1_792_662_583_000;
+
 pub(crate) fn sync_prune(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
@@ -16355,9 +16581,17 @@ pub(crate) fn sync_prune(
         database.entity_scan(transaction, &start, &end, physical_limit.saturating_add(1))?;
     let overflow = candidates.len() > physical_limit;
     candidates.truncate(physical_limit);
+    // Retention deletes only what one rebaseable overlay delta can still carry
+    // beside the largest receipt the IR may attach. A full page of Attempt
+    // events is three point deletes per entry, past that room, and the
+    // structural tree path would first drain the whole overlay under the writer.
+    let mut room = database
+        .entity_overlay_delta_room(transaction)
+        .saturating_sub(max_receipt_write_bytes(transaction)?);
+    let delete_bytes =
+        |key: &EntityKey| crate::entity::overlay_write_bytes(key.encoded().len(), None);
     let mut deleted_rows = 0_usize;
     let mut processed = 0_usize;
-    let mut materialized_bytes = 0_usize;
     for (age_key, encoded_locator) in &candidates {
         let locator = serde_json::from_slice::<Value>(encoded_locator)
             .ok()
@@ -16392,7 +16626,25 @@ pub(crate) fn sync_prune(
             ));
         }
         let event_key = conversation_sync_event_key(transaction, &conversation_id, sync_sequence)?;
-        let Some(stored) = database.entity_get(transaction, &event_key)? else {
+        let stored = database.entity_get(transaction, &event_key)?;
+        // An Attempt locator names the reference either path below releases.
+        let reference_bytes = match locator.get("attemptId").and_then(Value::as_str) {
+            Some(attempt_id) => delete_bytes(&attempt_sync_reference_key(
+                transaction,
+                attempt_id,
+                &conversation_id,
+                sync_sequence,
+            )?),
+            None => 0,
+        };
+        let write_bytes = delete_bytes(age_key)
+            + stored.as_ref().map_or(0, |_| delete_bytes(&event_key))
+            + reference_bytes;
+        if write_bytes > room {
+            break;
+        }
+        room -= write_bytes;
+        let Some(stored) = stored else {
             // Conversation deletion retires its replay range, while this
             // reconstructible age marker remains owner-global until TTL.  An
             // attempt-event locator carries enough evidence to retire its
@@ -16421,54 +16673,72 @@ pub(crate) fn sync_prune(
             processed += 1;
             continue;
         };
-        let (_, event_json) = sync_attempt_reference::materialize(
-            database,
-            transaction,
-            &event_key,
-            &stored,
-            usize::MAX,
-            false,
-        )?;
-        if materialized_bytes.saturating_add(event_json.len()) > MAX_SYNC_PRUNE_MATERIALIZED_BYTES {
-            break;
-        }
-        materialized_bytes += event_json.len();
-        let event = serde_json::from_slice::<Value>(&event_json)
-            .map_err(|_| invalid_data("conversation sync event is malformed"))?;
-        if event.get("conversationId").and_then(Value::as_str) != Some(&conversation_id)
-            || event.get("syncSeq").and_then(Value::as_u64) != Some(sync_sequence)
-            || event.get("occurredAt").and_then(Value::as_u64) != Some(occurred_at_ms)
-            || sync_age_index_value(&event)? != *encoded_locator
+        // A full-document row whose locator names no Attempt releases nothing:
+        // its header (namespace, logical key) identifies it and its payload, a
+        // whole TurnRecord for settled turn.upsert rows, is never read. Every
+        // other row is verified from its stored identity before a reference is
+        // released: compact Attempt references (small and inline), Attempt
+        // events, and rows older than Attempt locators.
+        if crate::versioned_document::stored_document_namespace(&stored)? == SYNC_DOCUMENT_IDENTITY
+            && locator.get("attemptId").is_none()
+            && locator.get("attemptSequence").is_none()
+            && occurred_at_ms >= SYNC_LOCATOR_ATTEMPT_IDENTITY_SINCE_MS
         {
-            return Err(invalid_data(
-                "conversation sync retention index target differs",
-            ));
-        }
-        if event.get("type").and_then(Value::as_str) == Some("attempt.event") {
-            let attempt_id = event
-                .get("attemptId")
-                .and_then(Value::as_str)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| invalid_data("attempt sync reference identity is malformed"))?;
-            let attempt_sequence = event
-                .get("payload")
-                .and_then(|payload| payload.get("event"))
-                .and_then(|attempt_event| attempt_event.get("seq"))
-                .and_then(Value::as_u64)
-                .ok_or_else(|| invalid_data("attempt sync reference sequence is malformed"))?;
-            let reference_key = attempt_sync_reference_key(
-                transaction,
-                attempt_id,
-                &conversation_id,
-                sync_sequence,
-            )?;
-            let reference = database
-                .entity_get(transaction, &reference_key)?
-                .ok_or_else(|| invalid_data("attempt sync reference is missing"))?;
-            if reference.as_slice() != attempt_sequence.to_le_bytes() {
-                return Err(invalid_data("attempt sync reference target differs"));
+            if crate::versioned_document::stored_document_logical_key(
+                &stored,
+                SYNC_DOCUMENT_IDENTITY,
+            )? != format!("{conversation_id}\u{1f}{sync_sequence:020}")
+            {
+                return Err(invalid_data(
+                    "conversation sync retention index target differs",
+                ));
             }
-            database.entity_delete(transaction, reference_key)?;
+        } else {
+            let (_, event_json) = sync_attempt_reference::materialize(
+                database,
+                transaction,
+                &event_key,
+                &stored,
+                usize::MAX,
+                false,
+            )?;
+            let event = serde_json::from_slice::<Value>(&event_json)
+                .map_err(|_| invalid_data("conversation sync event is malformed"))?;
+            if event.get("conversationId").and_then(Value::as_str) != Some(&conversation_id)
+                || event.get("syncSeq").and_then(Value::as_u64) != Some(sync_sequence)
+                || event.get("occurredAt").and_then(Value::as_u64) != Some(occurred_at_ms)
+                || sync_age_index_value(&event)? != *encoded_locator
+            {
+                return Err(invalid_data(
+                    "conversation sync retention index target differs",
+                ));
+            }
+            if event.get("type").and_then(Value::as_str) == Some("attempt.event") {
+                let attempt_id = event
+                    .get("attemptId")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| invalid_data("attempt sync reference identity is malformed"))?;
+                let attempt_sequence = event
+                    .get("payload")
+                    .and_then(|payload| payload.get("event"))
+                    .and_then(|attempt_event| attempt_event.get("seq"))
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| invalid_data("attempt sync reference sequence is malformed"))?;
+                let reference_key = attempt_sync_reference_key(
+                    transaction,
+                    attempt_id,
+                    &conversation_id,
+                    sync_sequence,
+                )?;
+                let reference = database
+                    .entity_get(transaction, &reference_key)?
+                    .ok_or_else(|| invalid_data("attempt sync reference is missing"))?;
+                if reference.as_slice() != attempt_sequence.to_le_bytes() {
+                    return Err(invalid_data("attempt sync reference target differs"));
+                }
+                database.entity_delete(transaction, reference_key)?;
+            }
         }
         database.entity_delete(transaction, event_key)?;
         database.entity_delete(transaction, age_key.clone())?;
@@ -16936,9 +17206,11 @@ fn lane_tail_before(
 struct SyncSnapshotResponse {
     active_attempt_phase: Option<Value>,
     attempts: Value,
+    authority_epoch: String,
     conversation_id: String,
     conversation_revision: u64,
     has_artifacts: Option<bool>,
+    head_digest: Value,
     queue_items: Vec<Value>,
     settings: Map<String, Value>,
     sync_sequence: u64,
@@ -16955,6 +17227,14 @@ impl SyncSnapshotResponse {
             response.insert("activeAttemptPhase".into(), phase);
         }
         response.insert("attempts".into(), self.attempts);
+        response.insert(
+            crate::generated_storage_v2::CONVERSATION_SYNC_EPOCH_FIELD.into(),
+            Value::String(self.authority_epoch),
+        );
+        response.insert(
+            crate::generated_storage_v2::CONVERSATION_SYNC_HEAD_DIGEST_FIELD.into(),
+            self.head_digest,
+        );
         response.insert("conversationId".into(), Value::String(self.conversation_id));
         response.insert(
             "conversationRevision".into(),
@@ -17068,6 +17348,7 @@ pub(crate) fn sync_snapshot_with_proof(
         &attempts,
     )?;
     let sync_sequence = sync_head(database, transaction, conversation_id)?;
+    let head_digest = sync_change_digest_at(database, transaction, conversation_id, sync_sequence)?;
     let has_artifacts = if include_artifact_hint {
         crate::artifact::conversation_empty_hint(database, transaction, conversation_id)?
     } else {
@@ -17080,9 +17361,11 @@ pub(crate) fn sync_snapshot_with_proof(
     SyncSnapshotResponse {
         active_attempt_phase,
         attempts,
+        authority_epoch: sync_lineage_hex(database.sync_lineage_epoch()),
         conversation_id: conversation_id.to_owned(),
         conversation_revision: revision,
         has_artifacts,
+        head_digest,
         queue_items,
         settings,
         sync_sequence,
@@ -17262,6 +17545,10 @@ pub(crate) fn sync_round_directory(
         .map_err(|_| invalid_data("Turn directory encoding failed"))
 }
 
+/// One lane-history page at exactly `expected_sync_sequence`. A positive
+/// `anchor_sequence` (the reader's applied head) adds `anchorDigest`, the
+/// digest of the change now at it, read with the page, so the reader's
+/// lineage fences the page as it fences a change page.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn sync_page(
     database: &AuthorityDatabase,
@@ -17271,6 +17558,7 @@ pub(crate) fn sync_page(
     before_ordinal: u64,
     limit: usize,
     expected_sync_sequence: u64,
+    anchor_sequence: u64,
     max_projection_bytes: usize,
     deadline_elapsed: &mut dyn FnMut() -> bool,
 ) -> io::Result<Option<Vec<u8>>> {
@@ -17300,7 +17588,7 @@ pub(crate) fn sync_page(
         .cloned()
         .unwrap_or(Value::Null);
     let attempts = attempts_for_turns(database, transaction, &turns, deadline_elapsed)?;
-    encode_response(&json!({
+    let mut response = json!({
         "conversationId": conversation_id,
         "conversationRevision": revision,
         "syncSequence": head,
@@ -17311,10 +17599,27 @@ pub(crate) fn sync_page(
         "totalTurns": total,
         "turns": turns,
         "attempts": attempts
-    }))
-    .map(Some)
+    });
+    insert_sync_lineage(
+        &mut response,
+        database,
+        transaction,
+        conversation_id,
+        head,
+        None,
+    )?;
+    if anchor_sequence > 0 {
+        response[crate::generated_storage_v2::CONVERSATION_SYNC_ANCHOR_DIGEST_FIELD] =
+            if anchor_sequence == head {
+                response[crate::generated_storage_v2::CONVERSATION_SYNC_HEAD_DIGEST_FIELD].clone()
+            } else {
+                sync_change_digest_at(database, transaction, conversation_id, anchor_sequence)?
+            };
+    }
+    encode_response(&response).map(Some)
 }
 
+#[cfg(test)]
 pub(crate) fn sync_changes(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
@@ -17323,15 +17628,49 @@ pub(crate) fn sync_changes(
     limit: usize,
     deadline_elapsed: &mut dyn FnMut() -> bool,
 ) -> io::Result<Option<Vec<u8>>> {
+    sync_change_page(
+        database,
+        transaction,
+        conversation_id,
+        after,
+        limit,
+        None,
+        deadline_elapsed,
+    )
+}
+
+/// One contiguous ordered change page after `after`: at most `limit` changes
+/// and, with `max_bytes`, at most that many bytes of changes. A change's bytes
+/// are its compact JSON encoding (the materialized document the response
+/// carries); one larger change is admitted alone so the page progresses, and
+/// the response then says `maxBytesApplied`. A settled `turn.upsert` carries
+/// its whole TurnRecord, so a row-limited page could reach hundreds of MB.
+pub(crate) fn sync_change_page(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    conversation_id: &str,
+    after: u64,
+    limit: usize,
+    max_bytes: Option<usize>,
+    deadline_elapsed: &mut dyn FnMut() -> bool,
+) -> io::Result<Option<Vec<u8>>> {
     if crate::conversation_header::sync_header(database, transaction, conversation_id)?.is_none() {
         return Ok(None);
     }
     let head = sync_head(database, transaction, conversation_id)?;
     if after > head {
-        return encode_response(&json!({
+        let mut response = json!({
             "head": head, "events": [], "resetRequired": true, "resetReason": "cursor_invalid"
-        }))
-        .map(Some);
+        });
+        insert_sync_lineage(
+            &mut response,
+            database,
+            transaction,
+            conversation_id,
+            head,
+            None,
+        )?;
+        return encode_response(&response).map(Some);
     }
     let mut prefix = conversation_prefix(conversation_id)?;
     prefix.extend_from_slice(&after.saturating_add(1).to_be_bytes());
@@ -17343,6 +17682,8 @@ pub(crate) fn sync_changes(
         &conversation_prefix(conversation_id)?,
     )?;
     let mut events = Vec::with_capacity(limit.min(INDEX_PAGE_ROWS));
+    let mut digests = Vec::with_capacity(limit.min(INDEX_PAGE_ROWS));
+    let mut page_bytes = 0_usize;
     let mut cursor = start;
     'pages: while events.len() < limit {
         let page_limit = (limit - events.len()).min(INDEX_PAGE_ROWS);
@@ -17374,6 +17715,7 @@ pub(crate) fn sync_changes(
                 }
                 break 'pages;
             }
+            let digest = sync_change_digest(database, transaction, &stored)?;
             let (_, value) = sync_attempt_reference::materialize(
                 database,
                 transaction,
@@ -17382,13 +17724,25 @@ pub(crate) fn sync_changes(
                 usize::MAX,
                 true,
             )?;
-            // Row limits and the caller's deadline provide resumable pages.
-            // storage.v2 chunks the complete response; neither one event nor
-            // the selected page inherits a legacy document byte quota.
-            events.push(
-                serde_json::from_slice::<Value>(&value)
-                    .map_err(|_| invalid_data("conversation sync event is malformed"))?,
-            );
+            let mut event = serde_json::from_slice::<Value>(&value)
+                .map_err(|_| invalid_data("conversation sync event is malformed"))?;
+            // Row limits, the caller's deadline and its byte bound provide
+            // resumable pages. storage.v2 chunks the complete response; no
+            // event inherits a legacy document byte quota or is truncated.
+            if let Some(max_bytes) = max_bytes {
+                // The contract measures a change as this response encodes it
+                // (encode_response), never its stored spelling.
+                let (counted, size) =
+                    crate::response_json::normalize_value_with_size(event, usize::MAX)
+                        .map_err(|_| invalid_data("conversation sync event is malformed"))?;
+                event = counted;
+                if !events.is_empty() && page_bytes.saturating_add(size) > max_bytes {
+                    break 'pages;
+                }
+                page_bytes = page_bytes.saturating_add(size);
+            }
+            events.push(event);
+            digests.push(digest);
         }
         if row_count < page_limit {
             break;
@@ -17399,23 +17753,56 @@ pub(crate) fn sync_changes(
         event.get("syncSeq").and_then(Value::as_u64) == Some(after + index as u64 + 1)
     });
     if head > after && (events.is_empty() || !contiguous) {
-        return encode_response(&json!({
+        let mut response = json!({
             "head": head, "events": [], "resetRequired": true, "resetReason": "cursor_expired"
-        }))
-        .map(Some);
+        });
+        insert_sync_lineage(
+            &mut response,
+            database,
+            transaction,
+            conversation_id,
+            head,
+            None,
+        )?;
+        return encode_response(&response).map(Some);
     }
     let last = events
         .last()
         .and_then(|event| event.get("syncSeq"))
         .and_then(Value::as_u64)
         .unwrap_or(after);
-    encode_response_raw(&json!({
+    let anchor_digest = sync_change_digest_at(database, transaction, conversation_id, after)?;
+    let head_digest = if after == head {
+        anchor_digest.as_str().map(str::to_owned)
+    } else if last == head {
+        digests.last().cloned()
+    } else {
+        None
+    };
+    let mut response = json!({
         "head": head,
         "events": events,
         "resetRequired": false,
         "hasMore": last < head
-    }))
-    .map(Some)
+    });
+    insert_sync_lineage(
+        &mut response,
+        database,
+        transaction,
+        conversation_id,
+        head,
+        head_digest,
+    )?;
+    response[crate::generated_storage_v2::CONVERSATION_SYNC_CHANGE_DIGESTS_FIELD] = json!(digests);
+    if after > 0 {
+        response[crate::generated_storage_v2::CONVERSATION_SYNC_ANCHOR_DIGEST_FIELD] =
+            anchor_digest;
+    }
+    if max_bytes.is_some() {
+        // Readers detect an engine that predates the bound by its absence.
+        response["maxBytesApplied"] = Value::Bool(true);
+    }
+    encode_response_raw(&response).map(Some)
 }
 
 pub(crate) fn revision(
@@ -17454,6 +17841,14 @@ mod metadata_read_tests;
 mod event_prune_tests;
 
 #[cfg(test)]
+#[path = "turn/attempt_event_bound_tests.rs"]
+mod attempt_event_bound_tests;
+
+#[cfg(test)]
+#[path = "turn/sync_prune_tests.rs"]
+mod sync_prune_tests;
+
+#[cfg(test)]
 #[path = "turn_event_load_tests.rs"]
 mod event_load_tests;
 
@@ -17464,6 +17859,14 @@ mod reuse_specs;
 #[cfg(test)]
 #[path = "turn_projection_residency_tests.rs"]
 mod residency_tests;
+
+#[cfg(test)]
+#[path = "turn_sync_changes_bytes_tests.rs"]
+mod sync_changes_bytes_tests;
+
+#[cfg(test)]
+#[path = "turn_sync_lineage_tests.rs"]
+mod sync_lineage_tests;
 
 pub(crate) fn main_turn_count(
     database: &AuthorityDatabase,
@@ -17527,6 +17930,10 @@ mod lane_state_tests {
 #[cfg(test)]
 #[path = "turn_visible_settlement_tests.rs"]
 mod visible_settlement_tests;
+
+#[cfg(test)]
+#[path = "turn_search_revision_tests.rs"]
+mod search_projection_revision_tests;
 
 #[cfg(test)]
 mod byte_window_tests {

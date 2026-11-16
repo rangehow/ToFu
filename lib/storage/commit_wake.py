@@ -7,6 +7,7 @@ import threading
 import time
 
 from lib.log import get_logger
+from lib.storage.errors import describe_storage_failure, is_transient_storage_error
 
 logger = get_logger(__name__)
 
@@ -21,6 +22,7 @@ class StorageCommitWakeSource:
         self._thread = None
         self._lifecycle_lock = threading.Lock()
         self._cancellation = RequestCancellation()
+        self.retryable_interruptions = 0
 
     def start(self, hint):
         # Enroll before the caller's first durable read. Gaps invalidate on
@@ -56,8 +58,17 @@ class StorageCommitWakeSource:
             except Exception as error:
                 if self._stop.is_set():
                     return
-                logger.warning('[%s] authority watch interrupted: %s',
-                               self._thread_name, type(error).__name__)
+                # A stopping or restarting authority and an elapsed deadline are
+                # outlived by the next watch; a refused request, a protocol or
+                # engine fault and a client bug repeat on every watch until fixed.
+                if is_transient_storage_error(error):
+                    self.retryable_interruptions += 1
+                    logger.debug('[%s] authority watch interrupted, retryable interruption %d: %s',
+                                 self._thread_name, self.retryable_interruptions,
+                                 describe_storage_failure(error))
+                else:
+                    logger.error('[%s] authority watch failed: %s',
+                                 self._thread_name, describe_storage_failure(error))
                 cursor = None
                 self._interrupted(hint)
                 self._stop.wait(self._backoff_ms / 1000)

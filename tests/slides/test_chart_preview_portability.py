@@ -95,6 +95,21 @@ def test_native_chart_binds_latin_and_cjk_typefaces(tmp_path):
         assert face is not None and face.attrib['typeface'] == 'Noto Sans SC'
 
 
+def test_negative_bars_keep_their_sign_in_office_renderers(tmp_path):
+    from lib.slides.export_pptx import export_pptx
+
+    deck = _deck(tmp_path, categories=3)
+    deck.pages[0].elements[0]['data']['series'][0]['values'][2] = -5
+    output = tmp_path / 'chart.pptx'
+    export_pptx(deck, str(output), embed_fonts=False)
+    with zipfile.ZipFile(output) as archive:
+        chart = ET.fromstring(archive.read('ppt/charts/chart1.xml'))
+    c = '{http://schemas.openxmlformats.org/drawingml/2006/chart}'
+    invert = chart.find(f'.//{c}ser/{c}invertIfNegative')
+    assert invert is not None and invert.attrib['val'] == '0'
+    assert chart.find(f'.//{c}catAx/{c}tickLblPos').attrib['val'] == 'low'
+
+
 def test_chart_only_strict_export_refuses_missing_font(tmp_path):
     from lib.slides.export_pptx import ExportError, export_pptx
 

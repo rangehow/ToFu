@@ -1514,6 +1514,68 @@ impl PayloadSegmentStore {
     }
 }
 
+/// The verified index position of one selected block
+/// ([`PayloadSegmentStore::build_location_table_selecting`]).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SelectedLocation {
+    pub(crate) block_id: BlockId,
+    pub(crate) reference: crate::payload_manifest::PayloadSegmentReference,
+    pub(crate) position: u32,
+}
+
+/// The table, the selected IDs' locations, and each segment left out of the
+/// table with the error that left it out.
+pub(crate) type SelectedLocationTable = (
+    CatalogLocationTable,
+    Vec<SelectedLocation>,
+    Vec<(Uuid, io::Error)>,
+);
+
+/// Calls `found(selected position, index position)` for every ID of
+/// `selected` that `index` holds. Both lists are strictly ascending (a
+/// verified index is), so one merge answers: it walks the shorter list and
+/// gallops through the longer, O(shorter x log(longer / shorter)).
+fn select_positions(
+    index: &[IndexEntry],
+    selected: &[BlockId],
+    mut found: impl FnMut(usize, usize),
+) {
+    let (mut position, mut wanted) = (0, 0);
+    if selected.len() <= index.len() {
+        while wanted < selected.len() && position < index.len() {
+            position = gallop(index, position, |entry| entry.block_id < selected[wanted]);
+            if position < index.len() && index[position].block_id == selected[wanted] {
+                found(wanted, position);
+                position += 1;
+            }
+            wanted += 1;
+        }
+    } else {
+        while position < index.len() && wanted < selected.len() {
+            wanted = gallop(selected, wanted, |id| *id < index[position].block_id);
+            if wanted < selected.len() && selected[wanted] == index[position].block_id {
+                found(wanted, position);
+                wanted += 1;
+            }
+            position += 1;
+        }
+    }
+}
+
+/// The first position at or after `from` whose element is not `before` the
+/// target, where `before` holds on a prefix of `slice[from..]`: exponential
+/// then binary search, O(log distance).
+fn gallop<T>(slice: &[T], from: usize, before: impl Fn(&T) -> bool) -> usize {
+    let mut low = from;
+    let mut step = 1;
+    while low + step <= slice.len() && before(&slice[low + step - 1]) {
+        low += step;
+        step *= 2;
+    }
+    let high = (low + step).min(slice.len());
+    low + slice[low..high].partition_point(before)
+}
+
 /// Packed [`CatalogLocationTable`] entry: the leading block-ID bits, then the
 /// segment's catalog ordinal and the entry's index position. The ordinal and
 /// position widths are the catalog and segment-format bounds; the ID prefix
@@ -1664,8 +1726,24 @@ impl PayloadSegmentStore {
     pub(crate) fn build_location_table(
         &self,
         catalog: &[crate::payload_manifest::PayloadSegmentReference],
-        mut check: impl FnMut() -> io::Result<()>,
+        check: impl FnMut() -> io::Result<()>,
     ) -> io::Result<CatalogLocationTable> {
+        self.build_location_table_selecting(catalog, &[], check)
+            .map(|(table, _, _)| table)
+    }
+
+    /// [`Self::build_location_table`], plus the exact location of every ID of
+    /// `selected` (strictly ascending) that an indexed segment holds, found
+    /// while its verified index is visited, so no index is read twice. Where
+    /// several segments hold an ID, the latest in catalog order answers, as
+    /// the catalog-wide recovery scan it replaces answered. Also returns each
+    /// segment left out of the table with the error that left it out.
+    pub(crate) fn build_location_table_selecting(
+        &self,
+        catalog: &[crate::payload_manifest::PayloadSegmentReference],
+        selected: &[BlockId],
+        mut check: impl FnMut() -> io::Result<()>,
+    ) -> io::Result<SelectedLocationTable> {
         if catalog.len() > 1 << LOCATION_ORDINAL_BITS {
             return Err(invalid_data("payload catalog exceeds its segment bound"));
         }
@@ -1676,21 +1754,49 @@ impl PayloadSegmentStore {
         let mut entries = Vec::with_capacity(capacity);
         let mut segments = Vec::with_capacity(catalog.len());
         let mut unindexed_segments = 0;
+        let mut unverified = Vec::new();
+        let mut held: Vec<Option<(usize, u32)>> = vec![None; selected.len()];
         for reference in catalog {
             check()?;
-            if self.extend_locations(reference, segments.len(), &mut entries) {
-                segments.push(*reference);
-            } else {
-                unindexed_segments += 1;
+            let ordinal = segments.len();
+            let indexed = self.with_verified_index(reference, |index| {
+                entries.extend(index.iter().enumerate().map(|(position, entry)| {
+                    CatalogLocationTable::entry(entry.block_id, ordinal, position)
+                }));
+                select_positions(index, selected, |selected_position, position| {
+                    held[selected_position] = Some((ordinal, position as u32));
+                });
+            });
+            match indexed {
+                Ok(()) => segments.push(*reference),
+                Err(error) => {
+                    unindexed_segments += 1;
+                    unverified.push((reference.segment_id, error));
+                }
             }
         }
         let byte_starts = sort_locations(&mut entries, &mut check)?;
-        Ok(CatalogLocationTable {
-            segments,
-            entries,
-            byte_starts,
-            unindexed_segments,
-        })
+        let located = selected
+            .iter()
+            .zip(held)
+            .filter_map(|(block_id, held)| {
+                held.map(|(ordinal, position)| SelectedLocation {
+                    block_id: *block_id,
+                    reference: segments[ordinal],
+                    position,
+                })
+            })
+            .collect();
+        Ok((
+            CatalogLocationTable {
+                segments,
+                entries,
+                byte_starts,
+                unindexed_segments,
+            },
+            located,
+            unverified,
+        ))
     }
 
     /// The location table of `catalog`, derived from `previous`, the table of
@@ -1836,6 +1942,35 @@ impl PayloadSegmentStore {
             let mut payload = vec![0_u8; entry.payload_len as usize];
             file.read_exact_at(entry.payload_offset, &mut payload)?;
             verify_entry_payload(entry, block_id, payload).map(Some)
+        })
+    }
+
+    /// Where `block_id`'s payload starts in `reference`'s file, when the index
+    /// entry a [`CatalogLocationTable`] attributed to `reference` at `position`
+    /// names it; the payload is not read. Same entry source and error meaning
+    /// as `read_located`.
+    pub(crate) fn located_payload_offset(
+        &self,
+        reference: &crate::payload_manifest::PayloadSegmentReference,
+        position: u32,
+        block_id: BlockId,
+    ) -> io::Result<Option<u64>> {
+        let entry = self.located_entry(reference, position, &mut None)?;
+        Ok((entry.block_id == block_id).then_some(entry.payload_offset))
+    }
+
+    /// Fills `bytes` from offset `offset` of segment `segment_id`'s file
+    /// through its shared read handle, unverified: the caller compares them
+    /// with bytes it verified (`BlockStore::read_payload_range`).
+    pub(crate) fn read_range(
+        &self,
+        segment_id: Uuid,
+        offset: u64,
+        bytes: &mut [u8],
+    ) -> io::Result<()> {
+        let handle = self.shared_read_handle(segment_id)?;
+        self.read_through(segment_id, &handle, |file| {
+            file.read_exact_at(offset, bytes)
         })
     }
 

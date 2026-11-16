@@ -248,7 +248,7 @@ function _renderTimerList(timers) {
       }
 
       html += `<details class="tpi-details">
-        <summary>${escapeHtml(_detailsLabel)}</summary>
+        <summary class="ui-disclosure">${escapeHtml(_detailsLabel)}</summary>
         <div class="tpi-detail-rows">
           <div>${escapeHtml(_fieldId)}: <code>${escapeHtml(t.id)}</code></div>
           <div>${escapeHtml(_fieldCheck)}: ${escapeHtml(instruction || "—")}</div>

@@ -136,7 +136,12 @@ pub(super) fn run(
                 .as_ref()
                 .and_then(|value| value.get("remaining")?.as_bool())
                 .unwrap_or(false);
-            Ok(((deleted > 0).then_some(transaction), (deleted, remaining)))
+            // Markers of a deleted conversation release no replay row, but
+            // their removal must commit too, or every later round rescans them.
+            Ok((
+                transaction.has_business_mutation().then_some(transaction),
+                (deleted, remaining),
+            ))
         })?;
         committed |= changed;
         prune.sync_rows = deleted;

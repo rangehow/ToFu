@@ -4,8 +4,11 @@ from types import SimpleNamespace
 
 import pytest
 
+from lib.conversation_sync.cursor import STREAM_START, ReplayPosition
 from lib.conversation_sync.service import ConversationSyncService
 from lib.conversation_sync.validation import decode
+
+EPOCH = '00000000000000e1'
 
 pytestmark = pytest.mark.unit
 
@@ -26,7 +29,10 @@ def test_state_only_replay_keeps_patch_sequence_and_full_durable_evidence(eviden
         **attempt, 'seq': 2, 'type': 'terminal_settlement', 'projectionRevision': 3,
         'payload': {'status': 'completed', 'phase': None, 'settlement': {'cause': 'completed'}},
     }}}
-    stored = {'head': 3, 'events': [change, terminal], 'hasMore': False}
+    stored = {'head': 3, 'events': [change, terminal], 'hasMore': False,
+              'authorityEpoch': EPOCH, 'headDigest': 'd3' * 8,
+              'changeDigests': ['d2' * 8, 'd3' * 8], 'anchorDigest': 'd1' * 8}
+    after = ReplayPosition(1, EPOCH, 'd1' * 8)
     original = deepcopy(stored)
     calls = []
 
@@ -35,7 +41,7 @@ def test_state_only_replay_keeps_patch_sequence_and_full_durable_evidence(eviden
         return stored
 
     service = ConversationSyncService(SimpleNamespace(changes=changes))
-    projected = service.changes('conv', 7, after_sequence=1, diagnostic_payload='none')
+    projected = service.changes('conv', 7, after=after, diagnostic_payload='none')
     replay = projected['events'][0]
     assert replay['payload']['event']['payload'] == {
         'status': 'running', 'phase': None, 'projectionPatch': patch,
@@ -44,7 +50,7 @@ def test_state_only_replay_keeps_patch_sequence_and_full_durable_evidence(eviden
     assert projected['events'][1] == terminal
     assert projected['head'] == 3 and not projected['hasMore']
     assert stored == original
-    assert service.changes('conv', 7, after_sequence=1)['events'] == original['events']
+    assert service.changes('conv', 7, after=after)['events'] == original['events']
     assert all(args == ('conv', 7) for args, _kwargs in calls)
     assert calls[0][1] == {'after_sequence': 1, 'limit': 500}
     for event in projected['events']:
@@ -57,4 +63,4 @@ def test_unknown_diagnostic_representation_refuses_before_repository_read():
         pytest.fail('invalid representation reached storage')
     service = ConversationSyncService(SimpleNamespace(changes=forbidden))
     with pytest.raises(ValueError, match='diagnostic'):
-        service.changes('conv', 7, after_sequence=0, diagnostic_payload='invalid')
+        service.changes('conv', 7, after=STREAM_START, diagnostic_payload='invalid')

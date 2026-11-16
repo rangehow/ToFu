@@ -567,6 +567,179 @@ fn a_disabled_reclaim_task_holds_every_collector_epoch_doorbells_included() {
     driver.stop_and_join().unwrap();
 }
 
+/// A held collector still builds the store's read path. The first catalog
+/// location table and the packed filter reclaim nothing; cold packed reads,
+/// writer dedupe probes and membership probes resolve through them
+/// (docs/TOFUDB_BLOCK_READ_PATH.md). The R3 driver built both only for an
+/// epoch that was about to start, so a daemon booted with the owner's
+/// storage-reclaim task disabled never built either.
+#[test]
+fn a_disabled_reclaim_task_still_builds_the_location_table_and_the_packed_filter() {
+    use crate::payload_manifest::{PayloadManifest, PayloadSegmentReference};
+    let (vfs, database) = authority();
+    let payloads: std::collections::BTreeMap<BlockId, Vec<u8>> = (0..8)
+        .map(|index| format!("held-read-path-{index}").into_bytes())
+        .map(|payload| (BlockId::for_payload(&payload), payload))
+        .collect();
+    // The task row first, then a checkpoint: the reopen below is a clean,
+    // empty-WAL open, which installs the catalog without building the filter.
+    create_reclaim_task(&database, 0);
+    database.lock().unwrap().checkpoint_for_test().unwrap();
+    {
+        let mut guard = database.lock().unwrap();
+        let blocks = guard.block_store_shared();
+        let created = blocks
+            .payload_segment_store()
+            .unwrap()
+            .create(
+                uuid::Uuid::from_u128(47),
+                payloads.keys().copied().collect(),
+                |id| Ok(payloads[&id].clone()),
+            )
+            .unwrap();
+        let reference = PayloadSegmentReference::new(
+            created.metadata(),
+            created.first_block_id(),
+            created.last_block_id(),
+        )
+        .unwrap();
+        // Keep whatever the checkpoint catalogued; the payloads join it.
+        let mut segments = blocks
+            .installed_payload_manifest()
+            .unwrap()
+            .map_or_else(Vec::new, |manifest| manifest.segments);
+        segments.push(reference);
+        guard
+            .engine_mut_for_test()
+            .publish_payload_manifest_for_test(PayloadManifest::new(segments).unwrap())
+            .unwrap();
+    }
+    drop(database);
+    let database = Arc::new(Mutex::new(
+        AuthorityDatabase::open_with_vfs(Path::new("/data"), vfs.clone()).unwrap(),
+    ));
+    let blocks = database.lock().unwrap().block_store_shared();
+    assert!(
+        blocks.published_catalog_locations_for_test().is_none(),
+        "fixture: the open published no table"
+    );
+    assert_eq!(
+        blocks.packed_filter_state_for_test(),
+        (false, false),
+        "fixture: the open built no filter"
+    );
+    let mut collector = OnlineGarbageCollector::with_min_epoch_interval(
+        AuthorityGarbageCollectionBudget::conservative(),
+        Duration::from_millis(10),
+    );
+    collector.defer_first_epoch(Duration::from_millis(100));
+    let driver = OnlineGarbageCollectionDriver::start_with_collector_and_hold(
+        &database,
+        collector,
+        false,
+        Some(watch(&database, ONLINE_GC_SCHEDULER_SYSTEM_KEY)),
+    )
+    .unwrap();
+    let observer = driver.observer();
+    let deadline = Instant::now() + WAIT;
+    while blocks.published_catalog_locations_for_test().is_none()
+        || blocks.packed_filter_state_for_test() != (true, true)
+    {
+        let metrics = observer.metrics();
+        assert_eq!(
+            (
+                metrics.epochs_completed,
+                metrics.deferred_epochs,
+                metrics.marks_built,
+                metrics.epoch_in_progress
+            ),
+            (0, 0, 0, false),
+            "an epoch started while the reclaim task was disabled: {metrics:?}"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "a held driver built no read path: {metrics:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let (publication, table) = blocks.published_catalog_locations_for_test().unwrap();
+    assert_eq!(publication, blocks.installed_catalog_publication_for_test());
+    assert!(
+        payloads
+            .keys()
+            .all(|id| table.candidates(*id).next().is_some()),
+        "the table locates every payload"
+    );
+    let metrics = observer.metrics();
+    assert!(metrics.held, "{metrics:?}");
+    assert_eq!(
+        (
+            metrics.epochs_completed,
+            metrics.deferred_epochs,
+            metrics.marks_built
+        ),
+        (0, 0, 0),
+        "{metrics:?}"
+    );
+    for (id, payload) in &payloads {
+        assert_eq!(&blocks.get(*id).unwrap(), payload);
+    }
+    driver.stop_and_join().unwrap();
+}
+
+/// The held driver's read-path builds never consume a doorbell: one rung while
+/// the task is disabled runs once the owner enables it, although the epoch
+/// timer is an hour away.
+#[test]
+fn a_doorbell_rung_while_held_survives_the_read_path_builds() {
+    let (_vfs, database) = authority();
+    commit_value(&database, b"before", b"value");
+    create_reclaim_task(&database, 0);
+    let mut collector = OnlineGarbageCollector::with_min_epoch_interval(
+        AuthorityGarbageCollectionBudget::conservative(),
+        Duration::from_millis(10),
+    );
+    collector.defer_first_epoch(Duration::from_secs(3600));
+    let driver = OnlineGarbageCollectionDriver::start_with_collector_and_hold(
+        &database,
+        collector,
+        false,
+        Some(watch(&database, ONLINE_GC_SCHEDULER_SYSTEM_KEY)),
+    )
+    .unwrap();
+    let observer = driver.observer();
+    database
+        .lock()
+        .unwrap()
+        .online_garbage_collection()
+        .unwrap()
+        .request_expedited_epoch();
+    let polls_until = Instant::now() + 8 * DRIVER_POLL_INTERVAL;
+    while Instant::now() < polls_until {
+        let metrics = observer.metrics();
+        assert_eq!(
+            (metrics.epochs_completed, metrics.deferred_epochs),
+            (0, 0),
+            "{metrics:?}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    update_task(&database, RECLAIM_TASK, 1, 2);
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let metrics = observer.metrics();
+        if metrics.epochs_completed + metrics.deferred_epochs >= 1 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the doorbell rung while held never ran: {metrics:?}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    driver.stop_and_join().unwrap();
+}
+
 #[test]
 fn the_scheduler_answers_whether_a_system_task_is_enabled() {
     let (_vfs, database) = authority();

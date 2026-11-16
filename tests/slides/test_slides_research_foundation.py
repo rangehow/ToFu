@@ -320,5 +320,5 @@ def test_research_is_the_first_recipe_stage():
     names = [stage.name for stage in stages]
     assert names[:2] == ['research', 'outline']
     assert stages[0].resume_ttl_s == 6 * 60 * 60
-    assert stages[0].checkpoint_version == evidence_checkpoint_version(
-        freshness='month')
+    assert stages[0].checkpoint_version.startswith(evidence_checkpoint_version(
+        freshness='month'))

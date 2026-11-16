@@ -88,6 +88,13 @@ pub enum SemanticExecutionError {
     /// `error_message` while `error_code` stays `database_integrity`, so
     /// clients classify on the code and never parse this text.
     Integrity(String),
+    /// An engine failure no classification recognizes: a poisoned lock, a
+    /// panicked worker, an invariant the engine checks. A retry of the same
+    /// request cannot pass before the process restarts, so it answers the
+    /// non-retryable `database_internal` with a bounded diagnostic naming the
+    /// cause; as a retryable `database_unavailable` clients retried it for as
+    /// long as the authority kept answering.
+    Internal(String),
     StorageUnavailable,
     /// The volume refused space (ENOSPC) or quota (EDQUOT). Same retryable
     /// `database_unavailable` wire code as `StorageUnavailable`, so every
@@ -131,6 +138,7 @@ impl SemanticExecutionError {
             Self::TurnLaterTurnsUnacknowledged => "turn_later_turns_unacknowledged",
             Self::TurnLaterTurnsChanged => "turn_later_turns_changed",
             Self::Integrity(_) => "database_integrity",
+            Self::Internal(_) => "database_internal",
             Self::StorageUnavailable | Self::StorageFull => "database_unavailable",
             Self::PayloadTooLarge => "storage_payload_too_large",
             Self::ResourceExhausted(_) | Self::ResourceBound(_) => "database_resource_exhausted",
@@ -151,7 +159,7 @@ impl SemanticExecutionError {
     }
 }
 
-/// Cap one integrity diagnostic for the wire: a single line within the
+/// Cap one integrity or internal diagnostic for the wire: a single line within the
 /// protocol error-message budget, so the response encoder never rejects an
 /// error frame of its own. The cap counts BYTES: multibyte input must stay
 /// under `MAX_ERROR_MESSAGE_BYTES` too, and truncation never splits UTF-8.
@@ -208,6 +216,33 @@ pub(crate) fn conflict_fence(reason: &'static str) -> io::Error {
 /// Build the integrity variant with a bounded diagnostic message.
 pub(crate) fn integrity_failure(message: impl AsRef<str>) -> SemanticExecutionError {
     SemanticExecutionError::Integrity(bounded_integrity_message(message.as_ref()))
+}
+
+/// Build the internal variant with a bounded diagnostic message.
+pub(crate) fn internal_failure(message: impl AsRef<str>) -> SemanticExecutionError {
+    SemanticExecutionError::Internal(bounded_integrity_message(message.as_ref()))
+}
+
+/// Failures a retry can outlive, which answer the retryable
+/// `database_unavailable`: the authority's latch (its recycle reopens it), an
+/// OS error (also when `vfs::PathIoError` names it), a WAL write or sync
+/// failure the barrier latched (a receipt resolves the commit), a component
+/// closed or cancelled for a stop or restart, an index still opening, and a
+/// write that made no progress. `map_storage_error` answers every other
+/// unclassified failure as `Internal`.
+fn retry_can_outlive(error: &io::Error) -> bool {
+    crate::engine::requires_reopen(error)
+        || crate::vfs::os_error_code(error).is_some()
+        || crate::wal::is_latched_flush_failure(error)
+        || matches!(
+            error.kind(),
+            io::ErrorKind::Interrupted
+                | io::ErrorKind::NotConnected
+                | io::ErrorKind::BrokenPipe
+                | io::ErrorKind::ConnectionReset
+                | io::ErrorKind::ConnectionAborted
+                | io::ErrorKind::WriteZero
+        )
 }
 
 impl fmt::Display for SemanticExecutionError {
@@ -281,7 +316,8 @@ pub(crate) fn map_storage_error(error: io::Error) -> SemanticExecutionError {
             None => SemanticExecutionError::Conflict,
         },
         io::ErrorKind::TimedOut => SemanticExecutionError::DeadlineElapsed,
-        _ => SemanticExecutionError::StorageUnavailable,
+        _ if retry_can_outlive(&error) => SemanticExecutionError::StorageUnavailable,
+        _ => internal_failure(error.to_string()),
     }
 }
 
@@ -3056,6 +3092,7 @@ fn compile_turn(
                 .get("sync_sequence")
                 .and_then(Value::as_u64)
                 .ok_or(SemanticExecutionError::InvalidPayload)?;
+            let anchor_sequence = optional_nonnegative_integer(&payload, "anchor_sequence", 0)?;
             (
                 vec![TransactionIrStep::TurnSyncPage {
                     conversation_id,
@@ -3063,6 +3100,7 @@ fn compile_turn(
                     before_ordinal,
                     limit: limit as usize,
                     sync_sequence,
+                    anchor_sequence,
                     max_projection_bytes: max_projection_bytes as usize,
                     slot: 0,
                 }],
@@ -3074,16 +3112,32 @@ fn compile_turn(
             )
         }
         "turn.sync.changes" => {
+            use crate::generated_conversation_change_page::{
+                CHANGE_PAGE_MAX_BYTES, CHANGE_PAGE_MIN_BYTES,
+            };
             let after = optional_nonnegative_integer(&payload, "after", 0)?;
             let limit = optional_nonnegative_integer(&payload, "limit", 500)?;
             if !(1..=2_000).contains(&limit) {
                 return Err(SemanticExecutionError::InvalidPayload);
             }
+            // A subscription's windowBytes (conversation-sync contract).
+            let max_bytes = match payload.get("max_bytes") {
+                None => None,
+                Some(value) => match value.as_u64().and_then(|bytes| usize::try_from(bytes).ok()) {
+                    Some(bytes)
+                        if (CHANGE_PAGE_MIN_BYTES..=CHANGE_PAGE_MAX_BYTES).contains(&bytes) =>
+                    {
+                        Some(bytes)
+                    }
+                    _ => return Err(SemanticExecutionError::InvalidPayload),
+                },
+            };
             (
                 vec![TransactionIrStep::TurnSyncChanges {
                     conversation_id,
                     after,
                     limit: limit as usize,
+                    max_bytes,
                     slot: 0,
                 }],
                 TransactionIrResult::SlotOrLiteral {
@@ -3202,15 +3256,29 @@ fn compile_turn(
                 )]),
                 _ => Map::from_iter([("content".to_owned(), Value::String(String::new()))]),
             };
+            let human_guidance_answer_json = match payload.get("human_guidance_answer") {
+                None => None,
+                Some(Value::Object(answer)) => {
+                    Some(canonical_json(&Value::Object(answer.clone()))?)
+                }
+                _ => return Err(SemanticExecutionError::InvalidPayload),
+            };
+            // A guidance answer edits a running Turn; a retirement settles a closed one.
+            let background_command_retirement_json =
+                match payload.get("background_command_retirement") {
+                    None => None,
+                    Some(Value::Object(_)) if human_guidance_answer_json.is_some() => {
+                        return Err(SemanticExecutionError::InvalidPayload)
+                    }
+                    Some(Value::Object(retirement)) => {
+                        Some(canonical_json(&Value::Object(retirement.clone()))?)
+                    }
+                    _ => return Err(SemanticExecutionError::InvalidPayload),
+                };
             (
                 vec![TransactionIrStep::TurnProjectionUpdate {
-                    human_guidance_answer_json: match payload.get("human_guidance_answer") {
-                        None => None,
-                        Some(Value::Object(answer)) => {
-                            Some(canonical_json(&Value::Object(answer.clone()))?)
-                        }
-                        _ => return Err(SemanticExecutionError::InvalidPayload),
-                    },
+                    human_guidance_answer_json,
+                    background_command_retirement_json,
                     preserve_activity: match payload.get("preserve_activity") {
                         None => false,
                         Some(Value::Bool(value)) => *value,
@@ -11349,4 +11417,5 @@ mod tests {
     include!("turn_recovery_bytes_tests.rs");
     include!("semantic_event_batch_composition_tests.rs");
     include!("semantic_turn_event_batch_tests.rs");
+    include!("turn_structural_commit_tests.rs");
 }

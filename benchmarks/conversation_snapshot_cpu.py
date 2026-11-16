@@ -50,8 +50,11 @@ def fixture():
                       "status": "running" if index == 11 else "completed",
                       "projection": {"content": terminal, "segments": segments, "toolRounds": rounds},
                       "projectionRevision": 1, "settlement": {}, "createdAt": 1, "updatedAt": 1})
+    # Trees whose cursors name their change's lineage read the authority's
+    # epoch and head digest; earlier trees ignore them.
     return {"syncSequence": 1, "conversationRevision": 1, "settings": {},
-            "turns": turns, "attempts": [], "queueItems": []}
+            "turns": turns, "attempts": [], "queueItems": [],
+            "authorityEpoch": "00000000000000c1", "headDigest": "0000000000000001"}
 
 
 def load_frozen(ref):

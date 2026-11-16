@@ -268,10 +268,8 @@
     }
 
     #[test]
-    fn search_page_budget_publishes_partial_at_turn_archive_boundary_without_starving_work() {
-        use crate::turn_search_projection::{
-            ConversationSearchRequest, TurnSearchDocument, TurnSearchProjection,
-        };
+    fn search_page_budget_defers_a_large_change_set_without_starving_later_work() {
+        use crate::turn_search_projection::{ConversationSearchRequest, TurnSearchProjection};
         use crate::turn_search_worker::process_turn_search_batch;
         use std::sync::{Arc, Mutex};
 
@@ -295,54 +293,39 @@
         database.commit(transaction).unwrap();
         let authority = Arc::new(Mutex::new(database));
         let projection = Arc::new(Mutex::new(
-            TurnSearchProjection::initialize(target_dir.path(), 16 * 1024 * 1024).unwrap(),
+            TurnSearchProjection::initialize(target_dir.path(), 1 << 30).unwrap(),
         ));
         let scope = crate::maintenance::MaintenanceScope::new(7, 11).unwrap();
-        process_turn_search_batch(&authority, &projection, scope).unwrap();
-        {
-            let mut target = projection.lock().unwrap();
-            target
-                .begin_conversation_rebuild(7, 11, "conversation", "previous", 100)
-                .unwrap();
-            target
-                .append_conversation_page(
-                    7,
-                    11,
-                    "conversation",
-                    "previous",
-                    &[TurnSearchDocument {
-                        turn_id: "previous-turn".into(),
-                        ordinal: 1,
-                        role: "user".into(),
-                        match_field: "content".into(),
-                        search_text: "previous searchable content".into(),
-                        chunk_index: 0,
-                    }],
-                )
-                .unwrap();
-            target
-                .finalize_conversation_rebuild(7, 11, "conversation", "previous")
-                .unwrap();
-        }
+        // Every page of the logical query: one conversation holds thousands
+        // of chunks here, more than one page scans.
         let search = |query: &str| {
-            projection
-                .lock()
-                .unwrap()
-                .search(&ConversationSearchRequest {
-                    tenant_id: 7,
-                    owner_user_id: 11,
-                    query: query.into(),
-                    limit: 50,
-                    snippet_radius: 10,
-                })
-                .unwrap()
+            let request = ConversationSearchRequest {
+                tenant_id: 7,
+                owner_user_id: 11,
+                query: query.into(),
+                limit: 50,
+                snippet_radius: 10,
+            };
+            let mut hits = Vec::new();
+            let mut cursor: Option<String> = None;
+            loop {
+                let page = projection
+                    .lock()
+                    .unwrap()
+                    .search_page_until(&request, cursor.as_deref(), || false)
+                    .unwrap();
+                hits.extend(page.items);
+                cursor = page.next_cursor;
+                if cursor.is_none() {
+                    return hits;
+                }
+            }
         };
-        let maximum_pages = crate::generated_tofudb_ir::SEARCH_PROJECTION_MAXIMUM_SOURCE_PAGES;
-        let maximum_turns = maximum_pages * SEARCH_PROJECTION_PAGE_ROWS;
-        // Populate only the canonical primary records used by this source scan.
-        // Small inline documents and 256-row commits avoid an 8,192-command
-        // semantic/receipt fixture while exercising the actual 1,024-page bound.
-        let seed = |database: &mut AuthorityDatabase, first: usize, end: usize| {
+        // Populate only the canonical records the revision diff reads (the
+        // Turn document and its turns_by_updated row). Small inline documents
+        // and 256-row commits avoid an 8,192-command semantic/receipt fixture
+        // while exercising the actual 1,024-page bound.
+        let seed = |database: &mut AuthorityDatabase, first: usize, end: usize, text: &str| {
             for start in (first..end).step_by(256) {
                 let mut transaction = database.begin(7, 11).unwrap();
                 for index in start..(start + 256).min(end) {
@@ -355,11 +338,20 @@
                             logical_key: turn_logical_key("conversation", &turn_id),
                             value_json: serde_json::to_vec(&json!({
                                 "turnId": turn_id, "conversationId": "conversation", "laneId": "main",
-                                "actor": "human", "status": if index == 0 { "completed" } else { "running" },
-                                "ordinal": index + 1, "projection": {"content": "replacement searchable content"}
+                                "actor": "human", "status": "completed", "ordinal": index + 1,
+                                "projectionRevision": 1, "projection": {"content": text}
                             })).unwrap(),
                             expected_version: None, updated_at_ms: 200,
                         }).unwrap();
+                    let updated = updated_index_key(&transaction, "conversation", 200, &turn_id)
+                        .unwrap();
+                    database
+                        .entity_put(
+                            &mut transaction,
+                            updated,
+                            encode_updated_index_value(&turn_id, 1).unwrap(),
+                        )
+                        .unwrap();
                 }
                 crate::search_dirty::mark(
                     database,
@@ -371,42 +363,48 @@
                 database.commit(transaction).unwrap();
             }
         };
-        seed(&mut authority.lock().unwrap(), 0, maximum_turns);
-        for extra in [false, true] {
-            if extra {
-                seed(
-                    &mut authority.lock().unwrap(),
-                    maximum_turns,
-                    maximum_turns + 1,
-                );
-            }
-            let metrics = process_turn_search_batch(&authority, &projection, scope).unwrap();
-            assert_eq!(metrics.source_pages, maximum_pages as u64);
-            assert_eq!(metrics.rebuilt_conversations, 1);
-            assert_eq!(metrics.page_budget_exhaustions, 1);
-            assert!(projection.lock().unwrap().source_incomplete(7, 11).unwrap());
-            assert!(search("previous searchable").is_empty());
-            assert_eq!(search("replacement searchable").len(), 1);
-            assert_eq!(
-                authority
-                    .lock()
-                    .unwrap()
-                    .snapshot_pin_metrics()
-                    .unwrap()
-                    .active_handles,
-                0
-            );
-            assert!(crate::search_dirty::list(&authority.lock().unwrap(), 7, 11)
+        seed(&mut authority.lock().unwrap(), 0, 1, "previous searchable content");
+        let first = process_turn_search_batch(&authority, &projection, scope).unwrap();
+        assert_eq!((first.rebuilt_conversations, first.indexed_turns), (1, 1));
+        assert_eq!(search("previous searchable").len(), 1);
+
+        // One settled Turn more than a round's page budget holds (one
+        // document each, eight per page).
+        let maximum_pages = crate::generated_tofudb_ir::SEARCH_PROJECTION_MAXIMUM_SOURCE_PAGES;
+        let maximum_turns = maximum_pages * crate::generated_conversation_search::SOURCE_PAGE_ROWS;
+        seed(
+            &mut authority.lock().unwrap(),
+            1,
+            maximum_turns + 2,
+            "replacement searchable content",
+        );
+        let metrics = process_turn_search_batch(&authority, &projection, scope).unwrap();
+        assert_eq!(metrics.source_pages, maximum_pages as u64);
+        assert_eq!(metrics.page_budget_exhaustions, 1);
+        assert_eq!(metrics.rebuilt_conversations, 0);
+        assert_eq!(metrics.acknowledged_tokens, 0);
+        // Committed pages stay; the owner keeps reporting indexing while the
+        // conversation's tokens stay dirty. Nothing is published as partial.
+        assert_eq!(search("previous searchable").len(), 1);
+        assert_eq!(search("replacement searchable").len(), 1);
+        assert!(!projection.lock().unwrap().source_incomplete(7, 11).unwrap());
+        assert_eq!(
+            crate::search_dirty::list(&authority.lock().unwrap(), 7, 11)
                 .unwrap()
-                .is_empty());
-            let retry = process_turn_search_batch(&authority, &projection, scope).unwrap();
-            assert_eq!(
-                retry.source_pages, 0,
-                "unchanged partial sources must not retry forever"
-            );
-            assert_eq!(retry.rebuilt_conversations, 0);
-        }
-        // A later dirty conversation must progress beyond the oversized source.
+                .len(),
+            1
+        );
+        assert_eq!(
+            authority
+                .lock()
+                .unwrap()
+                .snapshot_pin_metrics()
+                .unwrap()
+                .active_handles,
+            0
+        );
+        // A later dirty conversation progresses in the next round, which also
+        // resumes the large one from its item records.
         {
             let mut database = authority.lock().unwrap();
             let mut transaction = database.begin_with_identity_claim_scopes(7, 11).unwrap();
@@ -425,36 +423,16 @@
             .unwrap();
             database.commit(transaction).unwrap();
         }
-        let later = process_turn_search_batch(&authority, &projection, scope).unwrap();
-        assert_eq!(later.rebuilt_conversations, 1);
-        assert_eq!(later.page_budget_exhaustions, 0);
+        let resumed = process_turn_search_batch(&authority, &projection, scope).unwrap();
+        assert_eq!(resumed.rebuilt_conversations, 2);
+        assert_eq!(resumed.page_budget_exhaustions, 0);
+        assert_eq!(resumed.indexed_turns, 1, "recorded items are never read again");
         assert_eq!(search("later fixture").len(), 1);
-        // Reducing the source by one page leaves room for the archive page.
-        // The next exact-limit rebuild must clear partial coverage.
-        {
-            let mut database = authority.lock().unwrap();
-            let mut transaction = database.begin(7, 11).unwrap();
-            for index in maximum_turns - SEARCH_PROJECTION_PAGE_ROWS..=maximum_turns {
-                let key =
-                    turn_key(&transaction, "conversation", &format!("turn-{index:05}")).unwrap();
-                database.entity_delete(&mut transaction, key).unwrap();
-            }
-            crate::search_dirty::mark(
-                &database,
-                &mut transaction,
-                TURN_SEARCH_DIRTY_NAMESPACE,
-                "conversation",
-            )
-            .unwrap();
-            database.commit(transaction).unwrap();
-        }
-        let metrics = process_turn_search_batch(&authority, &projection, scope).unwrap();
-        assert_eq!(metrics.source_pages, maximum_pages as u64);
-        assert_eq!(metrics.rebuilt_conversations, 1);
-        assert_eq!(metrics.page_budget_exhaustions, 0);
-        assert!(!projection.lock().unwrap().source_incomplete(7, 11).unwrap());
         assert_eq!(search("replacement searchable").len(), 1);
-        assert!(search("previous searchable").is_empty());
+        assert!(!projection.lock().unwrap().source_incomplete(7, 11).unwrap());
+        let idle = process_turn_search_batch(&authority, &projection, scope).unwrap();
+        assert_eq!((idle.dirty_conversations, idle.source_pages), (0, 0));
+        assert!(!projection.lock().unwrap().owner_indexing(7, 11).unwrap());
         let database = authority.lock().unwrap();
         assert_eq!(database.snapshot_pin_metrics().unwrap().active_handles, 0);
         assert!(crate::search_dirty::list(&database, 7, 11)
@@ -1958,6 +1936,7 @@
                 3,
                 head,
                 0,
+                0,
                 &mut || {
                     checks += 1;
                     checks == 3
@@ -1984,6 +1963,7 @@
                 1,
                 3,
                 head,
+                0,
                 0,
                 &mut || false,
             )
@@ -3530,12 +3510,15 @@ mod snapshot_response_construction_tests {
                 for hint in [false, true] {
                     let mut previous = json!({"conversationId": "id汉字\"\\\n", "conversationRevision": 12,
                         "syncSequence": 42, "settings": settings, "turns": turns,
-                        "attempts": attempts, "queueItems": []});
+                        "attempts": attempts, "queueItems": [],
+                        "authorityEpoch": "0123456789abcdef", "headDigest": "fedcba9876543210"});
                     if let Some(value) = &window { previous["turnWindow"] = value.clone(); }
                     if hint { previous["hasArtifacts"] = Value::Bool(false); }
                     let response = SyncSnapshotResponse {active_attempt_phase: None, attempts: json!(attempts),
+                        authority_epoch: "0123456789abcdef".to_owned(),
                         conversation_id: "id汉字\"\\\n".to_owned(), conversation_revision: 12,
-                        has_artifacts: hint.then_some(false), queue_items: Vec::new(), settings: settings.clone(),
+                        has_artifacts: hint.then_some(false), head_digest: json!("fedcba9876543210"),
+                        queue_items: Vec::new(), settings: settings.clone(),
                         sync_sequence: 42, turn_window: window.clone(), turns: turns.clone()};
                     let encoded = response.into_encoded().unwrap();
                     assert!(encoded.json_proven());
@@ -3554,8 +3537,10 @@ mod snapshot_response_construction_tests {
     fn owned_snapshot_retains_the_complete_response_byte_limit() {
         let settings = Map::new();
         let turns = vec![json!({"content": "x".repeat(crate::generated_tofudb_ir::MAX_TURN_RESPONSE_BYTES + 1)})];
-        let response = SyncSnapshotResponse {active_attempt_phase: None, attempts: json!([]), conversation_id: "bounded".to_owned(),
-            conversation_revision: 1, has_artifacts: None, queue_items: Vec::new(), settings,
+        let response = SyncSnapshotResponse {active_attempt_phase: None, attempts: json!([]),
+            authority_epoch: "0123456789abcdef".to_owned(), conversation_id: "bounded".to_owned(),
+            conversation_revision: 1, has_artifacts: None, head_digest: Value::Null,
+            queue_items: Vec::new(), settings,
             sync_sequence: 1, turn_window: None, turns};
         let error = response.into_encoded().err().unwrap();
         assert_eq!(error.kind(), io::ErrorKind::OutOfMemory);

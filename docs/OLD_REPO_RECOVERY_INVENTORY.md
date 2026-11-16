@@ -3,7 +3,7 @@
 Point-in-time inventory of unfinished work in the write-protected old checkout
 `/path/to/your/data (a symlink to
 `…/your-user/INS/your-username/tofu`) and its sibling `../tofu-worktrees/`. It was taken so the
-Coordinator can dispatch continuation work. Delete this file and the TSV once that triage is finished; Git keeps the history.
+Coordinator can dispatch continuation work. Delete this file and its TSVs once that triage is finished; Git keeps the history.
 
 - Full machine-readable table, one row per item: [`old_repo_recovery_inventory.tsv`](old_repo_recovery_inventory.tsv)
   (3615 rows). Columns: kind, item, tip SHA, date, subject, status, in current branch,
@@ -702,6 +702,121 @@ The project memory lists 7 parallel Tofu-DB branches `tofudb/par-{paper,knowledg
 None of these refs exist in the old repo any more (no `par-` ref in `for-each-ref`), and `../tofu-worktrees/` has no such checkouts.
 They were landed or removed before the copy, so there is nothing to recover.
 
+## R4b/R5 release-candidate line: decisions (2026-11-17)
+
+Slice of the recovery split owned by the release-candidate Worker. The other slices (small ports `5060301b`,
+dispatch latency, uncommitted-worktree triage, memory mechanism `742d3429`) own what this table marks `deferred`.
+
+**Scope.** Every ref whose inventory row names the R4b/R5 line: the `gate-r4/*` candidates of 11-13, `gate-r4b/v8`…`v12r`,
+the `sync/cursor-lineage*` branches and the six worker snapshots of the same line. The union holds 523 commits that are not
+on the branch base `b38b99f700` (471 commits, 52 merges). None of the 25 refs is an ancestor of the branch.
+`gate-r4b/v12r` contains v8…v11r and `sync/cursor-lineage-20261113`. It does not contain the R4a `gate-r4/*` candidates
+or the rebased `sync/cursor-lineage-r4b*` copies, so those were classified commit by commit.
+
+**Method.** Each commit gets one verdict, in this order:
+
+1. `merged` when its `git patch-id --stable` equals a branch commit's patch-id.
+2. Otherwise `merged` when every added line (longer than 3 characters) is present in the branch's version of the file.
+   A commit with no more than 15% of its added lines missing is also `merged`; the TSV marks these "landed with later
+   revisions", and every larger residue was read by hand.
+3. `superseded` when a v12r copy with the same patch-id or subject carries it. This also covers merge commits, reverts,
+   and features the branch removed or replaced: Goal Studio (`0d299c9610`), Evolution (`91b5bee3f5`), the office game
+   (`e820b78e63`) and the 大象 channel adapter.
+4. `unmerged` otherwise. Every unmerged commit was then ported, deferred to its owning slice, or dropped with a reason.
+
+A trial `git merge gate-r4b/v12r` into the branch hit 38 conflicting files (mostly `packages/tofu-db`), so it was aborted
+and the line was ported by `cherry-pick -x` per functional unit instead. Each conflict was resolved toward the branch's
+later engine structure.
+
+- Per-commit table, one row per commit (sha, date, in v12r, verdict, git evidence, decision, subject):
+  [`old_repo_recovery_rc_line.tsv`](old_repo_recovery_rc_line.tsv).
+- Verdict totals: 284 merged, 100 superseded, 139 unmerged. Of the unmerged commits, 87 were ported, 46 deferred and 6 dropped.
+
+### Refs
+
+| Ref | Tip | Ancestor of b38b99f700 | In v12r | Commits not on the branch | merged / superseded / ported / deferred / dropped | Ref verdict |
+|---|---|---|---|---|---|---|
+| `gate-r4/22-30-20261113` | `4d5681446f` | no | no | 136 | 102 / 34 / 0 / 0 / 0 | merged: every commit is on the branch or superseded |
+| `gate-r4/r4a-20261113` | `3616fc673b` | no | no | 6 | 5 / 1 / 0 / 0 / 0 | merged: every commit is on the branch or superseded |
+| `gate-r4/r4a-candidate-20261113` | `9c25442199` | no | no | 82 | 74 / 8 / 0 / 0 / 0 | merged: every commit is on the branch or superseded |
+| `gate-r4/r4a-on-63b6365306` | `e33fdf2d1f` | no | no | 134 | 101 / 33 / 0 / 0 / 0 | merged: every commit is on the branch or superseded |
+| `gate-r4/rc2-20261113` | `72d590cc34` | no | no | 135 | 102 / 33 / 0 / 0 / 0 | merged: every commit is on the branch or superseded |
+| `gate-r4b/v8` | `df4ea08278` | no | yes | 124 | 13 / 25 / 77 / 8 / 1 | superseded by v12r (ancestor of it) |
+| `gate-r4b/v8r` | `6e319356b0` | no | yes | 146 | 13 / 26 / 77 / 29 / 1 | superseded by v12r (ancestor of it) |
+| `gate-r4b/v9` | `fffd78b99d` | no | yes | 125 | 13 / 25 / 78 / 8 / 1 | superseded by v12r (ancestor of it) |
+| `gate-r4b/v9r` | `dd36dbd0eb` | no | yes | 147 | 13 / 27 / 77 / 29 / 1 | superseded by v12r (ancestor of it) |
+| `gate-r4b/v10` | `28d9c1bee4` | no | yes | 270 | 118 / 47 / 78 / 25 / 2 | superseded by v12r (ancestor of it) |
+| `gate-r4b/v10r` | `ac89e94abd` | no | yes | 294 | 118 / 50 / 78 / 46 / 2 | superseded by v12r (ancestor of it) |
+| `gate-r4b/v11` | `25c3403edb` | no | no | 271 | 118 / 48 / 78 / 25 / 2 | unmerged: valuable content ported, rest deferred/dropped per commit |
+| `gate-r4b/v11r` | `e1ac30bfee` | no | yes | 295 | 118 / 51 / 78 / 46 / 2 | superseded by v12r (ancestor of it) |
+| `gate-r4b/v12` | `e6b1133cea` | no | no | 272 | 118 / 48 / 79 / 25 / 2 | unmerged: valuable content ported, rest deferred/dropped per commit |
+| `gate-r4b/v12r` | `c5dc3fb627` | no | yes | 296 | 118 / 51 / 79 / 46 / 2 | unmerged: valuable content ported, rest deferred/dropped per commit |
+| `sync/cursor-lineage-20261113` | `1d4a38bffa` | no | yes | 40 | 13 / 5 / 22 / 0 / 0 | superseded by v12r (ancestor of it) |
+| `sync/cursor-lineage-r4b-20261114` | `e6b1133cea` | no | no | 272 | 118 / 48 / 79 / 25 / 2 | unmerged: valuable content ported, rest deferred/dropped per commit |
+| `sync/cursor-lineage-r4b-on-gate-f3778e8907` | `a1ff817279` | no | no | 91 | 13 / 22 / 51 / 5 / 0 | unmerged: valuable content ported, rest deferred/dropped per commit |
+| `sync/cursor-lineage-r4b-on-gate-v5-01da2e895d` | `7d5de18195` | no | no | 122 | 13 / 27 / 75 / 6 / 1 | unmerged: valuable content ported, rest deferred/dropped per commit |
+| `wip/396ef26d-aa3e-531a-a5e9-fa9c0801f-1a4b9f5182` | `bd32bc6804` | no | no | 273 | 118 / 48 / 80 / 25 / 2 | worker snapshot; per-commit verdicts |
+| `wip/9349d5c9-a27f-5bc7-a26b-2b74d20d0-52397e423e` | `2382de824b` | no | no | 128 | 13 / 26 / 80 / 8 / 1 | worker snapshot; per-commit verdicts |
+| `wip/6f42b6c8-13b3-51ad-b699-e140b369e-a703ded774` | `af00cf8ac4` | no | no | 273 | 118 / 49 / 79 / 25 / 2 | worker snapshot; per-commit verdicts |
+| `wip/4e4c35db-9295-575f-a27f-4e2ddd42b-4c1cdd2212` | `e2d77aa2fc` | no | no | 296 | 118 / 51 / 78 / 46 / 3 | worker snapshot; per-commit verdicts |
+| `wip/cd3ae582-a2c9-5199-b309-8d726deb7-48d7176072` | `7e8ec9e030` | no | no | 274 | 118 / 48 / 78 / 25 / 5 | worker snapshot; per-commit verdicts |
+| `wip/e823fc62-e78b-56b2-9205-8a31b2de1-ebefe6b9ed` | `0b99d4ad96` | no | no | 297 | 118 / 52 / 79 / 46 / 2 | worker snapshot; per-commit verdicts |
+
+### Ported (branch `recover/rc-line-20261117`, each pick carries `cherry picked from`)
+
+| Unit | Old commits | Why it is still valuable |
+|---|---|---|
+| Sync retention sized to one overlay delta, no payload reads | `16cbb43fa4`…`a74b2c3830` (8) | bounded `sync_prune` commit holds |
+| Byte-bounded change pages; stream page reads end with their client | `54b54ea513`…`e3d110dcea` (9) | DB-6 sync stall; contract + generated clients regenerated |
+| Replay-cursor lineage (P/D/A), attempt-event reference digests, lineage-fenced history pages (DB-6 N1/N2) | `69dd1dd19c`…`c5dc3fb627` (10) | a crash-reused sequence no longer serves another lineage's changes |
+| Overflow at DolphinFS's 1,000,000-entry cap; dirty reopen through the catalog location table | `fc7493bba5`…`499766a766` (14) | reopen time after a crash scales with the WAL, not the catalog |
+| Online GC: paused reclaim still builds the read path; batched leaf reads per walk; one routing slice per level | `fa631326fa`…`4c0419a345` (11) | mark cost and cold-read cost on 6.2M-leaf stores |
+| Hold-line attribution; steer/Project Brain retire through the overlay; WAL frames past the budget still queue; spill deferral | `3f22f8523f`…`78b5e058ff`, `e2cb59c18d`, `3870a37771`, `c703033455`, `6ced3eaeaf` (17) | authority-hold latency |
+| R5-SP per-Turn search maintenance | `4bbd225275`, `1cd1cb0573`, `bded476ef0`, `c12bc3ac8c`, `2a6dc9b242`, `0a0ce0cc8b` | a dirty conversation costs what changed |
+| Late receipts retired with their evidence; B10 C1 retryable kinds; spill-deferral doc | `b7d390f276`, `60f573b7eb`, `47d4acd23f`, `fffd78b99d` | |
+| B13 Attempt-event read bound refused at write (both authorities) | `dde50a40ad`, `761c7940c6`, `eb64e78c4a` (worker snapshot 9349d5c9) | no unreadable Attempt event can be written |
+| Commit-watch failure classes (R5 B10 site 6) | specs `d5d10cbf23` + fix from the uncommitted worker snapshot `bd32bc6804` | a closed watch is retryable, a refusal logs at ERROR |
+
+Follow-up commits on the port branch: rustfmt; the backup spec above; clippy `--all-targets -D warnings` (the RC line predates that gate);
+the search-history retirement spec written after the RC cut, rewritten for per-Turn scope publication.
+
+**Verification.** All of the following ran on the port branch:
+
+- `cargo test --tests` (library and integration targets): library 2,663 passed, 0 failed; every integration target
+  passed.
+- `cargo clippy --all-targets -D warnings`: clean.
+- `gen_conversation_sync_contract.py --check`, `gen_storage_v2_contract.py --check`, `gen_tofudb_ir_contract.py --check`
+  and `gen_project_dispatch_storage.py --check`: current.
+- Without a native engine: `tests/conversation` passed (1,567 passed).
+- Python worker-control, Attempt-bound and storage-contract specs: passed.
+- With a certified release engine built from this branch: the native lanes of `tests/conversation`, `tests/tofudb`,
+  `tests/events` and the storage worker-control and contract specs ran 3,855 passed and 10 failed.
+  - 9 of those 10 fail identically on the base `b38b99f700` with its own certified engine. They are
+    `test_usage_recovery::test_unknown_write_*` (5), `test_conversation_steer_reply_quotes` (2),
+    `test_conversation_command_inject_mode::test_steer_committed_while_another_tool_runs_*` and
+    `test_conversation_file_change_fault_boundary::*[journal-read]`. They are pre-existing and not caused by this port.
+  - The 10th, `tests/tofudb/test_turn_text_backup.py`, compared a restored page byte for byte. Replay lineage makes a
+    restore draw a new epoch (by design: the epoch is drawn per open), so the spec now asserts that the epoch moved and
+    every change digest is kept. It passes.
+
+### Dropped
+
+- `9d906d2e60` and `99804284f0` (R4b B11, naming what a held authority waits on, worker snapshot only). These are
+  observation-only and conflict with the branch's later hold recorder in 31 hunks across 8 engine files. Re-derive them
+  if an unexplained hold recurs.
+- `7e8ec9e030` and `e2d77aa2fc`: one-off fault-census scripts.
+- `c20371c42e`: the branch fixed the same flaky maintenance specs differently in `e04cefa7cb`.
+- `3ad4a63613`: the selector spec passes without it.
+
+### Deferred to sibling slices
+
+- **Dispatch latency** (39 commits): project-dispatch append commits, lane indexes, coordinator polls and the session pool,
+  including `a7c5f0f7a9` and its measurement `397ff4ab3e`.
+- **Memory mechanism `742d3429`** (17 commits): owner-memory and docs(memory).
+- **Small ports `5060301b`** (7 commits): db5 WAL-barrier/CONTROL staging (`7335dbe5ca` and companions) and `f3778e8907`.
+  It also owns `7bac6101bf`, the recovery-lookup spec adapted to B1's staged CONTROL publication.
+
+
 ## Continue items by topic
 
 One line per topic: is it still relevant now that the current branch has moved on? Counts are branches / worker snapshots / lanes.
@@ -712,12 +827,12 @@ One line per topic: is it still relevant now that the current branch has moved o
 - **terminal-bench / evaluation harness** (13 / 5 / 0): Evaluation-only (evaluations/, tests/evaluations). Still relevant if the TB/FHE runs continue; `fix/native-exec-auth-20261113` plus the old main checkout's uncommitted `gateway.py` edit form one unit. Not product-critical.
 - **misc fixes (one-off)** (3 / 12 / 0): Small independent fixes (model registration, headless tofu-agent, swarm snapshot, logging, run_command copy). Each is cheap to rebase; review one by one.
 - **Router / Global Router / channels / watchdog** (6 / 7 / 1): Mixed. The router-ownership lane (`d9cde3978a`, 2026-11-09) is mostly landed: `lib/router/portfolio/` and `router-portfolio.ts` exist on the branch and 368 of 2,084 added lines are missing, mainly a variant of `portfolio/review.py` (99), its tests (93) and a 40-line ROUTER.md section; port only that residue after reading the landed review logic. Authority/schedule inventory docs (R13) and owner-attention remain unlanded and still relevant to ROUTER.md work.
-- **R4b/R5 release-candidate line (gate, cursor lineage, B-items)** (7 / 6 / 0): Still relevant and the highest value. `gate-r4b/v12r` (296 commits on old main `d12cd290ae`, an ancestor of the current branch) already contains 11 of the other continue branches. Rebase or merge v12r onto the current branch as one unit; treat v12, v11*, v10*, v9* and the worker snapshots of the same line as duplicates of it.
+- **R4b/R5 release-candidate line (gate, cursor lineage, B-items)** (7 / 6 / 0): Done 2026-11-17: see [R4b/R5 release-candidate line: decisions](#r4br5-release-candidate-line-decisions-2026-11-17). Original note: still relevant and the highest value. `gate-r4b/v12r` (296 commits on old main `d12cd290ae`, an ancestor of the current branch) already contains 11 of the other continue branches. Rebase or merge v12r onto the current branch as one unit; treat v12, v11*, v10*, v9* and the worker snapshots of the same line as duplicates of it.
 - **context slimming / prompt surface** (10 / 2 / 0): Partly superseded: UI navigation landed in a different shape (`lib/ui_nav.py`, `contracts/ui_nav_targets_v1.json`), so port only ctx-slim's prompt-surface trimming, not its ui_nav tools. Take `ctx-slim-r4f` (r4..r4f are one growing chain); `feat/mcp-search-only` and `fix/no-output-caps` are independent.
 - **conversation sync / push / websocket / paged turns** (6 / 3 / 0): Relevant to the network indicator/push task: `fix/frontend-disconnect-gil-push-20261113` and the WebSocket release fixes are small; the paged-turn branches (11-08) need a fresh rebase.
 - **storage benchmarks & crash-safety evaluation (TofuDB vs SQLite)** (5 / 3 / 0): Directly relevant to the SQLite-sidecar and Tofu-DB tasks: this is the crash-safety pass-1 and the SQLite authority-option harness. All new files under `evaluations/agent_harness_storage/`, so nothing conflicts. Land these first, then use them as the comparison baseline.
 - **execution spread / multi-executor (overlaps desktop multi-machine)** (3 / 1 / 0): `multi-link-agent` is superseded by today's node/pairing model (`f9240f6849`); mine it only for missing ideas. `perf/exec-spread-20261113` (project-keyed execution spread) and the 'executors beyond one host' design are a separate server-side layer and still relevant for multi-server work.
-- **R5 search-per-Turn maintenance** (3 / 0 / 0): Relevant but unowned: per-Turn search maintenance on top of R4b; continue after the RC line lands.
+- **R5 search-per-Turn maintenance** (3 / 0 / 0): Ported with the RC line (2026-11-17, `3f52356f88` and companions).
 - **stream/tool write amplification** (2 / 0 / 0): Small, still relevant storage write-amplification fixes; quick rebase.
 - **frontend world / game UI** (0 / 1 / 0): Obsolete in practice: Goal Studio was removed today (`0d299c9610`) and the office game moved to the lead-office stage (`e820b78e63`).
 

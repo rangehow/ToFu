@@ -731,7 +731,7 @@ if (typeof showToast !== 'function') throw new Error('project-brain runtime depe
         _esc(item.path) + '</code><span>' + _esc(_sha(item.head)) + '</span>' +
         (item.prunable ? '<strong>' + _esc(_pbiText('prunable')) + '</strong>' : '') + '</div>';
     }).join('');
-    return '<details class="pbi-unknown"><summary><span>' + _esc(_pbiText('unregistered')) +
+    return '<details class="pbi-unknown"><summary class="ui-disclosure"><span>' + _esc(_pbiText('unregistered')) +
       '</span><strong>' + count + '</strong></summary><p>' + _esc(_pbiText('unregisteredHint')) +
       (count > items.length ? ' ' + _esc(_pbiText('showingFirst')) + '.' : '') +
       '</p><div>' + rows + '</div></details>';

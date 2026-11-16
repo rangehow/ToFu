@@ -5263,6 +5263,58 @@
         assert_eq!(other.code(), "database_protocol_error");
     }
 
+    /// An engine failure no classification recognizes (a poisoned lock, a
+    /// panicked worker, an invariant the engine checks) does not pass on a
+    /// retry, so it answers a non-retryable `database_internal` naming its
+    /// cause. As a retryable `database_unavailable`, clients retried it for as
+    /// long as the authority kept answering.
+    #[test]
+    fn an_unclassified_engine_error_is_a_non_retryable_internal_error_naming_its_cause() {
+        for error in [
+            io::Error::other("entity overlay lock is poisoned"),
+            io::Error::other("WAL barrier worker panicked"),
+            io::Error::new(io::ErrorKind::UnexpectedEof, "failed to fill whole buffer"),
+        ] {
+            let cause = error.to_string();
+            let mapped = map_storage_error(error);
+            assert_eq!(mapped.code(), "database_internal", "{cause}");
+            assert!(!mapped.retryable(), "{cause}");
+            assert!(format!("{mapped:?}").contains(&cause), "{mapped:?} must name {cause}");
+        }
+    }
+
+    /// Failures a retry can outlive stay the retryable `database_unavailable`:
+    /// the authority's latch (its recycle reopens it), filesystem errors, a WAL
+    /// write or sync failure the barrier latched (a receipt resolves the
+    /// commit), closed or cancelled components and an index still opening.
+    #[test]
+    fn failures_a_retry_can_outlive_stay_retryable_database_unavailable() {
+        let directory = tempfile::tempdir().unwrap();
+        let plain = directory.path().join("plain");
+        std::fs::write(&plain, b"x").unwrap();
+        let annotated = crate::vfs::RealVfs.metadata(&plain.join("child.blk")).unwrap_err();
+        let barrier = crate::wal::WalBarrierShared::buffered_for_test(1024);
+        barrier.inject_background_error_for_test(io::Error::from_raw_os_error(libc::EIO));
+        let latched_flush = barrier.barrier_error().expect("the injected failure is latched");
+        for error in [
+            crate::engine::reopen_required(
+                io::ErrorKind::Other,
+                "tofu-db authority outcome is uncertain; close and reopen the engine".to_owned(),
+            ),
+            io::Error::from_raw_os_error(libc::EIO),
+            annotated,
+            latched_flush,
+            io::Error::new(io::ErrorKind::Interrupted, "search open cancelled"),
+            io::Error::new(io::ErrorKind::NotConnected, "search index is opening in background"),
+            io::Error::new(io::ErrorKind::BrokenPipe, "embedded runtime is closed"),
+        ] {
+            let cause = error.to_string();
+            let mapped = map_storage_error(error);
+            assert_eq!(mapped, SemanticExecutionError::StorageUnavailable, "{cause}");
+            assert!(mapped.retryable(), "{cause}");
+        }
+    }
+
     #[test]
     fn project_brain_payload_limit_maps_to_the_legacy_non_retryable_error() {
         let error = io::Error::new(
@@ -20229,6 +20281,390 @@
             event["payload"]["removedQueueIds"] == json!(["receipt-row"])));
     }
 
+    // A closed Turn's late background receipt, attached as round-0 evidence by
+    // `turn.projection.update`, retires its queue rows in the same commit
+    // (`background_command_retirement`; incident receipt b15df8be).
+    const RETIRE_CONV: &str = "retire-conv";
+    const RETIRE_TURN: &str = "retire-turn";
+    const RETIRE_BLOCK: &str = "injection:background-command:retire";
+
+    fn retirement_row(index: usize, attempt_id: &str) -> crate::queue::EnqueueItemRequest {
+        let receipt = index == 0;
+        crate::queue::EnqueueItemRequest {
+            conversation_id: RETIRE_CONV.to_owned(),
+            queue_id: format!("retire-row-{index:04}"),
+            kind: if receipt { "background_receipt" } else { "workflow_step" }.to_owned(),
+            priority: 50,
+            message: if receipt {
+                json!({"text":"late output","_backgroundCommand":"bg_late"})
+            } else {
+                json!({"text":format!("keep {index}")})
+            }.as_object().unwrap().clone(),
+            config: Map::new(),
+            created_at_ms: 1_200 + index as u64,
+            input_turn_id: String::new(),
+            output_turn_id: String::new(),
+            attempt_id: attempt_id.to_owned(),
+            dedupe_by_kind: false,
+            include_documents: false,
+        }
+    }
+
+    /// A settled Turn and a queue of `rows` items whose first is its late receipt;
+    /// the rows share one seed transaction (a database without a logical outbox).
+    /// Returns the Turn's projection revision.
+    fn seed_retirement(database: &mut AuthorityDatabase, rows: usize) -> u64 {
+        seed_retirement_turn(database);
+        let mut seed = database.begin_with_identity_claim_scopes(7, 11).unwrap();
+        for index in 0..rows {
+            crate::queue::enqueue_item(database, &mut seed, &retirement_row(index, "")).unwrap();
+        }
+        database.commit(seed).unwrap();
+        retire_turn(database)["projectionRevision"].as_u64().unwrap()
+    }
+
+    /// The same, with every row enqueued by the executor, which captures a
+    /// configured logical outbox atomically.
+    fn seed_retirement_through_executor(database: &mut AuthorityDatabase, rows: usize) -> u64 {
+        seed_retirement_turn(database);
+        for index in 0..rows {
+            let row = retirement_row(index, "");
+            execute(database, &request("queue.enqueue", 11,
+                json!({"conv_id":RETIRE_CONV,"user_id":11,"queue_id":row.queue_id,
+                       "kind":row.kind,"priority":row.priority,"message":row.message,
+                       "config":{},"created_at_ms":row.created_at_ms}),
+                Some(&format!("retire-enqueue-{index}"))), 1_200 + index as u64).unwrap();
+        }
+        retire_turn(database)["projectionRevision"].as_u64().unwrap()
+    }
+
+    fn seed_retirement_turn(database: &mut AuthorityDatabase) {
+        execute(database, &request("conversation.create", 11,
+            json!({"conv_id":RETIRE_CONV,"user_id":11,"created_at":1,"updated_at":1}),
+            Some("retire-create")), 1_000).unwrap();
+        execute(database, &request("turn.append_settled", 11,
+            json!({"conversation_id":RETIRE_CONV,"user_id":11,
+                   "command_id":"retire-seed","actor":"assistant",
+                   "kind":"reply","status":"completed",
+                   "projection":{"content":"report","thinking":"","segments":[]},
+                   "settlement":{"outcome":"completed","cause":"seed","resumeOptions":[]},
+                   "turn_id":RETIRE_TURN,"created_at":1_100}),
+            Some("retire-seed-command")), 1_100).unwrap();
+    }
+
+    fn retire_turn(database: &mut AuthorityDatabase) -> Value {
+        execute(database, &request("turn.get", 11,
+            json!({"conversation_id":RETIRE_CONV,"turn_id":RETIRE_TURN,"user_id":11}), None),
+            5_000).unwrap()
+    }
+
+    fn retire_queue(database: &mut AuthorityDatabase) -> Vec<(String, u64)> {
+        let listed = execute(database, &request("queue.list", 11,
+            json!({"conv_id":RETIRE_CONV,"user_id":11}), None), 5_001).unwrap();
+        listed.as_array().unwrap().iter().map(|row| (
+            row["queueId"].as_str().unwrap().to_owned(), row["position"].as_u64().unwrap()))
+            .collect()
+    }
+
+    fn retirement_projection(round: u64, queue_id: &str, command_id: &str) -> Value {
+        json!({"content":"report","thinking":"","segments":[],
+               "_bgCommandInjects":[{"blockId":RETIRE_BLOCK,"round":round,"count":1,
+                   "previews":[{"queueId":queue_id,"commandId":command_id,"text":"late output"}]}]})
+    }
+
+    fn retirement_member(disposition: &str, deliveries: Value) -> Value {
+        json!({"block_id":RETIRE_BLOCK,"disposition":disposition,"deliveries":deliveries})
+    }
+
+    fn late_delivery() -> Value {
+        json!([{"queue_id":"retire-row-0000","command_id":"bg_late"}])
+    }
+
+    fn retire_request(command: &str, expected: u64, projection: Value, member: Value) -> Request {
+        request("turn.projection.update", 11,
+            json!({"conversation_id":RETIRE_CONV,"user_id":11,"turn_id":RETIRE_TURN,
+                   "projection":projection,"expected_projection_revision":expected,
+                   "preserve_activity":true,"background_command_retirement":member}),
+            Some(command))
+    }
+
+    fn kept_rows(rows: usize) -> Vec<(String, u64)> {
+        (1..rows).map(|index| (format!("retire-row-{index:04}"), index as u64)).collect()
+    }
+
+    #[test]
+    fn turn_projection_retirement_removes_the_late_receipt_with_its_evidence_block() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        let revision = seed_retirement(&mut database, 3);
+        let retired = execute(&mut database, &retire_request("retire-1", revision,
+            retirement_projection(0, "retire-row-0000", "bg_late"),
+            retirement_member("settled_as_evidence", late_delivery())), 2_000).unwrap();
+        assert_eq!(retired["removedQueueIds"], json!(["retire-row-0000"]));
+        assert_eq!(retire_queue(&mut database), kept_rows(3));
+        let turn = retire_turn(&mut database);
+        assert_eq!(turn["projectionRevision"], json!(revision + 1));
+        assert_eq!(turn["projection"]["_bgCommandInjects"][0]["blockId"], RETIRE_BLOCK);
+        let changes = execute(&mut database, &request("turn.sync.changes", 11,
+            json!({"conversation_id":RETIRE_CONV,"user_id":11,"after":0}), None), 2_001).unwrap();
+        let patches: Vec<&Value> = changes["events"].as_array().unwrap().iter()
+            .filter(|event| event["type"] == "turn.patch").collect();
+        assert_eq!(patches.len(), 1);
+        assert_eq!(patches[0]["payload"]["removedQueueIds"], json!(["retire-row-0000"]));
+        // A lost-ACK replay, or a block attached before retirement existed,
+        // sends the unchanged projection: missing rows retire nothing else.
+        let again = execute(&mut database, &retire_request("retire-2", revision + 1,
+            retirement_projection(0, "retire-row-0000", "bg_late"),
+            retirement_member("settled_as_evidence", late_delivery())), 2_002).unwrap();
+        assert_eq!(again["removedQueueIds"], json!([]));
+        assert_eq!(retire_queue(&mut database), kept_rows(3));
+    }
+
+    #[test]
+    fn a_refused_retirement_changes_neither_the_turn_nor_the_queue() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        let revision = seed_retirement(&mut database, 3);
+        // A row bound to an attempt is protected intent, never retired as evidence.
+        let mut bind = database.begin_with_identity_claim_scopes(7, 11).unwrap();
+        let mut bound = retirement_row(0, "bound-attempt");
+        bound.queue_id = "retire-bound".to_owned();
+        bound.message.insert("_backgroundCommand".to_owned(), json!("bg_bound"));
+        crate::queue::enqueue_item(&database, &mut bind, &bound).unwrap();
+        database.commit(bind).unwrap();
+        let (turn, queue) = (retire_turn(&mut database), retire_queue(&mut database));
+        let late = || retirement_projection(0, "retire-row-0000", "bg_late");
+        let evidence = |deliveries| retirement_member("settled_as_evidence", deliveries);
+        let mut guidance = retire_request("retire-guidance", revision, late(), evidence(late_delivery()));
+        let mut payload: Value = serde_json::from_slice(&guidance.payload).unwrap();
+        payload["human_guidance_answer"] = json!({"guidanceId":"g","response":"yes","commandId":"c"});
+        guidance.payload = serde_json::to_vec(&payload).unwrap();
+        let invalid = [
+            retire_request("retire-round", revision,
+                retirement_projection(3, "retire-row-0000", "bg_late"), evidence(late_delivery())),
+            retire_request("retire-disposition", revision, late(),
+                retirement_member("consumed", late_delivery())),
+            retire_request("retire-empty", revision, late(), evidence(json!([]))),
+            retire_request("retire-duplicate", revision, late(), evidence(json!([
+                {"queue_id":"retire-row-0000","command_id":"bg_late"},
+                {"queue_id":"retire-row-0000","command_id":"bg_late"}]))),
+            retire_request("retire-disagree", revision, late(), evidence(json!([
+                {"queue_id":"retire-row-0001","command_id":"bg_late"}]))),
+            retire_request("retire-not-object", revision, late(), json!(["retire-row-0000"])),
+            guidance,
+        ];
+        for command in &invalid {
+            let error = execute(&mut database, command, 2_100).expect_err(&command.operation);
+            assert!(matches!(error, SemanticExecutionError::InvalidPayload
+                | SemanticExecutionError::InvalidPayloadFence(_)), "{:?}: {error:?}", command.command_id);
+            assert_eq!(retire_turn(&mut database), turn);
+            assert_eq!(retire_queue(&mut database), queue);
+        }
+        let conflicting = [
+            // The stored row belongs to bg_late, not to the command the block names.
+            retire_request("retire-other-command", revision,
+                retirement_projection(0, "retire-row-0000", "bg_other"),
+                evidence(json!([{"queue_id":"retire-row-0000","command_id":"bg_other"}]))),
+            retire_request("retire-bound", revision,
+                retirement_projection(0, "retire-bound", "bg_bound"),
+                evidence(json!([{"queue_id":"retire-bound","command_id":"bg_bound"}]))),
+        ];
+        for command in &conflicting {
+            let error = execute(&mut database, command, 2_200).expect_err(&command.operation);
+            assert!(matches!(error, SemanticExecutionError::Conflict
+                | SemanticExecutionError::ConflictFence(_)), "{:?}: {error:?}", command.command_id);
+            assert_eq!(retire_turn(&mut database), turn);
+            assert_eq!(retire_queue(&mut database), queue);
+        }
+        let stale = execute(&mut database, &retire_request("retire-stale", revision + 5, late(),
+            evidence(late_delivery())), 2_300).expect_err("stale projection");
+        assert!(matches!(stale, SemanticExecutionError::TurnProjectionStale), "{stale:?}");
+        assert_eq!(retire_queue(&mut database), queue);
+    }
+
+    #[test]
+    fn a_retirement_never_reaches_another_owners_queue_row() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        let revision = seed_retirement(&mut database, 1);
+        execute(&mut database, &request("conversation.create", 12,
+            json!({"conv_id":"other-conv","user_id":12,"created_at":1,"updated_at":1}),
+            Some("other-create")), 1_000).unwrap();
+        execute(&mut database, &request("queue.enqueue", 12,
+            json!({"conv_id":"other-conv","user_id":12,"queue_id":"other-row",
+                   "kind":"background_receipt","priority":50,
+                   "message":{"text":"theirs","_backgroundCommand":"bg_theirs"},
+                   "config":{},"created_at_ms":2}), Some("other-enqueue")), 1_300).unwrap();
+        let retired = execute(&mut database, &retire_request("retire-foreign", revision,
+            retirement_projection(0, "other-row", "bg_theirs"),
+            retirement_member("settled_as_evidence",
+                json!([{"queue_id":"other-row","command_id":"bg_theirs"}]))), 2_000).unwrap();
+        assert_eq!(retired["removedQueueIds"], json!([]));
+        let theirs = execute(&mut database, &request("queue.list", 12,
+            json!({"conv_id":"other-conv","user_id":12}), None), 2_001).unwrap();
+        assert_eq!(theirs.as_array().unwrap().len(), 1);
+        assert_eq!(retire_queue(&mut database), vec![("retire-row-0000".to_owned(), 1)]);
+    }
+
+    /// Retires the queue's first row in one transaction; returns the overlay room
+    /// left before commit (0: the commit takes the exact legacy tree path) and the queue.
+    fn retire_queue_head(rows: usize) -> (usize, Vec<(String, u64)>) {
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        database.set_write_overlay_for_test(true);
+        let revision = seed_retirement(&mut database, rows);
+        let mut transaction = database.begin_with_identity_claim_scopes(7, 11).unwrap();
+        crate::turn::update_projection(&database, &mut transaction, &crate::turn::ProjectionUpdateRequest {
+            preserve_activity: true,
+            conversation_id: RETIRE_CONV.to_owned(),
+            turn_id: RETIRE_TURN.to_owned(),
+            projection_json: serde_json::to_vec(
+                &retirement_projection(0, "retire-row-0000", "bg_late")).unwrap(),
+            expected_projection_revision: revision,
+            updated_at_ms: 3_000,
+            committed_at_ms: 3_000,
+        }, Some(&retirement_member("settled_as_evidence", late_delivery()))).unwrap();
+        let room = database.entity_overlay_delta_room(&transaction);
+        database.commit(transaction).unwrap();
+        (room, retire_queue(&mut database))
+    }
+
+    /// Opens a replay of an applied retirement (its row already gone), commits a
+    /// concurrent enqueue of `queue_id` while it is open, then commits the replay.
+    fn replay_beside_concurrent_enqueue(queue_id: &str) -> (io::Result<()>, Vec<(String, u64)>) {
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        database.set_write_overlay_for_test(true);
+        let revision = seed_retirement(&mut database, 2);
+        execute(&mut database, &retire_request("retire-first", revision,
+            retirement_projection(0, "retire-row-0000", "bg_late"),
+            retirement_member("settled_as_evidence", late_delivery())), 2_000).unwrap();
+        let mut replay = database.begin_with_identity_claim_scopes(7, 11).unwrap();
+        let response = crate::turn::update_projection(&database, &mut replay, &crate::turn::ProjectionUpdateRequest {
+            preserve_activity: true,
+            conversation_id: RETIRE_CONV.to_owned(),
+            turn_id: RETIRE_TURN.to_owned(),
+            projection_json: serde_json::to_vec(
+                &retirement_projection(0, "retire-row-0000", "bg_late")).unwrap(),
+            expected_projection_revision: revision + 1,
+            updated_at_ms: 3_000,
+            committed_at_ms: 3_000,
+        }, Some(&retirement_member("settled_as_evidence", late_delivery()))).unwrap();
+        let response: Value = serde_json::from_slice(&response).unwrap();
+        assert_eq!(response["removedQueueIds"], json!([]));
+        let mut enqueue = database.begin_with_identity_claim_scopes(7, 11).unwrap();
+        let mut row = retirement_row(if queue_id == "retire-row-0000" { 0 } else { 9 }, "");
+        row.queue_id = queue_id.to_owned();
+        crate::queue::enqueue_item(&database, &mut enqueue, &row).unwrap();
+        database.commit(enqueue).unwrap();
+        let outcome = database.commit(replay).map(|_| ());
+        (outcome, retire_queue(&mut database))
+    }
+
+    #[test]
+    fn a_fully_missing_replay_commits_beside_a_concurrent_enqueue_and_changes_no_row() {
+        // Nothing matched, so the replay reads no order range: an enqueue of
+        // another row cannot conflict with it.
+        let (outcome, queue) = replay_beside_concurrent_enqueue("retire-row-0100");
+        outcome.unwrap();
+        assert_eq!(queue, vec![("retire-row-0001".to_owned(), 1), ("retire-row-0100".to_owned(), 2)]);
+    }
+
+    #[test]
+    fn an_absent_listed_row_is_a_witness_so_its_concurrent_creation_conflicts() {
+        let (outcome, queue) = replay_beside_concurrent_enqueue("retire-row-0000");
+        assert!(outcome.is_err(), "a replay committed over a concurrently created listed row");
+        assert_eq!(queue, vec![("retire-row-0001".to_owned(), 1), ("retire-row-0000".to_owned(), 2)]);
+    }
+
+    #[test]
+    fn a_retirement_renumbers_a_long_queue_on_the_overlay_path_and_past_its_room() {
+        // 63 renumbered rows fit the overlay envelope; 399 exceed it, so that
+        // commit takes the exact legacy tree path. The end state is the same.
+        for (rows, overlay) in [(64, true), (400, false)] {
+            let (room, queue) = retire_queue_head(rows);
+            assert_eq!(room > 0, overlay, "{rows} rows left overlay room {room}");
+            assert_eq!(queue, kept_rows(rows));
+        }
+    }
+
+    fn seeded_retirement_fault_database(
+        vfs: std::sync::Arc<DeterministicVfs>,
+    ) -> (AuthorityDatabase, u64) {
+        let mut database = simulated_database(vfs.clone());
+        let revision = seed_retirement_through_executor(&mut database, 3);
+        vfs.arm_fault(None).unwrap();
+        (database, revision)
+    }
+
+    fn assert_retirement_recovers_all_or_nothing(vfs: std::sync::Arc<DeterministicVfs>) {
+        vfs.crash().unwrap();
+        vfs.arm_fault(None).unwrap();
+        let mut recovered =
+            AuthorityDatabase::open_with_vfs(std::path::Path::new("/data"), vfs).unwrap();
+        recovered
+            .configure_logical_outbox(&[73; 32], 1024 * 1024, 128 * 1024)
+            .unwrap();
+        let queue = retire_queue(&mut recovered);
+        let turn = retire_turn(&mut recovered);
+        let changes = execute(&mut recovered, &request("turn.sync.changes", 11,
+            json!({"conversation_id":RETIRE_CONV,"user_id":11,"after":0}), None), 6_000).unwrap();
+        let patches: Vec<&Value> = changes["events"].as_array().unwrap().iter()
+            .filter(|event| event["type"] == "turn.patch").collect();
+        match queue.len() {
+            3 => {
+                assert!(turn["projection"].get("_bgCommandInjects").is_none(), "{turn}");
+                assert!(patches.is_empty());
+            }
+            2 => {
+                assert_eq!(queue, kept_rows(3));
+                assert_eq!(turn["projection"]["_bgCommandInjects"][0]["blockId"], RETIRE_BLOCK);
+                assert_eq!(patches.len(), 1);
+                assert_eq!(patches[0]["payload"]["removedQueueIds"], json!(["retire-row-0000"]));
+            }
+            count => panic!("a partial retirement recovered with {count} queue rows"),
+        }
+    }
+
+    #[test]
+    fn every_turn_projection_retirement_commit_fault_recovers_all_or_nothing() {
+        let baseline_vfs = prepared_vfs();
+        let (mut baseline, revision) = seeded_retirement_fault_database(baseline_vfs.clone());
+        let command = retire_request("fault-retire", revision,
+            retirement_projection(0, "retire-row-0000", "bg_late"),
+            retirement_member("settled_as_evidence", late_delivery()));
+        execute(&mut baseline, &command, 2_000).unwrap();
+        let trace = baseline_vfs.trace().unwrap();
+        drop(baseline);
+        assert_retirement_recovers_all_or_nothing(baseline_vfs);
+        let mut cases = Vec::new();
+        for operation_number in 1..=trace.len() as u64 {
+            cases.push(FaultRule {
+                operation_number,
+                action: FaultAction::ErrorBefore(io::ErrorKind::Interrupted),
+            });
+        }
+        for (index, operation) in trace.iter().enumerate() {
+            let operation_number = index as u64 + 1;
+            match operation {
+                Operation::Write => cases.push(FaultRule {
+                    operation_number, action: FaultAction::ShortWrite(7) }),
+                // The WAL frame is lost after the rows were deleted in memory.
+                Operation::SyncData | Operation::SyncAll => cases.push(FaultRule {
+                    operation_number, action: FaultAction::DropSync }),
+                _ => {}
+            }
+        }
+        for rule in cases {
+            let vfs = prepared_vfs();
+            let (mut database, _) = seeded_retirement_fault_database(vfs.clone());
+            vfs.arm_fault(Some(rule)).unwrap();
+            let _ = execute(&mut database, &command, 2_000);
+            drop(database);
+            assert_retirement_recovers_all_or_nothing(vfs);
+        }
+    }
+
     #[test]
     fn queue_injection_ack_drains_only_never_accepted_inbox_rows() {
         let directory = tempfile::tempdir().unwrap();
@@ -24081,4 +24517,33 @@ fn record_list_headers_skip_blob_values_and_keep_scope_versions_and_cursors() {
         assert_eq!(retained["projection"]["usageComplete"], false);
         assert_eq!(retained["projection"]["content"], "saved");
         assert_eq!(retained["projectionRevision"], revision);
+    }
+
+    #[test]
+    fn turn_sync_changes_admits_max_bytes_only_within_the_subscription_window_contract() {
+        use crate::generated_conversation_change_page::{
+            CHANGE_PAGE_MAX_BYTES, CHANGE_PAGE_MIN_BYTES,
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        let read = |max_bytes: Option<Value>| {
+            let mut payload = json!({
+                "conversation_id": "bounded-conversation", "user_id": 11, "after": 0, "limit": 10,
+            });
+            if let Some(max_bytes) = max_bytes {
+                payload["max_bytes"] = max_bytes;
+            }
+            request("turn.sync.changes", 11, payload, None)
+        };
+        for invalid in [
+            json!(CHANGE_PAGE_MIN_BYTES - 1), json!(CHANGE_PAGE_MAX_BYTES + 1), json!(true),
+            json!("65536"), json!(65_536.5), json!(-1), Value::Null,
+        ] {
+            assert!(matches!(execute(&mut database, &read(Some(invalid.clone())), 2_000),
+                Err(SemanticExecutionError::InvalidPayload)), "admitted max_bytes {invalid}");
+        }
+        for valid in [CHANGE_PAGE_MIN_BYTES, CHANGE_PAGE_MAX_BYTES] {
+            execute(&mut database, &read(Some(json!(valid))), 2_000).unwrap();
+        }
+        execute(&mut database, &read(None), 2_000).unwrap();
     }

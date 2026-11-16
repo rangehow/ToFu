@@ -3,8 +3,8 @@
    not a raw diff row. */
 .ptool-batch-done-single.md-content {
   padding: var(--space-2) var(--space-3);
-  background: rgba(255,255,255,0.03);
-  border: 1px solid rgba(255,255,255,0.06);
+  background: color-mix(in srgb, white 3%, transparent);
+  border: var(--control-edge-inset) solid color-mix(in srgb, white 6%, transparent);
   font-size: var(--font-size-md);
 }
 .ptool-batch-done-single.md-content > :first-child { margin-top: 0; }
@@ -29,23 +29,15 @@
 .ptool-memory-block > summary:hover {
   background: var(--accent-subtle);
 }
-.ptool-memory-block > summary .ptool-text::after {
-  content: " ▸";
-  font-size: 10px;
-  opacity: 0.5;
-}
-.ptool-memory-block[open] > summary .ptool-text::after {
-  content: " ▾";
-}
 .ptool-memory-body {
-  margin: var(--space-1) 0 6px 11px;
-  padding: var(--space-3) 14px;
+  margin: var(--space-1) 0 calc(var(--space-1) + 2 * var(--control-edge-inset)) calc(var(--space-3) - var(--control-edge-inset));
+  padding: var(--space-3) calc(var(--space-3) + 2 * var(--control-edge-inset));
   border-left: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
   background: var(--accent-subtle);
   border-radius: 0 8px 8px 0;
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  gap: calc(var(--space-2) + var(--control-edge-inset));
 }
 .ptool-memory-name {
   font-size: 13.5px;
@@ -57,7 +49,7 @@
 .ptool-memory-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: calc(var(--space-1) + 2 * var(--control-edge-inset));
 }
 .ptool-memory-chip {
   display: inline-flex;
@@ -92,7 +84,7 @@
 }
 .ptool-memory-content {
   font-size: var(--font-size-md);
-  padding-top: 9px;
+  padding-top: calc(var(--space-2) + var(--control-edge-inset));
   border-top: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
 }
 .ptool-memory-content > :first-child { margin-top: 0; }

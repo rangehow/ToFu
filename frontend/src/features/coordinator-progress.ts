@@ -19,7 +19,7 @@
  * Worker model) stays attached, and the fold, scroll and focus survive live
  * board updates.
  */
-import { createButton } from '../ui';
+import { createButton, createDisclosureSummary } from '../ui';
 import { t } from '../i18n';
 import type {
   CoordinatorProgressBoard, CoordinatorProgressTask, CoordinatorProgressTranslation,
@@ -163,8 +163,8 @@ export function createCoordinatorProgress(ports: CoordinatorProgressPorts): Coor
   card.className = 'coordinator-progress';
   card.open = ports.open;
   card.addEventListener('toggle', () => ports.toggle(card.open));
-  const head = document.createElement('summary');
-  head.className = 'coordinator-progress-head';
+  const head = createDisclosureSummary(document);
+  head.classList.add('coordinator-progress-head');
   const body = document.createElement('div');
   body.className = 'coordinator-progress-body';
   const content = document.createElement('div');
@@ -239,8 +239,7 @@ export function createCoordinatorProgress(ports: CoordinatorProgressPorts): Coor
         fold.className = 'coordinator-progress-finished';
         fold.open = finishedOpen;
         fold.addEventListener('toggle', () => { finishedOpen = fold.open; ports.toggleFinished(fold.open); });
-        const label = document.createElement('summary');
-        label.textContent = t('coordinatorProgress.finished', { count: finished.length });
+        const label = createDisclosureSummary(document, t('coordinatorProgress.finished', { count: finished.length }));
         fold.append(label, taskList(finished, say));
         contentNodes.push(fold);
       }

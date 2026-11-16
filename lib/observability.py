@@ -38,7 +38,7 @@ _HTTP_BUCKETS = (0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0)
 _WAIT_BUCKETS = (0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0)
 _STORAGE_BUCKETS = (0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1,
                     0.25, 0.5, 1.0, 2.5, 5.0)
-_STORAGE_RPC_OUTCOMES = frozenset({'success', 'error'})
+_STORAGE_RPC_OUTCOMES = frozenset({'success', 'error', 'cancelled'})
 _LLM_BUCKETS = (0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 180.0)
 _ROUND_BUCKETS = (1, 2, 3, 4, 6, 8, 12, 20, 40, 80)
 _TOKEN_BUCKETS = (1_000, 4_000, 16_000, 32_000, 64_000, 128_000, 256_000)

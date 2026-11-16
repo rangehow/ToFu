@@ -17,10 +17,7 @@ from lib.background_command_projection import background_command_injection_recor
 from lib.storage.errors import StorageError
 
 pytest_plugins = ('tests.support.semantic_authorities',)
-# The native engine does not implement the member yet; what it does instead is
-# pinned in test_background_receipt_retirement_without_member.py.
-pytestmark = [pytest.mark.unit,
-              pytest.mark.parametrize('semantic_authority', ['sqlite', 'postgres'], indirect=True)]
+pytestmark = pytest.mark.unit
 
 CONV = 'retire-conv'
 

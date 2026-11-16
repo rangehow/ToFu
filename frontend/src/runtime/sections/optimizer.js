@@ -167,9 +167,8 @@ async function _refreshOptimizerPanel() {
     // History — everything else (older than today)
     const older = proposals.filter(p => !todays.includes(p));
     if (older.length > 0) {
-      html += `<div class="opt-section-title opt-history-header" data-tofu-action="_optToggleHistory()">
+      html += `<div id="optHistoryToggle" class="opt-section-title opt-history-header ui-disclosure" aria-expanded="false" data-tofu-action="_optToggleHistory()">
         ${t('optimizer.olderProposals')} <span class="opt-count">${older.length}</span>
-        <span id="optHistoryArrow" style="float:right">▸</span>
       </div>`;
       html += '<div id="optHistoryBody" style="display:none">';
       for (const p of older.slice(0, 40)) {
@@ -186,11 +185,11 @@ async function _refreshOptimizerPanel() {
 
 function _optToggleHistory() {
   const body = document.getElementById("optHistoryBody");
-  const arrow = document.getElementById("optHistoryArrow");
+  const toggle = document.getElementById("optHistoryToggle");
   if (!body) return;
   const open = body.style.display !== "none";
   body.style.display = open ? "none" : "block";
-  if (arrow) arrow.textContent = open ? "▸" : "▾";
+  if (toggle) toggle.setAttribute("aria-expanded", open ? "false" : "true");
 }
 
 function _renderOptimizerRow(p) {

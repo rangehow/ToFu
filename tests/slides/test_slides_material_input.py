@@ -32,18 +32,15 @@ def test_topic_limit_is_unchanged():
 
 
 def test_research_stage_attaches_supplied_material(monkeypatch):
-    captured = {}
-
-    def fake_research(topic):
-        captured['topic'] = topic
-        return {'topic': topic, 'cards': []}
-
+    called = []
     monkeypatch.setattr(
-        'lib.production.research.research_topic', fake_research)
+        'lib.production.research.research_topic',
+        lambda topic: called.append(topic))
     material = '## 真实证据\nCARD 困惑度 34.40 vs AR 38.68。'
     result = _run_research({'topic': 'CARD 汇报', 'material': material})
-    assert captured['topic'] == 'CARD 汇报'
+    assert called == []
     assert result['supplied_material'] == material
+    assert result['material_cards'][0]['point'] == 'CARD 困惑度 34.40 vs AR 38.68。'
 
 
 def test_research_stage_without_material_changes_nothing(monkeypatch):

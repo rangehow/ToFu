@@ -206,9 +206,9 @@ fn decode_transaction_entry(
                 "logical outbox fragments exceed declared length",
             ));
         }
-        bytes.try_reserve(fragment.len()).map_err(|error| {
-            io::Error::other(format!("logical outbox record allocation failed: {error}"))
-        })?;
+        bytes
+            .try_reserve(fragment.len())
+            .map_err(crate::resource_exhaustion::reservation_error)?;
         bytes.extend_from_slice(&fragment);
     }
     if bytes.len() != expected || Sha256::digest(&bytes).as_slice() != &inline[16..48] {

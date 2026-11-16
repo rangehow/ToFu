@@ -343,22 +343,50 @@ Problem: settling a Turn used structural range retirement for its temporary
 projection head. That operation drains the entire authority's overlay before
 rewriting the tree, making one conversation's completion pay for unrelated
 pending writes. Repeating it for many completing conversations defeats deferred
-materialization.
+materialization. On 2026-11-13 every steer still did this through
+`stage_projection_update`, and every 1,200th Project Brain event retired its
+old event indexes the same way; both appeared as multi-second tree-path holds.
 
-Decision: `turn.rs::retire_event_projection_head` scans at most one checkpoint plus
-the contract's maximum patch count plus one overflow witness. A normal bounded
-head is deleted through exact entity tombstones in the settlement's ordinary
-WAL transaction. The range witness preserves concurrent-insert conflicts;
-owner scoping, pinned snapshots, and atomic settlement remain unchanged.
-An unexpectedly larger range retains structural retirement, including all rows.
-Only single-event settlement and head rollover use this path. Bulk recovery
-keeps range retirement so hundreds of heads cannot exhaust point-write limits.
+Decision: `turn.rs::scan_projection_head` reads at most one checkpoint plus
+the contract's maximum patch count and the head's text pages, plus one overflow
+witness. A normal bounded head is deleted through exact entity tombstones in
+the commit's ordinary WAL transaction. The range witness preserves
+concurrent-insert conflicts; owner scoping, pinned snapshots, and atomic
+settlement remain unchanged. An unexpectedly larger range retains structural
+retirement, including all rows. Event settlement and head rollover
+(`retire_event_projection_head`) always delete a bounded head this way: one
+transaction can fold several events, and a structural retirement would refuse
+a later event's write into the same range. Single-Turn projection updates
+(`retire_updated_projection_head`: steers, branch, compaction and mode edits
+through `stage_projection_update`) delete it this way while the tombstones fit
+the transaction's remaining overlay envelope
+(`AuthorityDatabase::entity_overlay_delta_room`), and otherwise keep the
+structural retirement they always used. Bulk recovery keeps range retirement
+(`retire_projection_head`) so hundreds of heads cannot exhaust point-write
+limits. A Project Brain checkpoint retires the event indexes below its retained
+tail the same way (`project_brain.rs::retire_event_indexes`): every index key of
+a project has one length, so the envelope's room sets the tombstone budget; the
+paged scan reads one row past it, and a backlog the envelope cannot carry keeps
+structural retirement. Verify `turn::projection_retirement_tests`,
+`semantic_executor` `a_steer_commit_retires_its_projection_head_without_draining_the_overlay`
+and `project_brain` `checkpoint_install_retires_old_event_indexes_without_draining_the_overlay`
+(reads equal the structural result byte for byte), the witness specs
+`retirement_conflicts_with_a_concurrent_projection_patch` and
+`checkpoint_index_retirement_conflicts_with_an_index_insert_after_its_scan`, and
+the crash campaigns `every_steer_commit_fault_over_a_projection_head_recovers_one_atomic_prefix`
+and `every_checkpoint_commit_fault_recovers_one_atomic_prefix`.
 
 Alternatives considered: leaving abandoned heads indefinitely would add
 persistent garbage; asynchronous cleanup would require a new durable queue and
 its recovery protocol; globally disabling structural drains would violate the
 root/overlay coverage contract. Bounded point deletion uses the existing
-transaction and tombstone lifecycle without those changes.
+transaction and tombstone lifecycle without those changes. Carrying range
+retirement in the overlay itself was rejected for these bounded ranges: a
+range-tombstone delta record must be consulted by every overlay point read and
+scan, validated against pending writes, applied at merge with per-key versions,
+replayed after a crash, and shipped as a new delta format with a downgrade
+path. Unbounded retirements (bulk recovery, deletes, retention) stay
+structural; removing the drain from that tree path is a separate change.
 
 ## Alternatives considered
 

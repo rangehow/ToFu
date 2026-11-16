@@ -325,6 +325,9 @@ export class ConversationSyncCoordinator implements ConversationSyncConnection {
     mode: 'continuous' | 'detached',
   ): Promise<ConversationTurnPage> {
     const expectedSequence = this.sequence;
+    // The server answers only a page of the lineage this cursor names; a page
+    // of any other is refused without a head and repaired from a snapshot.
+    const cursor = this.cursorValue;
     const ranks = this.roundDirectoryRevision;
     const viewportBytes = conversationLoadBudget(this.options.snapshotViewport?.()).windowBytes;
     const chain = this.historyChain;
@@ -340,7 +343,7 @@ export class ConversationSyncCoordinator implements ConversationSyncConnection {
       expectedSequence,
       beforeOrdinal,
       limit,
-      { timeout: SNAPSHOT_FETCH_TIMEOUT_MS, signal: this.reads.signal, query: { windowBytes } },
+      { timeout: SNAPSHOT_FETCH_TIMEOUT_MS, signal: this.reads.signal, query: { windowBytes, cursor } },
     ).then(async (wirePage) => {
       if (this.closed) throw new Error('Conversation sync coordinator is closed');
       const page = materializeSnapshotReferences(wirePage);

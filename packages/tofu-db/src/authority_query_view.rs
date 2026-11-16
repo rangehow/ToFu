@@ -7,6 +7,7 @@ use std::sync::RwLock;
 #[derive(Clone)]
 pub(super) struct ReadOptions {
     event_read_epoch: Uuid,
+    sync_lineage_epoch: u64,
     worker_lease_clock: Arc<crate::worker_lease_clock::WorkerLeaseClock>,
     worker_control: Arc<crate::worker_control::WorkerControl>,
     foreground_admissions: Arc<std::sync::atomic::AtomicU64>,
@@ -27,6 +28,7 @@ impl ReadOptions {
                 .ok()
                 .map(|engine| engine.shared_blob_encoder()),
             event_read_epoch: database.event_read_epoch,
+            sync_lineage_epoch: database.sync_lineage_epoch,
             worker_lease_clock: Arc::clone(&database.worker_lease_clock),
             worker_control: Arc::clone(&database.worker_control),
             foreground_admissions: Arc::clone(&database.foreground_admissions),
@@ -42,6 +44,7 @@ impl ReadOptions {
         AuthorityDatabase {
             entities,
             event_read_epoch: self.event_read_epoch,
+            sync_lineage_epoch: self.sync_lineage_epoch,
             worker_lease_clock: Arc::clone(&self.worker_lease_clock),
             worker_control: Arc::clone(&self.worker_control),
             foreground_admissions: Arc::clone(&self.foreground_admissions),

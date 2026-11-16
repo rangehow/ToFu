@@ -5350,3 +5350,90 @@
         let reopened = Engine::open_with_vfs(Path::new("/data"), vfs).unwrap();
         assert_eq!(reopened.transaction_at(2).unwrap().unwrap().envelope.inline_payload, b"still writable");
     }
+
+    /// DolphinFS (BeeGFS through `bgfuse`) refuses a new name in a directory
+    /// that holds 1,000,000 entries with `Remote I/O error (os error 121)`
+    /// (docs/STORAGE_OPERATIONS.md, "Loose shards past a per-directory entry
+    /// cap").
+    const DOLPHINFS_DIRECTORY_ENTRY_CAP: usize = 1_000_000;
+
+    /// A small payload whose block lands in `shard`, and a filler that takes
+    /// the transaction past the carried bound, so the commit itself spills
+    /// both to loose files inside the commit.
+    fn spilled_commit_payloads(shard: u8, tag: &str, fill: u8) -> (Vec<u8>, Vec<u8>) {
+        let small = (0_u64..)
+            .map(|index| format!("{tag} {index}").into_bytes())
+            .find(|payload| BlockId::for_payload(payload).0[0] == shard)
+            .unwrap();
+        (small, vec![fill; MAX_CARRIED_PAYLOAD_BYTES + 128])
+    }
+
+    fn loose_shard_path(shard: u8) -> PathBuf {
+        Path::new("/data/blocks").join(format!("{shard:02x}"))
+    }
+
+    fn overflow_block_path(id: BlockId) -> PathBuf {
+        let hexadecimal = id.to_hex();
+        Path::new("/data/blocks-overflow")
+            .join(&hexadecimal[..2])
+            .join(&hexadecimal[2..4])
+            .join(format!("{hexadecimal}.blk"))
+    }
+
+    /// The refusal path of `loose-overflow-v1` at production's real limit: a
+    /// shard holding 1,000,000 entries refuses the commit's loose write with
+    /// EREMOTEIO; the block goes to its overflow leaf, the commit succeeds and
+    /// nothing latches. After a crash, with the shard still capped, the reopened
+    /// engine reads blocks from the shard and from the overflow leaf.
+    #[test]
+    fn a_loose_write_refused_at_the_dolphinfs_entry_cap_overflows_without_failing_the_commit_or_latching() {
+        const SHARD: u8 = 0x01;
+        let (vfs, mut engine) = initialized_simulated_engine();
+        let shard = loose_shard_path(SHARD);
+        let (before, before_filler) = spilled_commit_payloads(SHARD, "written below the cap", 0xa1);
+        let before_id = BlockId::for_payload(&before);
+        engine.commit_transaction(b"below the cap", &[&before, &before_filler]).unwrap();
+        assert_eq!(vfs.metadata(&shard.join(format!("{}.blk", before_id.to_hex()))).unwrap(), FileKind::File);
+
+        // The shard now holds exactly DolphinFS's limit: its real names plus
+        // names no listing shows.
+        let real_names = vfs.read_directory(&shard).unwrap().len();
+        vfs.hold_directory_entries(&shard, DOLPHINFS_DIRECTORY_ENTRY_CAP - real_names).unwrap();
+        vfs.cap_directory_entries(&shard, DOLPHINFS_DIRECTORY_ENTRY_CAP).unwrap();
+        let refused = vfs.create_dir(&shard.join("probe")).unwrap_err();
+        assert_eq!(refused.raw_os_error(), Some(121), "DolphinFS's exact errno: {refused}");
+        assert_eq!(refused.raw_os_error(), Some(libc::EREMOTEIO));
+
+        let (after, after_filler) = spilled_commit_payloads(SHARD, "refused at the cap", 0xb2);
+        let after_id = BlockId::for_payload(&after);
+        engine.commit_transaction(b"at the cap", &[&after, &after_filler]).unwrap();
+        assert!(!engine.is_restart_required(), "a refused name latched the authority");
+        engine.require_usable_authority().unwrap();
+        assert_eq!(vfs.read_directory(&shard).unwrap().len(), real_names, "nothing new in the refusing shard");
+        assert_eq!(vfs.metadata(&overflow_block_path(after_id)).unwrap(), FileKind::File);
+        engine.commit(b"after the overflow").unwrap();
+        assert_eq!(engine.state.durable_sequence, 3);
+
+        std::mem::forget(engine);
+        vfs.crash().unwrap();
+        let mut reopened = Engine::open_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
+        assert_eq!(reopened.state.durable_sequence, 3, "every acknowledged commit survived");
+        assert!(!reopened.is_restart_required());
+        assert_eq!(reopened.read_block(before_id).unwrap(), before, "the block in its shard");
+        assert_eq!(reopened.read_block(after_id).unwrap(), after, "the block in its overflow leaf");
+        assert_eq!(reopened.read_block(BlockId::for_payload(&before_filler)).unwrap(), before_filler);
+        assert_eq!(reopened.read_block(BlockId::for_payload(&after_filler)).unwrap(), after_filler);
+        assert_eq!(
+            reopened.transaction_at(2).unwrap().unwrap().envelope.inline_payload,
+            b"at the cap",
+        );
+
+        // The overflow mark is durable: with room back in the shard, a new
+        // block of that shard still goes to the overflow leaf.
+        vfs.cap_directory_entries(&shard, usize::MAX).unwrap();
+        let (later, later_filler) = spilled_commit_payloads(SHARD, "after the reopen", 0xc3);
+        reopened.commit_transaction(b"after the reopen", &[&later, &later_filler]).unwrap();
+        assert_eq!(vfs.metadata(&overflow_block_path(BlockId::for_payload(&later))).unwrap(), FileKind::File);
+        assert_eq!(vfs.read_directory(&shard).unwrap().len(), real_names);
+        assert!(!reopened.is_restart_required());
+    }

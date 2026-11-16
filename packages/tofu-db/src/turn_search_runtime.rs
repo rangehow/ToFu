@@ -5,7 +5,7 @@ use crate::authority::AuthorityDatabase;
 use crate::authority_gc_online::{OnlineGarbageCollectionHandle, OnlineGcDatabase};
 use crate::turn_search_projection::{
     ConversationSearchHit, ConversationSearchPage, ConversationSearchRequest,
-    OpenTurnSearchProjection, TurnSearchDocument,
+    OpenTurnSearchProjection, ScopeDiff, ScopeItem, ScopeItemKey,
 };
 use crate::vfs::{RealVfs, Vfs};
 use std::io;
@@ -451,28 +451,17 @@ impl TurnSearchProjection {
     ) -> io::Result<()> {
         self.writable()?.set_owner_indexing(tenant, owner, indexing)
     }
-    pub(crate) fn is_published(
-        &self,
-        tenant: u64,
-        owner: u64,
-        conversation: &str,
-        generation: &str,
-    ) -> io::Result<bool> {
-        self.opened()?
-            .is_published(tenant, owner, conversation, generation)
-    }
     pub(crate) fn source_incomplete(&self, tenant: u64, owner: u64) -> io::Result<bool> {
         self.opened()?.source_incomplete(tenant, owner)
     }
-    pub(crate) fn mark_rebuild_incomplete(
+    pub(crate) fn observe_backfill_generation(
         &mut self,
         tenant: u64,
         owner: u64,
-        conversation: &str,
-        generation: &str,
+        generation: u64,
     ) -> io::Result<()> {
         self.writable()?
-            .mark_rebuild_incomplete(tenant, owner, conversation, generation)
+            .observe_backfill_generation(tenant, owner, generation)
     }
     pub(crate) fn prepare_owner(
         &mut self,
@@ -515,61 +504,79 @@ impl TurnSearchProjection {
         self.writable()?
             .acknowledge_owner_backfill(tenant, owner, source, activation)
     }
-    pub(crate) fn set_conversation_title(
+    pub(crate) fn diff_scope(
+        &self,
+        tenant_id: u64,
+        owner_user_id: u64,
+        conversation_id: &str,
+        turns: &std::collections::BTreeMap<String, u64>,
+        archives: &[String],
+    ) -> io::Result<ScopeDiff> {
+        self.opened()?
+            .diff_scope(tenant_id, owner_user_id, conversation_id, turns, archives)
+    }
+    pub(crate) fn retract_scope_items(
         &mut self,
-        tenant: u64,
-        owner: u64,
-        conversation: &str,
-        generation: &str,
+        tenant_id: u64,
+        owner_user_id: u64,
+        conversation_id: &str,
+        items: &[ScopeItemKey],
         title: &str,
+        rebuild: bool,
+    ) -> io::Result<u64> {
+        self.writable()?.retract_scope_items(
+            tenant_id,
+            owner_user_id,
+            conversation_id,
+            items,
+            title,
+            rebuild,
+        )
+    }
+    pub(crate) fn index_scope_items(
+        &mut self,
+        tenant_id: u64,
+        owner_user_id: u64,
+        conversation_id: &str,
+        title: &str,
+        items: &[ScopeItem<'_>],
     ) -> io::Result<()> {
         self.writable()?
-            .set_conversation_title(tenant, owner, conversation, generation, title)
+            .index_scope_items(tenant_id, owner_user_id, conversation_id, title, items)
     }
-    pub fn begin_conversation_rebuild(
+    pub(crate) fn publish_scope(
         &mut self,
         tenant_id: u64,
         owner_user_id: u64,
         conversation_id: &str,
-        generation: &str,
         updated_at_ms: u64,
-    ) -> io::Result<()> {
-        self.writable()?.begin_conversation_rebuild(
+        title: &str,
+    ) -> io::Result<bool> {
+        self.writable()?.publish_scope(
             tenant_id,
             owner_user_id,
             conversation_id,
-            generation,
             updated_at_ms,
+            title,
         )
     }
-    pub fn append_conversation_page(
+    #[cfg(test)]
+    pub(crate) fn replace_conversation(
         &mut self,
         tenant_id: u64,
         owner_user_id: u64,
         conversation_id: &str,
-        generation: &str,
-        documents: &[TurnSearchDocument],
+        updated_at_ms: u64,
+        title: &str,
+        documents: &[crate::turn_search_projection::TurnSearchDocument],
     ) -> io::Result<()> {
-        self.writable()?.append_conversation_page(
+        self.writable()?.replace_conversation(
             tenant_id,
             owner_user_id,
             conversation_id,
-            generation,
+            updated_at_ms,
+            title,
             documents,
-        )
-    }
-    pub fn finalize_conversation_rebuild(
-        &mut self,
-        tenant_id: u64,
-        owner_user_id: u64,
-        conversation_id: &str,
-        generation: &str,
-    ) -> io::Result<()> {
-        self.writable()?.finalize_conversation_rebuild(
-            tenant_id,
-            owner_user_id,
-            conversation_id,
-            generation,
         )
     }
     pub fn remove_conversation(
@@ -655,6 +662,7 @@ mod tests {
     use crate::authority_gc::AuthorityGarbageCollectionBudget;
     use crate::authority_gc_online::{OnlineGarbageCollectionOutcome, OnlineGarbageCollector};
     use crate::entity::EntityKey;
+    use crate::turn_search_projection::{ScopeItemContent, TurnSearchDocument};
     use crate::vfs::{DeterministicVfs, FilesystemCapacity};
     use std::sync::{atomic::AtomicBool, Mutex};
 
@@ -776,22 +784,36 @@ mod tests {
             snippet_radius: 40,
         }
     }
-    fn publish(index: &mut TurnSearchProjection, generation: &str) {
+    fn index_needle(index: &mut TurnSearchProjection, text: &str) -> io::Result<()> {
+        let turn = ScopeItemKey::turn("turn");
+        let documents = [document(&format!("needle {text}"))];
+        index.index_scope_items(
+            7,
+            11,
+            "conversation",
+            "",
+            &[ScopeItem {
+                key: &turn,
+                revision: 1,
+                content: ScopeItemContent::Documents {
+                    documents: &documents,
+                    last: true,
+                },
+            }],
+        )
+    }
+    /// Replace the conversation's one Turn with `needle <text>` and publish.
+    fn publish(index: &mut TurnSearchProjection, text: &str) {
+        let empty = std::collections::BTreeMap::new();
+        let stale = index
+            .diff_scope(7, 11, "conversation", &empty, &[])
+            .unwrap()
+            .retract;
         index
-            .begin_conversation_rebuild(7, 11, "conversation", generation, 1)
+            .retract_scope_items(7, 11, "conversation", &stale, "", false)
             .unwrap();
-        index
-            .append_conversation_page(
-                7,
-                11,
-                "conversation",
-                generation,
-                &[document(&format!("needle {generation}"))],
-            )
-            .unwrap();
-        index
-            .finalize_conversation_rebuild(7, 11, "conversation", generation)
-            .unwrap();
+        index_needle(index, text).unwrap();
+        index.publish_scope(7, 11, "conversation", 1, "").unwrap();
     }
     fn loose_files(vfs: &dyn Vfs) -> usize {
         vfs.read_directory(Path::new("/index/blocks"))
@@ -813,10 +835,7 @@ mod tests {
         vfs.set_filesystem_capacity(starved()).unwrap();
         let before = vfs.trace().unwrap().len();
         assert_eq!(
-            index
-                .begin_conversation_rebuild(7, 11, "conversation", "new", 2)
-                .unwrap_err()
-                .kind(),
+            index_needle(&mut index, "new").unwrap_err().kind(),
             io::ErrorKind::StorageFull
         );
         assert_eq!(vfs.trace().unwrap().len(), before);

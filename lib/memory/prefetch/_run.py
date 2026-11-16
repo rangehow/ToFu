@@ -47,6 +47,25 @@ def _metadata(memory: dict) -> str:
     ]).strip()
 
 
+_TOOL_IDENTIFIER_RE = re.compile(r'\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b')
+
+
+def _fits_role(memory: dict, held_tools: frozenset[str] | None) -> bool:
+    """Whether the request can act on a lesson about tools (role fit).
+
+    A lesson whose title, description or tags name registered tools, none of
+    which this request holds, teaches how to use tools this role cannot call
+    (a Router given an ``edit_file`` trap). It is left out; a lesson naming no
+    tool, or one the request holds, stays. Unknown holdings filter nothing.
+    """
+    if held_tools is None:
+        return True
+    from lib.tools.registry._spec import tool_declared_by_registry
+    named = {name for name in _TOOL_IDENTIFIER_RE.findall(_metadata(memory))
+             if tool_declared_by_registry(name)}
+    return not named or bool(named & held_tools)
+
+
 def _todo_identifiers(task: dict | None) -> list[str]:
     values: list[str] = []
     for row in (task or {}).get('_todos') or []:
@@ -81,8 +100,11 @@ def run_memory_prefetch(messages: list, project_path: str | None,
 
     The corpus comes from the resident memory listing (``list_prefetch_corpus``);
     its rows are shared and only read here: selected rows are copied.
+    ``active_tools`` are the tool names this request holds (``None``: unknown);
+    a lesson about tools it holds none of is not selected (``_fits_role``).
     """
-    del active_tools, usage_sink  # no auxiliary model call, hence no billing
+    del usage_sink  # no auxiliary model call, hence no billing
+    held_tools = None if active_tools is None else frozenset(active_tools)
     # Every selection attempt owns a fresh result, including empty/failed
     # attempts. Do not leak the last task snapshot through early returns.
     if task is not None:
@@ -140,10 +162,14 @@ def run_memory_prefetch(messages: list, project_path: str | None,
                              include_body=False)
         selected: list[dict] = []
         rejected = 0
+        rejected_role_fit = 0
         for idx, score in scored:
             keep, reason, overlap = _confidence(query, memories[idx])
             if not keep:
                 rejected += 1
+                continue
+            if not _fits_role(memories[idx], held_tools):
+                rejected_role_fit += 1
                 continue
             row = dict(memories[idx])
             row['_prefetch_score'] = round(float(score), 4)
@@ -195,7 +221,7 @@ def run_memory_prefetch(messages: list, project_path: str | None,
     if task is not None:
         task['_prefetchedMemories'] = selected
     emit('done', selected=len(selected), candidates=len(scored),
-         rejectedLowConfidence=rejected, total_ms=elapsed_ms,
+         rejectedLowConfidence=rejected, rejectedRoleFit=rejected_role_fit, total_ms=elapsed_ms,
          strategy='local_high_confidence', auxiliaryLlmCalls=0,
          # The id is the exact usage record the owner-memory lookup reads.
          memories=[{'id': row.get('id', ''),

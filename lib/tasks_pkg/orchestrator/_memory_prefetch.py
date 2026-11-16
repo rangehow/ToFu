@@ -52,6 +52,18 @@ def accepted_memory_prefetch_roots(cfg):
     return memory_prefetch_corpus_roots(cfg, project_path, project_enabled)
 
 
+def _held_tool_names(cfg, tool_list):
+    """Tool names this request may call: its wire tools plus its deferred catalog.
+
+    ``None`` (nothing known) leaves role fit unfiltered.
+    """
+    names = {(tool.get('function') or {}).get('name')
+             for tool in [*(tool_list or ()), *(cfg.get('_executableToolCatalog') or ())]
+             if isinstance(tool, dict)}
+    names.discard(None)
+    return names or None
+
+
 def maybe_run_memory_prefetch(*, task: dict[str, Any], cfg: dict[str, Any],
                               messages: list[dict[str, Any]],
                               tool_list: list[dict[str, Any]] | None,
@@ -61,7 +73,6 @@ def maybe_run_memory_prefetch(*, task: dict[str, Any], cfg: dict[str, Any],
                               has_real_tools: bool,
                               injected_tool_calls: int,
                               turn_selection_retained: bool = False) -> None:
-    del tool_list  # the gate already records whether real tools are available
     # My Context is independent from relevance-retrieved experience memory.
     # Interactive turns learn explicit durable facts even when memory search is
     # off; headless surfaces have already stamped preferencesEnabled=False.
@@ -93,6 +104,7 @@ def maybe_run_memory_prefetch(*, task: dict[str, Any], cfg: dict[str, Any],
         run_memory_prefetch(
             messages, project_path=primary, task=task,
             emit_event=lambda event: append_event(task, event),
+            active_tools=_held_tool_names(cfg, tool_list),
             extra_paths=extras,
         )
     except Exception as exc:

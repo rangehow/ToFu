@@ -23,7 +23,7 @@ from lib.slides.render_html import render_page_html
 
 logger = get_logger(__name__)
 
-__all__ = ['inspect_deck_layout', 'findings_text']
+__all__ = ['inspect_deck_layout', 'findings_text', 'vertical_growth_repairs']
 
 _MEASURE_JS = r"""
 () => {
@@ -57,6 +57,7 @@ _MEASURE_JS = r"""
       z: layer.indexOf(el),
       allowOverlap: el.dataset.allowOverlap === 'true',
       fontSize: Number.parseFloat(innerStyle.fontSize || '0') || 0,
+      lineHeight: Number.parseFloat(innerStyle.lineHeight || '') || 0,
       outer: rectJSON(el.getBoundingClientRect()),
       rects: textRects(el),
       visible: style.display !== 'none' && style.visibility !== 'hidden' &&
@@ -120,10 +121,33 @@ def _pptx_safety(record: dict) -> float:
     return max(2.0, min(6.0, size * 0.15))
 
 
+def _line_boxes(record: dict) -> list:
+    """The record's line boxes.
+
+    Range rects are font content areas, which exceed the line box when the
+    authored line height is below the font's ascent+descent. Line boxes are
+    what must fit their frame and stay apart (and what PowerPoint lays out),
+    so the half-leading deficit is neither overflow nor a collision.
+    """
+    rects = record.get('rects') or []
+    line_height = float(record.get('lineHeight') or 0)
+    if not line_height:
+        return rects
+    out = []
+    for rect in rects:
+        deficit = max(0.0, (rect['height'] - line_height) / 2)
+        out.append({**rect, 'top': rect['top'] + deficit,
+                    'bottom': rect['bottom'] - deficit,
+                    'height': rect['height'] - 2 * deficit})
+    return out
+
+
 def _page_findings(records: list, page_index: int, *, tolerance: float,
                    occluders: list | None = None) -> list:
     findings = []
-    active = [r for r in records if r.get('visible')]
+    active = [{**r, 'content_rects': r.get('rects') or [],
+               'rects': _line_boxes(r)}
+              for r in records if r.get('visible')]
     for record in active:
         outer = record['outer']
         rects = record.get('rects') or []
@@ -148,11 +172,14 @@ def _page_findings(records: list, page_index: int, *, tolerance: float,
                 'page': page_index + 1,
                 'elements': [record['id']],
                 'overflow': overflow,
+                'required': round(_pptx_safety(record), 1),
                 'message': (f'page {page_index + 1}: text "{record["id"]}" '
                             f'overflows its bounds ({overflow})'),
             })
         elif _line_count(rects) >= 2:
-            clearance = outer['bottom'] - bottom
+            # The PowerPoint reserve stays measured from the content area.
+            clearance = outer['bottom'] - _union(
+                record['content_rects'])['bottom']
             needed = _pptx_safety(record)
             if clearance < needed:
                 findings.append({
@@ -313,6 +340,78 @@ def inspect_deck_layout(deck: Deck, *, timeout_ms: int = 20000,
                 len(page_results), len(all_findings))
     return {'ran': True, 'ok': not all_findings, 'pages': page_results,
             'findings': all_findings}
+
+
+def _vertical_deficit(finding: dict, vertical: str = 'top') -> float:
+    """Extra box height that removes a vertical overflow/clearance finding.
+
+    A middle-anchored box grows on both sides, so it needs the PowerPoint
+    reserve twice to keep that reserve below its last line.
+    """
+    reserve_shares = 2 if vertical == 'middle' else 1
+    if finding.get('type') == 'pptx_text_overflow_risk':
+        return reserve_shares * (float(finding['required'])
+                                 - float(finding['clearance']))
+    overflow = finding.get('overflow') or {}
+    if set(overflow) - {'top', 'bottom'}:
+        return 0.0
+    return (float(overflow.get('top') or 0) + float(overflow.get('bottom') or 0)
+            + reserve_shares * float(finding.get('required') or 0))
+
+
+def vertical_growth_repairs(page_data: dict, findings: list, *,
+                            page_height: int) -> dict:
+    """Grow text boxes that only lack height; zero-LLM geometric repair.
+
+    A box whose glyphs fit horizontally but spill a few pixels vertically
+    (or lack PowerPoint's CJK metric reserve) needs a taller box, not a
+    rewritten page. Each such top-level text element grows by exactly the
+    measured deficit around its vertical anchor and stays inside the page.
+    Returns ``{elementId: [x, y, w, h]}`` for the caller to apply and
+    re-measure; horizontal overflow, collisions and component-expanded
+    elements are left to the author repair.
+    """
+    anchors = {}
+    for element in page_data.get('elements') or []:
+        if isinstance(element, dict) and isinstance(element.get('content'), dict):
+            align = element['content'].get('align')
+            anchors[element.get('elementId')] = (
+                align[1] if isinstance(align, list) and len(align) > 1 else 'top')
+    deficits: dict = {}
+    for finding in findings:
+        if finding.get('type') not in ('text_overflow',
+                                       'pptx_text_overflow_risk'):
+            continue
+        element_id = finding['elements'][0]
+        deficit = _vertical_deficit(finding, anchors.get(element_id, 'top'))
+        if deficit > 0:
+            deficits[element_id] = max(deficits.get(element_id, 0.0), deficit)
+    repairs = {}
+    for element in page_data.get('elements') or []:
+        if not isinstance(element, dict) or element.get('elementType') != 'text':
+            continue
+        element_id = element.get('elementId')
+        bounds = element.get('bounds')
+        if element_id not in deficits or not (
+                isinstance(bounds, list) and len(bounds) == 4):
+            continue
+        x, y, width, height = (float(value) for value in bounds)
+        grow = float(int(deficits[element_id]) + 1)
+        content = element.get('content') if isinstance(
+            element.get('content'), dict) else {}
+        align = content.get('align') if isinstance(
+            content.get('align'), list) else []
+        vertical = align[1] if len(align) > 1 else 'top'
+        if vertical == 'middle':
+            y -= grow / 2
+        elif vertical == 'bottom':
+            y -= grow
+        height += grow
+        y = max(0.0, min(y, page_height - height))
+        if height > page_height:
+            continue
+        repairs[element_id] = [x, round(y, 1), width, round(height, 1)]
+    return repairs
 
 
 def findings_text(findings: list) -> str:

@@ -35,6 +35,36 @@ also record foreground blob collection/decoding: 65,953 / 6,398,259 bytes for
 old one/97-Turn fixtures, zero in both candidates. Payloads are approximately
 64 KiB per Turn; deferred background work is excluded from this dispatch scope.
 
+## Attempt event document bound at write
+
+**Problem:** `turn.events.list` (`turn::events_list`) reads each Attempt event
+document within `maximumAttemptEventDocumentBytes` (32 MiB,
+`contracts/tofudb_ir_v1.json`), but the writer checked no bound, while the
+request admits a projection patch up to the 64 MiB Turn snapshot (native) or
+frame (SQL sidecar). An event between the two, typically a terminal frame that
+carries a whole tool output in its patch, was committed and acknowledged, then
+answered `database_integrity` on every read. The SQL authority applied only its
+4 MiB non-terminal cap, which exempts terminal settlements and the
+checkpoint-resume bootstrap, so the SQL-to-native import, which admits the same
+bound, would refuse such a row.
+**Decision:** both authorities refuse an event document larger than that same
+constant before writing it, as `storage_payload_too_large`: native
+`turn::append_attempt_event`, the one live writer of every Attempt event, and SQL
+`_insert_attempt_event`, for every event type and the bootstrap alike. The refused
+transaction commits nothing. Producers already degrade on that code:
+`turn_lifecycle._is_frame_overflow_error` retries the frame once slim, and a
+terminal frame settles with `model_continuation: frame_over_budget`. Reads, the
+frame limits, the 4 MiB non-terminal cap and the stored format are unchanged, so
+the rollback engine reads every row; an event acknowledged before the bound keeps
+its bytes and still answers `database_integrity` on a native read.
+**Alternatives considered:** raising the read bound only moves the failure to the
+event page budget the same reader enforces; truncating the payload breaks exact
+patch replay; bounding one authority alone makes the two answer differently for
+the same frame.
+Verification: `turn::attempt_event_bound_tests`,
+`tests/storage_authority_sql/test_attempt_event_document_bound.py` and, on every
+authority, `tests/storage/test_storage_application_contract.py::test_a_terminal_frame_its_authority_could_not_read_back_settles_slim`.
+
 ## Canonical payload references
 
 Problem: each Attempt event was persisted twice in the same transaction: once
@@ -62,7 +92,11 @@ deadlines preserve contiguous replay cursors. Legacy `conversation.activity`
 snapshot invalidations remain readable. Exclusive operator migration retains
 its separately declared transfer protocol and requires its own certification.
 
-Pruning reads the compact row without loading the source. Attempt pruning
+Pruning never reads a full replay document that releases nothing: such a row
+is identified by its document header (namespace and logical key) and its
+retention locator. A row that releases an Attempt reference (an inline compact
+reference) or predates Attempt locators is read and its stored identity
+compared with its locator before anything is released. Attempt pruning
 cannot retire a source while a sync reference remains. Sync pruning releases
 the reference in the same transaction; pinned snapshots retain both records.
 Ordinary backup, restore and GC follow the existing entity/blob roots. Operator
@@ -72,6 +106,72 @@ Alternatives considered: dropping transport rows loses acknowledged replay;
 adding another canonical log introduces another publication and recovery
 boundary; retaining duplicate payloads preserves the measured write amplification.
 The existing exact reference index supplies the required lifetime fence.
+
+## Sync retention within one overlay delta
+
+**Problem:** `turn.sync.prune` deleted one scan page (up to 999 expired
+entries) per transaction. An Attempt-event entry is three point deletes
+(replay row, age marker, Attempt reference), so a full page carried about
+3,000 deletes, past the 192 KiB one rebaseable overlay delta holds. The commit
+then took the structural tree path, which first drains the whole overlay
+under the writer. Separately, the maintenance stage committed a sync
+transaction only when it deleted a replay row, so releasing a deleted
+conversation's age markers and Attempt references was discarded every round
+and left to the application's prune loop.
+**Decision:** each transaction deletes only the entries whose point deletes
+the remaining overlay room can carry beside the largest receipt the IR may
+attach (`entity_overlay_delta_room`, as Attempt-event retention does), and
+reports `remaining` so the next transaction resumes. The scan page stays the
+IR's entity range bound. Maintenance commits every sync transaction that
+changed state. Specs: `turn::sync_prune_tests` and maintenance's
+`idle_rounds_commit_sync_marker_release_after_conversation_delete`; the
+opt-in `turn::sync_prune_tests::sync_prune_commit_hold` measures the
+writer-held commit beside a pending overlay.
+**Measured** (2026-11-13; sandbox VM, 16 vCPU, local virtio disk, release
+build without LTO, three repetitions each): the commit of one maximal
+retention transaction beside 0 / 8 / 32 MiB of pending overlay deltas took
+1.5-1.8 / 136-154 / 1,262-1,267 ms before (999 entries; the overlay drained
+to zero records) and 1.9-2.3 / 1.9-2.3 / 2.0-2.3 ms after (646 entries; one
+delta appended, nothing drained). The former cost grows with the pending
+overlay, and production windows are larger (median 56 MB over 40 minutes on
+2026-11-13) on a network volume.
+**Alternatives considered:** a smaller fixed row count is a tuning number that
+still ignores key sizes; merging the overlay before the commit moves the same
+drain under the writer; removing markers lazily on read adds a second
+retention path.
+
+## Sync retention reads no settled payload
+
+**Problem:** after R3, production clients waited 140.4 s, 182.4 s and 160.6 s
+for single `turn.sync.prune` calls, with no authority hold of that length
+(OCR-HOLD, 2026-11-13). For every expired row still present, `sync_prune`
+materialized the whole stored document and parsed it, only to re-check the
+identity its retention locator already carries. Settled `turn.upsert` rows hold
+whole TurnRecords (0.5-0.8 MB blobs), up to a 64 MiB ceiling per transaction.
+An uncertified command is rehearsed on the published view before the writer
+runs it, so those cold blob reads landed on the network volume outside the
+authority mutex, and the prune's caller waited minutes.
+**Decision:** a full replay document whose locator names no Attempt releases
+nothing, so it is verified from its document header alone (namespace is the
+replay identity; logical key is `{conversation}\u{1f}{sequence}`) and its
+payload is never read. A row that releases a reference keeps the stored-identity
+check before the release: compact Attempt references are read without expanding
+their source (small inline documents) and compared with their locator, and a
+mismatch refuses. Locators written before history root 91b4c7e205
+(2026-10-22T09:49:43Z, which reproduces the released 0.18.3 engine) may lack an
+Attempt's identity, so a row whose locator is older than that is read as before
+(`SYNC_LOCATOR_ATTEMPT_IDENTITY_SINCE_MS`; a backdated row only takes the read).
+Retention cost now follows the rows it deletes, not settled TurnRecord bytes,
+and the `maximumSyncPruneMaterializedBytes` bound is retired (DB-5 review,
+2026-11-13). The SQL authority already pruned by key. Specs in
+`turn::sync_prune_tests`: settled rows whose blobs are missing are deleted;
+a compact reference whose stored identity disagrees with a consistent locator
+and protection reference refuses; a row older than Attempt locators is read,
+and an Attempt event behind an identity-less locator refuses.
+**Alternatives considered:** a smaller materialization ceiling keeps the
+read and adds a knob; caching decoded payloads moves the cost into memory;
+prefetching blobs off the rehearsal still reads every expired TurnRecord;
+trusting every locator would release references of pre-root rows on a guess.
 
 Older native engines reject the new physical identity. Downgrade requires a
 current-engine canonical export into a fresh, fully verified target authority
@@ -199,3 +299,81 @@ Inspector and Turn Trace tests retain older-engine error compatibility and
 same-cursor retry, while owner/corruption specifications stay unchanged.
 
 <!-- Evidence note: former docs/evidence/ artifact snapshots cited here were retired from the tree; cited JSON artifacts remain recoverable from git history. -->
+
+## Replay lineage
+
+Problem: a replay cursor named only owner, conversation and sequence. Crash
+recovery, a restore or a failover can give a sequence that a reader already saw
+to another change. A cursor naming it then replayed past the new change as if
+it had been seen. The protocol record is
+[Conversation Sync v3, Replay lineage](contracts/CONVERSATION_SYNC_V3.md#replay-lineage).
+
+Decision: every `turn.sync.changes`, `turn.sync.page` and `turn.sync.snapshot`
+result reports, from the read transaction of its rows:
+
+- `authorityEpoch`: 64 bits of OS randomness drawn once per authority open
+  after recovery and shared by its read replicas, never persisted or reused.
+  Natively it is a dedicated value on `AuthorityDatabase`, distinct from the
+  overlay-merge `database_instance_id`. The SQL authority derives it from its
+  backend open's identity. A published commit is lost only with a reopen,
+  which latches `restart_required` natively, so no sequence repeats within
+  one epoch.
+- `headDigest`: the digest of the change at the head. It is null at head 0 or
+  once that change has left retention.
+- `turn.sync.changes` adds `changeDigests`, one per returned change. With
+  `after > 0` it also adds `anchorDigest`, the digest of the change now at
+  `after`, which is null once that change has left retention.
+- `turn.sync.page` read with `anchor_sequence > 0` (the reader's applied head)
+  adds the same `anchorDigest` for that sequence, so a history page is fenced
+  by the reader's lineage from the page's own read, also when it answers at a
+  newer head.
+
+A digest is the first 64 bits of SHA-256, as 16 lowercase hex digits, over the
+change's committed record exactly as stored. Natively that is the value bytes
+stored for its key; a blob-backed row stores its content-addressed manifest.
+In SQL it is the row's length-framed stored columns. Overlay merges,
+checkpoints, history retirement and reopen move bytes physically without
+changing a digest. A different change committed at a reused sequence always
+changes it.
+
+A compact AttemptEvent reference row (see "Canonical payload references" above)
+stores only its event's identity and commit time. Recovery can lose an event
+and its replay row, then commit a different event at the same attempt and
+sync sequences within the same millisecond, so the reference's digest also
+covers the referenced event exactly as stored: natively the reference's and
+the event's stored value bytes, each length-framed after a domain tag; in SQL
+the event's `payload_json` after the row's columns. The retained reference
+keeps that event immutable, so the digest stays stable for the row's
+lifetime. It costs one extra point read of the event per reference a page
+returns or an anchor names; inline rows keep their digest.
+(`turn_sync_lineage_tests.rs`
+`a_different_attempt_event_at_a_reused_sequence_in_the_same_millisecond_has_a_different_digest`;
+`tests/conversation/test_conversation_change_storage.py`
+`test_an_attempt_change_recovery_replaced_in_the_same_millisecond_resets_its_cursor`.)
+
+Digests are authority-local identities: the two authorities never compare
+them, and a differential comparison checks only their presence and type. An
+operator import therefore resets each client once. Field names and widths come
+from `contracts/storage_v2.json` `applicationSemantics.conversationSyncLineage`,
+generated for both authorities, and the declaration moves the storage contract
+identity.
+
+Replay rows are insert-only. A future online rewrite of a row's stored bytes,
+such as settled `turn.upsert` compaction, must keep the row's original digest
+or accept one reset per client across the next epoch change. Either way no
+client diverges silently.
+
+Alternatives considered:
+
+- A per-row epoch stamp or a chained digest needs write-path and on-disk format
+  changes in both authorities.
+- Re-encoding the materialized event would hash a representation that the
+  diagnostic projection and engine normalization are free to change.
+- Storing the referenced event's content digest in the reference envelope at
+  write time changes the stored reference format, which the rollback engine
+  rejects (its reference parser admits only the event's sequence) or would
+  publish as an unknown public field.
+
+Specs: `packages/tofu-db/src/turn_sync_lineage_tests.rs` (stability across
+merge, checkpoint, history retirement and reopen, and reuse after a restored
+durable point) and `tests/conversation/test_conversation_sync_cursor_identity.py`.

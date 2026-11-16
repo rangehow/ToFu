@@ -436,3 +436,64 @@
         assert!(engine.finish_pack_adoption(prepared, outcome).is_err());
         assert!(engine.is_restart_required());
     }
+
+    /// Inside a `SpillDeferralScope`, a foreground commit whose carried
+    /// payloads pass the WAL record bound writes and applies nothing and
+    /// leaves its references to the request dispatcher; once they are durable
+    /// off the authority, the replay carries no payload and survives a crash.
+    #[test]
+    fn a_deferred_spill_writes_nothing_and_its_replay_survives_a_crash() {
+        let (vfs, mut engine) = initialized_simulated_engine();
+        let payloads: Vec<Vec<u8>> = (1..=3_u8).map(|byte| vec![byte; 1024 * 1024]).collect();
+        let ids: Vec<BlockId> = payloads.iter().map(|payload| engine.write_blob_block(payload).unwrap()).collect();
+        let before = engine.state.clone();
+        let wal_before = engine.wal_len();
+        vfs.arm_fault(None).unwrap();
+        let deferred = {
+            let scope = SpillDeferralScope::allow();
+            let error = engine.commit_references_with_authority_state(b"deferred", &ids, None).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::WouldBlock, "{error}");
+            scope.take_deferred().expect("the commit deferred its spill")
+        };
+        assert!(vfs.trace().unwrap().is_empty(), "a deferred commit wrote: {:?}", vfs.trace().unwrap());
+        assert_eq!(engine.state, before, "a deferred commit changed the engine state");
+        assert_eq!(engine.wal_len(), wal_before);
+        assert!(ids.iter().all(|id| deferred.contains(id)), "deferred references miss a carried block");
+        engine.block_store_shared().publish_deferred_spill(&deferred).unwrap();
+        // The replay writes the same blobs again; they are durable and cached,
+        // so nothing is staged and the commit carries nothing.
+        for payload in &payloads {
+            let id = engine.write_blob_block(payload).unwrap();
+            assert!(engine.block_store_shared().pending_payload(id).unwrap().is_none(),
+                "the replay staged a published block again");
+        }
+        let replayed = engine.commit_references_with_authority_state(b"replayed", &ids, None).unwrap();
+        assert!(engine.wal_len() - wal_before < 64 * 1024, "the replay carried its payloads");
+        std::mem::forget(engine);
+        vfs.crash().unwrap();
+        let reopened = Engine::open_with_vfs(Path::new("/data"), vfs).unwrap();
+        assert_eq!(reopened.state.durable_sequence, replayed.sequence);
+        for (id, payload) in ids.iter().zip(&payloads) {
+            assert_eq!(&reopened.read_block(*id).unwrap(), payload);
+        }
+    }
+
+    /// Only the first commit inside a scope may defer: a request that already
+    /// committed must never be replayed, so a later oversized commit spills
+    /// inline exactly as outside the request dispatcher.
+    #[test]
+    fn only_the_first_commit_in_a_spill_deferral_scope_may_defer() {
+        let (_vfs, mut engine) = initialized_simulated_engine();
+        let small = engine.write_block(b"small committed payload").unwrap();
+        let large: Vec<BlockId> = (1..=3_u8)
+            .map(|byte| engine.write_block(&vec![byte; 1024 * 1024]).unwrap())
+            .collect();
+        let scope = SpillDeferralScope::allow();
+        engine.commit_references_with_authority_state(b"first", &[small], None).unwrap();
+        engine.commit_references_with_authority_state(b"second", &large, None).unwrap();
+        assert!(scope.take_deferred().is_none());
+        for id in large {
+            assert!(engine.block_store_shared().pending_payload(id).unwrap().is_none(),
+                "the inline spill left a carried block staged");
+        }
+    }

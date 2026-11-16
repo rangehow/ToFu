@@ -117,3 +117,73 @@ def test_authority_restart_refreshes_claims_even_without_cancel_history():
     assert hints == ['authority-commit']
     unsubscribe()
     assert source.signals._active == {}
+
+
+@pytest.mark.unit
+def test_watch_interruptions_log_by_retry_class_and_keep_the_backoff_loop(caplog):
+    """A stopping or restarting authority and an elapsed deadline are outlived
+    by the next watch: DEBUG with the running count. A refused request, a
+    protocol or engine fault and a client bug repeat on every watch until
+    fixed: ERROR with the code. Each still resets the cursor, refreshes active
+    claims and waits the failure backoff; a stop ends the loop silently."""
+    import logging
+    from lib.durable_worker.runtime_policy import runtime_policy
+    from lib.storage.commit_wake import logger as wake_logger
+    from lib.storage.worker_wake import StorageWorkerWakeSource
+
+    class RecordingStop(threading.Event):
+        def __init__(self):
+            super().__init__()
+            self.waits = []
+
+        def wait(self, timeout=None):
+            self.waits.append(timeout)
+            return self.is_set()
+
+    policy = runtime_policy()
+    source = StorageWorkerWakeSource(None, policy)
+    source._stop = RecordingStop()
+    failures = [
+        # A native control closed for a stop or restart (wire retryable).
+        StorageError('database_unavailable', 'commit control closed', True, 50),
+        # The SQL authority's closed control carries no retryable flag.
+        StorageError('database_unavailable', 'Commit control closed'),
+        # Clients map the wire deadline_elapsed to database_timeout.
+        StorageError('database_timeout', 'commit watch deadline elapsed'),
+        # Clients keep no worker_control_refused code: it arrives as database_internal.
+        StorageError('worker_control_refused', 'commit watch binding differs'),
+        StorageError('database_protocol_error', 'Invalid worker watch response'),
+        TypeError("worker_watch() got an unexpected keyword argument 'cursor'"),
+    ]
+    cursors = []
+
+    def watch(cursor):
+        cursors.append(cursor)
+        if failures:
+            raise failures.pop(0)
+        source._stop.set()
+        raise StorageError('database_unavailable', 'commit watch cancelled', True)
+
+    active = threading.Event()
+    source.signals.subscribe('active', active)
+    source._watch = watch
+    caplog.set_level(logging.DEBUG, logger=wake_logger.name)
+    initial = {'epoch': 'old', 'queue': 0, 'cancel': 0}
+    source._run(initial, lambda operation: None)
+
+    records = [(record.levelno, record.getMessage()) for record in caplog.records
+               if record.name == wake_logger.name]
+    assert [level for level, _message in records] == [logging.DEBUG] * 3 + [logging.ERROR] * 3
+    for count, (_level, message) in enumerate(records[:3], start=1):
+        assert f'retryable interruption {count}:' in message, message
+    assert 'code=database_unavailable' in records[0][1]
+    assert 'code=database_timeout' in records[2][1]
+    assert "code=database_internal message='commit watch binding differs'" in records[3][1]
+    assert 'code=database_protocol_error' in records[4][1]
+    assert 'TypeError' in records[5][1]
+    assert source.retryable_interruptions == 3
+    # The loop itself is unchanged: every failure resets the cursor, refreshes
+    # active claims and waits the existing failure backoff.
+    assert cursors == [initial] + [None] * 6
+    assert active.is_set()
+    assert source._stop.waits == [policy['failureBackoffMilliseconds'] / 1000] * 6

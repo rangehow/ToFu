@@ -30,7 +30,7 @@ __all__ = ['AuthorPromptContext', 'author_page', 'author_page_input_sha256',
 
 _MAX_ROUNDS = 3
 _MAX_TOKENS = 6000
-_AUTHOR_INPUT_VERSION = 'slide-page-author-v3'
+_AUTHOR_INPUT_VERSION = 'slide-page-author-v4'
 
 _INTERNAL_COPY_RE = re.compile(
     r'(?:章节|本章|过渡|转场|承上启下)(?:引导|过渡|转场)?页'
@@ -40,7 +40,14 @@ _INTERNAL_COPY_RE = re.compile(
     r'introduc(?:e|ing)\s+the\s+next|\bTODO\b|\bTBD\b|占位|待补充)',
     re.IGNORECASE,
 )
-_SOURCE_MARKER_RE = re.compile(r'\[S\d{1,3}\]', re.IGNORECASE)
+_SOURCE_MARKER_RE = re.compile(r'\[[SM]\d{1,4}\]', re.IGNORECASE)
+#: Smallest text that stays legible when a 1280-px-wide slide is projected
+#: or screen-shared (10.5 pt); scaled to the deck width.
+_MIN_LEGIBLE_TEXT_PX = 14
+_INLINE_SIZE_RE = re.compile(r'font-size:\s*(\d+(?:\.\d+)?)px')
+_TAG_RE = re.compile(r'<[^>]+>')
+_CJK_RE = re.compile(r'[\u4e00-\u9fff]')
+_LATIN_LABEL_RE = re.compile(r'^[A-Z][A-Z&/·\- ]{3,}$')
 _NUMBER_RE = re.compile(
     r'(?<![A-Za-z0-9_.,])[-+]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)'
     r'(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?(?![A-Za-z0-9_]|\.\d)')
@@ -110,7 +117,16 @@ def _validate_page_text(deck, page_path: str, text: str) -> list:
     trial = Deck(title=deck.title, size=deck.size, theme=deck.theme,
                  pages=[page], root=deck.root)
     findings = validate_deck(trial)
+    findings.extend(_legibility_findings(deck, elements))
     visible_text = '\n'.join(_visible_text_values(data))
+    if _CJK_RE.search(deck.title or ''):
+        labels = [value for value in _visible_text_values(data)
+                  if _LATIN_LABEL_RE.match(_TAG_RE.sub('', value).strip())]
+        if labels:
+            findings.append(
+                '中文页面出现装饰性英文大写标签: '
+                + ', '.join(repr(_TAG_RE.sub('', v).strip()) for v in labels[:3])
+                + '。删除它，或改成告诉读者信息的中文小标题。')
     leaked = _INTERNAL_COPY_RE.search(visible_text)
     if leaked:
         findings.append(
@@ -121,6 +137,28 @@ def _validate_page_text(deck, page_path: str, text: str) -> list:
             '页面正文仍含 [S1] 这类内部来源编号；请改为页脚来源域名，'
             '不要把研究阶段标记展示给读者。')
     return findings
+
+
+def _legibility_findings(deck, elements: list) -> list[str]:
+    """Reject text smaller than the projected-slide legibility floor."""
+    floor = _MIN_LEGIBLE_TEXT_PX * deck.width / 1280
+    styles = (deck.theme or {}).get('textStyles') or {}
+    small = []
+    for element in elements:
+        if not isinstance(element, dict) or element.get('elementType') != 'text':
+            continue
+        content = element.get('content') if isinstance(
+            element.get('content'), dict) else {}
+        style = styles.get(str(content.get('style') or '').lstrip('$')) or {}
+        size = content.get('fontSize', style.get('fontSize'))
+        sizes = [size] + [float(px) for px in _INLINE_SIZE_RE.findall(
+            str(content.get('text') or ''))]
+        if any(isinstance(s, (int, float)) and s < floor for s in sizes):
+            small.append(str(element.get('elementId') or '?'))
+    if not small:
+        return []
+    return [f'文字小于投影可读下限 {floor:g}px: {", ".join(small[:6])}。'
+            '放大字号并删减文字，或把次要内容移到讲稿，不要靠缩小字号塞内容。']
 
 
 def _visible_text_values(data) -> list[str]:
@@ -156,9 +194,45 @@ def _visible_text_values(data) -> list[str]:
     return values
 
 
+def _text_number_findings(brief: dict, data: dict, *, total: int) -> list[str]:
+    """Reject visible numbers that occur nowhere in the deck's evidence.
+
+    ``deck_evidence_numbers`` holds every number written in the supplied
+    material and research cards. A number on the page that is in none of
+    them, nor in this page's brief, was invented or mis-copied. Integers up
+    to the deck's page count are structure (step labels, page counters).
+    """
+    from lib.slides.material import evidence_numbers
+    deck_numbers = {Decimal(value) for value in
+                    (brief.get('deck_evidence_numbers') or [])}
+    if not deck_numbers:
+        return []
+    try:
+        from lib.slides.components import expand_page_components
+        elements = expand_page_components(data)
+    except ValueError:
+        return []
+    allowed = deck_numbers | evidence_numbers(
+        [brief.get('key_message'), brief.get('content_notes')]
+        + [source.get('point') for source in (brief.get('sources') or [])
+           if isinstance(source, dict)])
+    visible = [_TAG_RE.sub(' ', value)
+               for value in _visible_text_values({'elements': elements})]
+    unsupported = [
+        str(number) for number in evidence_numbers(visible)
+        if number not in allowed
+        and not (number == number.to_integral_value() and 0 <= number <= total)]
+    if not unsupported:
+        return []
+    return [
+        '页面数字在源材料中找不到: ' + ', '.join(sorted(set(unsupported))[:8])
+        + '。只写源材料原样给出的数字（含单位、条件与限定语）；'
+          '不要换算、四舍五入或估算出新数字。']
+
+
 def _brief_fidelity_findings(brief: dict, text: str, *, page_index: int,
                              total: int) -> list[str]:
-    """Reject invented chart numbers that have no page-brief evidence."""
+    """Reject invented chart and text numbers absent from the evidence."""
     import yaml
     try:
         data = yaml.safe_load(text)
@@ -193,9 +267,10 @@ def _brief_fidelity_findings(brief: dict, text: str, *, page_index: int,
                     continue
                 if Decimal(str(value)) not in allowed:
                     unsupported.append(str(value))
+    findings = _text_number_findings(brief, data, total=total)
     if not unsupported:
-        return []
-    return [
+        return findings
+    return findings + [
         '图表包含本页事实素材中不存在的数值: '
         + ', '.join(list(dict.fromkeys(unsupported))[:8])
         + '。禁止为了“看起来像图表”而编造归一化分数；没有精确数据时，'
@@ -254,6 +329,28 @@ def _shared_author_prompt_prefix(deck, total: int, theme_block: str,
         f'Page geometry {deck.width}×{deck.height} px.')
 
 
+_CONTENT_RULES_ZH = (
+    '## 内容纪律（先于版式）\n'
+    '- 页标题就是本页的核心判断句（按“核心信息”写），带上最关键的数字；不要用“结果”“概览”这类栏目名。\n'
+    '- 正文每一条都要携带具体信息：数字及其对照、条件、样本量、具体做法或反例，只用上方证据和内容素材；'
+    '删掉口号、抽象形容和“读法”“要点”之类的元说明。\n'
+    '- 一页只讲一件事；放不下时删减次要信息，不要缩小字号。\n'
+    '- 只有证据里有可比的数字时才画图表或表格；不要画不承载数据的装饰曲线、箭头、'
+    '雷达图或空框架。\n\n')
+_CONTENT_RULES_EN = (
+    '## Content discipline (before layout)\n'
+    '- The page title IS the key message: one assertion with its decisive '
+    'number, never a topic label such as "Results" or "Overview".\n'
+    '- Every body item carries specific information (a number and its '
+    'comparison, a condition, a sample size, a concrete mechanism or a '
+    'counter-example) taken from the evidence and material above; delete '
+    'slogans, vague adjectives and meta labels.\n'
+    '- One point per page; cut secondary detail instead of shrinking text.\n'
+    '- Draw a chart or table only for comparable numbers in the evidence; '
+    'never draw decorative curves, arrows, radar shapes or empty '
+    'frameworks that encode no data.\n\n')
+
+
 def _without_source_markers(value) -> str:
     return _SOURCE_MARKER_RE.sub('', str(value or ''))
 
@@ -286,6 +383,18 @@ def _build_prompt(deck, brief: dict, page_index: int, total: int,
               '做成构图主体,不要缩成卡片角落的装饰。\n')
     source_cards = [s for s in (brief.get('sources') or [])
                     if isinstance(s, dict) and s.get('url')]
+    material_cards = [s for s in (brief.get('sources') or [])
+                      if isinstance(s, dict) and s.get('kind') == 'material']
+    material_block = ''
+    if material_cards:
+        heading = (
+            '\n## 本页证据（逐字摘自用户材料；数字、单位、条件和限定语如“不显著”'
+            '“单次”“估算”必须原样保留）\n' if lang == 'zh' else
+            '\n## Evidence for this page (verbatim from the supplied material; '
+            'keep numbers, units, conditions and qualifiers such as "not '
+            'significant", "single run", "estimate" exactly)\n')
+        material_block = heading + '\n'.join(
+            f'- {s.get("point")}' for s in material_cards) + '\n'
     if source_cards:
         heading = (
             '\n## 本页事实来源(必须保持事实与数字一致,并用 $caption '
@@ -315,7 +424,9 @@ def _build_prompt(deck, brief: dict, page_index: int, total: int,
             f'- 版式提示: {layout}\n- 内容素材: {notes}\n\n'
             f'{packet}\n'
             f'{images_block}\n'
+            f'{material_block}'
             f'{sources_block}'
+            f'{_CONTENT_RULES_ZH}'
             '读者任务、版式提示、内容素材是内部输入，禁止把“章节引导页”'
             '“引出下一页”“过渡页”等策划语原样放进页面。研究阶段的内部来源'
             '编号（形如 [S#]）只供内部核对，禁止出现在页面任何文字中。禁止编造'
@@ -329,7 +440,9 @@ def _build_prompt(deck, brief: dict, page_index: int, total: int,
         f'- layout hint: {layout}\n- material: {notes}\n\n'
         f'{packet}\n'
         f'{images_block}\n'
+        f'{material_block}'
         f'{sources_block}'
+        f'{_CONTENT_RULES_EN}'
         'Reader task, layout hint, and material are internal inputs; never '
         'render phrases such as "section divider", "transition page", or '
         '"introduce the next page". Research-stage internal source ids such '

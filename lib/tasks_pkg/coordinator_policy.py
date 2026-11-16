@@ -36,9 +36,12 @@ COORDINATOR_TOOLS = frozenset({
     # these readers; without them the role receives an unreadable pointer.
     'read_tool_artifact', 'search_tool_artifact',
     'search_tools', 'execute_tools',
-    # Read-only owner-memory lookup (mode=owner, memory_id). The memory write
-    # tools stay outside every Coordinator-family ceiling.
+    # Read-only owner-memory lookup (mode=owner, memory_id).
     'search_memories',
+    # A lead's one memory write: record a lesson (new or a repeat) as an agent
+    # report bound to its Turn and role (lib/tasks_pkg/handlers/memory.py).
+    # Correcting, deleting and merging lessons stay with Workers.
+    'create_memory',
 })
 # The Project Coordinator's direct core: its role tools in recorded-use order until
 # core plus the discovery pair fill the Sankuai Claude tool-name budget. Recorded

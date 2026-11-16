@@ -57,16 +57,28 @@ MEMORY_POINTER_MAX_CHARS = 512
 # by ``memory_trust_class`` from the write path's source class and the
 # lifecycle status, never from a model field.
 MEMORY_TRUST_CLASSES = ('owner-stated', 'verified', 'inferred', 'disproved')
+# The one evidence path that verifies a lesson without the owner: a Worker
+# recorded a verdict citing what it ran, and a reviewer accepted that Worker's
+# result (lib/memory/verification.py). Stored as ``provenance.verified_by``
+# by the settlement, never by a model argument. It is not owner speech.
+MEMORY_VERIFIED_BY_ACCEPTED_RESULT = 'accepted_result'
+# What a Worker's evidence says about a lesson; settled on acceptance.
+MEMORY_VERDICTS = ('confirmed', 'contradicted')
+# ``create_memory``'s write-time decision after it showed the nearest lessons:
+# this literal records a new lesson; an existing lesson id records a repeat.
+MEMORY_RECORD_AS_NEW = 'new'
 
 
 def memory_trust_class(status: Any, source_class: Any,
-                       edited_source_class: Any = None) -> str:
+                       edited_source_class: Any = None,
+                       verified_by: Any = None) -> str:
     """The trust class of one lesson or My Context item.
 
     ``disproved``: no longer believed (disproved or superseded; the status
     reason says which). ``owner-stated``: the owner wrote or typed it.
-    ``verified``: the owner confirmed or edited it, or the legacy audit bound
-    it to an owner Turn. ``inferred``: everything else - agent reports,
+    ``verified``: the owner confirmed or edited it, the legacy audit bound it
+    to an owner Turn, or an accepted Worker result's evidence confirmed it
+    (``verified_by``). ``inferred``: everything else - agent reports,
     unrecorded legacy sources and items awaiting confirmation.
     """
     status = status or 'active'
@@ -77,9 +89,30 @@ def memory_trust_class(status: Any, source_class: Any,
     if source_class == 'owner_stated':
         return 'owner-stated'
     if (source_class in ('owner_confirmed', 'legacy_import')
-            or edited_source_class == 'owner_stated'):
+            or edited_source_class == 'owner_stated'
+            or verified_by == MEMORY_VERIFIED_BY_ACCEPTED_RESULT):
         return 'verified'
     return 'inferred'
+
+
+def lesson_trust_class(memory: Mapping) -> str:
+    """``memory_trust_class`` of one stored lesson record."""
+    provenance = memory.get('provenance') or {}
+    return memory_trust_class(memory.get('status'), provenance.get('source_class'),
+                              provenance.get('edited_source_class'),
+                              provenance.get('verified_by'))
+
+
+def normalize_memory_verdict(value: Any) -> dict[str, str]:
+    """``{result, evidence}``: what a Worker's run showed about one lesson."""
+    if not isinstance(value, Mapping) or set(value) != {'result', 'evidence'}:
+        raise BadRequest('verdict must be {result, evidence}', field='verdict')
+    if value['result'] not in MEMORY_VERDICTS:
+        raise BadRequest('verdict.result must be one of ' + ', '.join(MEMORY_VERDICTS),
+                         field='verdict')
+    return {'result': value['result'],
+            'evidence': _bounded_text(value['evidence'], field='verdict.evidence',
+                                      max_chars=MEMORY_POINTER_MAX_CHARS, allow_blank=False)}
 
 
 def _bounded_text(
@@ -328,7 +361,12 @@ __all__ = [
     'MEMORY_TAG_MAX_CHARS',
     'MEMORY_TAG_MAX_ITEMS',
     'MEMORY_TRUST_CLASSES',
+    'MEMORY_RECORD_AS_NEW',
+    'MEMORY_VERDICTS',
+    'MEMORY_VERIFIED_BY_ACCEPTED_RESULT',
+    'lesson_trust_class',
     'memory_trust_class',
+    'normalize_memory_verdict',
     'normalize_memory_lifecycle',
     'normalize_memory_payload',
     'normalize_memory_search',

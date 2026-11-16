@@ -11,7 +11,10 @@
 //! thread (`begin_hold`/`finish_hold`), independently of request sampling:
 //! one reusable per-thread recorder, exclusive time per stage and per fixed
 //! hold phase. Sampled requests also total their holds' phases (112 bytes per
-//! Sample and operation aggregate).
+//! Sample and operation aggregate). Five commit-path stages (write admission,
+//! packer wake, spill, loose-shard join, inline WAL write) add 120 bytes per
+//! Sample and operation aggregate and 40 bytes to each thread's hold recorder,
+//! which also keeps one fixed `HoldCommits` commit-shape summary per thread.
 
 use serde_json::{json, Value};
 use std::cell::{Cell, RefCell};
@@ -382,6 +385,7 @@ struct HoldState {
     invalid_spans: u64,
     phases: [u64; HOLD_PHASES],
     stages: [u64; STAGES],
+    commits: HoldCommits,
 }
 impl HoldState {
     fn idle() -> Self {
@@ -392,6 +396,7 @@ impl HoldState {
             invalid_spans: 0,
             phases: [0; HOLD_PHASES],
             stages: [0; STAGES],
+            commits: HoldCommits::default(),
         }
     }
     fn reset(&mut self) {
@@ -402,6 +407,7 @@ impl HoldState {
         self.invalid_spans = 0;
         self.phases = [0; HOLD_PHASES];
         self.stages = [0; STAGES];
+        self.commits = HoldCommits::default();
     }
     fn enter(&mut self, stage: usize) -> Option<u64> {
         if self.frames.len() == MAX_DEPTH {
@@ -467,6 +473,7 @@ impl HoldState {
             phases,
             stages,
             invalid_spans,
+            commits: self.commits,
         }
     }
 }
@@ -479,6 +486,72 @@ pub(crate) struct HoldReport {
     pub(crate) phases: [u64; HOLD_PHASES],
     pub(crate) stages: Vec<(&'static str, u64)>,
     pub(crate) invalid_spans: u64,
+    pub(crate) commits: HoldCommits,
+}
+
+/// Content-free shape of the commits inside one attributed hold: the path each
+/// entity commit took and what decided it, and what each engine commit carried
+/// in its WAL record or spilled before appending it. Sums over the hold.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct HoldCommits {
+    pub(crate) entity_commits: u32,
+    /// Entity commits that published a tree root instead of an overlay delta.
+    pub(crate) tree_commits: u32,
+    pub(crate) writes: u64,
+    /// Overlay delta bytes of the write sets (`EntityTransaction::overlay_delta_bytes`).
+    pub(crate) delta_bytes: u64,
+    pub(crate) retired_ranges: bool,
+    pub(crate) mounted_ranges: bool,
+    /// A write set exceeded the overlay envelope (`overlay_delta_fits_envelope`).
+    pub(crate) over_overlay_envelope: bool,
+    pub(crate) engine_commits: u32,
+    /// Pending referenced block bytes the commits carried (or spilled).
+    pub(crate) carried_bytes: u64,
+    /// Engine commits whose carried bytes exceeded `MAX_CARRIED_PAYLOAD_BYTES`.
+    pub(crate) spills: u32,
+    pub(crate) spilled_blocks: u64,
+}
+
+/// Whether this thread is attributing an authority hold. Callers skip the work
+/// of describing a commit no hold line would print.
+pub(crate) fn hold_active() -> bool {
+    HOLD_SEQUENCE.with(Cell::get) != 0
+}
+
+/// One entity commit inside the current hold; outside a hold it is ignored.
+pub(crate) fn note_entity_commit(shape: crate::entity::EntityCommitShape, defers_to_overlay: bool) {
+    if !hold_active() {
+        return;
+    }
+    HOLD.with(|hold| {
+        let commits = &mut hold.borrow_mut().commits;
+        commits.entity_commits = commits.entity_commits.saturating_add(1);
+        commits.tree_commits = commits
+            .tree_commits
+            .saturating_add(u32::from(!defers_to_overlay));
+        commits.writes = commits.writes.saturating_add(shape.writes as u64);
+        commits.delta_bytes = commits.delta_bytes.saturating_add(shape.delta_bytes as u64);
+        commits.retired_ranges |= shape.retired_ranges;
+        commits.mounted_ranges |= shape.mounted_ranges;
+        commits.over_overlay_envelope |= shape.writes != 0 && !shape.fits_overlay_envelope;
+    });
+}
+
+/// One engine commit inside the current hold: the pending block bytes it
+/// referenced and, when they spilled, how many blocks it made durable first.
+pub(crate) fn note_engine_commit(carried_bytes: usize, spilled_blocks: Option<usize>) {
+    if !hold_active() {
+        return;
+    }
+    HOLD.with(|hold| {
+        let commits = &mut hold.borrow_mut().commits;
+        commits.engine_commits = commits.engine_commits.saturating_add(1);
+        commits.carried_bytes = commits.carried_bytes.saturating_add(carried_bytes as u64);
+        if let Some(blocks) = spilled_blocks {
+            commits.spills = commits.spills.saturating_add(1);
+            commits.spilled_blocks = commits.spilled_blocks.saturating_add(blocks as u64);
+        }
+    });
 }
 
 /// Thread-bound ownership of the per-thread hold recorder.

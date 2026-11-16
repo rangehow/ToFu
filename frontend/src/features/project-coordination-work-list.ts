@@ -2,7 +2,7 @@
  * different kinds: an empty conversation is never a queued assignment. Graph
  * projection owns execution/dependency facts; pages own bounded DOM demand.
  */
-import { createButton, createEmptyState } from '../ui';
+import { createButton, createDisclosureSummary, createEmptyState } from '../ui';
 import { t } from '../i18n';
 import type { CoordinationGraph, CoordinationGraphNode } from './project-coordination-graph';
 import { createCoordinationReference, captureCoordinationView } from './project-coordination-reference';
@@ -103,7 +103,7 @@ export function createCoordinationWorkList(graph: CoordinationGraph, navigate: (
       if (row.task) {
         const details = document.createElement('details'); details.className = 'coordination-work-details';
         details.dataset.coordinationDisclosure = `details:${viewKey}`;
-        const summary = document.createElement('summary'); summary.textContent = t('projectCoordination.workDetails');
+        const summary = createDisclosureSummary(document, t('projectCoordination.workDetails'));
         summary.dataset.coordinationFocus = `details:${viewKey}`;
         const facts = document.createElement('div'); facts.className = 'coordination-work-facts';
         const digest = options.digest(row.task);

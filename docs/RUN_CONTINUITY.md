@@ -1372,8 +1372,8 @@ the round-0 evidence block and retires the queue rows in one
 The `consume_peer` fence is gone. The prelude enqueues its rebuilt twins as
 durable (`agent_inbox.enqueue(durable=True)`): the standing row is the
 authority, so the process-local consumed fence never silently drops it and
-only warns. While an engine without the member serves the conversation (today
-the native engine), the evidence attaches and the rows stay listed: the settlement logs a WARNING,
+only warns. While an older engine without the member serves the conversation,
+the evidence attaches and the rows stay listed: the settlement logs a WARNING,
 remembers the written revision and never rewrites the Turn for them again. A
 later Turn then receives the stale receipt, as after any restart before this
 change.
@@ -1398,6 +1398,4 @@ delivered exactly once when the Turn resumes;
 a closed Turn's receipt is retired, never listed again, and an older authority
 is never rewritten in a loop),
 `tests/background/test_background_command_injection_lane.py::test_a_turn_prelude_never_drops_a_standing_durable_receipt_that_is_fenced`
-and `tests/background/test_background_receipt_retirement.py` (SQLite and
-PostgreSQL; `test_background_receipt_retirement_without_member.py` pins the
-native engine, which keeps the rows).
+and `tests/background/test_background_receipt_retirement.py` (every authority).

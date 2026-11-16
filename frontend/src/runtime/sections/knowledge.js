@@ -306,7 +306,7 @@ function _knowledgeRenderDocuments(data) {
       (warnings.length ? '<span class="kb-warning-count" title="' +
         _knowledgeEsc(warnings.join('; ')) + '">⚠ ' + warnings.length + '</span>' : '') +
       '</div><div class="kb-doc-meta">' + _knowledgeEsc(details) + '</div>' +
-      (warnings.length ? '<details class="kb-doc-warnings"><summary>' +
+      (warnings.length ? '<details class="kb-doc-warnings"><summary class="ui-disclosure">' +
         _knowledgeEsc(t('knowledge.parseNotes')) + '</summary><ul>' + warnings.map(function (warning) {
           return '<li>' + _knowledgeEsc(warning) + '</li>';
         }).join('') + '</ul></details>' : '') + '</div>' +

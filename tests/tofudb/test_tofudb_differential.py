@@ -136,6 +136,7 @@ from tofu_db.wire import (  # noqa: E402
     StorageV2Session,
 )
 from lib.goal_runs.contract import goal_run_policy  # noqa: E402
+from lib.storage.generated_v2_semantics import CONVERSATION_SYNC_LINEAGE  # noqa: E402
 from tests.support.tofudb_binary import ensure_engine_binary  # noqa: E402
 
 pytest_plugins = ('tests._chat_sidecar',)
@@ -158,6 +159,12 @@ _PAYMENT_TIE_USER = 'billing-payment-tie-fixture'
 _DROP_FIELDS = {'updated_at_ms', 'created_at_ms', 'first_event_at_ms',
                 'deletedAt', 'requested_at_ms', 'abort_requested_at',
                 'serverNowMs', 'occurredAt'}
+# Conversation-sync replay lineage names each authority's own open and stored
+# records (contracts/storage_v2.json conversationSyncLineage): both sides must
+# report every field with the same type, but values never compare across them.
+_DROP_FIELDS |= {
+    CONVERSATION_SYNC_LINEAGE[field] for field in (
+        'epochField', 'headDigestField', 'changeDigestsField', 'anchorDigestField')}
 
 # Far-future retention cutoff (post-2100) that qualifies every appended
 # event for an owner-scope prune sweep.
@@ -9400,6 +9407,108 @@ def test_worker_active_list_filters_owners_identically(legacy_driver, integratio
         assert views[:2] == [[row] for row in views[2]]
         observed.append(views)
     assert observed[0] == observed[1]
+
+
+def test_byte_bounded_change_pages_cut_at_the_same_change_on_both_authorities(
+    legacy_driver, tofudb_daemon,
+):
+    """``turn.sync.changes`` ``max_bytes`` cuts every page at the same change.
+
+    The measure is each change's encoded bytes exactly as the response carries
+    it, re-encoded here independently of either authority. Settled Turns of
+    mixed sizes (multi-byte text) and live AttemptEvents, whose large bodies
+    the native journal stores by reference, exercise both stored forms. A page
+    is read from every start position, so every boundary is compared, not only
+    the concatenated stream.
+    """
+    ns = f'diff_{uuid.uuid4().hex[:8]}'
+    conversation = f'{ns}_conv'
+    max_bytes = 65_536
+    defaults = {'allowCreate': True, 'title': 'Byte-bounded pages',
+                'createdAt': _TURN_TS, 'settings': {}}
+
+    def encoded(event: Any) -> int:
+        return len(json.dumps(event, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
+
+    def seed(driver) -> None:
+        def run(operation: str, payload: dict[str, Any]) -> Any:
+            outcome = driver.execute(operation, {'user_id': _OWNER_ID, **payload}, _cid())
+            assert outcome.ok, (operation, outcome)
+            return outcome.value
+
+        def settle(index: int, size: int, actor: str) -> None:
+            at = _TURN_TS + 1000 * (index + 1)
+            run('turn.append_settled', {
+                'conversation_id': conversation, 'actor': actor, 'status': 'completed',
+                'projection': {'content': '版' * (size // 3)}, 'lane_id': 'main',
+                'command_id': f'{ns}_settle_{index}', 'turn_id': f'{ns}_turn_{index}',
+                'created_at': at, 'now': at, 'conversation_defaults': defaults,
+            })
+
+        for index, size in enumerate((17_000, 90_000, 2_000, 2_000, 130_000, 64_000)):
+            settle(index, size, 'human' if index % 2 == 0 else 'assistant')
+        attempt = run('turn.attempt.create', {
+            'conversation_id': conversation, 'turn_id': f'{ns}_turn_5',
+            'command_id': f'{ns}_regenerate', 'operation': 'regenerate',
+            'target_actor': 'assistant', 'target_kind': 'reply',
+            'expected_projection_revision': 1, 'config': {},
+        })['attempt']['attemptId']
+        run('turn.attempt.bind', {'attempt_id': attempt, 'task_id': f'{ns}_task'})
+        for index, size in enumerate((30_000, 100_000, 105_000)):
+            run('turn.event.record', {
+                'attempt_id': attempt, 'task_id': f'{ns}_task', 'slim': True,
+                'content': 'x' * size, 'thinking': '',
+                'event_payload': {'phase': 'generating'},
+                'now': _TURN_TS + 20_000 + index,
+            })
+        run('turn.event.record', {
+            'attempt_id': attempt, 'task_id': f'{ns}_task', 'terminal': True,
+            'status': 'completed', 'slim': True, 'content': 'y' * 40_000, 'thinking': '',
+            'settlement': {'outcome': 'completed', 'cause': 'finished', 'resumeOptions': []},
+            'event_payload': {'status': 'completed', 'phase': None},
+            'now': _TURN_TS + 30_000,
+        })
+        for index, size in enumerate((1_000, 33_000, 70_000), start=6):
+            settle(index, size, 'human' if index % 2 == 0 else 'assistant')
+
+    def pages(driver) -> tuple[list[Any], dict[int, Any]]:
+        def read(after: int, **bound: Any) -> Any:
+            outcome = driver.execute('turn.sync.changes', {
+                'conversation_id': conversation, 'user_id': _OWNER_ID,
+                'after': after, 'limit': 500, **bound}, None)
+            assert outcome.ok, outcome
+            return outcome.value
+
+        unbounded = read(0)['events']
+        starts = [0] + [int(event['syncSeq']) for event in unbounded[:-1]]
+        return unbounded, {after: read(after, max_bytes=max_bytes) for after in starts}
+
+    observed = {}
+    for name, driver in (('legacy', legacy_driver), ('tofu-db', tofudb_daemon)):
+        seed(driver)
+        unbounded, bounded = pages(driver)
+        types = {event['type'] for event in unbounded}
+        assert {'turn.upsert', 'attempt.event'} <= types, (name, types)
+        sequences = [int(event['syncSeq']) for event in unbounded]
+        for after, page in bounded.items():
+            # The longest prefix that fits, never an empty page.
+            remaining = unbounded[sequences.index(after) + 1:] if after else unbounded
+            expected, used = [], 0
+            for event in remaining:
+                if expected and used + encoded(event) > max_bytes:
+                    break
+                expected.append(int(event['syncSeq']))
+                used += encoded(event)
+            got = [int(event['syncSeq']) for event in page['events']]
+            assert got == expected, (name, after, got, expected,
+                                     [encoded(event) for event in page['events']])
+            assert page['maxBytesApplied'] is True, (name, after)
+            assert page['hasMore'] is (expected[-1] < sequences[-1]), (name, after)
+        observed[name] = {after: [int(event['syncSeq']) for event in page['events']]
+                          for after, page in bounded.items()}
+    assert observed['legacy'] == observed['tofu-db']
+    assert any(len(page) > 1 for page in observed['legacy'].values())
+    assert any(len(page) == 1 for page in observed['legacy'].values())
 
 
 def _format_divergence(

@@ -163,12 +163,19 @@ def test_model_writes_are_agent_reports_that_cannot_touch_owner_only_fields(stor
     _memory_update({'memory_id': 'model_lesson', 'body': 'second', 'sensitive': True,
                     'enabled': False, 'provenance': {'source_class': 'owner_stated'}},
                    store, task=task)
-    updated = get_memory('model_lesson', project_path=store)
+    # A corrected body is a new version (tests/memory/test_memory_compounding.py).
+    assert get_memory('model_lesson', project_path=store)['status'] == 'superseded'
+    updated = get_memory('model_lesson_1', project_path=store)
     assert updated['body'] == 'second'
     assert updated['sensitive'] is False and updated['enabled'] is True
     assert updated['provenance']['source_class'] == 'agent_report'
-    assert updated['provenance']['edited_source_class'] == 'agent_report'
-    assert updated['provenance']['edited_turn_id'] == 'turn-model'
+    assert updated['provenance']['turn_id'] == 'turn-model'
+    _memory_update({'memory_id': 'model_lesson_1', 'tags': ['kept'], 'sensitive': True},
+                   store, task=task)
+    tagged = get_memory('model_lesson_1', project_path=store)
+    assert tagged['tags'] == ['kept'] and tagged['sensitive'] is False
+    assert tagged['provenance']['edited_source_class'] == 'agent_report'
+    assert tagged['provenance']['edited_turn_id'] == 'turn-model'
 
 
 def test_a_storage_write_refuses_an_undeclared_source_class(store):

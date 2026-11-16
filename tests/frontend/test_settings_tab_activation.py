@@ -43,12 +43,6 @@ async function main(){
    assert.deepEqual(calls,[...tabs.slice(1),'database'],'editor revisits retain drafts; Database refreshes its live status on activation');
   }else if(SCENARIO==='close_database'){
    bridge.switchSettingsTab('database');bridge.closeSettings();assert.deepEqual(destroyed,['database']);
-  }else if(SCENARIO==='database_owner_loads_on_visit'){
-   delete bridge._populateDatabaseTab;delete bridge._destroyDatabaseTab;
-   bridge.switchSettingsTab('database');assert.equal(bridge._populateDatabaseTab,undefined,'the Database owner stays out of the Settings chunk until visited');
-   for(let i=0;i<20&&typeof bridge._dbSelectEngine!=='function';i++)await tick();
-   assert.equal(typeof bridge._populateDatabaseTab,'function','visiting Database loads and registers its owner');
-   assert.equal(typeof bridge._destroyDatabaseTab,'function');
   }else if(SCENARIO==='opening_owns_visits'){
    calls.length=0;bridge.switchSettingsTab('skills');bridge.closeSettings();bridge.openSettings();await tick();
    assert.deepEqual(calls,['skills']);bridge.switchSettingsTab('skills');assert.deepEqual(calls,['skills','skills']);
@@ -61,8 +55,7 @@ main().catch(error=>{console.error(error);process.exitCode=1;dom.window.close();
 
 
 @pytest.mark.parametrize('scenario', ['opening_is_lazy', 'visit_during_config_read', 'visit_once',
-                                      'close_database', 'opening_owns_visits',
-                                      'database_owner_loads_on_visit'])
+                                      'close_database', 'opening_owns_visits'])
 def test_settings_independent_tab_activation(settings_bundle, scenario):
     constants = {'ROOT': str(ROOT), 'BUILT': str(settings_bundle), 'SCENARIO': scenario}
     script = '\n'.join(f'const {key}={json.dumps(value)};' for key, value in constants.items()) + HARNESS

@@ -37,8 +37,27 @@ TERMINAL_EVENT_TYPES = frozenset({
     'interrupted',
 })
 
+# An attempt event whose diagnostic evidence frame is held by the task-event row
+# committed in the same transaction names that row under this key instead of
+# storing the frame again: ``{'taskId': str, 'sequence': int}``. Only rows of the
+# structural retention class are named, because they outlive conversation
+# replay (TASK_EVENT_STRUCTURAL_RETENTION_MS >= the sync replay retention).
+ATTEMPT_EVIDENCE_REFERENCE_KEY = 'eventRef'
+
+
+def attempt_evidence_reference(body):
+    """``(task_id, sequence)`` named by an attempt-event payload, or ``None``."""
+    reference = body.get(ATTEMPT_EVIDENCE_REFERENCE_KEY) if isinstance(body, dict) else None
+    if not isinstance(reference, dict):
+        return None
+    task_id, sequence = reference.get('taskId'), reference.get('sequence')
+    if not isinstance(task_id, str) or not task_id or type(sequence) is not int or sequence < 0:
+        return None
+    return task_id, sequence
+
 
 __all__ = [
+    'ATTEMPT_EVIDENCE_REFERENCE_KEY',
     'EVENT_READ_GUARD_CONTRACT',
     'EVENT_READ_GUARD_SCOPED_CONTRACT',
     'EVENT_READ_GUARD_MAX_TYPES',
@@ -49,4 +68,5 @@ __all__ = [
     'TASK_EVENT_STRUCTURAL_RETENTION_MS',
     'TASK_STREAM_KIND',
     'TERMINAL_EVENT_TYPES',
+    'attempt_evidence_reference',
 ]

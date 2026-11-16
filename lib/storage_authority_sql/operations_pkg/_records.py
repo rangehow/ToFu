@@ -1807,13 +1807,19 @@ def _event_inspector_summary(session: Session, payload: Mapping[str, Any]) -> An
     # INDEXED BY (SQLite only): statements are planned without parameter
     # values, so the parameterized prefix range gets a pessimistic
     # selectivity estimate — measured on a 1M-row log, the planner
-    # abandoned storage_events_task_idx for an EMPTY ``#agent:`` range and
-    # scanned the retention index instead (16 s). The task-leading index
-    # turns the probe into exactly the key-range rows it must count.
-    children_from_where = (
-        "FROM storage_events INDEXED BY storage_events_task_idx "
-        "WHERE stream_kind=? AND "
-        if session.backend == "sqlite" else from_where)
+    # abandoned the task-leading index for an EMPTY ``#agent:`` range and
+    # scanned the retention index instead (16 s). The primary-key index
+    # (task_id, sequence) turns the probe into exactly the key-range rows it
+    # must count; its name comes from the authority's own catalogue.
+    children_from_where = from_where
+    if session.backend == "sqlite":
+        key_index = session.fetch_all(
+            "SELECT name FROM pragma_index_list('storage_events') WHERE origin='pk'")
+        if key_index:
+            children_from_where = (
+                'FROM storage_events INDEXED BY "'
+                + str(key_index[0]["name"]).replace('"', '""')
+                + '" WHERE stream_kind=? AND ')
     type_filter = (" AND (event_type IN (" + structural_placeholders +
                    ") OR event_type LIKE ?) GROUP BY task_id")
     summary_sql = select_cols + from_where + "task_id=?" + type_filter

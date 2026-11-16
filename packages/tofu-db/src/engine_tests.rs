@@ -3445,7 +3445,7 @@
             // Reproduce metadata left by the old async catalog merge: WAL
             // sequence/hash are current, but CONTROL carries an older root.
             engine.state.authority_state_root = Some(Some(initial));
-            engine.flush_dirty_control().unwrap();
+            engine.flush_dirty_control(ControlStaging::Staged).unwrap();
             drop(engine);
             vfs.crash().unwrap();
             vfs.arm_fault(None).unwrap();

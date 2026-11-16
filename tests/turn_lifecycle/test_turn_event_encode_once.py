@@ -2,9 +2,9 @@
 
 ``turn.event.record`` measures its byte bounds with ``len`` of exactly the
 bytes the storage clients splice (``lib.storage.protocol.FrozenPayload``):
-the snapshot-delta decision and the batch event budget read the same
-compact UTF-8 encoding the authority receives, and
-the inline evidence copy and the carried row share one encoding. A counting
+the batch event budget reads the same compact UTF-8 encoding the authority
+receives, and a snapshot's carried row is its only copy in the command (the
+attempt event names the row; ``test_diagnostic_evidence_once.py``). A counting
 instrument over the single admitted encoder proves the count; differential
 checks prove the requests both clients send are unchanged.
 """
@@ -98,7 +98,7 @@ def _finish(task):
     _discard(task)
 
 
-def test_snapshot_delta_is_encoded_once_for_its_copy_carrier_and_bound(
+def test_snapshot_delta_is_encoded_once_and_carried_once(
         turn_service, storage, monkeypatch, encodes, stdlib_wire):
     _, task = _task(turn_service, storage, 'encode-once')
     sent = _capture(storage, monkeypatch)
@@ -110,18 +110,15 @@ def test_snapshot_delta_is_encoded_once_for_its_copy_carrier_and_bound(
         assert isinstance(payload, FrozenPayload)
         evidence = payload['task_event']['event']
         assert evidence['prefixLen'] == len(_HISTORY)
-        inline = payload['event_payload']['event']
-        assert inline == evidence and inline is not evidence
-        # One encoding of the delta serves the inline copy, the carried row
-        # and the Attempt-event bound; the patch is measured and sent once;
-        # the full frame is encoded only to measure the inline bound.
+        assert 'event' not in payload['event_payload']
+        # The carried delta and the patch are each encoded and sent once; the
+        # full live frame is never encoded for storage at all.
         assert encodes[id(evidence)] == 1
-        assert encodes[id(inline)] == 0
         assert encodes[id(payload['projection_patch'])] == 1
-        assert encodes[id(grown)] == 1
+        assert encodes[id(grown)] == 0
         delta = encode_json_value(evidence)
         assert delta in payload.encoded['task_event']
-        assert delta in payload.encoded['event_payload']
+        assert delta not in payload.encoded['event_payload']
         # storage.v2 splices the bytes; it never re-encodes the command.
         assert [body for body in stdlib_wire if 'event_payload' in body] == []
     finally:
@@ -168,33 +165,6 @@ def test_requests_both_clients_send_are_unchanged(turn_service, storage, monkeyp
             'task_id': task['id'], 'after_sequence': -1, 'limit': 100})
         last = stored[-1]['event']
         assert (last['ratio'], last['tiny'], last['big']) == (0.25, 1e-05, 1e16)
-    finally:
-        _finish(task)
-
-
-def test_inline_snapshot_bound_measures_the_stored_utf8_bytes(
-        turn_service, storage, monkeypatch):
-    """The 64 KiB inline bound counts stored bytes, not ASCII escapes.
-
-    CJK text is three UTF-8 bytes but a six-character ``\\uXXXX`` escape; the
-    former measure moved such frames to their delta form at a third of the
-    stored size. ASCII frames decide exactly as before.
-    """
-    _, task = _task(turn_service, storage, 'encode-once-utf8')
-    sent = _capture(storage, monkeypatch)
-    cjk = [{'role': 'system', 'content': 'system prompt'},
-           {'role': 'user', 'content': '证' * 15_000}]
-    try:
-        _record(turn_service, task, 0, _snapshot(1, cjk))
-        grown = _snapshot(2, [*cjk, {'role': 'assistant', 'content': 'ok'}])
-        assert len(orjson.dumps(grown)) <= 64 * 1024 < len(json.dumps(grown, separators=(',', ':')))
-        _record(turn_service, task, 1, grown)
-        assert sent[-1]['event_payload']['event'] is grown
-        ascii_grown = _snapshot(3, [*cjk, {'role': 'assistant', 'content': 'ok'},
-                                    {'role': 'user', 'content': 'a' * 30_000}])
-        assert len(orjson.dumps(ascii_grown)) > 64 * 1024
-        _record(turn_service, task, 2, ascii_grown)
-        assert sent[-1]['event_payload']['event']['prefixLen'] == 3
     finally:
         _finish(task)
 

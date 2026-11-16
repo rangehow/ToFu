@@ -31,14 +31,16 @@ def stats(monkeypatch, tmp_path):
     monkeypatch.setattr(ks, '_list_siblings', lambda provider: [])
     ks._cache.update(day='', stats={}, overrides={}, loaded=False)
     _state._pending_mutations.clear()
+    # One freshness check observes the whole store (its decision and
+    # telemetry documents) once.
     fingerprints = []
-    real_fingerprint = _state._file_fingerprint
+    real_fingerprint = _state._store_fingerprint
 
     def counting_fingerprint(path):
         fingerprints.append(path)
         return real_fingerprint(path)
 
-    monkeypatch.setattr(_state, '_file_fingerprint', counting_fingerprint)
+    monkeypatch.setattr(_state, '_store_fingerprint', counting_fingerprint)
     ks.is_key_enabled(PROVIDER, 'warm-load')
     fingerprints.clear()
     yield ks, fingerprints
@@ -102,7 +104,8 @@ def test_admission_reads_never_stat_the_store_while_holding_the_lock(
             assert ks.is_key_enabled(PROVIDER, 'a') and ks.is_key_enabled(PROVIDER, 'b')
     else:
         assert ks.is_key_enabled(PROVIDER, 'a') and ks.is_key_enabled(PROVIDER, 'b')
-    assert held == [False] * (1 if batched else 2)
+    # Each freshness check stats both store documents (decisions, telemetry).
+    assert held == [False] * (2 if batched else 4)
 
 
 def test_change_committed_by_another_writer_is_seen_by_the_next_batch(

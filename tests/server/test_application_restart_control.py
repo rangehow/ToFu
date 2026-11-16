@@ -88,6 +88,14 @@ def test_delegation_uses_latest_disk_generation(target, monkeypatch):
     assert second['request'] == {'source': 'application-manual', 'requested_at': 123.5}
 
 
+def test_a_late_stderr_line_cannot_displace_the_receipt(target):
+    module = target / 'supervisor_protocol.py'
+    module.write_text('import atexit, sys\n'
+                      'atexit.register(lambda: print("warning: late interpreter notice", file=sys.stderr))\n'
+                      + module.read_text())
+    assert control.run_application_restart_control(str(target), stage='delegate')['generation'] == 'first'
+
+
 def test_preparation_failure_keeps_build_diagnostics(target):
     (target / 'serverctl.py').write_text('''
 def prepare_native_engine_artifact(*args, **kwargs):

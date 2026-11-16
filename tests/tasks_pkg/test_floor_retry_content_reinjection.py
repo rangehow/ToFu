@@ -89,7 +89,6 @@ def _patch_common(monkeypatch, dispatch_fn):
 
     # Silence the event/persistence seams.
     monkeypatch.setattr(_stream, 'append_event', lambda *a, **k: None)
-    monkeypatch.setattr(_stream, 'checkpoint_task_partial', lambda *a, **k: None)
 
 
 @pytest.mark.unit

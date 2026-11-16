@@ -1516,7 +1516,7 @@ fn run_round(
                 Ok(false) => RoundOutcome::NoWork,
                 // Abandoned before any CONTROL write: nothing landed and the
                 // authority stays usable, so a later round adopts again.
-                Err(error) if crate::engine::abandoned_uncovered(&error) => RoundOutcome::Conflict,
+                Err(error) if crate::wal::abandoned_uncovered(&error) => RoundOutcome::Conflict,
                 Err(error) => RoundOutcome::Terminal(error),
             }
         }
@@ -1625,6 +1625,7 @@ fn record_terminal_round(shared: &Shared, error: io::Error) {
 fn round_engine_error(error: io::Error) -> RoundOutcome {
     if error.kind() == io::ErrorKind::WouldBlock
         || crate::engine::is_rotation_backpressure(&error)
+        || crate::wal::abandoned_uncovered(&error)
         || (crate::vfs::is_storage_full(&error) && !crate::engine::requires_reopen(&error))
     {
         RoundOutcome::Conflict
@@ -1898,7 +1899,7 @@ mod tests {
         let generation = database.engine_mut_for_test().state().generation;
         let database = Arc::new(Mutex::new(database));
         let outcome = {
-            let _expired = crate::engine::ExpiredPackAdoptionCovers::on_this_thread();
+            let _expired = crate::wal::ExpiredPublicationCovers::on_this_thread();
             run_round(&database, MaintenanceScope::new(7, 11).unwrap(), 64, false)
         };
         match &outcome {
@@ -1936,6 +1937,66 @@ mod tests {
                 .payload_segment_count(),
             1
         );
+    }
+
+    /// History slices wait on the same WAL cover as pack adoption, before any
+    /// CONTROL write. A slice abandoned at a cover that missed the barrier
+    /// deadline published nothing, so the round defers and a later round
+    /// retires; a terminal round would stop the worker and recycle the daemon.
+    #[test]
+    fn a_round_whose_history_slice_misses_the_barrier_deadline_defers_and_retires_later() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        for index in 0..4_u16 {
+            let mut transaction = database.begin(7, 11).unwrap();
+            database
+                .entity_put(&mut transaction, key(index), vec![index as u8; 64])
+                .unwrap();
+            database.commit(transaction).unwrap();
+            database.checkpoint_for_test().unwrap();
+        }
+        assert_eq!(database.history_segment_count_for_test(), 4);
+        let barrier = crate::wal::WalBarrierShared::buffered_for_test(4 * 1024 * 1024);
+        database.attach_wal_barrier(&barrier).unwrap();
+        let vfs = database.wal_vfs().unwrap();
+        let mut transaction = database.begin(7, 11).unwrap();
+        database
+            .entity_put(&mut transaction, key(9), vec![9; 64])
+            .unwrap();
+        database.commit(transaction).unwrap();
+        // Written, so a Normal-tier command was acknowledged; its sync stalls.
+        barrier.write_for_test(vfs.as_ref()).unwrap();
+        let generation = database.engine_mut_for_test().state().generation;
+        let database = Arc::new(Mutex::new(database));
+        let outcome = {
+            let _expired = crate::wal::ExpiredPublicationCovers::on_this_thread();
+            run_round(&database, MaintenanceScope::new(7, 11).unwrap(), 1, false)
+        };
+        match &outcome {
+            RoundOutcome::Conflict => {}
+            RoundOutcome::Terminal(error) => {
+                panic!("a history slice abandoned before publication ended the worker: {error}")
+            }
+            _ => panic!("the round must defer its abandoned history slice"),
+        }
+        {
+            let mut guard = database.lock().unwrap();
+            assert_eq!(guard.history_segment_count_for_test(), 4);
+            let engine = guard.engine_mut_for_test();
+            engine.require_usable_authority().unwrap();
+            assert_eq!(
+                engine.state().generation,
+                generation,
+                "nothing was published"
+            );
+        }
+        // Once the sync completes, a later round retires history.
+        barrier.sync_for_test(vfs.as_ref()).unwrap();
+        assert!(matches!(
+            run_round(&database, MaintenanceScope::new(7, 11).unwrap(), 1, false),
+            RoundOutcome::HistoryCompacted { .. }
+        ));
+        assert!(database.lock().unwrap().history_segment_count_for_test() < 4);
     }
 
     /// Publishes a one-segment catalog in `database`, lets a whole-store pass

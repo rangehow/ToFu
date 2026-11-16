@@ -40,6 +40,7 @@ here: ``_today``, ``_pair_key``, ``_list_siblings``, ``_load_unlocked``,
 """
 
 import atexit
+import copy
 import json
 import os
 import sys as _sys
@@ -348,15 +349,109 @@ def _file_fingerprint(path: str):
         return _FINGERPRINT_UNKNOWN
 
 
+def _telemetry_path(path: str) -> str:
+    """The telemetry document beside the decision document at *path*."""
+    stem = path[:-len('.json')] if path.endswith('.json') else path
+    return stem + '.telemetry.json'
+
+
+def _store_fingerprint(path: str):
+    """Identity of both store documents; unknown when either cannot be observed."""
+    decisions = _file_fingerprint(path)
+    telemetry = _file_fingerprint(_telemetry_path(path))
+    if decisions is _FINGERPRINT_UNKNOWN or telemetry is _FINGERPRINT_UNKNOWN:
+        return _FINGERPRINT_UNKNOWN
+    return decisions, telemetry
+
+
+def _read_telemetry(path: str, generation: int, today: str):
+    """Telemetry published for this decision generation and day, and its identity.
+
+    The document carries only reconstructible counters published without a
+    durability barrier, so a torn, stale or foreign one is ignored, never
+    repaired here: the next telemetry commit republishes it.
+    """
+    try:
+        with open(_telemetry_path(path), 'rb') as handle:
+            stat = os.fstat(handle.fileno())
+            payload = handle.read()
+    except FileNotFoundError:
+        return None, ('missing',)
+    except OSError as error:
+        logger.debug('[KeyStats] telemetry document unreadable: %s', error)
+        return None, _FINGERPRINT_UNKNOWN
+    fingerprint = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+    try:
+        raw = json.loads(payload.decode('utf-8'))
+    except ValueError as error:
+        logger.debug('[KeyStats] ignoring a torn telemetry document: %s', error)
+        return None, fingerprint
+    base = raw.get('base') if isinstance(raw, dict) else None
+    if (type(base) is not int or base != generation or raw.get('day') != today
+            or not isinstance(raw.get('stats'), dict)):
+        return None, fingerprint
+    telemetry = {}
+    for pk, entry in raw['stats'].items():
+        if not isinstance(pk, str) or not isinstance(entry, dict):
+            return None, fingerprint
+        fields = {}
+        for field, value in entry.items():
+            if field in _TELEMETRY_COUNTER_FIELDS:
+                if type(value) is not int or value < 0:
+                    return None, fingerprint
+            elif field in _TELEMETRY_TEXT:
+                if not isinstance(value, str):
+                    return None, fingerprint
+            else:
+                continue
+            fields[field] = value
+        telemetry[pk] = fields
+    return telemetry, fingerprint
+
+
+def _merge_telemetry_document(document: dict, telemetry: dict | None) -> None:
+    """A bound telemetry document replaces the decision document's telemetry.
+
+    It is the complete telemetry of its generation and day (namespace folds
+    included), so the decision document contributes only decisions; layering
+    the two would count a folded entry twice.
+    """
+    if telemetry is None:
+        return
+    stats = {}
+    for pk, entry in document['stats'].items():
+        decisions = {field: value for field, value in entry.items()
+                     if field not in _TELEMETRY_FIELDS}
+        if any(value not in (None, False, {}, '') for value in decisions.values()):
+            stats[pk] = {**_new_entry(), **decisions}
+    for pk, fields in telemetry.items():
+        stats[pk] = {**(stats.get(pk) or _new_entry()), **fields}
+    document['stats'] = stats
+
+
+def _decision_view(document: dict):
+    """Overrides and billing stops: the state an owner decision makes durable."""
+    stops = {}
+    for pk, entry in document['stats'].items():
+        kept = {field: value for field, value in entry.items()
+                if field not in _TELEMETRY_FIELDS and value not in (None, False, {}, '')}
+        if kept:
+            stops[pk] = kept
+    return copy.deepcopy((document['overrides'], stops))
+
+
 def _normalise_document(raw, today: str) -> dict:
     """Validate the store and apply the daily-reset contract in memory."""
     if raw is None:
-        return {'day': today, 'stats': {}, 'overrides': {}}
+        return {'day': today, 'stats': {}, 'overrides': {}, 'generation': 0}
     if not isinstance(raw, dict):
         raise JsonStoreReadError('key stats store is not an object')
     stored_day = raw.get('day') or ''
     if not isinstance(stored_day, str):
         raise JsonStoreReadError('key stats store has an invalid day')
+    generation = raw.get('generation', 0)
+    if type(generation) is not int or generation < 0:
+        raise JsonStoreReadError('key stats store has an invalid generation')
     stats = raw.get('stats', {})
     overrides = raw.get('overrides', {})
     if not isinstance(stats, dict) or not isinstance(overrides, dict):
@@ -400,6 +495,7 @@ def _normalise_document(raw, today: str) -> dict:
         'stats': (normalised_stats if stored_day == today
                   else _carried_billing_stops(normalised_stats)),
         'overrides': overrides,
+        'generation': generation,
     }
 
 
@@ -437,6 +533,12 @@ def _apply_document_unlocked(document: dict) -> None:
 _TELEMETRY_COUNTERS = ('success', 'failure', 'credential_failures',
                        'rate_limited', 'gateway_errors')
 _TELEMETRY_TEXT = ('last_error', 'last_credential_error')
+# Reconstructible health telemetry. Every other entry field (billing stops)
+# and the overrides map are owner decisions, durable before the deciding call
+# returns; telemetry keeps the crash-loss window KEY_STATS_FLUSH_INTERVAL_SECONDS
+# documents.
+_TELEMETRY_COUNTER_FIELDS = frozenset(_TELEMETRY_COUNTERS + ('consecutive_429',))
+_TELEMETRY_FIELDS = _TELEMETRY_COUNTER_FIELDS | frozenset(_TELEMETRY_TEXT)
 
 
 def _merge_telemetry(total: dict, delta: dict) -> None:
@@ -611,19 +713,35 @@ def _commit_batch(path: str, batch: list, today: str):
     fold_map = _namespace_fold_map()
     with locked_path(path):
         raw = read_json(path, default=None, strict=True)
-        base = _file_fingerprint(path)
+        base = _store_fingerprint(path)
         # Readers never take the flock, so taking ``_lock`` here cannot
         # invert any lock order.
         with _lock:
             _inflight_base = base
         document = _normalise_document(raw, today)
+        generation = document['generation']
+        _merge_telemetry_document(document, _read_telemetry(path, generation, today)[0])
+        decisions = _decision_view(document)
         for item in batch:
             _apply_pending(item, document)
         _fold_namespaces(document['stats'], document['overrides'], fold_map)
-        write_json_atomic(path, document, allow_nan=False)
-        # Fingerprint our own inode while other writers are still excluded,
-        # so the next read does not reload the document we just wrote.
-        fingerprint = _file_fingerprint(path)
+        if raw is None or _decision_view(document) != decisions:
+            # An owner decision is durable before its caller returns; the
+            # new generation retires the telemetry document it absorbed.
+            document['generation'] = generation + 1
+            write_json_atomic(path, document, allow_nan=False)
+        else:
+            # Telemetry alone: an atomic publication without a durability
+            # barrier, which never rewrites (or can tear) a decision.
+            write_json_atomic(_telemetry_path(path), {
+                'base': generation, 'day': document['day'],
+                'stats': {pk: {field: value for field, value in entry.items()
+                               if field in _TELEMETRY_FIELDS}
+                          for pk, entry in document['stats'].items()},
+            }, fsync=False, allow_nan=False)
+        # Fingerprint our own inodes while other writers are still excluded,
+        # so the next read does not reload the documents we just wrote.
+        fingerprint = _store_fingerprint(path)
     return document, fingerprint
 
 
@@ -806,15 +924,20 @@ def _load_unlocked():
                        'loaded state and pending mutations without changing '
                        'the file', stats_path, error)
         if not (_cache['loaded'] and _cache_path == stats_path):
-            document = {'day': today, 'stats': {}, 'overrides': {}}
+            document = {'day': today, 'stats': {}, 'overrides': {}, 'generation': 0}
             _replay_pending_unlocked(
                 document, stats_path, include_inflight=True)
             _apply_document_unlocked(document)
             _cache_path = stats_path
         # Keep serving memory while the same broken document remains in
         # place; an atomic repair changes the inode and the next read sees it.
-        _disk_fingerprint = _file_fingerprint(stats_path)
+        _disk_fingerprint = _store_fingerprint(stats_path)
         return
+    telemetry, telemetry_fingerprint = _read_telemetry(
+        stats_path, document['generation'], today)
+    _merge_telemetry_document(document, telemetry)
+    fingerprint = (_FINGERPRINT_UNKNOWN if telemetry_fingerprint is _FINGERPRINT_UNKNOWN
+                   else (fingerprint, telemetry_fingerprint))
 
     stored_day = (raw or {}).get('day') if isinstance(raw, dict) else ''
     if stored_day and stored_day != today:
@@ -840,7 +963,7 @@ def _observe_store() -> tuple[str, object]:
     holder of ``_lock`` waiting to get the GIL back stalls every reader.
     """
     path = _stats_path()
-    return path, _file_fingerprint(path)
+    return path, _store_fingerprint(path)
 
 
 def _ensure_fresh_unlocked(observed: tuple[str, object] | None = None):
@@ -870,7 +993,7 @@ def _ensure_fresh_unlocked(observed: tuple[str, object] | None = None):
     if observed is not None and observed[0] == stats_path:
         fingerprint = observed[1]
     else:
-        fingerprint = _file_fingerprint(stats_path)
+        fingerprint = _store_fingerprint(stats_path)
     if (_disk_fingerprint is _FINGERPRINT_UNKNOWN
             or fingerprint != _disk_fingerprint):
         _load_unlocked()

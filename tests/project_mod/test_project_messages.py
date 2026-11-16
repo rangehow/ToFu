@@ -2,7 +2,7 @@
 from copy import deepcopy
 from types import SimpleNamespace
 import pytest
-from tests.swarm.test_retained_agents import RecordClient
+from tests.project_mod.test_project_message_history import LockedRecordClient
 from lib.conversations import project_messages as pm
 from lib.storage.errors import StorageError
 
@@ -10,7 +10,7 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture
 def setup(monkeypatch):
-    client = RecordClient()
+    client = LockedRecordClient()
     monkeypatch.setattr('lib.storage.get_storage_client', lambda **kw: client)
     conversations = {(1, 'sender'): '/project', (1, 'recipient'): '/project', (2, 'foreign'): '/project', (1, 'other'): '/other'}
     def get(self, conv, *, user_id, include_messages):
@@ -29,11 +29,11 @@ def send(setup, **kw):
 
 def test_submit_replay_and_lost_response(setup, monkeypatch):
     original = setup.client.command
-    head = pm.ProjectMailbox(1, '/project', 'recipient').key
+    arrival = pm.ProjectMailbox(1, '/project', 'recipient').key + ':arrival:'
     commits = []
     def lost(operation, payload, command_id):
         value = original(operation, payload, command_id)
-        if payload['key'] == head:
+        if payload['key'].startswith(arrival):  # a send's commit point: its original
             commits.append(1)
             if len(commits) == 1:
                 raise StorageError('database_timeout', 'ACK lost', retryable=True)
@@ -363,12 +363,16 @@ def test_full_scan_keeps_state_decision_and_sender_scope_filters(setup):
     mailbox.consider({'message_id': decided['id'], 'decision': 'deferred', 'note': 'Wait', 'expected_revision': 1}, 'task-r')
     fresh = mailbox.submit('sender', {'content': 'Current original', 'idempotency_key': 'fresh'}, 'task-s')
     setup.conversations[(1, 'rebound')] = '/other'
-    before = deepcopy(setup.client.rows)
+    before = deepcopy(mailbox.read())
     messages = [{'role': 'user', 'content': 'Objective'}]
     pm.inject(setup.recipient, messages, 1)
     assert messages[-1]['_projectMessageIds'] == [fresh['id']]
     assert setup.recipient['_projectMessageAttempt']['ids'] == [fresh['id']]
-    assert setup.client.rows == before  # Optional acquisition creates no receipt or execution.
+    # Optional acquisition creates no receipt or execution; it only absorbs the arrival.
+    assert mailbox.read() == before
+    rows = deepcopy(setup.client.rows)
+    pm.inject(setup.recipient, [{'role': 'user', 'content': 'Objective'}], 2)
+    assert setup.client.rows == rows
 
 
 def test_sender_validity_cache_is_per_injection_and_includes_invalid_senders(setup, monkeypatch):

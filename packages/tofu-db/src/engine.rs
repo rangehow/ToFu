@@ -34,8 +34,8 @@ use crate::payload_segment::{
 use crate::transaction::{TransactionEnvelope, MAX_CARRIED_PAYLOAD_BYTES};
 use crate::vfs::{sync_directory_barrier, FileKind, OpenRequest, RealVfs, Vfs, VfsFile};
 use crate::wal::{
-    ActiveLog, WalBarrier, WalBarrierDriver, WalDurability, MAX_GROUP_ENCODED_BYTES,
-    MAX_GROUP_TRANSACTIONS, WAL_RECORD_OVERHEAD_BYTES,
+    abandon_if_uncovered, abandoned_uncovered, ActiveLog, WalBarrier, WalBarrierDriver,
+    WalDurability, MAX_GROUP_ENCODED_BYTES, MAX_GROUP_TRANSACTIONS, WAL_RECORD_OVERHEAD_BYTES,
 };
 use crate::{ACTIVE_LOG_CHECKPOINT_BYTES, ACTIVE_LOG_ROTATE_BYTES};
 
@@ -451,7 +451,7 @@ impl Drop for Engine {
                 .restart_required
                 .load(std::sync::atomic::Ordering::Relaxed)
         {
-            if let Err(error) = self.flush_dirty_control() {
+            if let Err(error) = self.flush_dirty_control(ControlStaging::Staged) {
                 // No-panic/no-retry semantics stay: the failure only means
                 // the next open replays the WAL, but it is now observable.
                 crate::fsync_stats::note_drop_flush_failure();
@@ -1130,16 +1130,20 @@ impl Engine {
         Ok(())
     }
 
-    fn publish_control(&mut self, next: &ControlState) -> io::Result<()> {
+    fn publish_control(&mut self, next: &ControlState, staging: ControlStaging) -> io::Result<()> {
         crate::fsync_stats::note_publish_control();
         // CONTROL must never reference an unsynced WAL prefix. In `Normal`
         // durability the per-commit barrier is deferred to the background
         // flusher, so every publication performs it here first (a no-op in
         // `Strict` mode); a barrier failure is as ambiguous as a publication
-        // failure.
+        // failure, except a missed deadline before an unstaged publication:
+        // nothing was written and nothing changed, so it is abandoned.
         if let Err(error) = self.wal.sync_pending() {
-            self.restart_required
-                .store(true, std::sync::atomic::Ordering::Relaxed);
+            let error = match staging {
+                ControlStaging::Unstaged(publication) => abandon_if_uncovered(publication, error),
+                ControlStaging::Staged => error,
+            };
+            self.latch_unless_abandoned(&error);
             return Err(error);
         }
         // Synchronous publishers refuse to queue a CONTROL write behind an
@@ -1165,6 +1169,18 @@ impl Engine {
             return Err(error);
         }
         Ok(())
+    }
+
+    /// The one latch rule for a failed publication: an error from the first
+    /// CONTROL write on, or from a publisher that staged engine state, may have
+    /// partially landed and latches restart-required; a publication abandoned
+    /// before any CONTROL write and any state change (`wal::abandoned_uncovered`)
+    /// published nothing and never latches.
+    fn latch_unless_abandoned(&self, error: &io::Error) {
+        if !abandoned_uncovered(error) {
+            self.restart_required
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     pub fn is_restart_required(&self) -> bool {
@@ -1317,7 +1333,7 @@ impl Engine {
     /// must first catch the published durable point up in a standalone
     /// ordinary publication so every CONTROL transition stays explicable
     /// under the slot state-machine rules.
-    fn flush_dirty_control(&mut self) -> io::Result<()> {
+    fn flush_dirty_control(&mut self, staging: ControlStaging) -> io::Result<()> {
         let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_FLUSH_DIRTY);
         if !self.control_dirty {
             return Ok(());
@@ -1329,7 +1345,7 @@ impl Engine {
                 })?,
                 ..self.state.clone()
             };
-        self.publish_control(&next)?;
+        self.publish_control(&next, staging)?;
         self.state = next;
         self.control_dirty = false;
         Ok(())
@@ -1956,14 +1972,9 @@ impl Engine {
         };
         // Strict worker handoff can also own unwritten frames. Cover the
         // captured logical prefix before any off-authority CONTROL chain.
-        let wal_cover = self.wal.publication_cover(Arc::clone(&self.vfs))?;
-        #[cfg(test)]
-        let wal_cover = wal_cover.map(|mut cover| {
-            if EXPIRE_PACK_ADOPTION_COVERS.with(std::cell::Cell::get) {
-                cover.expire_barrier_wait_for_test();
-            }
-            cover
-        });
+        let wal_cover = self
+            .wal
+            .publication_cover(Arc::clone(&self.vfs), "pack adoption")?;
         Ok(PackAdoptionPreparation::Ready(Box::new(
             PreparedPackAdoption {
                 segment_id,
@@ -2003,8 +2014,7 @@ impl Engine {
             // reclaims (docs/STORAGE_OPERATIONS.md, "A slow WAL sync during a
             // background publication").
             Err(error)
-                if (error.kind() == io::ErrorKind::WouldBlock && prepared.stop_requested())
-                    || abandoned_uncovered(&error) =>
+                if error.kind() == io::ErrorKind::WouldBlock && prepared.stop_requested() =>
             {
                 Err(error)
             }
@@ -2012,8 +2022,7 @@ impl Engine {
                 // The CONTROL chain may have partially landed; the in-memory
                 // generation is unusable until recovery, exactly like a
                 // synchronous publication failure.
-                self.restart_required
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                self.latch_unless_abandoned(&error);
                 Err(error)
             }
             Ok(()) => {
@@ -3245,7 +3254,7 @@ impl Engine {
                 "payload manifest root overlaps its loose victim set",
             ));
         }
-        self.flush_dirty_control()?;
+        self.flush_dirty_control(ControlStaging::Staged)?;
         {
             let _timer =
                 crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_CATALOG_WRITE);
@@ -3259,7 +3268,7 @@ impl Engine {
                 payload_manifest_block_id: Some(manifest_block_id),
                 ..self.state.clone()
             };
-        self.publish_control(&next)?;
+        self.publish_control(&next, ControlStaging::Staged)?;
         self.state = next;
         self.control_dirty = false;
         let install_timer =
@@ -3341,6 +3350,10 @@ impl Engine {
 
     pub(crate) fn stabilize_control_slots(&mut self) -> io::Result<()> {
         self.require_usable_authority()?;
+        // The WAL barrier wait precedes the CONTROL write and every state
+        // change here, so a missed deadline published nothing: it is abandoned
+        // like a background publication's cover, and the hold fails instead of
+        // latching. Every other barrier failure still latches.
         let next =
             ControlState {
                 generation: self.state.generation.checked_add(1).ok_or_else(|| {
@@ -3348,7 +3361,10 @@ impl Engine {
                 })?,
                 ..self.state.clone()
             };
-        self.publish_control(&next)?;
+        self.publish_control(
+            &next,
+            ControlStaging::Unstaged("CONTROL slot stabilization"),
+        )?;
         self.state = next;
         self.control_dirty = false;
         Ok(())
@@ -3572,7 +3588,7 @@ impl Engine {
             let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_CK_DRAIN);
             self.materialize_deferred_blocks()?;
         }
-        self.flush_dirty_control()?;
+        self.flush_dirty_control(ControlStaging::Staged)?;
         crate::fsync_stats::note_checkpoint();
         crate::fsync_stats::note_checkpoint_history_tail(self.unstaged_history_bytes as u64);
         let _segments_timer =
@@ -3667,7 +3683,7 @@ impl Engine {
         drop(_wal_timer);
         {
             let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_CK_CONTROL);
-            self.publish_control(&next)?;
+            self.publish_control(&next, ControlStaging::Staged)?;
         }
         self.control_dirty = false;
         {
@@ -3783,7 +3799,10 @@ impl Engine {
         if self.state.sealed_log.is_some() {
             return Err(rotation_backpressure());
         }
-        self.flush_dirty_control()?;
+        // The handover changes no engine state before its CONTROL publication
+        // succeeds (a successor file it created is reused by the retry), so a
+        // missed barrier deadline in either publication abandons it.
+        self.flush_dirty_control(ControlStaging::Unstaged("WAL generation handover"))?;
         let generation = self
             .state
             .active_log_generation
@@ -3819,7 +3838,7 @@ impl Engine {
                 }),
                 ..self.state.clone()
             };
-        self.publish_control(&next)?;
+        self.publish_control(&next, ControlStaging::Unstaged("WAL generation handover"))?;
         successor.set_durability(self.wal_durability);
         if let Some(barrier) = &self.wal_barrier {
             successor.attach_barrier(barrier);
@@ -3980,7 +3999,7 @@ impl Engine {
             let _stage = crate::fsync_stats::StageTimer::diagnostic(
                 crate::fsync_stats::STAGE_ROTATION_INSTALL_DIRTY_CONTROL,
             );
-            self.flush_dirty_control()?;
+            self.flush_dirty_control(ControlStaging::Staged)?;
         }
         crate::fsync_stats::note_checkpoint();
         crate::fsync_stats::note_checkpoint_history_tail(self.unstaged_history_bytes as u64);
@@ -4084,7 +4103,7 @@ impl Engine {
                 crate::fsync_stats::STAGE_ROTATION_INSTALL_CONTROL,
             );
             let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_CK_CONTROL);
-            self.publish_control(&next)?;
+            self.publish_control(&next, ControlStaging::Staged)?;
         }
         self.control_dirty = false;
         {
@@ -4155,7 +4174,7 @@ impl Engine {
                 "checkpoint lost its sealed WAL ownership",
             ));
         }
-        self.flush_dirty_control()?;
+        self.flush_dirty_control(ControlStaging::Staged)?;
         crate::fsync_stats::note_checkpoint();
         // Zero residual encoding under authority: all successor bytes remain
         // WAL-owned. This metric remains comparable to the legacy install.
@@ -4196,7 +4215,7 @@ impl Engine {
             let _timer = crate::fsync_stats::StageTimer::diagnostic(
                 crate::fsync_stats::STAGE_ROTATION_INSTALL_CONTROL,
             );
-            self.publish_control(&next)?;
+            self.publish_control(&next, ControlStaging::Staged)?;
         }
         self.state = next;
         self.control_dirty = false;
@@ -4967,6 +4986,7 @@ impl std::fmt::Debug for PreparedRotationCheckpoint {
     }
 }
 
+#[derive(Default)]
 pub(crate) struct RotationSegmentOutcome {
     new_references: Vec<HistorySegmentReference>,
     payload_index_root_id: Option<BlockId>,
@@ -5163,68 +5183,19 @@ fn adoption_stopped_before_publication() -> io::Error {
     )
 }
 
-/// A pack adoption whose WAL cover the barrier worker had not synchronized
-/// by the barrier deadline: a slow but live fsync (2026-11-13 02:06, a
-/// DolphinFS stall past 30 s). The cover precedes every CONTROL write, so
-/// the adoption published nothing.
-#[derive(Debug)]
-struct AdoptionAbandonedUncovered(io::Error);
-
-impl std::fmt::Display for AdoptionAbandonedUncovered {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "pack adoption abandoned before its CONTROL publication: {}",
-            self.0
-        )
-    }
-}
-
-impl std::error::Error for AdoptionAbandonedUncovered {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.0)
-    }
-}
-
-fn abandon_if_uncovered(error: io::Error) -> io::Error {
-    if crate::wal::is_barrier_deadline(&error) {
-        io::Error::new(error.kind(), AdoptionAbandonedUncovered(error))
-    } else {
-        error
-    }
-}
-
-/// Whether `error` is a pack adoption abandoned before publication because
-/// its WAL cover missed the barrier deadline ([`AdoptionAbandonedUncovered`]).
-pub(crate) fn abandoned_uncovered(error: &io::Error) -> bool {
-    error
-        .get_ref()
-        .is_some_and(|inner| inner.is::<AdoptionAbandonedUncovered>())
-}
-
-#[cfg(test)]
-thread_local! {
-    static EXPIRE_PACK_ADOPTION_COVERS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// While alive, the WAL covers of pack adoptions prepared on this thread
-/// reach their barrier deadline at once instead of after `MAX_BARRIER_WAIT`.
-#[cfg(test)]
-pub(crate) struct ExpiredPackAdoptionCovers(());
-
-#[cfg(test)]
-impl ExpiredPackAdoptionCovers {
-    pub(crate) fn on_this_thread() -> Self {
-        EXPIRE_PACK_ADOPTION_COVERS.with(|flag| flag.set(true));
-        Self(())
-    }
-}
-
-#[cfg(test)]
-impl Drop for ExpiredPackAdoptionCovers {
-    fn drop(&mut self) {
-        EXPIRE_PACK_ADOPTION_COVERS.with(|flag| flag.set(false));
-    }
+/// What a synchronous CONTROL publisher changed before publishing. Its WAL
+/// barrier wait precedes the CONTROL write, so a missed deadline wrote
+/// nothing; whether it also changed nothing depends on the caller, which must
+/// say so here (docs/STORAGE_OPERATIONS.md, "A slow WAL sync during a
+/// background publication").
+#[derive(Clone, Copy, Debug)]
+enum ControlStaging {
+    /// Engine state changes only after the publication succeeds: a missed
+    /// barrier deadline abandons the named publication without latching.
+    Unstaged(&'static str),
+    /// Engine state was staged or moved before the publication: every barrier
+    /// failure, the deadline included, latches.
+    Staged,
 }
 
 /// What this thread's next foreground commit does with a carried set past
@@ -5387,7 +5358,7 @@ pub(crate) fn publish_prepared_pack_adoption(
         return Err(adoption_stopped_before_publication());
     }
     if let Some(cover) = &prepared.wal_cover {
-        cover.sync().map_err(abandon_if_uncovered)?;
+        cover.sync()?;
     }
     let mut control = prepared
         .control

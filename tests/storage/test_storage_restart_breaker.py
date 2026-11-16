@@ -461,3 +461,104 @@ def test_a_failing_trip_hook_never_breaks_the_breaker(_breaker_env, caplog):
     assert runtime.status()['degraded'] is True
     assert any('breaker-trip notification failed' in record.getMessage() for record in caplog.records)
     runtime.stop(timeout=5.0)
+
+
+class _RecoveryPortSupervisor(_ScriptedSupervisor):
+    """Its client takes the runtime's recovery port at start, as the native
+    storage.v2 client does."""
+
+    recover = None
+
+    def bind_runtime_recovery(self, recover) -> None:
+        self.recover = recover
+
+
+# Outlasts the test: only a runtime state change can end a caller's pause.
+_PAUSE_LONGER_THAN_THE_TEST_S = 600.0
+
+
+def _trip_with_callers_mid_retry(runtime, recover, count):
+    """Trip the breaker with a crash storm while ``count`` callers pause on
+    the recovery port, as the client's retry loop does between attempts;
+    return their outcomes."""
+    outcomes = []
+
+    def wait_out_a_transient_failure():
+        try:
+            outcomes.append(recover(_PAUSE_LONGER_THAN_THE_TEST_S))
+        except StorageError as error:
+            outcomes.append(error)
+
+    callers = [threading.Thread(target=wait_out_a_transient_failure, daemon=True)
+               for _ in range(count)]
+    for caller in callers:
+        caller.start()
+    # Let them park. A caller arriving after the trip gets the same answer.
+    threading.Event().wait(0.2)
+    assert all(caller.is_alive() for caller in callers)
+    for _ in range(4):  # 4 crashes > limit 3 trip the breaker
+        runtime._crashed(-9)
+    for caller in callers:
+        caller.join(timeout=5.0)
+    assert not any(caller.is_alive() for caller in callers)
+    return outcomes
+
+
+def test_a_breaker_trip_gives_a_caller_mid_retry_the_degraded_reason(_breaker_env):
+    """A call waiting out a transient failure learns what a new call learns.
+
+    r4b-n2000-1 (2026-11-14): a call pausing between replays failed with one
+    text for a breaker trip and for a stop alike, while a new call named the
+    degraded state and its recovery. A stop still outranks the degraded
+    text: it also ends the post-trip retries that text promises.
+    """
+    supervisor = _RecoveryPortSupervisor()
+    runtime = StorageRuntime(supervisor)
+    try:
+        assert runtime.start() is supervisor
+        [error] = _trip_with_callers_mid_retry(runtime, supervisor.recover, 1)
+        assert runtime.status()['degraded'] is True
+
+        assert isinstance(error, StorageError)
+        assert error.code == 'database_unavailable'
+        assert error.retryable is False
+        assert 'degraded' in error.message
+        for write in (False, True):
+            with pytest.raises(StorageError) as new_call:
+                runtime.client(write=write)
+            assert error.message == new_call.value.message
+
+        runtime.stop(timeout=5.0)
+        with pytest.raises(StorageError) as during_stop:
+            supervisor.recover(0.0)
+        assert during_stop.value.message == 'Storage runtime is stopping'
+        assert during_stop.value.retryable is False
+    finally:
+        runtime.stop(timeout=5.0)
+
+
+def test_a_breaker_trip_logs_once_that_it_ended_calls_mid_retry(_breaker_env, caplog):
+    """One warning per trip names the state and the breaker's reason."""
+    trips = []
+    supervisor = _RecoveryPortSupervisor()
+    runtime = StorageRuntime(supervisor, on_degraded=trips.append)
+    try:
+        assert runtime.start() is supervisor
+        with caplog.at_level(logging.WARNING, logger='tofu.storage.runtime'):
+            outcomes = _trip_with_callers_mid_retry(runtime, supervisor.recover, 3)
+            # A call arriving later in the same episode is refused unlogged.
+            with pytest.raises(StorageError) as late:
+                supervisor.recover(0.0)
+        assert [error.code for error in outcomes + [late.value]] == [
+            'database_unavailable'] * 4
+
+        [reason] = trips
+        lines = [record.getMessage() for record in caplog.records
+                 if record.name == 'tofu.storage.runtime'
+                 and 'mid-retry' in record.getMessage()]
+        assert len(lines) == 1, lines
+        assert 'degraded' in lines[0]
+        assert reason in lines[0]
+        assert 'stopping' not in lines[0]
+    finally:
+        runtime.stop(timeout=5.0)

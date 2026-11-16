@@ -7,12 +7,12 @@ Two steps run at the natural end of a tools-executed iteration,
 AFTER the tool execution pipeline and the consecutive-timeout
 circuit breaker:
 
-1. **Crash-recovery checkpoint** (``checkpoint_task_partial``):
-   persists current content/thinking to task_results + conversation
-   so data survives a server crash. Throttled to at most once every
-   5 seconds to avoid DB pressure. Failure is non-fatal (logged at
-   WARNING with exc_info) — a checkpoint bug must never break an
-   otherwise-healthy round.
+1. **Sampled round checkpoint** (``checkpoint_task_partial``): at every
+   round boundary a task without a conversation copies its progress to
+   task_results, its only durable home; a conversation attempt's Turn already
+   committed that progress, so it only refreshes the segment mirror. Failure
+   is non-fatal (logged at WARNING with exc_info) — a checkpoint bug must
+   never break an otherwise-healthy round.
 2. **RENDER_CONTRACT Phase 3 round close**: emits
    ROUND_END(reason='tools') pairing the ROUND_START emitted at this
    round's top. Reached only at the natural end of a tools-executed
@@ -21,8 +21,7 @@ circuit breaker:
    re-run; every early ``break`` path emits its own reason-tagged
    ROUND_END upstream (budget / aborted / tool_timeout).
 
-Both steps are control-flow-free — the helper mutates
-``rs.last_checkpoint_ts`` in place and returns nothing.
+Both steps are control-flow-free — the helper returns nothing.
 
 Before either step, the round's finished tool rows settle
 (``settle_finished_tool_rounds``): their executors are done with them, so the
@@ -32,7 +31,6 @@ Turn projection shares them by reference from then on.
 from __future__ import annotations
 
 import threading
-import time
 from typing import Any
 
 from lib.conversation_sync.settled_rows import settle_or_none
@@ -84,39 +82,27 @@ def settle_finished_tool_rounds(task: dict[str, Any]) -> int:
 
 def run_round_checkpoint_and_close(
     task: dict[str, Any],
-    rs: Any,
     *,
     round_num: int,
     tid: str,
 ) -> None:
-    """Persist the throttled partial checkpoint + emit ROUND_END.
+    """Take the round's sampled checkpoint + emit ROUND_END.
 
     Parameters
     ----------
     task : dict[str, Any]
         Live task dict (read by the checkpoint).
-    rs : RoundState
-        Loop-state carrier (mutated: ``last_checkpoint_ts``).
     round_num : int
         Current round index (0-based).
     tid : str
         8-char task id for logging.
     """
-    # ══════════════════════════════════════════
-    #  Crash-recovery checkpoint: persist partial state to DB
-    # ══════════════════════════════════════════
-    # After each tool execution round, save current content/thinking
-    # to task_results + conversation so data survives a server crash.
-    # Throttled to at most once every 5 seconds to avoid DB pressure.
     settle_finished_tool_rounds(task)
-    _now = time.time()
-    if _now - rs.last_checkpoint_ts >= 5:
-        try:
-            checkpoint_task_partial(task, force=True, wait_for_durability=False)
-            rs.last_checkpoint_ts = _now
-        except Exception as e:
-            logger.warning('[%s] Checkpoint after round %d failed (non-fatal): %s',
-                           tid, round_num + 1, e, exc_info=True)
+    try:
+        checkpoint_task_partial(task, force=True, sampled=True)
+    except Exception as e:
+        logger.warning('[%s] Checkpoint after round %d failed (non-fatal): %s',
+                       tid, round_num + 1, e, exc_info=True)
 
     # RENDER_CONTRACT Phase 3: explicit round-end boundary for a round
     #   that issued tool calls and is about to loop into the next round.

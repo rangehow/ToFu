@@ -96,12 +96,20 @@ Persistence:
   ``overrides`` is **not** scoped to the stored ``day`` — it carries over
   across day rollovers so manual decisions survive restarts.
 
+  The document also carries ``"generation"``. A telemetry-only commit
+  publishes ``key_stats.telemetry.json`` (``{"base": generation, "day",
+  "stats": {pair: telemetry fields}}``) atomically without fsync; readers
+  merge it only for the current generation and day, where it replaces the
+  decision document's telemetry.
+
   Health counters are reconstructible telemetry: recording updates the
   in-memory snapshot at once, and one coalesced background flush per
   ``KEY_STATS_FLUSH_INTERVAL_SECONDS`` (plus :func:`shutdown_key_stats` at
   shutdown and interpreter exit, which waits out a commit in progress)
-  merges them into the latest document under the store's cross-process lock. Manual overrides and billing stops are
-  admission decisions committed to disk before their call returns.
+  merges them into the latest store under the store's cross-process lock. Manual overrides and billing stops are
+  admission decisions committed (fsynced) to ``key_stats.json`` before their
+  call returns (docs/modules/auth_providers_billing.md, "Telemetry is
+  published without a durability barrier").
 
 Thread-safe. Reads and recording happen on the dispatcher hot path, so an
 in-memory snapshot is kept and no request thread writes the file.

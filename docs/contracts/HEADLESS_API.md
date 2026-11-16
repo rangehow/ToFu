@@ -466,6 +466,27 @@ an absent committed row returns 404 and never falls back to memory. The default
 This changes the read projection, never the configured storage backend.
 The committed result retains `streamState` alongside `finishReason`, so cold
 readers preserve native stream-failure verdicts even when transport is done.
+For a conversation attempt that has not settled, the durable state is read from
+the committed Turn and attempt its task row names:
+- `content`, `thinking` and `updated_at`, and the Turn-owned public fields,
+  from the Turn projection;
+- `status` from the attempt.
+
+The same holds for a task row restart recovery retired (`interrupted`) while
+its attempt is still its Turn's current attempt: recovery settles that Turn
+from its durable projection and only flips the row's status, so `content`,
+`thinking` and the Turn-owned fields come from that settled projection and
+`finished_at` from the row; the cold replay's terminal frame carries the same
+content. Once a resume has superseded that attempt, its row is read as stored.
+
+A running checkpoint therefore never decides what a reader sees, and the
+response shape is unchanged. Tasks their own attempt settled and tasks without
+a conversation are read from their committed row as before
+(`tests/tasks_pkg/test_durable_chat_task_turn_view.py`). A task without a
+conversation writes that row once per round, at the round end: a crash between
+a round's provider return and its round end drops that round's narration from
+its cold row, and `code_exec`'s fenced boundary still writes before code runs
+([sampled checkpoints](../modules/task_engine.md#persistence-discipline)).
 
 Problem: a live terminal response alone cannot certify persistent settlement.
 Decision: expose the existing durable query with explicit read provenance and

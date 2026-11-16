@@ -58,6 +58,50 @@ def test_state_only_replay_keeps_patch_sequence_and_full_durable_evidence(eviden
         decode('AttemptEvent', event['payload']['event'])
 
 
+def test_full_replay_resolves_referenced_evidence_once_and_none_never_reads_it():
+    from lib.task_replay.task_event_contract import ATTEMPT_EVIDENCE_REFERENCE_KEY as KEY
+    frame = {'type': 'messages_snapshot', 'prefixLen': 0, 'newMessages': [{'content': 'x'}]}
+    rows = {('task', 4): frame}
+
+    def change(sequence, reference):
+        return {'contract': 'tofu.conversation-sync.event/v1', 'type': 'attempt.event',
+                'conversationId': 'conv', 'syncSeq': sequence, 'occurredAt': 1,
+                'payload': {'event': {
+                    'attemptId': 'attempt', 'turnId': 'turn', 'conversationId': 'conv',
+                    'seq': sequence, 'projectionRevision': sequence, 'type': 'projection_updated',
+                    'payload': {'status': 'running', 'phase': None, 'updateKind': 'messages_snapshot',
+                                KEY: reference}}}}
+
+    stored = {'head': 3, 'hasMore': False, 'events': [
+        change(2, {'taskId': 'task', 'sequence': 4}),
+        change(3, {'taskId': 'task', 'sequence': 9})],
+        'authorityEpoch': EPOCH, 'headDigest': 'd3' * 8,
+        'changeDigests': ['d2' * 8, 'd3' * 8], 'anchorDigest': 'd1' * 8}
+    after = ReplayPosition(1, EPOCH, 'd1' * 8)
+    original = deepcopy(stored)
+    reads = []
+
+    def task_event(task_id, sequence):
+        reads.append((task_id, sequence))
+        return rows.get((task_id, sequence))
+
+    service = ConversationSyncService(SimpleNamespace(
+        changes=lambda *_args, **_kwargs: stored, task_event=task_event))
+    full = [event['payload']['event']['payload'] for event in
+            service.changes('conv', 7, after=after)['events']]
+    assert reads == [('task', 4), ('task', 9)]
+    assert full[0]['event'] == frame
+    # A row retention already removed leaves the body absent, exactly as the none representation.
+    assert 'event' not in full[1]
+    assert all(KEY not in body for body in full)
+    reads.clear()
+    none = [event['payload']['event']['payload'] for event in service.changes(
+        'conv', 7, after=after, diagnostic_payload='none')['events']]
+    assert reads == []
+    assert all('event' not in body and KEY not in body for body in none)
+    assert stored == original
+
+
 def test_unknown_diagnostic_representation_refuses_before_repository_read():
     def forbidden(*_args, **_kwargs):
         pytest.fail('invalid representation reached storage')

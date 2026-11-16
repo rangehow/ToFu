@@ -107,6 +107,61 @@ def test_idle_client_releases_slot_while_heartbeats_renew_it(push_app, monkeypat
     asyncio.run(exercise())
 
 
+async def _server_close_code(connection):
+    from quart.testing.connections import WebsocketDisconnectError
+
+    async with asyncio.timeout(5):
+        while True:
+            try:
+                await connection.receive()
+            except WebsocketDisconnectError as closed:
+                return closed.args[0]
+
+
+def test_idle_release_closes_with_a_code_the_browser_recovers_from(push_app, monkeypatch):
+    """push.js treats a 1000 close as intentional and terminal (see
+    tests/frontend/test_push_recovery_lifecycle.py). A page that is still alive
+    when the server releases its silent socket must reconnect by itself."""
+    import routes.push as push
+
+    app, _hub = push_app
+    monkeypatch.setattr(push, 'PUSH_RECEIVE_IDLE_TIMEOUT_SECONDS', 0.1)
+
+    async def exercise():
+        async with app.test_client().websocket('/api/push') as connection:
+            return await _server_close_code(connection)
+
+    assert asyncio.run(exercise()) == 1001
+
+
+def test_backlog_overflow_closes_with_a_code_the_browser_recovers_from(push_app, monkeypatch):
+    """The overflow disconnect exists so the page reconciles from durable
+    state; a terminal close would leave it without a socket instead."""
+    import lib.agent_core.push_policy as push_policy
+
+    app, hub = push_app
+    monkeypatch.setattr(push_policy, 'resolve_push_event_queue_capacity',
+                        lambda *_args, **_kwargs: 1)
+    monkeypatch.setattr(hub, '_register_subscription', lambda *args: None)
+    monkeypatch.setattr(hub, '_deregister_subscription', lambda *args: None)
+
+    async def exercise():
+        try:
+            async with app.test_client().websocket('/api/push') as connection:
+                await connection.send_json({'action': 'ping', 't': 1})
+                assert (await connection.receive_json())['type'] == 'pong'
+                server_client = next(iter(hub._clients))
+                hub.subscribe(server_client, 'chat', 'flood')
+                for n in range(3):
+                    hub._deliver_frame({'channel': 'chat', 'taskId': 'flood',
+                                        '_ownerUserId': '17', 'n': n})
+                return await _server_close_code(connection)
+        finally:
+            await asyncio.to_thread(hub.stop)
+
+    assert asyncio.run(exercise()) == 1001
+
+
 def test_real_socket_receives_large_ordered_backlog_without_pressure_disconnect(push_app, monkeypatch):
     app, hub = push_app
     monkeypatch.setattr(hub, '_register_subscription', lambda *args: None)

@@ -9,6 +9,7 @@ inventing storage fallbacks themselves.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -66,6 +67,21 @@ _PUBLIC_RESULT_METADATA_FIELDS = (
     'autopilotRunId',
     'flowStopReason',
 )
+
+# A conversation attempt's visible state is owned by its Turn projection and its
+# attempt record; the task-result row only names them (``turnId``/``attemptId``
+# from birth). These public fields are built from the same task state, with the
+# same sanitizers, on both sides.
+_TURN_PROJECTION_PUBLIC_FIELDS = (
+    'usage', 'apiRounds', 'todoState', 'waitingOn', 'modifiedFiles',
+    'modifiedFileList', 'model', 'preset', 'thinkingDepth', 'provider_id',
+    'routeSnapshot',
+)
+_LIVE_ATTEMPT_STATUSES = frozenset({'pending', 'running'})
+# Restart recovery marks a task row it found unsettled ``interrupted``; no
+# attempt settles its own row with that status. ``turn.recover`` settles the
+# attempt the row names from its durable Turn projection.
+_RECOVERY_RETIRED_STATUS = 'interrupted'
 
 
 def _positive_owner(value: Any) -> int | None:
@@ -256,15 +272,19 @@ class DurableChatTaskSnapshot:
         """Fetch cumulative content exactly once when a reader catches up."""
         if self.terminal_payload_loaded:
             return self
+        # Only a row restart recovery retired needs the attempt identity it names.
+        retired_conversation_row = (
+            self.status == _RECOVERY_RETIRED_STATUS and bool(self.conv_id))
         owned = _owned_task_replay_record(
             self.task_id,
             user_id=self.user_id,
             include_terminal_payload=True,
+            include_metadata=retired_conversation_row,
         )
         if owned is None:
             raise LookupError('durable task result disappeared during replay')
         value, record_updated_at_ms = owned
-        return _snapshot_from_value(
+        snapshot = _snapshot_from_value(
             self.task_id,
             user_id=self.user_id,
             value=value,
@@ -272,6 +292,7 @@ class DurableChatTaskSnapshot:
             event_replay=self.event_replay,
             terminal_payload_loaded=True,
         )
+        return _with_turn_projection(snapshot) if retired_conversation_row else snapshot
 
     def bounded_replay_payload(
         self,
@@ -350,6 +371,67 @@ def _snapshot_from_value(
     )
 
 
+def _bound_attempt(snapshot: DurableChatTaskSnapshot, metadata: Mapping[str, Any]):
+    """The attempt a conversation row names, while that attempt still owns this task.
+
+    A running row names its live attempt; a row restart recovery retired names
+    the attempt recovery settled. A row its own attempt settled names none.
+    """
+    if snapshot.terminal and snapshot.status != _RECOVERY_RETIRED_STATUS:
+        return None
+    turn_id, attempt_id = metadata.get('turnId'), metadata.get('attemptId')
+    if (not snapshot.conv_id
+            or not isinstance(turn_id, str) or not turn_id
+            or not isinstance(attempt_id, str) or not attempt_id):
+        return None
+    from lib import turn_lifecycle
+    try:
+        attempt = turn_lifecycle.get_attempt(attempt_id, user_id=snapshot.user_id)
+    except turn_lifecycle.LifecycleNotFound:
+        return None
+    owned_statuses = {snapshot.status} if snapshot.terminal else _LIVE_ATTEMPT_STATUSES
+    if (attempt.get('taskId') != snapshot.task_id or attempt.get('turnId') != turn_id
+            or attempt.get('conversationId') != snapshot.conv_id
+            or attempt.get('status') not in owned_statuses):
+        return None
+    return attempt
+
+
+def _with_turn_projection(snapshot: DurableChatTaskSnapshot) -> DurableChatTaskSnapshot:
+    """Serve a running or restart-retired conversation attempt from its Turn and attempt.
+
+    Its running checkpoints are no part of its visible state, so this view does
+    not depend on how recently one was written. Rows their own attempt settled,
+    rows of tasks without a conversation and rows whose attempt no longer owns
+    its Turn are returned unchanged.
+    """
+    attempt = _bound_attempt(snapshot, snapshot.metadata)
+    if attempt is None:
+        return snapshot
+    from lib import turn_lifecycle
+    try:
+        turn = turn_lifecycle.get_turn(
+            snapshot.conv_id, attempt['turnId'], user_id=snapshot.user_id)
+    except turn_lifecycle.LifecycleNotFound:
+        return snapshot
+    if turn.get('currentAttemptId') != attempt['attemptId']:
+        return snapshot
+    projection = turn.get('projection') if isinstance(turn.get('projection'), Mapping) else {}
+    metadata = dict(snapshot.metadata)
+    for field in _TURN_PROJECTION_PUBLIC_FIELDS:
+        if field in projection:
+            metadata[field] = projection[field]
+    turn_updated_at_ms = _nonnegative_milliseconds(turn.get('updatedAt'))
+    return dataclasses.replace(
+        snapshot,
+        status=str(attempt['status']),
+        content=projection['content'] if isinstance(projection.get('content'), str) else '',
+        thinking=projection['thinking'] if isinstance(projection.get('thinking'), str) else '',
+        metadata=metadata,
+        updated_at_ms=max(snapshot.updated_at_ms, turn_updated_at_ms),
+    )
+
+
 def load_durable_chat_task(
     task_id: str,
     *,
@@ -365,14 +447,14 @@ def load_durable_chat_task(
     if owned is None:
         return None
     value, record_updated_at_ms = owned
-    return _snapshot_from_value(
+    return _with_turn_projection(_snapshot_from_value(
         task_id,
         user_id=user_id,
         value=value,
         record_updated_at_ms=record_updated_at_ms,
         event_replay=read_event_bounds(task_id),
         terminal_payload_loaded=True,
-    )
+    ))
 
 
 def load_durable_chat_replay(
@@ -385,7 +467,7 @@ def load_durable_chat_replay(
     if owned is None:
         return None
     value, record_updated_at_ms = owned
-    return _snapshot_from_value(
+    snapshot = _snapshot_from_value(
         task_id,
         user_id=user_id,
         value=value,
@@ -393,6 +475,15 @@ def load_durable_chat_replay(
         event_replay=read_event_bounds(task_id),
         terminal_payload_loaded=False,
     )
+    if snapshot.terminal or not snapshot.conv_id:
+        return snapshot
+    # The compact projection omits the attempt identity the row names, so only a
+    # running conversation row reads its metadata to report its attempt status.
+    named = _owned_task_replay_record(task_id, user_id=user_id, include_metadata=True)
+    metadata = _json_object((named or ({}, 0))[0].get('metadata'), task_id=task_id, field='metadata')
+    attempt = _bound_attempt(snapshot, metadata)
+    return snapshot if attempt is None else dataclasses.replace(
+        snapshot, status=str(attempt['status']))
 
 
 __all__ = [

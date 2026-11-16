@@ -1,7 +1,6 @@
 """Slice 20 wire-parity: _round_checkpoint.py extraction from _run.py."""
 
 import inspect
-from types import SimpleNamespace
 
 import pytest
 
@@ -20,23 +19,19 @@ class TestRoundCheckpointWireParity:
         sig = inspect.signature(
             _round_checkpoint.run_round_checkpoint_and_close)
         params = set(sig.parameters.keys())
-        assert {'task', 'rs', 'round_num', 'tid'} <= params
+        assert {'task', 'round_num', 'tid'} <= params
 
-    def test_sampled_round_checkpoint_is_throttled_and_does_not_require_a_durability_fence(self, monkeypatch):
+    def test_every_round_end_takes_a_sampled_checkpoint_without_a_durability_fence(self, monkeypatch):
         calls = []
-        monkeypatch.setattr(_round_checkpoint.time, 'time', lambda: 20)
         monkeypatch.setattr(_round_checkpoint, 'checkpoint_task_partial',
             lambda task, **kw: calls.append(('checkpoint', kw)))
         monkeypatch.setattr(_round_checkpoint, 'append_event',
             lambda task, event: calls.append(('event', event)))
-        state = SimpleNamespace(last_checkpoint_ts=0)
-        _round_checkpoint.run_round_checkpoint_and_close({}, state, round_num=2, tid='test')
-        assert calls[0] == ('checkpoint', {'force': True, 'wait_for_durability': False})
-        assert calls[1][1]['type'] == 'round_end'
-        assert state.last_checkpoint_ts == 20
-        calls.clear()
-        _round_checkpoint.run_round_checkpoint_and_close({}, state, round_num=3, tid='test')
-        assert len(calls) == 1 and calls[0][0] == 'event'
+        for round_num in (2, 3):
+            calls.clear()
+            _round_checkpoint.run_round_checkpoint_and_close({}, round_num=round_num, tid='test')
+            assert calls[0] == ('checkpoint', {'force': True, 'sampled': True})
+            assert calls[1][1]['type'] == 'round_end'
 
     def test_checkpoint_failure_is_non_fatal(self):
         src = inspect.getsource(

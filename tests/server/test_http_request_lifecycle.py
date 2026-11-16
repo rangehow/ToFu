@@ -381,6 +381,39 @@ def test_production_write_fence_keeps_recovery_endpoints_postable(monkeypatch):
     assert fenced_status == 503
 
 
+def test_production_write_fence_keeps_client_diagnostics_postable(monkeypatch):
+    """The browser's diagnostics sinks only write log files.
+
+    Fencing them lost every browser log line for the 2026-11-13 02:07-02:18
+    storage outage, exactly the window the diagnosis needed.
+    """
+    import lib.storage as storage
+
+    app = create_base_app('request-storage-fence-diagnostics', {'TESTING': True})
+    register_request_lifecycle(app)
+    app.extensions['tofu_production_lifecycle'] = {'status': 'ready'}
+    diagnostics_paths = (
+        '/api/client-error',
+        '/api/v1/logs/client',
+        '/api/v4/logs/client',
+    )
+    for path in diagnostics_paths:
+        app.add_url_rule(path, endpoint='diagnostics:' + path,
+                         view_func=lambda: {'reached': True}, methods=['POST'])
+    monkeypatch.setattr(
+        storage, 'storage_status',
+        lambda: {'ready': False, 'state': 'unavailable'})
+
+    async def exercise():
+        async with app.test_app():
+            client = app.test_client()
+            return [(path, (await client.post(path)).status_code)
+                    for path in diagnostics_paths]
+
+    results = asyncio.run(exercise())
+    assert [status for _, status in results] == [200] * len(diagnostics_paths), results
+
+
 def test_distributed_preview_rejects_http_mutation_before_route_execution():
     app = create_base_app('distributed-preview-fence', {'TESTING': True})
     register_request_lifecycle(app, distributed_preview_read_only=True)

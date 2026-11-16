@@ -326,9 +326,9 @@ def test_frontend_preflight_runs_project_command_with_bounded_contract(
     def fake_run(command, **kwargs):
         observed['command'] = command
         observed['kwargs'] = kwargs
-        return ''
+        return native_engine.CommandOutput('', '')
 
-    monkeypatch.setattr(native_engine, '_run', fake_run)
+    monkeypatch.setattr(native_engine, '_run_streams', fake_run)
     environment = {'PATH': os.environ.get('PATH', '')}
 
     ok, error = REAL_RUN_FRONTEND_PREFLIGHT(
@@ -366,9 +366,9 @@ def test_preflight_refreshes_managed_pin_in_child_and_manager(tmp_path, monkeypa
 
     def prepare(*args, **kwargs):
         dotenv.write_text('TOFUDB_EXPECTED_SHA256=new-managed-pin\n')
-        return ''
+        return native_engine.CommandOutput('', '')
 
-    monkeypatch.setattr(native_engine, '_run', prepare)
+    monkeypatch.setattr(native_engine, '_run_streams', prepare)
     assert REAL_RUN_FRONTEND_PREFLIGHT(str(tmp_path), sys.executable, environment, 'test') == (True, '')
     assert environment['TOFUDB_EXPECTED_SHA256'] == 'new-managed-pin'
     assert os.environ['TOFUDB_EXPECTED_SHA256'] == 'new-managed-pin'
@@ -381,7 +381,7 @@ def test_preflight_freezes_project_pin_without_overwriting_override(tmp_path, mo
     (tmp_path / '.env').write_text('TOFUDB_EXPECTED_SHA256=project-pin\nTOFUDB_BIN=/admitted/engine\n')
     monkeypatch.delenv('TOFUDB_EXPECTED_SHA256', raising=False)
     environment = {} if inherited is None else {'TOFUDB_EXPECTED_SHA256': inherited}
-    monkeypatch.setattr(native_engine, '_run', lambda *a, **k: '')
+    monkeypatch.setattr(native_engine, '_run_streams', lambda *a, **k: native_engine.CommandOutput('', ''))
     assert REAL_RUN_FRONTEND_PREFLIGHT(str(tmp_path), sys.executable, environment, 'test') == (True, '')
     assert environment['TOFUDB_EXPECTED_SHA256'] == (inherited or 'project-pin')
     assert environment['TOFUDB_BIN'] == '/admitted/engine'
@@ -684,12 +684,12 @@ def test_non_utf8_project_dotenv_keeps_restart_preparation_on_inherited_values(
 
     def prepare(command, **kwargs):
         prepared.append(dict(kwargs['environment']))
-        return ''
+        return native_engine.CommandOutput('', '')
 
     # The real preflight also re-reads the .env around the child to refresh
     # managed engine pins; both reads must take the same fallback.
     monkeypatch.setattr(sm, 'run_frontend_preflight', REAL_RUN_FRONTEND_PREFLIGHT)
-    monkeypatch.setattr(native_engine, '_run', prepare)
+    monkeypatch.setattr(native_engine, '_run_streams', prepare)
     monkeypatch.setattr(
         manager, 'stop', lambda **_: {'ok': False, 'message': 'stop refused by test'})
 
@@ -846,7 +846,7 @@ def test_frontend_preflight_logs_stage_elapsed(tmp_path, monkeypatch, caplog):
     (project / 'serverctl.py').write_text('# stub\n', encoding='utf-8')
 
     monkeypatch.setattr(
-        native_engine, '_run', lambda *a, **k: '')
+        native_engine, '_run_streams', lambda *a, **k: native_engine.CommandOutput('', ''))
     with caplog.at_level(logging.INFO, logger='server_manager'):
         ready, error = REAL_RUN_FRONTEND_PREFLIGHT(
             str(project), sys.executable, {}, 'manager test')

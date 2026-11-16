@@ -285,7 +285,9 @@ returned. The role lookup of the Coordinator ceiling (`coordinator_scope`, never
 the tool selection) routes every handle to `coordinator_workers.poll_workers`,
 so a Coordinator reaches only its own Workers, never a background command, swarm
 agent or another conversation's task; without IDs, `poll` lists this request's
-Workers that are running or starting. The wait runs in the existing tool
+Workers that are running or starting, checking every Worker of the request, never
+only a first page of it; a Turn without a request of its own checks its project
+history's newest page. The wait runs in the existing tool
 invocation using disposable terminal subscriptions and interruptible Stop.
 Each Worker is in one phase (`phase` on a returned row): `running`;
 `needs_review` (a completed execution its Coordinator has not reviewed);
@@ -3239,6 +3241,12 @@ range and point documents. GET `/api/v4/project/coordination/assignments` return
 An exact `commandId` or `assignmentId` lookup is independent of history pages;
 these selectors cannot be combined with a cursor. Paging is passive, preserves
 legacy cursors through cutover, and never extends a grant or acknowledges a report.
+A page is one index range plus point documents: each document is consistent by
+itself, and listed index rows and sequences never change, so a birth committing
+during the build (the only commit that moves the head) never makes the page read
+again. Until 2026-11-13 the page required its load to start on the head its index
+list saw, so under a birth storm it read itself again up to four times and then
+refused ("Concurrent history changes").
 Read-only history omits unrelated source account/occurrence documents. Execution
 content in a page is a 2,000-character preview; the ordinary Worker conversation
 and exact lookup retain the complete evidence. Tenant filtering precedes exposure;
@@ -3454,25 +3462,111 @@ Alternative rejected: heartbeat-only guards cannot protect startup/completion dr
 Durable history. Problem: one record per original owner/project/recipient held
 at most 128 originals for its lifetime and rewrote the whole list on every
 receipt, so a months-long Project or Global Router exhausts its mailbox.
-Decision: `ProjectMailbox` keeps append-only segmented history on the same
-generic record CAS (key layout: `history` in `contracts/project_messages_v1.json`).
+Decision: `ProjectMailbox` keeps append-only segmented history on the generic
+record operations (key layout: `history` in `contracts/project_messages_v1.json`).
 The head holds only the open segment (at most `messagesPerSegment` = 128, the
-old per-record bound) and the sealed count. Each append first claims its
-message locator, which is also the history-wide idempotency check, and commits
-with one head CAS; an append that finds the open segment full first seals it
-(segment copy with per-sender links, sender pointers, pending index). Position
-= segment × 128 + slot never changes, so `before_id` stays a stable cursor;
-sealed receipts CAS their segment record and keep per-message revision CAS. A
-legacy single record is read as open segment 0 and sealed by its next append;
-nothing is copied away or deleted first. Acquisition reads sealed pending
-originals through the pending index and skips departed senders without reading
-their segments.
+old per-record bound) and the sealed count. Absorbing into a full open segment
+first seals it (segment copy with per-sender links, sender pointers, pending
+index) before the head CAS that advances it. Position = segment × 128 + slot
+never changes, so `before_id` stays a stable cursor; sealed receipts CAS their
+segment record and keep per-message revision CAS. A legacy single record is
+read as open segment 0 and sealed by its next absorption; nothing is copied away
+or deleted first. Acquisition reads sealed pending originals through the
+pending index and skips departed senders without reading their segments.
 Alternatives rejected: raising the cap (still a lifetime ceiling, larger
 rewrites); archiving or evicting considered originals (durable user evidence);
 writing every locator while sealing (measured 1.9 s, up to 21 s under host
 load, on each 129th send); `record.list` sender/pending indexes (SQL prefix
 lists are unindexed `LIKE` scans of the whole namespace); a new two-authority
-storage operation (one head CAS already commits each append atomically).
+storage operation (one head CAS then committed each append atomically).
+
+Appends never touch the head (decision 2026-11-13). Problem: every send was a
+CAS of the recipient's one head record with `casAttempts` (4) tries, so reports
+that arrive together lose to each other. The synthetic-agent harness
+("Coordination at scale" below) lost 37 of 100 Worker reports at N=100 and 238
+of 300 at N=300, even after three extra model rounds of retries, and each try
+rewrote the whole open segment. Decision: a send is a positional append that is
+idempotent by message ID, built from existing record operations:
+
+1. Ticket. The sender writes the mailbox's tickets record without an expected
+   version. Both authorities serialize the writes to one record and return
+   the new version, which is the ticket: concurrent senders never conflict.
+   The command ID is fixed per message ID (and per voided ticket, below), so
+   a retried draw replays the same ticket instead of drawing another.
+2. Claim. The sender creates its message locator `{ticket}` at version 0.
+   This is the history-wide idempotency check: a retry finds the claim and
+   delivers under it.
+3. Original. The sender creates the immutable original at its ticket's arrival
+   record, also at version 0. The send is durable from here on.
+
+The recipient's own acquisition and receipts (`inject`, `confirm`, `consider`)
+absorb arrivals in ticket order into the open segment, sealing it as before,
+one segment's room per head CAS. So the head has one writer, and positions,
+paging, per-sender links, the pending index and receipt revisions keep their
+meaning. An arrival counts only at the ticket its locator claims and only once;
+any other ticket is voided. A ticket's position is `ticketBase + ticket - 1`,
+minus earlier voided tickets; `ticketBase` is the head-era history length the
+first ticketed head write fixes. Readers never write: they read arrivals not
+yet absorbed after the absorbed history, in ticket order, so a reader before
+and after absorption sees the same order. A receipt for an original behind a
+stalled ticket is refused as uncertain until a later pass absorbs it.
+
+A ticket whose original is missing stops absorption once (`stalled`). The next
+pass that still finds it missing creates a void marker at that arrival, at
+version 0. If the sender died between ticket and original, its retry finds
+its ticket void, draws a new one and moves its claim. A live sender that
+loses that race does the same. Either way every message lands exactly once,
+and absorption never waits on a sender.
+
+Head-era history. The head's ticketed form stores the open segment under
+`open`, so writers from before this decision find no `messages` and fail
+closed. The first ticketed head write gives every head-era original that has no
+locator (a legacy single record's) its `{segment}` locator; a ticket claim that
+a retry of one of them made first yields to it, and absorption drops that copy.
+A head-era claim proven unfilled is replaced by a ticket claim. The one
+residual: a retry made before that first write returns its own copy of the
+original, with the same ID and body. The tool contract did not change.
+
+Rolling back and forward. A head converted back to the `messages` form for an
+earlier version keeps its `tickets` and `voided`: the conversion absorbs every
+drawn ticket and leaves no `{ticket}` claim at or below `tickets`, and the
+earlier writers keep head fields they do not know. Read again, such a head
+resumes them with `ticketBase` = its history length - `tickets` + the voided
+count, so the next ticket lands after every original, the earlier writers'
+appends included, and no earlier ticket is read or voided again. A head that
+predates tickets carries neither and starts at ticket 1.
+
+`ProjectMailbox.convert_back()` performs the conversion, offline, with the
+application stopped. It absorbs every drawn ticket (one never written is
+voided), points each `{ticket}` claim at its original's segment, and stores the
+head last. A claim whose ticket holds no original gets segment 0, which the
+earlier writers prove dangling and replace on retry. It finds every claim by
+paging the mailbox's locators with `record.list` once, the one listing in this
+layout. Converting again, or converting a mailbox that never took a ticket,
+writes nothing.
+
+Alternatives rejected:
+- an engine-side append operation: a new storage primitive that needs
+  certification, and the ticket gives the same conflict-free order with
+  existing operations;
+- per-sender lanes: the recipient needs a directory of senders, which is a
+  contended record again, or `record.list`, an unindexed `LIKE` scan on SQL;
+- more CAS tries or backoff: a tuned knob that still rewrites the open segment
+  O(N²) times;
+- senders sealing segments on their path: that puts every sender pointer
+  write of a seal on the 129th send;
+- senders reading the head to find a legacy original's retry: it puts an
+  open-segment read on every send to cover one legacy case.
+
+A mailbox write that loses its CAS to a record already holding exactly the
+value it attempted has succeeded (CAS-CONFLICT-1, 2026-11-13): two passes that
+absorb the same arrivals compute identical heads, segment copies, sender
+pointers and pending indexes. In the N=210 rounds cells, 203 of 208 conflicts
+were such identical writes; the losing pass aborted its seal or lost an
+acknowledgement, and messages were re-offered. `_put` re-reads on
+`database_conflict` and returns the stored version when the value is equal; any
+other conflict, such as a second confirmation whose receipt differs, still
+raises and retries.
 
 `reference/consult/report/question/assign/steer` classify context, not execution
 grants. Explicit accepted/rejected/deferred/conflict decisions use message revision
@@ -4502,8 +4596,9 @@ cancel, finish receipt or pending decision is a durable no-op (the decision
 keeps its first due time), and a different one is still refused as immutable.
 A real verdict met on the re-read — a revoked grant, a changed binding, an
 already settled request — still refuses at once. `consider_project_message`
-and `send_project_message` are unchanged: they commit through the per-recipient
-mailbox CAS, never the dispatch head, so this contention cannot reach them.
+and `send_project_message` are unchanged: a send appends without any CAS and a
+consideration CASes the recipient's own mailbox, never the dispatch head, so this
+contention cannot reach them.
 
 Alternatives rejected: waiting inside the publication lock (a contended review
 would block publication), returning the contention to the caller with recovery

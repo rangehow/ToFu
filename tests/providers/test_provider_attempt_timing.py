@@ -184,7 +184,6 @@ def test_manager_parents_attempts_under_ingress_guard(monkeypatch, observer_fail
 
     dispatcher = _FakeDispatcher([_make_slot(key=f'k{i}') for i in range(3)])
     monkeypatch.setattr(api, 'get_dispatcher', lambda: dispatcher)
-    monkeypatch.setattr(manager, 'checkpoint_task_partial', lambda task: None)
     calls = 0
     def transport(*args, **kwargs):
         nonlocal calls

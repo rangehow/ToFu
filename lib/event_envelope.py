@@ -82,6 +82,18 @@ def stamp_event_format_envelope(payload: Any) -> Any:
     return stamped
 
 
+def without_event_format_envelope(payload: Any) -> Any:
+    """The event as its producer recorded it, without the persistence envelope.
+
+    For a persisted row read back as the content of another record (an
+    attempt event's referenced evidence), after ``check_event_readable``.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    return {key: value for key, value in payload.items()
+            if key not in (_ENVELOPE_KEY, _IGNORABLE_KEY)}
+
+
 def event_envelope_version(payload: Any) -> int:
     """Return the durable format version of one persisted event payload.
 
@@ -144,5 +156,6 @@ __all__ = [
     'event_is_ignorable',
     'execution_event_time_ms',
     'stamp_event_format_envelope',
+    'without_event_format_envelope',
     'validate_event_stream_readable',
 ]

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any, Protocol
 
+from lib.event_envelope import check_event_readable, without_event_format_envelope
 from lib.log import get_logger
 from lib.storage import StorageClient
 from lib.storage.errors import StorageError, is_resource_bound_refusal
@@ -44,6 +45,10 @@ class ConversationSyncRepository(Protocol):
         expected_sync_sequence: int, offset: int = 0, limit: int = 50,
         anchor_turn_id: str = "",
     ) -> Mapping[str, Any] | None: ...
+
+    def task_event(self, task_id: str, sequence: int) -> Mapping[str, Any] | None:
+        """The retained task-event frame at ``sequence``; ``None`` once retention removed it."""
+        ...
 
     def turn_page(
         self,
@@ -191,6 +196,17 @@ class SidecarConversationSyncRepository:
                 "predates byte-bounded change pages conversation=%s",
                 int(max_bytes), conversation_id)
         return result
+
+    def task_event(self, task_id: str, sequence: int) -> Mapping[str, Any] | None:
+        rows = self._client().query("event.list", {
+            "task_id": task_id, "after_sequence": int(sequence) - 1, "limit": 1,
+        }) or []
+        row = rows[0] if rows else None
+        if (isinstance(row, Mapping) and row.get("sequence") == sequence
+                and isinstance(row.get("event"), Mapping)
+                and check_event_readable(row["event"]) == "ok"):
+            return without_event_format_envelope(row["event"])
+        return None
 
     def round_directory(
         self, conversation_id: str, user_id: int, *, lane_id: str,

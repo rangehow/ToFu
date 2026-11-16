@@ -1,10 +1,13 @@
 """Segmented project mailbox history on real SQLite, PostgreSQL and native authorities.
 
-The mailbox uses only generic record point reads and expected-version writes, so
-both storage authorities serve it unchanged: no listing, deletion or eviction.
+Online, the mailbox uses only generic record point reads, expected-version writes
+and unconditional writes (whose returned version is a send's ticket), so both
+storage authorities serve it unchanged: no listing, deletion or eviction. The
+offline conversion back to the head-era form pages its claims with record.list.
 The fixture never opens or switches the user's selected live authority.
 """
 from concurrent.futures import ThreadPoolExecutor
+import threading
 import uuid
 
 import pytest
@@ -15,6 +18,17 @@ pytest_plugins = ('tests.support.semantic_authorities',)
 pytestmark = pytest.mark.api
 
 SEGMENT = 3
+REPORTERS = 110
+
+
+@pytest.fixture
+def postgres_cluster(_postgres_bootstrap):
+    # The read and the write demand pools each open one server connection per
+    # concurrent request, so REPORTERS sends at once (each reads, then writes)
+    # need that many in each pool beyond the default cluster's room.
+    from tests.support.postgres_cluster import owned_postgres_cluster
+    with owned_postgres_cluster(max_connections=2 * REPORTERS + 16, bootstrap=_postgres_bootstrap) as dsn:
+        yield dsn
 
 
 @pytest.fixture
@@ -47,7 +61,8 @@ def test_many_segment_history_pages_replays_and_receipts_old_originals(authority
     mailbox, _, _ = authority
     box = mailbox()
     sent = [submit(box, 'alpha' if i % 4 == 1 else 'beta', str(i)) for i in range(100)]
-    head, _ = box.head()
+    assert every_page(box) == sent  # read before the recipient absorbs
+    head, _ = box.absorb()
     assert head['sealed'] == 33 and len(head['messages']) == 1
     assert every_page(box) == sent
     alpha = [m for m in sent if m['sender'] == 'alpha']
@@ -97,6 +112,26 @@ def test_concurrent_appends_cross_segment_boundaries_exactly_once(authority):
     assert box.find([m['id'] for m in history]) == {m['id']: m for m in history}
 
 
+def test_a_hundred_concurrent_reporters_commit_at_first_try_and_none_is_lost(authority):
+    mailbox, _, _ = authority
+    reporters = [f'worker-{i}' for i in range(REPORTERS)]
+    start = threading.Barrier(len(reporters))
+
+    def report(sender):
+        start.wait()
+        return submit(mailbox(), sender, 'report', f'{sender} verified its checkout')
+
+    with ThreadPoolExecutor(len(reporters)) as pool:
+        sent = list(pool.map(report, reporters))  # any refused send raises here
+    box = mailbox()
+    history = box.read()
+    assert sorted(m['id'] for m in history) == sorted(m['id'] for m in sent)
+    assert box.head()[0]['messages'] == []  # no send wrote the head
+    assert [submit(box, sender, 'report', f'{sender} verified its checkout') for sender in reporters[:5]] == sent[:5]
+    box.absorb()
+    assert box.read() == history and every_page(box) == history
+
+
 def test_legacy_single_record_mailbox_is_read_and_sealed_without_loss(authority, monkeypatch):
     mailbox, factory, _ = authority
     monkeypatch.setitem(pm.LIMITS, 'messagesPerSegment', 128)
@@ -112,7 +147,7 @@ def test_legacy_single_record_mailbox_is_read_and_sealed_without_loss(authority,
                                 'legacy-' + uuid.uuid4().hex)
     assert box.read() == legacy and every_page(box) == legacy
     grown = submit(box, 'gamma', 'after the old lifetime count')
-    assert box.head()[0]['sealed'] == 1
+    assert box.absorb()[0]['sealed'] == 1
     assert every_page(box) == [*legacy, grown]
     assert box.get(legacy[0]['id']) == legacy[0] and submit(box, 'beta', '0') == legacy[0]
 
@@ -131,3 +166,28 @@ def test_owner_and_project_histories_are_isolated(authority):
         same_key = submit(other, 'alpha', '0')
         assert same_key['id'] != sent[0]['id'] and mine.get(same_key['id']) is None
     assert mine.read() == sent
+
+
+def test_a_mailbox_converts_back_and_resumes_its_tickets(authority):
+    """The offline conversion finds every claim with record.list on each authority; the converted head
+    reads the whole history, a second conversion writes nothing, and the next ticket resumes after it."""
+    mailbox, factory, _ = authority
+    box = mailbox()
+    sent = [submit(box, sender, str(i)) for i, sender in enumerate(('alpha', 'beta', 'gamma', 'alpha', 'beta'))]
+    box.absorb()
+    sent.append(submit(box, 'gamma', 'still arriving'))
+    assert box.convert_back() == {'tickets': 1, 'claims': 6, 'head': True}
+
+    def stored(key):
+        return factory().query('record.get', {'namespace': pm.CONTRACT['namespace'], 'key': key})['value']
+
+    head = stored(box.key)
+    assert 'open' not in head and head['tickets'] == 6 and head['voided'] == [] and head['unlocated'] == 0
+    for position, message in enumerate(sent):
+        assert stored(box._key('message', message=message['id'])) == {'segment': position // SEGMENT}
+    assert [m['id'] for m in box.read()] == [m['id'] for m in sent]
+    assert box.convert_back() == {'tickets': 0, 'claims': 0, 'head': False}
+    later = submit(box, 'alpha', 'after the roll-forward')
+    head, _ = box.absorb()
+    assert head['tickets'] == 7 and head['voided'] == []
+    assert [m['id'] for m in box.read()] == [m['id'] for m in sent + [later]]

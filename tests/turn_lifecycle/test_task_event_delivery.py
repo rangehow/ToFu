@@ -97,7 +97,12 @@ def test_large_structural_frame_preserves_projection_event_and_settlement(
             'attempt_id': task['_attemptId'], 'user_id': 1, 'after': 0,
             'limit': 100, 'projection_mode': 'patch',
         })[-1]
-        assert canonical['payload']['event']['messages'] == wire['messages']
+        # The evidence is durable once, in its task-event row; the attempt event names it.
+        from lib.task_replay.task_event_contract import ATTEMPT_EVIDENCE_REFERENCE_KEY
+        assert 'event' not in canonical['payload']
+        assert canonical['payload'][ATTEMPT_EVIDENCE_REFERENCE_KEY] == {
+            'taskId': task['id'], 'sequence': 0}
+        assert _stored_event(storage, task['id'], 0)['event']['messages'] == wire['messages']
         changes = storage.client.query('turn.sync.changes', {
             'conversation_id': task['convId'], 'user_id': 1, 'after': 0, 'limit': 100,
         })

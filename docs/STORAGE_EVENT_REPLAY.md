@@ -199,6 +199,66 @@ half-sized storage. Delta coalescing was explicitly disabled. Exact bodies and
 replay survived every leg. Artifact pins, all legs and limits live in
 `tofudb_canonical_event_replay_20261001.json`.
 
+## Diagnostic evidence is stored once
+
+**Problem:** a `messages_snapshot` frame was durable twice in one
+`turn.event.record` transaction: inside its Attempt event
+(`payload.event`, conversation replay) and as the frame's carried task-event
+row (Request Inspector and task replay). On STORAGE-PRESSURE-COMPARE-1's fixed
+task the second copy was 38% of every frame command's bytes on both
+authorities (1.46 of 3.84 MB per Turn). On SQLite, Attempt events were the
+largest table (4.76 MB of WAL and checkpoint per Turn). A 64 KiB inline bound
+chose between the raw frame and its delta copy, but every branch kept two copies.
+Measurement: `.eval-runs/write-amp-20261113/results/ATTRIBUTION.md`.
+
+**Decision:**
+- The task-event row committed in the same transaction is the frame's single
+  durable copy. The Attempt event names it as `eventRef: {taskId, sequence}`
+  (`lib/task_replay/task_event_contract.py`) instead of storing the frame.
+- `ConversationSyncService.changes` resolves the name only for
+  `diagnosticPayload=full` replay, one task-event point read per named frame
+  (`event.list` from `sequence - 1`, limit 1). It never publishes the name.
+  The `none` representation, which the browser uses, reads nothing.
+- The Attempt-event read API (`turn_lifecycle.read_events`) resolves names the
+  same way before rebuilding deltas.
+- A resolved frame is the row's event without the row's persistence envelope
+  (`v`/`ignorable`, `lib/event_envelope.py`, `without_event_format_envelope`),
+  so it equals the inline frame of an unnamed event; a row newer than the
+  reader is refused or skipped like any other task-event read.
+- Only frames whose row outlives conversation replay are named: the structural
+  retention class (30 days) against the replay window (7 days,
+  `replayRetentionMs`). `tool_compacted` rows (streaming class, 6 hours) and
+  frames without a carried row stay inline.
+- The size bound and the shared second encoding are deleted. The full live
+  frame is no longer encoded for storage at all.
+- Neither authority changes. Both store the payload map as given, and a stored
+  name is an ordinary key.
+
+The kept contracts:
+- Replay delivers the same durable frame while the change exists; the named row
+  is the representation the event log stores.
+- Commit-before-push and the frame's atomicity are unchanged, because the row
+  and the event share their transaction.
+- Request Inspector reads are unchanged.
+- Evidence-shedding still degrades the named row in place.
+- A row deleted with its conversation, or by retention after the change itself
+  expired, leaves the body absent, exactly as `diagnosticPayload=none` does.
+
+**Alternatives considered:**
+- Keeping the Attempt-event copy and dropping the row would move Request
+  Inspector and task replay onto conversation-specific storage. The event log
+  serves every task.
+- Resolving names in the browser would add a request per frame and a frontend
+  contract change, although the browser never asks for the body.
+- A smaller inline bound or compression keeps two copies and adds a threshold.
+- Naming `tool_compacted` rows would let replay outlive its evidence by up to
+  seven days, to save about 4 KB per Turn.
+
+Specs:
+- `tests/turn_lifecycle/test_diagnostic_evidence_once.py`, on both authorities.
+- `tests/conversation/test_conversation_sync_diagnostic_payload.py`.
+- `tests/turn_lifecycle/test_turn_event_encode_once.py`.
+
 ## Task-event source guards
 
 Problem: task-event retention can delete a middle sequence and a later append

@@ -50,7 +50,7 @@ def run_application_restart_control(
         progress=None if stage == 'delegate' else 'Preparing application restart',
         termination_grace=40, failure_subject=f'Application restart {stage}',
     )
-    # The runner retains the tail, so the final bounded receipt survives logs.
+    # _run returns the child's stdout, so a late stderr line cannot displace the receipt.
     lines = output.splitlines()
     if not lines or not lines[-1].startswith(RESULT_PREFIX):
         raise RuntimeError(f'Application restart {stage} returned no receipt.')

@@ -55,6 +55,12 @@ _FENCE_RESTART_WAIT_POLL_S = 0.05
 _DEFAULT_CRASH_WINDOW_S = 600.0
 _DEFAULT_CRASH_LIMIT = 5
 _DEGRADED_REMINDER_INTERVAL_S = 60.0
+# What a degraded runtime tells every caller, new calls and calls mid-retry
+# alike; _unavailable_state explains the wording.
+_DEGRADED_MESSAGE = (
+    'Storage runtime is degraded after repeated sidecar crashes; it stays '
+    'fenced while the start is retried minutes apart, and a server process '
+    'restart retries at once')
 # A deterministic start refusal (StorageStartRefused) is not crash pressure:
 # the runtime reports `refused` and rechecks at this fixed cadence, because
 # only an operator action or a republished engine can change the verdict.
@@ -137,6 +143,9 @@ class StorageRuntime:
         self._degraded_reason = ''
         self._degraded_reminder_thread: threading.Thread | None = None
         self._refusal: dict[str, object] | None = None
+        # States ('stopping', 'degraded') whose refusal of a call mid-retry is
+        # already logged; leaving the state re-arms its warning.
+        self._mid_retry_refusals_logged: set[str] = set()
         # Wall-clock start of the current fence episode (None while ready) and
         # the error that opened it; the first crash of an episode wins.
         self._unavailable_since: float | None = None
@@ -334,6 +343,7 @@ class StorageRuntime:
                     refusal, self._refusal = self._refusal, None
                     cleared, self._degraded = self._degraded, False
                     self._degraded_reason = ''
+                    self._mid_retry_refusals_logged.discard('degraded')
                     self._ready_condition.notify_all()
                 if refusal is not None:
                     logger.warning(
@@ -510,6 +520,8 @@ class StorageRuntime:
     def _start(self, *, clear_stop: bool, after_trip: bool = False) -> StorageClient:
         if clear_stop:
             self._stopping.clear()
+            with self._lock:
+                self._mid_retry_refusals_logged.discard('stopping')
         elif self._stopping.is_set():
             raise StorageError(
                 'database_unavailable', 'Storage runtime is stopping')
@@ -624,10 +636,14 @@ class StorageRuntime:
         stop, a degraded verdict or a published refusal ends it at once. A
         ready authority is alive and its current client is returned; a
         restart in flight is waited out within ``client()``'s restart window.
-        Every other state proves the authority down for this call: stopping
-        and degraded raise non-retryable errors, a refusal raises its remedy
-        and an exit without a restart worker raises the fence error. Elapsed
-        time alone never ends the wait.
+        Every other state proves the authority down for this call. Stopping
+        and degraded raise non-retryable errors that name their state, since
+        one shared text made a stop read as a breaker trip: a degraded
+        runtime gives the text new calls get, and a stop outranks it because
+        it also ends the post-trip retries that text promises. The first such
+        raise of each episode logs one warning naming the state. A refusal
+        raises its remedy and an exit without a restart worker raises the
+        fence error. Elapsed time alone never ends the wait.
         """
         deadline = time.monotonic() + max(0.0, float(pause))
         with self._ready_condition:
@@ -637,9 +653,22 @@ class StorageRuntime:
                 if remaining <= 0:
                     break
                 self._ready_condition.wait(remaining)
-            if self._stopping.is_set() or self._degraded:
-                raise StorageError('database_unavailable',
-                    'Storage runtime recovery is stopped', retryable=False)
+            state = message = detail = ''
+            if self._stopping.is_set():
+                state, message = 'stopping', 'Storage runtime is stopping'
+            elif self._degraded:
+                state, message = 'degraded', _DEGRADED_MESSAGE
+                detail = f' ({self._degraded_reason})'
+            first_of_episode = (
+                bool(state) and state not in self._mid_retry_refusals_logged)
+            if first_of_episode:
+                self._mid_retry_refusals_logged.add(state)
+        if first_of_episode:
+            logger.warning(
+                'Storage calls mid-retry now fail without retry: the runtime '
+                'is %s%s', state, detail)
+        if state:
+            raise StorageError('database_unavailable', message, retryable=False)
         return self.client()
 
     def client(self, *, write: bool = False) -> StorageClient:
@@ -698,10 +727,7 @@ class StorageRuntime:
         with self._lock:
             degraded = self._degraded
         if degraded:
-            return ('Storage runtime is degraded after repeated sidecar '
-                    'crashes; it stays fenced while the start is retried '
-                    'minutes apart, and a server process restart retries at '
-                    'once', True)
+            return (_DEGRADED_MESSAGE, True)
         return ('Storage writes are fenced while the sidecar is unavailable'
                 if write else 'Storage sidecar is unavailable', False)
 

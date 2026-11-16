@@ -1131,7 +1131,7 @@ def test_sampled_forced_checkpoint_does_not_wait_for_earlier_storage_work(coordi
     coordinator.submit(lane, 0, 128, earlier, lambda: None)
     assert entered.wait(2)
     try:
-        assert _sync.checkpoint_task_partial(task, force=True, wait_for_durability=False)
+        assert _sync.checkpoint_task_partial(task, force=True, sampled=True)
         assert not checkpoint_done.is_set()
         assert lane.accepted == 2
         task['content'] = 'later'

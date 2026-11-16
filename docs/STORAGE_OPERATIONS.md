@@ -427,20 +427,56 @@ shutdown could not retire the WAL window, and the reopen replayed it in
 sync latches its own error, which every waiter receives), and nothing had
 been published: the cover precedes every CONTROL write.
 
-Decision: a pack adoption whose WAL cover is still unsynchronized at the
-barrier deadline is abandoned before publication, like a stopped one.
+Decision: a barrier deadline that expires before anything is written never
+latches the authority. Every off-authority publication whose WAL cover is
+still unsynchronized at the barrier deadline (pack adoption, history
+compaction and WAL rotation), and every synchronous CONTROL publication that
+changed no engine state before its barrier wait, is abandoned before
+publication, like a stopped one.
 
 - The barrier marks a missed deadline as `wal::BarrierDeadline` (kind
-  TimedOut, the same message), distinct from a latched worker error.
-  `publish_prepared_pack_adoption` wraps it at the cover
-  (`AdoptionAbandonedUncovered`), and `finish_pack_adoption` does not latch.
-- The packed payloads stay staged and WAL-carried, the unreferenced segment
-  is an orphan the segment lane reclaims, and both adoption paths retry: the
-  daemon's adoption driver after its retry pause, and a maintenance scope
-  round as a conflict deferral (a terminal round would stop the worker and
-  its record would recycle the daemon). Foreground commands that missed the
-  same deadline already answer a retryable `database_unavailable` that
-  receipts resolve.
+  TimedOut, the same message), distinct from a latched worker error. The
+  cover itself turns it into `wal::AbandonedUncovered` naming its
+  publication (`PublicationWalCover::sync`), so no cover user can latch on it
+  by forgetting to classify it; `wal::abandoned_uncovered` recognizes it, and
+  every publication finish latches through one rule
+  (`Engine::latch_unless_abandoned`).
+- Synchronous publications (`Engine::publish_control`) wait for the barrier
+  under the authority before their CONTROL write. Each caller declares
+  `ControlStaging`: `Unstaged` when engine state changes only after the
+  publication succeeds, so a missed deadline abandons it; `Staged` when it
+  moved or staged state first, so every barrier failure still latches.
+- Pack adoption: the packed payloads stay staged and WAL-carried, the
+  unreferenced segment is an orphan the segment lane reclaims, and both
+  adoption paths retry: the daemon's adoption driver after its retry pause,
+  and a maintenance scope round as a conflict deferral (a terminal round
+  would stop the worker and its record would recycle the daemon).
+- History compaction: the retired sources stay in the manifest, the promoted
+  segments are orphans the segment lane reclaims, the loose routing and
+  manifest blocks are unreferenced garbage, and the next slice (fast cadence
+  or scope round, both as conflict deferrals) retires again.
+- Rotation: CONTROL still names the sealed predecessor, so nothing is
+  re-encoded. `finish_rotation_publication` parks the encoded pair in the
+  slot a publication-lane deferral uses; the rotation keeps its lane, its GC
+  window and its read pins, and the driver treats the abandon as a transient
+  deferral and publishes the pair again. A graceful stop that abandons its
+  retirement leaves the window to the next open's replay.
+- CONTROL slot stabilization (`Engine::stabilize_control_slots`, the
+  rule-S8 step online-GC holds take before deleting): unstaged, so a missed
+  deadline fails the hold (an epoch error) instead of latching.
+- WAL generation handover (`Engine::seal_wal_for_checkpoint`, the rotation
+  driver's prepare: its dirty-CONTROL flush and the seal publication):
+  unstaged. A successor WAL file it pre-created is unreferenced until the
+  seal is published and the retry reuses it; the driver prepares again on
+  its next poll. On 2026-11-13 a 35 s stall latched R3 here
+  (CRASH-SAFETY-1, stall35local).
+- Foreground commands that missed the same deadline already answer a
+  retryable `database_unavailable` that receipts resolve.
+- Still latching on the deadline: the staged synchronous publishers
+  (catalog publishes, the synchronous checkpoint, the rotation and
+  predecessor installs and their dirty-CONTROL flushes), which move or stage
+  state before they publish. Every synchronous publisher, the unstaged ones
+  included, still holds the authority mutex for its whole barrier wait.
 - A failed sync of the cover itself, a worker's latched error, and every
   failure from the first CONTROL write on still latch: the WAL's or CONTROL's
   durable state is then unknown. No deadline, retry count or interval
@@ -455,9 +491,9 @@ Alternatives considered:
   moves the threshold.
 - Latching as before: a slow but live sync on a shared network mount becomes
   a recycle and a store-sized reopen.
-- Rotation and history compaction wait for the same cover before CONTROL and
-  still latch on its deadline; abandoning them needs their retry paths
-  checked first.
+- Re-encoding an abandoned rotation from its sealed WAL: the parked pair is
+  still exact (CONTROL and the sealed log are unchanged), so re-reading the
+  window only adds I/O to a stalled mount.
 
 Verification:
 
@@ -471,6 +507,18 @@ Verification:
 - `maintenance::tests::a_round_whose_pack_adoption_misses_the_barrier_deadline_defers_and_adopts_later`:
   the scope round's adoption defers, the authority stays usable and a later
   round publishes.
+- `engine::tests::a_history_compaction_whose_wal_cover_misses_the_barrier_deadline_is_abandoned_without_latching`
+  (CONTROL and the manifest unchanged, the orphan promotion reclaimed, the
+  next slice retires, a crash reopen keeps every payload),
+  `a_history_compaction_whose_wal_cover_sync_fails_still_latches` and
+  `maintenance::tests::a_round_whose_history_slice_misses_the_barrier_deadline_defers_and_retires_later`.
+- `engine::tests::a_rotation_publication_whose_wal_cover_misses_the_barrier_deadline_is_retried_without_latching`:
+  no I/O before the timeout, the predecessor stays sealed, the parked pair
+  publishes without re-encoding, and a crash reopen keeps the predecessor,
+  successor and window payloads.
+- `engine::tests::a_control_slot_stabilization_whose_wal_barrier_misses_the_deadline_is_abandoned_without_latching`:
+  no I/O before the timeout, CONTROL unchanged, the engine keeps committing
+  and a later stabilization publishes.
 
 ## Admitted engines, start refusals and liveness
 
@@ -3113,6 +3161,42 @@ Compaction verification additionally commits a 9 MiB summary and a 9 MiB
 retained-Turn update together, then checks exact content after crash/reopen and
 idempotent command replay. These replace existing projection documents through
 the existing Blob codec; there is no new persistent representation.
+
+## Duplicate key indexes
+
+**Problem:** five SQL authority indexes duplicated the key of their table's
+PRIMARY KEY or UNIQUE constraint index: same columns, order, collation and no
+predicate.
+- `storage_events_task_idx`
+- `idx_storage_conversation_turns_order`
+- `idx_tenant_users_email`
+- `idx_storage_knowledge_chunks_document`
+- `idx_storage_knowledge_assets_document`
+
+Every insert wrote the same key into two b-trees. `storage_events_task_idx` is
+written for every task-event row. On STORAGE-PRESSURE-COMPARE-1's fixed task its
+WAL pages equalled the primary-key index's byte for byte: 778 KB per Turn, 4.8%
+of the authority's bytes (`.eval-runs/write-amp-20261113/results/ATTRIBUTION.md`).
+
+**Decision:**
+- Fresh authorities create none of the five (`schema.py`,
+  `DUPLICATE_KEY_INDEX_NAMES`).
+- Established authorities keep writing them until the explicit offline index
+  transition (`scripts/storage_deep_clean.py --offline --no-vacuum --confirm`)
+  or the PostgreSQL migration job drops them, because they are
+  `OBSOLETE_DEFERRED_INDEX_NAMES`. Startup never runs that DDL.
+- The Request Inspector child-summary probe keeps its SQLite `INDEXED BY` hint.
+  It names the table's primary-key index from `pragma_index_list` (`origin='pk'`)
+  instead of the duplicate.
+- `tests/storage_authority_sql/test_schema_index_redundancy.py` keeps any new
+  duplicate out.
+
+**Alternatives considered:**
+- Dropping the duplicates at startup holds the single SQLite writer for a full
+  index walk on populated authorities.
+- Keeping them preserves the measured write amplification.
+- Rebuilding `storage_events` as `WITHOUT ROWID` would also merge the rowid
+  b-tree, but needs a full table copy and a new planner hint.
 
 ## SQLite demand and connection ownership
 

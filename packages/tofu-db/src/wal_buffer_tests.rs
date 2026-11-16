@@ -455,7 +455,10 @@ fn poisoned_driver_close_joins_worker_and_reports_unknown_drain_as_failure() {
 fn publication_cover_keeps_its_captured_prefix_when_later_frames_are_queued() {
     let (vfs, mut log, barrier) = log(65536);
     let hash = log.append(1, [0; 32], b"captured prefix").unwrap();
-    let cover = log.publication_cover(vfs.clone()).unwrap().unwrap();
+    let cover = log
+        .publication_cover(vfs.clone(), "test publication")
+        .unwrap()
+        .unwrap();
     barrier.sync_for_test(vfs.as_ref()).unwrap();
     log.append(2, hash, b"later unconfirmed suffix").unwrap();
     cover.sync().unwrap();
@@ -478,7 +481,10 @@ fn publication_cover_refuses_failed_worker_sync_without_a_physical_retry() {
     let (vfs, mut log, barrier) = log(65536);
     log.append(1, [0; 32], b"physically written but sync failed")
         .unwrap();
-    let cover = log.publication_cover(vfs.clone()).unwrap().unwrap();
+    let cover = log
+        .publication_cover(vfs.clone(), "test publication")
+        .unwrap()
+        .unwrap();
     vfs.arm_operation_fault(
         Operation::SyncData,
         1,
@@ -506,7 +512,10 @@ fn publication_cover_preserves_normal_mode_bytes_after_one_silently_lost_sync() 
     log.set_durability(WalDurability::Normal);
     log.append(1, [0; 32], b"normal captured physical bytes")
         .unwrap();
-    let cover = log.publication_cover(vfs.clone()).unwrap().unwrap();
+    let cover = log
+        .publication_cover(vfs.clone(), "test publication")
+        .unwrap()
+        .unwrap();
     vfs.arm_operation_fault(Operation::SyncData, 1, FaultAction::DropSync)
         .unwrap();
     cover.sync().unwrap();

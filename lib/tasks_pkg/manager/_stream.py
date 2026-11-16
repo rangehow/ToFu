@@ -34,7 +34,7 @@ from lib.tasks_pkg.manager._registry import (
     make_provider_abort_check,
     task_user_id,
 )
-from lib.tasks_pkg.manager._sync import checkpoint_task_partial
+from lib.tasks_pkg.manager._sync import refresh_segment_mirror
 from lib.tasks_pkg.round_prep_timing import finish_round_prep
 
 logger = get_logger(__name__)
@@ -94,11 +94,13 @@ def _opaque_reasoning_replay_tokens(
 # 1)"). retry_phase_fields maps the known tokens to stable typed reasonKeys
 # so the frontend localizes the cause; unknown tokens fall back to the raw
 # reason (same ruling as an unknown detailKey).
-# ── Streaming checkpoint interval (seconds) ──
-# Provider callbacks sample a checkpoint request at this cadence.  The actual
-# DB/presence work is deferred until the provider boundary so storage can never
-# stall upstream socket consumption.
-_STREAM_CHECKPOINT_INTERVAL = 5
+# ── Provider-boundary observer sampling (seconds) ──
+# Provider callbacks sample the boundary's observer work (the segment mirror
+# the Turn projection copies, and the presence heartbeat) at this cadence. The
+# work is deferred until the provider boundary so neither can stall upstream
+# socket consumption. The boundary writes no task-result row: a task's sampled
+# checkpoint is its round end.
+_PROVIDER_BOUNDARY_SAMPLE_INTERVAL = 5
 
 _RETRY_REASON_CLASSES = frozenset({
     'Waiting for network recovery',
@@ -764,14 +766,10 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None,
     #   (and only this round's) before the transparent retry re-streams.
     task['_round_base_content'] = _round_base_content
     task['_round_base_thinking'] = _round_base_thinking
-    # Init to 0.0 (epoch) so the FIRST content/thinking delta checkpoints
-    #   immediately, then settle into the _STREAM_CHECKPOINT_INTERVAL cadence.
-    #   Starting at time.time() left a pre-first-checkpoint window where a
-    #   server crash after the first tokens but before the 5s tick lost the
-    #   whole turn. checkpoint_task_partial() no-ops while content+thinking are
-    #   still empty, so an early call before any token is harmless. Mirrors the
-    #   orchestrator tool-loop's `_last_checkpoint = 0.0` (orchestrator.py).
-    _last_stream_ckpt = 0.0
+    # Init to 0.0 (epoch) so the FIRST content/thinking delta requests the
+    #   boundary's observer work, then settle into the
+    #   _PROVIDER_BOUNDARY_SAMPLE_INTERVAL cadence.
+    _last_boundary_sample = 0.0
 
     # Timing: measure time-to-first-token (TTFT) for the FIRST LLM round
     #   of this task only (the "waiting" window the user sees). Anchored to
@@ -809,12 +807,9 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None,
         except Exception as _metrics_err:
             logger.debug('%s TTFT metric skipped: %s', pfx, _metrics_err)
 
-    def _checkpoint_and_heartbeat_after_provider_boundary():
-        """Converge one sampled checkpoint after upstream consumption ends."""
-        try:
-            checkpoint_task_partial(task)
-        except Exception as e:
-            logger.debug('%s streaming checkpoint failed (non-fatal): %s', pfx, e)
+    def _converge_provider_boundary_observers():
+        """Refresh the segment mirror and publish presence once upstream consumption ends."""
+        refresh_segment_mirror(task)
         # Presence is an observer too.  It intentionally runs only outside the
         # provider-ingress guard; a shared-store stall may delay convergence but
         # can no longer pause the model socket.
@@ -841,22 +836,22 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None,
             except Exception as e:
                 logger.debug('%s presence heartbeat failed (non-fatal): %s', pfx, e)
 
-    def _maybe_checkpoint_during_stream():
-        """Sample recovery work without touching storage on provider ingress."""
-        nonlocal _last_stream_ckpt
+    def _maybe_sample_provider_boundary_observers():
+        """Request the boundary's observer work without running it on provider ingress."""
+        nonlocal _last_boundary_sample
         now = time.time()
-        if now - _last_stream_ckpt < _STREAM_CHECKPOINT_INTERVAL:
+        if now - _last_boundary_sample < _PROVIDER_BOUNDARY_SAMPLE_INTERVAL:
             return
-        _last_stream_ckpt = now
+        _last_boundary_sample = now
         if defer_provider_ingress_checkpoint(task):
             return
-        # Defensive adopter path: callbacks outside a guarded dispatch retain
-        # the historical synchronous checkpoint instead of silently losing it.
-        _checkpoint_and_heartbeat_after_provider_boundary()
+        # Defensive adopter path: callbacks outside a guarded dispatch run the
+        # observer work synchronously instead of silently losing it.
+        _converge_provider_boundary_observers()
 
     _text_deltas = TaskTextDeltaCoalescer(
         task, append_event, on_first_delta=_log_ttft_once,
-        on_after_delta=_maybe_checkpoint_during_stream, log_prefix=pfx)
+        on_after_delta=_maybe_sample_provider_boundary_observers, log_prefix=pfx)
     _request_activity_sink = _text_deltas.wrap_boundary(
         _on_request_diagnostic)
 
@@ -1022,7 +1017,7 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None,
     # cross-process DB probe is asynchronous in this closure so a degraded
     # Sidecar cannot become an upstream transport pause.
     _abort_check = _budget_abort_check
-    _provider_boundary_checkpoint_pending = False
+    _provider_boundary_observers_pending = False
 
     _dispatcher_attempt_ordinal = 0
 
@@ -1063,7 +1058,7 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None,
     def _dispatch_with_ingress_isolation(*args, **kwargs):
         """Drain one provider dispatch with storage/delivery observers muted."""
         nonlocal _provider_dispatch_ordinal
-        nonlocal _provider_boundary_checkpoint_pending
+        nonlocal _provider_boundary_observers_pending
         nonlocal _provider_observer_deferred_events
         nonlocal _provider_observer_deferred_checkpoints
 
@@ -1103,7 +1098,7 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None,
             _provider_observer_deferred_checkpoints += int(
                 receipt.get('deferredCheckpoints') or 0)
             if int(receipt.get('deferredCheckpoints') or 0) > 0:
-                _provider_boundary_checkpoint_pending = True
+                _provider_boundary_observers_pending = True
 
     try:
         stream_result = ensure_provider_stream_result(
@@ -1136,14 +1131,14 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None,
         msg, finish_reason, usage = stream_result
         # Final flush shares the request failure/span-cleanup path.
         _text_deltas.close()
-        if _provider_boundary_checkpoint_pending:
-            _provider_boundary_checkpoint_pending = False
-            _checkpoint_and_heartbeat_after_provider_boundary()
+        if _provider_boundary_observers_pending:
+            _provider_boundary_observers_pending = False
+            _converge_provider_boundary_observers()
     except BaseException as error:
         _text_deltas.close_after_error(error)
-        if _provider_boundary_checkpoint_pending:
-            _provider_boundary_checkpoint_pending = False
-            _checkpoint_and_heartbeat_after_provider_boundary()
+        if _provider_boundary_observers_pending:
+            _provider_boundary_observers_pending = False
+            _converge_provider_boundary_observers()
         _req_status, _req_error_kind, _req_error_detail = (
             _abort_request_attribution(task, error))
         _emit_model_request_complete(

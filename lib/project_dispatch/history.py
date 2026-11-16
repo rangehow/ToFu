@@ -1,8 +1,10 @@
 """Passive bounded assignment history over the selected semantic authority.
 
 Ordering follows immutable admission sequence, not task completion time. Cursors
-retain the owned storage witness and work through legacy cutover because copied
-assignments keep their original array order. This module creates no index or task.
+are owned index keys and work through legacy cutover because copied assignments
+keep their original array order. A page is one index range plus point documents,
+so a birth committing during its build never tears it. This module creates no
+index or task.
 A page also returns the loaded dispatch value its rows came from (``snapshot``);
 it holds every row's reachable prerequisites, so one build evaluates dependency
 states without reloading. ``RecipientOrigins`` reads catalog provenance from the
@@ -62,8 +64,11 @@ def page(repository, cursor=None):
             rows = store.query('list', collection='indexes', prefix='assignments:order:',
                                reverse=reverse, after_key=after, limit=PAGE_ROWS + 1)
             selected = [item['value']['id'] for item in rows[:PAGE_ROWS]]
+            # A point selection is consistent per document, and listed index rows and
+            # sequences never change, so a birth committing meanwhile (the only commit
+            # that moves the head) cannot tear the page and is no reason to read it again.
             value, snapshot = repository._load(selection(assignments=selected, cohort=False, include_policy=False))
-            if not isinstance(snapshot, Snapshot) or snapshot.revision != head['version']:
+            if not isinstance(snapshot, Snapshot):
                 continue
             documents = {row['id']: row for row in value['assignments']}
             for item in rows[:PAGE_ROWS]:

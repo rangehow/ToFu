@@ -51,8 +51,9 @@ PROGRESS_INTERVAL_SECONDS = 5.0
 PROGRESS_PREFIX = "TOFU_ENGINE_PROGRESS "
 PROGRESS_MAX_LINE_CHARACTERS = 16 * 1024
 # One JSON line naming what preparation decided (current, kept, refused,
-# deployed-certified, deployed-uncertified); lifecycle owners parse it from
-# the preparation child's combined output.
+# deployed-certified, deployed-uncertified). It travels with progress on the
+# preparation child's stderr; lifecycle owners parse it from that stream or
+# from a failure report.
 DECISION_PREFIX = "TOFU_ENGINE_DECISION "
 STORAGE_CONTRACT_DIGEST_DOMAIN = b'tofu-storage-contract-v1\0'
 # The application<->engine boundary documents the engine does not compile: the
@@ -62,6 +63,10 @@ STORAGE_CONTRACT_DIGEST_DOMAIN = b'tofu-storage-contract-v1\0'
 # contracts are the engine's Cargo external-inputs under contracts/.
 APPLICATION_STORAGE_CONTRACTS = ('contracts/storage_v2.json', 'contracts/native_storage_connection_v2.json',
                                  'contracts/tofudb_ir_v1.json')
+# Contracts whose generators write engine sources (conversation sync, search,
+# Transaction IR, worker control, ...) enter the storage contract identity
+# through those generated sources, here.
+ENGINE_GENERATED_SOURCE_ROOT = 'packages/tofu-db/src'
 MANAGED_ENGINE_ROOT = 'packages/tofu-db/target'
 _progress_observer: ContextVar[Callable[[str], None] | None] = ContextVar("engine_progress_observer", default=None)
 _progress_phase: ContextVar[str | None] = ContextVar("engine_progress_phase", default=None)
@@ -76,6 +81,18 @@ _SYNTHETIC_WORKSPACE_SENTINEL = '.workspace-root.sentinel'
 
 class EnginePreparationError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class CommandOutput:
+    """What a completed command wrote: its complete stdout and bounded stderr.
+
+    ``stdout`` is the machine-readable result. ``stderr`` is diagnostics (head
+    and tail, like a failure report): a shell's locale warning or a library
+    notice there never enters a parsed result.
+    """
+    stdout: str
+    stderr: str
 
 
 class EnginePreparationCancelledError(RuntimeError):
@@ -521,18 +538,35 @@ def source_fingerprint(root: Path) -> str | None:
     return digest.hexdigest()
 
 
+def _generated_engine_sources(root: Path) -> dict[str, Path]:
+    """The engine crate's sources generated from a contract it shares with the
+    application (``generated_*.rs``, ``*.generated.rs``): exactly the part of
+    that contract the engine compiles."""
+    sources = {}
+    for directory, folders, names in os.walk(root / ENGINE_GENERATED_SOURCE_ROOT):
+        folders.sort()
+        for name in names:
+            if name.endswith('.rs') and (name.startswith('generated_') or name.endswith('.generated.rs')):
+                path = Path(directory) / name
+                sources[path.relative_to(root).as_posix()] = path
+    return sources
+
+
 def storage_contract_sha256(root: Path) -> str:
     """Identity of the storage contract an application and its engine must share.
 
-    The application-side boundary documents plus the contracts the engine
-    compiles (its Cargo external-inputs under contracts/), in the source
-    identity's length-prefixed framing. VERSION and unrelated contracts are
-    not part of it.
+    The application-side boundary documents, the contracts the engine
+    compiles (its Cargo external-inputs under contracts/) and the engine
+    sources generated from shared contracts, in the source identity's
+    length-prefixed framing. A generated source changes only when what the
+    engine compiles from its contract changes, so a prose-only contract edit
+    keeps the identity. VERSION and unrelated contracts are not part of it.
     """
     root = Path(root)
     entries = {relative: root / relative for relative in APPLICATION_STORAGE_CONTRACTS}
     entries.update((key, path) for key, path in external_source_inputs(root)
                    if key.startswith('contracts/'))
+    entries.update(_generated_engine_sources(root))
     digest = hashlib.sha256(STORAGE_CONTRACT_DIGEST_DOMAIN)
     for key in sorted(entries):
         if not entries[key].is_file():
@@ -619,39 +653,68 @@ def _stop_command(child: subprocess.Popen, grace: float) -> None:
         child.wait(timeout=10)
 
 
-def _run(command: list[str], *, cwd: Path, environment: dict, timeout: float,
-         progress: str | None = None, termination_grace: float = 5,
-         failure_subject: str = 'Storage engine preparation') -> str:
+def _run(command: list[str], **options) -> str:
+    """The command's stdout, its machine-readable result (options: ``_run_streams``).
+
+    stderr stays diagnostics: relayed with progress and kept in failure reports.
+    """
+    return _run_streams(command, **options).stdout
+
+
+def _run_streams(command: list[str], *, cwd: Path, environment: dict, timeout: float,
+                 progress: str | None = None, termination_grace: float = 5,
+                 failure_subject: str = 'Storage engine preparation') -> CommandOutput:
     """Bound output/lifetime; optionally relay output live with idle heartbeats.
 
+    stdout and stderr are captured to separate files, so a result parsed from
+    stdout never contains a diagnostic line. A relay forwards whole lines of
+    each stream, so interleaving the two never splits a line or progress frame.
     Separate reader/writer offsets prevent progress reads from corrupting the
-    child's log. No reader thread, pipe backpressure or persistent log is added.
-    Machine-readable build identity remains capture-only.
+    child's logs. No reader thread, pipe backpressure or persistent log is
+    added. Machine-readable build identity remains capture-only.
     """
     started = time.monotonic()
     deadline = min(_deadline.get(), started + timeout)
     if started >= deadline:
         raise EnginePreparationError(f'{failure_subject} timed out (time budget exhausted).')
     with tempfile.TemporaryDirectory(prefix='tofu-engine-command-') as temporary, \
-            (Path(temporary) / 'output.log').open('wb') as log, \
-            (Path(temporary) / 'output.log').open('rb') as reader:
-        child = subprocess.Popen(command, cwd=cwd, env=environment, stdin=subprocess.DEVNULL, stdout=log,
-                                 stderr=subprocess.STDOUT, start_new_session=os.name != 'nt')
+            (Path(temporary) / 'stdout.log').open('wb') as stdout_log, \
+            (Path(temporary) / 'stdout.log').open('rb') as stdout_reader, \
+            (Path(temporary) / 'stderr.log').open('wb') as stderr_log, \
+            (Path(temporary) / 'stderr.log').open('rb') as stderr_reader:
+        child = subprocess.Popen(command, cwd=cwd, env=environment, stdin=subprocess.DEVNULL, stdout=stdout_log,
+                                 stderr=stderr_log, start_new_session=os.name != 'nt')
+        streams = ((stdout_log, stdout_reader), (stderr_log, stderr_reader))
+        decoders = [codecs.getincrementaldecoder('utf-8')(errors='replace') for _stream in streams]
+        partial_lines = ['' for _stream in streams]
+
+        def sizes() -> list[int]:
+            return [os.fstat(log.fileno()).st_size for log, _reader in streams]
+
+        def relay(*, final: bool = False) -> bool:
+            """Forward each stream's new whole lines; FINAL also forwards its last partial line."""
+            forwarded = False
+            for index, ((_log, reader), size) in enumerate(zip(streams, sizes())):
+                text = partial_lines[index] + decoders[index].decode(reader.read(size - reader.tell()), final=final)
+                cut = text.rfind('\n') + 1
+                if final or len(text) - cut > PROGRESS_MAX_LINE_CHARACTERS:
+                    cut = len(text)  # An over-long line cannot be a progress frame; never hold it back.
+                partial_lines[index] = text[cut:]
+                if cut:
+                    _report_progress(text[:cut], end='')
+                    forwarded = True
+            return forwarded
+
         next_progress = started + PROGRESS_INTERVAL_SECONDS
-        decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
         failure = ''
         try:
             while True:
                 now = time.monotonic()
-                size = os.fstat(log.fileno()).st_size
-                if size > MAX_LOG_BYTES:
+                if sum(sizes()) > MAX_LOG_BYTES:
                     failure = f'{failure_subject} exceeded its log budget.'
                     break
-                if progress:
-                    while reader.tell() < size:
-                        data = reader.read(min(65536, size - reader.tell()))
-                        _report_progress(decoder.decode(data), end='')
-                        next_progress = now + PROGRESS_INTERVAL_SECONDS
+                if progress and relay():
+                    next_progress = now + PROGRESS_INTERVAL_SECONDS
                 if child.poll() is not None:
                     # One more read below includes output written during poll.
                     break
@@ -671,21 +734,23 @@ def _run(command: list[str], *, cwd: Path, environment: dict, timeout: float,
             raise
         if failure or child.returncode:
             _stop_command(child, termination_grace)
-        size = os.fstat(log.fileno()).st_size
-        if size > MAX_LOG_BYTES:
+        stdout_size, stderr_size = sizes()
+        if stdout_size + stderr_size > MAX_LOG_BYTES:
             failure = failure or f'{failure_subject} exceeded its log budget.'
         if progress and not failure:
-            _report_progress(decoder.decode(reader.read(MAX_LOG_BYTES), final=True), end='')
-        output = _failure_output(reader, size)
-        if failure:
-            raise EnginePreparationError(f'{failure}\n{output}' if output else failure)
-        if child.returncode < 0:
-            raise EnginePreparationCancelledError(
-                f'{failure_subject} was terminated by signal {-child.returncode}; '
-                f'preparation was cancelled. {output}')
-        if child.returncode:
-            raise EngineCommandFailedError(f'{failure_subject} failed (exit {child.returncode}): {output}')
-        return output
+            relay(final=True)
+        stderr = _failure_output(stderr_reader, stderr_size)
+        if failure or child.returncode:
+            report = '\n'.join(text for text in (_failure_output(stdout_reader, stdout_size), stderr) if text)
+            if failure:
+                raise EnginePreparationError(f'{failure}\n{report}' if report else failure)
+            if child.returncode < 0:
+                raise EnginePreparationCancelledError(
+                    f'{failure_subject} was terminated by signal {-child.returncode}; '
+                    f'preparation was cancelled. {report}')
+            raise EngineCommandFailedError(f'{failure_subject} failed (exit {child.returncode}): {report}')
+        stdout_reader.seek(0)
+        return CommandOutput(stdout_reader.read(stdout_size).decode('utf-8', errors='replace').strip(), stderr)
 
 
 def _failure_output(reader, size: int, head_bytes: int = 4096, tail_bytes: int = 12288) -> str:
@@ -708,20 +773,23 @@ def _failure_output(reader, size: int, head_bytes: int = 4096, tail_bytes: int =
 
 
 def build_identity(binary: Path) -> dict:
+    """The engine's ``--build-info`` from its stdout; its stderr only explains a refusal."""
     try:
-        output = _run([str(binary), '--build-info'], cwd=binary.parent,
-                      environment=dict(os.environ), timeout=stage_seconds(10))
+        output = _run_streams([str(binary), '--build-info'], cwd=binary.parent,
+                              environment=dict(os.environ), timeout=stage_seconds(10))
     except EnginePreparationError as exc:
         # The selected engine could not report its identity, so it is not admitted.
         raise EngineAdmissionRefusedError(str(exc)) from exc
     try:
-        info = json.loads(output)
+        info = json.loads(output.stdout)
         if (info['format'] != 'tofu-db-build.v1'
                 or re.fullmatch('[0-9a-f]{64}', info['source_sha256']) is None):
             raise ValueError('invalid engine identity')
         return info
     except (ValueError, KeyError, TypeError) as exc:
-        raise EngineAdmissionRefusedError('Storage engine has no verifiable source identity; an engine update is required.') from exc
+        diagnostics = f' Engine stderr: {output.stderr}' if output.stderr else ''
+        raise EngineAdmissionRefusedError('Storage engine has no verifiable source identity; an engine '
+                                          f'update is required.{diagnostics}') from exc
 
 
 def verify_current(binary: Path, root: Path) -> None:
@@ -823,7 +891,7 @@ def _contract_binding(root: Path, binary: Path, source_sha256: str, binary_sha25
 
 
 def parse_engine_decision(text: str) -> dict | None:
-    """The last preparation decision reported in a child's combined output."""
+    """The last preparation decision in a child's stderr or failure report."""
     found = None
     for line in str(text or '').splitlines():
         if not line.startswith(DECISION_PREFIX):

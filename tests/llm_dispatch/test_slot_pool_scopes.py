@@ -134,9 +134,10 @@ def real_key_stats(key_store, monkeypatch):
     from lib.key_stats import _state
 
     monkeypatch.setattr(key_store, '_list_siblings', lambda provider: [])
+    # One freshness check observes the whole store (decision and telemetry documents) once.
     fingerprints = []
-    real_fingerprint = _state._file_fingerprint
-    monkeypatch.setattr(_state, '_file_fingerprint',
+    real_fingerprint = _state._store_fingerprint
+    monkeypatch.setattr(_state, '_store_fingerprint',
                         lambda path: fingerprints.append(path) or real_fingerprint(path))
     key_store.is_key_enabled('warm', 'load')
     fingerprints.clear()
@@ -151,8 +152,8 @@ def test_pinned_pick_checks_key_store_freshness_once_outside_the_lock(
     dispatcher.slots = [_configured(index) for index in range(30)] + group
     dispatcher._initialized = True
     held = []
-    counting = _state._file_fingerprint
-    monkeypatch.setattr(_state, '_file_fingerprint', lambda path: (
+    counting = _state._store_fingerprint
+    monkeypatch.setattr(_state, '_store_fingerprint', lambda path: (
         held.append(dispatcher._lock.locked()) or counting(path)))
 
     with provider_pin(_PINS[0]):

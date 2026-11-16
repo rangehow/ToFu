@@ -55,6 +55,12 @@ from lib.task_replay.persistence_projection import (
     tool_round_payload_chars,
     trim_tool_round_copy,
 )
+from lib.event_envelope import without_event_format_envelope
+from lib.task_replay.task_event_contract import (
+    ATTEMPT_EVIDENCE_REFERENCE_KEY,
+    STRUCTURAL_EVENT_TYPES,
+    attempt_evidence_reference,
+)
 from lib.tool_results.tool_round_identity import tool_rounds_with_execution_identity
 from lib.tool_results.tool_round_replay import (
     checkpoint_retention_positions,
@@ -1842,16 +1848,10 @@ def _settlement(task: dict[str, Any], raw_event: dict[str, Any],
 
 # Registered response-requiring events record as ``interaction_request``.
 _INTERACTION_EVENTS = interaction_types()
-# Diagnostic frames preserved inside their durable attempt event so the
-# frontend debug surfaces can rebuild without a separate task-event stream.
-# Kept deliberately narrow: only frames whose consumers lost their transport
-# in the conversation-sync migration.
+# Diagnostic frames that conversation replay with the full diagnostic payload
+# delivers on their attempt event. Kept deliberately narrow: only frames whose
+# consumers lost their transport in the conversation-sync migration.
 _DEBUG_EVIDENCE_EVENTS = frozenset({'messages_snapshot', 'tool_compacted'})
-# Frames whose stored encoding (compact UTF-8 JSON, ``_CommandEncoding``)
-# exceeds this size are carried in their shared-prefix delta form (the same
-# projection the durable event log stores) instead of duplicating the full
-# wire frame on the attempt event. ``read_events`` rehydrates them.
-_DEBUG_EVIDENCE_INLINE_MAX_BYTES = 64 * 1024
 _TERMINAL_EVENTS = frozenset({'done', 'error', 'aborted'})
 
 
@@ -1928,29 +1928,20 @@ class _CommandEncoding:
     Byte bounds read ``len`` of exactly the bytes both storage clients splice
     into the request (``lib.storage.protocol.FrozenPayload``), and every send
     of the command, including a shed or oversize retry, reuses the encoding of
-    each unchanged value. The inline evidence copy and the carried row's
-    ``event`` share one encoding.
+    each unchanged value.
     """
 
-    __slots__ = ('_held', '_copies')
+    __slots__ = ('_held',)
 
     def __init__(self) -> None:
         self._held: dict[int, tuple[Any, bytes]] = {}
-        self._copies: dict[int, tuple[Any, Any]] = {}
 
     def encoded(self, value: Any) -> bytes:
-        copied = self._copies.get(id(value))
-        if copied is not None and copied[0] is value:
-            value = copied[1]
         held = self._held.get(id(value))
         if held is None or held[0] is not value:
             held = (value, encode_json_value(value))
             self._held[id(value)] = held
         return held[1]
-
-    def share(self, copy: Any, original: Any) -> None:
-        """Encode the shallow copy ``copy`` with the bytes of ``original``."""
-        self._copies[id(copy)] = (copy, original)
 
     def frozen(self, payload: dict[str, Any]) -> FrozenPayload:
         encoded = {}
@@ -2028,41 +2019,34 @@ def _projection_update_event_payload(
     event_kind: str,
     raw_event: dict[str, Any],
     task_event: Mapping[str, Any] | None,
-    encoding: _CommandEncoding,
 ) -> dict[str, Any]:
     """Attempt-event payload of one ``projection_updated`` frame."""
     event_payload = {'phase': phase, 'updateKind': event_kind}
     if event_kind in _DEBUG_EVIDENCE_EVENTS:
-        # Diagnostic evidence (debug panel / Request Inspector) never
-        # folds into the projection. Carrying the live frame on its own
-        # durable attempt event restores the per-frame delivery that the
-        # conversation-sync migration removed — replay of the attempt
-        # stream re-delivers the same frame, so live and cold reconnect
-        # converge. Large message snapshots use the shared-prefix delta
-        # already computed for the event log; ``read_events`` rehydrates
-        # it, while the first frame of a (task, turn) stays full so a
-        # live debug panel that attached mid-stream still gets a baseline.
-        evidence = task_event.get('event') if isinstance(
-            task_event, Mapping) else None
-        if (event_kind == 'messages_snapshot'
-                and isinstance(evidence, Mapping)
-                and evidence.get('snapshotDeltaVersion') is not None
-                and int(evidence.get('prefixLen') or 0) > 0
-                and not _fits_inline(raw_event, encoding)):
-            event_payload['event'] = dict(evidence)
-            encoding.share(event_payload['event'], evidence)
-        else:
+        # Diagnostic evidence never folds into the projection; replay of the
+        # attempt stream re-delivers it. It is durable once: when this
+        # transaction also commits the frame's task-event row and that row
+        # outlives conversation replay, the attempt event names the row and
+        # replay resolves it (docs/STORAGE_EVENT_REPLAY.md, "Diagnostic
+        # evidence is stored once"). Otherwise the frame rides inline.
+        reference = _carried_evidence_reference(event_kind, task_event)
+        if reference is None:
             event_payload['event'] = raw_event
+        else:
+            event_payload[ATTEMPT_EVIDENCE_REFERENCE_KEY] = reference
     return event_payload
 
 
-def _fits_inline(raw_event: dict[str, Any], encoding: _CommandEncoding) -> bool:
-    try:
-        return len(encoding.encoded(raw_event)) <= _DEBUG_EVIDENCE_INLINE_MAX_BYTES
-    except StorageError:
-        # A frame no client can encode never rides inline; its delta takes
-        # the ordinary evidence-refusal path.
-        return False
+def _carried_evidence_reference(
+    event_kind: str, task_event: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    if event_kind not in STRUCTURAL_EVENT_TYPES or not isinstance(task_event, Mapping):
+        return None
+    task_id, sequence = task_event.get('task_id'), task_event.get('sequence')
+    if (not isinstance(task_event.get('event'), Mapping) or not isinstance(task_id, str)
+            or not task_id or type(sequence) is not int or sequence < 0):
+        return None
+    return {'taskId': task_id, 'sequence': sequence}
 
 
 def _frame_projection_patch(
@@ -2764,7 +2748,7 @@ def _record_task_event_locked(
         event_payload = {'phase': _live_phase, 'request': raw_event}
     else:
         event_payload = _projection_update_event_payload(
-            _live_phase, event_kind, raw_event, task_event, encoding)
+            _live_phase, event_kind, raw_event, task_event)
     command_payload = {
         'attempt_id': attempt_id, 'user_id': user_id,
         'task_id': str(task.get('id') or ''),
@@ -3440,7 +3424,7 @@ def _prepare_task_event_batch_entry(
         'terminal': False, 'status': 'running', 'settlement': {}, 'error': {},
         'event_type': 'projection_updated',
         'event_payload': _projection_update_event_payload(
-            source.get('phase'), event_kind, raw_event, entry.task_event, encoding),
+            source.get('phase'), event_kind, raw_event, entry.task_event),
         'now': _now_ms(),
         **_frame_projection_patch(baseline, projection, slim=slim,
                                   base_revision=revision),
@@ -3771,7 +3755,7 @@ def get_turn(conversation_id: str, turn_id: str, *, user_id: Any,
     user_id = require_user_id(user_id, context='get conversation turn')
     payload = _turn_read(conversation_id, turn_id, user_id, include_projection, content_preview_chars)
     row = _turn_client().query('turn.get', payload)
-    return _read_turn(row, conversation_id, turn_id, include_projection, content_preview_chars)
+    return _read_turn(row, conversation_id, turn_id, user_id, include_projection, content_preview_chars)
 
 
 def get_turns(requests: list[tuple[str, str, bool, int | None]], *, user_id: Any) -> list[Any]:
@@ -3791,7 +3775,7 @@ def get_turns(requests: list[tuple[str, str, bool, int | None]], *, user_id: Any
         try:
             if isinstance(row, StorageError):
                 raise row
-            results.append(_read_turn(row, conversation, turn, include_projection, preview_chars))
+            results.append(_read_turn(row, conversation, turn, user_id, include_projection, preview_chars))
         except (LifecycleNotFound, StorageError) as error:
             results.append(error)
     return results
@@ -3813,7 +3797,7 @@ def _turn_read(conversation_id: str, turn_id: str, user_id: int, include_project
     return payload
 
 
-def _read_turn(row: Any, conversation_id: str, turn_id: str, include_projection: bool,
+def _read_turn(row: Any, conversation_id: str, turn_id: str, user_id: int, include_projection: bool,
                content_preview_chars: int | None = None) -> dict[str, Any]:
     if row is None:
         raise LifecycleNotFound('Turn not found')
@@ -4174,6 +4158,17 @@ def read_events(attempt_id: str, *, after: int = 0,
                                  else 'full')})
     if events is None:
         raise LifecycleNotFound('Attempt not found')
+    from lib.tasks_pkg.event_log import read_events as read_task_events
+    for event in events:
+        body = event.get('payload') if isinstance(event, dict) else None
+        reference = attempt_evidence_reference(body)
+        if reference is None:
+            continue
+        del body[ATTEMPT_EVIDENCE_REFERENCE_KEY]
+        task_id, sequence = reference
+        rows = read_task_events(task_id, since_event_id=sequence - 1, limit=1, raise_on_error=True)
+        if rows and rows[0]['event_id'] == sequence:
+            body['event'] = without_event_format_envelope(rows[0]['payload'])
     from lib.tasks_pkg.snapshot_delta import rebuild_attempt_event_frames
     return rebuild_attempt_event_frames(events)
 

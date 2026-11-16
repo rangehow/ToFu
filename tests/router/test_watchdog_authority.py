@@ -262,8 +262,7 @@ def test_message_reaches_a_router_or_worker_of_any_project_as_nonhuman_context(w
     sent = execute_watchdog_tool({'id': 'watchdog-task'}, _scope(world), 'watchdog_message', arguments)
     assert sent['recipient_role'] == 'worker' and sent['project_path'] == world.project
     assert sent['execution_started'] is False
-    head, _ = ProjectMailbox(world.owner, world.project, world.worker).head()
-    [message] = head['messages']
+    [message] = ProjectMailbox(world.owner, world.project, world.worker).read()
     assert message['sender'] == world.watchdog['conversationId'] and message['kind'] == 'steer'
     assert message['content'].startswith('[From the owner\u2019s Router Watchdog')
     assert execute_watchdog_tool({'id': 'watchdog-task'}, _scope(world), 'watchdog_message',

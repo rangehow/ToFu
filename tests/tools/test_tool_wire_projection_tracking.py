@@ -223,8 +223,6 @@ def test_stream_persists_bounded_final_schema_fingerprint(monkeypatch):
     monkeypatch.setattr(
         stream_module, 'append_event',
         lambda _task_value, event: events.append(event))
-    monkeypatch.setattr(
-        stream_module, 'checkpoint_task_partial', lambda _task_value: None)
 
     body = {
         'model': 'kimi-k3',

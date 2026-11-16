@@ -76,6 +76,47 @@ def test_launch_refuses_stale_engine_by_default_even_if_provenance_claims_curren
         supervisor._advise_tofudb_engine_staleness(str(engine))
 
 
+# A wrapper or the engine itself may write to stderr: a shell's setlocale
+# warning in a container without C.UTF-8, a library or allocator notice.
+LOCALE_WARNING = '/bin/sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)'
+EXIT_NOTICE = 'notice: allocator statistics disabled'
+
+
+def warning_binary(path, stdout):
+    """A stand-in engine that warns on stderr around its --build-info stdout."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('#!/bin/sh\n'
+                    f'echo {shlex.quote(LOCALE_WARNING)} >&2\n'
+                    f"cat <<'TOFU_BUILD_INFO'\n{stdout}\nTOFU_BUILD_INFO\n"
+                    f'echo {shlex.quote(EXIT_NOTICE)} >&2\n')
+    path.chmod(0o755)
+    return path
+
+
+def test_a_stderr_warning_does_not_refuse_an_engine_with_a_valid_identity(project, monkeypatch):
+    import lib.storage.supervisor as supervisor
+    info = {'format': 'tofu-db-build.v1', 'source_sha256': engines.source_fingerprint(project),
+            'version': 'test', 'embedded_allocator': 'system'}
+    engine = warning_binary(project / 'deployed/tofu-db', json.dumps(info))
+    monkeypatch.setattr(supervisor, '_tofudb_checkout_root', lambda: project)
+    # tests/conftest.py turns an escaping admission refusal into a skip; here the
+    # refusal is the defect under test, so it fails the spec.
+    try:
+        identity = engines.build_identity(engine)
+        supervisor._advise_tofudb_engine_staleness(str(engine))  # storage start admits it
+    except engines.EngineAdmissionRefusedError as refused:
+        pytest.fail(f'a stderr warning refused an engine with a valid identity: {refused}')
+    assert identity == info
+
+
+def test_an_invalid_identity_is_refused_with_the_engines_stderr(project):
+    engine = warning_binary(project / 'deployed/tofu-db', 'tofu-db 0.2.0 (no build identity)')
+    with pytest.raises(engines.EngineAdmissionRefusedError, match='no verifiable source identity') as refused:
+        engines.build_identity(engine)
+    assert LOCALE_WARNING in str(refused.value)
+    assert EXIT_NOTICE in str(refused.value)
+
+
 def test_prepare_downloads_matching_engine_without_cargo_and_reuses_it(project, monkeypatch):
     dest = project / 'packages/tofu-db/target/release/tofu-db'
     binary(dest, '0' * 64)

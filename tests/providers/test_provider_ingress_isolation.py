@@ -117,8 +117,8 @@ def test_slow_storage_and_push_never_enter_provider_callback(
         chat_task_runtime.discard(task['id'])
 
 
-def test_stream_checkpoint_wait_happens_only_after_provider_return(monkeypatch):
-    """A slow recovery checkpoint cannot delay a provider delta callback."""
+def test_slow_boundary_work_happens_only_after_provider_return(monkeypatch):
+    """Slow provider-boundary observer work cannot delay a provider delta callback."""
     import lib.tasks_pkg.manager._stream as stream_module
 
     task = {
@@ -145,7 +145,7 @@ def test_stream_checkpoint_wait_happens_only_after_provider_return(monkeypatch):
             event.get('observerIsolation'),
         ))
 
-    def _slow_checkpoint(_task):
+    def _slow_boundary_refresh(_task):
         checkpoint_calls.append(time.perf_counter())
         time.sleep(0.20)
 
@@ -159,7 +159,7 @@ def test_stream_checkpoint_wait_happens_only_after_provider_return(monkeypatch):
 
     monkeypatch.setattr(stream_module, 'append_event', _append)
     monkeypatch.setattr(
-        stream_module, 'checkpoint_task_partial', _slow_checkpoint)
+        stream_module, 'refresh_segment_mirror', _slow_boundary_refresh)
     monkeypatch.setattr(stream_module, 'dispatch_stream', _dispatch)
 
     result = stream_module.stream_llm_response(
@@ -453,7 +453,6 @@ def test_logical_completion_persists_queue_gaps_across_floor_dispatches(
     # reach the blocker, so compress the retry budget to keep the dispatch
     # deadline and the wait-free flush fast.
     monkeypatch.setattr(guard, '_DELIVERY_MAX_ATTEMPTS', 1)
-    monkeypatch.setattr(stream, 'checkpoint_task_partial', lambda task: None)
     monkeypatch.setattr(push, 'push_event', lambda *a, **kw: None)
     monkeypatch.setattr(event_log, 'project_persistent_event', lambda tid, e: dict(e))
     monkeypatch.setattr(event_log, 'reset_persistent_event_projection', lambda *a: None)

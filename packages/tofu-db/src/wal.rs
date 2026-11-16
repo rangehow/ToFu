@@ -1272,7 +1272,14 @@ impl ActiveLog {
         if let Some(barrier) = &self.barrier {
             let _wait =
                 crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_WAL_BARRIER_WAIT);
-            barrier.wait_synced(self.len, std::time::Instant::now() + MAX_BARRIER_WAIT)?;
+            let deadline = std::time::Instant::now() + MAX_BARRIER_WAIT;
+            #[cfg(test)]
+            let deadline = if publication::covers_expire_on_this_thread() {
+                std::time::Instant::now()
+            } else {
+                deadline
+            };
+            barrier.wait_synced(self.len, deadline)?;
             return Ok(pending);
         }
         sync_data_barrier(self.file.as_mut())?;
@@ -2115,7 +2122,9 @@ mod buffer_tests;
 
 #[path = "wal_publication.rs"]
 mod publication;
-pub(crate) use publication::PublicationWalCover;
+#[cfg(test)]
+pub(crate) use publication::ExpiredPublicationCovers;
+pub(crate) use publication::{abandon_if_uncovered, abandoned_uncovered, PublicationWalCover};
 
 #[cfg(test)]
 #[path = "wal_query_cache_health_tests.rs"]

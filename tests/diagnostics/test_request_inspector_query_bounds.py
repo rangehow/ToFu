@@ -25,7 +25,7 @@ def test_swarm_discovery_uses_bounded_sidecar_summaries():
 def test_event_inspector_summary_uses_per_task_indexed_queries():
     """The retired mega-query (roots IN (...) OR'd with dozens of prefix
     ranges) defeated the SQLite planner on a 1M-row event log: it abandoned
-    ``storage_events_task_idx`` and scanned the retention index — tens of
+    the task-leading index and scanned the retention index — tens of
     seconds for milliseconds of key-range work. The operation must issue
     ONE equality probe plus ONE prefix-range probe per task, never an
     OR'd mega-predicate."""
@@ -37,6 +37,8 @@ def test_event_inspector_summary_uses_per_task_indexed_queries():
         backend = 'sqlite'
 
         def fetch_all(self, sql, params=()):
+            if 'pragma_index_list' in sql:
+                return [{'name': 'sqlite_autoindex_storage_events_1'}]
             calls.append(sql)
             return []
 
@@ -53,7 +55,7 @@ def test_event_inspector_summary_uses_per_task_indexed_queries():
             # SQLite plans without parameter values: the parameterized
             # prefix range needs the hint or the planner scans the
             # retention index (measured 16 s for an empty range).
-            assert 'INDEXED BY storage_events_task_idx' in sql
+            assert 'INDEXED BY "sqlite_autoindex_storage_events_1"' in sql
 
 
 def test_summary_list_pushes_conv_id_prefilter_into_sql():

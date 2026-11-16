@@ -1523,8 +1523,7 @@ a capture derives only live and new rows) and
 ## Turn events are encoded once
 
 Problem: `turn.event.record` measured its byte bounds with encodings the
-authority never received (an ASCII-escaped dump of the raw frame for the
-64 KiB inline-evidence choice, stdlib UTF-8 dumps of the evidence and patch for
+authority never received (stdlib UTF-8 dumps of the evidence and patch for
 the Attempt-event document bound, `canonical_json` per batch entry for the
 event budget), and the storage.v2 client then encoded the whole command again
 after a Python compatibility walk, through the stdlib encoder whenever a float
@@ -1538,17 +1537,13 @@ snapshot canonicalization, 305 to the two size dumps; checkpoint dumps took 248.
 Decision:
 - `turn_lifecycle._CommandEncoding` encodes each command value once with
   `lib.storage.protocol.encode_json_value` (finite-number admission, orjson,
-  the stdlib fallback for values orjson cannot represent). The inline-evidence
-  choice, the Attempt-event bound and the batch event budget read `len` of
-  those bytes; `FrozenPayload` adopts them and both clients splice them as
-  `orjson.Fragment`. The inline evidence copy and the carried row share one
-  encoding of the snapshot delta, and shed, oversize and rebase retries reuse
-  every unchanged value.
-- All three bounds mean compact UTF-8 JSON bytes as stored. The 64 KiB choice
-  formerly counted ASCII-escaped characters, so a non-ASCII frame moved to its
-  delta at about a third of its stored size; such frames up to 64 KiB stored
-  now ride inline, and ASCII frames decide exactly as before. The other two
-  bounds already measured the UTF-8 length of the same values.
+  the stdlib fallback for values orjson cannot represent). The batch event
+  budget reads `len` of those bytes; `FrozenPayload` adopts them and both
+  clients splice them as `orjson.Fragment`. A snapshot delta is carried once,
+  in its task-event row, which the Attempt event names
+  ([Diagnostic evidence is stored once](STORAGE_EVENT_REPLAY.md#diagnostic-evidence-is-stored-once));
+  shed, oversize and rebase retries reuse every unchanged value.
+- Byte bounds mean compact UTF-8 JSON bytes as stored.
 - storage.v1 frames were already orjson and are byte-identical. storage.v2
   requests are byte-identical except floats of magnitude below 1e-4
   (`0.00001`, `1.5e-7` instead of `1e-05`, `1.5e-07`); both authorities parse
@@ -1579,8 +1574,8 @@ content hash has no immutable owner and comparing it costs as much as hashing
 
 Evidence: `tests/turn_lifecycle/test_turn_event_encode_once.py` (an encode-count
 instrument over the one admitted encoder, request bytes of both clients
-against the former plain requests, the UTF-8 inline bound, batch budgets and a
-managed-lane run whose stored deltas equal plain-message deltas),
+against the former plain requests, a snapshot delta carried once, batch
+budgets and a managed-lane run whose stored deltas equal plain-message deltas),
 `tests/tasks_pkg/test_snapshot_delta.py` (rows equal an oracle built from the
 public prefix helpers, with settled and plain messages through growth,
 duplicates and an in-place rewrite; settled history encoded once; a forged

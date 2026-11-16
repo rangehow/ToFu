@@ -49,6 +49,29 @@ failures; checking deployment files during reconnect confuses disk preparation
 with running-process identity. The existing in-memory admission is reused;
 there is no additional persistent state or retention.
 
+Problem (2026-11-13): preparation commands (`native_engine._run`) wrote stdout
+and stderr to one log, and `build_identity` parsed that merged text as the
+engine's `--build-info` JSON. Any stderr line from the engine or a wrapper (a
+shell's locale warning in a container without `C.UTF-8`, a library notice)
+refused a good engine as having "no verifiable source identity" at admission,
+certification, deployment, the store-features preflight and landing
+verification. Decision: `native_engine._run_streams` captures the two streams
+separately and returns `CommandOutput(stdout, stderr)`; `_run` returns its
+stdout. Machine-readable results are parsed from stdout only: the build
+identity, the embedded library attestation, the engine-input commit list and
+the restart receipt. stderr is diagnostics: relayed live as progress (whole
+lines per stream, so neither splits the other's lines), in every failure report,
+and in the identity refusal when stdout is not a valid identity.
+`TOFU_ENGINE_PROGRESS` and `TOFU_ENGINE_DECISION` frames remain prefix-framed
+lines on the stderr progress stream; the manager reads the decision there.
+`_run` keeps returning text because a serving worker imports
+`application_restart` lazily from disk next to the `native_engine` it loaded at
+storage admission. Alternatives rejected: forcing a locale in the probe's
+environment (fixes one source only), filtering known warnings (an open-ended
+list), and scanning merged text for the last JSON object (stray output can
+still parse as an identity). Verify `tests/server/test_native_engine_update.py`
+(identity specs) and `tests/server/test_native_engine_preparation_process.py`.
+
 The host's own relaunches run a private copy of the admitted bytes, so a staged
 deployment never refuses them; an attachment detaches at once when the
 published process exits but keeps a live, starved engine through the
@@ -736,10 +759,24 @@ Decision: restarts deploy only certified engines.
 - **Storage contract identity.** `native_engine.storage_contract_sha256` hashes
   `contracts/storage_v2.json`, `contracts/native_storage_connection_v2.json`,
   the operation IR `contracts/tofudb_ir_v1.json` (an engine kept across an IR
-  change would silently ignore new payload fields) and every `contracts/*`
-  entry of the engine's Cargo `external-inputs`.
+  change would silently ignore new payload fields), every `contracts/*` entry
+  of the engine's Cargo `external-inputs`, and every engine source generated
+  from a contract the engine shares with the application
+  (`packages/tofu-db/src/**/generated_*.rs` and `*.generated.rs`).
   Records are keyed by engine source *and* contract because the contract covers
-  files the engine fingerprint does not. Deployments record the contract of the
+  files the engine fingerprint does not.
+  Problem (2026-11-14): contracts that only generators read (Transaction IR,
+  search, sync vocabulary, worker control, ...) were outside the identity, so
+  a tree whose IR changed still matched its predecessor's engine, and the keep
+  rule would pair them. Decision: a generated engine source is exactly what
+  the engine compiles from its contract, so it enters the identity; a
+  prose-only contract edit compiles nothing new and keeps it. Alternative
+  rejected: declaring each generator contract as an `external-inputs` entry,
+  which also feeds the engine fingerprint, so every prose edit of
+  `conversation_sync_v3.yaml` (nine commits in one week) would need a newly
+  certified engine. The first deployment after the change records the new
+  identity; until then a retained storage host bound to the old one is refused
+  retention, like any contract change. Deployments record the contract of the
   tree they prepared in `build.json`; manual `deploy_tofudb_engine.py` runs
   record none, and new bytes never inherit the previous deployment's evidence,
   certification note or contract.

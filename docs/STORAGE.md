@@ -2151,7 +2151,14 @@ in flight: until the crash callback runs, the runtime still holds readiness and
 no worker exists, and that callback fences readiness and starts the worker
 under one hold. Refusing that window lost the replay of a command whose
 acknowledgement died with the child (`tests/tofudb/test_native_lost_ack_recovery.py`).
-`StorageRuntime.stop()` wakes paused callers. A non-transient code or a
+`StorageRuntime.stop()` wakes paused callers. The two non-retryable
+`database_unavailable` raises name their state, because one shared text made a
+harness stop read as a breaker trip: a stopping runtime raises
+`Storage runtime is stopping`, a degraded one the degraded text new calls get,
+and a stop outranks a degraded verdict since it also ends the post-trip
+retries. The first such raise of each stop or breaker episode logs one
+`tofu.storage.runtime` warning naming the state (and the breaker's reason);
+later paused callers in that episode fail unlogged. A non-transient code or a
 command without replay safety still raises on its first failure. Supervision's
 own verdict (the unresponsive budget, applied only to an engine with no
 answer and no kernel wait) remains the only time-based fence, and a wedged holder cannot hide behind the

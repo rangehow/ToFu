@@ -206,7 +206,7 @@ def test_engine_identity_mismatch_is_the_typed_admission_refusal(tmp_path, monke
 def test_unanswered_identity_probe_refuses_admission_with_its_cause(tmp_path, monkeypatch):
     def timeout(*args, **kwargs):
         raise engines.EnginePreparationError('Storage engine preparation timed out after 10.0s')
-    monkeypatch.setattr(engines, '_run', timeout)
+    monkeypatch.setattr(engines, '_run_streams', timeout)
     with pytest.raises(engines.EngineAdmissionRefusedError, match='timed out') as refused:
         engines.build_identity(tmp_path / 'tofu-db')
     assert type(refused.value.__cause__) is engines.EnginePreparationError

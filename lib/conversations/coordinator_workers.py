@@ -120,30 +120,15 @@ def get_workers(task, scope, arguments, *, repository=None):
     binding, a stopped or foreign attempt) stays a refusal.
     """
     _validate_schema(arguments, 'getProjectWorkers')
-    from lib.project_dispatch.continuation import original_delegation, worker_summaries
+    from lib.project_dispatch.continuation import worker_summaries
     repository = repository or ProjectDispatchRepository(scope['user_id'], scope['project_path'])
-    try:
-        principal, source, _ = source_for_task(repository, task)
-    except SyntheticSource:
-        from lib.identity import PrincipalContext
-        principal, source = PrincipalContext.from_payload(task.get('_principalContext') or {}), None
-    origin = value = None
-    if source is not None:
-        origin = original_delegation(task, {}, repository=repository)
-        budget_id = origin.get('policy', {}).get('requestBudgetId') or getattr(task.get('_coordinatorRequestBudget'), 'budget_id', None)
-        value, _ = repository._load(repository._selection(sources=[origin['attemptId']],
-            budgets=[budget_id] if budget_id else []))
+    principal, source, origin, value = _current_request(task, repository)
     project_history = source is None or arguments.get('scope', 'request') == 'project'
     page = repository.history_page(arguments.get('after_id')) if project_history else None
     candidates = page['rows'] if page else value['assignments']
     continuations = dict(zip((row['id'] for row in candidates),
                              page['rowOlderCursors'] if page else (row['id'] for row in candidates)))
-    rows = [row for row in candidates
-            if row['request']['coordinatorId'] == scope['conversation_id']
-            and row['grant'].get('bindingRevision') == scope['binding_revision']
-            and row['grant']['tenant'] == principal.tenant_id
-            and (project_history or row['request'].get('delegation', {}).get('attemptId') == origin['attemptId'])
-            and row['request']['profile']['mode'] != 'coordinator']
+    rows = _own_workers(candidates, scope, principal, None if project_history else origin)
     cursor = arguments.get('after_id')
     if cursor is not None and not project_history:
         indices = [i for i, row in enumerate(rows) if row['id'] == cursor]
@@ -172,6 +157,35 @@ def get_workers(task, scope, arguments, *, repository=None):
         # Delegations whose Worker storage does not show yet: starting, or refused before birth.
         result['starting_workers'] = starting
     return _readable_page(task, result, 'workers', lambda shown: continuations[rows[shown - 1]['id']])
+
+
+def _current_request(task, repository):
+    """(principal, source, origin, rows): this Coordinator's current request and its loaded record.
+
+    A Turn whose input is nonhuman (a project report relay, a Watchdog notice)
+    has no request of its own: source, origin and rows are None.
+    """
+    from lib.project_dispatch.continuation import original_delegation
+    try:
+        principal, source, _ = source_for_task(repository, task)
+    except SyntheticSource:
+        from lib.identity import PrincipalContext
+        return PrincipalContext.from_payload(task.get('_principalContext') or {}), None, None, None
+    origin = original_delegation(task, {}, repository=repository)
+    budget_id = origin.get('policy', {}).get('requestBudgetId') or getattr(task.get('_coordinatorRequestBudget'), 'budget_id', None)
+    value, _ = repository._load(repository._selection(sources=[origin['attemptId']],
+                                                      budgets=[budget_id] if budget_id else []))
+    return principal, source, origin, value
+
+
+def _own_workers(candidates, scope, principal, origin):
+    """This Coordinator's Worker rows: its binding epoch and tenant, and ``origin``'s request when given."""
+    return [row for row in candidates
+            if row['request']['coordinatorId'] == scope['conversation_id']
+            and row['grant'].get('bindingRevision') == scope['binding_revision']
+            and row['grant']['tenant'] == principal.tenant_id
+            and (origin is None or row['request'].get('delegation', {}).get('attemptId') == origin['attemptId'])
+            and row['request']['profile']['mode'] != 'coordinator']
 
 
 def _readable_page(task, result, key, cursor_after):
@@ -427,18 +441,45 @@ def await_workers(task, scope, arguments, *, repository=None, service=None, runt
 
 
 def _running_workers(task, scope):
-    """This request's Workers that are running or starting: a ``poll`` without IDs."""
-    page = reread_on_contention(task, lambda: get_workers(task, scope, {}),
-                                label='coordinator worker page', effect_free=True)
-    running = ([row for row in page['workers'] if row['status'] not in _TERMINAL]
-               + page.get('starting_workers', []))
-    more = (' This page does not hold every Worker: page get_project_workers from next_cursor.'
-            if page.get('next_cursor') else '')
-    return {'workers': running, 'instruction': (
-        'This request\'s Workers that are running or starting (or could not start). Poll their assignment '
-        'IDs with wait_s to wait for results; get_project_workers lists every Worker, settled ones included.'
-        if running else 'No Worker of this request is running or starting; get_project_workers lists '
-        'every Worker, settled ones included.') + more}
+    """This request's Workers that are running or starting: a ``poll`` without IDs.
+
+    Every Worker of the request is checked, never only a first page of it. A
+    Turn whose input is nonhuman has no request of its own and checks its
+    project history's newest page, as get_project_workers(scope='project') does.
+    """
+    def read():
+        from lib.project_dispatch.continuation import worker_summaries
+        repository = ProjectDispatchRepository(scope['user_id'], scope['project_path'])
+        principal, source, origin, value = _current_request(task, repository)
+        if source is None:
+            page = repository.history_page(None)
+            rows, starting = _own_workers(page['rows'], scope, principal, None), []
+            older = page['olderCursor'] is not None
+        else:
+            rows, older = _own_workers(value['assignments'], scope, principal, origin), False
+            # Delegations whose Worker storage does not show yet: starting, or refused before birth.
+            starting = births.rows(task, exclude={row['id'] for row in value['assignments']})
+        workers = []
+        for item, row in zip(worker_summaries(repository, rows), rows):
+            if item['status'] not in _TERMINAL:
+                item['source_turn_id'] = row['request']['authorizationSource']['turnId']
+                item['current_request'] = row['request']['authorizationSource'] == source
+                workers.append(item)
+        return workers + starting, older
+    running, older = reread_on_contention(task, read, label='coordinator worker page', effect_free=True)
+    instruction = ('This request\'s Workers that are running or starting (or could not start). Poll their '
+                   'assignment IDs with wait_s to wait for results; get_project_workers lists every Worker, '
+                   'settled ones included.' if running else 'No Worker of this request is running or starting; '
+                   'get_project_workers lists every Worker, settled ones included.')
+    if older:
+        instruction += ' This page does not hold every Worker: page get_project_workers from next_cursor.'
+    result = {'workers': running, 'instruction': instruction}
+    shown = _readable_page(task, result, 'workers', lambda shown: None)['workers']
+    if len(shown) < len(running):
+        result = {'workers': shown, 'instruction': instruction + (
+            f' {len(running) - len(shown)} more running or starting Workers did not fit this result; '
+            'get_project_workers pages all of them.')}
+    return result
 
 
 def wait_for_workers(task, scope, ids, *, wait_s, mode='any', repository=None, service=None,

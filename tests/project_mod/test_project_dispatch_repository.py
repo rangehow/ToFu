@@ -45,21 +45,25 @@ class RecordClient:
         assert operation == 'record.put'
         with self.lock:
             if command_id in self.receipts:
-                assert self.receipts[command_id] == args
-                return
+                committed, receipt = self.receipts[command_id]
+                assert committed == args
+                return deepcopy(receipt)
             key = (args['namespace'], args['key'])
             version = self.rows.get(key, {}).get('version', 0)
-            if self.forced_conflicts or args['expected_version'] != version:
+            # As on both authorities, a write without an expected version never conflicts.
+            if 'expected_version' in args and (self.forced_conflicts or args['expected_version'] != version):
                 if self.forced_conflicts:
                     self.forced_conflicts -= 1
                 self.conflicts += 1
                 raise StorageError('database_conflict', 'stale record')
             self.rows[key] = {'value': deepcopy(args['value']), 'version': version + 1}
-            self.receipts[command_id] = deepcopy(args)
+            receipt = {'key': args['key'], 'version': version + 1}
+            self.receipts[command_id] = (deepcopy(args), receipt)
             self.puts += 1
             if self.uncertain_once:
                 self.uncertain_once = False
                 raise StorageError('database_timeout', 'response lost after commit', retryable=True)
+            return deepcopy(receipt)
 
 
 class Conversations:

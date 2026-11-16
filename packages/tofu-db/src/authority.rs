@@ -2978,8 +2978,9 @@ impl AuthorityDatabase {
     }
 
     /// Graceful-stop retirement of the WAL window into indexed history
-    /// (`Engine::retire_wal_window_for_stop`); the caller merges the overlay
-    /// first and has stopped every driver that shares the publication lane.
+    /// (`Engine::retire_wal_window_for_stop`); the caller has stopped every
+    /// driver that shares the publication lane. Unmerged overlay deltas are
+    /// retired into history like an online rotation's and replay at open.
     pub(crate) fn retire_wal_window_for_stop(&mut self) -> io::Result<()> {
         self.entities
             .writer_engine_mut()?

@@ -936,6 +936,11 @@ cancellation and never releases resources underneath a live provider call.
 Explicit owner Stop/supersede, provider or network failure, transport
 deadlines, shutdown, crash, and power loss can still terminate work; a crash can
 lose memory-only increments from the current provider call before convergence.
+A task without a conversation writes its task row once per round, at the round
+end, so a crash between a round's provider return and its round end also drops
+that round's narration from its cold row; `code_exec`'s fenced boundary still
+writes before code runs
+([sampled checkpoints](../modules/task_engine.md#persistence-discipline)).
 
 ### 2.14 Project-path selection and recent history
 

@@ -1292,8 +1292,8 @@ def run_frontend_preflight(
     if engine_override is not None:
         command += ['--uncertified-engine-override', json.dumps(engine_override, sort_keys=True)]
     try:
-        from serverctl_pkg.native_engine import _run, parse_engine_decision
-        output = _run(
+        from serverctl_pkg.native_engine import _run_streams, parse_engine_decision
+        output = _run_streams(
             command,
             cwd=Path(project_path),
             environment=child_environment,
@@ -1311,7 +1311,8 @@ def run_frontend_preflight(
     except OSError as exc:
         return False, f'frontend preflight could not start: {exc}'
     if engine_decision is not None:
-        engine_decision.update(parse_engine_decision(output) or {})
+        # The decision travels with progress on the preparation child's stderr.
+        engine_decision.update(parse_engine_decision(output.stderr) or {})
     elapsed = time.monotonic() - preflight_started
     # A successful native preparation replaces the project's managed pin.
     # Refresh inherited copies only when they still equal the old project

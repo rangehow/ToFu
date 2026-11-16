@@ -84,8 +84,8 @@ def runtime(base_runtime, monkeypatch):
     monkeypatch.setattr(workers, 'require_isolated_worker_root', lambda project, **_: None)
     # Waits read the Coordinator's real project mailbox through the record store.
     from lib.storage import service as storage_service
-    from tests.swarm.test_retained_agents import RecordClient
-    records, conversation_storage = RecordClient(), storage_service._runtime.client()
+    from tests.project_mod.test_project_message_history import LockedRecordClient
+    records, conversation_storage = LockedRecordClient(), storage_service._runtime.client()
     class Storage:
         def query(self, operation, payload):
             return records.query(operation, payload)
@@ -2537,6 +2537,16 @@ def test_poll_without_ids_lists_the_requests_running_workers(runtime):
     assert [row['assignment_id'] for row in listed['workers']] == [running['assignment_id']], listed
     assert 'get_project_workers' in listed['instruction']
     assert 'error' in r.call('poll', ids=[running['assignment_id']], mode='first')
+
+
+def test_poll_without_ids_finds_a_running_worker_past_the_first_page(runtime):
+    r = runtime
+    workers = [r.call('delegate_project_work', **{**r.args, 'idempotency_key': f'part-{i}'}) for i in range(17)]
+    for worker in workers[:16]:
+        r.attempts[r.c.repo.read(worker['assignment_id'])['execution']['attemptId']]['status'] = 'completed'
+    listed = r.call('poll')
+    assert [row['assignment_id'] for row in listed['workers']] == [workers[16]['assignment_id']], listed
+    assert listed['instruction'].startswith("This request's Workers that are running")
 
 
 def test_a_handle_that_is_no_worker_of_this_coordinator_is_named_as_such(runtime):

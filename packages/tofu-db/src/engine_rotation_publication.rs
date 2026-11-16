@@ -16,6 +16,8 @@ pub(crate) struct PreparedRotationPublication {
     catchup: Option<ControlState>,
     next: ControlState,
     outcome: RotationSegmentOutcome,
+    /// The pair a publication abandoned before any CONTROL write re-parks.
+    snapshot: Option<Box<PreparedRotationCheckpoint>>,
     blocks: Arc<BlockStore>,
     control: Arc<Mutex<ControlFile>>,
     wal_cover: Option<crate::wal::PublicationWalCover>,
@@ -61,9 +63,11 @@ impl Engine {
                     "checkpoint lost its sealed WAL ownership",
                 ));
             }
-            let mut outcome = outcome?;
-            let mut segments = snapshot.history_manifest_segments;
-            segments.append(&mut outcome.new_references);
+            let outcome = outcome?;
+            // Copies, not moves: a publication abandoned at its WAL cover
+            // re-parks this exact pair for its retry.
+            let mut segments = snapshot.history_manifest_segments.clone();
+            segments.extend(outcome.new_references.iter().cloned());
             let mut manifest = HistoryManifest {
                 manifest_page_ids: Vec::new(),
                 checkpoint_sequence: sealed.terminal_sequence,
@@ -97,7 +101,9 @@ impl Engine {
             };
             // Cover the captured logical state before publishing CONTROL.
             // This includes Strict's in-flight group-barrier acknowledgements.
-            let wal_cover = self.wal.publication_cover(Arc::clone(&self.vfs))?;
+            let wal_cover = self
+                .wal
+                .publication_cover(Arc::clone(&self.vfs), "rotation")?;
             let prepared = PreparedRotationPublication {
                 manifest,
                 manifest_pages,
@@ -105,6 +111,7 @@ impl Engine {
                 catchup,
                 next,
                 outcome,
+                snapshot: Some(snapshot),
                 blocks: Arc::clone(&self.blocks),
                 control: Arc::clone(&self.control),
                 wal_cover,
@@ -129,6 +136,19 @@ impl Engine {
         outcome: io::Result<()>,
     ) -> io::Result<u64> {
         self.async_publication_in_flight = false;
+        let outcome = match (outcome, prepared.snapshot.take()) {
+            // Abandoned before any CONTROL write (its WAL cover missed the
+            // barrier deadline): nothing landed and CONTROL still names the
+            // sealed predecessor. The encoded pair parks like a lane
+            // deferral, keeping its lane, GC window and read pins, and the
+            // driver publishes it again without re-encoding.
+            (Err(error), Some(snapshot)) if abandoned_uncovered(&error) => {
+                prepared.completed = true;
+                self.deferred_rotation = Some((snapshot, std::mem::take(&mut prepared.outcome)));
+                return Err(error);
+            }
+            (outcome, _) => outcome,
+        };
         let result = (|| {
             outcome?;
             let advanced = self.state.durable_sequence != prepared.next.durable_sequence

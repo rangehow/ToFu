@@ -331,6 +331,10 @@ static PyObject *crc32c_native(PyObject *self, PyObject *args) {
     Py_ssize_t n = view.len;
     Py_ssize_t i = 0;
     crc ^= 0xFFFFFFFFu;
+    /* The buffer export pins the bytes. A spilled body is an mmapped file
+       whose pages can fault in from disk; holding the GIL here froze every
+       thread of the API host. */
+    Py_BEGIN_ALLOW_THREADS
     while (i + 8 <= n) {
         uint64_t word;
         memcpy(&word, p + i, 8);
@@ -349,6 +353,7 @@ static PyObject *crc32c_native(PyObject *self, PyObject *args) {
         crc = (crc >> 8) ^ crc32c_table[0][(crc ^ p[i]) & 0xFF];
         i++;
     }
+    Py_END_ALLOW_THREADS
     PyBuffer_Release(&view);
     return PyLong_FromUnsignedLong(crc ^ 0xFFFFFFFFu);
 }

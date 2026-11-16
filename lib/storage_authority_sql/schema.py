@@ -404,10 +404,6 @@ _TABLES = (
     )
     """,
     """
-    CREATE INDEX IF NOT EXISTS idx_storage_conversation_turns_order
-    ON storage_conversation_turns(conversation_id, lane_id, ordinal)
-    """,
-    """
     CREATE INDEX IF NOT EXISTS idx_storage_conversation_turns_owner_order
     ON storage_conversation_turns(conversation_id, user_id, lane_id, ordinal)
     """,
@@ -1045,14 +1041,6 @@ _TABLES = (
     ON storage_knowledge_documents(user_id, created_at DESC, id)
     """,
     """
-    CREATE INDEX IF NOT EXISTS idx_storage_knowledge_chunks_document
-    ON storage_knowledge_chunks(user_id, document_id, ordinal)
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS idx_storage_knowledge_assets_document
-    ON storage_knowledge_assets(user_id, document_id, ordinal)
-    """,
-    """
     CREATE INDEX IF NOT EXISTS idx_storage_knowledge_assets_enrichment
     ON storage_knowledge_assets(user_id, enrichment_status, updated_at, id)
     """,
@@ -1231,10 +1219,6 @@ _TABLES = (
     ON storage_plugin_rows(namespace, table_name, updated_at_ms)
     """,
     """
-    CREATE INDEX IF NOT EXISTS storage_events_task_idx
-    ON storage_events(task_id, sequence)
-    """,
-    """
     CREATE INDEX IF NOT EXISTS storage_rate_limit_bucket_idx
     ON storage_rate_limit_events(endpoint, client_key, occurred_at_ms)
     """,
@@ -1312,10 +1296,6 @@ _TABLES = (
     """
     CREATE INDEX IF NOT EXISTS idx_tool_result_artifact_expiry
     ON tool_result_artifacts(expires_at_ms, user_id)
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS idx_tenant_users_email
-    ON tenant_users(email)
     """,
     """
     CREATE INDEX IF NOT EXISTS idx_tenant_users_role
@@ -2389,9 +2369,22 @@ TASK_EVENT_RETENTION_INDEX_NAMES = frozenset(
     spec[0] for spec in TASK_EVENT_RETENTION_SPECS.values())
 LEGACY_TASK_EVENT_RETENTION_INDEX_NAME = 'idx_storage_events_retention'
 LEGACY_TASK_EVENT_RETENTION_TYPE_LIMIT = 64
+# Each duplicate below indexed exactly the key of its table's PRIMARY KEY or
+# UNIQUE constraint, so every insert wrote the same key into two b-trees
+# (storage_events_task_idx: 4.8% of the authority's bytes on the fixed
+# STORAGE-PRESSURE-COMPARE-1 task). Fresh authorities never create them;
+# established ones keep writing them until the offline index transition.
+DUPLICATE_KEY_INDEX_NAMES = frozenset({
+    'storage_events_task_idx',
+    'idx_storage_conversation_turns_order',
+    'idx_tenant_users_email',
+    'idx_storage_knowledge_chunks_document',
+    'idx_storage_knowledge_assets_document',
+})
 OBSOLETE_DEFERRED_INDEX_NAMES = frozenset({
     LEGACY_TASK_EVENT_RETENTION_INDEX_NAME,
     'idx_storage_events_retention_v2',
+    *DUPLICATE_KEY_INDEX_NAMES,
 })
 
 

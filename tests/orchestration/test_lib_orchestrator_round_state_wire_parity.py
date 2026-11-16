@@ -51,7 +51,6 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 _FIELDS = {
     'model', 'preset', 'thinking_enabled',
     'exit_reason', 'abort_phase', 'consecutive_tool_timeouts',
-    'last_checkpoint_ts',
     'assistant_msg', 'last_finish_reason', 'last_usage',
     'last_stream_result',
     'accumulated_usage', 'api_rounds',
@@ -125,7 +124,6 @@ def test_round_state_defaults_match_pre_slice_initializers():
     assert rs.exit_reason == 'running'
     assert rs.abort_phase is None
     assert rs.consecutive_tool_timeouts == 0
-    assert rs.last_checkpoint_ts == 0.0
     assert rs.assistant_msg is None
     assert rs.last_finish_reason is None
     assert rs.last_usage is None

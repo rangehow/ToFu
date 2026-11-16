@@ -27,6 +27,10 @@ from lib.conversation_sync.turn_images import (
     turn_image_owner_scope,
 )
 from lib.conversation_sync.validation import decode
+from lib.task_replay.task_event_contract import (
+    ATTEMPT_EVIDENCE_REFERENCE_KEY,
+    attempt_evidence_reference,
+)
 from lib.turn_image_transport import MAX_TURN_IMAGES
 from lib.turn_projection_segments import (
     change_without_provider_replay,
@@ -51,16 +55,45 @@ def _without_diagnostic_body(change: Any) -> Any:
     Its multi-megabyte request snapshots must not head-of-line block ordinary
     progress/terminal replay. The repository's full event remains untouched.
     """
-    if not isinstance(change, dict) or change.get('type') != 'attempt.event':
+    body = _attempt_body(change)
+    if body is None or ('event' not in body and ATTEMPT_EVIDENCE_REFERENCE_KEY not in body):
         return change
+    return _with_attempt_body(change, {
+        key: value for key, value in body.items()
+        if key not in ('event', ATTEMPT_EVIDENCE_REFERENCE_KEY)})
+
+
+def _attempt_body(change: Any) -> dict[str, Any] | None:
+    if not isinstance(change, dict) or change.get('type') != 'attempt.event':
+        return None
     payload = change.get('payload')
     attempt = payload.get('event') if isinstance(payload, dict) else None
     body = attempt.get('payload') if isinstance(attempt, dict) else None
-    if not isinstance(body, dict) or 'event' not in body:
+    return body if isinstance(body, dict) else None
+
+
+def _with_attempt_body(change: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
+    """Copy-on-write: the repository's stored change is never mutated."""
+    payload = change['payload']
+    return {**change, 'payload': {**payload, 'event': {**payload['event'], 'payload': body}}}
+
+
+def _with_referenced_evidence(change: Any, repository: ConversationSyncRepository) -> Any:
+    """Resolve the evidence an attempt event names to its task-event row.
+
+    The row is the frame's single durable copy (docs/STORAGE_EVENT_REPLAY.md,
+    "Diagnostic evidence is stored once"); a row retention already removed
+    leaves the body absent, as the ``none`` representation does.
+    """
+    body = _attempt_body(change)
+    reference = attempt_evidence_reference(body)
+    if reference is None:
         return change
-    return {**change, 'payload': {**payload, 'event': {
-        **attempt, 'payload': {key: value for key, value in body.items() if key != 'event'},
-    }}}
+    resolved = {key: value for key, value in body.items() if key != ATTEMPT_EVIDENCE_REFERENCE_KEY}
+    frame = repository.task_event(*reference)
+    if frame is not None:
+        resolved['event'] = frame
+    return _with_attempt_body(change, resolved)
 
 
 def _require_provider_replay_payload(value: str, segment_payload: str | None = None) -> None:
@@ -623,6 +656,8 @@ class ConversationSyncService:
         ]
         if diagnostic_payload == "none":
             events = [_without_diagnostic_body(event) for event in events]
+        else:
+            events = [_with_referenced_evidence(event, self._repository) for event in events]
         events = [public_change_with_stable_segments(event) for event in events]
         if provider_replay_payload == "none":
             events = [change_without_provider_replay(event) for event in events]

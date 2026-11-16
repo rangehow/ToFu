@@ -123,11 +123,24 @@ Turn retirement; verify selected-store crash/Continue/query parity and recovery 
 
 - `src/wal_publication.rs` shares captured-prefix coverage across rotation,
   history pruning and pack adoption before off-authority CONTROL publication.
-  A cover still unsynchronized at the barrier deadline returns
-  `wal::BarrierDeadline`; pack adoption abandons on it before publication
-  instead of latching, while rotation and history compaction still latch
+  A cover still unsynchronized at the barrier deadline abandons its
+  publication itself (`wal::AbandonedUncovered`, recognized by
+  `wal::abandoned_uncovered`); all three publishers abandon before any
+  CONTROL write instead of latching, and an abandoned rotation re-parks its
+  encoded pair for the driver's retry. Synchronous `Engine::publish_control`
+  callers declare `ControlStaging`: unstaged ones (CONTROL slot
+  stabilization, the WAL generation handover) abandon a missed deadline,
+  staged ones latch; publication finishes latch through
+  `Engine::latch_unless_abandoned` only
   (`docs/STORAGE_OPERATIONS.md#a-slow-wal-sync-during-a-background-publication`).
-  Verify the two `a_pack_adoption_whose_wal_cover_*` specifications.
+  `wal::ExpiredPublicationCovers` expires the covers prepared, and the
+  pre-publication barrier waits made, on its thread. Verify the
+  `a_pack_adoption_whose_wal_cover_*`, `a_history_compaction_whose_wal_cover_*`,
+  `a_rotation_publication_whose_wal_cover_*`,
+  `a_control_slot_stabilization_whose_wal_barrier_*`,
+  `a_rotation_handover_whose_wal_barrier_*` and
+  `only_an_unstaged_control_publication_abandons_a_missed_barrier_deadline`
+  specifications.
 
 - `src/wal_write_buffer.rs` owns queued/inflight physical frames for the existing
   WAL barrier worker. The actual authority VFS must opt in; encryption stays on
@@ -236,8 +249,9 @@ Turn retirement; verify selected-store crash/Continue/query parity and recovery 
   dropout still wakes every waiter and counts `dropped_terminal_records`
   (lock-free, folded into the metrics snapshot). Round errors carrying
   rotation backpressure or `WouldBlock` publication conflicts, and a pack
-  adoption abandoned before publication (`engine::abandoned_uncovered`),
-  classify as conflict deferrals, never terminal worker failures — a terminal record
+  adoption or history slice abandoned before publication
+  (`wal::abandoned_uncovered`), classify as conflict deferrals, never
+  terminal worker failures — a terminal record
   reaches the listener health gate and recycles the daemon on a signal
   that is retryable by design. A space or quota refusal defers too while
   the authority is usable; a latch error (`engine::requires_reopen`) stays
@@ -384,9 +398,11 @@ Turn retirement; verify selected-store crash/Continue/query parity and recovery 
   live in `engine_rotation_publication_tests.rs`; see `docs/TOFUDB_PUBLICATION_LATENCY.md`.
   The graceful stop runs this pipeline synchronously
   (`Engine::retire_wal_window_for_stop`), never `Engine::checkpoint`'s
-  materialization, and the adoption driver's stop abandons its publication
+  materialization, merges no overlay (unmerged deltas retire into history and
+  replay at open), and the adoption driver's stop abandons its publication
   before CONTROL (`PreparedPackAdoption::cancel_on`); verify
-  `daemon::tests::a_graceful_stop_retires_the_wal_window_into_indexed_history_without_materializing_staged_blocks`
+  `daemon::tests::a_graceful_stop_retires_the_wal_window_into_indexed_history_without_materializing_staged_blocks`,
+  `daemon::tests::a_graceful_stop_leaves_the_unmerged_overlay_to_replay_instead_of_merging_it`
   and `stopping_the_adoption_driver_abandons_a_full_catalog_merge_before_publication`
   (`docs/NATIVE_STORAGE_LIFECYCLE.md`).
 - `src/engine.rs` composes those primitives, owns the process lease, and visits

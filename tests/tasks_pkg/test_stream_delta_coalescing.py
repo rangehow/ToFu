@@ -262,8 +262,6 @@ def test_stream_flushes_text_before_tool_boundary_and_provider_return(monkeypatc
         stream_module, 'append_event',
         lambda _task, event: emitted.append(event),
     )
-    monkeypatch.setattr(
-        stream_module, 'checkpoint_task_partial', lambda _task: None)
 
     def _dispatch(_body, *, on_content, on_thinking,
                   on_tool_call_ready, on_before_tool_call_ready, **_kwargs):
@@ -330,8 +328,6 @@ def test_final_delta_emit_failure_closes_request_span_and_sink(monkeypatch):
 
     monkeypatch.setattr(stream_module, 'TaskTextDeltaCoalescer', _coalescer)
     monkeypatch.setattr(stream_module, 'append_event', _append_event)
-    monkeypatch.setattr(
-        stream_module, 'checkpoint_task_partial', lambda _task: None)
 
     def _dispatch(_body, *, on_content, **_kwargs):
         on_content('A')

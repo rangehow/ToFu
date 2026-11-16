@@ -397,7 +397,7 @@ fn crashed_store_with_a_damaged_index(
         .commit_references(b"window identifier-only", &[BlockId::for_payload(named)])
         .unwrap();
     if confirmed {
-        engine.flush_dirty_control().unwrap();
+        engine.flush_dirty_control(ControlStaging::Staged).unwrap();
     }
     let durable = engine.state.durable_sequence;
     let control_durable = ControlFile::open_with_vfs(Path::new("/data"), vfs.clone())

@@ -180,7 +180,7 @@ def test_uncertified_head_is_refused_when_the_deployed_engine_cannot_serve_it(pr
 
 
 def test_refusal_reaches_the_manager_as_a_typed_decision(project, monkeypatch):
-    """The decision line survives the preflight child's combined failure output."""
+    """The decision line survives the preflight child's failure report."""
     from serverctl_pkg import native_engine
     (project / 'serverctl.py').write_text('# preflight command\n')
     refusal = {'decision': 'refused', 'message': 'engine at HEAD is uncertified: abc; refused'}
@@ -189,12 +189,26 @@ def test_refusal_reaches_the_manager_as_a_typed_decision(project, monkeypatch):
         raise native_engine.EngineCommandFailedError(
             'Worker artifact preparation failed (exit 1): progress noise\n'
             + native_engine.DECISION_PREFIX + json.dumps(refusal) + '\nFrontend preflight failed: ...')
-    monkeypatch.setattr(native_engine, '_run', failing_child)
+    monkeypatch.setattr(native_engine, '_run_streams', failing_child)
     decision = {}
     ready, _error = existing.REAL_RUN_FRONTEND_PREFLIGHT(
         str(project), sys.executable, {}, 'test', parts='storage-engine', engine_decision=decision)
     assert ready is False
     assert decision == refusal
+
+
+def test_a_kept_decision_reaches_the_manager_from_the_preflight_stderr(project):
+    """A passing preflight reports its decision with progress on stderr, beside other notices."""
+    kept = {'decision': 'kept', 'message': 'engine at HEAD is uncertified: abc; kept def'}
+    (project / 'serverctl.py').write_text(
+        'import sys\n'
+        "print('/bin/sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)', file=sys.stderr)\n"
+        f'print({engines.DECISION_PREFIX + json.dumps(kept)!r}, file=sys.stderr)\n'
+        "print('Frontend artifact is ready.')\n")
+    decision = {}
+    assert existing.REAL_RUN_FRONTEND_PREFLIGHT(
+        str(project), sys.executable, {}, 'test', parts='storage-engine', engine_decision=decision) == (True, '')
+    assert decision == kept
 
 
 def test_refused_engine_refuses_the_restart_and_never_retains_storage(project, monkeypatch):
@@ -534,6 +548,30 @@ def test_storage_contract_identity_covers_application_and_compiled_contracts(pro
     for name in ('storage_v2.json', 'native_storage_connection_v2.json', 'tofudb_ir_v1.json',
                  'storage_operations_v1.json'):
         (project / 'contracts' / name).write_text('{"changed": true}')
+        assert engines.storage_contract_sha256(project) != before
+        before = engines.storage_contract_sha256(project)
+
+
+def test_storage_contract_identity_covers_engine_sources_generated_from_shared_contracts(project):
+    """A contract the engine's generators read (Transaction IR, search, sync
+    vocabulary, ...) is shared through the sources generated from it: what
+    the engine compiles from it is part of the identity, its prose is not."""
+    shared = project / 'contracts/shared_v1.json'
+    shared.write_text('{"bound": 1, "description": "before"}')
+    generated = project / 'packages/tofu-db/src/generated_shared.rs'
+    generated.write_text('pub const BOUND: u64 = 1;\n')
+    nested = project / 'packages/tofu-db/src/turn/tokens.generated.rs'
+    nested.parent.mkdir()
+    nested.write_text('pub const TOKENS: &[&str] = &["a"];\n')
+    before = engines.storage_contract_sha256(project)
+
+    shared.write_text('{"bound": 1, "description": "prose only"}')
+    (project / 'packages/tofu-db/src/handwritten.rs').write_text('fn engine_only() {}\n')
+    assert engines.storage_contract_sha256(project) == before
+
+    for source, changed in ((generated, 'pub const BOUND: u64 = 2;\n'),
+                            (nested, 'pub const TOKENS: &[&str] = &["a", "b"];\n')):
+        source.write_text(changed)
         assert engines.storage_contract_sha256(project) != before
         before = engines.storage_contract_sha256(project)
 

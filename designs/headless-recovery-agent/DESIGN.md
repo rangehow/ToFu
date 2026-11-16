@@ -61,7 +61,7 @@ Problem: Tofu's provider credentials are encrypted secrets in the model-routing 
 TofuDB, and plaintext crosses only one outbound call.
 
 Decision:
-- The project's own example-corp gateway credential (P13), resolved through the audited loopback reveal
+- The project's own sankuai gateway credential (P13), resolved through the audited loopback reveal
   endpoint (`/api/v4/model-routing/credentials/<id>/secret/reveal`) while Tofu is up: at watcher start
   and after a verified recovery, never periodically.
 - It is held only in the watcher's memory. The repair session sees a key-less loopback URL through the

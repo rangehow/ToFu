@@ -1,6 +1,7 @@
 """Execution preparation and launch use one admitted interpreter generation."""
 import json
 from pathlib import Path
+import site
 import sys
 
 import pytest
@@ -56,6 +57,14 @@ def test_real_preparation_records_the_installed_interpreter_not_the_manager(tmp_
     subprocess.run([sys.executable, '-m', 'venv', '--without-pip', '--system-site-packages',
                     str(tmp_path / 'environment')], check=True, capture_output=True, timeout=120)
     target = str(tmp_path / 'environment/bin/python')
+    # An installed environment carries the application's dependencies. A venv nested
+    # in a venv sees only the base interpreter's packages (--system-site-packages),
+    # so expose this interpreter's site-packages too.
+    purelib = subprocess.run(
+        [target, '-c', 'import sysconfig; print(sysconfig.get_path("purelib"))'],
+        check=True, capture_output=True, text=True, timeout=60).stdout.strip()
+    Path(purelib, 'tofu_test_dependencies.pth').write_text(
+        '\n'.join(site.getsitepackages()) + '\n')
     (tmp_path / '.tofu_env.json').write_text(json.dumps({'python': target}))
     # The disposable project owns source identity; import the preparation implementation
     # from this lane, independently of the ambient shared-checkout PYTHONPATH.

@@ -1513,131 +1513,64 @@ def _gate_render(ctx: dict, artifact: dict) -> list:
 # ── Stage: layout_qa ──────────────────────────────────────
 
 def _run_layout_qa(ctx: dict) -> dict:
-    """Measure actual glyph line boxes and minimally repair bad pages.
+    """Measure actual glyph line boxes and repair pages until they fit.
 
-    Unlike the VLM pass this is deterministic and cheap: Chromium reports
-    the same rectangles used by preview rendering. Candidate repairs are
-    accepted only when they reduce that page's finding count; otherwise the
-    exact original YAML is restored.
+    Chromium reports the same rectangles used by preview rendering. Each
+    round first re-lays out measured findings exactly (zero LLM), then asks
+    the page author to tighten what geometry cannot fix. A page change is
+    kept only when it lowers that page's finding count, otherwise its exact
+    previous YAML is restored; so every kept round lowers the deck total and
+    the loop ends at zero findings or when a round keeps nothing.
     """
     render = ctx['artifacts'].get('render') or {}
     if not (render.get('previews') or []):
         return {'ran': False, 'ok': False,
                 'reason': 'no rendered previews; layout QA skipped',
                 'findings': [], 'repaired': 0}
-    from lib.slides.layout_qa import findings_text, inspect_deck_layout
+    from lib.slides.layout_qa import inspect_deck_layout
     from lib.slides.pptd import parse_deck
     manifest = os.path.join(ctx['deck_dir'], 'deck.pptd')
     deck = parse_deck(manifest)
-    initial = inspect_deck_layout(deck)
-    if not initial.get('ran') or initial.get('ok'):
-        return {**initial, 'initialFindings': len(initial.get('findings') or []),
+    measured = inspect_deck_layout(deck)
+    if not measured.get('ran') or measured.get('ok'):
+        return {**measured,
+                'initialFindings': len(measured.get('findings') or []),
                 'repaired': 0}
-    initial_finding_count = len(initial.get('findings') or [])
-    # Growing one box can expose the next deficit on the same page; repeat
-    # until a round keeps nothing. Each kept round strictly lowers that
-    # page's finding count, so this terminates.
-    grown: set = set()
+    initial_finding_count = len(measured.get('findings') or [])
+    repaired: set = set()
     while True:
-        kept = _grow_short_text_boxes(ctx, deck, initial)
+        kept = _relayout_pages(ctx, deck, measured)
+        if not kept:
+            kept = _tighten_pages(ctx, deck, measured)
         if not kept:
             break
-        grown |= kept
+        repaired |= kept
         deck = parse_deck(manifest)
-        initial = inspect_deck_layout(deck)
-        if not initial.get('ran'):
-            raise RuntimeError('layout QA could not remeasure grown text boxes')
-        if initial.get('ok'):
+        remeasured = inspect_deck_layout(deck)
+        if not remeasured.get('ran'):
+            raise RuntimeError('layout QA could not remeasure repaired pages')
+        measured = remeasured
+        if measured.get('ok'):
             break
-    if grown:
-        if initial.get('ok'):
-            _refresh_previews(ctx, deck, grown)
-            return {**initial, 'initialFindings': initial_finding_count,
-                    'repaired': len(grown),
-                    'repairedPages': [i + 1 for i in sorted(grown)]}
-
-    from lib.design_sys.themes import get_theme
-    from lib.json_store import write_text_atomic
-    from lib.slides.author import author_page
-    outline = _effective_outline(ctx['artifacts'])
-    briefs = _author_briefs(ctx, outline)
-    design = ctx['artifacts']['design']
-    author_artifact = ctx['artifacts'].get('author') or {}
-    assets_by_page = author_artifact.get('assets_by_page') or {}
-    theme = get_theme(design['theme_id'])
-    by_page: dict = {}
-    for finding in initial.get('findings') or []:
-        by_page.setdefault(int(finding['page']) - 1, []).append(finding)
-
-    originals = {}
-    candidates = set()
-    abort_check = _context_abort_check(ctx)
-    max_429_attempts = ctx.get('max_429_attempts')
-    for index, findings in sorted(by_page.items()):
-        _raise_if_aborted(ctx, 'layout QA')
-        page_path = os.path.join(ctx['deck_dir'], deck.pages[index].path)
-        with open(page_path, encoding='utf-8') as fh:
-            seed = fh.read()
-        originals[index] = seed
-        fix = author_page(
-            deck, briefs[index], index, len(deck.pages),
-            theme=theme,
-            image_urls=(list(assets_by_page.get(index, []) or
-                              assets_by_page.get(str(index), []))
-                        + list(author_artifact.get('input_images') or [])),
-            lang=ctx.get('lang', 'zh'), model=ctx.get('model') or None,
-            max_rounds=2, seed_yaml=seed,
-            extra_findings=[findings_text(findings)],
-            abort_check=abort_check,
-            max_429_attempts=max_429_attempts,
-            owner_user_id=ctx.get('owner_user_id'),
-            provider_pin_id=ctx.get('provider_pin_id') or '')
-        _raise_if_aborted(ctx, 'layout QA')
-        if fix.get('mode') != 'authored':
-            continue
-        write_text_atomic(page_path, fix['yaml'])
-        candidates.add(index)
-
-    if not candidates:
-        return {**initial, 'initialFindings': initial_finding_count,
-                'repaired': len(grown),
-                'repairedPages': [i + 1 for i in sorted(grown)]}
-
-    deck = parse_deck(manifest)
-    candidate_result = inspect_deck_layout(deck)
-    if not candidate_result.get('ran'):
-        for index in candidates:
-            write_text_atomic(os.path.join(ctx['deck_dir'], deck.pages[index].path),
-                              originals[index])
-        return {**initial, 'reason': candidate_result.get('reason') or
-                'repair could not be remeasured',
-                'initialFindings': initial_finding_count,
-                'repaired': len(grown),
-                'repairedPages': [i + 1 for i in sorted(grown)]}
-
-    initial_counts = {i: len(findings) for i, findings in by_page.items()}
-    final_counts = {p['index']: len(p.get('findings') or [])
-                    for p in candidate_result.get('pages') or []}
-    accepted = set()
-    for index in candidates:
-        if final_counts.get(index, 10**6) < initial_counts[index]:
-            accepted.add(index)
-        else:
-            page_path = os.path.join(ctx['deck_dir'], deck.pages[index].path)
-            write_text_atomic(page_path, originals[index])
-    if accepted != candidates:
-        deck = parse_deck(manifest)
-        candidate_result = inspect_deck_layout(deck)
-
-    accepted |= set(grown)
-    _refresh_previews(ctx, deck, accepted)
-    remaining = candidate_result.get('findings') or []
+    _refresh_previews(ctx, deck, repaired)
     logger.info('[Slides:layout-qa] %d initial, %d repaired page(s), %d remain',
-                initial_finding_count, len(accepted), len(remaining))
-    return {**candidate_result,
-            'initialFindings': initial_finding_count,
-            'repaired': len(accepted),
-            'repairedPages': [i + 1 for i in sorted(accepted)]}
+                initial_finding_count, len(repaired),
+                len(measured.get('findings') or []))
+    return {**measured, 'initialFindings': initial_finding_count,
+            'repaired': len(repaired),
+            'repairedPages': [i + 1 for i in sorted(repaired)]}
+
+
+def _findings_by_page(measured: dict) -> dict:
+    by_page: dict = {}
+    for finding in measured.get('findings') or []:
+        by_page.setdefault(int(finding['page']) - 1, []).append(finding)
+    return by_page
+
+
+def _page_counts(result: dict) -> dict:
+    return {page['index']: len(page.get('findings') or [])
+            for page in result.get('pages') or []}
 
 
 def _refresh_previews(ctx: dict, deck, indexes) -> None:
@@ -1656,57 +1589,151 @@ def _refresh_previews(ctx: dict, deck, indexes) -> None:
                            '%s', index + 1, exc)
 
 
-def _grow_short_text_boxes(ctx: dict, deck, measured: dict) -> set:
-    """Apply the zero-LLM height repair; keep a page only if it improves.
+def _relayout_pages(ctx: dict, deck, measured: dict) -> set:
+    """Apply the exact zero-LLM re-layout; keep a page only if it improves.
 
-    Small vertical overflows (a box a few pixels shorter than its line box,
-    or missing PowerPoint's CJK metric reserve) used to go through an LLM
-    rewrite that often left them in place, and the zero-finding gate then
-    refused the whole deck. Growing the measured box is exact.
+    Box fits are exact; a collision can be cleared by moving either text, so
+    both variants are measured and the page keeps the one with fewer
+    findings.
     """
     import yaml
     from lib.json_store import write_text_atomic
-    from lib.slides.layout_qa import (inspect_deck_layout,
-                                      vertical_growth_repairs)
+    from lib.slides.layout_qa import (apply_relayout, inspect_deck_layout,
+                                      relayout_repairs)
     from lib.slides.pptd import parse_deck
-    by_page: dict = {}
-    for finding in measured.get('findings') or []:
-        by_page.setdefault(int(finding['page']) - 1, []).append(finding)
-    originals: dict = {}
-    for index, findings in by_page.items():
+    by_page = _findings_by_page(measured)
+    manifest = os.path.join(ctx['deck_dir'], 'deck.pptd')
+    paths = {index: os.path.join(ctx['deck_dir'], deck.pages[index].path)
+             for index in by_page}
+    originals = {}
+    for index, path in paths.items():
+        with open(path, encoding='utf-8') as fh:
+            originals[index] = fh.read()
+    best = {index: (len(findings), originals[index])
+            for index, findings in by_page.items()}
+    for move in ('lower', 'upper'):
+        _raise_if_aborted(ctx, 'layout QA')
+        variants = {}
+        for index, findings in by_page.items():
+            data = yaml.safe_load(originals[index])
+            if not isinstance(data, dict):
+                continue
+            repairs = relayout_repairs(data, findings, page_height=deck.height,
+                                       move=move)
+            if not repairs:
+                continue
+            apply_relayout(data, repairs)
+            text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+            if text != best[index][1]:
+                variants[index] = text
+                write_text_atomic(paths[index], text)
+        if not variants:
+            continue
+        try:
+            result = inspect_deck_layout(
+                parse_deck(manifest), page_indexes=tuple(sorted(variants)),
+                abort_check=_context_abort_check(ctx))
+        finally:
+            for index in variants:
+                write_text_atomic(paths[index], originals[index])
+        if not result.get('ran'):
+            continue
+        counts = _page_counts(result)
+        for index, text in variants.items():
+            if counts.get(index, 10**6) < best[index][0]:
+                best[index] = (counts[index], text)
+    kept = set()
+    for index, (_count, text) in best.items():
+        if text != originals[index]:
+            write_text_atomic(paths[index], text)
+            kept.add(index)
+    logger.info('[Slides:layout-qa] re-laid out %d of %d page(s)',
+                len(kept), len(by_page))
+    return kept
+
+
+def _tighten_pages(ctx: dict, deck, measured: dict) -> set:
+    """Ask the page author to fix what geometry cannot, from measurements.
+
+    The author sees each finding with its measured size and the copy length
+    that fits, may move boxes into empty space or cut copy, and must keep
+    the title claim's numbers (``author_page`` validates that). Each round's
+    candidate gets the exact re-layout and is measured; what remains is its
+    next round's feedback. A page is kept only if its re-measured finding
+    count drops.
+    """
+    import yaml
+    from lib.design_sys.themes import get_theme
+    from lib.json_store import write_text_atomic
+    from lib.slides.author import author_page
+    from lib.slides.layout_qa import findings_text, inspect_deck_layout
+    from lib.slides.pptd import parse_deck
+    outline = _effective_outline(ctx['artifacts'])
+    briefs = _author_briefs(ctx, outline)
+    design = ctx['artifacts']['design']
+    author_artifact = ctx['artifacts'].get('author') or {}
+    assets_by_page = author_artifact.get('assets_by_page') or {}
+    theme = get_theme(design['theme_id'])
+    by_page = _findings_by_page(measured)
+    originals = {}
+    candidates = set()
+    abort_check = _context_abort_check(ctx)
+    for index, findings in sorted(by_page.items()):
+        _raise_if_aborted(ctx, 'layout QA')
         page_path = os.path.join(ctx['deck_dir'], deck.pages[index].path)
         with open(page_path, encoding='utf-8') as fh:
-            text = fh.read()
-        data = yaml.safe_load(text)
-        if not isinstance(data, dict):
+            seed = fh.read()
+        originals[index] = seed
+        try:
+            page_data = yaml.safe_load(seed)
+        except yaml.YAMLError:
+            page_data = None
+
+        def measure(text, index=index):
+            relaid, _trial, remaining = _relayout_page_text(
+                deck, index, text, abort_check=abort_check)
+            return ([findings_text(remaining, yaml.safe_load(relaid))]
+                    if remaining else [])
+
+        fix = author_page(
+            deck, briefs[index], index, len(deck.pages),
+            theme=theme,
+            image_urls=(list(assets_by_page.get(index, []) or
+                              assets_by_page.get(str(index), []))
+                        + list(author_artifact.get('input_images') or [])),
+            lang=ctx.get('lang', 'zh'), model=ctx.get('model') or None,
+            max_rounds=2, seed_yaml=seed,
+            extra_findings=[findings_text(
+                findings, page_data if isinstance(page_data, dict) else None)],
+            abort_check=abort_check,
+            max_429_attempts=ctx.get('max_429_attempts'),
+            owner_user_id=ctx.get('owner_user_id'),
+            provider_pin_id=ctx.get('provider_pin_id') or '',
+            layout_findings=measure)
+        _raise_if_aborted(ctx, 'layout QA')
+        if fix.get('mode') != 'authored':
             continue
-        repairs = vertical_growth_repairs(data, findings,
-                                          page_height=deck.height)
-        if not repairs:
-            continue
-        for element in data.get('elements') or []:
-            if isinstance(element, dict) and element.get('elementId') in repairs:
-                element['bounds'] = repairs[element['elementId']]
-        originals[index] = text
-        write_text_atomic(page_path, yaml.safe_dump(
-            data, allow_unicode=True, sort_keys=False))
-    if not originals:
+        relaid, _trial, _remaining = _relayout_page_text(
+            deck, index, fix['yaml'], abort_check=abort_check)
+        write_text_atomic(page_path, relaid)
+        candidates.add(index)
+    if not candidates:
         return set()
     manifest = os.path.join(ctx['deck_dir'], 'deck.pptd')
     result = inspect_deck_layout(parse_deck(manifest),
-                                 page_indexes=tuple(sorted(originals)),
-                                 abort_check=_context_abort_check(ctx))
-    after = {page['index']: len(page.get('findings') or [])
-             for page in result.get('pages') or []}
+                                 page_indexes=tuple(sorted(candidates)),
+                                 abort_check=abort_check)
+    counts = _page_counts(result) if result.get('ran') else {}
     kept = set()
-    for index, text in originals.items():
-        if result.get('ran') and after.get(index, 10**6) < len(by_page[index]):
+    for index in candidates:
+        if counts.get(index, 10**6) < len(by_page[index]):
             kept.add(index)
         else:
             write_text_atomic(os.path.join(ctx['deck_dir'],
-                                           deck.pages[index].path), text)
-    logger.info('[Slides:layout-qa] grew text boxes on %d of %d page(s)',
-                len(kept), len(originals))
+                                           deck.pages[index].path),
+                              originals[index])
+    logger.info('[Slides:layout-qa] author tightened %d of %d page(s)',
+                len(kept), len(candidates))
     return kept
 
 
@@ -1845,13 +1872,10 @@ def _run_visual_qa(ctx: dict) -> dict:
     fresh pixels must pass before the retained YAML/preview pair is changed.
     Missing reviewers degrade explicitly; known defects remain gate failures.
     """
-    from dataclasses import replace
-
     import lib.design_sys.visual_qa as vqa
     from lib.design_sys.themes import get_theme
     from lib.slides.author import author_page, _validate_page_text
-    from lib.slides.layout_qa import inspect_deck_layout
-    from lib.slides.pptd import parse_deck, parse_page_text
+    from lib.slides.pptd import parse_deck
     from lib.slides.render_png import render_page_png
     from lib.json_store import write_text_atomic
     from lib.design_sys.contact_sheet import build_contact_sheet
@@ -1966,12 +1990,12 @@ def _run_visual_qa(ctx: dict) -> dict:
                         or _validate_page_text(deck, deck.pages[index].path, yaml_text)):
                     rejected.append(index + 1)
                     continue
-                trial = replace(deck, pages=list(deck.pages))
-                trial.pages[index] = parse_page_text(yaml_text, path=deck.pages[index].path)
-                layout = inspect_deck_layout(trial, page_indexes=[index], abort_check=abort_check)
-                if not layout.get('ran') or not layout.get('ok') or layout.get('findings'):
+                fitted = _relaid_out_candidate(deck, index, yaml_text,
+                                               abort_check=abort_check)
+                if fitted is None:
                     rejected.append(index + 1)
                     continue
+                yaml_text, trial = fitted
                 trial_png = os.path.join(scratch, f'candidate-{index}.png')
                 try:
                     render_page_png(trial, index, trial_png, scale=2.0)
@@ -2037,6 +2061,62 @@ def _run_visual_qa(ctx: dict) -> dict:
             'coherenceReviewed': bool(initial_deck_review.get('ok')),
             'coherence_findings': len(deck_findings), 'coherence': deck_findings,
             'remaining': remaining}
+
+
+def _relayout_page_text(deck, index: int, yaml_text: str, *, abort_check):
+    """Exact zero-LLM re-layout of one page's YAML, to a fixed point.
+
+    Used on LLM-written candidates (copy tightening, visual repair), whose
+    new copy often needs a different box: the re-layout of the layout stage
+    is applied while it lowers the page's findings. Returns
+    ``(yaml_text, trial_deck, findings)``; ``findings`` is ``None`` when the
+    page could not be measured.
+    """
+    from dataclasses import replace
+
+    import yaml
+    from lib.slides.layout_qa import (apply_relayout, inspect_deck_layout,
+                                      relayout_repairs)
+    from lib.slides.pptd import parse_page_text
+
+    def measure(text):
+        trial = replace(deck, pages=list(deck.pages))
+        trial.pages[index] = parse_page_text(text, path=deck.pages[index].path)
+        layout = inspect_deck_layout(trial, page_indexes=[index],
+                                     abort_check=abort_check)
+        if not layout.get('ran'):
+            return trial, None
+        return trial, layout.get('findings') or []
+
+    trial, findings = measure(yaml_text)
+    while findings:
+        best = None
+        for move in ('lower', 'upper'):
+            data = yaml.safe_load(yaml_text)
+            repairs = relayout_repairs(data, findings, page_height=deck.height,
+                                       move=move)
+            if not repairs:
+                continue
+            apply_relayout(data, repairs)
+            text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+            variant, remaining = measure(text)
+            if remaining is not None and len(remaining) < len(findings) and (
+                    best is None or len(remaining) < len(best[2])):
+                best = (text, variant, remaining)
+        if best is None:
+            break
+        yaml_text, trial, findings = best
+    return yaml_text, trial, findings
+
+
+def _relaid_out_candidate(deck, index: int, yaml_text: str, *, abort_check):
+    """A visual-repair candidate that passes layout QA after exact re-layout,
+    as ``(yaml_text, trial_deck)``, or ``None``."""
+    yaml_text, trial, findings = _relayout_page_text(
+        deck, index, yaml_text, abort_check=abort_check)
+    if findings is None or findings:
+        return None
+    return yaml_text, trial
 
 
 def _gate_visual_qa(ctx: dict, artifact: dict) -> list:

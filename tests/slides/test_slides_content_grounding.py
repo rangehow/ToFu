@@ -2,7 +2,7 @@
 
 Supplied material becomes verbatim evidence units that reach page authors;
 visible numbers must come from the evidence; text below the projection
-legibility floor is rejected; short text boxes are grown, not rewritten.
+legibility floor is rejected. Layout repair lives in test_slides_layout_repair.py.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ import pytest
 import yaml
 
 from lib.slides import author, recipe
-from lib.slides.layout_qa import vertical_growth_repairs
 from lib.slides.material import evidence_numbers, material_cards
 from lib.slides.pptd import Deck
 
@@ -111,21 +110,6 @@ def test_legibility_floor_and_decorative_latin_labels():
          'content': {'fontSize': 16, 'text': 'RISK RADAR'}}]})
     assert any('英文' in f for f in author._validate_page_text(
         _deck(), 'pages/01.page', text))
-
-
-def test_vertical_growth_repair_grows_by_the_measured_deficit():
-    page = {'elements': [
-        {'elementId': 'title', 'elementType': 'text', 'bounds': [10, 100, 500, 60],
-         'content': {'align': ['left', 'middle'], 'text': 'x'}},
-        {'elementId': 'wide', 'elementType': 'text', 'bounds': [0, 0, 10, 10]}]}
-    findings = [
-        {'type': 'pptx_text_overflow_risk', 'elements': ['title'],
-         'clearance': 5.0, 'required': 12.5},
-        {'type': 'text_overflow', 'elements': ['wide'],
-         'overflow': {'right': 4.0}, 'required': 2.0}]
-    repairs = vertical_growth_repairs(page, findings, page_height=720)
-    # Middle-anchored: grows on both sides, so the reserve is needed twice.
-    assert repairs == {'title': [10.0, 92.0, 500.0, 76.0]}
 
 
 def test_overflow_is_measured_on_line_boxes_not_font_content_areas():

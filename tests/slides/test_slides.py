@@ -905,13 +905,13 @@ class TestRecipe:
                    'pages': [{'index': 0, 'findings': [finding]}]}
         clean = {'ran': True, 'ok': True, 'findings': [],
                  'pages': [{'index': 0, 'findings': []}]}
-        measurements = [initial, clean if improves else initial]
-        if not improves:
-            measurements.append(initial)  # remeasure after exact rollback
+        def measure(deck, **_kw):
+            # Only the improving candidate's taller title box measures clean.
+            moved = list(deck.pages[0].elements[0]['bounds'][:2]) == [72, 190]
+            return clean if improves and moved else initial
 
         import lib.slides.layout_qa as layout_qa
-        monkeypatch.setattr(layout_qa, 'inspect_deck_layout',
-                            lambda deck: measurements.pop(0))
+        monkeypatch.setattr(layout_qa, 'inspect_deck_layout', measure)
         import lib.slides.author as author
         candidate = original.replace('[72, 200, 1136, 120]',
                                      '[72, 190, 1136, 140]')
@@ -1728,3 +1728,27 @@ elements:
         props = fn['parameters']['properties']
         assert 'page' in props and 'pages' in props
         assert props['pages']['maxItems'] == 8
+
+
+# ── One rich-text semantics, theme-ink table cells ───────
+
+def test_preview_and_export_agree_that_br_is_a_line_break():
+    from lib.slides.render_html import _rich_html
+    from lib.slides.richtext import parse_rich_text
+    text = 'a × b<br/> &lt; c × d'
+    # Preview passes markup through: a break and a literal "<", not "<br/>".
+    assert _rich_html(text, {}) == text
+    paragraphs = parse_rich_text(text, {})
+    assert [run.text for run in paragraphs[0].runs] == [
+        'a × b', '\n', ' < c × d']
+    assert _rich_html('a < b', {}) == '<p>a &lt; b</p>'
+
+
+def test_unstyled_table_cells_take_the_theme_ink():
+    from lib.slides.render_html import _cell_style
+    dark = {'colors': {'bg': '#172126', 'ink': '#F3F3EC'}}
+    assert _cell_style({'text': 'x'}, 1, 1, 3, 3, {}, dark)['color'] == '$ink'
+    assert _cell_style({'text': 'x'}, 1, 1, 3, 3,
+                       {'cellStyle': {'color': '$accent'}}, dark)['color'] \
+        == '$accent'
+    assert _cell_style({'text': 'x'}, 1, 1, 3, 3, {}, {})['color'] == '#000000'

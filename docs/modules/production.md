@@ -507,9 +507,8 @@ and, for interviews, own decisions separated from team results. The author
 gate rejects visible numbers absent from the deck's evidence and text below
 the projection legibility floor. Layout QA measures line boxes, not font
 content areas: a half-leading deficit is neither overflow nor collision,
-while the PowerPoint reserve stays measured from the content area. The
-zero-LLM text-box growth repair reserves PowerPoint metrics on both sides of
-a middle-anchored box and repeats until a round keeps nothing. Native charts
+while the PowerPoint reserve stays measured from the content area (repairs:
+"Layout repair to a fixed point" below). Native charts
 write `c:invertIfNegative=0`, without which LibreOffice draws negative bars
 as their absolute value.
 **Alternatives considered:** a pixel tolerance on overflow (a tuning knob that
@@ -520,6 +519,47 @@ figures with no data).
 Verify with `tests/slides/test_slides_content_grounding.py`,
 `tests/slides/test_slides_material_input.py` and
 `tests/slides/test_chart_preview_portability.py`.
+
+### Layout repair to a fixed point
+
+**Problem:** after the measurement fixes, every benchmark deck still had 1-5
+real overflows at the zero-finding `layout_qa` gate and none shipped. Three
+mechanisms left them in place: box growth was computed from the line-box
+overflow while the gate measures the PowerPoint reserve from the content
+area (grown boxes landed under a pixel short); a bottom-anchored box keeps
+its text glued to its lower edge, so no height adds clearance below it; and
+the author repair prompt forbade changing copy and received only a bare
+message, while the legibility floor forbids smaller type, leaving genuinely
+long copy with no legal move. Authors also shrank type below the floor to
+cram dense pages, failing the author gate outright.
+**Decision:** findings carry the measured geometry (`lines`,
+`contentBottom`, `reserve` per text). `layout_qa.relayout_repairs` fits a
+box exactly for its anchor (top extends down, middle around its centre,
+bottom re-anchors at the text's first line so the text does not move) and
+clears a collision by moving either text past the other's last line plus
+reserve; `_relayout_pages` measures both collision variants and keeps the
+better. What geometry cannot fix (an unbreakable run, copy longer than its
+space) goes to the page author with `findings_text`'s measured budget (box
+height, needed height, the character count that fits) and permission to
+move boxes into empty space or cut copy; `author._claim_number_findings`
+rejects a repair that drops a number of the page title's claim. The stage
+loops (re-layout, else tighten) keeping only page changes that lower that
+page's finding count, so it ends at zero findings or when a round keeps
+nothing. Authored type below the floor is lifted to it
+(`_raise_to_legibility_floor`), turning density into an overflow this loop
+repairs; visual-repair candidates get the same exact re-layout before
+judgement (`_relaid_out_candidate`). The gate predicate is unchanged.
+**Alternatives considered:** a pixel tolerance or fewer reserve pixels
+(hides real overflow, and is a knob); shrinking type to fit (illegible when
+projected; the floor exists for this); a padding margin on grown boxes (a
+knob; the exact fit is tested to pass the gate with one pixel less
+failing); splitting an overfull page into two (changes page count, every
+later page index, briefs and page counters after authoring; not built,
+because measured tightening cleared every overfull page it was given on the
+benchmark, see [`SLIDES_BENCHMARK.md`](../SLIDES_BENCHMARK.md)). A reply cut off
+by the output budget (`finish_reason == 'length'`) is an author finding: it
+can still parse and would ship a page missing its last elements.
+Verify with `tests/slides/test_slides_layout_repair.py`.
 
 ## Stage contract
 

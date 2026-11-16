@@ -58,7 +58,9 @@ def evaluate(run: str, arms: list[str], docs: list[str], seed: str) -> dict:
                 rows.append({'doc': doc_id, 'arm': arm, 'delivered': False,
                              'missing': True})
                 continue
-            base = os.path.dirname(deck['pngs'][0])
+            # Verdicts belong to this run: a deck linked from another run
+            # (re-judged in a new pass) must not read or write that run's cache.
+            base = os.path.join(run_dir, arm, doc_id)
             judged = _cached(
                 os.path.join(base, f'judge-{seed}.json'),
                 lambda: score.judge_deck(doc['text'], deck['pngs'],
@@ -106,6 +108,9 @@ def _summary(rows: list[dict], arms: list[str]) -> dict:
                      for r in judged])}
         for name in score.DIMENSIONS:
             entry[name] = _mean([r['judge']['scores'][name] for r in delivered])
+        entry['all_judged'] = {
+            name: _mean([r['judge']['scores'][name] for r in judged])
+            for name in score.DIMENSIONS}
         entry['content_mean'] = _mean([
             statistics.mean(r['judge']['scores'][n]
                             for n in score.CONTENT_DIMENSIONS)
@@ -144,6 +149,13 @@ def markdown(result: dict) -> str:
                 value = f'{summary[arm]["delivered"]}/{summary[arm]["decks"]}'
             cells.append('' if value is None else str(value))
         lines.append(f'| {column} | ' + ' | '.join(cells) + ' |')
+    lines += ['', '## Means over every judged deck (incl. undelivered)', '',
+              '| dimension | ' + ' | '.join(arms) + ' |',
+              '|---|' + '---|' * len(arms)]
+    for name in score.DIMENSIONS:
+        cells = [str(summary[arm]['all_judged'].get(name) or '')
+                 for arm in arms]
+        lines.append(f'| {name} | ' + ' | '.join(cells) + ' |')
     lines += ['', '## Per deck', '',
               '| doc | arm | delivered | content | visual | overall | '
               'specific/slide | unsupported/slide | judge summary |',

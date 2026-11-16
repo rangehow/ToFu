@@ -6,7 +6,9 @@ The run uses the public recipe entry point ``build_deck_from_topic`` exactly
 as ``produce_slides`` does, with two benchmark-only substitutions recorded in
 ``run.json``:
 
-- model calls go through the running server's routing (``llm_bridge``);
+- model calls go through the running server's routing (``llm_bridge``),
+  including the visual-QA vision calls: this process has no dispatcher, so
+  the vision-slot probe answers with the bridged model instead;
 - web research and image generation are disabled, because the competitor arms
   receive no web or image service either and the inputs are the authority.
 """
@@ -51,9 +53,15 @@ def _lift_outline_budget() -> None:
     recipe._llm_chat = chat
 
 
+def _vision_through_bridge() -> None:
+    import lib.design_sys.visual_qa as vqa
+    vqa._vision_model = lambda: llm_bridge.DEFAULT_MODEL
+
+
 def build(doc_id: str, out_dir: str) -> dict:
     doc = load_document(doc_id)
     llm_bridge.install()
+    _vision_through_bridge()
     if os.environ.get('SLIDES_BENCH_TOFU_BASELINE') == '1':
         _lift_outline_budget()
     import lib.production.research as research
@@ -72,6 +80,8 @@ def build(doc_id: str, out_dir: str) -> dict:
         'seconds': round(time.time() - started, 1),
         'pptx': result['pptx_path'], 'pages': result['pages'],
         'quality': result.get('quality'),
+        'visual_qa': {k: v for k, v in (result.get('qa') or {}).items()
+                      if k in ('ran', 'reason', 'repaired', 'findings')},
         'material_chars_supplied': len(doc['material_for_tofu']),
         'source_chars': len(doc['text']),
     }

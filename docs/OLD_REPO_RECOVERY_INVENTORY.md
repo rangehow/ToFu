@@ -959,7 +959,7 @@ reproducer `41815617d4` on an earlier base). Three are tagged into this topic by
 | `0fc7d5bc8a` | a poll reads its request without the head witness and each settled attempt once | 119/156 / 117/156 / 16/156 | unmerged; in v12r; rewrites `_running_workers` from `79d31c7f5f`, so it follows 5060301b's landing or the RC line |
 | `3bd1271c1e` | a poll reads no attempt of a Worker whose task is live in this process | 39/43 / 39/43 / 3/43 | unmerged; in v12r; same dependency as `0fc7d5bc8a` |
 | `5473a0a418` | a poll result with many starting Workers fits one tool result | 32/36 / 32/36 / 32/36 | unmerged, not in v12r; a fit fix on `79d31c7f5f`'s `_running_workers`: port right after 5060301b lands |
-| `c40d1571fb`, `bec39ba13f`, `26f5896305` | a history page reads each kind of row evidence in one exchange (`query_many`), its streamed-upload fix, the page benchmark | 738/817, 77/97, 62/64 / same / 737, 77, 63 | unmerged, not in v12r; **valuable, not ported here**: page 115 → 7 round trips, but it adds pipelining to both storage clients and `tofu_db/wire.py`; the native lane cannot run on this host (`tests/storage/test_coordinator_workers_authority.py` skips: "inherited native storage engine cannot serve this checkout"). Next port, as its own storage-owned assignment |
+| `c40d1571fb`, `bec39ba13f`, `26f5896305` | a history page reads each kind of row evidence in one exchange (`query_many`), its streamed-upload fix, the page benchmark | 738/817, 77/97, 62/64 / same / 737, 77, 63 | **ported** by Worker 72d5a0fe (re-derived on today's code, see "Assignment-page reads: ported" below). The old "native lane cannot run on this host" blocker was only the inherited engine: build one from the checkout (`serverctl_pkg.native_engine --prepare-only`) and select it with `TOFU_TEST_TOFUDB_BIN` |
 | `20f8b99531`, `67add17c0d`, `7605481a59`, `9f0473a9e3`, `8be516174d`, `e9f32573d3`, `d9abda77a5`, `a63c7a65bb`, `af1a13a9b6`, `675154a26f` | recipient/absorption/seal reads in exchanges, R4b step 3 | 214/230 … 47/56 (≥90% missing everywhere) | unmerged; built on the ticket layout of `d076928c1e` and on `query_many`; port with the mailbox after 5060301b lands |
 | `78fd51be6f`, `6f029bea5e` | both-way rollback rehearsal for the R4b mailbox layout and its keeper | 215/215, 4/4 | unmerged; goes with the mailbox port |
 | `7bb3d08de9`, `f621b811fc` | message-input fake scope; gen_world_art keeper | 0/1, 0/3 | merged (content on the branch) |
@@ -984,3 +984,31 @@ Current birth contention, for the R5 decision (SQLite authority, real delegation
 after its first Worker): 4 births 0.37 s wall, 4 of 8 head commits lost; 8 births 1.39 s, 17 of 25 lost; 16 births 0.90 s,
 92 of 108 lost. Losses grow faster than births but every birth finished in under 1.4 s locally, against the 0.5–0.7 s
 production births measured in `d0c7b1b141`. The fix for that growth is R5, which belongs to the release-candidate line.
+
+
+## Assignment-page reads: ported (2026-11-17, Worker 72d5a0fe)
+
+`c40d1571fb`, `bec39ba13f`, `26f5896305` are re-derived on today's code, not
+cherry-picked. `lib.storage.port.query_many` performs independent reads in one
+pipelined exchange on both storage clients and in `tofu_db/wire.py`
+(`StorageV2Session.request_many`, a read that needs a streamed upload is left
+unsent and read alone); a page build reads its documents, bound Turns, attempts
+and delivery workspaces kind by kind through it (`SegmentedDispatch.get_many`,
+`service._HistoryEvidence`, `turn_lifecycle.get_turns/get_attempts`,
+`integration_state_repository.find_workspaces`). Re-derived against the current
+tree, which differs from the old base: the v1 client now pools keep-alive
+sockets, so the batch rides `keep_alive` frames instead of a new `pipelined`
+flag, and the preview path now cuts `contentPreview` on the authority, so the
+evidence reads request metadata or a server-cut preview, never a full body.
+Measured before/after with `benchmarks/project_assignment_page_reads.py`
+(`--rows 32 --builds 3`, exported pre-change tree vs this one, same engine built
+from this checkout): SQLite 115 → 7 round trips per build (116 → 8 when one Turn
+changed), native 115 → 7 (116 → 8); RPC counts and oracle-equal pages unchanged.
+Native lane ran against an engine built from this checkout
+(`python3 -m serverctl_pkg.native_engine --project "$PWD" --prepare-only <dir>`
+with FMG CARGO_HOME/RUSTUP_HOME and `CARGO_BUILD_JOBS=4`), selected with
+`TOFU_TEST_TOFUDB_BIN`; `tests/storage/test_coordinator_workers_authority.py`
+passed, not skipped. Differential `tests/tofudb/test_tofudb_differential.py`
+245/245 passed against the same engine. No knob was added and nothing was
+restarted. The old repo was read only through `git show` of the three commits;
+nothing was written there.

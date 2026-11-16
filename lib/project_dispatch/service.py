@@ -6,8 +6,9 @@ review are distinct; acceptance never claims file publication/canonical delivery
 HistoryPreviews keeps one owner/project's previous history-page result previews,
 reused only while the Turn's projection revision and public status are unchanged.
 A history page lists historyRow projections; exact command/assignment lookups
-return complete views. A page build whose requester is gone stops before its next
-row with HistoryBuildCancelled.
+return complete views. A page build reads its rows' Turns, attempts and delivery
+workspaces kind by kind, one exchange each (_HistoryEvidence). A page build whose
+requester is gone stops before its next exchange or row with HistoryBuildCancelled.
 """
 from __future__ import annotations
 from collections.abc import Mapping
@@ -85,11 +86,101 @@ def _preview_version(turn):
     return turn.get('projectionRevision'), turn.get('status')
 
 
+def _answer(outcome):
+    if isinstance(outcome, Exception):
+        raise outcome
+    return outcome
+
+
+class _HistoryEvidence:
+    """One page build's bound-execution evidence, read kind by kind, one exchange each.
+
+    It holds exactly what the build's rows would read one by one: a bound Turn's
+    metadata where a remembered preview may still hold (its server-cut preview
+    once that metadata shows another revision or status) and its server-cut
+    preview otherwise, every bound attempt, and every delivery workspace. A value is that read's
+    result or the exception it raised, raised again where the row reads it. Each
+    distinct path resolves once. Nothing outlives the build.
+    """
+
+    def __init__(self, rows, previous, cancelled):
+        from lib.integration_state_repository import find_workspaces
+        from lib.turn_lifecycle import get_attempts, get_turns
+        from .publication import delivery_workspace, memoized_resolver
+        self.resolve = memoized_resolver()
+        self.metadata, self.bodies, self.attempts, self.workspaces = {}, {}, {}, {}
+        bound = [row for row in rows if row['execution'] is not None]
+        for owner in sorted({row['grant']['owner'] for row in bound}):
+            mine = [row for row in bound if row['grant']['owner'] == owner]
+            identities = sorted({(row['request']['recipientId'], row['execution']['turnId']) for row in mine})
+            attempts = sorted({row['execution']['attemptId'] for row in mine})
+            self._stop_if(cancelled)
+            # A remembered identity needs only metadata; a new one needs its
+            # server-cut preview. Neither reads the full projection body.
+            reads = [(*identity, identity not in previous) for identity in identities]
+            for (*identity, preview), turn in zip(reads, get_turns(
+                    [(conversation, turn, False,
+                      HISTORY_PREVIEW_CHARACTERS if preview else None)
+                     for conversation, turn, preview in reads],
+                    user_id=owner)):
+                (self.bodies if preview else self.metadata)[owner, tuple(identity)] = turn
+            self._stop_if(cancelled)
+            self.attempts.update(((owner, attempt), found) for attempt, found in zip(
+                attempts, get_attempts(attempts, user_id=owner)))
+            changed = [identity for identity in identities if (owner, identity) in self.metadata
+                       and self._needs_body(self.metadata[owner, identity], previous[identity])]
+            workspaces = sorted({key for key in (
+                delivery_workspace(row, self.attempts[owner, row['execution']['attemptId']],
+                                   resolve=self.resolve)
+                for row in mine if row['request'].get('profile', {}).get('mode') in ('files', 'project')
+                and not isinstance(self.attempts[owner, row['execution']['attemptId']], Exception))
+                if key is not None})
+            if changed:
+                self._stop_if(cancelled)
+                self.bodies.update(((owner, identity), turn) for identity, turn in zip(
+                    changed, get_turns([(conversation, turn, False, HISTORY_PREVIEW_CHARACTERS)
+                                        for conversation, turn in changed], user_id=owner)))
+            if workspaces:
+                self._stop_if(cancelled)
+                self.workspaces.update(((owner, key), row) for key, row in zip(
+                    workspaces, find_workspaces(workspaces, user_id=owner)))
+
+    @staticmethod
+    def _stop_if(cancelled):
+        if cancelled():
+            raise HistoryBuildCancelled('Assignment history requester disconnected before the page evidence')
+
+    @staticmethod
+    def _needs_body(metadata, remembered):
+        # As _bound_turn: a failed metadata read ends the row; another version reads the preview.
+        return not isinstance(metadata, Exception) and (
+            not isinstance(metadata, Mapping) or _preview_version(metadata) != remembered[0])
+
+    def bound_turn(self, owner, identity, previews):
+        """``_bound_turn`` of one page row, answered from this build's reads."""
+        if identity in previews[0]:
+            turn = _answer(self.metadata[owner, identity])
+            remembered = previews[0][identity]
+            if isinstance(turn, Mapping) and _preview_version(turn) == remembered[0]:
+                return turn, remembered
+        turn = _answer(self.bodies[owner, identity])
+        return turn, (_preview_version(turn), turn['contentPreview'])
+
+    def attempt(self, owner, attempt_id):
+        return _answer(self.attempts[owner, attempt_id])
+
+    def workspace_get(self, project_root, task_id, *, user_id):
+        return _answer(self.workspaces[user_id, (project_root, task_id)])
+
+
 class ProjectDispatchService:
     def __init__(self, repository, *, commands=None, turn_get=None, attempt_get=None,
                  workspace_get=None, publication_lock=None, publication_wake=None,
                  history_previews=None, publication_release=None):
         self.repository = repository
+        # A page reads its evidence together only through the selected storage's
+        # own reads; injected single-read ports keep their row-by-row calls.
+        self._default_evidence_reads = turn_get is None and attempt_get is None and workspace_get is None
         if commands is None:
             from lib.conversation_sync.runtime import conversation_turn_commands
             commands = conversation_turn_commands
@@ -448,13 +539,15 @@ class ProjectDispatchService:
             return turn, (_preview_version(turn), turn['contentPreview'])
         return self.turn_get(conversation_id, turn_id, user_id=owner), None
 
-    def _view(self, assignment, *, settlement_only=False, previews=None, snapshot=None):
+    def _view(self, assignment, *, settlement_only=False, previews=None, snapshot=None, evidence=None):
         """previews: a history page's (previous, current) maps of exact previews.
 
         Only a history row passes them; that row also carries the contract's
         historyRequest projection of the request instead of the complete one.
         snapshot: the page's loaded dispatch value; dependency states read the
         row's prerequisites from it instead of reloading them.
+        evidence: the page build's ``_HistoryEvidence``, which answers this
+        row's Turn, attempt and workspace reads.
         """
         request = assignment['request']
         association = assignment['execution']
@@ -463,9 +556,14 @@ class ProjectDispatchService:
         attempt = None
         if association is not None:
             identity = (request['recipientId'], association['turnId'])
-            turn, remembered = self._bound_turn(identity, assignment['grant']['owner'],
-                                                settlement_only=settlement_only, previews=previews)
-            attempt = self.attempt_get(association['attemptId'], user_id=assignment['grant']['owner'])
+            owner = assignment['grant']['owner']
+            if evidence is None:
+                turn, remembered = self._bound_turn(identity, owner,
+                                                    settlement_only=settlement_only, previews=previews)
+                attempt = self.attempt_get(association['attemptId'], user_id=owner)
+            else:
+                turn, remembered = evidence.bound_turn(owner, identity, previews)
+                attempt = evidence.attempt(owner, association['attemptId'])
             if turn is not None and attempt is not None:
 
                 if (turn.get('turnId') != association['turnId']
@@ -489,8 +587,10 @@ class ProjectDispatchService:
         delivery = None
         if assignment['request'].get('profile', {}).get('mode') in ('files', 'project'):
             from .publication import delivery_view
-            delivery = delivery_view(assignment, attempt,
-                                     self.workspace_get or self.repository.get_workspace)
+            delivery = (delivery_view(assignment, attempt,
+                                      self.workspace_get or self.repository.get_workspace)
+                        if evidence is None else
+                        delivery_view(assignment, attempt, evidence.workspace_get, resolve=evidence.resolve))
         dependency_view = ({'dependencyStates': self.repository.dependency_states(assignment, value=snapshot)}
                            if 'dependencies' in assignment['request'] and not settlement_only else {})
         review = deepcopy(assignment['review'])
@@ -543,13 +643,14 @@ class ProjectDispatchService:
         page = self.repository.history_page(cursor)
         owner, project = self.repository.owner, self.repository.project
         previews = (self.history_previews.previous(owner, project), {})
+        rows = [row for row in page['rows'] if row['grant']['tenant'] == principal.tenant_id]
+        evidence = (_HistoryEvidence(rows, previews[0], cancelled)
+                    if self._default_evidence_reads and self.repository.workspace_get is None else None)
         views = []
-        for row in page['rows']:
+        for row in rows:
             if cancelled():
                 raise HistoryBuildCancelled('Assignment history requester disconnected during the build')
-            if row['grant']['tenant'] != principal.tenant_id:
-                continue
-            views.append(self._view(row, previews=previews, snapshot=page['snapshot']))
+            views.append(self._view(row, previews=previews, snapshot=page['snapshot'], evidence=evidence))
         self.history_previews.replace(owner, project, previews[1])
         return {'assignments': views, 'olderCursor': page['olderCursor'], 'newerCursor': page['newerCursor']}
 

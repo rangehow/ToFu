@@ -78,6 +78,17 @@ class _FakeSession:
             raise outcome
         return outcome
 
+    def request_many(self, requests, *, deadline_unix_ms):
+        """Pops one scripted list of answers (or an exchange failure) for the whole train."""
+        type(self).calls += 1
+        for operation, payload in requests:
+            type(self).seen.append({'operation': operation, 'payload': dict(payload),
+                                    'command_id': None, 'pipelined': True})
+        outcome = type(self).responses.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
 
 @pytest.fixture(autouse=True)
 def _patch_session(monkeypatch: pytest.MonkeyPatch):
@@ -110,6 +121,48 @@ def test_query_returns_result_and_injects_owner() -> None:
     assert result == {'count': 4}
     assert _FakeSession.seen[0]['payload']['user_id'] == 7
     assert _FakeSession.seen[0]['command_id'] is None
+
+
+def test_query_many_answers_each_read_in_one_exchange_with_the_owner_injected() -> None:
+    _FakeSession.responses = [[_FakeResponse(0, b'{"n": 1}'), _FakeResponse(0, b''),
+                               _FakeResponse(0, b'{"n": 3}')]]
+    reads = [('record.get', {'namespace': 'n', 'key': str(index)}) for index in range(3)]
+    assert _client().query_many(reads, deadline=5.0) == [{'n': 1}, None, {'n': 3}]
+    assert _FakeSession.calls == 1
+    assert [seen['payload']['user_id'] for seen in _FakeSession.seen] == [7, 7, 7]
+
+
+def test_query_many_rereads_a_transient_answer_through_query_and_keeps_a_refusal() -> None:
+    _FakeSession.responses = [
+        [_FakeResponse(0, b'{"n": 1}'),
+         _FakeResponse(503, b'', 'database_busy', 'busy', True),
+         _FakeResponse(400, b'', 'database_protocol_error', 'bad read', False)],
+        _FakeResponse(0, b'{"n": 2}'),
+    ]
+    reads = [('record.get', {'namespace': 'n', 'key': str(index)}) for index in range(3)]
+    first, second, third = _client().query_many(reads, deadline=5.0)
+    assert (first, second) == ({'n': 1}, {'n': 2})
+    assert isinstance(third, StorageError) and third.code == 'database_protocol_error'
+    # The train, then the one transient read again through query().
+    assert _FakeSession.calls == 2 and 'pipelined' not in _FakeSession.seen[-1]
+    assert _FakeSession.seen[-1]['payload']['key'] == '1'
+
+
+def test_query_many_sends_a_read_that_needs_a_streamed_upload_alone() -> None:
+    # request_many leaves such a read unsent (None); query() streams it.
+    _FakeSession.responses = [[_FakeResponse(0, b'{"n": 0}'), None], _FakeResponse(0, b'{"n": 1}')]
+    reads = [('record.get', {'namespace': 'n', 'key': str(index)}) for index in range(2)]
+    assert _client().query_many(reads, deadline=5.0) == [{'n': 0}, {'n': 1}]
+    assert _FakeSession.calls == 2 and 'pipelined' not in _FakeSession.seen[-1]
+
+
+def test_query_many_rereads_every_read_after_a_failed_exchange() -> None:
+    from tofu_db.wire import StorageV2ConnectionClosedError
+    _FakeSession.responses = [StorageV2ConnectionClosedError('closed'),
+                              _FakeResponse(0, b'{"n": 0}'), _FakeResponse(0, b'{"n": 1}')]
+    reads = [('record.get', {'namespace': 'n', 'key': str(index)}) for index in range(2)]
+    assert _client().query_many(reads, deadline=5.0) == [{'n': 0}, {'n': 1}]
+    assert _FakeSession.calls == 3
 
 
 def test_query_does_not_overwrite_explicit_owner() -> None:

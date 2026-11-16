@@ -1,9 +1,12 @@
 # Standalone Tofu-DB client
 
-`_frame_body.py` owns anonymous overflow buffers shared by v1/v2 readers;
+`_frame_body.py` owns anonymous overflow buffers shared by v1/v2 readers and
+the `ReceiveBuffer` both use to read a pipelined exchange's answers;
 decoding must return owned values before mappings close. `wire.py` owns
 storage.v2 framing, authentication, bounded streaming and session
-lifetime. The public import surface is `tofu_db`; this directory also builds the
+lifetime; `StorageV2Session.request_many` pipelines single-frame queries in
+send-buffer segments (contract in `docs/STORAGE.md`, "Commands, queries, and
+idempotency"). The public import surface is `tofu_db`; this directory also builds the
 independent `tofu-db-client` wheel. `_crc32c_accelerator.py` owns the optional
 lazy compiler, bounded cache, process-group cleanup and atomic publication. Never import `lib`, `scripts`, or application
 configuration. `_loopback.py` is the stdlib-only owner of local allocation

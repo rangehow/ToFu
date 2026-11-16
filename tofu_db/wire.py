@@ -582,13 +582,24 @@ def recv_frame(
     *,
     before_payload: Any = None,
 ) -> dict[int, Any]:
-    (length,) = struct.unpack(">I", _read_exact(sock, 4, frame_start=True))
+    return _recv_frame(lambda count, frame_start=False: _read_exact(sock, count, frame_start=frame_start),
+                       before_payload=before_payload)
+
+
+def _closed_receive(at_frame_boundary: bool) -> Exception:
+    if at_frame_boundary:
+        return StorageV2ConnectionClosedError("storage.v2 peer closed the connection at a frame boundary")
+    return StorageV2ProtocolError("storage.v2 peer closed mid-frame")
+
+
+def _recv_frame(read_exact: Any, *, before_payload: Any = None) -> dict[int, Any]:
+    (length,) = struct.unpack(">I", read_exact(4, frame_start=True))
     if length == 0 or length > MAX_FRAME_BODY_BYTES:
         raise StorageV2ProtocolError(f"invalid storage.v2 body length {length}")
     reservation = before_payload(length) if before_payload is not None else None
     from ._frame_body import received_frame_body
-    with received_frame_body(lambda count: _read_exact(sock, count), length, reservation) as body:
-        (checksum,) = struct.unpack(">I", _read_exact(sock, 4))
+    with received_frame_body(lambda count: read_exact(count), length, reservation) as body:
+        (checksum,) = struct.unpack(">I", read_exact(4))
         with memoryview(body) as view:
             actual_checksum = crc32c(view)
         if checksum != actual_checksum:
@@ -807,6 +818,69 @@ class StorageV2Session:
             }
         )
         self._sock.sendall(pack_frame(body))
+        return self._receive_response(
+            correlation, command_id=command_id,
+            read_frame=lambda before_payload: recv_frame(self._sock, before_payload=before_payload))
+
+    def request_many(
+        self,
+        requests: Iterable[tuple[str, dict[str, Any] | None]],
+        *,
+        deadline_unix_ms: int,
+    ) -> list[StorageV2Response | None]:
+        """Pipelined queries: each response is read only after every request is sent.
+
+        The daemon serves a session's frames in order, so responses arrive in
+        request order and each is validated exactly as ``request`` validates
+        one. Requests go out in segments that fit this socket's send buffer:
+        a send never waits for a peer that is itself waiting for its responses
+        to be read. A request whose payload needs a streamed upload is not
+        sent: its element is ``None``, and the caller sends it alone with
+        ``request``.
+        """
+        frames, slots = [], []
+        for operation, payload in requests:
+            payload_bytes = _payload_bytes(payload if payload is not None else {})
+            if len(payload_bytes) > MAX_PAYLOAD_BYTES:
+                slots.append(None)
+                continue
+            correlation = self._next_correlation()
+            slots.append(len(frames))
+            frames.append((correlation, pack_frame(encode_message({
+                FIELD_KIND: KIND_REQUEST,
+                FIELD_PROTOCOL_VERSION: PROTOCOL_VERSION,
+                FIELD_CORRELATION_ID: correlation,
+                FIELD_DEADLINE_UNIX_MS: deadline_unix_ms,
+                FIELD_OWNER_ID: self._owner_id,
+                FIELD_TENANT_ID: self._tenant_id,
+                FIELD_COMMAND_ID: None,
+                FIELD_SCHEMA_ID: self.schema_id,
+                FIELD_OPERATION: operation,
+                FIELD_PAYLOAD: payload_bytes,
+            }))))
+        from ._frame_body import ReceiveBuffer
+        received = ReceiveBuffer(self._sock, _closed_receive)
+        send_capacity = self._sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
+        responses: list[StorageV2Response] = []
+        start = 0
+        while start < len(frames):
+            end, size = start + 1, len(frames[start][1])
+            while end < len(frames) and size + len(frames[end][1]) <= send_capacity:
+                size += len(frames[end][1])
+                end += 1
+            self._sock.sendall(b"".join(frame for _, frame in frames[start:end]))
+            for correlation, _ in frames[start:end]:
+                responses.append(self._receive_response(
+                    correlation, command_id=None,
+                    read_frame=lambda before_payload: _recv_frame(
+                        received.read_exact, before_payload=before_payload)))
+            start = end
+        if not received.drained:
+            raise StorageV2ProtocolError("storage.v2 peer sent bytes after the pipelined responses")
+        return [None if slot is None else responses[slot] for slot in slots]
+
+    def _receive_response(self, correlation: bytes, *, command_id: str | None,
+                          read_frame: Any) -> StorageV2Response:
         response_payload = bytearray()
         response_stream_id: bytes | None = None
         response_final = False
@@ -844,9 +918,7 @@ class StorageV2Session:
 
         try:
             while True:
-                message = recv_frame(
-                    self._sock,
-                    before_payload=_admit_response_frame if admission is not None else None)
+                message = read_frame(_admit_response_frame if admission is not None else None)
                 if message.get(FIELD_CORRELATION_ID) != correlation:
                     raise StorageV2ProtocolError("storage.v2 response correlation mismatch")
                 if int(message.get(FIELD_SCHEMA_ID, 0)) != self.schema_id:

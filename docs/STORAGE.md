@@ -464,6 +464,31 @@ and semantic differential scripts.
 command_id)` is one transaction. Operations with non-reconstructible effects
 require a command receipt written in that same transaction.
 
+`query_many(requests)` (`lib.storage.port.query_many` for any client) performs
+independent reads in one pipelined exchange. Element `i` is exactly what
+`query(*requests[i])` returns, or the `StorageError` it raises: the authority
+answers each read alone, with its own handler, owner scope and error. A
+storage.v2 session already serves frames in order, so the client sends every
+request before it reads the answers; on storage.v1 every query but the last of
+a segment carries `keep_alive: true`, so the SQL sidecar reads the next frame
+at once through its existing keep-alive serving instead of closing the socket. Requests go out in
+segments that fit the socket's send buffer, so a send never waits for a peer
+that waits for its answers to be read, and one receive takes every queued
+answer up to the socket's receive buffer. A storage.v2 read whose payload needs
+a streamed upload is not pipelined; it is sent alone through `query`. A read
+answered with a classified transient failure, or left unanswered by a failed
+exchange, is read again through `query` and its replay policy.
+Problem: each of K independent point reads paid its own round trip; in a busy
+process every round trip waits several times for the interpreter (client
+acquisition, pool, a poll and a receive per frame piece), so a 32-row history
+page took 142 s at p95 on the N=1000 synthetic load of the old repo's
+COORD-PAGE-READS probe. Decision: pipeline the reads on the existing protocols.
+Alternatives rejected: per-domain multi-get operations (four catalog operations
+on both authorities, a native engine rebuild and redeployment for the same
+round trips) and a thread pool (a concurrency knob that still pays every round
+trip). Specs: `tests/storage/test_storage_query_many.py` (SQLite, PostgreSQL,
+native) and the `query_many` cases of `tests/storage/test_storage_v2_client.py`.
+
 - same command ID + same operation and canonical payload returns the committed
   response;
 - same command ID + different operation or payload is `database_conflict`;

@@ -3,6 +3,7 @@
 Entry points: workspace_origin pins private admission before registration;
 publication_reason checks live repository authority and immutable delta scope;
 delivery_view projects origin.delivery without inventing execution state;
+delivery_workspace names the registered workspace it reads;
 delivery_final says whether that receipt is final for its work id.
 Repository validation owns source/grant/result and exact attempt/task identity.
 No scheduler, durable ledger, tool authority or execution is created here.
@@ -12,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 import errno
+import functools
 from pathlib import Path
 import subprocess
 import threading
@@ -88,8 +90,17 @@ def workspace_origin(task) -> dict:
     return {admission.KEY: deepcopy(config[admission.KEY])} if admission.KEY in config else {}
 
 
-def _same_project(left, right) -> bool:
-    return bool(left and right) and Path(left).expanduser().resolve() == Path(right).expanduser().resolve()
+def _resolved(path) -> Path:
+    return Path(path).expanduser().resolve()
+
+
+def memoized_resolver():
+    """A resolver for one page build: each distinct path resolves once."""
+    return functools.cache(_resolved)
+
+
+def _same_project(left, right, resolve=_resolved) -> bool:
+    return bool(left and right) and resolve(left) == resolve(right)
 
 
 def _path_allowed(path: str, scopes, root: Path, *, project_grant: bool = False) -> bool:
@@ -330,35 +341,49 @@ def _uncommitted_delivery(acknowledgement) -> tuple[str, str]:
                        + '); its delta must be committed on the branch')
 
 
-def _associated_receipt(assignment: Mapping, attempt: Mapping | None, workspace_get):
-    """``(task_id, row, receipt)`` of the exact associated workspace, or ``None``.
+def delivery_workspace(assignment: Mapping, attempt: Mapping | None, *,
+                       resolve=_resolved) -> tuple[str, str] | None:
+    """``(project_root, task_id)`` of the association's registered workspace, or ``None``.
 
-    Raises only what the workspace read raises; callers decide what unknown means.
+    ``resolve`` maps a path to its resolved ``Path``; a page build passes one
+    that resolves each distinct path once.
     """
     execution = assignment.get('execution') or {}
     if not isinstance(attempt, Mapping) or not attempt.get('taskId'):
         return None
-    request, grant = assignment['request'], assignment['grant']
+    request = assignment['request']
     if (attempt.get('attemptId') != execution.get('attemptId')
             or attempt.get('turnId') != execution.get('turnId')
             or attempt.get('conversationId') != request['recipientId']):
         return None
     # The checkout is registered under the association's work id; each physical
     # attempt of the assignment runs as its own task inside it.
-    task_id = execution.get('taskId') or attempt['taskId']
-    project_root = str(Path(request['projectPath']).expanduser().resolve())
+    return str(resolve(request['projectPath'])), execution.get('taskId') or attempt['taskId']
+
+
+def _associated_receipt(assignment: Mapping, attempt: Mapping | None, workspace_get, *,
+                        resolve=_resolved):
+    """``(task_id, row, receipt)`` of the exact associated workspace, or ``None``.
+
+    Raises only what the workspace read raises; callers decide what unknown means.
+    """
+    workspace = delivery_workspace(assignment, attempt, resolve=resolve)
+    if workspace is None:
+        return None
+    project_root, task_id = workspace
+    request, grant = assignment['request'], assignment['grant']
     row = workspace_get(project_root, task_id, user_id=grant['owner'])
     if (not isinstance(row, Mapping) or row.get('task_id') != task_id
             or type(row.get('user_id')) is not int or row['user_id'] < 1
             or row['user_id'] != grant['owner']
-            or not _same_project(row.get('project_root'), request['projectPath'])):
+            or not _same_project(row.get('project_root'), request['projectPath'], resolve)):
         return None
     origin = row.get('origin') or {}
     binding = origin.get(admission.KEY) or {}
     if (binding.get('assignmentId') != assignment['id']
             or binding.get('owner') != grant['owner']
             or binding.get('recipientId') != request['recipientId']
-            or not _same_project(binding.get('projectPath'), request['projectPath'])):
+            or not _same_project(binding.get('projectPath'), request['projectPath'], resolve)):
         return None
     receipt = origin.get('delivery') or {}
     return (task_id, row, receipt) if receipt else None
@@ -374,7 +399,8 @@ def delivery_final(assignment: Mapping, attempt: Mapping | None, workspace_get) 
     return found is not None and found[2].get('state') == 'delivered'
 
 
-def delivery_view(assignment: Mapping, attempt: Mapping | None, workspace_get) -> dict | None:
+def delivery_view(assignment: Mapping, attempt: Mapping | None, workspace_get, *,
+                  resolve=_resolved) -> dict | None:
     """Read the exact associated workspace receipt, never infer from candidate.
 
     workspace_get uses the existing (project_root, task_id, user_id=owner) port.
@@ -385,7 +411,7 @@ def delivery_view(assignment: Mapping, attempt: Mapping | None, workspace_get) -
     This is diagnostic projection; publication_reason remains the live fence.
     """
     try:
-        found = _associated_receipt(assignment, attempt, workspace_get)
+        found = _associated_receipt(assignment, attempt, workspace_get, resolve=resolve)
         if found is None:
             return None
         task_id, row, receipt = found

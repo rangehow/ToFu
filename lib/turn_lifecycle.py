@@ -3769,6 +3769,36 @@ def get_turn(conversation_id: str, turn_id: str, *, user_id: Any,
     None. The authority reads the projection; the caller never decodes it.
     """
     user_id = require_user_id(user_id, context='get conversation turn')
+    payload = _turn_read(conversation_id, turn_id, user_id, include_projection, content_preview_chars)
+    row = _turn_client().query('turn.get', payload)
+    return _read_turn(row, conversation_id, turn_id, include_projection, content_preview_chars)
+
+
+def get_turns(requests: list[tuple[str, str, bool, int | None]], *, user_id: Any) -> list[Any]:
+    """``get_turn`` of each ``(conversation_id, turn_id, include_projection, content_preview_chars)``.
+
+    The reads share one pipelined exchange. Element ``i`` is what ``get_turn``
+    returns for ``requests[i]``, or the ``LifecycleNotFound``/``StorageError``
+    it raises.
+    """
+    from lib.storage.port import query_many
+    user_id = require_user_id(user_id, context='get conversation turn')
+    reads = [('turn.get', _turn_read(conversation, turn, user_id, include_projection, preview_chars))
+             for conversation, turn, include_projection, preview_chars in requests]
+    results: list[Any] = []
+    for (conversation, turn, include_projection, preview_chars), row in zip(
+            requests, query_many(_turn_client(), reads)):
+        try:
+            if isinstance(row, StorageError):
+                raise row
+            results.append(_read_turn(row, conversation, turn, include_projection, preview_chars))
+        except (LifecycleNotFound, StorageError) as error:
+            results.append(error)
+    return results
+
+
+def _turn_read(conversation_id: str, turn_id: str, user_id: int, include_projection: bool,
+               content_preview_chars: int | None = None) -> dict[str, Any]:
     if type(include_projection) is not bool:
         raise TypeError('Invalid Turn projection flag')
     if content_preview_chars is not None and (
@@ -3780,13 +3810,31 @@ def get_turn(conversation_id: str, turn_id: str, *, user_id: Any,
         payload['include_projection'] = False
     if content_preview_chars is not None:
         payload['content_preview_chars'] = content_preview_chars
-    row = _turn_client().query('turn.get', payload)
+    return payload
+
+
+def _read_turn(row: Any, conversation_id: str, turn_id: str, include_projection: bool,
+               content_preview_chars: int | None = None) -> dict[str, Any]:
     if row is None:
         raise LifecycleNotFound('Turn not found')
     if not include_projection:
         from lib.conversation_sync.validation import ContractViolation, decode
         if not isinstance(row, Mapping) or 'projection' in row:
             raise StorageError('database_protocol_error', 'Turn metadata read returned an invalid result')
+        if content_preview_chars is not None and 'contentPreview' not in row:
+            # The restart keep rule can retain an engine built before
+            # content_preview_chars existed: contracts/tofudb_ir_v1.json is not
+            # part of the storage-contract identity it compares. Such an engine
+            # ignores the parameter, so cut the same prefix from the public
+            # projection here instead of failing the caller's whole read.
+            whole = _turn_client().query('turn.get', {
+                'conversation_id': conversation_id, 'turn_id': turn_id, 'user_id': user_id})
+            if whole is None:
+                raise LifecycleNotFound('Turn not found')
+            projection = whole.get('projection') if isinstance(whole, Mapping) else None
+            content = projection.get('content') if isinstance(projection, Mapping) else None
+            row = {**row, 'contentPreview': (content[:content_preview_chars]
+                                             if isinstance(content, str) else None)}
         if content_preview_chars is not None:
             preview = row.get('contentPreview', False)
             if not (preview is None or (isinstance(preview, str) and len(preview) <= content_preview_chars)):
@@ -3820,6 +3868,19 @@ def get_attempt(attempt_id: str, *, user_id: Any, include_execution_config: bool
     if row is None:
         raise LifecycleNotFound('Attempt not found')
     return row
+
+
+def get_attempts(attempt_ids: list[str], *, user_id: Any) -> list[Any]:
+    """``get_attempt`` of each attempt, read in one exchange.
+
+    Element ``i`` is what ``get_attempt(attempt_ids[i], user_id=user_id)``
+    returns, or the ``LifecycleNotFound``/``StorageError`` it raises.
+    """
+    from lib.storage.port import query_many
+    user_id = require_user_id(user_id, context='get turn attempt')
+    rows = query_many(_turn_client(), [('turn.attempt.get', {'attempt_id': attempt_id, 'user_id': user_id})
+                                       for attempt_id in attempt_ids])
+    return [LifecycleNotFound('Attempt not found') if row is None else row for row in rows]
 
 
 def list_dispatchable_attempts(

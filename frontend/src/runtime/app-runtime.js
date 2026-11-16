@@ -22310,6 +22310,10 @@ let backgroundConversationActivity = new Map();
   runtimeScope.observeCoordinatorProgress = function (progress) {
     surface.observeProgress(progress); sidebarSurface.observeProgress(progress); headquartersSurface.observeProgress(progress);
   };
+  // The shared revalidation (core/conversation_invalidation.js) retries failed binding reads.
+  runtimeScope.recoverProjectCoordination = function () {
+    surface.recover(); sidebarSurface.recover(); headquartersSurface.recover();
+  };
   // Reached from the main coordinator's card and settings, never as list rows.
   runtimeScope.routerConversationIds = function () {
     return [globalRouter.conversationId(), routerWatchdog.conversationId()].filter(Boolean);
@@ -22399,6 +22403,7 @@ let backgroundConversationActivity = new Map();
   };
   window.addEventListener('pagehide', function (event) {
     if (!event.persisted) {
+      delete runtimeScope.recoverProjectCoordination;
       surface.destroy(); sidebarSurface.destroy(); headquartersSurface.destroy(); globalRouter.destroy(); routerWatchdog.destroy();
       coordinatorConversationGroups.destroy(); leadOffice?.destroy(); stopLandingWatch();
     }
@@ -24088,6 +24093,7 @@ function _revalidateOnResume(trigger) {
   // a boot load already in flight must not hold its replay cursor asleep.
   // The coordinator coalesces snapshots and preserves stream retry backoff.
   void identityReady.then(() => _activeConversationWake()).catch(failed);
+  runtimeScope.recoverProjectCoordination?.();
   if (refreshCatalog) {
     void identityReady.then(() => loadConversationCatalog())
       .catch(failed).finally(_releaseBootLoad);

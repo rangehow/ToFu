@@ -173,11 +173,18 @@ export function createProjectCoordinationSurface(ports: {
     ports.sidebar.replaceChildren(row);
   }
   function invalidate() { pending = true; void refresh(true); }
-  // Recovery signals retry failed demand, never ordinary list renders or a timer.
+  /* Recovery signals retry failed demand, never ordinary list renders or a timer
+   * of this surface. Besides its own browser events, the application's shared
+   * revalidation (push reconnect, backend recovery, its reconcile) calls
+   * recover(). A read already in flight is that retry, so one signal heard on
+   * both paths reads once. */
+  function recover(): boolean {
+    if (!alive || document.visibilityState === 'hidden' || !(bindingFailed || bindingStale)) return false;
+    if (!flight) invalidate();
+    return true;
+  }
   function recoverBinding() {
-    if (document.visibilityState === 'hidden') return;
-    if (bindingFailed || bindingStale) invalidate();
-    else unreadInView?.();
+    if (document.visibilityState !== 'hidden' && !recover()) unreadInView?.();
   }
   window.addEventListener('online', recoverBinding);
   document.addEventListener('visibilitychange', recoverBinding);
@@ -502,7 +509,7 @@ export function createProjectCoordinationSurface(ports: {
     observed = { binding: key, revision: progress.revision };
     invalidate();
   }
-  return { refresh, coordinatorId, observeProgress, destroy() {
+  return { refresh, recover, coordinatorId, observeProgress, destroy() {
     alive = false; generation++; flight?.abort(); flight = null; pending = false; unreadInView = null;
     dropBoardCard(); ports.office?.(null);
     window.removeEventListener('online', recoverBinding);

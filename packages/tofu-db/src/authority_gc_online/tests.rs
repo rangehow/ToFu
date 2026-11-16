@@ -969,11 +969,11 @@ fn an_epoch_ending_at_ninety_percent_of_the_catalog_ceiling_keeps_the_minimum_in
 
 /// docs/TOFUDB_BLOCK_READ_PATH.md, "Published catalog location table": the
 /// first table needs no authority hold. While a foreground holder keeps the
-/// mutex, every epoch's capture defers, yet the driver publishes the table of
-/// the installed catalog (live 2026-11-07 the capture deferred twice and the
-/// authority's table appeared only after five minutes).
+/// mutex, the epoch's capture waits for it, yet the driver has already
+/// published the table of the installed catalog (live 2026-11-07 the capture
+/// deferred twice and the authority's table appeared only after five minutes).
 #[test]
-fn driver_publishes_the_first_catalog_location_table_while_epochs_defer() {
+fn driver_publishes_the_first_catalog_location_table_while_the_capture_waits() {
     use crate::block::BlockId;
     use crate::payload_manifest::{PayloadManifest, PayloadSegmentReference};
     let (_vfs, database) = authority();
@@ -1014,11 +1014,11 @@ fn driver_publishes_the_first_catalog_location_table_while_epochs_defer() {
     let foreground = database.lock().unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while blocks.published_catalog_locations_for_test().is_none()
-        || observer.metrics().deferred_epochs == 0
+        || !observer.metrics().epoch_in_progress
     {
         assert!(
             std::time::Instant::now() < deadline,
-            "no first table while the capture defers"
+            "no first table while the capture waits"
         );
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -1031,17 +1031,30 @@ fn driver_publishes_the_first_catalog_location_table_while_epochs_defer() {
         "no epoch got past its capture"
     );
     drop(foreground);
+    wait_for_completed_epoch(&observer);
     driver.stop_and_join().unwrap();
+}
+
+fn wait_for_completed_epoch(observer: &OnlineGarbageCollectionObserver) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while observer.metrics().epochs_completed == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the waiting capture completes its epoch once the holder lets go"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(observer.metrics().deferred_epochs, 0);
 }
 
 /// docs/TOFUDB_BLOCK_READ_PATH.md, "Packed filter built off the authority
 /// mutex": a clean open installs its catalog without the packed filter, and no
 /// install builds it for a catalog it did not add. The driver builds it beside
-/// the first location table while a foreground holder keeps the mutex and every
-/// epoch's capture defers (live 2026-11-09 the first foreground publication
-/// built it inside a 68.2 s hold).
+/// the first location table while a foreground holder keeps the mutex and the
+/// epoch's capture waits for it (live 2026-11-09 the first foreground
+/// publication built it inside a 68.2 s hold).
 #[test]
-fn driver_builds_the_packed_filter_off_the_mutex_while_epochs_defer() {
+fn driver_builds_the_packed_filter_off_the_mutex_while_the_capture_waits() {
     use crate::block::BlockId;
     use crate::payload_manifest::{PayloadManifest, PayloadSegmentReference};
     let (vfs, database) = authority();
@@ -1090,11 +1103,11 @@ fn driver_builds_the_packed_filter_off_the_mutex_while_epochs_defer() {
     let foreground = database.lock().unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while blocks.packed_filter_state_for_test() != (true, true)
-        || observer.metrics().deferred_epochs == 0
+        || !observer.metrics().epoch_in_progress
     {
         assert!(
             std::time::Instant::now() < deadline,
-            "no packed filter while the capture defers"
+            "no packed filter while the capture waits"
         );
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -1114,6 +1127,7 @@ fn driver_builds_the_packed_filter_off_the_mutex_while_epochs_defer() {
         io::ErrorKind::NotFound
     );
     drop(foreground);
+    wait_for_completed_epoch(&observer);
     driver.stop_and_join().unwrap();
 }
 
@@ -1627,9 +1641,9 @@ fn shutdown_during_mark_read_abandons_before_reading_the_remaining_graph() {
 }
 
 #[test]
-fn idle_epochs_eventually_verify_every_payload_catalog_window() {
+fn every_epoch_verifies_every_payload_catalog_window() {
     let (vfs, database) = authority();
-    let excluded_segment = {
+    let last_segment = {
         let mut guard = database.lock().unwrap();
         for index in 0..(MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED + 1) {
             let payload = format!("idle-window-live-{index}");
@@ -1646,28 +1660,12 @@ fn idle_epochs_eventually_verify_every_payload_catalog_window() {
             .installed_payload_manifest()
             .unwrap()
             .unwrap();
-        let count = manifest
-            .segments
-            .len()
-            .div_ceil(MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED);
-        assert!(count > 1);
-        let start = (capture.snapshot.generation as usize % count)
-            * MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED;
-        manifest
-            .segments
-            .iter()
-            .enumerate()
-            .find(|(index, _)| {
-                *index < start || *index >= start + MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED
-            })
-            .unwrap()
-            .1
-            .segment_id
+        assert!(manifest.segments.len() > MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED);
+        manifest.segments.last().unwrap().segment_id
     };
-    // Corruption outside the first selected window is a reachability oracle:
-    // repeated idle epochs must eventually inspect that real catalog file.
-    let path =
-        Path::new("/data/payload-segments").join(format!("{}.pseg", excluded_segment.simple()));
+    // Corruption in the catalog's last window: the first epoch already reads
+    // that real catalog file, as it reads every window.
+    let path = Path::new("/data/payload-segments").join(format!("{}.pseg", last_segment.simple()));
     let mut file = vfs
         .open(
             &path,
@@ -1682,135 +1680,226 @@ fn idle_epochs_eventually_verify_every_payload_catalog_window() {
     drop(file);
     let mut collector = OnlineGarbageCollector::new(test_budget());
     let stop = AtomicBool::new(false);
-    let mut detected = false;
-    for _ in 0..8 {
-        if let Err(error) = collector.run_epoch(&database, &stop) {
-            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-            detected = true;
-            break;
-        }
-    }
-    assert!(
-        detected,
-        "unchanged generation must not starve another catalog window"
+    assert_eq!(
+        collector.run_epoch(&database, &stop).unwrap_err().kind(),
+        io::ErrorKind::InvalidData
     );
 }
 
+/// docs/TOFUDB_ONLINE_GC.md, "Every confirmed segment is reclaimed each
+/// epoch": live 2026-11-15 the source authority's catalog held 57.7 GB of
+/// which at most 9.2 GB was reachable, because an epoch scanned one
+/// 16-segment window (two epochs each) and reclaimed one segment of it. Now
+/// the second epoch reclaims every dead segment of every window, and no live
+/// block goes.
 #[test]
-fn idle_epochs_reclaim_dead_segment_beyond_first_window_and_preserve_live_data() {
+fn the_second_epoch_reclaims_every_confirmed_segment_in_every_window() {
     let (_vfs, database) = authority();
-    let (dead_id, live_ids) = {
+    let segments = 3 * MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED + 1;
+    let (dead, live) = {
         let mut guard = database.lock().unwrap();
-        let mut payloads = Vec::new();
-        for index in 0..(MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED + 1) {
-            let payload = format!("idle-reclaim-payload-{index}").into_bytes();
-            let id = guard.write_orphan_block_for_test(&payload).unwrap();
-            guard.compact_payload_blocks_for_test(&[id]).unwrap();
-            payloads.push((id, payload));
-        }
-        let capture = guard
-            .online_gc_capture(test_budget().maximum_temporary_bytes)
-            .unwrap();
-        let manifest = capture
-            .blocks
-            .installed_payload_manifest()
-            .unwrap()
-            .unwrap();
-        let windows = manifest
-            .segments
-            .len()
-            .div_ceil(MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED);
-        let start = (capture.snapshot.generation as usize % windows)
-            * MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED;
-        let target = manifest
-            .segments
-            .iter()
-            .enumerate()
-            .find(|(index, _)| {
-                *index < start || *index >= start + MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED
-            })
-            .unwrap()
-            .1;
-        let dead_id = capture
-            .blocks
-            .payload_segment_store()
-            .unwrap()
-            .open_segment(target.segment_id)
-            .unwrap()
-            .block_ids()
-            .next()
-            .unwrap();
-        let mut live_ids = Vec::new();
-        for (id, payload) in payloads {
-            if id != dead_id {
-                assert_eq!(guard.commit_block_payload_for_test(&payload).unwrap(), id);
-                live_ids.push((id, payload));
+        let mut dead = Vec::new();
+        let mut live = Vec::new();
+        for index in 0..segments {
+            let dead_payload = format!("every-window-dead-{index}").into_bytes();
+            let dead_id = guard.write_orphan_block_for_test(&dead_payload).unwrap();
+            let live_payload = format!("every-window-live-{index}").into_bytes();
+            let live_id = guard.commit_block_payload_for_test(&live_payload).unwrap();
+            // Odd segments are fully dead, even ones keep a live block.
+            if index % 2 == 0 {
+                guard
+                    .compact_payload_blocks_for_test(&[dead_id, live_id])
+                    .unwrap();
+            } else {
+                guard.compact_payload_blocks_for_test(&[dead_id]).unwrap();
+                guard.compact_payload_blocks_for_test(&[live_id]).unwrap();
             }
+            dead.push(dead_id);
+            live.push((live_id, live_payload));
         }
-        let after = guard
-            .online_gc_capture(test_budget().maximum_temporary_bytes)
-            .unwrap();
-        assert_eq!(after.snapshot.generation, capture.snapshot.generation);
-        (dead_id, live_ids)
+        (dead, live)
     };
     let mut collector = OnlineGarbageCollector::new(test_budget());
     run_epoch(&mut collector, &database);
-    run_epoch(&mut collector, &database);
-    assert!(
-        database
-            .lock()
-            .unwrap()
-            .read_block_for_test(dead_id)
-            .is_ok(),
-        "first window must not retire another window's segment"
+    assert_eq!(
+        metrics(&collector).total_segments_retired,
+        0,
+        "one mark confirms nothing"
     );
-    for _ in 0..6 {
+    run_epoch(&mut collector, &database);
+    let finished = metrics(&collector);
+    let guard = database.lock().unwrap();
+    for dead_id in dead {
+        assert_eq!(
+            guard.read_block_for_test(dead_id).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+    }
+    for (live_id, payload) in live {
+        assert_eq!(guard.read_block_for_test(live_id).unwrap(), payload);
+    }
+    assert!(finished.total_segments_retired + finished.total_segments_rewritten >= segments as u64);
+}
+
+/// A rewrite copies a segment's live bytes to free its dead ones, so it waits
+/// until the segment frees at least as much as it copies: rewriting never
+/// writes more than it reclaims, and the catalog stays at least half live.
+#[test]
+fn a_segment_is_rewritten_once_its_dead_bytes_reach_its_live_bytes() {
+    let (_vfs, database) = authority();
+    let mostly_live = (vec![0x11_u8; 1_000], vec![0x22_u8; 3_000]);
+    let mostly_dead = (vec![0x33_u8; 2_500], vec![0x44_u8; 1_000]);
+    let ids = {
+        let mut guard = database.lock().unwrap();
+        let mut ids = Vec::new();
+        for (dead, live) in [&mostly_live, &mostly_dead] {
+            let dead_id = guard.write_orphan_block_for_test(dead).unwrap();
+            let live_id = guard.commit_block_payload_for_test(live).unwrap();
+            guard
+                .compact_payload_blocks_for_test(&[dead_id, live_id])
+                .unwrap();
+            ids.push((dead_id, live_id));
+        }
+        ids
+    };
+    let mut collector = OnlineGarbageCollector::new(test_budget());
+    for _ in 0..3 {
         run_epoch(&mut collector, &database);
     }
     let guard = database.lock().unwrap();
+    // 1,000 dead bytes beside 3,000 live ones wait for more of the segment
+    // to die; 2,500 beside 1,000 are reclaimed.
+    assert_eq!(metrics(&collector).total_segments_rewritten, 1);
+    assert_eq!(guard.read_block_for_test(ids[0].0).unwrap(), mostly_live.0);
     assert_eq!(
-        guard.read_block_for_test(dead_id).unwrap_err().kind(),
+        guard.read_block_for_test(ids[1].0).unwrap_err().kind(),
         io::ErrorKind::NotFound
     );
-    for (id, payload) in live_ids {
-        assert_eq!(guard.read_block_for_test(id).unwrap(), payload);
-    }
-    assert!(metrics(&collector).total_segments_retired > 0);
+    assert_eq!(guard.read_block_for_test(ids[0].1).unwrap(), mostly_live.1);
+    assert_eq!(guard.read_block_for_test(ids[1].1).unwrap(), mostly_dead.1);
 }
 
 #[test]
-fn cancelled_and_contended_epochs_do_not_advance_catalog_confirmation() {
+fn cancelled_epochs_do_not_advance_catalog_confirmation() {
     let (_vfs, database) = authority();
+    let dead_id = {
+        let mut guard = database.lock().unwrap();
+        let live_id = guard.commit_block_payload_for_test(b"cancel-live").unwrap();
+        let dead_id = guard.write_orphan_block_for_test(b"cancel-dead").unwrap();
+        guard
+            .compact_payload_blocks_for_test(&[live_id, dead_id])
+            .unwrap();
+        dead_id
+    };
     let mut collector = OnlineGarbageCollector::new(test_budget());
     let stop = AtomicBool::new(true);
     assert_eq!(
         collector.run_epoch(&database, &stop).unwrap(),
         OnlineGarbageCollectionOutcome::Deferred
     );
-    assert!(collector.payload_window_cursor.is_none());
-    assert!(!collector.payload_window_second_epoch);
+    assert!(collector.previous.segment_dead.is_empty());
     stop.store(false, Ordering::Release);
-    let guard = database.lock().unwrap();
-    assert_eq!(
-        collector.run_epoch(&database, &stop).unwrap(),
-        OnlineGarbageCollectionOutcome::Deferred
-    );
-    assert!(collector.payload_window_cursor.is_none());
-    drop(guard);
     run_epoch(&mut collector, &database);
-    let cursor = collector.payload_window_cursor.unwrap();
-    assert!(collector.payload_window_second_epoch);
+    let observed = collector.previous.segment_dead.clone();
+    assert_eq!(observed.len(), 1);
     stop.store(true, Ordering::Release);
     collector.run_epoch(&database, &stop).unwrap();
-    assert_eq!(collector.payload_window_cursor, Some(cursor));
-    assert!(collector.payload_window_second_epoch);
+    assert_eq!(collector.previous.segment_dead, observed);
+    assert!(database
+        .lock()
+        .unwrap()
+        .read_block_for_test(dead_id)
+        .is_ok());
     stop.store(false, Ordering::Release);
     run_epoch(&mut collector, &database);
     assert_eq!(
-        collector.payload_window_cursor,
-        Some(cursor.wrapping_add(1))
+        database
+            .lock()
+            .unwrap()
+            .read_block_for_test(dead_id)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::NotFound
     );
-    assert!(!collector.payload_window_second_epoch);
+}
+
+/// docs/TOFUDB_ONLINE_GC.md, "The capture waits for the mutex": live
+/// 2026-11-15 the search worker held its index mutex at every one of 147
+/// sampled captures, so the search collector never completed an epoch while
+/// the index grew to 182 GiB. A holder that keeps the mutex about 95% of the
+/// time no longer defers the epoch; the capture waits for its hand-off.
+#[test]
+fn a_capture_behind_a_mostly_held_mutex_waits_instead_of_deferring() {
+    let (_vfs, database) = authority();
+    let orphan = database
+        .lock()
+        .unwrap()
+        .write_orphan_block_for_test(b"mostly-held-orphan")
+        .unwrap();
+    let done = Arc::new(AtomicBool::new(false));
+    let holder = {
+        let database = Arc::clone(&database);
+        let done = Arc::clone(&done);
+        std::thread::spawn(move || {
+            while !done.load(Ordering::Acquire) {
+                let guard = database.lock().unwrap();
+                std::thread::sleep(Duration::from_millis(20));
+                drop(guard);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        })
+    };
+    let mut collector = OnlineGarbageCollector::new(test_budget());
+    run_epoch(&mut collector, &database);
+    run_epoch(&mut collector, &database);
+    done.store(true, Ordering::Release);
+    holder.join().unwrap();
+    let finished = metrics(&collector);
+    assert_eq!(
+        (finished.epochs_completed, finished.deferred_epochs),
+        (2, 0)
+    );
+    assert_eq!(
+        database
+            .lock()
+            .unwrap()
+            .read_block_for_test(orphan)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+}
+
+/// A stop raised while the capture waits ends the epoch before it captures.
+#[test]
+fn a_stop_raised_while_the_capture_waits_defers_without_capturing() {
+    let (_vfs, database) = authority();
+    let guard = database.lock().unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let collector = Arc::new(Mutex::new(OnlineGarbageCollector::new(test_budget())));
+    let observer = collector.lock().unwrap().handle();
+    let worker = {
+        let database = Arc::clone(&database);
+        let stop = Arc::clone(&stop);
+        let collector = Arc::clone(&collector);
+        std::thread::spawn(move || collector.lock().unwrap().run_epoch(&database, &stop))
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !observer.metrics().epoch_in_progress {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(!worker.is_finished(), "the capture waits for the holder");
+    stop.store(true, Ordering::Release);
+    drop(guard);
+    assert_eq!(
+        worker.join().unwrap().unwrap(),
+        OnlineGarbageCollectionOutcome::Deferred
+    );
+    let finished = observer.metrics();
+    assert_eq!((finished.marks_built, finished.deferred_epochs), (0, 1));
+    assert!(!finished.epoch_in_progress);
 }
 
 #[test]

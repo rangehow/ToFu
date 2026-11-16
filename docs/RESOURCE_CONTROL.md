@@ -559,6 +559,36 @@ evict-only acceleration policies, described in [INDEX_FASTPATH.md](INDEX_FASTPAT
 oversized indexes remain complete in memory and failed persistence retains
 live traversal. Free-space/inode probes never reject commands or file edits.
 
+## Durable store growth is bounded by structure, not by budgets
+
+**Problem (measured 2026-11-15).** Database storage grew without limit while
+every task still had to run at full speed: the source authority's catalog held
+57.7 GB with at most 9.2 GB reachable, the reconstructible search projection
+held 182 GB whose 22,234 retained history segments kept every page version
+live, its collector never ran, and 46 GiB of other authorities' search
+namespaces had no owner (inventory and causes:
+[STORAGE_OPERATIONS.md](STORAGE_OPERATIONS.md#durable-store-growth-inventory-2026-11-15)).
+
+**Decision.** Reclaim by lifecycle and proof, with no size budget, quota or
+new launch setting: the search index retires its history to the source's
+existing retained bound; the online collector's capture waits for its mutex;
+every epoch confirms dead sets across the whole catalog and rewrites each
+segment once its dead bytes reach its live bytes (so collector writes never
+exceed what it frees); an automatic search namespace records its owner and is
+reclaimed when that authority is gone and no engine holds it. Durable user
+state is only ever reclaimed when unreachable from every root, pin and
+retained history segment, and reconstructible index data is never evicted
+while it is reachable. `contracts/resource_policy_v1.json` gains no entry
+because nothing new is configurable. On copies of the live state the source
+shrank 59.3 -> 9.6 GB and the search projection 194.4 -> 7.4 GB.
+
+**Alternatives rejected.** A disk budget for the search projection that
+evicts and rebuilds it (a probe-derived retention would have been allowed, but
+the bytes were superseded versions, not live index data, and a rebuild of the
+same design regrows them); a per-epoch reclamation count or time slice (a
+tuning knob); an operator `collect-garbage` schedule (it re-marks a store per
+item and does not keep up).
+
 ## Local scratch disk
 
 **Problem (measured read-only 2026-11-12).** Tofu put its local writes on the

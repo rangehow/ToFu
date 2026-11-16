@@ -192,6 +192,7 @@ pub struct AuthorityGarbageCollectionSession<'a> {
     coverage: CatalogCoverage,
     stats: AuthorityGarbageCollectionSessionStats,
     failed: bool,
+    census_history_references: u64,
 }
 
 impl<'a> AuthorityGarbageCollectionSession<'a> {
@@ -214,6 +215,7 @@ impl<'a> AuthorityGarbageCollectionSession<'a> {
             },
             stats: AuthorityGarbageCollectionSessionStats::default(),
             failed: false,
+            census_history_references: 0,
         })
     }
 
@@ -266,6 +268,124 @@ impl<'a> AuthorityGarbageCollectionSession<'a> {
         self.stats
     }
 
+    /// Read-only liveness census of the whole payload catalog: how many of
+    /// its bytes the session's marks still reach. It reclaims nothing and
+    /// writes only the session's mark spill; operators run it on a closed
+    /// store or a copy to measure garbage that reclamation has not reached
+    /// (docs/STORAGE_OPERATIONS.md, "Measuring liveness with gc-census").
+    pub fn census(&mut self) -> io::Result<CatalogLivenessCensus> {
+        self.engine.require_usable_authority()?;
+        self.engine.require_physical_maintenance_available()?;
+        let root = self
+            .engine
+            .state()
+            .authority_state_root
+            .ok_or_else(|| invalid_input("authority GC refuses a legacy CONTROL root"))?;
+        let engine = &*self.engine;
+        if self.marks.is_none() {
+            let vfs = engine.vfs();
+            let work_directory = engine.data_dir().join(GC_WORK_DIRECTORY);
+            ensure_directory(&work_directory, engine.data_dir(), vfs.as_ref())?;
+            ensure_directory(
+                &work_directory.join("gc-runs"),
+                &work_directory,
+                vfs.as_ref(),
+            )?;
+            let mut live = SpillMarkSet::initialize(&work_directory, Arc::clone(&vfs))?;
+            let mark_result = (|| {
+                let live_cell = RefCell::new(&mut live);
+                visit_entity_page_graph_with_values(
+                    root,
+                    |block_id| engine.block_store().get(block_id),
+                    |block_id, _| live_cell.borrow_mut().insert(block_id),
+                    |key, value| {
+                        visit_semantic_value_blocks(
+                            engine.block_store(),
+                            key,
+                            value,
+                            |block_id, _| live_cell.borrow_mut().insert(block_id),
+                        )
+                    },
+                )?;
+                let mut retained_history_references = 0_u64;
+                engine.visit_gc_stable_transaction_blocks(|block_id| {
+                    retained_history_references += 1;
+                    live_cell.borrow_mut().insert(block_id)
+                })?;
+                let result = live_cell.borrow_mut().finish();
+                result.map(|metrics| (metrics, retained_history_references))
+            })();
+            let (metrics, retained_history_references) = match mark_result {
+                Ok(metrics) => metrics,
+                Err(error) => {
+                    let _ = live.cleanup();
+                    return Err(error);
+                }
+            };
+            self.census_history_references = retained_history_references;
+            self.marks = Some(CachedMarks { live, metrics });
+            self.stats.mark_builds += 1;
+        }
+        let marks = self.marks.as_ref().unwrap();
+        let protected = engine.state().payload_manifest_block_id;
+        let references = engine.payload_segment_references().to_vec();
+        let store = engine.block_store().payload_segment_store()?;
+        let mut payload = vec![0_u64; references.len()];
+        let mut live_payload = vec![0_u64; references.len()];
+        let mut census = CatalogLivenessCensus {
+            catalog_segments: references.len() as u64,
+            live_references: marks.metrics.references,
+            history_segments: engine.history_segment_count() as u64,
+            retained_history_references: self.census_history_references,
+            ..CatalogLivenessCensus::default()
+        };
+        for reference in &references {
+            engine.block_store().verify_payload_segment(reference)?;
+            census.catalog_file_bytes += reference.file_bytes;
+        }
+        // Each pass holds the catalog entries of a sixteenth of the hash
+        // space and that slice's live IDs, never the whole catalog index.
+        for first_shard in (0..=u8::MAX).step_by(CENSUS_SHARDS_PER_PASS) {
+            let shards = first_shard..=first_shard.saturating_add(CENSUS_SHARDS_PER_PASS as u8 - 1);
+            let mut entries: Vec<(BlockId, u32, usize)> = Vec::new();
+            for (ordinal, reference) in references.iter().enumerate() {
+                let segment = store.open_segment(reference.segment_id)?;
+                entries.extend(
+                    segment
+                        .index_entries()
+                        .filter(|(block_id, _)| shards.contains(&block_id.0[0]))
+                        .map(|(block_id, length)| (block_id, length, ordinal)),
+                );
+            }
+            entries.sort_unstable_by_key(|(block_id, _, _)| *block_id);
+            let mut live_ids = Vec::new();
+            for shard in shards {
+                live_ids.extend(marks.live.live_for_shard(shard)?);
+            }
+            live_ids.sort_unstable();
+            for (block_id, length, ordinal) in entries {
+                census.catalog_blocks += 1;
+                census.catalog_payload_bytes += u64::from(length);
+                payload[ordinal] += u64::from(length);
+                if live_ids.binary_search(&block_id).is_ok() || protected == Some(block_id) {
+                    census.live_blocks += 1;
+                    census.live_payload_bytes += u64::from(length);
+                    live_payload[ordinal] += u64::from(length);
+                }
+            }
+        }
+        for ((reference, payload), live) in references.iter().zip(payload).zip(live_payload) {
+            if live == 0 {
+                census.fully_dead_segments += 1;
+                census.fully_dead_segment_file_bytes += reference.file_bytes;
+            } else if live.saturating_mul(2) <= payload {
+                census.mostly_dead_segments += 1;
+                census.mostly_dead_segment_file_bytes += reference.file_bytes;
+            }
+        }
+        Ok(census)
+    }
+
     /// Successful callers must finish explicitly so cleanup failures surface.
     pub fn finish(mut self) -> io::Result<AuthorityGarbageCollectionSessionStats> {
         release_cached_marks(&mut self.marks)?;
@@ -277,6 +397,31 @@ impl Drop for AuthorityGarbageCollectionSession<'_> {
     fn drop(&mut self) {
         let _ = release_cached_marks(&mut self.marks);
     }
+}
+
+/// The census holds a sixteenth of the hash space per pass: 16 of 256 shards.
+const CENSUS_SHARDS_PER_PASS: usize = 16;
+
+/// Payload-catalog liveness reported by `AuthorityGarbageCollectionSession::census`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CatalogLivenessCensus {
+    pub catalog_segments: u64,
+    pub catalog_file_bytes: u64,
+    pub catalog_blocks: u64,
+    pub catalog_payload_bytes: u64,
+    pub live_references: u64,
+    /// Retained history segments, and the block references their
+    /// transactions keep live (counted with repeats).
+    pub history_segments: u64,
+    pub retained_history_references: u64,
+    pub live_blocks: u64,
+    pub live_payload_bytes: u64,
+    /// Segments none of whose blocks is reachable.
+    pub fully_dead_segments: u64,
+    pub fully_dead_segment_file_bytes: u64,
+    /// Segments with live blocks whose live payload is at most half.
+    pub mostly_dead_segments: u64,
+    pub mostly_dead_segment_file_bytes: u64,
 }
 
 fn release_cached_marks(marks: &mut Option<CachedMarks>) -> io::Result<()> {
@@ -1389,6 +1534,36 @@ mod tests {
         vfs.arm_fault(None).unwrap();
         let reopened = AuthorityDatabase::open_with_vfs(Path::new("/data"), vfs).unwrap();
         assert_eq!(reopened.read_block_for_test(live_id).unwrap(), live_payload);
+    }
+
+    #[test]
+    fn census_measures_live_and_dead_catalog_bytes_and_reclaims_nothing() {
+        let (_vfs, mut database, live_id, live_payload, dead_id) =
+            authority_with_partially_live_payload_segment();
+        let mut session = database.begin_garbage_collection(test_budget()).unwrap();
+        let census = session.census().unwrap();
+        session.finish().unwrap();
+        assert_eq!(census.catalog_segments, 1);
+        assert_eq!(census.catalog_blocks, 2);
+        assert_eq!(census.live_blocks, 1);
+        let dead_payload = database.read_block_for_test(dead_id).unwrap();
+        assert_eq!(
+            census.catalog_payload_bytes - census.live_payload_bytes,
+            dead_payload.len() as u64,
+            "the dead block's stored bytes are exactly the unreachable payload"
+        );
+        assert!(census.live_payload_bytes > 0 && census.catalog_file_bytes > 0);
+        assert_eq!(
+            census.mostly_dead_segments + census.fully_dead_segments,
+            u64::from(dead_payload.len() >= live_payload.len())
+        );
+        assert_eq!(database.read_block_for_test(live_id).unwrap(), live_payload);
+        assert_eq!(database.payload_segment_count_for_test(), 1);
+        let plan = database.plan_garbage_collection(test_budget()).unwrap();
+        assert_eq!(
+            plan.candidate_segment_dead_blocks, 1,
+            "the census reclaimed nothing"
+        );
     }
 
     #[test]

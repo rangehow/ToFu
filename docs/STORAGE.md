@@ -1917,6 +1917,13 @@ Process-local completed predecessors and the 30-second owner cache are not distr
   the archive table, and its post-insert metadata is assembled from the
   values just written rather than a blob read-back on the single writer.
 - Recoverable conversation trash: 30 days.
+- Native physical storage: superseded versions are reclaimed by the online
+  collector, which rewrites a payload segment once its dead bytes reach its
+  live bytes, and the native search projection retires its WAL history to the
+  source's retained bound; an automatic search namespace whose owner
+  authority is gone is removed
+  ([inventory and lifecycles](STORAGE_OPERATIONS.md#durable-store-growth-inventory-2026-11-15)).
+  Measure liveness on a copy with `tofu-db gc-census`.
 - Tool-result artifacts: owner-scoped, content-addressed reconstructible data;
   each write declares an expiry, reads/searches reject the wrong owner and
   expired rows, and maintenance prunes expired rows in bounded batches.

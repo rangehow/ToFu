@@ -240,3 +240,62 @@ def test_the_panel_reports_a_pending_yield_as_a_restart(layout, monkeypatch):
     assert state['directory'] == str(copy)
     assert state['pendingDirectory'] == str(layout.legacy) and state['restartRequired']
     assert _placement_state(layout)['lastLaunch']['selected'], 'status never records a decision'
+
+
+def _foreign_copy(layout, authority: Path) -> Path:
+    """Another installation's copy under the shared base, marked by its launch."""
+    copy = layout.candidate.parent / paths.namespace_identity(authority)
+    _native_tree(copy, files_per_shard=1)
+    paths.record_projection_owner(copy, authority)
+    return copy
+
+
+def test_a_launch_marks_its_namespace_beside_the_index_leaf(layout):
+    assert _launch(layout) == layout.candidate
+    marker = paths.projection_owner_marker(layout.candidate)
+    assert marker.read_text() == str(layout.data / 'tofudb-authority')
+    assert not layout.candidate.exists(), 'the leaf stays absent for native initialization'
+    assert paths.read_projection_owner(layout.candidate) == layout.data / 'tofudb-authority'
+
+
+def test_copies_whose_authority_is_gone_are_reclaimed_and_live_ones_kept(layout, tmp_path):
+    copy = _local_copy(layout)
+    assert _launch(layout) == copy
+    gone = _foreign_copy(layout, tmp_path / 'removed-worktree' / 'data' / 'tofudb-authority')
+    held = _foreign_copy(layout, tmp_path / 'removed-scratch' / 'data' / 'tofudb-authority')
+    (tmp_path / 'stopped' / 'data' / 'tofudb-authority').mkdir(parents=True)
+    stopped = _foreign_copy(layout, tmp_path / 'stopped' / 'data' / 'tofudb-authority')
+    unmarked = _native_tree(layout.candidate.parent / ('cd' * 32), files_per_shard=1)
+    forged = _native_tree(layout.candidate.parent / ('ef' * 32), files_per_shard=1)
+    paths.projection_owner_marker(forged).write_text(str(tmp_path / 'not-its-authority'))
+    holder = os.open(held / 'LOCK', os.O_RDWR)
+    try:
+        fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        auto.maintain_search_projection(layout.data, str(copy), remove=_remove_now)
+    finally:
+        os.close(holder)
+    assert not gone.exists() and not paths.projection_owner_marker(gone).exists()
+    for kept in (copy, held, stopped, unmarked, forged):
+        assert (kept / 'CONTROL').is_file()
+    assert paths.projection_owner_marker(held).exists()
+    auto.maintain_search_projection(layout.data, str(copy), remove=_remove_now)
+    assert not held.exists() and not paths.projection_owner_marker(held).exists()
+    remaining = sorted(path.name for path in copy.parent.iterdir())
+    assert remaining == sorted([
+        copy.name, paths.projection_owner_marker(copy).name, stopped.name,
+        paths.projection_owner_marker(stopped).name, unmarked.name, forged.name,
+        paths.projection_owner_marker(forged).name])
+
+
+def test_an_interrupted_orphan_removal_resumes_from_its_marker(layout, tmp_path):
+    copy = _local_copy(layout)
+    assert _launch(layout) == copy
+    gone = _foreign_copy(layout, tmp_path / 'removed' / 'data' / 'tofudb-authority')
+    auto.maintain_search_projection(layout.data, str(copy), remove=lambda _retired: None)
+    leftovers = [path for path in copy.parent.iterdir() if '.retired-' in path.name]
+    assert not gone.exists() and len(leftovers) == 1
+    assert paths.projection_owner_marker(gone).exists(), 'kept until the leftover is gone'
+    auto.maintain_search_projection(layout.data, str(copy), remove=_remove_now)
+    assert not leftovers[0].exists()
+    auto.maintain_search_projection(layout.data, str(copy), remove=_remove_now)
+    assert not paths.projection_owner_marker(gone).exists()

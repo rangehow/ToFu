@@ -44,7 +44,7 @@ use zeroize::Zeroize;
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn usage() -> ! {
-    eprintln!("usage: tofu-db <init|inspect> --data-dir <persistent-path>\n       tofu-db serve --data-dir <existing-authority> --owner-id <positive-id> [--tenant-id <positive-id>] [--search-projection-dir <persistent-path>] [--durability strict|normal] [--wal-flush-interval-ms <1..1000>] [--backup-dir <persistent-path>] [--fastpath-dir <existing-local-base> [--fastpath-admission required|auto]] [--fastpath-sync-interval-ms <1000..3600000>]\n       tofu-db fastpath-export --data-dir <durable-seed> --backup-dir <NEW-authority-target>\n       tofu-db <certify-filesystem|{FILESYSTEM_CERTIFICATION_MATRIX_COMMAND}> --data-dir <persistent-empty-path>\n       tofu-db certify-resource-gate --data-dir <persistent-empty-path>\n       tofu-db collect-garbage --data-dir <existing-authority> [--execute [--max-rounds <1..{MAX_AUTHORITY_GC_SESSION_CALLS}>] [--budget-ms <1..{MAX_AUTHORITY_GC_OPERATOR_MILLISECONDS}>]]\n       tofu-db sql --data-dir <existing-authority> --tenant-id <positive-id> --owner-id <positive-id> < query.sql\n       tofu-db backfill-activity-index --data-dir <existing-authority> --tenant-id <positive-id> --owner-id <positive-id> [--maximum-rows <1..256>] --execute\n       tofu-db backfill-integration-checkout-claims --data-dir <existing-authority> --tenant-id <positive-id> --owner-id <positive-id> [--maximum-rows <1..128>] --execute\n       tofu-db migration-session --data-dir <existing-authority> --tenant-id <positive-id> --owner-id <positive-id> --execute\n       tofu-db backup --data-dir <source> --backup-dir <persistent-path>\n       tofu-db verify --data-dir <existing-authority>\n       tofu-db rewrite-history-routing --data-dir <existing-authority> [--execute]\n       tofu-db salvage --data-dir <existing-authority> --backup-dir <persistent-empty-target>\n       tofu-db restore --backup-dir <source> --data-dir <restore-target>\n       tofu-db certify-release --manifest <SHA256SUMS> --signature <SHA256SUMS.sig> --binary <packaged-tofu-db> [--pubkey <public-key.json>]\n       tofu-db certify-release-keygen --key-out <secret-key.json> --pubkey-out <public-key.json>");
+    eprintln!("usage: tofu-db <init|inspect> --data-dir <persistent-path>\n       tofu-db serve --data-dir <existing-authority> --owner-id <positive-id> [--tenant-id <positive-id>] [--search-projection-dir <persistent-path>] [--durability strict|normal] [--wal-flush-interval-ms <1..1000>] [--backup-dir <persistent-path>] [--fastpath-dir <existing-local-base> [--fastpath-admission required|auto]] [--fastpath-sync-interval-ms <1000..3600000>]\n       tofu-db fastpath-export --data-dir <durable-seed> --backup-dir <NEW-authority-target>\n       tofu-db <certify-filesystem|{FILESYSTEM_CERTIFICATION_MATRIX_COMMAND}> --data-dir <persistent-empty-path>\n       tofu-db certify-resource-gate --data-dir <persistent-empty-path>\n       tofu-db collect-garbage --data-dir <existing-authority> [--execute [--max-rounds <1..{MAX_AUTHORITY_GC_SESSION_CALLS}>] [--budget-ms <1..{MAX_AUTHORITY_GC_OPERATOR_MILLISECONDS}>]]\n       tofu-db sql --data-dir <existing-authority> --tenant-id <positive-id> --owner-id <positive-id> < query.sql\n       tofu-db backfill-activity-index --data-dir <existing-authority> --tenant-id <positive-id> --owner-id <positive-id> [--maximum-rows <1..256>] --execute\n       tofu-db backfill-integration-checkout-claims --data-dir <existing-authority> --tenant-id <positive-id> --owner-id <positive-id> [--maximum-rows <1..128>] --execute\n       tofu-db migration-session --data-dir <existing-authority> --tenant-id <positive-id> --owner-id <positive-id> --execute\n       tofu-db backup --data-dir <source> --backup-dir <persistent-path>\n       tofu-db verify --data-dir <existing-authority>\n       tofu-db gc-census --data-dir <closed-authority-or-copy>\n       tofu-db rewrite-history-routing --data-dir <existing-authority> [--execute]\n       tofu-db salvage --data-dir <existing-authority> --backup-dir <persistent-empty-target>\n       tofu-db restore --backup-dir <source> --data-dir <restore-target>\n       tofu-db certify-release --manifest <SHA256SUMS> --signature <SHA256SUMS.sig> --binary <packaged-tofu-db> [--pubkey <public-key.json>]\n       tofu-db certify-release-keygen --key-out <secret-key.json> --pubkey-out <public-key.json>");
     std::process::exit(2)
 }
 
@@ -283,7 +283,7 @@ fn arguments() -> Arguments {
                 && tenant_id.is_none()
                 && search_projection_dir.is_none()
                 && maximum_rows.is_none() => {}
-        "verify"
+        "verify" | "gc-census"
             if backup_dir.is_none()
                 && retain_generations.is_none()
                 && owner_id.is_none()
@@ -846,6 +846,35 @@ fn run() -> io::Result<()> {
                 stats.calls, stats.mark_builds, !more_candidates, more_candidates,
                 more_candidates && stats.calls >= maximum_rounds,
                 more_candidates && started.elapsed() >= time_budget);
+            return Ok(());
+        }
+        "gc-census" => {
+            let resource_budget =
+                DaemonResourceBudget::from_snapshot(probe_launch_resources(&arguments.data_dir));
+            let budget = AuthorityGarbageCollectionBudget::from_resource_budget(resource_budget);
+            let at_rest_key = tofu_db::at_rest::key_from_launch_environment()?;
+            let mut database = AuthorityDatabase::open_with_key(&arguments.data_dir, at_rest_key)?;
+            let mut session = database.begin_garbage_collection(budget)?;
+            let census = session.census();
+            let cleanup = session.finish();
+            let census = census?;
+            cleanup?;
+            println!(
+                "format=tofu-db.gc-census.v1 catalog_segments={} catalog_file_bytes={} catalog_blocks={} catalog_payload_bytes={} live_references={} history_segments={} retained_history_references={} live_blocks={} live_payload_bytes={} fully_dead_segments={} fully_dead_segment_file_bytes={} mostly_dead_segments={} mostly_dead_segment_file_bytes={}",
+                census.catalog_segments,
+                census.catalog_file_bytes,
+                census.catalog_blocks,
+                census.catalog_payload_bytes,
+                census.live_references,
+                census.history_segments,
+                census.retained_history_references,
+                census.live_blocks,
+                census.live_payload_bytes,
+                census.fully_dead_segments,
+                census.fully_dead_segment_file_bytes,
+                census.mostly_dead_segments,
+                census.mostly_dead_segment_file_bytes,
+            );
             return Ok(());
         }
         "sql" => {

@@ -780,8 +780,7 @@ fn mark_reads_and_inserts_each_page_shared_by_pinned_roots_once() {
 #[test]
 fn segment_window_scan_reads_each_mark_run_once() {
     let (_vfs, database) = mark_cost_authority();
-    let mut collector = OnlineGarbageCollector::new(test_budget());
-    collector.payload_window_cursor = Some(0);
+    let collector = OnlineGarbageCollector::new(test_budget());
     let capture = database
         .lock()
         .unwrap()
@@ -801,20 +800,25 @@ fn segment_window_scan_reads_each_mark_run_once() {
     let mut expected_dead = BTreeMap::new();
     for (segment, reference) in catalog.iter().enumerate() {
         let mut dead = Vec::new();
-        for (position, id) in store
+        let mut retained = Vec::new();
+        let block_ids = store
             .open_segment(reference.segment_id)
             .unwrap()
             .block_ids()
-            .enumerate()
-        {
+            .collect::<Vec<_>>();
+        for (position, id) in block_ids.iter().copied().enumerate() {
             if segment < window_len && position % 4 == segment % 4 && Some(id) != protected {
                 dead.push(id);
             } else {
                 live.push(id);
+                retained.push(id);
             }
         }
         if !dead.is_empty() {
-            expected_dead.insert(reference.segment_id, dead);
+            expected_dead.insert(
+                reference.segment_id,
+                super::dead_set_digest(&block_ids, &retained),
+            );
         }
     }
     assert_eq!(expected_dead.len(), window_len);
@@ -870,9 +874,11 @@ fn segment_window_scan_reads_each_mark_run_once() {
          mark_run_bytes_read={run_bytes}",
         spilled.run_count, spilled.spill_bytes,
     );
+    // The scan covers the whole catalog, one pass over the runs per window.
+    let windows = SEGMENTS.div_ceil(window_len) as u64;
     assert!(
-        run_bytes <= spilled.spill_bytes,
-        "a window of {window_len} segments read {run_bytes} mark-run bytes; one pass over {} runs is {}",
+        run_bytes <= windows * spilled.spill_bytes,
+        "{windows} windows of {window_len} segments read {run_bytes} mark-run bytes; one pass over {} runs is {}",
         spilled.run_count,
         spilled.spill_bytes,
     );

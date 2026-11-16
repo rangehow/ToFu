@@ -7,7 +7,6 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import json
-import re
 import socket
 import subprocess
 
@@ -37,7 +36,6 @@ _BOUNDARY_SEARCH_PATTERN = (
     r'write_transaction|db_execute_with_retry|allocate_scoped_sequence|'
     r'lock_scoped_sequence|cursor|commit|rollback|connect|execute|'
     r'executemany)\b|tofu.{0,64}schema')
-_BOUNDARY_SEARCH_RE = re.compile(_BOUNDARY_SEARCH_PATTERN)
 
 @dataclass(frozen=True, slots=True)
 class BoundaryViolation:
@@ -91,34 +89,21 @@ def _python_files(project_root: Path):
                     (base / name).relative_to(project_root).as_posix()
                     for name in files if name.endswith('.py'))
     all_files = sorted(set(indexed))
-    # Every capability recognized by the AST scanner contains one of the
-    # lexical markers above. Avoid constructing ASTs for the thousands of
-    # unrelated Python files on high-latency project filesystems. ripgrep is
-    # only an accelerator: when it is unavailable or fails, the same marker
-    # test runs in Python, so the gate admits the same files either way.
     candidates = _candidate_python_files(project_root)
+    if candidates is not None:
+        # Every capability recognized by the AST scanner contains one of the
+        # lexical markers above. Avoid constructing ASTs for the thousands of
+        # unrelated Python files on high-latency project filesystems. The
+        # conservative fallback below keeps the old full scan when ripgrep is
+        # unavailable or returns an infrastructure error.
+        all_files = [relative for relative in all_files
+                     if relative in candidates]
     for relative in all_files:
         if not relative.endswith('.py'):
             continue
         if relative.startswith('lib/storage_authority_sql/'):
             continue
-        path = project_root / relative
-        if candidates is None:
-            if not _mentions_boundary_marker(path):
-                continue
-        elif relative not in candidates:
-            continue
-        yield path
-
-
-def _mentions_boundary_marker(path: Path) -> bool:
-    try:
-        with open(path, 'rb') as handle:
-            source = handle.read().decode('utf-8', errors='surrogateescape')
-    except OSError:
-        # Unreadable files reach the AST scanner, which reports them.
-        return True
-    return _BOUNDARY_SEARCH_RE.search(source) is not None
+        yield project_root / relative
 
 
 def _candidate_python_files(project_root: Path) -> set[str] | None:
@@ -260,8 +245,7 @@ def _scan_python_file(path: Path, relative: str) -> list[BoundaryViolation]:
                 return True
         return False
 
-    # Network transport modules whose ``connect`` opens a socket, not a database.
-    socket_names = {'socket', 'websockets'}
+    socket_names = {'socket'}
     for imported in ast.walk(tree):
         if isinstance(imported, ast.ImportFrom) and imported.module == 'socket':
             for alias in imported.names:

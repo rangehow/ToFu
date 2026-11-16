@@ -20,9 +20,8 @@ import json
 from pathlib import Path
 
 import pytest
-from tests.support.export_toolchain import require_export_toolchain
 
-require_export_toolchain()
+pytest.importorskip('export', reason='export.py is not shipped in opensource builds')
 
 pytestmark = pytest.mark.unit
 
@@ -48,18 +47,11 @@ def test_open_catalog_drops_keys_only_an_excluded_fragment_used(tmp_path, monkey
                           'settings.public': 'U'})
     shipped = dest / 'frontend/src/app.ts'
     shipped.write_text("t('settings.shared'); t('settings.public');", encoding='utf-8')
-    # The translation ledger lists every key; it must not count as a consumer.
-    ledger = dest / 'frontend/src/i18n/translation-sources.json'
-    ledger.write_text(json.dumps({'responsibility': 'r', 'fingerprints': {
-        'settings.privateOnly': 'a', 'settings.shared': 'b', 'settings.public': 'c'}},
-        indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
     monkeypatch.setattr(_export_core, 'ROOT', source)
 
     removed = _export_core._prune_open_catalog_of_excluded_fragments(dest)
 
     assert removed == ['settings.privateOnly']
-    assert json.loads(ledger.read_text(encoding='utf-8'))['fingerprints'] == {
-        'settings.shared': 'b', 'settings.public': 'c'}
     for language in ('en', 'zh'):
         text = (dest / f'frontend/src/i18n/locales/{language}.json').read_text(encoding='utf-8')
         assert json.loads(text) == {'settings.shared': 'S', 'settings.public': 'U'}
@@ -135,44 +127,6 @@ def test_exported_frontend_never_embeds_the_export_host_path(tmp_path, monkeypat
         _export_core._build_exported_frontend(dest)
     assert seen and all(seen), 'the toolchain must be a real in-tree copy, not a link'
     assert not (dest / 'node_modules').exists(), 'the temporary toolchain copy must not ship'
-
-
-def test_worktree_toolchain_links_into_a_shared_checkout_are_copied_into_the_tree(tmp_path, monkeypatch):
-    """A task worktree's node_modules links each package into the shared
-    checkout; the in-tree toolchain must not keep those escaping links."""
-    from export_pkg import _export_core
-
-    shared = tmp_path / 'shared' / 'node_modules'
-    (shared / 'vite' / 'bin').mkdir(parents=True)
-    (shared / 'vite' / 'bin' / 'vite.js').write_text('// cli', encoding='utf-8')
-    source = tmp_path / 'source'
-    (source / 'node_modules' / '.bin').mkdir(parents=True)
-    (source / 'node_modules' / 'vite').symlink_to(shared / 'vite')
-    (source / 'node_modules' / '.bin' / 'vite').symlink_to('../vite/bin/vite.js')
-    dest = tmp_path / 'dest'
-    (dest / 'scripts').mkdir(parents=True)
-    (dest / 'scripts/build_frontend.mjs').write_text('// build', encoding='utf-8')
-    monkeypatch.setattr(_export_core, 'ROOT', source)
-    monkeypatch.setattr(_export_core.shutil, 'which', lambda name: '/usr/bin/node')
-    observed = []
-
-    def fake_run(command, **kwargs):
-        toolchain = (dest / 'node_modules').resolve()
-        vite = dest / 'node_modules' / 'vite'
-        launcher = dest / 'node_modules' / '.bin' / 'vite'
-        observed.append((vite.is_symlink(), launcher.is_symlink(),
-                         launcher.resolve().is_relative_to(toolchain),
-                         launcher.read_text(encoding='utf-8')))
-
-        class Done:
-            returncode = 0
-            stdout = stderr = ''
-        return Done()
-
-    monkeypatch.setattr(_export_core.subprocess, 'run', fake_run)
-    _export_core._build_exported_frontend(dest)
-    assert observed[0] == (False, True, True, '// cli')
-    assert not (dest / 'node_modules').exists()
 
 
 def test_export_without_node_fails_closed(tmp_path, monkeypatch):

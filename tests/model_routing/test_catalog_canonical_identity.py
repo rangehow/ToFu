@@ -13,7 +13,7 @@ import json
 
 import pytest
 
-from tests.support.overlay import requires_private_overlay
+from tests.support.overlay import requires_yourprovider_overlay
 
 from lib.model_catalog._creator_identity import canonical_key
 from lib.model_routing import model_defaults, plan_legacy_migration
@@ -24,10 +24,10 @@ pytestmark = pytest.mark.unit
 IMPORT_DEFAULT = 128_000
 
 
-@requires_private_overlay
+@requires_yourprovider_overlay
 @pytest.mark.parametrize('model_id', ['claude-opus-5.5', 'claude-opus-4.7', 'claude-opus-4.8'])
 def test_relay_dot_spelling_inherits_the_official_dash_spelling_context(model_id):
-    bundle = compile_provider_template_bundle('meituan', selected_model_ids=[model_id])
+    bundle = compile_provider_template_bundle('yourprovider', selected_model_ids=[model_id])
     offering, = bundle['offerings']
     model, = bundle['models']
     assert offering['model'] == {'creator_id': 'anthropic', 'model_id': model_id}
@@ -37,9 +37,9 @@ def test_relay_dot_spelling_inherits_the_official_dash_spelling_context(model_id
 
 @pytest.mark.parametrize('model_id,window', [
     ('claude-opus-5', 1_000_000), ('claude-opus-4.6', 1_000_000), ('claude-sonnet-4.5', 200_000)])
-@requires_private_overlay
+@requires_yourprovider_overlay
 def test_exact_spellings_keep_their_exact_directory_facts(model_id, window):
-    bundle = compile_provider_template_bundle('meituan', selected_model_ids=[model_id])
+    bundle = compile_provider_template_bundle('yourprovider', selected_model_ids=[model_id])
     offering, = bundle['offerings']
     assert offering['model'] == {'creator_id': 'anthropic', 'model_id': model_id}
     assert offering['context_window'] == bundle['models'][0]['context_window'] == window

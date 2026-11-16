@@ -227,8 +227,8 @@ def test_compute_catalog_reports_an_unloadable_provider_as_a_typed_cause(monkeyp
     def stale(*_args):
         # The 2026-11-12 production failure: an installed copy older than the checkout.
         raise ModuleNotFoundError("No module named 'lib.runtime_paths'", name='lib.runtime_paths')
-    ep = SimpleNamespace(name='hope', value='tofu_meituan_environments.hope:hope_provider_factory',
-                         dist=SimpleNamespace(name='tofu-meituan-environments', version='0.1.0'),
+    ep = SimpleNamespace(name='hope', value='tofu_yourprovider_environments.hope:hope_provider_factory',
+                         dist=SimpleNamespace(name='tofu-yourprovider-environments', version='0.1.0'),
                          load=stale if stage == 'entry point load' else lambda: stale)
     monkeypatch.setattr(host, 'entry_points', lambda **kw: [ep])
     task = {'_userId': actor.owner_id, '_tenantId': actor.tenant_id}
@@ -236,7 +236,7 @@ def test_compute_catalog_reports_an_unloadable_provider_as_a_typed_cause(monkeyp
                                       1, {}, {}, actor.project_root, True)[1])
     assert result['ok'] is False and result['code'] == 'provider_unavailable'
     assert result['uncertain'] is False
-    assert 'hope' in result['error'] and 'tofu-meituan-environments 0.1.0' in result['error']
+    assert 'hope' in result['error'] and 'tofu-yourprovider-environments 0.1.0' in result['error']
     assert "ModuleNotFoundError: No module named 'lib.runtime_paths'" in result['error']
 
 def test_injected_job_service_lifecycle_stays_with_embedding(monkeypatch):

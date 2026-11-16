@@ -7,14 +7,9 @@ import argparse
 import json
 from pathlib import Path
 import re
-import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-from scripts.rust_const_layout import rustfmt_const_items  # noqa: E402
 SOURCE = ROOT / "contracts" / "storage_v2.json"
 OUTPUT = ROOT / "packages" / "tofu-db" / "src" / "generated_storage_v2.rs"
 
@@ -396,7 +391,7 @@ def main() -> int:
         + f"COMMIT_NOTICE_CONTRACT = {notices['noticeContract']!r}\n"
         + f"MAX_COMMIT_NOTICE_KEY_BYTES = {notices['maximumKeyBytes']!r}\n"
         + f"MAX_COMMIT_NOTICE_KEYS = {notices['maximumKeysPerTransaction']!r}\n")
-    outputs = {OUTPUT: rustfmt_const_items(_render(document)), ROOT / 'lib/storage/generated_v2_semantics.py': python,
+    outputs = {OUTPUT: _render(document), ROOT / 'lib/storage/generated_v2_semantics.py': python,
                ROOT / 'tofu_db/generated_v2.py': wire_python,
                ROOT / 'scripts/generated_storage_v2.py': ('\"\"\"@generated compatibility import; owner is tofu_db.generated_v2.\"\"\"\n'
                    + 'from tofu_db.generated_v2 import *  # noqa: F401,F403\n')}

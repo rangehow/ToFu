@@ -45,7 +45,6 @@ from rootless_vm.guest_agent import GuestAgent
 from rootless_vm.loopback_service import LoopbackServiceRelay
 from rootless_vm.image_store import resolve_image_store, resolve_image_store_entry
 from rootless_vm import pdeath_exec, qemu_launcher
-import rootless_vm as launcher_package
 
 from tests.support.host_capabilities import (
     require_unix_socket_host as _require_unix_socket_host,
@@ -191,15 +190,8 @@ def test_session_command_has_no_network_host_mount_or_kvm(host_tmp_path):
         assert "-enable-kvm" not in command
         assert not {"-virtfs", "-fsdev"} & set(command)
         # The test's own binary, kernel and state may sit below HOME (the
-        # private local-root opt-in), as may the interpreter and this
-        # package's launcher scripts (a CI checkout lives in /home/runner);
-        # no other HOME path may reach QEMU.
-        trusted = {str(host_tmp_path): "<scratch>",
-                   str(Path(launcher_package.__file__).resolve().parent): "<package>",
-                   sys.executable: "<python>"}
-        for path, label in trusted.items():
-            rendered = rendered.replace(path, label)
-        assert str(Path.home()) not in rendered
+        # private local-root opt-in); no other HOME path may reach QEMU.
+        assert str(Path.home()) not in rendered.replace(str(host_tmp_path), "<scratch>")
         assert session.session_dir.stat().st_mode & 0o077 == 0
     finally:
         session.delete()
@@ -1306,7 +1298,7 @@ def test_harbor_runner_builds_secret_free_single_trial_command(host_tmp_path):
     rendered = " ".join(argv)
     assert argv[0] == str(harbor.resolve())
     assert "rootless_vm.harbor_tofu_agent:TofuHostAgent" in argv
-    assert "deepseek-v4-flash-meituan" in argv
+    assert "deepseek-v4-flash-yourprovider" in argv
     assert "API_KEY" not in rendered
     assert argv[argv.index("--n-concurrent") + 1] == "1"
     for name in ("state", "cache", "jobs"):

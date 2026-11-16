@@ -24,7 +24,6 @@ import subprocess
 import sys
 
 import pytest
-from tests.support.export_toolchain import require_export_toolchain
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -33,7 +32,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 # export.py is the maintainer's release tool; it is intentionally NOT shipped
 # in the opensource build, so these guard tests (which import it) can only run
 # in the source tree.
-require_export_toolchain()
+pytest.importorskip('export', reason='export.py is not shipped in opensource builds')
 
 
 def _color(s, c): return f'\033[{c}m{s}\033[0m'

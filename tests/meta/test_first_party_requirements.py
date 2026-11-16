@@ -34,12 +34,7 @@ def _distributions() -> dict[str, tuple[str, dict]]:
 
 def test_first_party_requirements_admit_the_checkout_versions():
     distributions = _distributions()
-    from tests.support.overlay import private_overlay_installed
-    # The overlay's provider is the sibling that pins tofu-environments; the
-    # public core ships tofu-environments alone.
-    expected = {'tofu-environments'} | (
-        {'tofu-meituan-environments'} if private_overlay_installed() else set())
-    assert expected <= distributions.keys()
+    assert {'tofu-environments', 'tofu-yourprovider-environments'} <= distributions.keys()
     excluded = []
     for path, project in distributions.values():
         requirements = list(project.get('dependencies') or [])

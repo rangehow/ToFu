@@ -5,13 +5,8 @@ import json
 from pathlib import Path
 import pprint
 import re
-import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-from scripts.rust_const_layout import rustfmt_const_items  # noqa: E402
 
 
 def main():
@@ -44,7 +39,7 @@ def main():
         rust.append(f'pub const {constant}: usize = {value};')
     outputs = {
         ROOT / 'lib/storage/generated_project_dispatch_contract.py': python,
-        ROOT / 'packages/tofu-db/src/generated_project_dispatch_storage.rs': rustfmt_const_items('\n'.join(rust)) + '\n',
+        ROOT / 'packages/tofu-db/src/generated_project_dispatch_storage.rs': '\n'.join(rust) + '\n',
     }
     for path, content in outputs.items():
         if args.check:

@@ -1,7 +1,7 @@
 """Registry env_specs for the internal hope/llm MCP servers.
 
 Pins the install-time credential/config surface the catalog advertises for the
-Meituan-internal launchers. The actual server behaviour (tool profiles, login
+YourProvider-internal launchers. The actual server behaviour (tool profiles, login
 timeouts, subprocess budgets) is owned by the sibling hope-mcp/llm-mcp repos;
 ChatUI only needs to pass the env keys through ``env_specs`` so the install
 modal can edit them and ``build_server_config`` forwards them into the launched
@@ -10,7 +10,7 @@ process env.
 
 import pytest
 
-from tests.support.overlay import requires_private_overlay
+from tests.support.overlay import requires_yourprovider_overlay
 
 import lib.mcp.registry as reg
 
@@ -27,7 +27,7 @@ def _spec_by_key(server_id: str) -> dict[str, dict]:
     reg.is_opensource_build(),
     reason='internal MCP launchers are stripped from opensource builds',
 )
-@requires_private_overlay
+@requires_yourprovider_overlay
 def test_hope_env_specs_include_tool_profile_and_log_level():
     specs = _spec_by_key('hope')
     assert 'HOPE_MCP_TOOL_PROFILE' in specs
@@ -45,7 +45,7 @@ def test_hope_env_specs_include_tool_profile_and_log_level():
     reg.is_opensource_build(),
     reason='internal MCP launchers are stripped from opensource builds',
 )
-@requires_private_overlay
+@requires_yourprovider_overlay
 def test_llm_env_specs_include_login_parallel_and_log_level():
     specs = _spec_by_key('llm')
     for key in ('LLM_MCP_LOGIN_TIMEOUT', 'LLM_MCP_MAX_PARALLEL',
@@ -58,7 +58,7 @@ def test_llm_env_specs_include_login_parallel_and_log_level():
     reg.is_opensource_build(),
     reason='internal MCP launchers are stripped from opensource builds',
 )
-@requires_private_overlay
+@requires_yourprovider_overlay
 def test_new_env_keys_forward_into_built_config():
     env_values = {
         'HOPE_USERNAME': 'u',
@@ -83,7 +83,7 @@ def test_new_env_keys_forward_into_built_config():
     reg.is_opensource_build(),
     reason='internal MCP launchers are stripped from opensource builds',
 )
-@requires_private_overlay
+@requires_yourprovider_overlay
 def test_xuecheng_env_specs_include_toolset():
     specs = _spec_by_key('xuecheng')
     assert 'XUECHENG_TOOLSET' in specs
@@ -94,7 +94,7 @@ def test_xuecheng_env_specs_include_toolset():
     reg.is_opensource_build(),
     reason='internal MCP launchers are stripped from opensource builds',
 )
-@requires_private_overlay
+@requires_yourprovider_overlay
 def test_build_server_config_preserves_env_keys_not_in_specs():
     # Regression: catalog install/reconnect rebuilds the config row via
     # build_server_config; keys outside env_specs (hand-added in

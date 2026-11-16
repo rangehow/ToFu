@@ -6,14 +6,7 @@ Root launcher exec chains and root threads are tracked for cleanup only.
 Entry: --receipt PATH --timeout SECONDS -- COMMAND. Linux-only benchmark owner;
 no timings or production defaults can be admitted by this observation.
 """
-import argparse
-import ctypes
-import errno
-import json
-import math
-import os
-import signal
-import sys
+import argparse,ctypes,errno,json,math,os,signal,sys
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))

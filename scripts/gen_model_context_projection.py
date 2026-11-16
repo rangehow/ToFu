@@ -6,13 +6,8 @@ Dependencies: standard library only; no runtime contract reads or startup I/O.
 from pathlib import Path
 import argparse
 import json
-import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-from scripts.rust_const_layout import rustfmt_const_items  # noqa: E402
 SOURCE = ROOT / "contracts/model_context_v1.schema.json"
 RULES = {
     "DISPLAY_ONLY_FIELDS": "displayOnlyProjectionFields",
@@ -33,10 +28,10 @@ def render_outputs():
                 or len(values) != len(set(values))):
             raise ValueError(f"Invalid model context rule: {key}")
         python.extend([f"{name} = frozenset((", *[f"    {value!r}," for value in values], "))", ""])
-        rust.extend([f"pub(crate) const {name}: &[&str] = &[{', '.join(map(json.dumps, values))}];", ""])
+        rust.extend([f"pub(crate) const {name}: &[&str] = &[", *[f"    {json.dumps(value)}," for value in values], "];", ""])
     return {
         ROOT / "lib/storage/generated_model_context_projection.py": "\n".join(python).rstrip() + "\n",
-        ROOT / "packages/tofu-db/src/generated_model_context_projection.rs": rustfmt_const_items("\n".join(rust).rstrip()) + "\n",
+        ROOT / "packages/tofu-db/src/generated_model_context_projection.rs": "\n".join(rust).rstrip() + "\n",
     }
 
 

@@ -17,7 +17,7 @@ import pytest
 
 pytestmark = [pytest.mark.auth_mode('open'), pytest.mark.unit]
 
-PROVIDER = 'owner:1:example-corp'
+PROVIDER = 'owner:1:sankuai'
 KEY = 'cred_2009fa1132a88c55243ebcd3'
 SIBLING = 'credential-1792419920936-26sj7f'
 PAIR = f'{PROVIDER}::{KEY}'

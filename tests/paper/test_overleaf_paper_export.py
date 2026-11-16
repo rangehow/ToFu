@@ -84,6 +84,11 @@ class Cloud:
         self.requests.append(request)
         if request.method == 'POST':
             assert request.headers['x-csrf-token'] == 'fixture-csrf'
+            # Overleaf validates the compile body strictly (rangehow/overleaf-mcp#2).
+            if 'rootDocId' in json.loads(request.content):
+                return httpx.Response(400, json={
+                    'error': 'Validation error: Unrecognized key: "rootDocId" at "body"',
+                    'statusCode': 400})
             value = json.dumps({'status': self.status, 'outputFiles': self.rows,
                                 'clsiServerId': 'fixture-clsi'}).encode()
         elif '/output/' in request.url.path:
@@ -178,6 +183,18 @@ def test_failed_compile_does_not_export_the_old_pdf(exports):
             assert {item['name'] for item in manifest['artifacts']} == {'document.synctex.gz', 'build.log'}
             assert not any(r.url.path.endswith('output.pdf') for r in cloud.requests)
     asyncio.run(run())
+
+
+def test_compile_body_omits_root_doc_id_that_overleaf_rejects(exports):
+    _, module, _, transport = exports
+    cloud = Cloud()
+
+    async def run():
+        async with module.ExportStore(cloud.transport(transport)) as store:
+            assert (await store.build(REQUEST))['compile_status'] == 'success'
+    asyncio.run(run())
+    compile_body = json.loads(next(r for r in cloud.requests if r.method == 'POST').content)
+    assert 'rootDocId' not in compile_body
 
 
 @pytest.mark.parametrize('redirect', [False, True])

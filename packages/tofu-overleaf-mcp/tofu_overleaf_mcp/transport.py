@@ -99,7 +99,7 @@ class OverleafTransport:
             async with client.stream('POST', page_url + '/compile', headers={
                     **self._headers(page_url), 'x-csrf-token': parser.token}, json={
                         'check': 'silent', 'draft': False, 'incrementalCompilesEnabled': True,
-                        'rootDocId': None, 'stopOnFirstError': False}) as response:
+                        'stopOnFirstError': False}) as response:
                 if response.status_code in (401, 403):
                     raise ExportError('overleaf_authentication')
                 if not response.is_success:

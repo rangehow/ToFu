@@ -804,7 +804,7 @@
   "context.edit": "编辑",
   "context.identityAdd": "添加事实",
   "context.identityDesc": "你的组织、角色、领域和稳定环境信息。",
-  "context.identityEmpty": "例如：我来自美团",
+  "context.identityEmpty": "例如：我是一名后端工程师",
   "context.identityTitle": "关于我",
   "context.intro": "只保存你明确表达的长期背景、规则和回答偏好，可随时编辑或删除。临时要求不会保存。",
   "context.loadFailed": "加载失败",

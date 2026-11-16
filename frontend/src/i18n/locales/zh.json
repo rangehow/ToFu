@@ -6682,5 +6682,18 @@
   "toolCard.debug.grantRevision": "授权版本",
   "toolCard.debug.turn": "轮次 ID",
   "toolCard.debug.command": "命令 ID",
-  "toolCard.debug.message": "消息 ID"
+  "toolCard.debug.message": "消息 ID",
+  "leadDeliverables.title": "成果",
+  "leadDeliverables.more": "加载更早的成果",
+  "leadDeliverables.retry": "重试",
+  "leadDeliverables.loading": "正在读取成果…",
+  "leadDeliverables.error": "无法读取成果。",
+  "leadDeliverables.empty": "还没有成果。",
+  "leadDeliverables.source": "跳到原消息",
+  "leadDeliverables.close": "关闭",
+  "leadDeliverables.kind.report": "报告",
+  "leadDeliverables.kind.file": "文件",
+  "leadDeliverables.kind.deck": "演示稿",
+  "leadDeliverables.kind.document": "文档",
+  "leadDeliverables.kind.merge": "已合并"
 }

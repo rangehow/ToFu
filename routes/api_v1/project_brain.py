@@ -125,6 +125,20 @@ def project_coordinator_progress_history_read():
         return _safe_route_error_response(exc)
 
 
+@api_v1_project_brain_bp.route('/api/v1/project/coordination/deliverables', methods=['GET'])
+@require_scope('conversations')
+@api_meta(summary="Read one page of a lead conversation's deliverables, newest first", tags=['project'], scope='conversations')
+def project_lead_deliverables_read():
+    from quart import request
+    try:
+        from lib.conversations.lead_deliverables import DeliverablesPage
+        path = decode_proxy_path_arg('path') or ''
+        return api_ok(DeliverablesPage(_owner(), request.args.get('conversationId') or '').read(
+            request.args.get('cursor') or None, project_path=str(path).strip()))
+    except Exception as exc:
+        return _safe_route_error_response(exc)
+
+
 @api_v1_project_brain_bp.route('/api/v1/project/coordination/reports/read', methods=['POST'])
 @require_scope('conversations')
 @api_meta(summary='Acknowledge the exact displayed Coordinator report', tags=['project'], scope='conversations')

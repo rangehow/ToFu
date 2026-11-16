@@ -6684,6 +6684,20 @@
     "toolCard.debug.grantRevision": "924a810cc1b51ca5",
     "toolCard.debug.turn": "da3e313abb8c38f7",
     "toolCard.debug.command": "50e77b6103a42a88",
-    "toolCard.debug.message": "0463ec8cd73d05bc"
+    "toolCard.debug.message": "0463ec8cd73d05bc",
+    "toolCard.review.refusedResultChanged": "468b8af63cf18055",
+    "leadDeliverables.title": "a2abc0f01d3fdab8",
+    "leadDeliverables.more": "a2223cb090ac9c62",
+    "leadDeliverables.retry": "19a00f0ab63df45b",
+    "leadDeliverables.loading": "c0dd691f53db5611",
+    "leadDeliverables.error": "3166036d74270a68",
+    "leadDeliverables.empty": "70f3d93d3650e3d3",
+    "leadDeliverables.source": "bf9c92651a69c18c",
+    "leadDeliverables.close": "f09d5099805369e6",
+    "leadDeliverables.kind.report": "a9478cdeb8183415",
+    "leadDeliverables.kind.file": "5be84a41cfc9f9e5",
+    "leadDeliverables.kind.deck": "c1a5916f8322d479",
+    "leadDeliverables.kind.document": "30a81bbd95e2aa6b",
+    "leadDeliverables.kind.merge": "2d5ab6327b616395"
   }
 }

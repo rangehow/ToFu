@@ -132,6 +132,18 @@ def image_posthook(task, fn_name, fn_args, project_path, result):
     return assets
 
 
+def _hint_deliverable(task, project_path):
+    """The published artifact is a deliverable of this conversation; the hint never changes the receipt."""
+    from lib.conversations.lead_deliverables import notify
+    from lib.tasks_pkg.manager._registry import task_user_id
+    try:
+        owner = task_user_id(task)
+    except Exception:
+        logger.debug('deliverable owner unavailable for task %s', task.get('id'), exc_info=True)
+        return
+    notify(owner, task.get('convId') or '', project_path or '')
+
+
 def handle(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, project_path,
            project_enabled, all_tools=None):
     from lib.tasks_pkg.executor import _finalize_tool_round
@@ -149,6 +161,7 @@ def handle(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, project_path
             meta.update(artifactId=result['id'], artifactFormat=result['format'], responseFile=result)
             from lib.artifacts.events import emit_artifact_event
             emit_artifact_event(task, result['artifact'])
+            _hint_deliverable(task, project_path)
         else:
             artifact = publish_rich(fn_args['payload'], conv_id=task.get('convId'),
                                     user_id=task_user_id(task), task_id=task.get('id', ''))
@@ -158,6 +171,7 @@ def handle(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, project_path
 
             from lib.artifacts.events import emit_artifact_event
             emit_artifact_event(task, artifact)
+            _hint_deliverable(task, project_path)
         content = json.dumps(result, ensure_ascii=False)
         _finalize_tool_round(task, rn, round_entry, [meta])
     except Exception as exc:

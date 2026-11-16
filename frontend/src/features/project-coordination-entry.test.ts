@@ -38,11 +38,13 @@ it('mounts the leader above date groups using explicit binding without promoting
     );
     await vi.waitFor(() => expect(document.querySelector('[data-coordinator-id="leader"]')).not.toBeNull());
     const entry = document.getElementById('projectCoordinatorEntry')!;
-    // The entry's office slot follows it (empty until a lead office shows), then the list.
+    // The entry's office slot follows it (empty until a lead office shows), then its deliverables slot, then the list.
     const officeSlot = entry.nextElementSibling as HTMLElement;
     expect(officeSlot.className).toBe('lead-office-slot');
     expect(officeSlot.hidden).toBe(true);
-    expect(officeSlot.nextElementSibling?.id).toBe('convList');
+    const deliverablesSlot = officeSlot.nextElementSibling as HTMLElement;
+    expect(deliverablesSlot.className).toBe('lead-deliverables-slot');
+    expect(deliverablesSlot.nextElementSibling?.id).toBe('convList');
     const row = entry.querySelector<HTMLElement>('.coordination-leader')!;
     expect([...row.querySelectorAll('button')].map(button => button.getAttribute('aria-label'))).toEqual(['sidebar.copyConvId']);
     row.click();
@@ -205,10 +207,11 @@ it('bridges the main coordinator card and health checks to their typed owners an
     // No pinned rows above New Chat: the main coordinator takes the leader slot of the list.
     expect(document.querySelector('#sidebar .sidebar-header')!.nextElementSibling!.className).toBe('sidebar-action-row');
     const slot = document.getElementById('globalRouterEntry')!;
-    // The main coordinator's card is followed by its office slot, then the project entry.
+    // The main coordinator's card is followed by its office slot, its deliverables slot, then the project entry.
     const routerOffice = slot.nextElementSibling as HTMLElement;
     expect(routerOffice.className).toBe('lead-office-slot');
-    expect(routerOffice.nextElementSibling!.id).toBe('projectCoordinatorEntry');
+    expect(routerOffice.nextElementSibling!.className).toBe('lead-deliverables-slot');
+    expect(routerOffice.nextElementSibling!.nextElementSibling!.id).toBe('projectCoordinatorEntry');
     expect(slot.parentElement!.className).toBe('coordination-conversation-column');
     const card = slot.querySelector<HTMLElement>('.coordination-leader.global-router-card')!;
     expect(card.querySelector('.coordination-leader-label')!.textContent).toBe('globalRouter.entry');
@@ -217,7 +220,7 @@ it('bridges the main coordinator card and health checks to their typed owners an
     // The conversation column holds only the router headers above the strip: no office there.
     expect(strip.previousElementSibling!.querySelector('.router-watchdog-header')).not.toBeNull();
     const routerHeader = strip.previousElementSibling!.previousElementSibling!.querySelector('.global-router-header')!;
-    expect(strip.parentElement!.querySelector(':scope > .lead-office-slot, :scope > .lead-office')).toBeNull();
+    expect(strip.parentElement!.querySelector(':scope > .lead-office-slot, :scope > .lead-office, :scope > .lead-deliverables-slot')).toBeNull();
     // Health checks live in the main coordinator's settings, not in a sidebar entry of their own.
     const healthChecks = routerHeader.querySelector<HTMLDetailsElement>('details.router-watchdog')!;
     expect(healthChecks).not.toBeNull();
@@ -462,7 +465,8 @@ it.each([
 
 /** presence.js over a mutable folder list, with the main coordinator card and the folder settings opener. */
 function mountFolderView(folders: { id: string; name: string; projectPaths: string[] }[], selected: () => string,
-  reads: Record<string, unknown>, conversations: unknown[] = [], loadLeadOffice?: () => Promise<unknown>) {
+  reads: Record<string, unknown>, conversations: unknown[] = [], loadLeadOffice?: () => Promise<unknown>,
+  loadLeadDeliverables?: () => Promise<unknown>) {
   document.body.innerHTML = '<div id="convList"></div><div id="presenceStrip"></div>';
   const runtime: Record<string, any> = {}, settings = vi.fn();
   const stub = 'const createGlobalRouterEntry = () => ({ refresh() {}, destroy() {}, home() { return "/data/router/1"; }, conversationId() { return "coordinator-router"; } });\n'
@@ -471,11 +475,11 @@ function mountFolderView(folders: { id: string; name: string; projectPaths: stri
   new Function('runtimeScope', 'pushSubscribe', 'pushUnsubscribe', 'createProjectCoordinationSurface', 'createSameTaskReadJoin',
     'openProjectCoordinationWorkspace', 'getActiveConv', 'Api', 'getFolders', 'getActiveFolderId',
     'loadConversation', '_projectConversationNavigation', 'createCoordinatorConversationGroups', '_promptRenameFolder', 'conversations',
-    'readLanding', 'subscribeLanding', 'loadLeadOffice',
+    'readLanding', 'subscribeLanding', 'loadLeadOffice', 'loadLeadDeliverables',
     stub + 'const mergeConversationCatalogRows = () => 0; const renderConversationList = () => {};\n' + source)(
     runtime, vi.fn(), vi.fn(), createProjectCoordinationSurface, createSameTaskReadJoin, vi.fn(), () => null, { project: reads },
     () => folders, selected, vi.fn(), createProjectConversationNavigation(), createCoordinatorConversationGroups, settings, conversations,
-    readLanding, subscribeLanding, loadLeadOffice,
+    readLanding, subscribeLanding, loadLeadOffice, loadLeadDeliverables,
   );
   return { runtime, settings };
 }
@@ -528,7 +532,7 @@ it.each(['/srv/测试项目', '/srv/プロジェクト'.normalize('NFD'), '/srv/
       runtime.presenceRefresh();
       await vi.waitFor(() => expect(reads.workerConversations).toHaveBeenCalledWith(root, undefined, expect.any(AbortSignal)));
       // The archive group follows the entry's office slot.
-      const group = document.querySelector<HTMLElement>('#projectCoordinatorEntry + .lead-office-slot + .coordinator-conversations-host .coordinator-conversations');
+      const group = document.querySelector<HTMLElement>('#projectCoordinatorEntry + .lead-office-slot + .lead-deliverables-slot + .coordinator-conversations-host .coordinator-conversations');
       await vi.waitFor(() => expect(group?.hidden).toBe(false));
       expect(group!.dataset.coordinatorId).toBe('leader');
       expect(group!.querySelector('.coordinator-conversations-count')!.textContent).toBe('1');
@@ -548,22 +552,38 @@ it('shows a lead\'s work as the plain list in the classic mode and loads the ani
     leadId: () => shownLead, refresh() {}, destroy: vi.fn(),
   };
   const loadLeadOffice = vi.fn(async () => ({ createLeadOffice: () => office }));
+  let deliverablesLead = '';
+  const deliverables = {
+    root: Object.assign(document.createElement('section'), { className: 'lead-deliverables' }),
+    show: vi.fn((target: { leadId: string }) => { deliverablesLead = target.leadId; }),
+    hide: vi.fn(() => { deliverablesLead = ''; }),
+    leadId: () => deliverablesLead, destroy: vi.fn(),
+  };
+  const opener = { open: vi.fn(), openSource: vi.fn() };
+  const loadLeadDeliverables = vi.fn(async () => ({
+    createLeadDeliverables: () => deliverables, createDeliverableOpener: () => opener, runtimeOpenPorts: () => ({}),
+  }));
   const { runtime } = mountFolderView([{ id: 'folder', name: 'Project', projectPaths: ['/project'] }], () => 'folder', reads, [worker],
-    loadLeadOffice);
+    loadLeadOffice, loadLeadDeliverables);
   const slot = () => document.querySelector<HTMLElement>('#projectCoordinatorEntry + .lead-office-slot')!;
+  const deliverablesSlot = () => document.querySelector<HTMLElement>('#projectCoordinatorEntry + .lead-office-slot + .lead-deliverables-slot')!;
   try {
     await vi.waitFor(() => expect(document.querySelector('#projectCoordinatorEntry [data-coordinator-id="leader"]')).not.toBeNull());
     await vi.waitFor(() => expect(reads.coordinatorProgress).toHaveBeenCalled());
     runtime.presenceRefresh();
     await nextTask();
     // Classic: the Coordinator row and its Worker list, with no office module, scene or reads of its own.
-    const group = document.querySelector<HTMLElement>('#projectCoordinatorEntry + .lead-office-slot + .coordinator-conversations-host .coordinator-conversations');
+    const group = document.querySelector<HTMLElement>('#projectCoordinatorEntry + .lead-office-slot + .lead-deliverables-slot + .coordinator-conversations-host .coordinator-conversations');
     await vi.waitFor(() => expect(group?.hidden).toBe(false));
     expect(group!.querySelector('.coordinator-conversations-count')!.textContent).toBe('1');
     expect(slot().hidden).toBe(true);
     expect(slot().childElementCount).toBe(0);
     expect(loadLeadOffice).not.toHaveBeenCalled();
     expect(reads.coordinationAssignments).not.toHaveBeenCalled();
+    // Classic: the lead's 成果 list sits beneath its row, above the archive.
+    await vi.waitFor(() => expect(deliverables.show).toHaveBeenCalledWith({ leadId: 'leader', path: '/project' }));
+    expect(deliverablesSlot().hidden).toBe(false);
+    expect(deliverables.root.parentElement).toBe(deliverablesSlot());
 
     // Switching to the studio shows the lead's office beneath its row, above the same list.
     rememberLanding('world');
@@ -571,6 +591,9 @@ it('shows a lead\'s work as the plain list in the classic mode and loads the ani
     expect(loadLeadOffice).toHaveBeenCalledTimes(1);
     expect(slot().hidden).toBe(false);
     expect(office.root.parentElement).toBe(slot());
+    // The studio's office opens deliverables itself: no sidebar list.
+    expect(deliverables.hide).toHaveBeenCalled();
+    expect(deliverablesSlot().hidden).toBe(true);
 
     // Back to classic: the office stops (its scene, loop and reads end in hide) and the slot empties from view.
     rememberLanding('chat');
@@ -582,9 +605,13 @@ it('shows a lead\'s work as the plain list in the classic mode and loads the ani
     await nextTask();
     expect(office.show).toHaveBeenCalledTimes(shows);
     expect(group!.hidden).toBe(false);
+    expect(deliverablesSlot().hidden).toBe(false);
+    expect(deliverablesLead).toBe('leader');
   } finally { window.dispatchEvent(new Event('pagehide')); localStorage.removeItem(LANDING_STORAGE_KEY); }
   // Teardown releases the mode subscription: a later switch reaches no torn-down sidebar.
   expect(office.destroy).toHaveBeenCalled();
+  expect(deliverables.destroy).toHaveBeenCalled();
+  expect(loadLeadDeliverables).toHaveBeenCalledTimes(1);
   const showsAtTeardown = office.show.mock.calls.length, hidesAtTeardown = office.hide.mock.calls.length;
   rememberLanding('chat');
   rememberLanding('world');

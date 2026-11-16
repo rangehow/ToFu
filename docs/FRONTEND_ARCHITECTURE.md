@@ -2908,7 +2908,9 @@ without a route opens `#/world` unless the owner's last explicit choice (`tofu_l
 by `application-shell/landing.ts`) is the classic view, and an address that names a route is honoured as
 given. The HUD's "Classic view" button opens `#/chat`; the classic top bar's "Office" link returns.
 The same choice is the presentation mode elsewhere (`readLanding`/`subscribeLanding`): the classic
-view's sidebar never loads the animated lead office (docs/PROJECT_COORDINATION.md, "Lead office").
+view's sidebar never loads the animated lead office (docs/PROJECT_COORDINATION.md, "Lead office"); it shows
+each lead's 成果 list instead, and both views open a deliverable through the one opener in
+`features/lead-deliverables/open.ts` (docs/PROJECT_COORDINATION.md, "Lead deliverables").
 `01-workspace-dock.css` places the workspace in the shell grid: HUD across the top, the scene, and the
 application's own conversation column docked beside it by `body[data-conversation-dock]` (closed, brief
 or chat), which the world adapter owns; every other piece of classic chrome stays hidden. The docked chat

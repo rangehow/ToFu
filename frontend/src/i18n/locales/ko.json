@@ -6682,5 +6682,18 @@
   "toolCard.debug.grantRevision": "권한 부여 리비전",
   "toolCard.debug.turn": "턴 ID",
   "toolCard.debug.command": "명령 ID",
-  "toolCard.debug.message": "메시지 ID"
+  "toolCard.debug.message": "메시지 ID",
+  "leadDeliverables.title": "산출물",
+  "leadDeliverables.more": "이전 항목 불러오기",
+  "leadDeliverables.retry": "다시 시도",
+  "leadDeliverables.loading": "산출물을 불러오는 중…",
+  "leadDeliverables.error": "산출물을 불러올 수 없습니다.",
+  "leadDeliverables.empty": "아직 산출물이 없습니다.",
+  "leadDeliverables.source": "원래 메시지로 이동",
+  "leadDeliverables.close": "닫기",
+  "leadDeliverables.kind.report": "보고",
+  "leadDeliverables.kind.file": "파일",
+  "leadDeliverables.kind.deck": "슬라이드",
+  "leadDeliverables.kind.document": "문서",
+  "leadDeliverables.kind.merge": "병합됨"
 }

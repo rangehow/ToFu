@@ -6682,5 +6682,18 @@
   "toolCard.debug.grantRevision": "Berechtigungsrevision",
   "toolCard.debug.turn": "Durchgangs-ID",
   "toolCard.debug.command": "Befehls-ID",
-  "toolCard.debug.message": "Nachrichten-ID"
+  "toolCard.debug.message": "Nachrichten-ID",
+  "leadDeliverables.title": "Ergebnisse",
+  "leadDeliverables.more": "Ältere laden",
+  "leadDeliverables.retry": "Erneut versuchen",
+  "leadDeliverables.loading": "Ergebnisse werden geladen…",
+  "leadDeliverables.error": "Ergebnisse konnten nicht gelesen werden.",
+  "leadDeliverables.empty": "Noch keine Ergebnisse.",
+  "leadDeliverables.source": "Zur Nachricht",
+  "leadDeliverables.close": "Schließen",
+  "leadDeliverables.kind.report": "Bericht",
+  "leadDeliverables.kind.file": "Datei",
+  "leadDeliverables.kind.deck": "Präsentation",
+  "leadDeliverables.kind.document": "Dokument",
+  "leadDeliverables.kind.merge": "Zusammengeführt"
 }

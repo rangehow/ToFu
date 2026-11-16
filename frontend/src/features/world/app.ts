@@ -16,6 +16,8 @@ import {
 import { assignmentStatus } from '../project-coordination-graph';
 import { createOffice, type OpenTarget } from './office';
 import { createPanel } from './panel';
+import { createDeliverableOpener, runtimeOpenPorts, type DeliverableOpener } from '../lead-deliverables/open';
+import { mergeDeliverable, reportDeliverable, type LeadDeliverable } from '../lead-deliverables/model';
 
 export type ConversationDock = 'closed' | 'brief' | 'chat';
 /** What the world asks of the application shell; it never reaches into chat chrome itself. */
@@ -26,7 +28,11 @@ export interface WorldShell {
   classic(): void;
   push: PushPort | null;
 }
-export interface WorldOptions { live?: (onChange: () => void) => WorldLive; now?: () => number }
+export interface WorldOptions {
+  live?: (onChange: () => void) => WorldLive; now?: () => number;
+  /** The deliverable opener; default: the application's (lead-deliverables/open.ts) with this office's chat. */
+  deliverables?: (openTurn: (conversationId: string, turn: TurnRef) => void) => DeliverableOpener;
+}
 
 /** One team's projection input. Office facts, where the server has them, are the authority for who is
  * busy, which owner questions are open (the text still comes from the lead's tail) and open incidents. */
@@ -119,6 +125,36 @@ export function mountWorld(root: HTMLElement, shell: WorldShell, options: WorldO
     return true;
   }
 
+  /** A deliverable's Turn opens in this office's docked conversation column, beside its person's panel. */
+  function chatAt(conversationId: string, turn: TurnRef) {
+    panelFocus = undefined;
+    if (personOf(conversationId) && showBrief(conversationId, true)) {
+      panel.setTab('chat');
+      scene.select(conversationId);
+    }
+    shell.dock('chat');
+    shell.openChat(conversationId, turn);
+  }
+  const deliverables = (options.deliverables || (openTurn => createDeliverableOpener(runtimeOpenPorts({ openTurn }))))(chatAt);
+
+  /** The deliverable a desk document or trophy shows: the same item the classic sidebar lists. */
+  function deliverableOf(document: DeskDocument | Office['trophies'][number]): LeadDeliverable | null {
+    if ('kind' in document) {
+      if (document.kind !== 'deliverable' || document.ref.source !== 'lead-report') return null;
+      const input = inputs.get(document.team);
+      const latest = input?.reports?.latest;
+      const ref = document.ref;
+      return reportDeliverable({
+        conversationId: ref.conversationId, turnId: ref.turnId, title: document.title, createdAt: document.at,
+        content: latest?.turnId === ref.turnId ? latest.content : document.title,
+        ordinal: latest?.turnId === ref.turnId ? latest.ordinal : undefined,
+        projectPath: input?.reports?.projectPath || document.team,
+      });
+    }
+    return mergeDeliverable({ assignmentId: document.ref.assignmentId, title: document.title, conversationId: document.ref.conversationId,
+      turnId: document.ref.turnId, projectPath: inputs.get(document.team)?.reports?.projectPath || document.team, createdAt: 0 });
+  }
+
   function open(target: OpenTarget) {
     if (!office) return;
     let personId = target.id;
@@ -129,6 +165,13 @@ export function mountWorld(root: HTMLElement, shell: WorldShell, options: WorldO
       const desk = [...office.documents, ...arrived].find(each => each.id === target.id);
       const source = desk || office.trophies.find(each => each.id === target.id);
       if (!source) return;
+      // A deliverable opens itself (report card, Worker result), not its author's conversation.
+      const item = deliverableOf(source);
+      if (item && deliverables.open(item)) {
+        if (desk) opened.add(desk.id);
+        schedule();
+        return;
+      }
       personId = source.ref.conversationId;
       panelFocus = source.ref;
       panelTeam = source.team;

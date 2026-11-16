@@ -6682,5 +6682,18 @@
   "toolCard.debug.grantRevision": "Версия разрешения",
   "toolCard.debug.turn": "ID хода",
   "toolCard.debug.command": "ID команды",
-  "toolCard.debug.message": "ID сообщения"
+  "toolCard.debug.message": "ID сообщения",
+  "leadDeliverables.title": "Результаты",
+  "leadDeliverables.more": "Загрузить более ранние",
+  "leadDeliverables.retry": "Повторить",
+  "leadDeliverables.loading": "Загрузка результатов…",
+  "leadDeliverables.error": "Не удалось прочитать результаты.",
+  "leadDeliverables.empty": "Результатов пока нет.",
+  "leadDeliverables.source": "К сообщению",
+  "leadDeliverables.close": "Закрыть",
+  "leadDeliverables.kind.report": "Отчёт",
+  "leadDeliverables.kind.file": "Файл",
+  "leadDeliverables.kind.deck": "Презентация",
+  "leadDeliverables.kind.document": "Документ",
+  "leadDeliverables.kind.merge": "Слито"
 }

@@ -3,7 +3,7 @@ import type { EndpointPorts, EndpointOptions, JsonObject } from './contracts';
 import { createProjectPathWrite } from './project-path-singleflight';
 
 import { buildProjectContinuityEndpoints } from './project-continuity';
-import type { CoordinatorProgressHistoryGroup, CoordinatorProgressHistoryPage } from '../project-coordination.generated';
+import type { CoordinatorProgressHistoryGroup, CoordinatorProgressHistoryPage, LeadDeliverablePage } from '../project-coordination.generated';
 
 import type { CoordinatorConversationPage, CoordinatorReportState, CoordinatorReportReadRequest, CoordinationBinding, CoordinatorProgressState, ProjectMessagePage } from '../project-coordination.generated';
 import type { RouterInstruction, RouterInstructionPage, RouterOwnerDelegationState, RouterPortfolioState, RouterProjectsPage,
@@ -112,6 +112,11 @@ export function createProjectEndpoints(ports: EndpointPorts) {
       signal?: AbortSignal) =>
       get<CoordinatorProgressHistoryPage>('/api/v4/project/coordination/progress/history',
         { query: { path, ...query }, signal, timeout: COORDINATION_READ_TIMEOUT_MS, onError: 'throw' }),
+    // One page of a lead's deliverables, newest first (docs/PROJECT_COORDINATION.md, Lead deliverables).
+    leadDeliverables: (conversationId: string, path: string, cursor?: string, signal?: AbortSignal) =>
+      get<LeadDeliverablePage>('/api/v4/project/coordination/deliverables',
+        { query: { conversationId, ...(path ? { path } : {}), ...(cursor ? { cursor } : {}) }, signal,
+          timeout: COORDINATION_READ_TIMEOUT_MS, onError: 'throw' }),
     markCoordinatorReportRead: (body: CoordinatorReportReadRequest) =>
       post<CoordinatorReportState>('/api/v4/project/coordination/reports/read', body, { onError: 'throw' }),
     coordinationMessages: (path: string, conversationId: string, beforeId = '') =>

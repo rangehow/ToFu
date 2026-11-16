@@ -10,6 +10,7 @@ import { goToWorkspace, hasMountedWorkspace, mountWorkspacePage, showWorkspace }
 import { rememberLanding } from '../application-shell/landing';
 import { mountWorld, type WorldShell } from './world/app';
 import type { PushFrame, PushPort } from './world/live';
+import { cancelPendingReveal, openConversationTurn } from './lead-deliverables/open';
 
 type PushHandler = (frame: PushFrame) => void;
 
@@ -29,27 +30,6 @@ function pushPort(): PushPort | null {
   };
 }
 
-type OpenAtTurn = (conversationId: string, turn: { turnId: string; ordinal: number }) => Promise<void>;
-interface TurnStoreRuntime { ensureRuntimeStore?(conversationId: string): { subscribe(changed: () => void): () => void } }
-
-let pendingReveal: (() => void) | null = null;
-/** A Turn without a known ordinal is a recent one (a Worker's result): reveal it once the classic Turn store
- * holds it; the subscription ends at the reveal, the next open, or teardown. */
-function revealWhenReady(conversationId: string, turnId: string) {
-  const presentation = readLiveRuntimeBinding('ConversationSurfacePresentation') as { revealTurn?(conversation: string, turn: string): boolean } | undefined;
-  const turns = readLiveRuntimeBinding('ConversationTurnStore') as TurnStoreRuntime | undefined;
-  const reveal = () => Boolean(presentation?.revealTurn?.(conversationId, turnId));
-  const store = turns?.ensureRuntimeStore?.(conversationId);
-  if (reveal() || !store) return;
-  let frame = 0;
-  const release = store.subscribe(() => {
-    if (frame) return;
-    frame = requestAnimationFrame(() => { frame = 0; if (reveal()) stop(); });
-  });
-  const stop = () => { if (frame) cancelAnimationFrame(frame); release(); if (pendingReveal === stop) pendingReveal = null; };
-  pendingReveal = stop;
-}
-
 export function openWorld(): void {
   // Arriving in the office (the classic top bar's link, an address or the landing) makes it the landing view.
   rememberLanding('world');
@@ -62,16 +42,7 @@ export function openWorld(): void {
   if (!root) throw new Error('World page container is missing');
   let leaving = false;
   const shell: WorldShell = {
-    openChat(conversationId, turn) {
-      pendingReveal?.();
-      const openAt = readLiveRuntimeBinding('openConversationAtTurn') as OpenAtTurn | undefined;
-      if (turn && typeof turn.ordinal === 'number' && typeof openAt === 'function') {
-        void openAt(conversationId, { turnId: turn.turnId, ordinal: turn.ordinal });
-        return;
-      }
-      legacy.loadConversation?.(conversationId);
-      if (turn) revealWhenReady(conversationId, turn.turnId);
-    },
+    openChat: openConversationTurn,
     // The dock is the body's data-conversation-dock (01-workspace-dock.css places the column from it).
     // Re-announcing the workspace lets the shell resume or suspend the column's transcript transport;
     // while the world is being left, the next workspace announces itself.
@@ -87,7 +58,7 @@ export function openWorld(): void {
   // The dock belongs to the office: leaving it leaves no dock behind in the next workspace.
   mountWorkspacePage(() => {
     leaving = true;
-    pendingReveal?.();
+    cancelPendingReveal();
     page.dispose();
     delete document.body.dataset.conversationDock;
   }, page.route);

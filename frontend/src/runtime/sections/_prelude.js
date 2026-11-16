@@ -175,6 +175,7 @@ const openCoordinatorTaskHistory = (ports) => import('../features/coordinator-ta
 // The lead office loads with its game stage and art when a lead first shows in the studio
 // mode's sidebar; the classic mode (application-shell/landing.ts) never imports it.
 const loadLeadOffice = () => import('../features/lead-office/office');
+const loadLeadDeliverables = () => import('../features/lead-deliverables/classic');
 import { readLanding, subscribeLanding } from '../application-shell/landing';
 import {
   conversationFullIdById as queryConversationFullIdById,

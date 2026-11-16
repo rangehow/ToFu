@@ -6682,5 +6682,18 @@
   "toolCard.debug.grantRevision": "Grant revision",
   "toolCard.debug.turn": "Turn ID",
   "toolCard.debug.command": "Command ID",
-  "toolCard.debug.message": "Message ID"
+  "toolCard.debug.message": "Message ID",
+  "leadDeliverables.title": "Deliverables",
+  "leadDeliverables.more": "Load older",
+  "leadDeliverables.retry": "Retry",
+  "leadDeliverables.loading": "Loading deliverables…",
+  "leadDeliverables.error": "Deliverables could not be read.",
+  "leadDeliverables.empty": "No deliverables yet.",
+  "leadDeliverables.source": "Go to message",
+  "leadDeliverables.close": "Close",
+  "leadDeliverables.kind.report": "Report",
+  "leadDeliverables.kind.file": "File",
+  "leadDeliverables.kind.deck": "Deck",
+  "leadDeliverables.kind.document": "Document",
+  "leadDeliverables.kind.merge": "Merged"
 }

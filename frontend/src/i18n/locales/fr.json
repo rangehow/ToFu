@@ -6682,5 +6682,18 @@
   "toolCard.debug.grantRevision": "Révision de l’autorisation",
   "toolCard.debug.turn": "ID du tour",
   "toolCard.debug.command": "ID de la commande",
-  "toolCard.debug.message": "ID du message"
+  "toolCard.debug.message": "ID du message",
+  "leadDeliverables.title": "Livrables",
+  "leadDeliverables.more": "Charger les plus anciens",
+  "leadDeliverables.retry": "Réessayer",
+  "leadDeliverables.loading": "Chargement des livrables…",
+  "leadDeliverables.error": "Impossible de lire les livrables.",
+  "leadDeliverables.empty": "Aucun livrable pour le moment.",
+  "leadDeliverables.source": "Aller au message",
+  "leadDeliverables.close": "Fermer",
+  "leadDeliverables.kind.report": "Rapport",
+  "leadDeliverables.kind.file": "Fichier",
+  "leadDeliverables.kind.deck": "Présentation",
+  "leadDeliverables.kind.document": "Document",
+  "leadDeliverables.kind.merge": "Fusionné"
 }

@@ -2276,6 +2276,69 @@ state, hand-off and review captures, day and night, hover card and click, a
 six-Worker profile, hidden/offscreen/disposed sleep, reduced motion; evidence
 in `output/studio-redesign/after/`).
 
+### Lead deliverables (owner request 2026-11-16)
+
+Problem: in the classic view a lead's deliverables (delivery reports, published
+files and decks, merged Worker results) were scattered through very long
+conversations, so the owner scrolled back to find them; and in the studio,
+clicking a deliverable only opened the lead's conversation.
+
+Decision: a read-time projection over the owners that already hold the
+deliverables, with no store of its own (owner direction 2026-11-16: reuse the
+existing report/delivery owners, no parallel store)
+(`lib/conversations/lead_deliverables.py`; `deliverableItem`/`deliverablePage`
+in `contracts/project_coordination_v1.schema.json`). Each read of
+`GET /api/v4/project/coordination/deliverables` walks the lead's main lane
+newest-first through `turn_lifecycle.lane_turns_newest_first` (one bounded
+`turn.sync.page` per Turn, so a long conversation never hits the
+whole-conversation response bound) and the conversation's artifact rows:
+
+- delivery reports: the lead's own canonical `coordinator_report.delivery`
+  Turns (`CoordinatorReports`); the item's title and summary are the Turn's
+  `title\n\nmessage` content. The Global Router's relayed deliveries are the
+  report relay notices in its Turns: `lib/router/relay.py` owns both the notice
+  format (`render_notice`) and its parser (`notice_references`); each named
+  report is read from the Project Router's canonical Turn, so a forged or
+  deleted reference lists nothing.
+- published files, decks and documents: the artifact rows
+  (`lib.artifacts.core.list_artifacts`) from `publish_response_file`, rich
+  responses and long-form reports. A `.pptx`/`.pptd` file is a deck, another
+  file a file, a rich response or long-form report a document; workspace
+  writes, inline images and scanner snippets are not deliverables. The source
+  message is the oldest Turn whose tool round carries the `artifactId`.
+
+Items are newest first, 64 per page (the coordination page bound); the cursor
+is the previous page's last `(createdAt, item digest)`, so a page boundary is
+stable while new deliverables arrive. Reads require the caller to own the
+conversation (403 otherwise); a malformed cursor is a 400. Producers send only
+a push hint, `{kind: "lead_deliverable", conversationId}` on the project
+channel: `CoordinatorReports` for a delivery, the relay for the Global Router,
+and `rich_response` for a published artifact. A Worker result a finished request
+merged reaches the list through the delivery report the finish requires; the
+studio's trophy shelf opens such a result as a `merge` item it builds itself.
+Cost: each read walks the whole main lane, comparable to opening the
+conversation once; the list is read when shown and on hints.
+
+One item model and one opener serve both modes
+(`frontend/src/features/lead-deliverables/`). Opening an item shows the
+deliverable itself: an artifact in the artifact panel (file preview, deck
+viewer), a report as the conversation's own `report_to_user` card in a dialog,
+a merge at its Worker's result Turn. The secondary action ("Go to message")
+opens the lead's message at that exact Turn. In the classic view, presence
+places a 成果 section after each shown lead's office slot (the Global Router's
+card, a project's Coordinator row), above the archive of conversations it
+started; older pages load on demand, so lists of any length are complete. A
+`lead_deliverable` push for the shown lead and a push reconnect re-read the first
+page. In the studio, a delivery on the desk and a trophy on the shelf build the
+same item (same identity) and call the same opener, whose Turn port docks the
+office's conversation column; other desk documents still open their author's brief.
+
+Alternatives rejected: a pointer ledger written by each producer (the first
+implementation; a parallel store that needed seeding and could disagree with
+the reports and artifacts it copied); scraping Turns in the browser (only
+covers loaded windows); deriving the list from the latest-report head (it keeps
+only the newest report); a second studio-only implementation.
+
 ### Office team facts (2026-11-13)
 
 Problem: the office must show who works, who walks in with a report, which

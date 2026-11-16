@@ -355,7 +355,7 @@ import {
 // Temporary tool-card port; remove with retained tool dispatch.
 import { createToolCardPresentation, handleToolCardClick } from '../conversation/ui/tool-cards';
 import { paperDocumentsApi } from '../api/paper-documents';
-import { installPaperProposalObserver } from '../features/paper/proposal-card';
+import { installPaperProposalObserver } from '../features/paper/proposal-observer';
 import { nudgePreviewRebuild } from '../features/paper/preview-rebuild';
 import {
   createToolSearchPresentation,

@@ -355,7 +355,7 @@ import {
 // Temporary tool-card port; remove with retained tool dispatch.
 import { createToolCardPresentation, handleToolCardClick } from '../conversation/ui/tool-cards';
 import { paperDocumentsApi } from '../api/paper-documents';
-import { installPaperProposalObserver } from '../features/paper/proposal-card';
+import { installPaperProposalObserver } from '../features/paper/proposal-observer';
 import { nudgePreviewRebuild } from '../features/paper/preview-rebuild';
 import {
   createToolSearchPresentation,
@@ -4821,7 +4821,6 @@ const ExportImages = (() => {
 
 // Temporary lexical presenters; remove with the retained artifact-panel migration.
 import { renderPublishedFile, renderScriptWarning } from '../rich-response/artifact-delivery';
-import { mountArtifactReview } from '../rich-response/artifact-review';
 
 (function () {
   "use strict";
@@ -5095,6 +5094,9 @@ import { mountArtifactReview } from '../rich-response/artifact-review';
       if (_activeId !== id || _openEpoch !== openEpoch) return;
       _renderHeader(panel, meta);
       if (reviewHost) {
+        // The review editor loads with the first opened artifact, not at startup.
+        const { mountArtifactReview } = await import('../rich-response/artifact-review');
+        if (_activeId !== id || _openEpoch !== openEpoch) return;
         reviewHost.hidden = false;
         _disposeReview = mountArtifactReview(reviewHost, {
           load: signal => Api.artifacts.review(id, signal),

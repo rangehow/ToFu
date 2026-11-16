@@ -6,9 +6,10 @@ plus the role-to-character mapping both read. Nothing here imports a feature,
 API client or shell owner; hosts inject scenes and data, and each host owns its
 own art.
 
-`engine/` is the game engine. `loop.ts` advances fixed 60 Hz steps over visible
-time and sleeps without callbacks when the world reports no change, waking on one
-timer for the next keyframe; `camera.ts` fits, pans, zooms and clamps;
+`engine/` is the game engine. `loop.ts` advances every frame by exactly its
+visible time (in steps of at most 1/60 s, so no frame drops or doubles a step and
+motion never judders) and sleeps without callbacks when the world reports no
+change, waking on one timer for the next keyframe; `camera.ts` fits, pans, zooms and clamps;
 `pointer.ts` recognizes tap, drag-pan, wheel and pinch; `paint.ts` draws
 in-world plates, bubbles, emotes and hotspot brackets and owns the `Emote` type
 and `PALETTE`; `stage.ts` hosts one scene on one device-resolution canvas with an

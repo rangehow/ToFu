@@ -1,5 +1,5 @@
 /** Executable specifications for the office game engine's pure modules:
- * the fixed-step loop's sleep/keyframe/catch-up semantics and camera math. */
+ * the loop's frame-time stepping, sleep/keyframe/catch-up semantics and camera math. */
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),ts=require('typescript');
@@ -18,18 +18,37 @@ function scheduler(){
 }
 const near=(a,b)=>assert.ok(Math.abs(a-b)<1e-6,`${a} != ${b}`);
 
-test('the loop advances exact fixed steps of visible time and renders once per frame',()=>{
+const sum=list=>list.reduce((total,value)=>total+value,0);
+
+test('every frame advances exactly its visible time in steps of at most STEP_MS and renders once',()=>{
  const s=scheduler(),steps=[],renders=[];let busy=true;
  const loop=createGameLoop({...s.ports,visible:()=>true,step:dt=>steps.push(dt),render:now=>renders.push(now),nextWake:()=>busy?0:Infinity});
  loop.wake();assert.equal(s.frames.size,1);
  s.frame(1000);assert.equal(steps.length,0,'the first frame after sleep only renders');
- s.frame(1000+STEP_MS*2.5);assert.equal(steps.length,2);assert.ok(steps.every(dt=>dt===STEP_MS));
- s.frame(1000+STEP_MS*3);assert.equal(steps.length,3,'the fractional remainder carries over');
+ s.frame(1000+STEP_MS*2.5);near(sum(steps),STEP_MS*2.5);assert.equal(steps.length,3);assert.ok(steps.every(dt=>dt<=STEP_MS));
+ s.frame(1000+STEP_MS*3);near(sum(steps),STEP_MS*3);
  assert.equal(renders.length,3);
  // A stalled tab replays at most MAX_FRAME_MS of simulation in one burst.
- s.frame(1000+STEP_MS*3+60_000);assert.equal(steps.length,3+Math.round(MAX_FRAME_MS/STEP_MS));
+ const before=sum(steps);s.frame(1000+STEP_MS*3+60_000);near(sum(steps)-before,MAX_FRAME_MS);assert.ok(steps.every(dt=>dt<=STEP_MS));
  busy=false;s.frame(70_000);assert.equal(s.frames.size,0);assert.equal(s.timers.size,0,'an idle world owns no callbacks');
  loop.dispose();
+});
+
+test('motion never judders: no frame drops or doubles a step when frame times do not divide into steps',()=>{
+ // A 60 Hz display's frames with timestamps coarsened to 0.1 ms (16.7, 16.6, 16.7, ...), and a 144 Hz display.
+ for(const period of [1000/60,1000/144]){
+  const s=scheduler();let advanced=0;
+  const loop=createGameLoop({...s.ports,visible:()=>true,step:dt=>{advanced+=dt;},render(){},nextWake:()=>0});
+  loop.wake();
+  let previous=Math.round(1000*10)/10;s.frame(previous);
+  for(let index=1;index<=240;index++){
+   const now=Math.round((1000+index*period)*10)/10;
+   advanced=0;s.frame(now);
+   near(advanced,now-previous);
+   previous=now;
+  }
+  loop.dispose();
+ }
 });
 
 test('a world with only keyframes sleeps on one timer and resumes without replaying slept time',()=>{

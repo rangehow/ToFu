@@ -118,7 +118,7 @@ import {
   createModelBrandResolver,
   detectModelBrand,
 } from '../core/model-brand-detection';
-import { brandIconHtml } from '../core/model-brand-icons';
+import { brandBadgeHtml } from '../core/model-brand-badge';
 import { createModelDisplayNames } from '../core/model-display-names';
 import { createModelGroupPolicy } from '../core/model-group';
 import { modelDisplayUnits } from '../core/model-display-fold';
@@ -1058,7 +1058,7 @@ import {
 // migrated. The policy and asset registries are typed, module-private, and
 // composed once; no compatibility name is published to `window`.
 const _detectBrand = detectModelBrand;
-const _brandSvg = brandIconHtml;
+const _brandSvg = brandBadgeHtml;
 // The one brand-resolution interface for every model surface: explicit
 // Creator identity wins, the registered-models catalog covers id-only
 // callers, and name-pattern detection remains as the fallback for ids the

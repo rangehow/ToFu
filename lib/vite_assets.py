@@ -420,6 +420,16 @@ def vite_authoring_inputs() -> tuple[str, ...]:
     return tuple(inputs)
 
 
+def source_authoring_fingerprint() -> str:
+    """Identify the current Vite build inputs (locale catalog and authoring).
+
+    Equal fingerprints before and after a build attempt prove that no source
+    changed under it; lifecycle preparation uses this to tell a concurrent
+    edit or landing apart from a build that fails on settled sources.
+    """
+    return f'{_source_i18n_catalog_digest()}:{_source_vite_authoring_digest()}'
+
+
 def validate_source_vite_artifact(
         entries: tuple[str, ...] | None = None) -> dict:
     """Validate a source checkout's graph and authoring-content digest.
@@ -733,6 +743,7 @@ __all__ = [
     'VITE_AUTHORING_CONFIG_PATHS', 'VITE_AUTHORING_SUFFIXES',
     'VITE_ENTRIES', 'VITE_ENTRY', 'VITE_MANIFEST', 'VITE_OUT_DIR',
     'ViteAssetError', 'clear_vite_asset_cache', 'get_vite_asset_tags',
+    'source_authoring_fingerprint',
     'get_vite_build_id', 'refresh_vite_build_ids',
     'request_vite_build_id_refresh', 'validate_published_vite_artifact',
     'validate_source_vite_artifact', 'validate_vite_artifact',

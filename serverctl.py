@@ -299,6 +299,29 @@ def _validate_frontend_artifact() -> None:
         raise RuntimeError(detail or 'frontend artifact validation failed')
 
 
+def _frontend_source_fingerprint() -> str:
+    """Fingerprint the build inputs in a fresh interpreter, like validation.
+
+    An unreadable fingerprint is returned as its error text: two identical
+    errors compare equal (no evidence of a change), a differing one does not.
+    """
+    selected_project = Path(PROJECT).resolve()
+    verifier = selected_project / 'scripts' / 'verify_frontend_dist.py'
+    try:
+        completed = subprocess.run(
+            [sys.executable, str(verifier), '--source-fingerprint'],
+            cwd=selected_project,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=30.0,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f'unavailable: {exc}'
+    output = (completed.stdout or '').strip()
+    return output if completed.returncode == 0 else f'unavailable: {output[-2000:]}'
+
+
 def _source_frontend_build_command() -> list[str] | None:
     """Return a source-build command only when local dev dependencies exist."""
     project = Path(PROJECT)
@@ -440,7 +463,7 @@ def prepare_source_frontend_artifact(
             pass
         print(
             f'[{time.strftime("%H:%M:%S")}] Frontend artifact is stale '
-            f'({initial_error_message[:200]}); rebuilding once before '
+            f'({initial_error_message[:200]}); rebuilding before '
             f'{operation}…',
             file=sys.stderr,
         )
@@ -453,26 +476,10 @@ def prepare_source_frontend_artifact(
         browser_error = _ensure_canary_browser(build_environment)
         if browser_error:
             return browser_error
-        try:
-            from serverctl_pkg.native_engine import _run
-            _run(
-                command, cwd=Path(PROJECT),
-                timeout=_FRONTEND_REPAIR_TIMEOUT_SECONDS,
-                environment=build_environment,
-                progress=None if capture_output else 'Building frontend resources',
-                failure_subject='frontend artifact rebuild',
-            )
-        except (RuntimeError, KeyboardInterrupt) as exc:
-            message = str(exc) or 'frontend artifact rebuild cancelled'
-            return message if capture_output else message + '; run `npm run build:frontend` manually'
-        except OSError as exc:
-            return f'frontend artifact rebuild could not start: {exc}'
-        try:
-            _validate_frontend_artifact()
-        except Exception as final_error:
-            return (
-                'frontend artifact remained invalid after rebuild: '
-                f'{final_error}; initial error: {initial_error_message}')
+        failure = _rebuild_frontend_until_sources_settle(
+            command, build_environment, capture_output, initial_error_message)
+        if failure:
+            return failure
         print(
             f'[{time.strftime("%H:%M:%S")}] Frontend artifact rebuilt and '
             f'validated in {time.monotonic() - rebuild_started:.1f}s '
@@ -480,6 +487,55 @@ def prepare_source_frontend_artifact(
             file=sys.stderr,
         )
     return ''
+
+
+def _rebuild_frontend_until_sources_settle(
+        command: list[str], build_environment: dict[str, str],
+        capture_output: bool, initial_error_message: str) -> str:
+    """Build and validate; rebuild only while sources change under a build.
+
+    A landing or concurrent edit can change ``frontend/src`` while Vite runs,
+    so the graph is already stale when validated (or the build refuses its
+    own changed inputs). That is not a build failure: the new sources are
+    built again. A failure on unchanged sources is returned. No attempt count
+    exists; each extra build is caused by a newly observed source change.
+    """
+    from serverctl_pkg.native_engine import _run
+    attempt_sources = _frontend_source_fingerprint()
+    while True:
+        try:
+            _run(
+                command, cwd=Path(PROJECT),
+                timeout=_FRONTEND_REPAIR_TIMEOUT_SECONDS,
+                environment=build_environment,
+                progress=None if capture_output else 'Building frontend resources',
+                failure_subject='frontend artifact rebuild',
+            )
+        except KeyboardInterrupt as exc:
+            message = str(exc) or 'frontend artifact rebuild cancelled'
+            return message if capture_output else message + '; run `npm run build:frontend` manually'
+        except RuntimeError as exc:
+            message = str(exc) or 'frontend artifact rebuild failed'
+            failure = message if capture_output else message + '; run `npm run build:frontend` manually'
+        except OSError as exc:
+            return f'frontend artifact rebuild could not start: {exc}'
+        else:
+            try:
+                _validate_frontend_artifact()
+                return ''
+            except Exception as final_error:
+                failure = (
+                    'frontend artifact remained invalid after rebuild: '
+                    f'{final_error}; initial error: {initial_error_message}')
+        settled_sources = _frontend_source_fingerprint()
+        if settled_sources == attempt_sources:
+            return failure
+        print(
+            f'[{time.strftime("%H:%M:%S")}] Frontend sources changed during '
+            'the rebuild (a concurrent edit or landing); rebuilding them…',
+            file=sys.stderr,
+        )
+        attempt_sources = settled_sources
 
 
 def prepare_native_engine_artifact(operation: str, *, project: str | None = None,

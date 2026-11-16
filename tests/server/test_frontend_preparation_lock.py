@@ -87,6 +87,70 @@ def test_fresh_host_without_a_browser_refuses_start_with_one_actionable_line(tmp
     assert not built.exists(), 'no build (and so no canary) runs without its browser'
 
 
+def _rebuild_harness(tmp_path, monkeypatch, *, builds):
+    """Stale graph; each build runs ``builds[n]`` and moves to its sources."""
+    import serverctl_pkg.native_engine as native_engine
+    monkeypatch.setattr(serverctl, 'PROJECT', str(tmp_path))
+    monkeypatch.setattr(serverctl, '_lifecycle_owns_frontend', lambda: True)
+    monkeypatch.setattr(serverctl, '_source_frontend_build_command', lambda: ['build'])
+    monkeypatch.setattr(serverctl, '_ensure_canary_browser', lambda _env: '')
+    state = {'sources': 'v0', 'published': None, 'runs': 0}
+
+    def run(*_a, **_k):
+        step = builds[state['runs']]
+        state['runs'] += 1
+        state['published'] = state['sources']
+        state['sources'] = step.get('sources_after', state['sources'])
+        if step.get('fails'):
+            raise RuntimeError(step['fails'])
+
+    def validate():
+        if state['published'] != state['sources']:
+            raise ValueError('Vite authoring inputs are stale')
+        if state['published'] == 'broken':
+            raise ValueError('broken graph')
+
+    monkeypatch.setattr(native_engine, '_run', run)
+    monkeypatch.setattr(serverctl, '_validate_frontend_artifact', validate)
+    monkeypatch.setattr(serverctl, '_frontend_source_fingerprint', lambda: state['sources'])
+    return state
+
+
+def test_landing_during_the_rebuild_builds_the_new_sources(tmp_path, monkeypatch):
+    state = _rebuild_harness(tmp_path, monkeypatch, builds=[
+        {'sources_after': 'v1'}, {'sources_after': 'v2'}, {}])
+    assert serverctl.prepare_source_frontend_artifact('test restart') == ''
+    assert state['runs'] == 3 and state['published'] == 'v2'
+
+
+def test_build_refusing_its_changed_inputs_is_rebuilt(tmp_path, monkeypatch):
+    state = _rebuild_harness(tmp_path, monkeypatch, builds=[
+        {'sources_after': 'v1', 'fails': 'frontend authoring inputs changed during the frontend build'},
+        {}])
+    assert serverctl.prepare_source_frontend_artifact('test restart') == ''
+    assert state['runs'] == 2
+
+
+def test_failure_on_settled_sources_refuses_after_one_build(tmp_path, monkeypatch):
+    state = _rebuild_harness(tmp_path, monkeypatch, builds=[{'fails': 'vite exploded'}])
+    assert serverctl.prepare_source_frontend_artifact(
+        'test restart', capture_output=True) == 'vite exploded'
+    assert state['runs'] == 1
+    state = _rebuild_harness(tmp_path, monkeypatch, builds=[{}])
+    state['sources'] = 'broken'
+    error = serverctl.prepare_source_frontend_artifact('test restart')
+    assert error.startswith('frontend artifact remained invalid after rebuild: broken graph')
+    assert state['runs'] == 1
+
+
+def test_source_fingerprint_matches_the_validator_digests(monkeypatch):
+    from lib import vite_assets
+    monkeypatch.setattr(serverctl, 'PROJECT', vite_assets.BASE_DIR)
+    assert serverctl._frontend_source_fingerprint() == (
+        f'{vite_assets._source_i18n_catalog_digest()}:'
+        f'{vite_assets._source_vite_authoring_digest()}')
+
+
 def test_browser_authority_runs_in_the_canary_environment_before_the_build(tmp_path, monkeypatch):
     seen = tmp_path / 'seen'
     built = _stale_source_checkout(tmp_path, monkeypatch, (

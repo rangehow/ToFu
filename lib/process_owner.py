@@ -7,9 +7,10 @@ move) only recorded evidence proves death: record_exit stores one fixed-shape
 record per incarnation, written by an observer that proved the exit from the
 kernel in the owner's namespace; record_host_retired stores one record per
 host that handed this data root's serving lock to another host, so every
-process on it belongs to a stopped serving era. Both live in the directory the
-process family reads (exit_evidence_dir). A retirement never covers the
-reading host itself. Missing or inaccessible evidence is unknown. This grants
+process on it belongs to a stopped serving era; record_era_retired does the
+same for one (host, boot, PID namespace) era, e.g. a container restarted under
+the same hostname. All live in the directory the process family reads
+(exit_evidence_dir). A retirement never covers the reader's own host or era. Missing or inaccessible evidence is unknown. This grants
 no task or external-job authority.
 """
 from pathlib import Path
@@ -20,6 +21,8 @@ import socket
 
 EXIT_RECORD_FORMAT = 'tofu.process-exit/v1'
 HOST_RETIREMENT_FORMAT = 'tofu.host-retired/v1'
+ERA_RETIREMENT_FORMAT = 'tofu.era-retired/v1'
+_ERA_FIELDS = ('host', 'boot', 'pid_namespace')
 _OWNER_FIELDS = ('host', 'boot', 'pid_namespace', 'pid', 'started')
 
 
@@ -144,14 +147,58 @@ def _host_retired(owner):
             and record.get('host') == owner['host'])
 
 
+def _era(owner):
+    return {key: owner[key] for key in _ERA_FIELDS}
+
+
+def _era_retirement_path(era, directory):
+    encoded = json.dumps(era, sort_keys=True, separators=(',', ':')).encode('utf-8')
+    return Path(directory) / 'eras' / f'{hashlib.sha256(encoded).hexdigest()}.json'
+
+
+def record_era_retired(owner, directory, *, evidence):
+    """Record that the serving era ``owner`` names has ended; called by its successor.
+
+    The successor acquired the serving lock that era stamped, as for a host
+    retirement, but on the same host from a different boot or PID namespace.
+    """
+    current = process_owner()
+    if (not isinstance(owner, dict) or not all(isinstance(owner.get(key), str) and owner[key]
+                                               for key in _ERA_FIELDS)
+            or current is None or _era(owner) == _era(current)):
+        raise ValueError('only another serving era can be retired')
+    from lib.json_store import write_json_atomic
+    era = _era(owner)
+    path = _era_retirement_path(era, directory)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    write_json_atomic(str(path), {'format': ERA_RETIREMENT_FORMAT, 'era': era,
+                                  'successor': current, 'evidence': evidence}, mode=0o600)
+    return str(path)
+
+
+def _era_retired(owner):
+    current = process_owner()
+    if current is None or _era(owner) == _era(current):
+        return False
+    try:
+        record = json.loads(_era_retirement_path(_era(owner), exit_evidence_dir())
+                            .read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return False
+    return (isinstance(record, dict) and record.get('format') == ERA_RETIREMENT_FORMAT
+            and record.get('era') == _era(owner))
+
+
 def owner_state(owner):
     if not _well_formed(owner):
         return 'unknown'
     state = _kernel_state(owner)
-    if state == 'unknown' and (_exit_recorded(owner) or _host_retired(owner)):
+    if state == 'unknown' and (_exit_recorded(owner) or _host_retired(owner)
+                               or _era_retired(owner)):
         return 'dead'
     return state
 
 
-__all__ = ["EXIT_RECORD_FORMAT", "HOST_RETIREMENT_FORMAT", "exit_evidence_dir", "owner_state",
-           "process_owner", "record_exit", "record_host_retired"]
+__all__ = ["ERA_RETIREMENT_FORMAT", "EXIT_RECORD_FORMAT", "HOST_RETIREMENT_FORMAT",
+           "exit_evidence_dir", "owner_state", "process_owner", "record_era_retired",
+           "record_exit", "record_host_retired"]

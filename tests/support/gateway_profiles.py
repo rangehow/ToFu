@@ -3,7 +3,7 @@
 Core behavior keyed on a gateway (``lib.provider.gateway_profiles``) must not
 depend on which private overlay bundle the test host happens to have. These
 helpers replace the loaded profiles for one test with explicit documents.
-The Meituan overlay's real declaration is pinned by bundles/meituan/tests.
+The YourProvider overlay's real declaration is pinned by bundles/yourprovider/tests.
 """
 from __future__ import annotations
 

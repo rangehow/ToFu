@@ -34,8 +34,8 @@ export const CREATOR_TO_BRAND: Readonly<Record<string, string>> = Object.freeze(
   minimax: 'minimax',
   bytedance: 'doubao',
   doubao: 'doubao',
-  meituan: 'meituan',
-  longcat: 'meituan',
+  yourprovider: 'yourprovider',
+  longcat: 'yourprovider',
   alibaba: 'qwen',
   qwen: 'qwen',
   meta: 'meta',
@@ -74,7 +74,7 @@ export function brandForCreator(creatorId: unknown): string {
 
 const MODEL_BRAND_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   [/yeysai|thunlp|tsinghua|清华/i, 'tsinghua'],
-  [/sankuai|longcat|meituan|三快|龙猫/i, 'meituan'],
+  [/example-corp|longcat|yourprovider|your-corp|your-mascot/i, 'yourprovider'],
   [/openrouter/i, 'openrouter'],
   [/mimo|xiaomi/i, 'mimo'],
   [/shubiaobiao|数标标/i, 'shubiaobiao'],
@@ -117,8 +117,8 @@ const MODEL_BRAND_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
 export function detectModelBrand(value: unknown): string {
   if (value == null || value === '') return 'generic';
   // A legacy gateway request name may append its host to the actual family.
-  // Only that terminal suffix is hosting metadata, not a Meituan model.
-  const text = String(value).replace(/-meituan$/i, '');
+  // Only that terminal suffix is hosting metadata, not a YourProvider model.
+  const text = String(value).replace(/-yourprovider$/i, '');
   for (const [pattern, brand] of MODEL_BRAND_PATTERNS) {
     if (pattern.test(text)) return brand;
   }

@@ -1,7 +1,7 @@
 """Service thread commands and auto-reply (C5, C6).
 
 The 大象 account commands and supervisor restart policy moved with the adapter to
-bundles/meituan/tests/channels/test_dx_service_and_supervisor.py (docs/PUBLIC_CORE.md).
+bundles/yourprovider/tests/channels/test_dx_service_and_supervisor.py (docs/PUBLIC_CORE.md).
 """
 import threading
 from types import SimpleNamespace

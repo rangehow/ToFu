@@ -5,9 +5,8 @@ from pathlib import Path
 import subprocess
 
 import pytest
-from tests.support.export_toolchain import require_export_toolchain
 
-export = require_export_toolchain()
+export = pytest.importorskip('export', reason='maintainer tooling is not distributed')
 pytestmark = pytest.mark.unit
 
 

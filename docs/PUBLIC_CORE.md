@@ -22,9 +22,8 @@ already publishes twice, and both channels are wrong:
   `_OPENSOURCE_BUILD` flags are regex-replaced (`_sanitize.py`,
   `_lists._ENDPOINTS`, `_INTERNAL_DOMAIN_LITERALS`, `_OPENSOURCE_FIXED_CANDIDATES`).
   It then reconstructs a sanitized Git DAG (`_history.py`) and pushes it to
-  `github.com/rangehow/ToFu` (`NiuTrans/ToFu`, also public, is no longer a
-  push target; docs/PUBLICATION_AUDIT.md §R.5). Both repositories are
-  publicly readable (anonymous GitHub API HTTP 200, 2026-11-15).
+  `github.com/rangehow/ToFu` and `github.com/NiuTrans/ToFu`. Both repositories
+  are already publicly readable (anonymous GitHub API HTTP 200, 2026-11-15).
   So the public code is a *derived rewrite*, not the source. A colleague's fix
   against it cannot come back. Any core module that branches on
   `your-llm-gateway.example.com` behaves differently once rewritten, and every new

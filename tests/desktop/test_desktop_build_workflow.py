@@ -62,7 +62,6 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from tests.support.export_toolchain import require_export_toolchain
 
 yaml = pytest.importorskip('yaml', reason='PyYAML required to parse workflows')
 
@@ -1295,7 +1294,7 @@ def test_the_shared_script_survives_export_and_is_tracked():
     membership in the keep-list — ``_should_exclude`` returning a verdict there
     is expected and is NOT evidence of a problem.
     """
-    _export = require_export_toolchain()
+    _export = pytest.importorskip('export', reason='export.py not shipped in opensource')
     rel = 'scripts/release_assets.py'
     for mode in ('personal', 'internal'):
         verdict = _export._should_exclude('scripts', 'release_assets.py', mode)

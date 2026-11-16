@@ -671,7 +671,7 @@ TofuDB.
 - A second 大象 bridge session would contend with Tofu's own session (C6).
 
 Decision: the 大象 notification robot posts into the bound command group
-through the open platform. The watcher uses `tofu_meituan.dx.robot.DxRobot`
+through the open platform. The watcher uses `tofu_yourprovider.dx.robot.DxRobot`
 with a standard-library transport (client-credentials token, then
 `sendGroupMsgByRobot`). The robot `clientId` and the group `gid` are
 non-secret IDs pinned in the watcher's `config.json`. The robot secret is read
@@ -2828,7 +2828,7 @@ the first failure:
 1. Persistence. The volume must keep its contents across application and
    container restarts, CodeLab pause/restart (which moves the pod to another
    node) and image re-pulls. The system temporary directory is emptied at
-   boot, and node-local mounts such as `/opt/meituan/appdatas` do not follow a
+   boot, and node-local mounts such as `/opt/yourprovider/appdatas` do not follow a
    rescheduled pod even though the mount table reports a local block
    filesystem.
 2. Medium. From a shell that carries the production `LD_PRELOAD` and

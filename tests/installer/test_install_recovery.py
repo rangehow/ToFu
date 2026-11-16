@@ -12,7 +12,6 @@ import tarfile
 import time
 
 import pytest
-from tests.support.export_toolchain import require_export_toolchain
 
 from bootstrap_pkg.process import OUTPUT_LIMIT, run_command
 from scripts.install_frontend_dist import install_archive
@@ -151,7 +150,7 @@ def test_required_install_helpers_are_not_gitignored():
 
 
 def test_frontend_install_helper_survives_public_export_policy():
-    export = require_export_toolchain()
+    export = pytest.importorskip('export', reason='private exporter is not shipped in public source')
     assert 'scripts/install_frontend_dist.py' in export._OPENSOURCE_KEEP_FILES
     for mode in ('personal', 'internal', 'opensource'):
         assert export._should_exclude('bootstrap_pkg/process.py', 'process.py', mode) is None

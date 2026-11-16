@@ -2,7 +2,7 @@
 
 Only installed bundles declare a source; the key is validated server-side and
 never returned. Every source here is synthetic (the CatPaw declaration is
-pinned in bundles/meituan/tests/test_catpaw_local_import.py).
+pinned in bundles/yourprovider/tests/test_catpaw_local_import.py).
 """
 from __future__ import annotations
 

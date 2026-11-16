@@ -222,7 +222,7 @@ def test_auth_source_does_not_grant_an_ssrf_exemption(_isolated_store):
     # migration (docs/SITE_PACKS.md).
     from lib.auth_sources import _static_catalog
     catalog = {d['domain'] for d in _static_catalog()}
-    assert catalog, 'precondition: the site-pack auth catalog names domains'
+    assert 'internal.example.com' in catalog, 'precondition: the domain is in the auth catalog'
     # It is in the CREDENTIAL catalog, yet grants no reachability by itself.
     assert _isolated_store.enabled_hosts() == set()
     assert set(_sync_kwargs()['allow_private_hosts']) == set()

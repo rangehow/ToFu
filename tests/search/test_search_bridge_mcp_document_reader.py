@@ -3,7 +3,7 @@
 A catalog entry's ``document_reader`` (lib/mcp/registry.py) names the hosts,
 path shape and tool; ``_ChatuiMcpDocumentReader`` reroutes matching links
 instead of the anonymous login wall. The connector here is synthetic; the
-学城 declaration is pinned in bundles/meituan/tests/test_xuecheng_document_reader.py.
+学城 declaration is pinned in bundles/yourprovider/tests/test_xuecheng_document_reader.py.
 """
 from __future__ import annotations
 

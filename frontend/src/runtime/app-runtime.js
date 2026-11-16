@@ -2628,7 +2628,7 @@ retainedCompositionLifecycle.add(() => _responsivenessMonitor.dispose());
   /* Bump on every change to the mascot art (defeats the 24h icon cache).
    * index.html's two static tags carry this same token — keep them in sync;
    * tests/mcp_protocol/test_brand_mascot_single.py asserts they match. */
-  var LOGO_VER = '20260729a';
+  var LOGO_VER = '0.19.2';
 
   /* The one shipped mascot. */
   var LOGO_PATH = '/static/icons/tofu-welcome.svg';
@@ -19303,6 +19303,10 @@ function selectTheme(theme) {
   applyTheme(theme);
 }
 
+function _syncRangeOutput(input, outputId, suffix) {
+  const output = document.getElementById(outputId);
+  if (output) output.textContent = String(input && input.value || '') + String(suffix || '');
+}
 
 /* Cost dashboard aliases — moved to myday.js */
 
@@ -26081,6 +26085,7 @@ const runtimeActions = Object.freeze({
   _safeClipboardWrite,
   _swarmCopyAgentId,
   _swarmToggleClass,
+  _syncRangeOutput,
   _timerInstructionToggle,
   _timerPollToggle,
   _timerWatcherToggle,

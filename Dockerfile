@@ -5,28 +5,9 @@
 ARG PYTHON_IMAGE=python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a
 
 FROM ${PYTHON_IMAGE} AS python-dependencies
-# `tofu-repo-kernel`'s setup.py builds its Rust helpers with `cargo build`, and
-# its gix discovery crate needs Rust >= 1.88; Debian's rustc is older. Install
-# the toolchain the native release builds pin (build-desktop.yml), through a
-# checksum-verified rustup-init.
-ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:$PATH
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends gcc g++ ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && case "$(dpkg --print-architecture)" in \
-         amd64) rust_host=x86_64-unknown-linux-gnu; \
-                rustup_sha256=b1c8cb14e30889e7e2999e6b69e62d9e9b9ffc0f4df8180564d306d9680e6c55 ;; \
-         arm64) rust_host=aarch64-unknown-linux-gnu; \
-                rustup_sha256=9f608c142e0e38a78957d0661ba1dfaf0b6fb37184cfaa4b9a0aa57af6184282 ;; \
-         *) echo "unsupported build architecture" >&2; exit 1 ;; \
-       esac \
-    && curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/rustup-init \
-       "https://static.rust-lang.org/rustup/archive/1.29.3/${rust_host}/rustup-init" \
-    && echo "${rustup_sha256}  /tmp/rustup-init" | sha256sum -c - \
-    && chmod +x /tmp/rustup-init \
-    && /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain 1.96.0 \
-    && rm /tmp/rustup-init \
-    && cargo --version
+    && apt-get install -y --no-install-recommends gcc g++ rustc cargo \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY pyproject.toml uv.lock README.md ./
 # Workspace members are path distributions in uv.lock. A frozen sync fails
@@ -35,6 +16,8 @@ COPY pyproject.toml uv.lock README.md ./
 COPY packages/tofu-search packages/tofu-search
 COPY plugins/tofu-trading plugins/tofu-trading
 COPY packages/tofu-repo-kernel packages/tofu-repo-kernel
+# `tofu-repo-kernel`'s setup.py builds its Rust helper with `cargo build`, so the
+# toolchain needs the cargo driver, not just rustc (separate Debian packages).
 # This stage only prepares dependencies; the runtime images above stay compile-free.
 RUN python -m pip install --no-cache-dir uv==0.13.5 \
     && UV_PROJECT_ENVIRONMENT=/opt/tofu-api \

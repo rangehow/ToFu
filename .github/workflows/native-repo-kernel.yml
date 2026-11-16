@@ -38,12 +38,12 @@ jobs:
         with:
           python-version: '3.12'
       - name: Prepare pinned Rust toolchain
-        run: rustup toolchain install 1.96.0 --profile minimal
+        run: rustup toolchain install 1.85.1 --profile minimal
       - name: Install build and application test dependencies
         run: python -m pip install build==1.6.1 setuptools==80.10.2 wheel==0.48.0 pytest==9.1.1 networkx==3.6.1 scipy==1.18.1 '.[test]'
       - name: Build and install standalone platform wheel
         env:
-          RUSTUP_TOOLCHAIN: '1.96.0'
+          RUSTUP_TOOLCHAIN: '1.85.1'
         run: |
           python -m build --no-isolation --outdir /tmp/tofu-native-dist packages/tofu-repo-kernel
           python -m pip install --no-deps /tmp/tofu-native-dist/*.whl

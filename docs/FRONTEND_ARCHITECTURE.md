@@ -843,6 +843,14 @@ requesting the application preserves the waterfall. Tests: `main.test.ts`,
   which counts the desktop switch (the browser is always on and has no
   switch), and reads reachability through the optional live
   `LocalControlPresentationState`; an absent owner means unprobed, not broken.
+  Reachability is an observation that only the open modal's poll maintains,
+  so opening the menu that holds the row asks a loaded owner to re-probe both
+  status endpoints once (reachability and the row only; the closed modal is
+  not repainted). The row therefore never presents a closed session's answer,
+  and a never-requested owner is not loaded for it. Clearing reachability on
+  close was rejected because unknown reads as healthy (an enabled desktop whose
+  agent dropped would look live), and a background poll would add an interval
+  for a row that is visible only while its menu is open.
   The independent browser/desktop wire flags cross one frozen
   `LocalControlShellState` getter port and remain conversation-owned. Normal
   boot, generic `misc` commands, badge repaint, and modal close paths do not

@@ -965,7 +965,7 @@ LC_FILE_HARNESS = textwrap.dedent("""
 """)
 
 
-def _run_file(neuter=None) -> dict:
+def _run_file(neuter=None, harness=LC_FILE_HARNESS, **splices) -> dict:
     """Eval the ENTIRE shipped local-control.js — handlers, state and badge."""
     path = _find_defining_file("toggleDesktopFromLocalModal")
     body = path.read_text(encoding="utf-8")
@@ -975,8 +975,8 @@ def _run_file(neuter=None) -> dict:
             "NEUTER substitution did not apply — the anchor text is gone, so "
             "this run proves nothing about whether the guard bites")
         body = rewritten
-    script = LC_FILE_HARNESS.format(shipped=body,
-                                    html=MODAL_HTML.replace("`", "\\`"))
+    script = harness.format(shipped=body,
+                            html=MODAL_HTML.replace("`", "\\`"), **splices)
     proc = subprocess.run([_node(), "-e", script], cwd=ROOT,
                           capture_output=True, text=True)
     assert proc.returncode == 0, f"node failed: {proc.stderr}"
@@ -1212,6 +1212,149 @@ def test_the_modal_polls_while_open():
     assert int(m.group(1)) < 15000, (
         f"poll cadence {m.group(1)}ms is not shorter than the 15s connection "
         f"window — a state change could be missed entirely")
+
+
+# ── 7b. The toolbar row outside the modal ──────────────────────────────
+#
+# That poll is the only thing refreshing reachability, and it stops on close,
+# yet the row keeps presenting what it saw: a user who opened the modal before
+# their extension connected then read "unavailable" on a row whose extension
+# was live. These drive the shipped menu toggle, badge painter and lazy owner
+# together across a closed modal.
+
+LC_REACH_HARNESS = textwrap.dedent("""
+    const {{ JSDOM }} = require('jsdom');
+    const dom = new JSDOM(`<!DOCTYPE html><body>{html}
+      <div class="toolbar-submenu" id="submenuExtras">
+        <button class="submenu-trigger"></button>
+        <div class="submenu-item" id="localControlToggle"></div>
+      </div>
+      <span id="localControlBadge"></span></body>`);
+    global.document = dom.window.document;
+    global.window = dom.window;
+    global.t = (k) => k;
+    global.escapeHtml = (s) => String(s == null ? '' : s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    global.showToast = () => {{}};
+    global._safeClipboardWrite = () => Promise.resolve();
+    global.downloadBrowserExtension = () => {{}};
+    global._applyBrowserLnaWarning = () => {{}};
+    global.browserEnabled = true;
+    global.desktopEnabled = false;
+    global._applyDesktopUI = (v) => {{ global.desktopEnabled = !!v; }};
+    global.captureActiveConversationSettings = () => {{}};
+    global.updateSubmenuCounts = () => {{}};
+
+    // What the two status endpoints report now, and how often they were asked.
+    const world = {{ browser: false, desktop: false }};
+    const asked = {{ n: 0 }};
+    global.Api = {{
+      browser: {{ status: () => {{
+        asked.n++;
+        return Promise.resolve({{ connected: world.browser, clients: [] }});
+      }} }},
+      desktop: {{
+        status: () => {{
+          asked.n++;
+          return Promise.resolve({{ connected: world.desktop, nodes: [],
+            setup_state: world.desktop ? 'connected' : 'pair' }});
+        }},
+        mintToken: () => Promise.resolve({{ token: 'T' }}),
+      }},
+    }};
+
+    {paint}
+    {toggle}
+    {shipped}
+
+    const row = () => document.getElementById('localControlToggle');
+    const badge = () => document.getElementById('localControlBadge');
+    const settle = () => new Promise((r) => setTimeout(r, 0));
+    const snap = () => ({{
+      unavailable: row().classList.contains('tool-unavailable'),
+      badgeStale: badge().classList.contains('lc-badge-stale'),
+    }});
+    const openMenu = async () => {{
+      if (document.getElementById('submenuExtras').classList.contains('open')) {{
+        toggleSubmenu('submenuExtras');
+      }}
+      toggleSubmenu('submenuExtras');
+      await settle();
+    }};
+    const modalSession = async () => {{
+      openLocalControlModal();
+      await settle();
+      closeLocalControlModal();
+    }};
+
+    (async () => {{
+      const out = {{}};
+
+      // (a) Local Control never requested: no owner to ask.
+      const owner = window.LocalControlPresentationState;
+      window.LocalControlPresentationState = undefined;
+      await openMenu();
+      out.unrequested = {{ asked: asked.n, ...snap() }};
+      window.LocalControlPresentationState = owner;
+
+      // (b) A modal session saw nothing connected, then closed.
+      await modalSession();
+      out.closedUnreachable = snap();
+
+      // (c) The extension connects after the modal closed.
+      world.browser = true;
+      await openMenu();
+      out.connectedAfterClose = snap();
+
+      // (d) Reverse: desktop control ON and live at close, agent then drops.
+      global.desktopEnabled = true;
+      world.desktop = true;
+      await modalSession();
+      out.desktopLiveAtClose = snap();
+      world.desktop = false;
+      await openMenu();
+      out.desktopDroppedAfterClose = snap();
+
+      console.log(JSON.stringify(out));
+      process.exit(0);
+    }})().catch((e) => {{ console.error(e); process.exit(1); }});
+""")
+
+
+def _run_reach(neuter=None) -> dict:
+    return _run_file(neuter, LC_REACH_HARNESS,
+                     paint=_slice_fn("_paintToolExposureState"),
+                     toggle=_slice_fn("toggleSubmenu"))
+
+
+def test_opening_the_menu_replaces_the_closed_modals_answer():
+    """The row reports reachability as of the menu opening, both directions."""
+    out = _run_reach()
+    assert out["closedUnreachable"]["unavailable"] is True, (
+        "precondition: a session that saw nothing connected marks the row")
+    assert out["connectedAfterClose"]["unavailable"] is False, (
+        "the extension connected after the modal closed, and the menu still "
+        "showed the closed session's 'unavailable'")
+    assert out["desktopLiveAtClose"]["badgeStale"] is False
+    assert out["desktopDroppedAfterClose"]["badgeStale"] is True, (
+        "desktop control is on and its agent dropped after the modal closed; "
+        "the menu still presented it as working")
+
+
+def test_the_menu_never_probes_for_an_unrequested_owner():
+    """A user who never opened Local Control pays no request per menu open,
+    and an unprobed capability is still not presented as broken."""
+    out = _run_reach()
+    assert out["unrequested"]["asked"] == 0, (
+        "opening the menu queried status before Local Control was requested")
+    assert out["unrequested"]["unavailable"] is False
+
+
+def test_NEUTER_skipping_the_refresh_freezes_the_closed_answer():
+    """Drop the menu-open refresh → the reported stale row returns."""
+    out = _run_reach(lambda s: s.replace("presentation.refresh();", ""))
+    assert out["connectedAfterClose"]["unavailable"] is True, (
+        "NEUTER did not restore the frozen 'unavailable' row")
 
 
 # ── 8. The open-extensions route: loopback-gated, shell-free ─────────

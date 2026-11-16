@@ -713,6 +713,8 @@ function toggleSubmenu(id) {
       t.classList.add("open");
       t.setAttribute('aria-expanded', 'true');
     }
+    if (el.querySelector("#localControlToggle")
+        && typeof _lcRefreshReach === "function") _lcRefreshReach();
   }
 }
 // Close sub-menus on outside click

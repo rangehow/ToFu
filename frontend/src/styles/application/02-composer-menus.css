@@ -66,5 +66,7 @@
   line-height:1.25;
   white-space:nowrap;
 }
+/* Dim a check only where .active shows it: on an off row this selector would
+ * outrank the hidden check's opacity:0 and paint a check that was never set. */
 .submenu-item.tool-unavailable .submenu-item-icon,
-.submenu-item.tool-unavailable .submenu-item-check{opacity:.42}
+.submenu-item.active.tool-unavailable .submenu-item-check{opacity:.42}

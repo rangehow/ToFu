@@ -63,13 +63,17 @@
 var _LC_POLL_MS = 3000;
 var _lcPollTimer = null;
 
-/* Last CONFIRMED reachability per capability, written only by the renderers
- * from a real status response. `null` = never confirmed, which is NOT the same
+/* Last CONFIRMED reachability per capability, written only from a real status
+ * response (the renderers, or _lcProbeReach for the toolbar row). `null` =
+ * never confirmed, which is NOT the same
  * as "unreachable" — an unchecked capability must never be presented as
  * broken. Read by the switch repaint (which would otherwise have to guess) and
  * by the badge. */
 var _lcReach = { browser: null, desktop: null };
-var LocalControlPresentationState = Object.freeze({ reach: _lcReach });
+var LocalControlPresentationState = Object.freeze({
+  reach: _lcReach,
+  refresh: _lcProbeReach,
+});
 
 /* Signatures and explicit entry intent used by the setup renderers.
  * `_lcDesktopSigLast = null` forces a desktop render on reopen. Settings can
@@ -813,6 +817,28 @@ function _lcRefresh() {
       .then(_lcRenderDesktop)
       .catch(function (e) { _lcRenderDesktop(null, e); });
   });
+}
+
+/* The toolbar row presents _lcReach after this modal closes, when the poll
+ * that maintains it has stopped. The retained badge calls this when the row is
+ * about to be seen, so the row never shows a closed session's answer. It
+ * writes reachability and the row only: the closed modal is not repainted, so
+ * a menu click cannot raise a join toast. A failed call leaves the last
+ * confirmed value, as the renderers do. */
+function _lcProbeReach() {
+  if (_lcPollTimer || typeof Api === 'undefined' || !Api.browser || !Api.desktop) return;
+  Promise.resolve(Api.browser.status()).then(function (d) {
+    if (!d) return;
+    _lcReach.browser = !!d.connected;
+    _lcUpdateBadge();
+  }, function () {});
+  _lcResolveArch().then(function (arch) {
+    return Api.desktop.status(arch);
+  }).then(function (d) {
+    if (!d) return;
+    _lcReach.desktop = !!d.connected;
+    _lcUpdateBadge();
+  }, function () {});
 }
 
 function _lcT(key, fallback) {

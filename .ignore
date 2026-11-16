@@ -15,7 +15,6 @@ frontend/src/runtime/utility-panels-runtime.generated.js
 frontend/src/runtime/settings-presenters.generated.js
 frontend/src/runtime/orchestration-presenters.generated.js
 frontend/src/runtime/slides-editor-presenters.generated.js
-frontend/src/runtime/cost-popover-presenters.generated.js
 frontend/src/i18n/generated/
 static/styles.css
 static/settings.css

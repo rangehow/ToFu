@@ -8,9 +8,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from tests.support.export_toolchain import require_export_toolchain
 
-require_export_toolchain()
+pytest.importorskip('export', reason='export.py is not shipped in opensource builds')
 pytestmark = [
     pytest.mark.unit,
     pytest.mark.skipif(shutil.which('git') is None, reason='git not installed'),

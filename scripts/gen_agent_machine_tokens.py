@@ -109,13 +109,7 @@ def render_outputs():
         ignore_case = bool(regex.flags & re.IGNORECASE)
         pattern = translate_pattern(regex.pattern, ignore_case, whitespace, digits)
         ts.append(f'  new RegExp({json.dumps(pattern, ensure_ascii=False)}, "g{"i" if ignore_case else ""}u"),')
-        literal, flag = f'r#"{pattern}"#', str(ignore_case).lower()
-        # cargo fmt keeps a tuple element on one line only within its default
-        # fn_call_width (60) and max_width (100); emit exactly that layout.
-        if len(f'({literal}, {flag})') <= 60:
-            rust.append(f'    ({literal}, {flag}),')
-        else:
-            rust.extend(['    (', f'        {literal},', f'        {flag},', '    ),'])
+        rust.append(f'    (r#"{pattern}"#, {str(ignore_case).lower()}),')
     ts.extend([
         '];', '',
         '// Python strip() whitespace, not ECMAScript trim() (which also strips BOM).',

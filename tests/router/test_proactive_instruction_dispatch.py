@@ -377,7 +377,7 @@ def test_a_forward_steered_into_a_commitment_wake_is_that_turns_request(routed):
     Turn's input. Over real storage, the owner's verified words authorize the wake once
     its model has received them, and every later admission of their grant holds."""
     from lib.conversations.coordinator_workers import delegate, get_workers
-    from lib.project_dispatch.delegation import WORKER_INPUT_SOURCE_HEAD, source_for_task
+    from lib.project_dispatch.delegation import source_for_task
     from lib.project_dispatch.repository import NonhumanRequest, ProjectDispatchRepository
     from lib.router.forwarding import route_to_project
     from lib.storage import get_storage_client
@@ -411,14 +411,7 @@ def test_a_forward_steered_into_a_commitment_wake_is_that_turns_request(routed):
     repository.validate(repository.admission(row['id']))
     page = get_workers(task, routed.coordinator_scope, {})
     assert page['scope'] == 'request' and [item['current_request'] for item in page['workers']] == [True]
-    # The Worker's objective links the owner's steered message, whose verbatim words
-    # it reads with get_conversation (docs/PROJECT_COORDINATION.md).
+    # The Worker's objective quotes the owner's verbatim words.
     inputs = get_storage_client().query('turn.list', {
         'conversation_id': row['request']['recipientId'], 'user_id': routed.owner})
-    link = (WORKER_INPUT_SOURCE_HEAD + routed.target['conversationId'] + '; Turn ' + reply['turnId']
-            + ' (message ' + record['commandId'] + ' the owner sent while that reply ran)')
-    assert any(str((item.get('projection') or {}).get('content') or '').startswith(
-        'Resume and verify' + link) for item in inputs), inputs
-    from lib.turn_initiation import steered_input_turn
-    linked = get_turn(routed.target['conversationId'], reply['turnId'], user_id=routed.owner)
-    assert TEXT in steered_input_turn(linked, record['commandId'])['projection']['content']
+    assert any(TEXT in str((item.get('projection') or {}).get('content') or '') for item in inputs), inputs

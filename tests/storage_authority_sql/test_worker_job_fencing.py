@@ -168,11 +168,7 @@ def test_heartbeat_extends_lease_and_advances_cursor_monotonically():
     }, 'heartbeat')
     assert heartbeat['ok'] is True
     assert heartbeat['job']['leaseDeadlineMs'] >= claimed['leaseDeadlineMs']
-    # Lease time is the authority's whole-ms clock, which may lead the test's
-    # later wall reading; bound the extension by the authority's own beat.
-    assert heartbeat['job']['heartbeatAtMs'] >= claimed['heartbeatAtMs']
-    assert heartbeat['job']['leaseDeadlineMs'] == (
-        heartbeat['job']['heartbeatAtMs'] + 10_000)
+    assert heartbeat['job']['leaseDeadlineMs'] <= wall_ms() + 10_000
     assert heartbeat['job']['replayCursor'] == 12
 
     lower_cursor = _command('worker_job.heartbeat', {

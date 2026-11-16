@@ -35,7 +35,7 @@ def test_envelope_matches_the_tb_harness_shape_with_a_placeholder_secret():
     assert all('relay' in secret for secret in envelope['credential_secrets'].values())
     [deployment] = routing['deployments']
     assert deployment['wire_model_id'] == 'kimi-k3.1-pro-m17'
-    assert routing['providers'][0]['provider_id'] == 'sankuai'
+    assert routing['providers'][0]['provider_id'] == 'example-corp'
     assert 'thinking' in routing['models'][0]['capabilities']
 
 

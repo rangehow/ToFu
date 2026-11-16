@@ -264,10 +264,6 @@ scale = [
 constraint-dependencies = [
     "certifi>=2026.10.19",
     "pyjwt>=2.14.0",
-    # onnxruntime (pymupdf_layout's runtime) ships no Intel-macOS wheel after
-    # 1.23; the lock forks there so every other platform keeps the current one.
-    "onnxruntime<1.24; sys_platform == 'darwin' and platform_machine == 'x86_64'",
-    "onnxruntime>=1.29; sys_platform != 'darwin' or platform_machine != 'x86_64'",
 ]
 
 [tool.uv.workspace]

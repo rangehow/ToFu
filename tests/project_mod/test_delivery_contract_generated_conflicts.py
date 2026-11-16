@@ -61,9 +61,6 @@ def test_storage_contract_output_conflict_is_rebuilt_from_the_merged_contract(tm
     environment = _toolchain()
     monkeypatch.setenv('CARGO_HOME', environment.get('CARGO_HOME', ''))
     monkeypatch.setenv('RUSTUP_HOME', environment.get('RUSTUP_HOME', ''))
-    # The fixture repository holds only the generator's inputs; a real checkout
-    # also holds the toolchain lookup (serverctl_pkg) the generator imports.
-    monkeypatch.setenv('PYTHONPATH', str(ROOT))
     root = tmp_path / 'repo'
     root.mkdir()
     git(root, 'init', '-q', '-b', 'main')

@@ -665,23 +665,13 @@ impl Vfs for RealVfs {
             }
             // SAFETY: a successful statvfs initialized the complete structure.
             let info = unsafe { info.assume_init() };
-            // statvfs counters are u64 on Linux but u32 (fsblkcnt_t/fsfilcnt_t)
-            // on macOS; widen explicitly so both targets compile.
-            #[allow(clippy::useless_conversion)]
-            let (blocks, available, fragment, files, free_files) = (
-                u64::from(info.f_blocks),
-                u64::from(info.f_bavail),
-                u64::from(info.f_frsize),
-                u64::from(info.f_files),
-                u64::from(info.f_favail),
-            );
-            let bytes_known = blocks > 0 && fragment > 0;
-            let inodes_known = files > 0;
+            let bytes_known = info.f_blocks > 0 && info.f_frsize > 0;
+            let inodes_known = info.f_files > 0;
             Ok(FilesystemCapacity {
-                total_bytes: bytes_known.then(|| blocks.saturating_mul(fragment)),
-                available_bytes: bytes_known.then(|| available.saturating_mul(fragment)),
-                total_inodes: inodes_known.then_some(files),
-                available_inodes: inodes_known.then_some(free_files),
+                total_bytes: bytes_known.then(|| info.f_blocks.saturating_mul(info.f_frsize)),
+                available_bytes: bytes_known.then(|| info.f_bavail.saturating_mul(info.f_frsize)),
+                total_inodes: inodes_known.then_some(info.f_files),
+                available_inodes: inodes_known.then_some(info.f_favail),
             })
         }
         #[cfg(not(unix))]

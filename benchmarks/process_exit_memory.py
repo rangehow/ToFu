@@ -6,14 +6,7 @@ Root launcher exec chains and root threads are tracked for cleanup only.
 Entry: --receipt PATH --timeout SECONDS -- COMMAND. Linux-only benchmark owner;
 no timings or production defaults can be admitted by this observation.
 """
-import argparse
-import ctypes
-import errno
-import json
-import math
-import os
-import signal
-import sys
+import argparse,ctypes,errno,json,math,os,signal,sys
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
@@ -161,11 +154,6 @@ def observe(command, *, timeout_seconds=120, allow_threaded_children=False):
      for pid in list(live|pending):
       try:os.kill(pid,signal.SIGKILL)
       except ProcessLookupError:pass  # The owned tracee exited before kill reached it.
-      # Linux >=6.0 marks a last exiting thread group-exited before its exit stop,
-      # so SIGKILL is dropped there; only a resume lets that tracee finish exiting.
-      try:trace(CONT,pid,signal.SIGKILL)
-      except OSError as error:
-       if error.errno!=errno.ESRCH:raise
      try:pid,wait=os.waitpid(-1,WALL)
      except ChildProcessError:break
      except InterruptedError:continue

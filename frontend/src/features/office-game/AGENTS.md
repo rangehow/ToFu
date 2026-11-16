@@ -16,7 +16,7 @@ accessible button layer (`.evo-target`) mirrored over scene targets. Hidden or
 offscreen stages own no callbacks; reduced motion settles every beat at once.
 `gestures: 'tap'` embeds a stage in a scrolling list (hover and tap only) and
 `camera.ts` `fit: 'contain'` shows the whole world at zoom 1. Hosts style the
-stage classes themselves (`features/lead-office/office.css`).
+stage classes themselves (`36-lead-office.css`).
 
 `office-character.ts` maps free-form roles to eight character models.
 

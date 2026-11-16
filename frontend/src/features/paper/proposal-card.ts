@@ -22,7 +22,7 @@ export interface PaperProposalCardDeps {
   onApplied?(): void;
 }
 
-import { PAPER_PROPOSAL_MOUNTED_ATTR as MOUNTED_ATTR } from './proposal-observer';
+const MOUNTED_ATTR = 'data-paper-proposal-mounted';
 
 function proposalStatusText(tr: Translator, status: string): string {
   switch (status) {
@@ -205,3 +205,39 @@ export async function mountPaperProposalCard(
   };
   renderCardBody(host, deps, proposal, decide);
 }
+
+const SKELETON_SELECTOR = `.paper-proposal[data-paper-proposal]:not([${MOUNTED_ATTR}])`;
+
+/** Watch the chat timeline for proposal skeletons and hydrate them as they
+ * mount. Returns the teardown. */
+export function installPaperProposalObserver(
+  deps: PaperProposalCardDeps,
+  root: ParentNode = document,
+): () => void {
+  const mountAll = (scope: ParentNode): void => {
+    if (scope instanceof Element && scope.matches(SKELETON_SELECTOR)) {
+      void mountPaperProposalCard(scope as HTMLElement, deps);
+    }
+    scope.querySelectorAll?.(SKELETON_SELECTOR).forEach(element => {
+      void mountPaperProposalCard(element as HTMLElement, deps);
+    });
+  };
+  mountAll(root);
+  const target = root instanceof Document
+    ? (root.body ?? root.documentElement)
+    : root;
+  if (!target || typeof MutationObserver !== 'function') return () => undefined;
+  const observer = new MutationObserver(records => {
+    for (const record of records) {
+      for (const node of record.addedNodes) {
+        if (node.nodeType === 1) mountAll(node as Element);
+      }
+    }
+  });
+  observer.observe(target, { childList: true, subtree: true });
+  return () => observer.disconnect();
+}
+
+/* Re-exported for the skeleton half and for tests; the presentation owner
+ * renders this exact attribute contract. */
+export const PAPER_PROPOSAL_SELECTOR = SKELETON_SELECTOR;

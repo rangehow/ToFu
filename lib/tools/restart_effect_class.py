@@ -28,10 +28,6 @@ from collections.abc import Mapping
 import os
 import posixpath
 
-from lib.log import get_logger
-
-logger = get_logger(__name__)
-
 SAFE_CLASSES = frozenset({'read_only', 'idempotent', 'verifiable'})
 
 # Git subcommands that write only the worktree, its index and the checked-out
@@ -162,11 +158,8 @@ def run_command_effect_class(command: str, cwd: str, worktree: str) -> str:
         for segment in analysis._split_pipeline(command):
             verdict, cwd = _segment_class(segment, cwd, worktree)
             classes.append(verdict)
-    except Exception as error:
-        # A parser refusal proves nothing.
-        logger.debug('run_command effect class unknown: parser refused (%s)',
-                     type(error).__name__)
-        return 'unknown'
+    except Exception:
+        return 'unknown'  # A parser refusal proves nothing.
     if 'unknown' in classes:
         return 'unknown'
     return 'verifiable' if 'verifiable' in classes else 'read_only'

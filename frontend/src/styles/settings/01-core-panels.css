@@ -118,6 +118,16 @@
    OAuth Subscription Login Tab
    ══════════════════════════════════════════════════════ */
 /* China-access banner — same amber language as .stg-oauth-note */
+.oauth-china-note {
+  margin: 0 0 14px;
+  padding: 10px var(--space-3);
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+  color: #8a5a00;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1.5px solid rgba(245, 158, 11, 0.4);
+  border-radius: var(--s-radius);
+}
 
 .oauth-provider-card {
   border: var(--s-border);
@@ -459,6 +469,16 @@
 .pref-learned-box .pl-dismiss:hover{background:rgba(148,163,184,0.12)}
 .pref-learned-box .pl-resolved{opacity:0.75}
 /* ── Preferences settings tab — pending-proposal rows ── */
+.prefs-pending-list{display:flex;flex-direction:column;gap:var(--space-2);margin:6px 0 var(--space-1) 0}
+.prefs-pending-row{
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:var(--space-2) var(--space-3);border-radius:8px;
+  background:rgba(99,102,241,0.06);border:1px solid rgba(99,102,241,0.18);
+}
+.prefs-pending-text{flex:1;min-width:0;color:var(--text-primary,#e4e4e7);font-size:12.5px}
+.prefs-pending-text b{font-weight:600}
+.prefs-pending-evidence{font-size:10.5px;opacity:0.65;margin-top:2px}
+.prefs-pending-actions{display:flex;gap:6px;flex-shrink:0}
 /* ══════════════════════════════════════════════════════
    My Context settings tab — "paper dossier" (2026-08 redesign)
    Index-card archive metaphor on the tofu block system: highlighter
@@ -534,13 +554,111 @@
   .ctx-groups{columns:1}
 }
 .ctx-groups[aria-busy="true"]{opacity:.55}
+.ctx-group{
+  min-width:0;margin:0 0 14px;padding:var(--space-4);break-inside:avoid;
+  border:var(--s-border);background:var(--s-white);box-shadow:var(--s-shadow-xs);
+  transition:transform .12s ease,box-shadow .12s ease;
+}
+.ctx-group:hover{transform:translate(-1px,-1px);box-shadow:var(--s-shadow-sm)}
+.ctx-group-head{display:flex;align-items:flex-start;gap:11px;margin-bottom:13px}
+.ctx-group-icon{
+  display:flex;align-items:center;justify-content:center;width:34px;height:34px;flex:0 0 34px;
+  border:var(--s-border-sm);background:var(--s-cream);color:var(--s-ink);
+  box-shadow:2px 2px 0 var(--s-ink);
+}
+.ctx-group-icon svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.ctx-group-work_rule .ctx-group-icon{background:rgba(201,153,63,.16)}
+.ctx-group-copy{min-width:0;flex:1}
+.ctx-group-title-row{display:flex;align-items:center;gap:var(--space-2)}
+.ctx-group-title-row h3{margin:0;font-size:13.5px;font-weight:800;letter-spacing:.01em;color:var(--s-ink)}
+.ctx-group-title-row span{
+  min-width:20px;padding:1px 7px;text-align:center;
+  font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:800;
+  background:var(--s-gold);color:var(--s-ink);border:1.5px solid var(--s-ink);
+}
+.ctx-group-copy p{margin:5px 0 0;font-size:11.5px;line-height:1.6;color:var(--s-ink-soft);opacity:.85}
+.ctx-add-btn{
+  display:flex;align-items:center;gap:5px;flex:none;padding:5px 10px;
+  border:1.5px dashed rgba(26,24,20,.4);border-radius:0;background:transparent;color:var(--s-ink-soft);
+  font:inherit;font-size:var(--font-size-xs);font-weight:700;cursor:pointer;transition:all .12s ease;
+}
+.ctx-add-btn:hover{border-style:solid;border-color:var(--s-ink);color:var(--s-ink);background:var(--s-cream);box-shadow:2px 2px 0 var(--s-ink);transform:translate(-1px,-1px)}
+.ctx-add-btn svg{width:12px;height:12px}
 
 /* ── Fact/rule cards: numbered index cards ── */
+.ctx-items{display:flex;flex-direction:column;gap:var(--space-2);counter-reset:ctxcard}
+.ctx-empty{
+  width:100%;padding:var(--space-4) var(--space-3);border:1.5px dashed rgba(26,24,20,.3);border-radius:0;background:transparent;
+  color:rgba(61,54,44,.55);font:inherit;font-size:11.5px;font-weight:600;cursor:pointer;transition:all .12s ease;
+}
+.ctx-empty:hover{border-color:var(--s-gold-dim);color:var(--s-gold-dim);background:rgba(201,153,63,.05)}
+.ctx-item{
+  counter-increment:ctxcard;position:relative;overflow:hidden;
+  border:1.5px solid var(--s-ink);background:var(--s-white);
+  box-shadow:2px 2px 0 rgba(26,24,20,.12);
+  transition:transform .12s ease,box-shadow .12s ease;
+}
+.ctx-item:hover{transform:translate(-1px,-1px);box-shadow:3px 3px 0 var(--s-ink)}
+.ctx-item.is-editing{transform:translate(-1px,-1px);box-shadow:3px 3px 0 var(--s-gold)}
+.ctx-item-view{display:flex;align-items:flex-start;gap:10px;padding:10px var(--space-3);cursor:pointer}
 /* archive counter: 01 / 02 / 03 … */
+.ctx-item-view::before{
+  content:counter(ctxcard,decimal-leading-zero);flex:none;margin-top:2px;
+  font-family:'JetBrains Mono',monospace;font-size:9.5px;font-weight:800;letter-spacing:.05em;
+  color:rgba(26,24,20,.38);
+}
+.ctx-item:hover .ctx-item-view::before,.ctx-item.is-editing .ctx-item-view::before{color:var(--s-gold-dim)}
+.ctx-item-content{min-width:0;flex:1}
+.ctx-item-text{margin:0;color:var(--s-ink);font-size:12.5px;line-height:1.65;overflow-wrap:break-word}
+.ctx-item-meta{margin-top:6px;font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.04em;color:rgba(61,54,44,.5)}
+.ctx-item-actions{display:flex;gap:2px;opacity:0;transition:opacity .15s ease}
+.ctx-item:hover .ctx-item-actions,.ctx-item:focus-within .ctx-item-actions{opacity:1}
+.ctx-item-actions button{
+  display:flex;align-items:center;justify-content:center;width:24px;height:24px;
+  border:1.5px solid transparent;border-radius:0;background:transparent;color:rgba(61,54,44,.6);
+  cursor:pointer;transition:all .1s ease;
+}
+.ctx-item-actions button:hover{border-color:var(--s-ink);background:var(--s-cream);color:var(--s-ink)}
+.ctx-item-actions button.is-danger:hover{border-color:#b3261e;background:rgba(179,38,30,.08);color:#b3261e}
+.ctx-item-actions button svg{width:12px;height:12px}
 
 /* ── WHEN→DO: punched-ticket rule rows, stitched by a dashed link ── */
+.ctx-rule-line{display:grid;grid-template-columns:26px minmax(0,1fr);align-items:start;gap:var(--space-2)}
+.ctx-rule-line+.ctx-rule-line{margin-top:7px}
+.ctx-rule-line>span{
+  position:relative;display:flex;align-items:center;justify-content:center;height:19px;
+  background:var(--s-ink);color:var(--s-white);
+  font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:800;
+}
+.ctx-rule-line.is-action>span{background:var(--s-gold);color:var(--s-ink)}
+.ctx-rule-line:not(.is-action)>span::after{
+  content:'';position:absolute;left:50%;top:100%;height:8px;
+  border-left:1.5px dashed rgba(26,24,20,.35);
+}
+.ctx-rule-line p{margin:1px 0 0;color:var(--s-ink);font-size:12.5px;line-height:1.6;overflow-wrap:break-word}
 
 /* ── Inline editor ── */
+.ctx-item-editor{padding:2px var(--space-3) var(--space-3);border-top:1.5px dashed rgba(26,24,20,.18)}
+.ctx-item-editor label{display:block;margin-top:10px}
+.ctx-item-editor label span{
+  display:block;margin-bottom:5px;
+  font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:800;letter-spacing:.06em;color:var(--s-ink-soft);
+}
+.ctx-item-editor textarea{
+  box-sizing:border-box;width:100%;resize:vertical;min-height:56px;padding:var(--space-2) 10px;
+  border:1.5px solid var(--s-ink);border-radius:0;background:var(--s-white);
+  color:var(--s-ink);font:inherit;font-size:12.5px;line-height:1.6;outline:none;
+  transition:border-color .12s ease,box-shadow .12s ease;
+}
+.ctx-item-editor textarea:focus{border-color:var(--s-gold-dim);box-shadow:2px 2px 0 var(--s-gold-glow)}
+.ctx-editor-done{
+  display:block;margin:9px 0 0 auto;padding:5px 14px;
+  border:var(--s-border-sm);border-radius:0;background:var(--s-ink);color:var(--s-white);
+  font:inherit;font-size:var(--font-size-xs);font-weight:800;letter-spacing:.04em;cursor:pointer;
+  box-shadow:2px 2px 0 rgba(26,24,20,.25);
+  transition:transform .1s ease,box-shadow .1s ease,background .1s ease,color .1s ease;
+}
+.ctx-editor-done:hover{background:var(--s-gold);color:var(--s-ink);transform:translate(1px,1px);box-shadow:1px 1px 0 rgba(26,24,20,.25)}
 
 /* ── Experience-memory zone: a separate section under a hairline ── */
 .ctx-memory-zone{margin-top:var(--space-6);padding-top:var(--space-5);border-top:1px solid var(--s-line-strong)}
@@ -563,6 +681,7 @@
   .ctx-toolbar-actions{justify-content:flex-end}
   .ctx-groups{columns:1}
   .ctx-memory-actions{width:100%;flex-wrap:wrap}
+  .ctx-item-actions{opacity:1}
 }
 
 

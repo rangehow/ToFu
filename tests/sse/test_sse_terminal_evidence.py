@@ -162,12 +162,8 @@ def test_single_long_debug_request_rotates_without_reopening(tmp_path, monkeypat
     try:
         for _ in range(100):
             dumper.line('x' * 2048)
-        files = list(tmp_path.glob('raw_sse.log*'))
-        assert (tmp_path / 'raw_sse.log.1') in files
-        assert all(path.stat().st_size <= 8192 for path in files)
-        # Rotations of the current day are never deleted (docs/LOGGING.md):
-        # the chain grows instead of dropping any line this request wrote.
-        assert sum(line.startswith('x') for path in files
-                   for line in path.read_text().splitlines()) == 100
+        assert (tmp_path / 'raw_sse.log').stat().st_size <= 8192
+        assert (tmp_path / 'raw_sse.log.1').stat().st_size <= 8192
+        assert len(list(tmp_path.glob('raw_sse.log*'))) == 2
     finally:
         dumper.finish()

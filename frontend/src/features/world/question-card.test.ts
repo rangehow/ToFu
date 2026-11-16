@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { t } from '../../i18n';
 import { mountWorld, type WorldShell } from './app';
-import type { OpenTarget } from './office';
+import type { OpenTarget } from './scene';
 import { fixtureLive, type FixtureSnapshot } from './preview/fixture';
 import type { QuestionTurn } from './attention';
 import { LEAD, PROJECT, memberRunning, reportProgress, teamPage } from './testing/recorded';
@@ -18,7 +18,7 @@ vi.mock('./office', () => ({
     openPerson = ports.open;
     return {
       element: document.createElement('div'), update: () => {}, walk: () => {}, select: () => {}, restoreFocus: () => {},
-      resize: () => {}, destroy: () => {}, documentCounts: () => ({ reports: 0, deliverables: 0 }),
+      resize: () => {}, setInsets: () => {}, destroy: () => {}, documentCounts: () => ({ reports: 0, deliverables: 0 }),
     };
   },
 }));

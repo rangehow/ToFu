@@ -11,7 +11,7 @@ import { LEAD, PROJECT, RUNNER, memberRunning, teamPage } from './testing/record
 vi.mock('./office', () => ({
   createOffice: () => ({
     element: document.createElement('div'), update: () => {}, walk: () => {}, select: () => {}, restoreFocus: () => {},
-    resize: () => {}, destroy: () => {}, documentCounts: () => ({ reports: 0, deliverables: 0 }),
+    resize: () => {}, setInsets: () => {}, destroy: () => {}, documentCounts: () => ({ reports: 0, deliverables: 0 }),
   }),
 }));
 

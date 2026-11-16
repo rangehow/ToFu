@@ -6460,7 +6460,6 @@
   "world.team.board": "Выполнено задач: {done}/{total}",
   "world.team.routine": "{count} в простое",
   "world.team.routineMore": "{count}+ в простое",
-  "world.team.routineTitle": "Недавние участники команды, которые свободны или закончили: {count}",
   "world.loading.title": "Готовим офис…",
   "world.loading.progress": "Готово: {done} из {total}",
   "world.doc.deliverable": "Результат",

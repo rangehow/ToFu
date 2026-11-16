@@ -1,10 +1,12 @@
 /** Tofu office floor plan: pure geometry in scene units (CSS pixels at scale 1).
  * The owner's glass office sits top-left under the window wall; team zones fill rows to its right and below
  * (one zone per team: a banner, the lead's head desk, then pods of two facing desk rows); the bottom strip
- * holds the entrance with the Watchdog's station and the lounge. Walkways: each zone's left aisle, one
- * corridor under every row and the spine along the left wall, so every desk reaches the owner's door.
- * Seats keep their slot while their person stays (allocateSlots), so the office never reshuffles.
- * Entry points: layoutOffice, allocateSlots, walkToOwner, walkHome, walkOut, nearestInDirection. */
+ * holds the entrance with the Watchdog's station and the lounge. Walkways (routes.ts walks them): each zone's
+ * left aisle, one corridor under every row, the spine along the left wall and the bottom lane to the entrance,
+ * so every desk reaches the owner's door and the way out. Seats keep their slot while their person stays
+ * (allocateSlots), so the office never reshuffles.
+ * Entry points: fitOffice, layoutOffice, allocateSlots, waitingSpots, shelfSlots, corridorBelow, bottomLane. */
+import { stableHash } from './hash';
 
 export interface Point { x: number; y: number }
 export interface Rect { x: number; y: number; w: number; h: number }
@@ -17,7 +19,9 @@ export interface ZoneLayout {
   key: string; x: number; y: number; w: number; h: number; row: number;
   banner: Point; lead: Seat; pods: Pod[]; seats: Seat[]; routine: Point;
 }
-export interface DecorItem { kind: 'plant' | 'tall-plant' | 'shelf' | 'cooler' | 'printer'; x: number; y: number; variant: number }
+/** `key` names the item's place (the n-th gap of the window wall, the plant beside a team's room, the cooler),
+ * so a floor-plan blend moves each item to its own new place; `variant` is stable per key. */
+export interface DecorItem { key: string; kind: 'plant' | 'tall-plant' | 'shelf' | 'cooler' | 'printer'; x: number; y: number; variant: number }
 export interface OfficeLayout {
   width: number; height: number; wall: number;
   owner: { room: Rect; desk: Rect; chair: Point; door: Point; drop: Point; tray: Rect; whiteboard: Rect; shelf: Rect };
@@ -71,23 +75,31 @@ export function sceneScale(viewportWidth: number): number {
   return Math.min(1, viewportWidth / MIN_WIDTH);
 }
 
-/** The largest scale at which the whole office still fits the window height, between sceneScale and the scale
- * that lays it out exactly MIN_WIDTH units wide; a short office is drawn bigger instead of leaving empty floor.
- * The search stops when one more step would move the right edge by less than a pixel. */
+/** The largest scale at which the whole office fits the window, so the camera's zoom 1 shows all of it with no
+ * letterbox. A short office is drawn bigger (up to the scale that lays it out exactly MIN_WIDTH units wide)
+ * instead of leaving empty floor; a tall one is laid out wider (more rooms per row) at a smaller scale. Each
+ * search stops when one more step would move the right edge by less than a pixel. */
 export function fitOffice(viewportWidth: number, viewportHeight: number, teams: ReadonlyArray<TeamShape>): { scale: number; layout: OfficeLayout } {
   const low = sceneScale(viewportWidth);
   const high = viewportWidth / MIN_WIDTH;
   const fits = (scale: number) => layoutOffice(viewportWidth, teams, 0, scale).height * scale <= viewportHeight;
-  let best = low;
-  if (viewportHeight && high > low && fits(low)) {
-    if (fits(high)) best = high;
-    else {
-      let tooBig = high;
-      while ((tooBig - best) * viewportWidth > 1) {
-        const middle = (best + tooBig) / 2;
-        if (fits(middle)) best = middle; else tooBig = middle;
-      }
+  const search = (fitting: number, tooBig: number) => {
+    while ((tooBig - fitting) * viewportWidth > 1) {
+      const middle = (fitting + tooBig) / 2;
+      if (fits(middle)) fitting = middle; else tooBig = middle;
     }
+    return fitting;
+  };
+  let best = low;
+  if (viewportHeight && fits(low)) {
+    if (high > low) best = fits(high) ? high : search(low, high);
+  } else if (viewportHeight) {
+    // Halving terminates: once every room shares one row, the floor's height stops growing while the window's
+    // height in scene units keeps doubling.
+    let tooBig = low;
+    best = low / 2;
+    while (!fits(best)) { tooBig = best; best /= 2; }
+    best = search(best, tooBig);
   }
   return { scale: best, layout: layoutOffice(viewportWidth, teams, viewportHeight, best) };
 }
@@ -270,39 +282,33 @@ export function layoutOffice(viewportWidth: number, teams: ReadonlyArray<TeamSha
   const windows = Math.max(3, Math.floor((width - MARGIN * 2) / 300));
   for (let index = 0; index <= windows; index += 1) {
     const at = MARGIN + (index * (width - MARGIN * 2)) / windows;
-    if (at > MARGIN + OFFICE_W + 20 && at < width - MARGIN - 20) decor.push({ kind: 'tall-plant', x: at, y: floorTop - 6, variant: index % 3 });
+    if (at > MARGIN + OFFICE_W + 20 && at < width - MARGIN - 20) decor.push({ key: `wall:${index}`, kind: 'tall-plant', x: at, y: floorTop - 6, variant: index % 3 });
   }
-  decor.push({ kind: 'cooler', x: width - MARGIN - 24, y: bottomTop + 120, variant: 0 });
-  decor.push({ kind: 'printer', x: lounge.x + lounge.w + 70, y: bottomTop + 106, variant: 0 });
-  decor.push({ kind: 'tall-plant', x: MARGIN + 18, y: bottomTop + BOTTOM_H - 20, variant: 1 });
-  decor.push({ kind: 'plant', x: lounge.x + lounge.w - 12, y: lounge.y + 26, variant: 2 });
+  decor.push({ key: 'cooler', kind: 'cooler', x: width - MARGIN - 24, y: bottomTop + 120, variant: 0 });
+  decor.push({ key: 'printer', kind: 'printer', x: lounge.x + lounge.w + 70, y: bottomTop + 106, variant: 0 });
+  decor.push({ key: 'lounge-corner', kind: 'tall-plant', x: MARGIN + 18, y: bottomTop + BOTTOM_H - 20, variant: 1 });
+  decor.push({ key: 'lounge', kind: 'plant', x: lounge.x + lounge.w - 12, y: lounge.y + 26, variant: 2 });
   for (const zone of zones) {
-    if (zone.x + zone.w + ZONE_GAP / 2 < width - MARGIN) decor.push({ kind: 'plant', x: zone.x + zone.w + ZONE_GAP / 2, y: zone.y + zone.h - 8, variant: zone.row % 3 });
+    if (zone.x + zone.w + ZONE_GAP / 2 < width - MARGIN) {
+      decor.push({ key: `beside:${zone.key}`, kind: 'plant', x: zone.x + zone.w + ZONE_GAP / 2, y: zone.y + zone.h - 8, variant: stableHash(zone.key) % 3 });
+    }
   }
   return { width, height, wall: WALL, owner, zones, watchdog, entrance, lounge, bar, spine: MARGIN / 2, corridors, decor };
 }
 
-function zoneOf(layout: OfficeLayout, seat: Seat): ZoneLayout | null {
-  return layout.zones.find(zone => zone.lead === seat || zone.seats.includes(seat)) || null;
+/** The walkway along a zone's left edge, inside its rug. */
+export function aisleOf(zone: ZoneLayout): number {
+  return zone.x + 8;
 }
 
-/** From a desk to the spot in front of the owner's desk, along aisles and corridors. */
-export function walkToOwner(layout: OfficeLayout, seat: Seat): Point[] {
-  const path: Point[] = [{ x: seat.x, y: seat.y }, seat.stand];
-  const lane = layout.corridors[0];
-  const { door, drop } = layout.owner;
-  const zone = zoneOf(layout, seat);
-  if (zone) {
-    const aisle = zone.x + 8;
-    const corridor = layout.corridors[zone.row];
-    path.push({ x: aisle, y: seat.stand.y }, { x: aisle, y: corridor });
-    if (zone.row > 0) path.push({ x: layout.spine, y: corridor }, { x: layout.spine, y: lane });
-  } else {
-    const corridor = layout.corridors[layout.corridors.length - 1] + 70;
-    path.push({ x: seat.stand.x, y: corridor }, { x: layout.spine, y: corridor }, { x: layout.spine, y: lane });
-  }
-  path.push({ x: door.x, y: lane }, { x: door.x, y: drop.y }, { x: drop.x, y: drop.y });
-  return compact(path);
+/** The corridor under a zone's row (every zone in a justified row has the row's height). */
+export function corridorBelow(zone: ZoneLayout): number {
+  return zone.y + zone.h + CORRIDOR / 2;
+}
+
+/** The lane just above the bottom strip (lounge, bar, entrance, Watchdog station). */
+export function bottomLane(layout: OfficeLayout): number {
+  return layout.height - BOTTOM_H - MARGIN - 6;
 }
 
 /** Where people with an open owner question wait: feet on one line in the corridor in front of the owner's
@@ -323,52 +329,3 @@ export function shelfSlots(shelf: Rect): Point[] {
   })));
 }
 
-export function walkHome(layout: OfficeLayout, seat: Seat): Point[] {
-  return walkToOwner(layout, seat).reverse();
-}
-
-/** From the owner's desk out through the entrance: a Worker whose work is done leaves the floor. */
-export function walkOut(layout: OfficeLayout): Point[] {
-  const { door, drop } = layout.owner;
-  const lane = layout.corridors[0];
-  const bottom = layout.corridors[layout.corridors.length - 1] + 70;
-  return compact([{ x: drop.x, y: drop.y }, { x: door.x, y: drop.y }, { x: door.x, y: lane }, { x: layout.spine, y: lane },
-    { x: layout.spine, y: bottom }, { x: layout.entrance.x, y: bottom }, { x: layout.entrance.x, y: layout.entrance.y + 30 }]);
-}
-
-function compact(points: Point[]): Point[] {
-  const out: Point[] = [];
-  for (const point of points) {
-    const last = out[out.length - 1];
-    if (!last || Math.abs(last.x - point.x) > 0.5 || Math.abs(last.y - point.y) > 0.5) out.push(point);
-  }
-  return out;
-}
-
-export function pathLength(points: ReadonlyArray<Point>): number {
-  let total = 0;
-  for (let index = 1; index < points.length; index += 1) {
-    total += Math.abs(points[index].x - points[index - 1].x) + Math.abs(points[index].y - points[index - 1].y);
-  }
-  return total;
-}
-
-export type NavDirection = 'left' | 'right' | 'up' | 'down';
-/** Keyboard movement between people: the nearest target inside the pressed direction's 90° cone, or, when the
- * cone is empty, the nearest one anywhere on that side. */
-export function nearestInDirection<T extends Point>(from: Point, targets: ReadonlyArray<T>, direction: NavDirection): T | null {
-  let best: T | null = null;
-  let bestScore = Infinity;
-  let bestInCone = false;
-  for (const target of targets) {
-    const dx = target.x - from.x;
-    const dy = target.y - from.y;
-    const along = direction === 'left' ? -dx : direction === 'right' ? dx : direction === 'up' ? -dy : dy;
-    const across = direction === 'left' || direction === 'right' ? Math.abs(dy) : Math.abs(dx);
-    if (along <= 1) continue;
-    const inCone = along >= across;
-    const score = Math.hypot(along, across);
-    if ((inCone && !bestInCone) || (inCone === bestInCone && score < bestScore)) { best = target; bestScore = score; bestInCone = inCone; }
-  }
-  return best;
-}

@@ -30,5 +30,9 @@ void Promise.all([ready(), fetch(params.get('fixture') || './live.json').then(re
       live: onChange => (source = fixtureLive(snapshot, onChange, { scale: Number(params.get('scale') || 0) })),
       now: () => (params.has('now') ? Number(params.get('now')) : Date.now()),
     });
-    (window as unknown as { __world: unknown }).__world = { report: (team: string) => source?.report(team), office: () => world.office(), replies: () => source?.replies };
+    (window as unknown as { __world: unknown }).__world = {
+      report: (team: string) => source?.report(team), grow: (team: string, count: number) => source?.grow(team, count),
+      office: () => world.office(), inspect: () => world.inspect(),
+      replies: () => source?.replies,
+    };
   });

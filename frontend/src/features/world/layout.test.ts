@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  allocateSlots, fitOffice, layoutOffice, nearestInDirection, pathLength, shelfSlots, waitingSpots, walkHome, walkOut, walkToOwner,
-  type Rect, type TeamShape,
+  allocateSlots, fitOffice, layoutOffice, shelfSlots, waitingSpots, type Rect, type TeamShape,
 } from './layout';
 
 const TEAMS: TeamShape[] = [
@@ -32,23 +31,6 @@ describe('open-plan floor', () => {
       expect(layout.zones.find(zone => zone.key === '/harness')!.seats).toHaveLength(0);
     });
   }
-
-  it('reaches the owner desk from every desk along straight aisles, and walks back the same way', () => {
-    const layout = layoutOffice(1920, TEAMS);
-    for (const zone of layout.zones) {
-      for (const seat of [zone.lead, ...zone.seats]) {
-        const path = walkToOwner(layout, seat);
-        expect(path[0]).toEqual({ x: seat.x, y: seat.y });
-        expect(path[path.length - 1]).toEqual(layout.owner.drop);
-        for (let i = 1; i < path.length; i += 1) expect(path[i].x === path[i - 1].x || path[i].y === path[i - 1].y).toBe(true);
-        expect(walkHome(layout, seat)).toEqual([...path].reverse());
-      }
-    }
-    const out = walkOut(layout);
-    expect(out[0]).toEqual(layout.owner.drop);
-    expect(out[out.length - 1].x).toBe(layout.entrance.x);
-    expect(pathLength(out)).toBeGreaterThan(0);
-  });
 
   it('lines people with an open owner question up in front of the office, beside the door and off every zone', () => {
     for (const width of [1920, 1280, 768]) {
@@ -81,15 +63,16 @@ describe('open-plan floor', () => {
     }
   });
 
-  it('draws a short office bigger instead of leaving empty floor, never wider than the window', () => {
+  it('fits the whole floor to the window: a short office drawn bigger, a crowded one laid out wider, never letterboxed', () => {
     const small: TeamShape[] = [{ key: '/router', kind: 'router', seats: 2 }, { key: '/tofu', kind: 'project', seats: 6 }];
     const { scale, layout } = fitOffice(1920, 1036, small);
     expect(scale).toBeGreaterThan(1);
     expect(layout.width * scale).toBeLessThanOrEqual(1920 + 0.5);
     expect(layout.height * scale).toBeGreaterThanOrEqual(1036 - 1);
     const crowded = fitOffice(1920, 1036, TEAMS.concat(Array.from({ length: 12 }, (_, i) => ({ key: `/p${i}`, kind: 'project' as const, seats: 40 }))));
-    expect(crowded.scale).toBe(1);
-    expect(crowded.layout.height).toBeGreaterThan(1036);
+    expect(crowded.scale).toBeLessThan(1);
+    expect(crowded.layout.height * crowded.scale).toBeLessThanOrEqual(1036);
+    expect(crowded.layout.width * crowded.scale).toBeCloseTo(1920, -1);
     expect(fitOffice(768, 900, small).scale).toBeCloseTo(0.6, 5);
   });
 
@@ -124,11 +107,4 @@ describe('open-plan floor', () => {
     expect(second.get('d')).toBe(0);
   });
 
-  it('moves keyboard focus to the nearest person in the pressed direction', () => {
-    const targets = [{ x: 0, y: 0, id: 'a' }, { x: 100, y: 4, id: 'b' }, { x: 60, y: 200, id: 'c' }, { x: -90, y: 0, id: 'd' }];
-    expect(nearestInDirection(targets[0], targets.slice(1), 'right')?.id).toBe('b');
-    expect(nearestInDirection(targets[0], targets.slice(1), 'down')?.id).toBe('c');
-    expect(nearestInDirection(targets[0], targets.slice(1), 'left')?.id).toBe('d');
-    expect(nearestInDirection(targets[0], targets.slice(1), 'up')).toBeNull();
-  });
 });

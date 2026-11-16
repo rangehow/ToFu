@@ -4,7 +4,7 @@
  * author's brief. Real WorldLive, endpoint facade and transport; only fetch and the painted scene simulated. */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { mountWorld } from './app';
-import type { OpenTarget } from './office';
+import type { OpenTarget } from './scene';
 import type { LeadDeliverable } from '../lead-deliverables/model';
 import { LEAD, PROJECT, memberRunning, teamPage } from './testing/recorded';
 
@@ -14,7 +14,7 @@ vi.mock('./office', () => ({
     scene.open = ports.open;
     return {
       element: document.createElement('div'), update: () => {}, walk: () => {}, select: () => {}, restoreFocus: () => {},
-      resize: () => {}, destroy: () => {}, documentCounts: () => ({ reports: 0, deliverables: 0 }),
+      resize: () => {}, setInsets: () => {}, destroy: () => {}, documentCounts: () => ({ reports: 0, deliverables: 0 }),
     };
   },
 }));

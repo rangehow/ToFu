@@ -6460,7 +6460,6 @@
   "world.team.board": "{done}/{total} tâches terminées",
   "world.team.routine": "{count} au repos",
   "world.team.routineMore": "{count}+ au repos",
-  "world.team.routineTitle": "Membres récents de l’équipe inactifs ou terminés : {count}",
   "world.loading.title": "Préparation du bureau…",
   "world.loading.progress": "{done} sur {total} prêts",
   "world.doc.deliverable": "Livraison",

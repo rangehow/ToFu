@@ -6460,7 +6460,6 @@
   "world.team.board": "{done}/{total} tasks done",
   "world.team.routine": "{count} idle",
   "world.team.routineMore": "{count}+ idle",
-  "world.team.routineTitle": "{count} recent team members are idle or finished",
   "world.loading.title": "Setting up the office…",
   "world.loading.progress": "{done} of {total} ready",
   "world.doc.deliverable": "Deliverable",

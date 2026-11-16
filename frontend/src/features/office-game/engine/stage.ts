@@ -9,6 +9,7 @@ import { createCamera, resizeCamera, setInsets, worldToScreen, screenToWorld, zo
   resetCamera, cameraScale, clampCamera, overflows, type Camera, type Insets, type Vec } from './camera';
 import { attachPointer } from './pointer';
 import { createPainter, type Painter } from './paint';
+import { nearestInDirection, type NavDirection } from './targets';
 
 export type StageTarget = {id:string;label:string;x:number;y:number;width:number;height:number;
   pressed?:boolean;
@@ -23,6 +24,8 @@ export interface SceneFrame {
 }
 export interface Scene {
   readonly width:number;readonly height:number;
+  /** True when the scene paints every pixel of the view at every camera position: the stage skips its backdrop. */
+  readonly opaque?:boolean;
   backdrop():CanvasImageSource|undefined;
   step(dtMs:number,input:{axis:Vec}):void;
   draw(frame:SceneFrame):void;
@@ -40,6 +43,7 @@ const MOVE_KEYS:Record<string,Vec> = {
   ArrowLeft:{x:-1,y:0},ArrowRight:{x:1,y:0},ArrowUp:{x:0,y:-1},ArrowDown:{x:0,y:1},
   KeyA:{x:-1,y:0},KeyD:{x:1,y:0},KeyW:{x:0,y:-1},KeyS:{x:0,y:1},
 };
+const ARROWS:Record<string,NavDirection> = {ArrowLeft:'left',ArrowRight:'right',ArrowUp:'up',ArrowDown:'down'};
 /** Inset and follow easing time constant (presentation). */
 const EASE_MS = 140;
 
@@ -48,6 +52,10 @@ export interface StageOptions {
   /** 'tap' keeps a fixed camera: no drag, wheel, pinch, movement or zoom keys,
    * so a stage inside a scrolling list leaves scrolling to the page. */
   gestures?:'camera'|'tap';
+  /** 'move' (the default): arrows and WASD are held movement for the scene.
+   * 'targets': arrows move keyboard focus to the nearest target in that direction
+   * (the camera follows the scene's focus again); there is no held movement. */
+  navigation?:'move'|'targets';
 }
 
 export function mountStage(host:HTMLElement,options:StageOptions) {
@@ -127,19 +135,22 @@ export function mountStage(host:HTMLElement,options:StageOptions) {
     metrics.paints++;
     ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,canvas.width,canvas.height);
     ctx.setTransform(dpr,0,0,dpr,0,0);
+    if(!scene.opaque)drawBackdrop(scene);
+    scene.draw(frame(now));
+    ctx.setTransform(1,0,0,1,0,0);
+  }
+  function drawBackdrop(scene:Scene){
     const backdrop=scene.backdrop(),w=camera.viewWidth,h=camera.viewHeight;
-    ctx.fillStyle='#1c140e';ctx.fillRect(0,0,w,h);
+    ctx!.fillStyle='#1c140e';ctx!.fillRect(0,0,w,h);
     if(backdrop){
       const bw=(backdrop as HTMLCanvasElement).width||1,bh=(backdrop as HTMLCanvasElement).height||1;
       const cover=Math.max(w/bw,h/bh);
-      ctx.imageSmoothingEnabled=true;ctx.globalAlpha=.55;
-      ctx.drawImage(backdrop,(w-bw*cover)/2,(h-bh*cover)/2,bw*cover,bh*cover);ctx.globalAlpha=1;
+      ctx!.imageSmoothingEnabled=true;ctx!.globalAlpha=.55;
+      ctx!.drawImage(backdrop,(w-bw*cover)/2,(h-bh*cover)/2,bw*cover,bh*cover);ctx!.globalAlpha=1;
     }
-    const vignette=ctx.createRadialGradient(w/2,h/2,Math.min(w,h)*.2,w/2,h/2,Math.max(w,h)*.75);
+    const vignette=ctx!.createRadialGradient(w/2,h/2,Math.min(w,h)*.2,w/2,h/2,Math.max(w,h)*.75);
     vignette.addColorStop(0,'rgba(20,13,8,0.25)');vignette.addColorStop(1,'rgba(20,13,8,0.8)');
-    ctx.fillStyle=vignette;ctx.fillRect(0,0,w,h);
-    scene.draw(frame(now));
-    ctx.setTransform(1,0,0,1,0,0);
+    ctx!.fillStyle=vignette;ctx!.fillRect(0,0,w,h);
   }
   function syncTargets(){
     if(!scene)return;
@@ -193,9 +204,27 @@ export function mountStage(host:HTMLElement,options:StageOptions) {
     const target=event.target as Element|null;
     return target===host||target===document.body||!!target?.closest?.('.evo-stage-targets');
   }
+  /** Focus the target nearest to the focused one (or to the frame centre) in a direction. */
+  function moveFocus(direction:NavDirection){
+    if(!scene)return;
+    const centers=scene.targets().map(target=>({id:target.id,x:target.x+target.width/2,y:target.y+target.height/2}));
+    const current=centers.find(item=>item.id===focus);
+    const from=current||screenToWorld(camera,center());
+    const distance=(item:Vec)=>Math.hypot(item.x-from.x,item.y-from.y);
+    const next=nearestInDirection(from,centers.filter(item=>item!==current),direction)
+      ||(current?null:centers.reduce<typeof centers[number]|null>((best,item)=>!best||distance(item)<distance(best)?item:best,null));
+    if(!next)return;
+    userCamera=false;
+    buttons.get(next.id)?.focus({preventScroll:true});
+    loop.wake();
+  }
   function keydown(event:KeyboardEvent){
     if(options.gestures==='tap'||event.altKey||event.ctrlKey||event.metaKey||!movementTarget(event))return;
-    const move=MOVE_KEYS[event.code];
+    if(options.navigation==='targets'){
+      const direction=ARROWS[event.key];
+      if(direction){event.preventDefault();moveFocus(direction);return;}
+    }
+    const move=options.navigation==='targets'?undefined:MOVE_KEYS[event.code];
     if(move){event.preventDefault();if(!held.has(event.code)){held.set(event.code,move);userCamera=false;loop.wake();}return;}
     if(event.target===host&&(event.code==='KeyE'||event.code==='Enter'||event.code==='Space')){event.preventDefault();scene?.interact?.();loop.wake();return;}
     if(event.key==='+'||event.key==='='){zoomAt(camera,1.25,center());loop.wake();}
@@ -232,6 +261,8 @@ export function mountStage(host:HTMLElement,options:StageOptions) {
     still,
     wake(){loop.wake();},
     resetView(){resetCamera(camera);userCamera=false;loop.wake();},
+    /** The camera follows the scene's focus again after the human panned or zoomed. */
+    resumeFollow(){userCamera=false;loop.wake();},
     focusTarget(id:string){buttons.get(id)?.focus({preventScroll:true});},
     metrics(){return {...loop.metrics(),...metrics,pending:loop.pending(),backingPixels:canvas.width*canvas.height};},
     dispose(){

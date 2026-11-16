@@ -375,6 +375,51 @@ def test_parent_watch_requests_stop_when_owner_image_channel_closes():
         ownership_stream.close()
 
 
+def test_owner_channel_alone_identifies_the_owner_where_ppid_is_a_launcher(monkeypatch):
+    """A Windows venv launcher is the Sidecar's PPID; only EOF proves death."""
+    import lib.storage_authority_sql.__main__ as sidecar_main
+
+    monkeypatch.setattr(sidecar_main, '_PARENT_PID_IDENTIFIES_OWNER', False)
+    monkeypatch.setattr(sidecar_main.os, 'getppid', lambda: 456)
+    requested = threading.Event()
+    read_descriptor, write_descriptor = os.pipe()
+    ownership_stream = os.fdopen(read_descriptor, 'rb', buffering=0)
+    watcher = sidecar_main._start_parent_watch(
+        123, requested.set, ownership_stream=ownership_stream, interval=0.01)
+    try:
+        assert not sidecar_main._owner_gone(123, read_descriptor)
+        assert not requested.wait(0.2)
+        os.close(write_descriptor)
+        write_descriptor = None
+        assert requested.wait(1.0)
+        assert sidecar_main._owner_gone(123, read_descriptor)
+    finally:
+        watcher.set()
+        if write_descriptor is not None:
+            os.close(write_descriptor)
+        ownership_stream.close()
+
+
+def test_supervisor_startup_refusal_names_child_exit_code_and_stderr(tmp_path, monkeypatch):
+    """A refused child startup must say why in the raised diagnostic itself."""
+    monkeypatch.delenv('TOFU_STORAGE_TEST_POSTGRES_DSN_FILE', raising=False)
+    forwarded = []
+    supervisor = StorageSupervisor(
+        project_root=tmp_path, backend='postgres', startup_timeout=60,
+        child_stderr_forward=forwarded.append)
+    try:
+        with pytest.raises(RuntimeError) as raised:
+            supervisor.start()
+    finally:
+        supervisor.stop()
+    message = str(raised.value)
+    assert message.startswith(
+        'storage sidecar startup refused (database_unavailable): '
+        'storage startup failed (RuntimeError) [exit_code=2; stderr: ')
+    assert 'requires TOFU_STORAGE_TEST_POSTGRES_DSN_FILE' in message
+    assert forwarded
+
+
 def test_parent_watch_fails_closed_without_a_valid_owner_channel():
     import lib.storage_authority_sql.__main__ as sidecar_main
 
@@ -6299,9 +6344,16 @@ def test_runtime_fences_then_restarts_and_rehandshakes_same_backend(
     os.environ.get('TOFU_STORAGE_TEST_POSTGRES') != '1',
     reason='real PostgreSQL contract is opt-in',
 )
-def test_postgres_kill_reconnects_external_authority(tmp_path, monkeypatch):
+def test_postgres_kill_reconnects_external_authority(request, tmp_path, monkeypatch):
+    from contextlib import ExitStack
+    from tests.support.postgres_isolation import isolated_postgres_dsn, postgres_dsn_source
+
     monkeypatch.setenv('TOFU_STORAGE_PG_READ_POOL', '1')
     monkeypatch.setenv('TOFU_STORAGE_PG_WRITE_POOL', '1')
+    resources = ExitStack()
+    isolated = resources.enter_context(isolated_postgres_dsn(
+        postgres_dsn_source(request, tmp_path), tmp_path))
+    monkeypatch.setenv('TOFU_STORAGE_TEST_POSTGRES_DSN_FILE', str(isolated))
     fenced = threading.Event()
     supervisor = StorageSupervisor(
         project_root=tmp_path, backend='postgres', startup_timeout=60)
@@ -6326,6 +6378,7 @@ def test_postgres_kill_reconnects_external_authority(tmp_path, monkeypatch):
         )['value'] is True
     finally:
         runtime.stop()
+        resources.close()
     assert not (tmp_path / 'data' / 'pgdata').exists()
 
 

@@ -45,6 +45,32 @@ def _configured_parent_pid() -> int | None:
     return parent_pid
 
 
+# On Windows the interpreter named by the supervisor's ``sys.executable`` can
+# be a venv launcher that runs the real interpreter as its own child, so the
+# Sidecar's PPID is the launcher, never the supervisor. Windows also has no
+# fork() that could leak the non-inheritable owner pipe, so the ownership
+# channel alone identifies the owner there.
+_PARENT_PID_IDENTIFIES_OWNER = os.name != 'nt'
+
+
+def _owner_gone(expected_pid: int, ownership_descriptor: int | None) -> bool:
+    """Probe once whether the owning supervisor image has disappeared."""
+    if ownership_descriptor is not None:
+        try:
+            if os.read(ownership_descriptor, 1) == b'':
+                return True
+        except BlockingIOError:
+            pass
+        except OSError:
+            return True
+    if ownership_descriptor is not None and not _PARENT_PID_IDENTIFIES_OWNER:
+        return False
+    try:
+        return os.getppid() != expected_pid
+    except OSError:
+        return True
+
+
 def _start_parent_watch(
     expected_pid: int | None,
     request_stop,
@@ -74,25 +100,7 @@ def _start_parent_watch(
 
     def watch() -> None:
         while not stopped.wait(interval):
-            if ownership_descriptor is not None:
-                chunk = None
-                try:
-                    chunk = os.read(ownership_descriptor, 1)
-                except BlockingIOError:
-                    pass
-                except OSError:
-                    if not stopped.is_set():
-                        request_stop()
-                    return
-                if chunk == b'':
-                    if not stopped.is_set():
-                        request_stop()
-                    return
-            try:
-                parent_changed = os.getppid() != expected_pid
-            except OSError:
-                parent_changed = True
-            if parent_changed:
+            if _owner_gone(expected_pid, ownership_descriptor):
                 if not stopped.is_set():
                     request_stop()
                 return
@@ -230,7 +238,8 @@ def main() -> int:
         )
         # Close the small race where the worker died before the watcher thread
         # got scheduled.  Do not advertise readiness to a nonexistent owner.
-        if expected_parent_pid is not None and os.getppid() != expected_parent_pid:
+        if expected_parent_pid is not None and _owner_gone(
+                expected_parent_pid, sys.stdin.buffer.fileno()):
             raise StorageError(
                 'database_unavailable', 'Storage supervisor exited during startup')
         ready = {

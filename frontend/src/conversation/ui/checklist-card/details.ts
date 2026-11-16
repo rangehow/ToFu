@@ -1,5 +1,6 @@
 /** Checklist verdict, explanation, breadcrumbs and accepted revision history. Entry points below; dependencies are explicit imports and ports. */
 import { escapeHtmlText as escapeValue } from "../../../html-safety";
+import { disclosureToggleHtml } from "../../presentation/disclosure-toggle";
 import type { ChecklistRound, ChecklistMeta, ChecklistText } from "./contracts";
 export function checklistDetails(round: ChecklistRound, meta: ChecklistMeta, updateCount: number, text: ChecklistText) {
   const _t = text;
@@ -31,7 +32,7 @@ export function checklistDetails(round: ChecklistRound, meta: ChecklistMeta, upd
   const explanationHtml = explanation
     ? `<div class="ptool-todo-explanation">${escapeValue(explanation)}</div>` : "";
   const historyHtml = displayHistory.length > 1
-    ? `<details class="ptool-todo-history"><summary>${escapeValue(_t("todo.history", { n: displayHistory.length }))}</summary><div>${displayHistory.map((h) => {
+    ? `<details class="ptool-todo-history">${disclosureToggleHtml(escapeValue(_t("todo.history", { n: displayHistory.length })))}<div>${displayHistory.map((h) => {
         const state = `${h.done}/${h.total}`;
         const rev = h.revision ? ` · r${h.revision}` : "";
         const operation = h.operation ? `<code>${escapeValue(h.operation)}</code>` : "";

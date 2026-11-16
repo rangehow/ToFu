@@ -1,4 +1,5 @@
 """Preparation reports live work and owns compiler descendants through failure."""
+import json
 import os
 from pathlib import Path
 import signal
@@ -87,6 +88,40 @@ def test_identity_output_stays_capture_only(tmp_path, capsys):
                           timeout=engines.PREPARATION_TOTAL_TIMEOUT_SECONDS)
     assert result == 'machine-readable'
     assert capsys.readouterr().err == ''
+
+
+def test_a_result_is_stdout_and_stderr_stays_diagnostics(tmp_path):
+    program = ('import sys; print("warning: a library notice", file=sys.stderr, flush=True); '
+               'print("machine-readable", flush=True); print("late notice", file=sys.stderr)')
+    command = [sys.executable, '-c', program]
+    options = dict(cwd=tmp_path, environment=dict(os.environ),
+                   timeout=engines.PREPARATION_TOTAL_TIMEOUT_SECONDS)
+    assert engines._run(command, **options) == 'machine-readable'
+    output = engines._run_streams(command, **options)
+    assert output.stdout == 'machine-readable'
+    assert 'warning: a library notice\nlate notice' in output.stderr
+
+
+def test_a_failure_report_keeps_both_streams(tmp_path):
+    program = 'import sys; print("partial result"); print("error: denied lint", file=sys.stderr); sys.exit(1)'
+    with pytest.raises(engines.EngineCommandFailedError, match='exit 1') as failed:
+        engines._run([sys.executable, '-c', program], cwd=tmp_path, environment=dict(os.environ),
+                     timeout=engines.PREPARATION_TOTAL_TIMEOUT_SECONDS)
+    assert 'partial result' in str(failed.value)
+    assert 'error: denied lint' in str(failed.value)
+
+
+def test_relay_keeps_a_stderr_progress_frame_whole_beside_a_partial_stdout_line(tmp_path):
+    frames = []
+    frame = engines.PROGRESS_PREFIX + json.dumps({'phase': 'validating'}) + '\n'
+    program = ('import sys; sys.stdout.write("partial "); sys.stdout.flush(); '
+               f'sys.stderr.write({frame!r}); sys.stderr.flush(); print("line", flush=True)')
+    with engines.observe_preparation(frames.append):
+        result = engines._run([sys.executable, '-c', program], cwd=tmp_path, environment=dict(os.environ),
+                              timeout=engines.PREPARATION_TOTAL_TIMEOUT_SECONDS,
+                              progress='Validating storage engine')
+    assert frames == [{'phase': 'validating'}]
+    assert result == 'partial line'
 
 
 def test_broken_progress_sink_does_not_break_preparation(tmp_path, monkeypatch):

@@ -1,15 +1,15 @@
 /** Lazy resource entry for owned task surfaces. Provider discovery occurs only
  * after opening; selection/run changes dispose every subscription and request.
  */
-import { createButton, createField } from '../ui';
+import { createButton, createDisclosureSummary, createField } from '../ui';
 import { request } from '../api/transport';
 import { renderRichResponse, disposeRichResponse } from './renderer';
 import type { SurfaceContext } from './resource-client';
 import type { SurfaceText } from './surface-blocks';
 
 export function mountResourceLauncher(host:HTMLElement,text:SurfaceText){
-  const doc=host.ownerDocument,details=doc.createElement('details'),summary=doc.createElement('summary');
-  summary.textContent=text('rich.surface.explore','Resources');details.className='rich-resource-launcher';
+  const doc=host.ownerDocument,details=doc.createElement('details'),summary=createDisclosureSummary(doc,text('rich.surface.explore','Resources'));
+  details.className='rich-resource-launcher';
   const controls=doc.createElement('div');controls.className='ui-toolbar';
   const status=doc.createElement('p');status.setAttribute('role','status');
   const retry=createButton({label:text('rich.surface.refresh','Refresh'),size:'sm'},doc);

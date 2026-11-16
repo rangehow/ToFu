@@ -41,6 +41,11 @@ if TYPE_CHECKING:
 # Three minutes tolerates background timer clamping while ensuring a proxy
 # that lost its browser cannot retain the owner's dead connections forever.
 PUSH_RECEIVE_IDLE_TIMEOUT_SECONDS = 180.0
+# RFC 6455 7.4.1 "going away". push.js treats 1000 as an intentional terminal
+# close and recovers every other code except a 1008 refusal, so a server-side
+# release (receive idle, backlog overflow, shutdown) must not end in 1000: the
+# page that is still alive reconnects and reconciles instead of staying offline.
+PUSH_SERVER_RELEASE_CLOSE_CODE = 1001
 
 logger = get_logger(__name__)
 
@@ -394,6 +399,9 @@ async def push_ws():
         # Cancel and drain the sibling immediately so hub membership and its
         # queued frames are released at the transport boundary.
         await _join_socket_halves(send_task, recv_task)
+        # A peer disconnect cancels this handler before it gets here, so only
+        # a server-side release replaces Quart's default 1000 close.
+        await websocket.close(PUSH_SERVER_RELEASE_CLOSE_CODE)
     except asyncio.CancelledError:
         pass
     finally:

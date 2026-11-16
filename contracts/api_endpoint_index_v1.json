@@ -8850,6 +8850,24 @@
     },
     {
       "method": "GET",
+      "path": "/api/v4/project/coordination/deliverables",
+      "transport": "http",
+      "responseContract": "tofu.api/v4",
+      "summary": "Read one page of a lead conversation's deliverables, newest first",
+      "tags": [
+        "project"
+      ],
+      "scope": "conversations",
+      "public": false,
+      "requiredScopes": [
+        "conversations"
+      ],
+      "documented": true,
+      "owner": "routes/api_v1/project_brain.py",
+      "handler": "project_lead_deliverables_read"
+    },
+    {
+      "method": "GET",
       "path": "/api/v4/project/coordination/messages",
       "transport": "http",
       "responseContract": "tofu.api/v4",

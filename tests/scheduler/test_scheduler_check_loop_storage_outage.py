@@ -29,7 +29,10 @@ def test_storage_outage_is_a_warning_without_traceback(monkeypatch, caplog, retr
     def fenced_tick():
         ticked.set()
         raise StorageError(
-            'database_unavailable', 'Storage runtime recovery is stopped',
+            'database_unavailable',
+            'Storage runtime is degraded after repeated sidecar crashes; it '
+            'stays fenced while the start is retried minutes apart, and a '
+            'server process restart retries at once',
             retryable=retryable)
 
     monkeypatch.setattr(manager, '_check_and_run_due_tasks', fenced_tick)

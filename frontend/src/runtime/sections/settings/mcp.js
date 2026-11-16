@@ -413,8 +413,8 @@ function _renderMcpCatalog() {
         var _countLabel = _disabledCount > 0
           ? t('mcp.toolsCountOf', { a: (e.tools_count - _disabledCount), b: e.tools_count })
           : t('mcp.toolsCount', { n: (e.tools_count || 0) });
-        html += '<button class="mcp-app-tools-count mcp-tools-toggle" data-tofu-action="_mcpToggleToolsPanel(\'' + escapeHtml(e.id) + '\')" title="' + escapeHtml(t('mcp.toolsToggleTitle')) + '">' +
-          (_mcpToolsOpen[e.id] ? '▾ ' : '▸ ') + escapeHtml(_countLabel) + '</button>';
+        html += '<button class="mcp-app-tools-count mcp-tools-toggle" aria-expanded="' + (_mcpToolsOpen[e.id] ? 'true' : 'false') + '" data-tofu-action="_mcpToggleToolsPanel(\'' + escapeHtml(e.id) + '\')" title="' + escapeHtml(t('mcp.toolsToggleTitle')) + '"><span class="ui-disclosure" aria-hidden="true"></span>' +
+          escapeHtml(_countLabel) + '</button>';
       }
       html += _mcpUpdateButtonHtml(e);
       html += '<button class="btn btn-secondary btn-xs" data-tofu-action="_mcpUninstall(\'' + escapeHtml(e.id) + '\')" title="' + escapeHtml(t('mcp.uninstallTitle')) + '">' + escapeHtml(t('mcp.uninstall')) + '</button>';
@@ -816,7 +816,7 @@ function _mcpOpenInstallModal(serverId, isReinstall) {
     required.forEach(function(spec) { fieldsHtml += _renderSpec(spec); });
     if (optional.length > 0) {
       fieldsHtml += '<details class="mcp-advanced-toggle" style="margin-top:12px;">';
-      fieldsHtml += '<summary style="cursor:pointer;color:var(--text-muted);font-size:12px;user-select:none;">' + escapeHtml(t('mcp.advancedToggle', { n: optional.length })) + '</summary>';
+      fieldsHtml += '<summary class="ui-disclosure" style="cursor:pointer;color:var(--text-muted);font-size:12px;user-select:none;">' + escapeHtml(t('mcp.advancedToggle', { n: optional.length })) + '</summary>';
       fieldsHtml += '<div style="margin-top:8px;">';
       optional.forEach(function(spec) { fieldsHtml += _renderSpec(spec); });
       fieldsHtml += '</div></details>';
@@ -953,6 +953,8 @@ function _applyDebugModeVisibility() {
     const element = document.getElementById(id);
     if (element) element.style.display = visible ? '' : 'none';
   }
+  // Tool cards keep their technical details (IDs, raw result) for debug mode.
+  runtimeScope.refreshToolCards?.();
   /* A hidden experimental workflow must never keep owning future turns. The
    * already-accepted turn has an immutable config, so this paint/persist reset
    * only affects the next message when Debug Mode is switched off. */

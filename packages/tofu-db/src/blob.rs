@@ -344,8 +344,26 @@ where
     VisitReference: FnMut(BlockId) -> io::Result<()>,
 {
     let manifest_bytes = read_block(reference.manifest_block_id)?;
-    let manifest =
-        decode_reachable_manifest(tenant_id, owner_user_id, &reference, &manifest_bytes)?;
+    visit_read_blob_references(
+        tenant_id,
+        owner_user_id,
+        &reference,
+        &manifest_bytes,
+        &mut visit_reference,
+    )
+}
+
+/// [`visit_blob_references`] for a manifest the caller already read (an
+/// online mark reads a batch of manifests at once): the same owner-scope and
+/// identity checks, then the manifest and its chunks.
+pub(crate) fn visit_read_blob_references(
+    tenant_id: u64,
+    owner_user_id: u64,
+    reference: &BlobReference,
+    manifest_bytes: &[u8],
+    mut visit_reference: impl FnMut(BlockId) -> io::Result<()>,
+) -> io::Result<()> {
+    let manifest = decode_reachable_manifest(tenant_id, owner_user_id, reference, manifest_bytes)?;
     visit_reference(reference.manifest_block_id)?;
     for chunk in &manifest.chunks {
         visit_reference(chunk.block_id)?;

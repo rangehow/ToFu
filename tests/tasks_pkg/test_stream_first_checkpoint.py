@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Recovery checkpoint sampling at the provider-ingress isolation boundary.
+"""Provider-boundary observer work at the provider-ingress isolation boundary.
 
-The first content/thinking delta requests a checkpoint immediately, but the DB
-write must not run on the callback stack that drains the upstream model stream.
-``stream_llm_response`` therefore coalesces all in-flight requests and performs
-one checkpoint as soon as that provider dispatch has returned.
+The first content/thinking delta requests the boundary's observer work (the
+segment mirror the Turn projection copies, and presence), but that work must
+not run on the callback stack that drains the upstream model stream.
+``stream_llm_response`` therefore coalesces all in-flight requests and runs it
+once, as soon as that provider dispatch has returned. The boundary writes no
+task-result row (``test_conversation_attempt_sampled_checkpoints.py``).
 """
 import os
 import sys
@@ -35,14 +37,14 @@ def _make_task():
     }
 
 
-def test_first_delta_requests_checkpoint_settled_at_provider_boundary(
+def test_first_delta_requests_a_mirror_refresh_settled_at_provider_boundary(
         monkeypatch):
     import lib.tasks_pkg.manager as m
     import lib.tasks_pkg.manager._stream as st
 
     calls = []
     # ★ Package-split binding: ``stream_llm_response`` lives in the ``_stream``
-    #   submodule, which imports ``checkpoint_task_partial`` (from ._sync) and
+    #   submodule, which imports ``refresh_segment_mirror`` (from ._sync) and
     #   ``append_event`` (from ._events) into ITS OWN namespace at import and
     #   calls them directly. Patching the ``manager`` facade attribute rebinds
     #   only the facade's re-export, NOT ``_stream``'s binding, so the stub
@@ -50,13 +52,13 @@ def test_first_delta_requests_checkpoint_settled_at_provider_boundary(
     #   facade; the split moved the true binding site). Patch ``_stream``.
     #   ``dispatch_stream`` is also owned by ``_stream`` as an imported
     #   dependency, so patch the same concrete binding.
-    monkeypatch.setattr(st, 'checkpoint_task_partial', lambda task: calls.append(time.time()))
+    monkeypatch.setattr(st, 'refresh_segment_mirror', lambda task: calls.append(task['content']))
     # Don't actually persist events to DB during the test.
     monkeypatch.setattr(st, 'append_event', lambda task, ev: task['events'].append(ev))
 
     def _fake_dispatch_stream(body, *, on_content=None, on_thinking=None, **kwargs):
-        # The first delta samples recovery immediately, but DB work is isolated
-        # until this provider function has returned.
+        # The first delta samples the boundary work immediately, but it is
+        # isolated until this provider function has returned.
         on_content('hello ')
         assert calls == []
         on_content('world')
@@ -70,18 +72,18 @@ def test_first_delta_requests_checkpoint_settled_at_provider_boundary(
     msg, finish, usage = m.stream_llm_response(task, {'model': 'test-model'})
 
     assert task['content'] == 'hello world'
-    assert len(calls) == 1, 'sampled checkpoint did not settle at provider boundary'
+    assert calls == ['hello world'], 'the mirror refresh did not settle at the provider boundary'
 
 
-def test_checkpoint_throttled_after_first(monkeypatch):
-    """Rapid deltas coalesce into one post-provider recovery checkpoint."""
+def test_rapid_deltas_coalesce_into_one_boundary_refresh(monkeypatch):
+    """Rapid deltas coalesce into one post-provider mirror refresh."""
     import lib.tasks_pkg.manager as m
     import lib.tasks_pkg.manager._stream as st
 
     calls = []
-    # See test_first_delta_checkpoints_immediately for why these patch _stream
-    # (real binding site), including its dispatcher dependency.
-    monkeypatch.setattr(st, 'checkpoint_task_partial', lambda task: calls.append(time.time()))
+    # See the first test for why these patch _stream (real binding site),
+    # including its dispatcher dependency.
+    monkeypatch.setattr(st, 'refresh_segment_mirror', lambda task: calls.append(task['content']))
     monkeypatch.setattr(st, 'append_event', lambda task, ev: task['events'].append(ev))
 
     def _fake_dispatch_stream(body, *, on_content=None, on_thinking=None, **kwargs):
@@ -95,8 +97,8 @@ def test_checkpoint_throttled_after_first(monkeypatch):
     task = _make_task()
     m.stream_llm_response(task, {'model': 'test-model'})
 
-    # Exactly one checkpoint after provider return; no callback did DB work.
-    assert len(calls) == 1, f'expected 1 throttled checkpoint, got {len(calls)}'
+    # Exactly one refresh after provider return; no callback ran it.
+    assert len(calls) == 1, f'expected 1 coalesced refresh, got {len(calls)}'
 
 
 if __name__ == '__main__':

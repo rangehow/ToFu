@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import json
 import random
 import threading
 import time
@@ -547,6 +548,95 @@ def test_large_snapshot_carrier_is_atomic_replayable_and_survives_restart(applic
     assert len(rows) == 2 and rows[0]['event']['messages'][0]['content'] == body
     replay = runtime.client().command('event.append', carrier | {'user_id': 1}, uuid.uuid4().hex)
     assert replay['inserted'] is False
+
+
+def test_a_terminal_frame_its_authority_could_not_read_back_settles_slim(
+        application_storage, monkeypatch):
+    """A terminal frame whose Attempt event would exceed the event document
+    bound that ``turn.events.list`` reads with (contracts/tofudb_ir_v1.json
+    ``maximumAttemptEventDocumentBytes``) is refused by the authority itself as
+    ``storage_payload_too_large`` before it is acknowledged. The producer's
+    existing overflow fence (``turn_lifecycle._is_frame_overflow_error``)
+    answers with exactly one slim settlement: the Turn settles, the carried
+    task event commits once, and every acknowledged Attempt event reads back."""
+    import lib.turn_lifecycle as lifecycle
+    from lib.storage.errors import StorageError
+    from lib.storage.protocol import MAX_FRAME_BYTES
+    from lib.storage_authority_sql.migration.generated_tofudb_migration import (
+        MAX_ATTEMPT_EVENT_DOCUMENT_BYTES,
+    )
+    from lib.turn_lifecycle import bind_task, create_turn_pair, get_turn, record_task_event
+
+    conv_id = f'event-bound-{uuid.uuid4().hex}'
+    task_id = f'event-bound-{uuid.uuid4().hex}'
+    pair = create_turn_pair(conv_id, command_id=f'create-{conv_id}',
+        input_projection={'content': 'question'}, config={'model': 'gpt-4o'}, user_id=1,
+        conversation_defaults={'allowCreate': True, 'title': 'Event bound', 'settings': {}})
+    attempt_id, turn_id = pair['attempt']['attemptId'], pair['turn']['turnId']
+    bind_task(attempt_id, task_id, user_id=1)
+    real_client = lifecycle._turn_client(write=True)
+    frames = []
+
+    class Recorder:
+        """Forwards every command unchanged and records the authority's answer."""
+
+        def __getattr__(self, name):
+            return getattr(real_client, name)
+
+        def command(self, operation, payload, command_id, **kwargs):
+            if operation != 'turn.event.record':
+                return real_client.command(operation, payload, command_id, **kwargs)
+            frame = {'slim': payload.get('slim') is True,
+                     'terminal': payload.get('terminal') is True}
+            if 'projection_patch' in payload:
+                frame['patch_bytes'] = len(json.dumps(
+                    dict(payload)['projection_patch'], separators=(',', ':')).encode())
+            frames.append(frame)
+            try:
+                return real_client.command(operation, payload, command_id, **kwargs)
+            except StorageError as exc:
+                frame['refused'] = exc.code
+                raise
+
+    monkeypatch.setattr(lifecycle, '_turn_client', lambda **_kwargs: Recorder())
+    # The live projection mirrors a tool output into its tool_use segment, so
+    # the frame carries it twice: past the event bound, inside one wire frame.
+    task = {
+        'id': task_id, 'convId': conv_id, '_attemptId': attempt_id, '_userId': 1,
+        'status': 'done', 'finishReason': 'stop', 'content': 'final answer', 'thinking': '',
+        'toolRounds': [{
+            'roundNum': 1, 'toolCallId': 'call-1', 'toolName': 'run_command',
+            'toolArgs': {'command': 'cat build.log'}, 'status': 'done',
+            'toolContent': 'x' * (MAX_ATTEMPT_EVENT_DOCUMENT_BYTES * 3 // 4)}],
+        'segments': [], 'model': 'gpt-4o', 'config': {'model': 'gpt-4o'},
+        'created_at': time.time(), 'abort_event': threading.Event(),
+    }
+    terminal = {'type': 'done', 'finishReason': 'stop'}
+
+    assert record_task_event(task, terminal, task_event={
+        'task_id': task_id, 'sequence': 1, 'event': terminal}) == 'carried'
+
+    patch_bytes = frames[0].pop('patch_bytes')
+    assert frames == [
+        {'slim': False, 'terminal': True, 'refused': 'storage_payload_too_large'},
+        {'slim': True, 'terminal': True},
+    ]
+    # The authority's event bound refused it, not the transport's frame cap.
+    assert MAX_ATTEMPT_EVENT_DOCUMENT_BYTES < patch_bytes < MAX_FRAME_BYTES
+    # Settled: no full-state probe stays scheduled, nothing aborts the worker.
+    assert '_turnProjectionOversizeRetryAt' not in task
+    assert not task.get('aborted') and not task['abort_event'].is_set()
+    turn = get_turn(conv_id, turn_id, user_id=1)
+    assert turn['status'] == 'completed'
+    assert turn['projection']['content'] == 'final answer'
+    events = application_storage.query('turn.events.list', {
+        'attempt_id': attempt_id, 'user_id': 1, 'projection_mode': 'patch'})
+    assert events[-1]['type'] == 'terminal_settlement'
+    assert max(len(json.dumps(event, separators=(',', ':')).encode())
+               for event in events) <= MAX_ATTEMPT_EVENT_DOCUMENT_BYTES
+    carried = application_storage.query('event.list', {
+        'user_id': 1, 'task_id': task_id, 'after': 0, 'limit': 10})
+    assert [row['sequence'] for row in carried] == [1]
 
 
 def test_repeated_concurrent_agent_restart_keeps_every_acknowledged_round(application_storage):

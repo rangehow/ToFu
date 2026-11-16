@@ -49,6 +49,29 @@ failures; checking deployment files during reconnect confuses disk preparation
 with running-process identity. The existing in-memory admission is reused;
 there is no additional persistent state or retention.
 
+Problem (2026-11-13): preparation commands (`native_engine._run`) wrote stdout
+and stderr to one log, and `build_identity` parsed that merged text as the
+engine's `--build-info` JSON. Any stderr line from the engine or a wrapper (a
+shell's locale warning in a container without `C.UTF-8`, a library notice)
+refused a good engine as having "no verifiable source identity" at admission,
+certification, deployment, the store-features preflight and landing
+verification. Decision: `native_engine._run_streams` captures the two streams
+separately and returns `CommandOutput(stdout, stderr)`; `_run` returns its
+stdout. Machine-readable results are parsed from stdout only: the build
+identity, the embedded library attestation, the engine-input commit list and
+the restart receipt. stderr is diagnostics: relayed live as progress (whole
+lines per stream, so neither splits the other's lines), in every failure report,
+and in the identity refusal when stdout is not a valid identity.
+`TOFU_ENGINE_PROGRESS` and `TOFU_ENGINE_DECISION` frames remain prefix-framed
+lines on the stderr progress stream; the manager reads the decision there.
+`_run` keeps returning text because a serving worker imports
+`application_restart` lazily from disk next to the `native_engine` it loaded at
+storage admission. Alternatives rejected: forcing a locale in the probe's
+environment (fixes one source only), filtering known warnings (an open-ended
+list), and scanning merged text for the last JSON object (stray output can
+still parse as an identity). Verify `tests/server/test_native_engine_update.py`
+(identity specs) and `tests/server/test_native_engine_preparation_process.py`.
+
 The host's own relaunches run a private copy of the admitted bytes, so a staged
 deployment never refuses them; an attachment detaches at once when the
 published process exits but keeps a live, starved engine through the
@@ -734,10 +757,26 @@ Decision: restarts deploy only certified engines.
   reads records and re-verifies the bytes, required check verdicts and the
   engine's reported source; it has no write path.
 - **Storage contract identity.** `native_engine.storage_contract_sha256` hashes
-  `contracts/storage_v2.json`, `contracts/native_storage_connection_v2.json`
-  and every `contracts/*` entry of the engine's Cargo `external-inputs`.
+  `contracts/storage_v2.json`, `contracts/native_storage_connection_v2.json`,
+  the operation IR `contracts/tofudb_ir_v1.json` (an engine kept across an IR
+  change would silently ignore new payload fields), every `contracts/*` entry
+  of the engine's Cargo `external-inputs`, and every engine source generated
+  from a contract the engine shares with the application
+  (`packages/tofu-db/src/**/generated_*.rs` and `*.generated.rs`).
   Records are keyed by engine source *and* contract because the contract covers
-  files the engine fingerprint does not. Deployments record the contract of the
+  files the engine fingerprint does not.
+  Problem (2026-11-14): contracts that only generators read (Transaction IR,
+  search, sync vocabulary, worker control, ...) were outside the identity, so
+  a tree whose IR changed still matched its predecessor's engine, and the keep
+  rule would pair them. Decision: a generated engine source is exactly what
+  the engine compiles from its contract, so it enters the identity; a
+  prose-only contract edit compiles nothing new and keeps it. Alternative
+  rejected: declaring each generator contract as an `external-inputs` entry,
+  which also feeds the engine fingerprint, so every prose edit of
+  `conversation_sync_v3.yaml` (nine commits in one week) would need a newly
+  certified engine. The first deployment after the change records the new
+  identity; until then a retained storage host bound to the old one is refused
+  retention, like any contract change. Deployments record the contract of the
   tree they prepared in `build.json`; manual `deploy_tofudb_engine.py` runs
   record none, and new bytes never inherit the previous deployment's evidence,
   certification note or contract.
@@ -767,6 +806,22 @@ Decision: restarts deploy only certified engines.
   `build.json` says `UNCERTIFIED operator override <id> by <operator>: <reason>`.
   A failed override refuses the restart. `install.sh` passes the decision only
   for a first deployment, when nothing is deployed yet.
+- **Automatic certification before a normal start** (requested 2026-11-16 by the project coordinator for the owner:
+  an IR-only contract change must not leave `serverctl start`/`restart` or
+  `migrate_host.py --start` refusing). Before serverctl asks the manager for
+  anything, `native_engine.certify_head_before_start` checks the same decision;
+  when preparation would refuse, it runs `scripts/engine_certify.py` for HEAD's
+  commit itself (outside the 1,200 s preparation budget: the gate takes 1-2 h;
+  measured 2026-11-16 on this host: build 166 s, both isolated certifications
+  7 s and 6 s, the recorded f3102951 run's cargo/load/ff-native/rollback
+  checks 623-4,011 s each), then the ordinary preparation deploys the new
+  record. Fixture: this checkout's own store when no engine holds its `LOCK`
+  (a stopped server), else the newest record's fixture whose `CONTROL` still
+  matches; the work root is `packages/tofu-db/target/engine-certify-work`.
+  Uncommitted engine inputs or contracts, no settled fixture, a work root on
+  another filesystem, or a failing gate refuse with one actionable line before
+  the manager is asked to stop anything. The operator override skips it; the
+  in-app restart and the manager's own spawns do not run it.
 - **Automatic spawns** (crash, planned and lease recovery) prepare only the
   frontend; the new storage host's admission keeps or refuses the deployed
   engine. Starting the manager is not an engine decision either.
@@ -788,6 +843,28 @@ every acknowledged row and verifies offline with `verdict=ok` and
 stops storage with the production host's `NATIVE_DAEMON_STOP_SECONDS`;
 `load_run.py` gives older harnesses the same budget.
 
+Problem (2026-11-16): the crash probe slept a fixed 5 s after the first
+catalog location table and assumed the packed-filter build was still running.
+On a compact production store (386 segments, restored from the closed backup)
+the build takes about 0.4 s, so every engine, the certified f3102951
+included, failed the drill, and a start's automatic gate against the stopped
+production store would have refused. Decision: the probe launches the
+candidate with the engine's fault-injection point
+`TOFU_DB_FAILPOINT=packed_filter_build_pause`
+(`BlockStore::build_packed_filter_pausing`): after its first index read the
+online GC driver's build logs `packed_filter step=paused` with the authority's
+root and holds the build open, installing nothing, until a stop. The probe
+makes its two build commits after that marker and SIGKILLs, so the kill lands
+inside the build on any catalog size; an engine without the failpoint builds
+through, makes no build commits and fails the unchanged verdict. No other
+launch sets the variable. Alternatives rejected: a longer or adaptive sleep (a
+timing knob that still races a fast build); killing on a build-start marker
+without a pause (two strict commits can outlast a 0.4 s build); a large-catalog
+fixture only (the start-path gate uses whatever store the host has). Verify
+`the_build_pause_failpoint_holds_every_catalog_size_inside_the_build`
+(386 and 4,096 segments) and, opt-in against a real engine and drill source,
+`tests/deploy/test_engine_certify_crash_probe.py`.
+
 Operating it: `.venv/bin/python3 scripts/engine_certify.py --fixture <authority>
 [--commit REV] [--work-root DIR]`. The fixture is required (no hidden default):
 a settled TofuDB authority directory (`CONTROL`, `payload-segments/`,
@@ -802,7 +879,8 @@ the deployed engine's own commit is certified (`--commit`), or the operator
 overrides once.
 
 Alternatives rejected: running the gate inside restart preparation (1-2 h against
-a 1,200 s budget); records in Git or backfilled from a worker's `/tmp`; automatic
+a 1,200 s budget; the CLI runs it before preparation instead); certifying with
+only build+certify (a record must carry every required check); records in Git or backfilled from a worker's `/tmp`; automatic
 rollback to the newest certified engine (downgrades cross on-disk format
 boundaries); `storage_v2.json` alone as the contract (the compiled operation
 catalog changes independently); a runtime-handshake digest (itself an engine

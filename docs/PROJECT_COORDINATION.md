@@ -285,7 +285,9 @@ returned. The role lookup of the Coordinator ceiling (`coordinator_scope`, never
 the tool selection) routes every handle to `coordinator_workers.poll_workers`,
 so a Coordinator reaches only its own Workers, never a background command, swarm
 agent or another conversation's task; without IDs, `poll` lists this request's
-Workers that are running or starting. The wait runs in the existing tool
+Workers that are running or starting, checking every Worker of the request, never
+only a first page of it; a Turn without a request of its own checks its project
+history's newest page. The wait runs in the existing tool
 invocation using disposable terminal subscriptions and interruptible Stop.
 Each Worker is in one phase (`phase` on a returned row): `running`;
 `needs_review` (a completed execution its Coordinator has not reviewed);
@@ -310,7 +312,29 @@ Workers, and returns `wait=settled` at once when none is pending, so polling a
 reported Worker never loops a model. Durable attempt/delivery evidence
 alone declares settlement: a terminal notification only starts a prompt recheck
 every 0.5 s for up to 10 s, because it can precede the attempt's durable status;
-otherwise a 5 s recheck covers notification loss and queued admission. Polls
+otherwise a 5 s recheck covers notification loss and queued admission. A recheck
+reads a Worker again only when it can have changed: one whose task runs in this
+process (pending or running, not aborted, in the task runtime) once its terminal
+notification fires here or it no longer runs here, and any other Worker
+(another process, still queued, settled, or delivering) at each recheck. The
+Coordinator task keeps the last row of each Worker still running here
+(`_coordinatorWaitRows`), so a later poll reads none of them either. A Worker
+whose end fired is read at every recheck until the wait ends, since the
+notification can precede its durable status. Problem (old-repo SCALE-COORD-1,
+38c9c6b3a4, ported 2026-11-16): every recheck and every poll call re-read all
+watched Workers, so a lead's wait cost O(Workers) storage reads per 5 s and
+checked input only between full passes. Measured with a 0.15 s settlement read
+(`tests/project_mod/test_coordinator_wait_reads.py` setup, default rechecks):
+at 10/30 Workers running here, reads during a 12 s idle wait 30/49 before, 0
+after; a repeat poll 1.95 s/6.44 s before, 0.01 s after; one Worker's end to the
+poll's return 2.57 s/9.70 s before, 0.39 s/0.48 s after; a project message
+during a 30-Worker wait was not seen before the 30 s deadline before, 4.3 s
+after (the durable input read cadence). Decision: a recheck costs O(changes).
+Alternatives rejected: a shorter recheck interval (a knob, still O(N) per
+recheck); one batched exchange for every view (still O(N) per recheck; the R5
+per-request change index is the storage-side answer). Accepted: a Worker
+revoked or settled by another process while its task still runs here is seen
+when that task ends here, not at the next recheck. Polls
 read only the assignment row itself (no policy rows or prerequisites), attempt
 status, Turn metadata and delivery receipt
 (`view_for_coordinator(settlement_only=True)`), and each poll observes the
@@ -336,8 +360,10 @@ Coordinator conversation's inbox holds a steer (a human chat message, forwarded
 request or channel batch) or another background completion, checked every wait
 slice; or once a steer another server process committed to the live Turn, or an
 incoming project message submitted after the call started, appears at a durable
-read (the first check, then at most every 5 s). It is checked before the first
-wait, so input already waiting ends the call at once. Its instruction
+read (the first check, then at most every 5 s). It is checked when the call
+starts, so input already waiting ends the call after one read of its Workers;
+input that arrives during the wait ends a pass between two Worker reads (a
+Worker not reached is `unread` and named pending). Its instruction
 names the still-pending Worker IDs to wait on next; Workers keep running and the
 input arrives at the round boundary right after the tool result. When nothing
 is pending any more the call returns `wait=settled` with its news instead, and
@@ -1225,7 +1251,11 @@ sessions and tells the human what matters.
   and returns at once; the human's answer is an ordinary message quoting
   the question (the card fills the composer's existing reply-quote and sends,
   or adds to an existing draft), so it steers a live turn or starts the next
-  one. `blocking=true` waits as before; a chat message sent instead of the card
+  one. The quote ends with `[question <guidanceId>]`, so the reply names the
+  exact question it answers; the office's question card and "answer in
+  conversation" use the same answer control and quote
+  ([FRONTEND_ARCHITECTURE.md](FRONTEND_ARCHITECTURE.md), "Owner questions in
+  the office"). `blocking=true` waits as before; a chat message sent instead of the card
   ends the wait and reaches the model as the answer or new direction. Only a
   steer the seam authored as human input counts, and a Global Router forward
   of the owner's message only once `require_human_turn` verifies it: channel
@@ -2276,6 +2306,69 @@ state, hand-off and review captures, day and night, hover card and click, a
 six-Worker profile, hidden/offscreen/disposed sleep, reduced motion; evidence
 in `output/studio-redesign/after/`).
 
+### Lead deliverables (owner request 2026-11-16)
+
+Problem: in the classic view a lead's deliverables (delivery reports, published
+files and decks, merged Worker results) were scattered through very long
+conversations, so the owner scrolled back to find them; and in the studio,
+clicking a deliverable only opened the lead's conversation.
+
+Decision: a read-time projection over the owners that already hold the
+deliverables, with no store of its own (owner direction 2026-11-16: reuse the
+existing report/delivery owners, no parallel store)
+(`lib/conversations/lead_deliverables.py`; `deliverableItem`/`deliverablePage`
+in `contracts/project_coordination_v1.schema.json`). Each read of
+`GET /api/v4/project/coordination/deliverables` walks the lead's main lane
+newest-first through `turn_lifecycle.lane_turns_newest_first` (one bounded
+`turn.sync.page` per Turn, so a long conversation never hits the
+whole-conversation response bound) and the conversation's artifact rows:
+
+- delivery reports: the lead's own canonical `coordinator_report.delivery`
+  Turns (`CoordinatorReports`); the item's title and summary are the Turn's
+  `title\n\nmessage` content. The Global Router's relayed deliveries are the
+  report relay notices in its Turns: `lib/router/relay.py` owns both the notice
+  format (`render_notice`) and its parser (`notice_references`); each named
+  report is read from the Project Router's canonical Turn, so a forged or
+  deleted reference lists nothing.
+- published files, decks and documents: the artifact rows
+  (`lib.artifacts.core.list_artifacts`) from `publish_response_file`, rich
+  responses and long-form reports. A `.pptx`/`.pptd` file is a deck, another
+  file a file, a rich response or long-form report a document; workspace
+  writes, inline images and scanner snippets are not deliverables. The source
+  message is the oldest Turn whose tool round carries the `artifactId`.
+
+Items are newest first, 64 per page (the coordination page bound); the cursor
+is the previous page's last `(createdAt, item digest)`, so a page boundary is
+stable while new deliverables arrive. Reads require the caller to own the
+conversation (403 otherwise); a malformed cursor is a 400. Producers send only
+a push hint, `{kind: "lead_deliverable", conversationId}` on the project
+channel: `CoordinatorReports` for a delivery, the relay for the Global Router,
+and `rich_response` for a published artifact. A Worker result a finished request
+merged reaches the list through the delivery report the finish requires; the
+studio's trophy shelf opens such a result as a `merge` item it builds itself.
+Cost: each read walks the whole main lane, comparable to opening the
+conversation once; the list is read when shown and on hints.
+
+One item model and one opener serve both modes
+(`frontend/src/features/lead-deliverables/`). Opening an item shows the
+deliverable itself: an artifact in the artifact panel (file preview, deck
+viewer), a report as the conversation's own `report_to_user` card in a dialog,
+a merge at its Worker's result Turn. The secondary action ("Go to message")
+opens the lead's message at that exact Turn. In the classic view, presence
+places a 成果 section after each shown lead's office slot (the Global Router's
+card, a project's Coordinator row), above the archive of conversations it
+started; older pages load on demand, so lists of any length are complete. A
+`lead_deliverable` push for the shown lead and a push reconnect re-read the first
+page. In the studio, a delivery on the desk and a trophy on the shelf build the
+same item (same identity) and call the same opener, whose Turn port docks the
+office's conversation column; other desk documents still open their author's brief.
+
+Alternatives rejected: a pointer ledger written by each producer (the first
+implementation; a parallel store that needed seeding and could disagree with
+the reports and artifacts it copied); scraping Turns in the browser (only
+covers loaded windows); deriving the list from the latest-report head (it keeps
+only the newest report); a second studio-only implementation.
+
 ### Office team facts (2026-11-13)
 
 Problem: the office must show who works, who walks in with a report, which
@@ -3148,6 +3241,12 @@ range and point documents. GET `/api/v4/project/coordination/assignments` return
 An exact `commandId` or `assignmentId` lookup is independent of history pages;
 these selectors cannot be combined with a cursor. Paging is passive, preserves
 legacy cursors through cutover, and never extends a grant or acknowledges a report.
+A page is one index range plus point documents: each document is consistent by
+itself, and listed index rows and sequences never change, so a birth committing
+during the build (the only commit that moves the head) never makes the page read
+again. Until 2026-11-13 the page required its load to start on the head its index
+list saw, so under a birth storm it read itself again up to four times and then
+refused ("Concurrent history changes").
 Read-only history omits unrelated source account/occurrence documents. Execution
 content in a page is a 2,000-character preview; the ordinary Worker conversation
 and exact lookup retain the complete evidence. Tenant filtering precedes exposure;
@@ -3275,6 +3374,41 @@ former per-row reload, one dispatch record read per build) and
 `test_project_dispatch_history.py::test_page_dependency_rows_add_no_snapshot_reads`
 (SQLite, PostgreSQL and native: a build's dispatch RPCs equal its page load's).
 
+Problem: each 32-row page still made about 115 storage round trips (an assignment
+document, a Turn, an attempt and a delivery workspace per row), and in a busy
+process every round trip waits several times to be scheduled. The old repo's
+COORD-PAGE-READS probe measured page p50 11-18 s and p95 142-155 s on the N=1000
+synthetic Coordinator load, with the page thread's CPU 0.2% of its wall time.
+Decision: a build reads each kind of evidence for all its rows in one exchange
+(`lib.storage.port.query_many`, see
+[STORAGE.md](STORAGE.md#commands-queries-and-idempotency)): the selected
+documents (`SegmentedDispatch.get_many`, used by every point selection), then
+the bound Turns (metadata where a remembered preview may still hold, the
+server-cut content preview otherwise), the attempts, the previews whose Turn
+metadata changed, and the delivery workspaces (`service._HistoryEvidence`).
+Each read is the same live read as before and is consumed where the row read it,
+so failures surface on the same row; each distinct project path resolves once
+per build. A page of 32 rows now costs the round trips of a page of one: 7, plus
+one when Turns changed. Injected single-read ports keep the row-by-row path.
+Alternatives rejected: an exact cache of settled rows' views (Turn, attempt and
+workspace evidence can change after settlement, so exactness needs a live
+witness per row, which is the same reads; the slowest pages are in busy phases
+with live rows; and the no-cross-request-cache decision above stands), a
+projection maintained at settlement (every Turn, attempt and delivery writer in
+other owners would have to maintain it), and per-domain multi-get operations
+(four catalog operations on both authorities and a native engine rebuild and
+redeployment for the same round trips). Guards:
+`test_project_dispatch_history.py::test_page_round_trips_do_not_grow_with_its_rows`
+(115 round trips before) and `::test_page_content_equals_the_row_by_row_reads`
+(SQLite and native). Re-measured here with `benchmarks/project_assignment_page_reads.py
+--rows 32 --builds 3` on an exported pre-change tree and this one (same engine
+built from this checkout, `TOFU_TEST_TOFUDB_BIN`): SQLite 115 → 7 round trips
+per 32-row build (116 → 8 when one Turn changed), native 115 → 7 (116 → 8),
+with identical RPC counts and oracle-equal pages on both. What remains is per
+read, not per round trip: the old repo's VM runs put the residual per-read cost
+at ~155 ms while 300 Workers are born and ~60 ms once 1000 run, the wait of a
+host process whose threads saturate the interpreter lock.
+
 Problem: when a client disconnects, Quart cancels only the coroutine awaiting the
 view. The former sync view's worker thread kept building the whole page (every
 Turn, attempt, delivery and dependency read) for nobody, while polling clients
@@ -3282,9 +3416,10 @@ frequently gave up on slow builds; the retained application logs hold hundreds o
 SLOW/HEAVY warnings for this GET. Decision: GET assignments is an async view that
 runs the unchanged build on a worker thread, sets an event when its coroutine is
 cancelled and joins the worker before re-raising the cancellation.
-`ProjectDispatchService.history_page` checks that predicate before the page load
-and between rows and raises `HistoryBuildCancelled`; the row whose reads are in
-flight finishes and no later row is read. A cancelled build sends no response and
+`ProjectDispatchService.history_page` checks that predicate before the page load,
+before each evidence exchange and between rows and raises `HistoryBuildCancelled`;
+the exchange or row whose reads are in flight finishes and nothing later is read.
+A cancelled build sends no response and
 keeps the previous previews slot. Exact command/assignment lookups are single reads
 and do not check it. Alternatives rejected: a build deadline (a tuning knob that also
 cuts slow legitimate builds), abandoning the thread as before (its reads continue),
@@ -3327,25 +3462,111 @@ Alternative rejected: heartbeat-only guards cannot protect startup/completion dr
 Durable history. Problem: one record per original owner/project/recipient held
 at most 128 originals for its lifetime and rewrote the whole list on every
 receipt, so a months-long Project or Global Router exhausts its mailbox.
-Decision: `ProjectMailbox` keeps append-only segmented history on the same
-generic record CAS (key layout: `history` in `contracts/project_messages_v1.json`).
+Decision: `ProjectMailbox` keeps append-only segmented history on the generic
+record operations (key layout: `history` in `contracts/project_messages_v1.json`).
 The head holds only the open segment (at most `messagesPerSegment` = 128, the
-old per-record bound) and the sealed count. Each append first claims its
-message locator, which is also the history-wide idempotency check, and commits
-with one head CAS; an append that finds the open segment full first seals it
-(segment copy with per-sender links, sender pointers, pending index). Position
-= segment × 128 + slot never changes, so `before_id` stays a stable cursor;
-sealed receipts CAS their segment record and keep per-message revision CAS. A
-legacy single record is read as open segment 0 and sealed by its next append;
-nothing is copied away or deleted first. Acquisition reads sealed pending
-originals through the pending index and skips departed senders without reading
-their segments.
+old per-record bound) and the sealed count. Absorbing into a full open segment
+first seals it (segment copy with per-sender links, sender pointers, pending
+index) before the head CAS that advances it. Position = segment × 128 + slot
+never changes, so `before_id` stays a stable cursor; sealed receipts CAS their
+segment record and keep per-message revision CAS. A legacy single record is
+read as open segment 0 and sealed by its next absorption; nothing is copied away
+or deleted first. Acquisition reads sealed pending originals through the
+pending index and skips departed senders without reading their segments.
 Alternatives rejected: raising the cap (still a lifetime ceiling, larger
 rewrites); archiving or evicting considered originals (durable user evidence);
 writing every locator while sealing (measured 1.9 s, up to 21 s under host
 load, on each 129th send); `record.list` sender/pending indexes (SQL prefix
 lists are unindexed `LIKE` scans of the whole namespace); a new two-authority
-storage operation (one head CAS already commits each append atomically).
+storage operation (one head CAS then committed each append atomically).
+
+Appends never touch the head (decision 2026-11-13). Problem: every send was a
+CAS of the recipient's one head record with `casAttempts` (4) tries, so reports
+that arrive together lose to each other. The synthetic-agent harness
+("Coordination at scale" below) lost 37 of 100 Worker reports at N=100 and 238
+of 300 at N=300, even after three extra model rounds of retries, and each try
+rewrote the whole open segment. Decision: a send is a positional append that is
+idempotent by message ID, built from existing record operations:
+
+1. Ticket. The sender writes the mailbox's tickets record without an expected
+   version. Both authorities serialize the writes to one record and return
+   the new version, which is the ticket: concurrent senders never conflict.
+   The command ID is fixed per message ID (and per voided ticket, below), so
+   a retried draw replays the same ticket instead of drawing another.
+2. Claim. The sender creates its message locator `{ticket}` at version 0.
+   This is the history-wide idempotency check: a retry finds the claim and
+   delivers under it.
+3. Original. The sender creates the immutable original at its ticket's arrival
+   record, also at version 0. The send is durable from here on.
+
+The recipient's own acquisition and receipts (`inject`, `confirm`, `consider`)
+absorb arrivals in ticket order into the open segment, sealing it as before,
+one segment's room per head CAS. So the head has one writer, and positions,
+paging, per-sender links, the pending index and receipt revisions keep their
+meaning. An arrival counts only at the ticket its locator claims and only once;
+any other ticket is voided. A ticket's position is `ticketBase + ticket - 1`,
+minus earlier voided tickets; `ticketBase` is the head-era history length the
+first ticketed head write fixes. Readers never write: they read arrivals not
+yet absorbed after the absorbed history, in ticket order, so a reader before
+and after absorption sees the same order. A receipt for an original behind a
+stalled ticket is refused as uncertain until a later pass absorbs it.
+
+A ticket whose original is missing stops absorption once (`stalled`). The next
+pass that still finds it missing creates a void marker at that arrival, at
+version 0. If the sender died between ticket and original, its retry finds
+its ticket void, draws a new one and moves its claim. A live sender that
+loses that race does the same. Either way every message lands exactly once,
+and absorption never waits on a sender.
+
+Head-era history. The head's ticketed form stores the open segment under
+`open`, so writers from before this decision find no `messages` and fail
+closed. The first ticketed head write gives every head-era original that has no
+locator (a legacy single record's) its `{segment}` locator; a ticket claim that
+a retry of one of them made first yields to it, and absorption drops that copy.
+A head-era claim proven unfilled is replaced by a ticket claim. The one
+residual: a retry made before that first write returns its own copy of the
+original, with the same ID and body. The tool contract did not change.
+
+Rolling back and forward. A head converted back to the `messages` form for an
+earlier version keeps its `tickets` and `voided`: the conversion absorbs every
+drawn ticket and leaves no `{ticket}` claim at or below `tickets`, and the
+earlier writers keep head fields they do not know. Read again, such a head
+resumes them with `ticketBase` = its history length - `tickets` + the voided
+count, so the next ticket lands after every original, the earlier writers'
+appends included, and no earlier ticket is read or voided again. A head that
+predates tickets carries neither and starts at ticket 1.
+
+`ProjectMailbox.convert_back()` performs the conversion, offline, with the
+application stopped. It absorbs every drawn ticket (one never written is
+voided), points each `{ticket}` claim at its original's segment, and stores the
+head last. A claim whose ticket holds no original gets segment 0, which the
+earlier writers prove dangling and replace on retry. It finds every claim by
+paging the mailbox's locators with `record.list` once, the one listing in this
+layout. Converting again, or converting a mailbox that never took a ticket,
+writes nothing.
+
+Alternatives rejected:
+- an engine-side append operation: a new storage primitive that needs
+  certification, and the ticket gives the same conflict-free order with
+  existing operations;
+- per-sender lanes: the recipient needs a directory of senders, which is a
+  contended record again, or `record.list`, an unindexed `LIKE` scan on SQL;
+- more CAS tries or backoff: a tuned knob that still rewrites the open segment
+  O(N²) times;
+- senders sealing segments on their path: that puts every sender pointer
+  write of a seal on the 129th send;
+- senders reading the head to find a legacy original's retry: it puts an
+  open-segment read on every send to cover one legacy case.
+
+A mailbox write that loses its CAS to a record already holding exactly the
+value it attempted has succeeded (CAS-CONFLICT-1, 2026-11-13): two passes that
+absorb the same arrivals compute identical heads, segment copies, sender
+pointers and pending indexes. In the N=210 rounds cells, 203 of 208 conflicts
+were such identical writes; the losing pass aborted its seal or lost an
+acknowledgement, and messages were re-offered. `_put` re-reads on
+`database_conflict` and returns the stored version when the value is equal; any
+other conflict, such as a second confirmation whose receipt differs, still
+raises and retries.
 
 `reference/consult/report/question/assign/steer` classify context, not execution
 grants. Explicit accepted/rejected/deferred/conflict decisions use message revision
@@ -4375,8 +4596,9 @@ cancel, finish receipt or pending decision is a durable no-op (the decision
 keeps its first due time), and a different one is still refused as immutable.
 A real verdict met on the re-read — a revoked grant, a changed binding, an
 already settled request — still refuses at once. `consider_project_message`
-and `send_project_message` are unchanged: they commit through the per-recipient
-mailbox CAS, never the dispatch head, so this contention cannot reach them.
+and `send_project_message` are unchanged: a send appends without any CAS and a
+consideration CASes the recipient's own mailbox, never the dispatch head, so this
+contention cannot reach them.
 
 Alternatives rejected: waiting inside the publication lock (a contended review
 would block publication), returning the contention to the caller with recovery
@@ -4405,7 +4627,8 @@ result." when the JSON stayed under 1 MB. Each call also materialized the
 projection and persisted it as a multi-megabyte artifact.
 
 Decision: both tools return a compact effect receipt: `assignment_id`,
-`decision` (`accept`/`reject`/`rework`, or `cancelled`), `grant_revision`,
+`conversation_id` (the Worker conversation; its title names the task in the
+Coordinator's tool cards), `decision` (`accept`/`reject`/`rework`, or `cancelled`), `grant_revision`,
 `revoked`, `result_revision`, `execution_status`, `checkpoint_sha`, `delivery`,
 `canonical_delivery` and `next_step`, plus `acceptance_counts` for work with
 acceptance checks (above). The service answers from the
@@ -4958,6 +5181,23 @@ held row per pass); persisting the cause in the receipt (a new durable receipt
 field and a write per cause change, only to deduplicate a log line). Specs:
 `test_publication_pin_retires_the_stale_hold_without_publishing` and the pin
 and cause cases in `test_coordinator_publication_recovery.py`.
+
+Problem (pin before release): the pin and the release are two writes. A poll
+issued in the same tool batch as the accept (2026-11-17: 8cc1d672, 9b1975d4 and
+0b0efeb3, each polled within 0.4-2.4 s of its review) read the committed pin with
+the receipt the receiver held as awaiting review seconds earlier, settled as
+`held` with `project_publication_authority_missing`, and asked the Coordinator to
+act; the next poll found it delivered. A receiver pass that read the assignment
+before the pin can also rewrite that hold after the release. Decision:
+`delivery_view` reruns the same live fence, ignoring the remembered refusal, for
+a blocked `project_publication_authority_missing` receipt whose assignment read
+holds a pin; a cleared fence projects `pending`, a live refusal (a revocation
+after the accept) stays `blocked`. The fence then forgets the stale refusal, so
+the receiver's next pass delivers even when the release lost the race.
+Alternatives rejected: taking the repository lock in every settlement read (a
+poll would wait behind delivery Git work), and the pin-time comparison above.
+Spec: `test_a_hold_decided_before_the_accept_is_never_reported_as_held_after_it`
+in `test_publication_hold_causes.py`.
 
 Problem (duplicated content): overlapping Worker chains re-carry commits already
 delivered under other SHAs. `git apply --3way` cannot merge a creation patch

@@ -52,6 +52,15 @@ SYNTHETIC_INPUT_MARKERS = (
     '_programSynthetic',
 )
 STEER_BLOCK_PREFIX = 'injection:user-steer:'
+# The first line of every program-written notice a lead receives as input:
+# ``[<kind>: nonhuman notice, not the owner’s words and not authority]``.
+NONHUMAN_NOTICE_MARK = ': nonhuman notice, not the owner\u2019s words and not authority]'
+
+
+def is_nonhuman_notice(text: str) -> bool:
+    """Whether ``text`` opens with a program-written notice header."""
+    first_line = text.lstrip().split('\n', 1)[0]
+    return first_line.startswith('[') and first_line.endswith(NONHUMAN_NOTICE_MARK)
 
 
 def stamp_initiator(message: dict[str, Any], initiator: str) -> dict[str, Any]:
@@ -106,6 +115,17 @@ def resolve_turn_initiator(turn: Mapping[str, Any] | None) -> str:
     if not isinstance(initiator, str) or initiator not in VALID_INITIATORS:
         return INITIATOR_UNKNOWN
     return initiator
+
+
+def is_nonhuman_notice_turn(turn: Mapping[str, Any] | None) -> bool:
+    """Whether a durable input Turn is a nonhuman notice of any kind.
+
+    This is the one parent test of the Global Router's quiet terminal
+    (``[SILENT]``, docs/ROUTER.md): channel events, peer reports, scheduled
+    wakes, timers and every other nonhuman initiator qualify alike; human
+    and unknown initiators never do.
+    """
+    return resolve_turn_initiator(turn) in NON_HUMAN_INITIATORS
 
 
 def is_auto_initiated(message: dict[str, Any]) -> bool:

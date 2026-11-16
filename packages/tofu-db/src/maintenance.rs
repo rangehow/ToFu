@@ -210,6 +210,17 @@ pub struct MaintenanceMetrics {
     pub search_retry_deferrals: u64,
     pub search_maximum_failure_backoff_milliseconds: u64,
     pub search_page_budget_exhaustions: u64,
+    /// History the search index retired (`TurnSearchProjection::retire_history_slice`)
+    /// and the segments it retained after its latest slice.
+    pub search_retired_history_segments: u64,
+    pub search_retained_history_segments: u32,
+    pub search_history_retirement_failures: u64,
+    /// The longest single hold of the index mutex any retirement slice took.
+    pub search_history_retirement_max_hold_us: u64,
+    /// Search items retracted because their source changed or vanished, and
+    /// the logical (owner-budget) bytes of the projection rows they held.
+    pub search_retracted_items: u64,
+    pub search_retracted_logical_bytes: u64,
     pub tool_result_artifacts_pruned: u64,
     pub tool_result_prune_backlog_rounds: u64,
     pub attempt_events_pruned: u64,
@@ -1029,6 +1040,12 @@ fn run_worker(
                                 metrics.search_page_budget_exhaustions = metrics
                                     .search_page_budget_exhaustions
                                     .saturating_add(search.page_budget_exhaustions);
+                                metrics.search_retracted_items = metrics
+                                    .search_retracted_items
+                                    .saturating_add(search.retracted_items);
+                                metrics.search_retracted_logical_bytes = metrics
+                                    .search_retracted_logical_bytes
+                                    .saturating_add(search.retracted_logical_bytes);
                             },
                             Backoff::Keep,
                         )
@@ -1057,6 +1074,9 @@ fn run_worker(
                     }
                 }
             }
+        }
+        if let Some(search_projection) = search_projection {
+            retire_search_history(shared, search_projection);
         }
         if shared
             .state
@@ -1496,8 +1516,57 @@ fn run_round(
                 Ok(false) => RoundOutcome::NoWork,
                 // Abandoned before any CONTROL write: nothing landed and the
                 // authority stays usable, so a later round adopts again.
-                Err(error) if crate::engine::abandoned_uncovered(&error) => RoundOutcome::Conflict,
+                Err(error) if crate::wal::abandoned_uncovered(&error) => RoundOutcome::Conflict,
                 Err(error) => RoundOutcome::Terminal(error),
+            }
+        }
+    }
+}
+
+/// Retires every retirable history slice of the search index, one slice per
+/// pair of short holds, until none is left or the worker stops. The index is
+/// derived data, so the retained bound is the source's own
+/// (`history_retained_segments`); a failure is logged and retried next round.
+fn retire_search_history(
+    shared: &Shared,
+    search_projection: &Arc<Mutex<crate::turn_search_projection::TurnSearchProjection>>,
+) {
+    loop {
+        if shared.stop.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
+        match crate::turn_search_projection::TurnSearchProjection::retire_history_slice(
+            search_projection,
+            shared.config.history_retained_segments,
+        ) {
+            Ok(Some(retired)) => update_metrics(
+                shared,
+                |metrics| {
+                    metrics.search_retired_history_segments = metrics
+                        .search_retired_history_segments
+                        .saturating_add(u64::from(retired.metrics.retired_segments));
+                    metrics.search_retained_history_segments = retired.metrics.retained_segments;
+                    metrics.search_history_retirement_max_hold_us = metrics
+                        .search_history_retirement_max_hold_us
+                        .max(u64::try_from(retired.longest_hold.as_micros()).unwrap_or(u64::MAX));
+                },
+                Backoff::Keep,
+            ),
+            Ok(None) => return,
+            Err(error) => {
+                crate::engine_log::warn(
+                    "search_history",
+                    &format!("history retirement failed; the next round retries: kind={:?} error={error}", error.kind()),
+                );
+                update_metrics(
+                    shared,
+                    |metrics| {
+                        metrics.search_history_retirement_failures =
+                            metrics.search_history_retirement_failures.saturating_add(1);
+                    },
+                    Backoff::Keep,
+                );
+                return;
             }
         }
     }
@@ -1556,6 +1625,7 @@ fn record_terminal_round(shared: &Shared, error: io::Error) {
 fn round_engine_error(error: io::Error) -> RoundOutcome {
     if error.kind() == io::ErrorKind::WouldBlock
         || crate::engine::is_rotation_backpressure(&error)
+        || crate::wal::abandoned_uncovered(&error)
         || (crate::vfs::is_storage_full(&error) && !crate::engine::requires_reopen(&error))
     {
         RoundOutcome::Conflict
@@ -1829,7 +1899,7 @@ mod tests {
         let generation = database.engine_mut_for_test().state().generation;
         let database = Arc::new(Mutex::new(database));
         let outcome = {
-            let _expired = crate::engine::ExpiredPackAdoptionCovers::on_this_thread();
+            let _expired = crate::wal::ExpiredPublicationCovers::on_this_thread();
             run_round(&database, MaintenanceScope::new(7, 11).unwrap(), 64, false)
         };
         match &outcome {
@@ -1867,6 +1937,66 @@ mod tests {
                 .payload_segment_count(),
             1
         );
+    }
+
+    /// History slices wait on the same WAL cover as pack adoption, before any
+    /// CONTROL write. A slice abandoned at a cover that missed the barrier
+    /// deadline published nothing, so the round defers and a later round
+    /// retires; a terminal round would stop the worker and recycle the daemon.
+    #[test]
+    fn a_round_whose_history_slice_misses_the_barrier_deadline_defers_and_retires_later() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        for index in 0..4_u16 {
+            let mut transaction = database.begin(7, 11).unwrap();
+            database
+                .entity_put(&mut transaction, key(index), vec![index as u8; 64])
+                .unwrap();
+            database.commit(transaction).unwrap();
+            database.checkpoint_for_test().unwrap();
+        }
+        assert_eq!(database.history_segment_count_for_test(), 4);
+        let barrier = crate::wal::WalBarrierShared::buffered_for_test(4 * 1024 * 1024);
+        database.attach_wal_barrier(&barrier).unwrap();
+        let vfs = database.wal_vfs().unwrap();
+        let mut transaction = database.begin(7, 11).unwrap();
+        database
+            .entity_put(&mut transaction, key(9), vec![9; 64])
+            .unwrap();
+        database.commit(transaction).unwrap();
+        // Written, so a Normal-tier command was acknowledged; its sync stalls.
+        barrier.write_for_test(vfs.as_ref()).unwrap();
+        let generation = database.engine_mut_for_test().state().generation;
+        let database = Arc::new(Mutex::new(database));
+        let outcome = {
+            let _expired = crate::wal::ExpiredPublicationCovers::on_this_thread();
+            run_round(&database, MaintenanceScope::new(7, 11).unwrap(), 1, false)
+        };
+        match &outcome {
+            RoundOutcome::Conflict => {}
+            RoundOutcome::Terminal(error) => {
+                panic!("a history slice abandoned before publication ended the worker: {error}")
+            }
+            _ => panic!("the round must defer its abandoned history slice"),
+        }
+        {
+            let mut guard = database.lock().unwrap();
+            assert_eq!(guard.history_segment_count_for_test(), 4);
+            let engine = guard.engine_mut_for_test();
+            engine.require_usable_authority().unwrap();
+            assert_eq!(
+                engine.state().generation,
+                generation,
+                "nothing was published"
+            );
+        }
+        // Once the sync completes, a later round retires history.
+        barrier.sync_for_test(vfs.as_ref()).unwrap();
+        assert!(matches!(
+            run_round(&database, MaintenanceScope::new(7, 11).unwrap(), 1, false),
+            RoundOutcome::HistoryCompacted { .. }
+        ));
+        assert!(database.lock().unwrap().history_segment_count_for_test() < 4);
     }
 
     /// Publishes a one-segment catalog in `database`, lets a whole-store pass
@@ -2174,6 +2304,7 @@ mod tests {
 
     fn authority_with_expired_attempt_events(
         event_count: usize,
+        publish_conversation_sync: bool,
     ) -> (tempfile::TempDir, Arc<Mutex<AuthorityDatabase>>) {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
@@ -2207,6 +2338,10 @@ mod tests {
         )
         .unwrap();
         for index in 0..event_count {
+            if index > 0 && index % 200 == 0 {
+                database.commit(seed).unwrap();
+                seed = database.begin_with_identity_claim_scopes(7, 11).unwrap();
+            }
             crate::turn::append_attempt_event(
                 &database,
                 &mut seed,
@@ -2218,7 +2353,7 @@ mod tests {
                     event_type: "text-delta",
                     payload: serde_json::Value::String(format!("chunk-{index}")),
                     occurred_at_ms: old_ms,
-                    publish_conversation_sync: false,
+                    publish_conversation_sync,
                 },
             )
             .unwrap();
@@ -2229,7 +2364,7 @@ mod tests {
 
     #[test]
     fn scheduler_prunes_expired_attempt_events_on_idle_rounds() {
-        let (_directory, database) = authority_with_expired_attempt_events(3);
+        let (_directory, database) = authority_with_expired_attempt_events(3, false);
         let scheduler = MaintenanceScheduler::start(
             Arc::clone(&database),
             vec![MaintenanceScope::new(7, 11).unwrap()],
@@ -2245,7 +2380,7 @@ mod tests {
 
     #[test]
     fn idle_round_commits_event_retirement_without_payload_rows() {
-        let (directory, database) = authority_with_expired_attempt_events(0);
+        let (directory, database) = authority_with_expired_attempt_events(0, false);
         let namespace = crate::generated_tofudb_ir::CONVERSATION_EVENT_RETIREMENT_NAMESPACE;
         let (first, end) = EntityKey::prefix_range(7, 11, namespace, b"j").unwrap();
         {
@@ -2279,6 +2414,52 @@ mod tests {
             db.entity_scan(&mut tx, &first, &end, 1).unwrap().is_empty(),
             "maintenance discarded metadata-only retirement progress"
         );
+    }
+
+    #[test]
+    fn idle_rounds_commit_sync_marker_release_after_conversation_delete() {
+        // Deleting a conversation retires its replay range, while each expired
+        // entry's age marker and Attempt reference remain until retention
+        // releases them. Such a batch deletes no replay row, yet it must commit,
+        // or every later round rescans and discards the same page. More markers
+        // than one prune page also take more than one round.
+        let (directory, database) = authority_with_expired_attempt_events(1_200, true);
+        let present = |db: &AuthorityDatabase, namespace: &str| {
+            let mut tx = db.begin(7, 11).unwrap();
+            let (start, end) = EntityKey::prefix_range(7, 11, namespace, &[]).unwrap();
+            !db.entity_scan(&mut tx, &start, &end, 1).unwrap().is_empty()
+        };
+        let markers = crate::generated_tofudb_ir::CONVERSATION_SYNC_AGE_INDEX_NAMESPACE;
+        let references = crate::generated_tofudb_ir::ATTEMPT_EVENT_SYNC_REFERENCE_NAMESPACE;
+        {
+            let mut db = database.lock().unwrap();
+            assert!(present(&db, markers) && present(&db, references));
+            let mut tx = db.begin_with_identity_claim_scopes(7, 11).unwrap();
+            crate::conversation_header::delete(
+                &mut db,
+                &mut tx,
+                &crate::conversation_header::DeleteRequest {
+                    conversation_id: "maintenance-conversation".into(),
+                    deleted_at_ms: 2_000_000_000_000,
+                },
+            )
+            .unwrap();
+            db.commit(tx).unwrap();
+        }
+        for round in 0.. {
+            match run_round(&database, MaintenanceScope::new(7, 11).unwrap(), 64, false) {
+                RoundOutcome::NoWork => break,
+                RoundOutcome::Terminal(error) => panic!("round {round} failed: {error}"),
+                _ => assert!(round < 200, "maintenance never settled"),
+            }
+        }
+        drop(database);
+        let db = AuthorityDatabase::open(directory.path()).unwrap();
+        assert!(
+            !present(&db, markers),
+            "maintenance discarded the release of a deleted conversation's sync markers"
+        );
+        assert!(!present(&db, references));
     }
 
     fn authority_with_mount() -> (tempfile::TempDir, Arc<Mutex<AuthorityDatabase>>) {
@@ -2371,6 +2552,49 @@ mod tests {
             .is_empty());
     }
 
+    /// docs/STORAGE_OPERATIONS.md, "Search projection history retirement":
+    /// the worker that indexes also retires the index's history down to the
+    /// source's retained bound, so superseded index pages become collectable.
+    #[test]
+    fn scheduler_retires_search_index_history_to_the_retained_bound() {
+        let authority_directory = tempfile::tempdir().unwrap();
+        let projection_directory = tempfile::tempdir().unwrap();
+        let database = Arc::new(Mutex::new(
+            AuthorityDatabase::initialize(authority_directory.path()).unwrap(),
+        ));
+        let mut index =
+            TurnSearchProjection::initialize(projection_directory.path(), 1 << 24).unwrap();
+        for generation in 1..=6 {
+            index
+                .publish_scope(7, 11, "conversation", generation, "")
+                .unwrap();
+            index.checkpoint_wal_window_for_shutdown().unwrap();
+        }
+        let history = |index: &mut TurnSearchProjection| {
+            index
+                .database_mut_for_test()
+                .engine_mut_for_test()
+                .history_segment_count()
+        };
+        assert!(history(&mut index) >= 6);
+        let projection = Arc::new(Mutex::new(index));
+        let scheduler = MaintenanceScheduler::start_with_search(
+            Arc::clone(&database),
+            Some(Arc::clone(&projection)),
+            vec![MaintenanceScope::new(7, 11).unwrap()],
+            MaintenanceSchedulerConfig::for_history_test(Duration::from_millis(10), 1, 2),
+        )
+        .unwrap();
+        let metrics = wait_for(&scheduler.observer(), |metrics| {
+            metrics.search_retained_history_segments == 2
+        });
+        assert!(metrics.search_retired_history_segments >= 4);
+        assert_eq!(metrics.search_history_retirement_failures, 0);
+        assert!(metrics.search_history_retirement_max_hold_us > 0);
+        scheduler.stop_and_join().unwrap();
+        assert_eq!(history(&mut projection.lock().unwrap()), 2);
+    }
+
     /// Search is admitted on an empty owner and the worker is idle behind the
     /// 60 s backoff ceiling: inside the 20 s wait bound, only a commit-side
     /// wake can start another round.
@@ -2385,10 +2609,20 @@ mod tests {
             MaintenanceSchedulerConfig::for_test(Duration::from_millis(10), 1),
         )
         .unwrap();
+        // Admission ends in a round of its own; a no-work round can precede
+        // it, so the idle round must follow the end of admission.
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while projection.lock().unwrap().owner_indexing(7, 11).unwrap() {
+            assert!(Instant::now() < deadline, "search admission never finished");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let admitted_no_work_rounds = scheduler.observer().metrics().unwrap().no_work_rounds;
         let idle = {
             // The state lock excludes every scheduling decision, so a re-arm
             // still in flight also selects the ceiling.
-            let mut state = wait_for_round(&scheduler, |metrics| metrics.no_work_rounds >= 1);
+            let mut state = wait_for_round(&scheduler, |metrics| {
+                metrics.no_work_rounds > admitted_no_work_rounds
+            });
             let ceiling = Duration::from_millis(MAX_MAINTENANCE_IDLE_INTERVAL_MILLISECONDS);
             state.next_idle_interval = ceiling;
             state.round_deadline = Instant::now() + ceiling;

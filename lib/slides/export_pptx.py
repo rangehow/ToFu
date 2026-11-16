@@ -955,6 +955,11 @@ def _add_chart(slide, el: dict, deck: Deck) -> None:
             ser.format.line.color.rgb = rgb
         except Exception as e:
             logger.debug('[Slides→PPTX] series %d color: %s', i, e)
+        if hasattr(ser, 'invert_if_negative'):
+            # Without an explicit c:invertIfNegative LibreOffice (and the
+            # Office viewers built on it) draws a negative bar as its
+            # absolute value, so a -0.05 result renders as +0.05.
+            ser.invert_if_negative = False
     show_legend = bool(opts.get('legend', len(series) > 1))
     chart.has_legend = show_legend
     if show_legend:
@@ -973,6 +978,12 @@ def _add_chart(slide, el: dict, deck: Deck) -> None:
                 _resolve('$hairline', deck.theme))[0]
             for axis in (value_axis, cat_axis):
                 axis.tick_labels.font.size = Pt(max(9.0, h * 0.04))
+            if any(float(v) < 0 for s in series
+                   for v in (s.get('values') or [])):
+                from pptx.enum.chart import XL_TICK_LABEL_POSITION
+                # Category labels at the plot edge, not on the zero line
+                # that negative bars cross.
+                cat_axis.tick_label_position = XL_TICK_LABEL_POSITION.LOW
     except Exception as e:
         logger.debug('[Slides→PPTX] axis styling: %s', e)
     if opts.get('dataLabels'):

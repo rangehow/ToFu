@@ -14,7 +14,7 @@ from lib.log import get_logger
 from lib.memory.contracts import (
     MEMORY_SEARCH_BODY_MAX_CHARS,
     MEMORY_SEARCH_TOP_K_DEFAULT,
-    memory_trust_class,
+    lesson_trust_class,
     normalize_memory_search,
 )
 from lib.memory.relevance._score import _score_token_documents
@@ -200,22 +200,24 @@ def search_memories(
     if not relevant:
         return f'No memories matched query "{query}".'
 
-    results = relevant[:top_k]
     logger.info('[MemorySearch] query="%.80s" → %d/%d matches (showing top %d)',
-                query, len(relevant), n, len(results))
+                query, len(relevant), n, min(top_k, len(relevant)))
+    return format_memory_matches(relevant, top_k)
 
-    # Format results — compact index with file paths
+
+def format_memory_matches(relevant: list[tuple[float, dict[str, Any]]], top_k: int) -> str:
+    """The model-facing index of ranked active lessons (score > 0, best first)."""
+    results = relevant[:top_k]
     parts = [f'Found {len(relevant)} matching memories (showing top {len(results)}):']
     parts.append('')
     for rank, (sc, mem) in enumerate(results, 1):
         tags = mem.get('tags', [])
         tag_str = f'  tags: {", ".join(tags)}' if tags else ''
-        provenance = mem.get('provenance') or {}
-        trust = memory_trust_class(mem.get('status'), provenance.get('source_class'),
-                                   provenance.get('edited_source_class'))
+        repeats = len(mem.get('recurrences') or {})
         parts.append(
             f'{rank}. **{mem["name"]}** (id: {mem.get("id", "")}; scope: {mem["scope"]}; '
-            f'trust: {trust})\n'
+            f'trust: {lesson_trust_class(mem)}'
+            + (f'; repeated {repeats}x' if repeats else '') + ')\n'
             f'   {mem.get("description", "")}\n'
             f'   path: {mem.get("filepath", "")}'
             f'{tag_str}'

@@ -288,10 +288,6 @@
 .coordinator-progress-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-2); cursor: pointer; list-style: none; min-width: 0; }
 .coordinator-progress-head::-webkit-details-marker { display: none; }
 .coordinator-progress-title { font-weight: var(--weight-semibold); white-space: nowrap; }
-/* The flex head drops the native marker; this triangle matches the finished-task fold's. */
-.coordinator-progress-title::before { content: '\25B8'; content: '\25B8' / ''; display: inline-block; margin-inline-end: var(--space-1); color: var(--text-tertiary); font-size: var(--font-size-xs); font-weight: var(--weight-regular); }
-.coordinator-progress[open] .coordinator-progress-title::before { content: '\25BE'; content: '\25BE' / ''; }
-.coordinator-progress-head:hover .coordinator-progress-title::before { color: var(--text-primary); }
 .coordinator-progress-tally { color: var(--accent); font-size: var(--font-size-xs); font-weight: var(--weight-semibold); white-space: nowrap; }
 .coordinator-progress-updated { margin-inline-start: auto; color: var(--text-tertiary); font-size: var(--font-size-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .coordinator-progress-summary { flex: 1 1 8rem; min-width: 0; color: var(--text-secondary); font-size: var(--font-size-sm); line-height: var(--leading-title); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

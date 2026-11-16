@@ -110,6 +110,8 @@ from ._crud import (
     create_memory,
     clear_memories,
     update_memory,
+    supersede_memory,
+    verify_memory,
     delete_memory,
     merge_memories,
     toggle_memory,
@@ -126,7 +128,7 @@ __all__ = [
     'iter_eligible_memories', 'iter_lesson_records', 'load_eligible_memories',
     'resident_eligible_memories',
     'is_active_lesson', 'MemoryRevisionConflict',
-    'create_memory', 'update_memory', 'delete_memory', 'clear_memories', 'merge_memories',
-    'toggle_memory',
+    'create_memory', 'update_memory', 'supersede_memory', 'verify_memory', 'delete_memory',
+    'clear_memories', 'merge_memories', 'toggle_memory',
     'resolve_target_dir', 'resolve_skills_dir', 'run_storage_migrations',
 ]

@@ -128,9 +128,7 @@ mod tests {
             io::ErrorKind::InvalidData
         );
         let mut rebuilt = TurnSearchProjection::open(&projection, 1 << 20).unwrap();
-        rebuilt
-            .begin_conversation_rebuild(7, 11, "conversation", "generation", 1)
-            .unwrap();
+        rebuilt.publish_scope(7, 11, "conversation", 1, "").unwrap();
         assert_eq!(
             crate::authority_gc_online::OnlineGcDatabase::gc_database(&rebuilt)
                 .unwrap()
@@ -167,7 +165,7 @@ mod tests {
             uuid
         );
         reopened
-            .begin_conversation_rebuild(7, 11, "conversation", "generation", 1)
+            .publish_scope(7, 11, "conversation", 1, "")
             .unwrap();
         assert_eq!(
             crate::authority_gc_online::OnlineGcDatabase::gc_database(&reopened)

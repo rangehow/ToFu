@@ -5,12 +5,19 @@ use crate::authority::AuthorityDatabase;
 use crate::authority_gc_online::{OnlineGarbageCollectionHandle, OnlineGcDatabase};
 use crate::turn_search_projection::{
     ConversationSearchHit, ConversationSearchPage, ConversationSearchRequest,
-    OpenTurnSearchProjection, TurnSearchDocument,
+    OpenTurnSearchProjection, ScopeDiff, ScopeItem, ScopeItemKey,
 };
 use crate::vfs::{RealVfs, Vfs};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+/// One history retirement slice of the search index and the longer of its
+/// two holds of the index mutex.
+pub(crate) struct RetiredHistorySlice {
+    pub(crate) metrics: crate::engine::HistoryCompactionMetrics,
+    pub(crate) longest_hold: std::time::Duration,
+}
 
 pub struct TurnSearchProjection {
     opened: Option<OpenTurnSearchProjection>,
@@ -287,6 +294,58 @@ impl TurnSearchProjection {
         index.opened = candidate.opened.take();
         Ok(())
     }
+    /// One automatic history retirement slice on the opened index, the same
+    /// slice the source authority's maintenance round retires: prepare under a
+    /// short hold, encode off the mutex, install under a second short hold.
+    /// Retained history keeps every block its transactions wrote reachable,
+    /// so an index whose history is never retired keeps every page version it
+    /// ever wrote (docs/STORAGE_OPERATIONS.md, "Search projection history
+    /// retirement"). `None` when nothing is retirable, the index is still
+    /// opening, or a rotation owns the publication lane.
+    pub(crate) fn retire_history_slice(
+        shared: &Arc<std::sync::Mutex<Self>>,
+        retained_segments: usize,
+    ) -> io::Result<Option<RetiredHistorySlice>> {
+        let prepare_held;
+        let prepared = {
+            let mut index = shared
+                .lock()
+                .map_err(|_| io::Error::other("search index mutex is poisoned"))?;
+            let held = std::time::Instant::now();
+            let Some(opened) = index.opened.as_mut() else {
+                return Ok(None);
+            };
+            let prepared = match opened
+                .database
+                .try_prepare_history_compaction(retained_segments)
+            {
+                Ok(Some(prepared)) => prepared,
+                Ok(None) => return Ok(None),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(None),
+                Err(error) => return Err(error),
+            };
+            prepare_held = held.elapsed();
+            prepared
+        };
+        let outcome = crate::engine::encode_history_compaction(&prepared);
+        let mut index = shared
+            .lock()
+            .map_err(|_| io::Error::other("search index mutex is poisoned"))?;
+        let held = std::time::Instant::now();
+        let opened = index.opened.as_mut().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotConnected,
+                "search index closed during history retirement",
+            )
+        })?;
+        let metrics = opened
+            .database
+            .finish_history_compaction(prepared, outcome)?;
+        Ok(Some(RetiredHistorySlice {
+            metrics,
+            longest_hold: prepare_held.max(held.elapsed()),
+        }))
+    }
     pub(crate) fn install_stop(&mut self, stop: Arc<std::sync::atomic::AtomicBool>) {
         if let Some(opened) = &mut self.opened {
             opened.install_stop(Arc::clone(&stop));
@@ -392,28 +451,17 @@ impl TurnSearchProjection {
     ) -> io::Result<()> {
         self.writable()?.set_owner_indexing(tenant, owner, indexing)
     }
-    pub(crate) fn is_published(
-        &self,
-        tenant: u64,
-        owner: u64,
-        conversation: &str,
-        generation: &str,
-    ) -> io::Result<bool> {
-        self.opened()?
-            .is_published(tenant, owner, conversation, generation)
-    }
     pub(crate) fn source_incomplete(&self, tenant: u64, owner: u64) -> io::Result<bool> {
         self.opened()?.source_incomplete(tenant, owner)
     }
-    pub(crate) fn mark_rebuild_incomplete(
+    pub(crate) fn observe_backfill_generation(
         &mut self,
         tenant: u64,
         owner: u64,
-        conversation: &str,
-        generation: &str,
+        generation: u64,
     ) -> io::Result<()> {
         self.writable()?
-            .mark_rebuild_incomplete(tenant, owner, conversation, generation)
+            .observe_backfill_generation(tenant, owner, generation)
     }
     pub(crate) fn prepare_owner(
         &mut self,
@@ -456,61 +504,79 @@ impl TurnSearchProjection {
         self.writable()?
             .acknowledge_owner_backfill(tenant, owner, source, activation)
     }
-    pub(crate) fn set_conversation_title(
+    pub(crate) fn diff_scope(
+        &self,
+        tenant_id: u64,
+        owner_user_id: u64,
+        conversation_id: &str,
+        turns: &std::collections::BTreeMap<String, u64>,
+        archives: &[String],
+    ) -> io::Result<ScopeDiff> {
+        self.opened()?
+            .diff_scope(tenant_id, owner_user_id, conversation_id, turns, archives)
+    }
+    pub(crate) fn retract_scope_items(
         &mut self,
-        tenant: u64,
-        owner: u64,
-        conversation: &str,
-        generation: &str,
+        tenant_id: u64,
+        owner_user_id: u64,
+        conversation_id: &str,
+        items: &[ScopeItemKey],
         title: &str,
+        rebuild: bool,
+    ) -> io::Result<u64> {
+        self.writable()?.retract_scope_items(
+            tenant_id,
+            owner_user_id,
+            conversation_id,
+            items,
+            title,
+            rebuild,
+        )
+    }
+    pub(crate) fn index_scope_items(
+        &mut self,
+        tenant_id: u64,
+        owner_user_id: u64,
+        conversation_id: &str,
+        title: &str,
+        items: &[ScopeItem<'_>],
     ) -> io::Result<()> {
         self.writable()?
-            .set_conversation_title(tenant, owner, conversation, generation, title)
+            .index_scope_items(tenant_id, owner_user_id, conversation_id, title, items)
     }
-    pub fn begin_conversation_rebuild(
+    pub(crate) fn publish_scope(
         &mut self,
         tenant_id: u64,
         owner_user_id: u64,
         conversation_id: &str,
-        generation: &str,
         updated_at_ms: u64,
-    ) -> io::Result<()> {
-        self.writable()?.begin_conversation_rebuild(
+        title: &str,
+    ) -> io::Result<bool> {
+        self.writable()?.publish_scope(
             tenant_id,
             owner_user_id,
             conversation_id,
-            generation,
             updated_at_ms,
+            title,
         )
     }
-    pub fn append_conversation_page(
+    #[cfg(test)]
+    pub(crate) fn replace_conversation(
         &mut self,
         tenant_id: u64,
         owner_user_id: u64,
         conversation_id: &str,
-        generation: &str,
-        documents: &[TurnSearchDocument],
+        updated_at_ms: u64,
+        title: &str,
+        documents: &[crate::turn_search_projection::TurnSearchDocument],
     ) -> io::Result<()> {
-        self.writable()?.append_conversation_page(
+        self.writable()?.replace_conversation(
             tenant_id,
             owner_user_id,
             conversation_id,
-            generation,
+            updated_at_ms,
+            title,
             documents,
-        )
-    }
-    pub fn finalize_conversation_rebuild(
-        &mut self,
-        tenant_id: u64,
-        owner_user_id: u64,
-        conversation_id: &str,
-        generation: &str,
-    ) -> io::Result<()> {
-        self.writable()?.finalize_conversation_rebuild(
-            tenant_id,
-            owner_user_id,
-            conversation_id,
-            generation,
         )
     }
     pub fn remove_conversation(
@@ -596,6 +662,7 @@ mod tests {
     use crate::authority_gc::AuthorityGarbageCollectionBudget;
     use crate::authority_gc_online::{OnlineGarbageCollectionOutcome, OnlineGarbageCollector};
     use crate::entity::EntityKey;
+    use crate::turn_search_projection::{ScopeItemContent, TurnSearchDocument};
     use crate::vfs::{DeterministicVfs, FilesystemCapacity};
     use std::sync::{atomic::AtomicBool, Mutex};
 
@@ -717,22 +784,36 @@ mod tests {
             snippet_radius: 40,
         }
     }
-    fn publish(index: &mut TurnSearchProjection, generation: &str) {
+    fn index_needle(index: &mut TurnSearchProjection, text: &str) -> io::Result<()> {
+        let turn = ScopeItemKey::turn("turn");
+        let documents = [document(&format!("needle {text}"))];
+        index.index_scope_items(
+            7,
+            11,
+            "conversation",
+            "",
+            &[ScopeItem {
+                key: &turn,
+                revision: 1,
+                content: ScopeItemContent::Documents {
+                    documents: &documents,
+                    last: true,
+                },
+            }],
+        )
+    }
+    /// Replace the conversation's one Turn with `needle <text>` and publish.
+    fn publish(index: &mut TurnSearchProjection, text: &str) {
+        let empty = std::collections::BTreeMap::new();
+        let stale = index
+            .diff_scope(7, 11, "conversation", &empty, &[])
+            .unwrap()
+            .retract;
         index
-            .begin_conversation_rebuild(7, 11, "conversation", generation, 1)
+            .retract_scope_items(7, 11, "conversation", &stale, "", false)
             .unwrap();
-        index
-            .append_conversation_page(
-                7,
-                11,
-                "conversation",
-                generation,
-                &[document(&format!("needle {generation}"))],
-            )
-            .unwrap();
-        index
-            .finalize_conversation_rebuild(7, 11, "conversation", generation)
-            .unwrap();
+        index_needle(index, text).unwrap();
+        index.publish_scope(7, 11, "conversation", 1, "").unwrap();
     }
     fn loose_files(vfs: &dyn Vfs) -> usize {
         vfs.read_directory(Path::new("/index/blocks"))
@@ -754,10 +835,7 @@ mod tests {
         vfs.set_filesystem_capacity(starved()).unwrap();
         let before = vfs.trace().unwrap().len();
         assert_eq!(
-            index
-                .begin_conversation_rebuild(7, 11, "conversation", "new", 2)
-                .unwrap_err()
-                .kind(),
+            index_needle(&mut index, "new").unwrap_err().kind(),
             io::ErrorKind::StorageFull
         );
         assert_eq!(vfs.trace().unwrap().len(), before);
@@ -913,6 +991,288 @@ mod tests {
             TurnSearchProjection::open_with_vfs(Path::new("/index"), vfs, 1 << 26).unwrap();
         assert_eq!(reopened.search(&request()).unwrap().len(), 1);
     }
+    fn store_bytes(vfs: &dyn Vfs) -> u64 {
+        let mut bytes = 0;
+        for directory in [
+            Path::new("/index/blocks"),
+            Path::new("/index/payload-segments"),
+        ] {
+            let Ok(entries) = vfs.read_directory(directory) else {
+                continue;
+            };
+            for entry in entries {
+                let files = match vfs.metadata(&entry) {
+                    Ok(crate::vfs::FileKind::Directory) => vfs.read_directory(&entry).unwrap(),
+                    _ => vec![entry],
+                };
+                for file in files {
+                    bytes += vfs
+                        .open(&file, crate::vfs::OpenRequest::default())
+                        .unwrap()
+                        .len()
+                        .unwrap();
+                }
+            }
+        }
+        bytes
+    }
+
+    /// docs/STORAGE_OPERATIONS.md, "Search projection history retirement":
+    /// live 2026-11-15 the index retained every sealed WAL window as history,
+    /// whose transactions keep every page version they wrote reachable, so
+    /// the collector found 179.28 of 179.30 GB live. Retiring the index's
+    /// history lets the same collector reclaim superseded generations, and
+    /// search answers stay identical, also after a reopen.
+    #[test]
+    fn retired_index_history_lets_the_collector_reclaim_superseded_generations() {
+        let vfs = Arc::new(DeterministicVfs::new(None));
+        vfs.create_dir(Path::new("/index")).unwrap();
+        let mut index =
+            TurnSearchProjection::initialize_with_vfs(Path::new("/index"), vfs.clone(), 1 << 26)
+                .unwrap();
+        for generation in 0..24 {
+            publish(&mut index, &format!("generation-{generation}"));
+            index.checkpoint_wal_window_for_shutdown().unwrap();
+        }
+        let history = |index: &mut TurnSearchProjection| {
+            index
+                .database_mut_for_test()
+                .engine_mut_for_test()
+                .history_segment_count()
+        };
+        assert!(history(&mut index) >= 24, "each sealed window is history");
+        let expected = index.search(&request()).unwrap();
+        assert_eq!(expected.len(), 1);
+        let index = Arc::new(Mutex::new(index));
+        let mut collector =
+            OnlineGarbageCollector::new(AuthorityGarbageCollectionBudget::conservative());
+        let stop = AtomicBool::new(false);
+        let collect = |collector: &mut OnlineGarbageCollector| {
+            for _ in 0..3 {
+                assert_eq!(
+                    collector.run_epoch(&index, &stop).unwrap(),
+                    OnlineGarbageCollectionOutcome::EpochComplete
+                );
+            }
+        };
+        collect(&mut collector);
+        let retained_history_bytes = store_bytes(vfs.as_ref());
+        let mut retired = 0;
+        while let Some(slice) = TurnSearchProjection::retire_history_slice(&index, 1).unwrap() {
+            retired += slice.metrics.retired_segments;
+        }
+        assert!(retired >= 23);
+        assert!(history(&mut index.lock().unwrap()) <= 1);
+        collect(&mut collector);
+        let retired_history_bytes = store_bytes(vfs.as_ref());
+        eprintln!(
+            "search_history_retirement generations=24 retired_segments={retired} \
+             store_bytes_before={retained_history_bytes} store_bytes_after={retired_history_bytes}"
+        );
+        assert!(
+            retired_history_bytes * 3 < retained_history_bytes * 2,
+            "superseded generations are reclaimed once no history pins them"
+        );
+        assert_eq!(index.lock().unwrap().search(&request()).unwrap(), expected);
+        drop(index);
+        let reopened =
+            TurnSearchProjection::open_with_vfs(Path::new("/index"), vfs, 1 << 26).unwrap();
+        assert_eq!(reopened.search(&request()).unwrap(), expected);
+    }
+
+    fn generations_with_history(vfs: &Arc<DeterministicVfs>) -> TurnSearchProjection {
+        vfs.create_dir(Path::new("/index")).unwrap();
+        vfs.sync_directory(Path::new("/")).unwrap();
+        let mut index =
+            TurnSearchProjection::initialize_with_vfs(Path::new("/index"), vfs.clone(), 1 << 26)
+                .unwrap();
+        for generation in 0..6 {
+            publish(&mut index, &format!("generation-{generation}"));
+            index.checkpoint_wal_window_for_shutdown().unwrap();
+        }
+        index
+    }
+
+    /// Every I/O fault of a search history retirement leaves an index that
+    /// reopens with the same answers, and a later collector epoch reclaims
+    /// nothing those answers need.
+    #[test]
+    fn every_search_history_retirement_fault_reopens_with_identical_answers() {
+        use crate::vfs::{FaultAction, FaultRule, Operation};
+        let retire_all = |index: &Arc<Mutex<TurnSearchProjection>>| -> io::Result<()> {
+            while TurnSearchProjection::retire_history_slice(index, 1)?.is_some() {}
+            Ok(())
+        };
+        let baseline_vfs = Arc::new(DeterministicVfs::new(None));
+        let baseline = generations_with_history(&baseline_vfs);
+        let expected = baseline.search(&request()).unwrap();
+        assert_eq!(expected.len(), 1);
+        let baseline = Arc::new(Mutex::new(baseline));
+        baseline_vfs.arm_fault(None).unwrap();
+        retire_all(&baseline).unwrap();
+        let trace = baseline_vfs.trace().unwrap();
+        assert!(trace.contains(&Operation::Write));
+        let mut cases = Vec::new();
+        for (index, operation) in trace.iter().enumerate() {
+            let number = index as u64 + 1;
+            cases.push((number, FaultAction::ErrorBefore(io::ErrorKind::Interrupted)));
+            if operation == &Operation::Write {
+                cases.push((number, FaultAction::ShortWrite(7)));
+            }
+            if matches!(
+                operation,
+                Operation::SyncData | Operation::SyncAll | Operation::SyncDirectory
+            ) {
+                cases.push((number, FaultAction::DropSync));
+            }
+        }
+        for (operation_number, action) in cases {
+            let vfs = Arc::new(DeterministicVfs::new(None));
+            let index = Arc::new(Mutex::new(generations_with_history(&vfs)));
+            vfs.arm_fault(Some(FaultRule {
+                operation_number,
+                action,
+            }))
+            .unwrap();
+            let _ = retire_all(&index);
+            drop(index);
+            vfs.crash().unwrap();
+            vfs.arm_fault(None).unwrap();
+            let reopened =
+                TurnSearchProjection::open_with_vfs(Path::new("/index"), vfs.clone(), 1 << 26)
+                    .unwrap();
+            assert_eq!(
+                reopened.search(&request()).unwrap(),
+                expected,
+                "fault {operation_number} {action:?}"
+            );
+            let reopened = Arc::new(Mutex::new(reopened));
+            retire_all(&reopened).unwrap();
+            let mut collector =
+                OnlineGarbageCollector::new(AuthorityGarbageCollectionBudget::conservative());
+            let stop = AtomicBool::new(false);
+            for _ in 0..2 {
+                assert_eq!(
+                    collector.run_epoch(&reopened, &stop).unwrap(),
+                    OnlineGarbageCollectionOutcome::EpochComplete
+                );
+            }
+            assert_eq!(
+                reopened.lock().unwrap().search(&request()).unwrap(),
+                expected
+            );
+        }
+    }
+
+    /// Opt-in measurement on a COPY of a real search index
+    /// (docs/STORAGE_OPERATIONS.md, "Search queries while the index is
+    /// reclaimed"): search latency idle, then while history retirement and
+    /// collector epochs run, and the index-mutex time each of those holds.
+    /// `TOFU_DB_SEARCH_LOCK_BENCH_DIR=<copy> cargo test --release --lib
+    /// search_latency_while_the_index_is_reclaimed -- --ignored --nocapture`
+    #[test]
+    #[ignore = "opt-in measurement on a copy of a real search index"]
+    fn search_latency_while_the_index_is_reclaimed() {
+        use std::time::{Duration, Instant};
+        let Some(directory) = std::env::var_os("TOFU_DB_SEARCH_LOCK_BENCH_DIR") else {
+            return;
+        };
+        let percentile = |samples: &mut Vec<Duration>, p: f64| -> f64 {
+            samples.sort_unstable();
+            let index = ((samples.len() as f64 - 1.0) * p).round() as usize;
+            samples[index].as_secs_f64() * 1000.0
+        };
+        let opened = Instant::now();
+        let index = Arc::new(Mutex::new(
+            TurnSearchProjection::open(Path::new(&directory), u64::MAX / 4).unwrap(),
+        ));
+        eprintln!("open_ms={}", opened.elapsed().as_millis());
+        let queries = ["storage", "error", "test", "model", "search", "commit"];
+        let query = |round: usize| -> (Duration, usize) {
+            let request = ConversationSearchRequest {
+                tenant_id: 1,
+                owner_user_id: 1,
+                query: queries[round % queries.len()].into(),
+                limit: 20,
+                snippet_radius: 40,
+            };
+            let started = Instant::now();
+            let hits = index.lock().unwrap().search(&request).unwrap().len();
+            (started.elapsed(), hits)
+        };
+        for round in 0..queries.len() {
+            query(round);
+        }
+        let mut idle = Vec::new();
+        let mut hits = 0;
+        for round in 0..300 {
+            let (elapsed, found) = query(round);
+            idle.push(elapsed);
+            hits += found;
+        }
+        eprintln!(
+            "idle queries=300 hits={hits} p50_ms={:.2} p99_ms={:.2} max_ms={:.2}",
+            percentile(&mut idle, 0.5),
+            percentile(&mut idle, 0.99),
+            percentile(&mut idle, 1.0)
+        );
+        let done = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
+        let background = {
+            let index = Arc::clone(&index);
+            let done = Arc::clone(&done);
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                let started = Instant::now();
+                let mut slices = 0_u32;
+                let mut longest = Duration::ZERO;
+                while let Some(slice) =
+                    TurnSearchProjection::retire_history_slice(&index, 64).unwrap()
+                {
+                    slices += 1;
+                    longest = longest.max(slice.longest_hold);
+                }
+                eprintln!(
+                    "retirement slices={slices} elapsed_ms={} longest_hold_ms={:.2}",
+                    started.elapsed().as_millis(),
+                    longest.as_secs_f64() * 1000.0
+                );
+                let mut collector = OnlineGarbageCollector::with_min_epoch_interval(
+                    AuthorityGarbageCollectionBudget::conservative(),
+                    Duration::ZERO,
+                );
+                for epoch in 0..2 {
+                    let started = Instant::now();
+                    let outcome = collector.run_epoch(&index, &stop).unwrap();
+                    let metrics = collector.handle().metrics();
+                    eprintln!(
+                        "epoch={epoch} outcome={outcome:?} elapsed_ms={} capture_wait_us={} capture_hold_us={} reclaimed_bytes={}",
+                        started.elapsed().as_millis(),
+                        metrics.last_capture_wait_us,
+                        metrics.last_capture_hold_us,
+                        metrics.total_reclaimed_bytes
+                    );
+                }
+                done.store(true, std::sync::atomic::Ordering::Release);
+            })
+        };
+        let mut busy = Vec::new();
+        let mut round = 0;
+        while !done.load(std::sync::atomic::Ordering::Acquire) {
+            busy.push(query(round).0);
+            round += 1;
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        background.join().unwrap();
+        eprintln!(
+            "while_reclaiming queries={} p50_ms={:.2} p99_ms={:.2} max_ms={:.2}",
+            busy.len(),
+            percentile(&mut busy, 0.5),
+            percentile(&mut busy, 0.99),
+            percentile(&mut busy, 1.0)
+        );
+    }
+
     #[test]
     fn mounted_projection_collector_reclaims_and_joins_without_an_operator() {
         let vfs = Arc::new(DeterministicVfs::new(None));

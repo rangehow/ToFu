@@ -1067,6 +1067,9 @@ The separate `/api/client-error` beacon sends only its declared `message`,
 `url`, `conversationCount`, and optional `extra` fields. Its producer omits
 browser-only timestamp and user-agent fields: the request boundary rejects
 unknown fields, and a rejected beacon loses the original error evidence.
+This beacon and `/api/{v1,v4}/logs/client` write only log files, so the storage
+write fence (`lib/http_transport/request_lifecycle.py`) exempts them: browser
+evidence keeps arriving during a storage outage.
 
 ```text
 producer
@@ -1163,9 +1166,11 @@ Storage supervision emits its full lifecycle through
 backend), ready handshake, liveness probe failures (count/threshold),
 termination escalation steps (owner-channel EOF, SIGTERM, SIGKILL), child
 exit (code, decoded signal, uptime), restart scheduling and per-attempt
-outcomes with the applied backoff, and the restart circuit breaker's
-CRITICAL trip plus heartbeat reminders while the runtime stays in its
-terminal `degraded` state. These logger names sit inside the `tofu.`
+outcomes with the applied backoff, the restart circuit breaker's
+CRITICAL trip plus heartbeat reminders while the runtime stays `degraded`,
+and one WARNING per stop or breaker episode when it first fails a call
+waiting out a transient failure (`calls mid-retry`), naming the state:
+`stopping`, or `degraded` with the breaker's reason. These logger names sit inside the `tofu.`
 business prefix admitted by `lib/server_logging._BIZ_PREFIXES`, so every
 transition lands in app.log (INFO+) and error.log/incident.jsonl (WARNING+);
 a storage authority outage must never be invisible in the standard

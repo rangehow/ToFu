@@ -209,6 +209,158 @@ one page, including restoration and sync staging. This is work-count evidence, n
 restart-time or filesystem durability guarantee; the packed-catalog scan and
 actual payload validation remain separate costs.
 
+## Reopen time against WAL size
+
+**Problem:** after a graceful stop the R3 engine reopens in about 0.4 s (no
+replay), but a crashed or latched authority took 625 s (2026-11-13 02:07,
+`engine_open` 625,139 ms) and a killed-stop probe 690 s. Without a phase split
+it was unknown whether that cost follows the active WAL's bytes, the premise of
+keeping the WAL small, or something else.
+
+**Decision:** `packages/tofu-db/src/engine_restart_open_tests.rs` measures it with
+three ignored tests, each run in its own process on a disposable authority:
+
+- `dirty_open_build_base` writes indexed history (16 M locations) and a payload
+  catalog at production scale (4,092 segments of 57,000 blocks).
+- `dirty_open_build_window` commits an unretired window to a requested active
+  WAL size, optionally behind a CONTROL-owned sealed predecessor, and ends without
+  engine teardown. That leaves what a SIGKILL leaves.
+- `dirty_open_phase_measurement` drops the page cache and times `Engine::open` in
+  a `recovery-profile` build. It checks the acknowledged durable sequence and reads
+  back every carried window block and a sample of catalog and history references,
+  byte for byte.
+
+The window follows production's WAL composition: about 360 distinct references
+per MiB and a 27% inline share. Runs go on isolated VMs, one per WAL size,
+launched together; never on the production host.
+
+Result on R3 engine source (`f3102951`), VM local disk, cold cache, 3 runs per
+point (median seconds):
+
+| active WAL (selected IDs) | `engine_open` | packed lookup | payload replay | WAL scan + ID decode |
+|---|---|---|---|---|
+| 68 MB (23,809) | 105.3 | 92.8 | 11.0 | 0.10 |
+| 269 MB (94,465) | 128.1 | 86.5 | 40.4 | 0.33 |
+| 714 MB (250,369) | 223.9 | 110.3 | 111.1 | 0.97 |
+| 1,075 MB (376,833) | 286.8 | 118.9 | 164.8 | 1.49 |
+| 561 MB sealed + 655 MB active (426,753) | 294.4 | 104.9 | 184.0 | 1.48 (+3.0 sealed completion) |
+
+The open is CPU-bound on one thread (97-98%). Its cost follows the catalog and
+the number of distinct references, not WAL bytes:
+
+- The packed lookup reads every catalogued index (11 GB) and builds the union
+  filter, routes and membership witnesses over every catalogued ID. It costs the
+  same for any crashed open whose WAL names a payload.
+- Payload replay re-reads a segment's index for each reference the bounded index
+  cache misses.
+- Reading and decoding even a 1.2 GB window takes under 2 s.
+
+A smaller WAL therefore shortens only payload replay. Raw runs and method:
+`.eval-runs/tofudb-reopen-20261113/` (`METHOD.md`, `results/README.md`).
+
+Alternatives considered: timing production restarts gives no phase split (the
+profile is a diagnostic build), and copying the production authority to local
+disk changes the measured operation (see the fixed-image boundary below);
+production stays read-only.
+
+## Recovery builds the catalog location table
+
+**Problem:** a crashed open whose WAL names any payload ran one catalog-wide
+pass that built the packed filter, its per-segment membership witnesses and
+prefix routes over every catalogued ID (87-119 s of a 105-294 s open above).
+Replay then re-read a whole segment index (2.7 MB at production shape) for each
+WAL reference that the bounded index cache missed. Replay needs none of the
+filter, routes or witnesses, and the online GC driver rebuilds them after
+readiness anyway. Loose compaction also moves history manifests, routing roots
+and routing pages into payload segments. A lookup of only the WAL's own IDs
+would therefore leave each history-metadata read to a catalog-wide candidate
+scan.
+
+**Decision:** recovery reads every catalogued index once, verified
+(`with_verified_index`, the first-table builder's path), into the
+[catalog location table](TOFUDB_BLOCK_READ_PATH.md)
+(`PayloadSegmentStore::build_location_table_selecting`). In the same visit it
+records the exact index position of each block the WAL names, through a
+galloping merge of the sorted, verified index with the sorted selection. Where
+several segments hold a block, the latest in catalog order answers.
+
+- The table is published for the installed publication (source `recovery`).
+  Every recovery read (history manifest, routing root and pages, references
+  outside the selection) resolves by position, and a fully indexed table proves
+  absence. The online GC driver then finds the first table already published.
+- A WAL reference reads its recorded position: one entry read and one payload
+  read, checked by CRC32C and content hash. Errors keep the kinds the
+  whole-index read reported (a missing segment file is invalid data), so replay
+  repairs from a carried copy, propagates other I/O errors, truncates or fails
+  closed as before.
+- The packed filter, routes and witnesses are built after readiness by the
+  online GC driver, as after a clean open. Until then dedupe probes restage,
+  which is idempotent by content ID.
+
+A segment whose index fails verification is left out of the table:
+
+- The lookup is incomplete and the table never proves absence. The segment
+  stays catalogued, so blocks only it holds answer missing or invalid, never
+  absent.
+- Recovery logs each such segment by name (`recovery`
+  `step=catalog_index_unverified`) and counts it (`system.metrics`
+  `durability.recoveryUnindexedSegments`); `verify` reports it
+  (`payload.failed_segment_ids`).
+- Deliberate change (engine reviewer ruling, 2026-11-13): recovery serves any
+  verified copy of a block, as reads already do once the first location table
+  is published. Before, a damaged index earlier in catalog order could fail the
+  open, or truncate a record, whose block had a verified copy in another
+  segment.
+
+The table holds one 8-byte entry per catalogued block. That is 1.87 GB at
+production's 233 M blocks, which the GC driver held within about 21 s of
+readiness anyway; now the table is resident during replay.
+
+**Result:** the same harness, method and VM shape as the curve above. Each
+VM builds one crashed fixture and alternates cold opens of the R3 engine and
+the candidate on copies of identical bytes, 3 each. Median seconds:
+
+| active WAL | R3 `engine_open` | candidate | speedup | catalog pass, R3 → candidate | payload replay, R3 → candidate | peak RSS (MiB), R3 → candidate |
+|---|---|---|---|---|---|---|
+| 68 MB | 106.6 | 22.2 | 4.8x | 94.6 → 19.8 | 10.7 → 0.8 | 1,775 → 1,939 |
+| 269 MB | 141.0 | 28.9 | 4.9x | 99.7 → 24.6 | 39.9 → 2.6 | 2,116 → 2,276 |
+| 714 MB | 210.1 | 34.7 | 6.1x | 102.6 → 24.3 | 104.7 → 8.2 | 2,876 → 3,020 |
+| 1,075 MB | 278.0 | 42.9 | 6.5x | 115.0 → 28.0 | 159.9 → 11.9 | 3,533 → 3,627 |
+| 561 MB sealed + 655 MB active | 308.2 | 48.9 | 6.3x | 119.2 → 29.5 | 181.9 → 13.0 | 3,715 → 3,883 |
+
+- Every open reached the acknowledged durable sequence, and the window's blocks
+  read back byte for byte.
+- The final revision repeated the 68 MB and 1.2 GB points on fresh VMs: 94.0 →
+  19.0 s and 302.1 → 48.2 s.
+- The catalog pass itself is 4-5x cheaper (no filter, witnesses, routes or
+  per-ID probes); payload replay is 13-14x faster.
+- Open-thread CPU falls from 97-98% to 84-89% of the open, so the remaining
+  pass waits on reads more than before.
+- Raw runs: `.eval-runs/tofudb-reopen-20261113/raw/lever1-*`.
+
+**Alternatives considered:**
+
+- Resolving the WAL's IDs through `CatalogLocationTable::candidates` after the
+  build. Entries keep a 36-bit ID prefix, so at 233 M blocks about 0.34% of
+  lookups would find another block's prefix, and a false candidate in a later
+  segment would shadow the true location. The merge uses the verified indexes'
+  full IDs.
+- Locating only the WAL's IDs without a table: misses the history metadata
+  that loose compaction moved into segments.
+- Raising the index cache for recovery: a memory-sized knob that only moves
+  the re-reads.
+- Parallel record decode: WAL read and decode take under 2 s even at 1.2 GB.
+- Per-segment parallel index reads: deferred until the after-curve shows how
+  much of the open is I/O wait. The pass is sequential, like the first-table
+  builder.
+
+**Verification:** `engine::recovery_lookup_tests` covers the per-ID
+differential over seeded stores, the damaged index (no partial entries, both
+catalog orders, confirmed and unconfirmed records), catalogued history
+metadata and the published first table. Also
+`engine::recovery_witness_tests::a_dirty_reopen_reads_each_catalogued_index_at_most_once_and_builds_no_packed_filter`
+and `block::tests::carried_recovery_lookup_repairs_invalid_files_but_propagates_io_errors`.
+
 ## Fixed-image comparison boundary
 
 A recovery fixture is copied only after SIGKILL has been joined. Its exact file

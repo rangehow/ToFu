@@ -811,7 +811,9 @@ reported, at most four reads (the head check precedes every Turn read), so the
 response's `syncSeq` names the head the page is exact for, never one older
 than the caller's. Only a head behind the caller, or one that keeps moving
 through those reads, returns 409 (`history_page_stale`, carrying
-`currentSyncSeq`). In the browser, identical requests share one flight, a
+`currentSyncSeq`). The caller also names the replay cursor it holds at
+`syncSeq`, and the page answers only in that cursor's lineage (see "Replay
+lineage", history pages). In the browser, identical requests share one flight, a
 different overlapping request is rejected instead of queued, and
 identity/reference/sequence validation plus the non-authoritative Store merge
 happen in one synchronous coordinator turn. The continuous window and detached
@@ -1692,6 +1694,120 @@ without background retries. History/rank reads require an accepted snapshot.
 Read cancellation, observer isolation, watchdog and resource regression rules
 live in [Defensive patterns](../DEFENSIVE_PATTERNS.md#conversation-sync-ownership).
 
+### Replay lineage
+
+**Problem:** a reader could see a commit before its write was durable. When a
+crash erased that change, restart recovery committed new changes reusing its
+sequence before browsers reconnected. A cursor named only owner, conversation
+and sequence, so a browser holding the lost change resumed after it. It
+skipped the new change at that sequence, kept the lost one, and diverged
+silently until some later snapshot. The same skip hit a live stream whose
+storage authority restarted underneath the API host, because the stream
+re-read from its in-memory sequence. WRITE-AMP-1's kill tests found it, and it
+reproduced on both authorities
+(`tests/conversation/test_conversation_sync_cursor_identity.py`). The engine
+fix, readers seeing only acknowledged commits, closes this one source. A
+restore, failover or a future gap can still reuse a sequence.
+
+**Decision:** a cursor names its change's lineage:
+`c2.<scope>.<authorityEpoch>.<syncSeq>.<changeDigest>`
+(`x-tofu-stream.cursorLineage`). Storage reports the facts from the same read
+transaction as the rows
+([storage replay lineage](../STORAGE_EVENT_REPLAY.md#replay-lineage)):
+
+- the open's epoch, drawn once per authority open after recovery;
+- each change's digest, over its record exactly as stored; a compact
+  AttemptEvent reference's digest also covers the event it references, since
+  the reference stores only the event's identity and commit time;
+- `anchorDigest`, the change now at the cursor's sequence;
+- `headDigest`, the head change.
+
+`ConversationSyncService` decides:
+
+| Situation at the cursor's sequence | Answer |
+|---|---|
+| the change's digest equals the cursor's, in any epoch | resume; an ordinary reconnect never resets, across a clean restart too |
+| the digest differs: recovery or a restore gave the sequence to another change | `sync.reset_required(cursor_invalid)` |
+| the change left retention, and the open that minted the cursor is still serving | resume: a published commit is lost only with a reopen, so no sequence repeats within one epoch |
+| the change left retention, and another open is serving | `cursor_expired` |
+| beyond the head | `cursor_invalid`, as before |
+| a `c1` cursor issued before lineage, past sequence 0 | `protocol_mismatch` once; the snapshot it triggers issues a lineage cursor. A `c1` cursor at 0 has seen nothing and starts the stream. |
+
+The verification is not limited to a reconnect: every stream page read passes the stream's
+position, so a storage restart under a live stream resets that stream.
+Heartbeats repeat the client's last delivered cursor verbatim, never a
+cursor rewritten to a new epoch: the browser compares cursor strings.
+The browser already treats cursors as opaque and recovers from every reset
+with one snapshot (`frontend/src/core/conversation-sync.ts`), so it is
+unchanged. Tabs open across the deploy reset exactly once. Invalidation
+`cursorHint` stays the lineage-free `c1` ordering hint. It only orders wakes,
+never resumes replay, and still decodes on replicas running the previous
+build. A storage result without lineage fails closed with
+`database_protocol_error`. The facts move the storage contract identity,
+so the change ships only as a certified tree and engine pair.
+
+**Alternatives rejected:**
+
+- An epoch alone resets every client after every restart, clean ones too. So
+  does resetting on any `serverBootId` change.
+- A per-row epoch stamp or a chained head digest would cover the prefix
+  explicitly. Both need write-path and on-disk changes in both authorities.
+  The digest of the change at the cursor's sequence covers its commit time and
+  content, which a different commit does not reproduce. It needs no write.
+  For an AttemptEvent reference the content is the referenced event's stored
+  bytes: the reference alone names an event that recovery can re-append
+  differently at the same attempt and sync sequences in the same millisecond.
+- A reconnect window or cursor TTL is a tuning knob that still admits the
+  skip inside its bound.
+
+Specs:
+
+- `test_conversation_sync_cursor_identity.py`: real crash restore and reuse,
+  native reconnect, clean restart and a pre-deploy cursor, on both authorities;
+- `test_conversation_sync_lineage.py`: every decision, plus a restart under a
+  live stream;
+- `test_conversation_change_storage.py`: an AttemptEvent change replaced in the
+  same millisecond after a restored durable point resets its cursor (SQL);
+- the native `turn_sync_lineage_tests.rs`, the same replacement included;
+- the `replay lineage` cases in `frontend/src/core/conversation-sync.test.ts`.
+
+**History pages answer in the reader's lineage.**
+
+*Problem:* a history page (`turn.sync.page`) was fenced by the reader's bare
+head sequence. After recovery gave that head to another change, a page read
+at it carried Turns of a lineage the reader never replayed, and the browser
+published it at once, because its replica had "reached" that head. The
+replica mixed two lineages until the stream's own reset replaced it.
+
+*Decision:* the history read names the cursor the reader holds at `syncSeq`
+(`turnPage` query `cursor`; the browser sends the cursor of its applied
+head). `turn.sync.page` with `anchor_sequence` reports `anchorDigest`, the
+digest of the change now at the reader's head, from the same read as the
+page, also when the page answers at a newer head. `ConversationSyncService`
+applies the change-page decision above to that anchor. A replaced change, one
+another open cannot prove, a head behind the reader, or a `c1` cursor past 0
+answers 409 `history_page_stale` with the lineage `reason` and no
+`currentSyncSeq`: no head of this lineage extends that replica, so the
+browser repairs from one snapshot (its existing path for a 409 without a
+head) and reads again under the snapshot's cursor. A read without `cursor`,
+from a tab loaded before this deploy, keeps the sequence fence until reload;
+the same tab's stream resets once anyway.
+
+*Alternatives rejected:* comparing only the page's `headDigest` fences a page
+read at exactly the reader's head but not one read at a newer head; a second
+anchor read in its own transaction needs an epoch-continuity argument that
+the same-read digest makes unnecessary; comparing cursor strings in the
+browser at publication would refuse every page read across a clean restart,
+whose epoch differs although its lineage does not, and break cursor opacity.
+
+Specs: `test_conversation_sync_cursor_identity.py`
+(`test_a_history_page_never_answers_a_replica_of_a_replaced_lineage`, real
+restore on both authorities, and the clean-restart guard),
+`test_conversation_sync_lineage.py` (every history decision),
+`turn_sync_lineage_tests.rs`
+(`a_history_page_names_the_digest_of_the_change_at_its_anchor`) and the
+`replay lineage` history cases in `frontend/src/core/conversation-sync.test.ts`.
+
 ### Catch-up budget
 
 **Problem:** a browser returning after a long absence reopened its retained
@@ -1769,8 +1885,8 @@ behind a proxy that forwards to its plain-HTTP port; a per-origin connection
 budget makes the seventh conversation wait; a WebSocket adds a second transport
 and lifecycle; a POST-created stream session adds server-side session state
 that this request-scoped response avoids. The bound is the request line, about
-150 URL-encoded bytes per stream: dozens of live conversations fit common
-8 KB proxy limits. Specs: `tests/conversation/test_conversation_sync_multiplex.py`
+185 URL-encoded bytes per stream with a lineage cursor: dozens of live
+conversations fit common 8 KB proxy limits. Specs: `tests/conversation/test_conversation_sync_multiplex.py`
 and `frontend/src/core/conversation-event-multiplexer.test.ts`.
 
 Conversation SSE has no per-principal count quota or shared capacity lease; new conversations
@@ -1864,6 +1980,37 @@ plus BLAKE2), more than the derivation it would save; a size- or TTL-bounded
 cache adds a tuning knob and keeps the same retained-container cost while
 warm. Reopen only with a measurement that shows derivation dominating a
 snapshot path and the retained-container cost of the proposed bound.
+
+### Stream page reads: bounded and owned by their subscription
+
+**Problem:** a stream's replay page held up to 500 changes whatever their
+size, and every settled `turn.upsert` carries a whole TurnRecord. On a lane
+API host serving production code under live writes, pages of ~17 MB decoded
+for several streams at once held 184 MB of changes in flight. RSS grew 372 MB
+-> 2.97 GB in ten minutes and stayed there, and full collections over that
+graph are the multi-second stalls (a native capture during a production
+stall showed the GIL holder in `gc_collect_main`). Page reads also outlived
+their clients: 59 extra threads and 149 response-frame reservations were
+still alive after every lane client had closed.
+
+**Decision:** a stream reads pages of at most its subscription's
+`windowBytes`, or the contract's `windowBytes` maximum when it has none.
+The authority cuts a page by the changes' encoded bytes and never splits or
+refuses a change (`turn.sync.changes` `max_bytes`, see `docs/STORAGE_TOFUDB.md`
+"Complete conversation-sync replay"). A stream owns one `RequestCancellation`
+for its page reads, cancelled by its subscription's close: an in-flight read is
+interrupted (daemon and SQL transports shut the socket down), a cancelled read
+is never replayed or waited out, and no later read is dispatched. A response
+that had already arrived when the client left is still decoded (bounded by
+the page bound); commit watches rely on that delivery. Cancelled reads count
+as the `cancelled` storage RPC outcome, not as errors. Specs:
+`tests/conversation/test_conversation_change_page_bytes.py`,
+`tests/conversation/test_conversation_stream_page_cancellation.py`.
+
+**Alternatives rejected:** a fixed smaller row limit is a tuning number and
+stays unbounded in bytes; slicing pages in the API host still decodes the
+whole response; dropping a cancelled read's result after it returns still
+pays the read and its retries.
 
 ## Dispatch handshake
 

@@ -178,6 +178,9 @@ class CoordinatorReports:
         pointer.update(title=request['title'], kind=request['kind'])
         validate_report(pointer, 'reportPointer')
         self._change_head(scope, pointer=pointer)
+        if request['kind'] == 'delivery':
+            from lib.conversations.lead_deliverables import notify
+            notify(self.owner, scope['coordinatorId'], self.project)
         # Before the intent retires: a crash here replays the relay at boot, and
         # its per-Turn command id keeps the Global Router notice exactly once.
         self._relay(scope, request, turn['turnId'])

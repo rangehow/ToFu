@@ -4,6 +4,7 @@
  * label arrives already translated; this module authors no copy.
  */
 import { escapeHtmlText as escape } from '../../../html-safety';
+import { disclosureToggleHtml } from '../../presentation/disclosure-toggle';
 
 import type { ToolChip, ToolDebugField } from './contracts';
 
@@ -40,15 +41,43 @@ export function sectionHtml(heading: string, innerHtml: string): string {
     : '';
 }
 
+/** Every disclosure inside a card opens from the tool rows' chevron, which turns down when open. */
+function toggleHtml(label: string): string {
+  return disclosureToggleHtml(escape(label));
+}
+
+/** A labeled disclosure around already-escaped markup. */
+export function disclosureHtml(label: string, innerHtml: string, open = false): string {
+  return innerHtml
+    ? `<details class="ptool-coord-more"${open ? ' open' : ''}>${toggleHtml(label)}${innerHtml}</details>`
+    : '';
+}
+
 /** Long prose stays one click away; `markdownHtml` is the trusted renderer's output. */
 export function collapsibleHtml(label: string, markdownHtml: string, open = false): string {
-  return markdownHtml
-    ? `<details class="ptool-coord-more"${open ? ' open' : ''}><summary>${escape(label)}</summary><div class="ptool-coord-prose md-content">${markdownHtml}</div></details>`
-    : '';
+  return markdownHtml ? disclosureHtml(label, `<div class="ptool-coord-prose md-content">${markdownHtml}</div>`, open) : '';
+}
+
+/**
+ * Free text as shown (its translation when there is one) with the authored
+ * original behind a toggle; both arguments are already-escaped markup.
+ */
+export function translatedTextHtml(
+  shownHtml: string, originalHtml: string, labels: { readonly original: string; readonly translating: string },
+  pending: boolean,
+): string {
+  return shownHtml
+    + (originalHtml ? `<details class="ptool-coord-original">${toggleHtml(labels.original)}${originalHtml}</details>` : '')
+    + (pending ? `<span class="ptool-coord-translating">${escape(labels.translating)}</span>` : '');
 }
 
 export function leadHtml(sentence: string): string {
   return sentence ? `<p class="ptool-coord-lead">${escape(sentence)}</p>` : '';
+}
+
+/** The card's one-line outcome, above its explanation. */
+export function verdictHtml(sentence: string): string {
+  return sentence ? `<p class="ptool-coord-lead ptool-coord-verdict"><strong>${escape(sentence)}</strong></p>` : '';
 }
 
 export function checkRowHtml(kind: MarkKind, stateLabel: string, titleHtml: string, detailHtml = ''): string {
@@ -74,9 +103,9 @@ export function debugHtml(label: string, fields: readonly ToolDebugField[], rawL
     .map(([name, value]) => `<div class="ptool-coord-debug-row"><span>${escape(name)}</span><code>${escape(value)}</code></div>`)
     .join('');
   const rawHtml = raw.trim()
-    ? `<details class="ptool-coord-raw"><summary>${escape(rawLabel)}</summary><pre>${escape(raw)}</pre></details>`
+    ? `<details class="ptool-coord-raw">${toggleHtml(rawLabel)}<pre>${escape(raw)}</pre></details>`
     : '';
   return rows || rawHtml
-    ? `<details class="ptool-coord-debug"><summary>${escape(label)}</summary>${rows}${rawHtml}</details>`
+    ? `<details class="ptool-coord-debug">${toggleHtml(label)}${rows}${rawHtml}</details>`
     : '';
 }

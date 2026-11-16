@@ -1065,7 +1065,7 @@ const _toolGroupPorts = {
   cleanTranslation: (content) => typeof stripNoTranslateTags === 'function' ? stripNoTranslateTags(content) : content,
   renderLine: (round, searching) => _renderUnifiedToolLine(round, searching),
   renderSwarm: (round, allRounds, inspectorAnchorHtml) => typeof _buildSwarmPanelHTML === 'function' ? _buildSwarmPanelHTML(round, allRounds, inspectorAnchorHtml) : null,
-  renderProgram: (round, batched) => programExecutionCardHtml(round, (key, _fallback, values) => t(key, values), batched),
+  renderProgram: (round, batched) => programExecutionCardHtml(round, (key, _fallback, values) => t(key, values), batched, _toolGroupPorts.debugEnabled()),
   debugEnabled: () => typeof _featureFlags !== 'undefined' && !!_featureFlags.debug_mode,
   taskIdForRound: (round) => typeof _riTaskIdForRound === 'function' ? _riTaskIdForRound(round) : '',
   debugLog: (message) => { if (typeof debugLog === 'function') debugLog(message, 'info'); },

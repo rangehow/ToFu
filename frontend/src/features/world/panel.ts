@@ -1,18 +1,33 @@
 /** The person panel beside the office: one header (portrait, name, state, the Brief/Chat switch, close)
  * over the brief, which leads with what the person did, the evidence and the decisions waiting on the owner.
+ * A lead with open questions leads with a compact question card instead (question, the shared answer control
+ * with its choices, own-answer box and default, the project, '1/N' paging, "answer in conversation"); the
+ * rest of the brief folds behind a "progress" disclosure below it.
  * "Chat" hands the same column to the application's own conversation view and composer (the shell docks the
  * classic ConversationSurface below this header), so chatting with a person is the classic chat itself.
  * Entry point: createPanel. Dependencies: i18n, ui button factory, safe text projection, sprites. */
 import { t, type I18nKey } from '../../i18n';
-import { createButton } from '../../ui';
-import type { Brief, BriefCheck, TurnRef, Verdict } from './brief';
+import { createButton, createDisclosureSummary } from '../../ui';
+import type { ChoiceInteraction, ChoicePorts } from '../../rich-response/choices';
+import { mountGuidanceAnswerFor, type GuidanceAnswerMount } from '../../rich-response/guidance-answer';
+import type { Brief, BriefCheck, BriefDecision, TurnRef, Verdict } from './brief';
 import type { ReportKind } from './model';
 import { renderText } from './text';
 import { worldTheme } from './skin';
 import { portraitStyle } from './sprites';
 
 export type PanelTab = 'brief' | 'chat';
-export interface PanelPorts { close(): void; chat(turn: TurnRef | null): void; brief(): void }
+export interface PanelPorts {
+  close(): void;
+  chat(turn: TurnRef | null): void;
+  brief(): void;
+  /** Answer ports bound to this question's conversation and Turn; undefined where it cannot be answered. */
+  answerPorts(decision: BriefDecision): ChoicePorts | undefined;
+  /** Opens the lead's conversation at this question with the composer replying to it. */
+  answerInChat(decision: BriefDecision): void;
+  /** The owner answered this question from the card. */
+  answered(decision: BriefDecision): void;
+}
 export interface PanelIdentity { team: string; color: string; state: string }
 
 const REPORT_KEYS = {
@@ -70,6 +85,26 @@ export function createPanel(ports: PanelPorts) {
   body.setAttribute('aria-labelledby', name.id);
   let tab: PanelTab = 'brief';
   let personId = '';
+  // The question card's state for the open person: the page shown, the mounted answer controls (kept so a
+  // draft survives live repaints) and the questions answered here (still shown, marked answered, after the
+  // office stops listing them).
+  let questionId = '';
+  const answers = new Map<string, GuidanceAnswerMount>();
+  const answeredHere = new Map<string, BriefDecision>();
+  let lastRender: { brief: Brief; identity: PanelIdentity; now: number } | null = null;
+  let progressOpen = false;
+  function resetQuestions() {
+    progressOpen = false;
+    for (const mount of answers.values()) mount.dispose();
+    answers.clear();
+    answeredHere.clear();
+    questionId = '';
+  }
+  const markdownHtml = (source: string) => {
+    const holder = document.createElement('div');
+    renderText(source, holder);
+    return holder.innerHTML;
+  };
   briefTab.addEventListener('click', () => { setTab('brief'); ports.brief(); });
   chatTab.addEventListener('click', () => ports.chat(null));
 
@@ -93,6 +128,72 @@ export function createPanel(ports: PanelPorts) {
     link.addEventListener('click', () => ports.chat(turn));
     return link;
   }
+  function markAnswered(decision: BriefDecision) {
+    if (answeredHere.has(decision.guidanceId)) return;
+    answeredHere.set(decision.guidanceId, decision);
+    ports.answered(decision);
+    if (lastRender && personId === lastRender.brief.person.id) render(lastRender.brief, lastRender.identity, lastRender.now);
+  }
+  function answerFor(decision: BriefDecision): GuidanceAnswerMount {
+    const known = answers.get(decision.guidanceId);
+    if (known) return known;
+    const bound = ports.answerPorts(decision);
+    const observe = (value: ChoiceInteraction) => {
+      if (value.state === 'answered') queueMicrotask(() => markAnswered(decision));
+      return value;
+    };
+    const observed: ChoicePorts | undefined = bound && {
+      ...bound,
+      load: async (id, signal) => observe(await bound.load(id, signal)),
+      submit: async (id, response, command, signal) => observe(await bound.submit(id, response, command, signal)),
+    };
+    const mount = mountGuidanceAnswerFor(document, decision.guidanceId, observed, markdownHtml, { submitOnChoose: true });
+    answers.set(decision.guidanceId, mount);
+    return mount;
+  }
+  function questionCard(parent: HTMLElement, decisions: BriefDecision[]) {
+    let index = decisions.findIndex(item => item.guidanceId === questionId);
+    if (index < 0) index = 0;
+    const decision = decisions[index];
+    questionId = decision.guidanceId;
+    const answered = answeredHere.has(decision.guidanceId);
+    const card = el('section', 'w-question-card', parent);
+    card.dataset.guidanceId = decision.guidanceId;
+    card.dataset.state = answered ? 'answered' : 'open';
+    const top = el('header', 'w-question-top', card);
+    heading(top, t('world.brief.decisions'), 'decision');
+    if (answered) el('span', 'w-question-badge', top).textContent = t('world.brief.answered');
+    if (decisions.length > 1) {
+      const pager = el('div', 'w-question-pager', top);
+      const step = (delta: number) => {
+        questionId = decisions[(index + delta + decisions.length) % decisions.length].guidanceId;
+        if (lastRender) render(lastRender.brief, lastRender.identity, lastRender.now);
+        body.querySelector<HTMLElement>(`.w-question-pager [data-step="${delta}"]`)?.focus({ preventScroll: true });
+      };
+      const previous = createButton({ label: '‹', size: 'sm', variant: 'ghost', onClick: () => step(-1) });
+      previous.dataset.step = '-1';
+      previous.setAttribute('aria-label', t('world.brief.question.previous'));
+      const count = el('span', 'w-question-count', pager);
+      count.textContent = `${index + 1}/${decisions.length}`;
+      count.setAttribute('aria-live', 'polite');
+      const next = createButton({ label: '›', size: 'sm', variant: 'ghost', onClick: () => step(1) });
+      next.dataset.step = '1';
+      next.setAttribute('aria-label', t('world.brief.question.next'));
+      pager.prepend(previous);
+      pager.append(next);
+    }
+    const meta = el('p', 'w-meta w-question-meta', card);
+    meta.textContent = [decision.project ? t('world.brief.project', { name: decision.project }) : '',
+      t(decision.blocking ? 'world.brief.blocking' : 'world.brief.nonBlocking')].filter(Boolean).join(' · ');
+    card.append(answerFor(decision).node);
+    const actions = el('div', 'w-question-actions', card);
+    const inChat = el('button', 'w-link w-link-primary', actions);
+    inChat.type = 'button';
+    inChat.textContent = t('world.brief.answer');
+    inChat.dataset.turn = decision.turn.turnId;
+    inChat.addEventListener('click', () => ports.answerInChat(decision));
+  }
+
   function check(list: HTMLElement, item: BriefCheck) {
     const row = el('li', 'w-check', list);
     row.dataset.verdict = item.verdict;
@@ -106,6 +207,8 @@ export function createPanel(ports: PanelPorts) {
 
   function render(brief: Brief, identity: PanelIdentity, now: number) {
     const person = brief.person;
+    if (person.id !== personId) resetQuestions();
+    lastRender = { brief, identity, now };
     personId = person.id;
     head.dataset.person = person.id;
     head.hidden = false;
@@ -115,27 +218,34 @@ export function createPanel(ports: PanelPorts) {
     name.textContent = person.name;
     line.textContent = [identity.team, identity.state].filter(Boolean).join(' · ');
     body.replaceChildren();
-    if (brief.decisions.length) {
-      const section = el('section', 'w-brief-section w-decisions', body);
-      heading(section, t('world.brief.decisions'), 'decision');
-      for (const decision of brief.decisions) {
-        const card = el('article', 'w-decision', section);
-        renderText(decision.question, el('div', 'w-decision-text', card));
-        const meta = el('p', 'w-meta', card);
-        meta.textContent = decision.blocking ? t('world.brief.blocking')
-          : decision.fallback ? t('world.brief.default', { value: decision.fallback }) : t('world.brief.nonBlocking');
-        revealLink(card, decision.turn, t('world.brief.answer')).classList.add('w-link-primary');
-      }
+    const listed = new Set(brief.decisions.map(item => item.guidanceId));
+    const decisions = [...brief.decisions, ...[...answeredHere.values()].filter(item => !listed.has(item.guidanceId))]
+      .sort((a, b) => Number(b.blocking) - Number(a.blocking) || a.at - b.at);
+    for (const [id, mount] of answers) {
+      if (decisions.some(item => item.guidanceId === id)) continue;
+      mount.dispose();
+      answers.delete(id);
+    }
+    // Questions first; everything else in the brief folds behind "progress" while one is open.
+    let rest: HTMLElement = body;
+    if (decisions.length) {
+      questionCard(body, decisions);
+      const more = el('details', 'w-brief-more', body);
+      const moreSummary = createDisclosureSummary(document, t('world.brief.progress'));
+      moreSummary.classList.add('w-brief-more-summary'); more.append(moreSummary);
+      more.open = progressOpen;
+      more.addEventListener('toggle', () => { progressOpen = more.open; });
+      rest = more;
     }
     if (brief.overdue.length) {
-      const section = el('section', 'w-brief-section', body);
+      const section = el('section', 'w-brief-section', rest);
       heading(section, t('world.brief.overdue'), 'exception');
       const list = el('ul', 'w-list', section);
       for (const item of brief.overdue) {
         el('li', '', list).textContent = `${item.title} · ${t('world.brief.dueAgo', { when: ago(item.dueAt, now) })}`;
       }
     }
-    const did = el('section', 'w-brief-section', body);
+    const did = el('section', 'w-brief-section', rest);
     const lead = brief.lead;
     if (lead.kind === 'report') {
       heading(did, t(REPORT_KEYS[lead.reportKind]), lead.reportKind === 'delivery' ? 'deliverable' : '');
@@ -158,7 +268,7 @@ export function createPanel(ports: PanelPorts) {
       revealLink(did, null);
     }
     if (brief.checks.length || brief.review || brief.delivery) {
-      const section = el('section', 'w-brief-section', body);
+      const section = el('section', 'w-brief-section', rest);
       heading(section, t('world.brief.evidence'));
       if (brief.checks.length) {
         const list = el('ul', 'w-checks', section);
@@ -180,7 +290,7 @@ export function createPanel(ports: PanelPorts) {
       }
     }
     if (brief.board) {
-      const section = el('section', 'w-brief-section', body);
+      const section = el('section', 'w-brief-section', rest);
       heading(section, t('world.brief.board'));
       const bar = el('div', 'w-progress', section);
       bar.style.setProperty('--done', String(brief.board.total ? brief.board.done / brief.board.total : 0));
@@ -207,7 +317,7 @@ export function createPanel(ports: PanelPorts) {
     tab: () => tab,
     person: () => personId,
     isOpen: () => !head.hidden,
-    hide() { head.hidden = true; body.hidden = true; personId = ''; tab = 'brief'; },
+    hide() { head.hidden = true; body.hidden = true; personId = ''; tab = 'brief'; resetQuestions(); lastRender = null; },
     focus() { (tab === 'brief' ? body : chatTab).focus({ preventScroll: true }); },
   };
 }

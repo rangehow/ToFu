@@ -138,6 +138,59 @@ native format costs. SQL and older/invalid native declarations retain legacy
 wire grouping and do not claim this optimization. The headroom fraction is a
 selection policy to measure, not an optimality claim.
 
+## Application write amplification
+
+**Problem:** on STORAGE-PRESSURE-COMPARE-1's fixed task, Codex writes 2.2–2.4 MB
+and makes 1.6–2.7 fsyncs per Turn. Tofu wrote:
+- SQL authority: 16.2 MB and 157 fsyncs per Turn;
+- TofuDB f3102951: 30.8 MB and 344 fsyncs per Turn.
+
+That amplification is what makes network-volume stalls hurt Tofu. The
+attribution assigns every byte and fsync at the FUSE boundary to one write
+site; shares sum to the measured total in each cell
+(`.eval-runs/write-amp-20261113/results/ATTRIBUTION.md`, `TABLES.md`).
+
+**Decision:** remove each write the contracts do not need, by structure: a
+copy stored once, a derived copy rebuilt from its authority, a frame committed
+at a boundary the stream contract already has. No time window, batch size,
+debounce interval, threshold or cap is introduced. Acknowledged writes stay
+durable.
+
+| redundant write (measured share) | structural removal | contract kept | status |
+|---|---|---|---|
+| diagnostic evidence stored twice per transaction: in the attempt event and the carried task-event row (38% of frame-command bytes) | the row is the single copy; the attempt event names it, and full replay resolves it | replay, Request Inspector, commit-before-push, retention | done; [record](STORAGE_EVENT_REPLAY.md#diagnostic-evidence-is-stored-once) |
+| five SQL indexes duplicating a PK/UNIQUE key; `storage_events_task_idx` alone was 4.8% of SQL bytes | fresh authorities never create them; the offline index transition retires them | every query keeps its access path (the PK index serves the hint) | done; [record](STORAGE_OPERATIONS.md#duplicate-key-indexes) |
+| text frames emitted before their projection write was admitted, one standalone commit each (21 of 24 commits per Turn, 13.6% of SQL fsyncs) | the provider text coalescer emits when the committed cadence admits the write | commit-before-push, browser cadence, cold replay of every frame | held: measured −13.5% SQL / −4.3% TofuDB fsyncs, but on TofuDB the first commit a WAL stall holds becomes a visible projection write, so a crash erases a change a reader saw in about every stall instead of about 1 in 3. Lands after the engine publishes only acknowledged commits (DB-5), with 0/3 observed losses |
+| model continuation rewritten whole at every settlement (559 KB per Turn at 50 Turns, quadratic in conversation length) | append-only per-Turn segments plus a versioned head; a typed base-rewrite instead of a threshold | restore, CAS frontier, receipts, lifecycle (Turn delete drops head and segments) | R5: DB-5 owns the engine half, WRITE-AMP owns SQL and the producer |
+| `key_stats.json` telemetry rewritten with fsync on every flush (4 fsync/Turn) | split decisions (overrides, billing stops: fsynced before returning) from reconstructible telemetry (atomic replace, no fsync) | decision durability; telemetry keeps its documented crash-loss window | done (config-store fsyncs 4.1 → 0.1 per Turn); [record](modules/auth_providers_billing.md#telemetry-is-published-without-a-durability-barrier) |
+| running task-result checkpoints rewriting state the Turn already holds (12 commits per Turn: 6 sampled, 3 at tool/round boundaries, 3 lifecycle) | the provider boundary writes no row; each round end takes the round's one sampled checkpoint, which a conversation attempt skips because every reader of its row reads its Turn ([decision](modules/task_engine.md#persistence-discipline)) | polling (the durable view reads the Turn), restart recovery (`turn.recover`; birth, `code_exec` boundary and terminal rows unchanged), billing, recovery fields (`todoState`, evolution consumption) | implemented on `perf/write-amp-f-20261113`: task-result commits 12 → 6 per Turn; fsync/Turn −3.8% on SQL and −1.1% on TofuDB; bytes/Turn flat on SQL (+0.1%) and +1.4% on TofuDB (next row); on TofuDB the first event after a 32 s stall arrives in 0.9–1.1 s instead of 3.1–7.1 s; 0 acknowledged writes lost in 36 kill cells; a task without a conversation writes 24–50% fewer sampled bytes |
+| a stored Turn projection holds each finished tool result twice, in `toolRounds[].toolContent` and in `segments[].result.content` (25.5 KB for one 12 KB result), and TofuDB re-materializes both at each structural projection event: (f)'s round-end mirror refresh, which the retired throttle skipped at about half the round ends, added 1.47 such events and 0.41 MB per Turn (`projectionCheckpointBytes` +71 KB, `overlayMaterializedBytes` +161 KB) | a `tool_use` segment names its round by identity (`id`, `llmRound`) instead of embedding the result body; readers take bodies from `toolRounds`, already the browser's authority for rich bodies | browser prose placement (segments), tool bodies (`toolRounds`), the thin task-row form, compat deliverable text (text segments only) | proposal to the Turn projection owner; the projection checkpoint cost per structural event goes to DB-5's R5 |
+| a task without a conversation rewrites its whole tool-round and segment arrays at every sampled checkpoint, quadratic in its rounds (124 MB of row payload over 100 rounds of 4 s) | append-only per-round task-row segments under a small head, written in the round end's transaction; readers assemble the arrays, and terminal publication stays one row | polling, crash diagnostics, cold replay and terminal rows of tasks without a conversation | proposal for R5: a task-result storage contract change on both authorities |
+| per-frame conversation revision bump (+2 indexes) and change-log index maintenance (4 b-trees, two overlapping) | contract-bound (`conversationRevision`, change replay) | sync contract | proposal to the sync-contract owner |
+| `run_command` journal: 4 fsyncs per modifying call | none: three are the undo commit protocol (payload, its name, the row), and the fourth is the journal's re-flush of an uncertain ancestor | undo | no change; a read-only command records nothing |
+| TofuDB background rewrites each WAL byte about five more times (rotation 8.0, pack 6.6, GC 5.1, maintenance 2.0 MB/Turn; overlay 5.0 MB/Turn plus 42 merge fsyncs) | each block written once to its final home; GC as a by-product of retirement | engine durability | DB-5 (R5), with the measured tables |
+
+With the evidence, index and key-health items, 3 reps per build:
+- SQL authority: 16.20 → 12.44 MB and 157.2 → 153.3 fsyncs per Turn (−23% bytes).
+- TofuDB: 30.83 → 30.02 MB and 344.3 → 340.7 fsyncs per Turn. Its foreground
+  WAL fell 7%; its total is dominated by the engine background, and it already
+  deduplicated the evidence copy by content.
+- Stall latency is unchanged.
+- Kill tests lost no acknowledged write. A change a reader saw before its WAL
+  frame was acknowledged was lost at the baseline rate: 2 of 12 TofuDB cells
+  across these builds, 0 on SQLite.
+
+Evidence: `.eval-runs/write-amp-20261113/results/BEFORE_AFTER.md`.
+
+**Alternatives rejected:**
+- Compressing or capping the duplicated payloads keeps the copies and adds a
+  threshold.
+- A timer or debounce on frame commits trades user-visible latency for writes
+  and is a tuning knob.
+- Dropping the fsync of a shared file weakens the decisions stored in it.
+- Deleting indexes at startup holds the single SQLite writer on populated
+  authorities.
+
 ## Loose batch publication per hash shard
 
 Problem: a transaction whose carried payload exceeds the format's 2 MiB carried

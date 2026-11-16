@@ -231,7 +231,10 @@ logical socket immediately, rejects its correlated RPCs and schedules the
 existing reconnect without awaiting transport close. A delayed or throwing
 `close()` cannot strand work, and late old-socket callbacks cannot settle a new
 socket's requests. Temporary server close code 1011 reconnects; intentional 1000
-and policy refusal 1008 do not schedule a retry. Visible activation, `online`,
+and policy refusal 1008 do not schedule a retry. A server-side release (receive
+idle, backlog overflow, shutdown) therefore closes with 1001 (`routes/push.py`
+`PUSH_SERVER_RELEASE_CLOSE_CODE`) so a page that is still alive reconnects and
+reconciles; a peer close cancels the handler first. Visible activation, `online`,
 and `pageshow` provide fresh connection demand after a clean close or a delayed
 retry; repeated signals join the same connecting socket. A passive wake never
 bypasses a 1008 policy refusal. An explicit connect consumes a pending

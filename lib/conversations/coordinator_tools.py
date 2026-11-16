@@ -113,8 +113,10 @@ def _work_receipt(view: dict, decision: str, next_step: str) -> dict:
     and get_conversation; echoing that view cost thousands of tokens per call.
     """
     execution = view.get('execution') or {}
-    return {'assignment_id': view['assignmentId'], 'decision': decision,
-            'grant_revision': view['grantRevision'], 'revoked': view['revoked'],
+    # conversation_id names the Worker conversation, whose title is the task's
+    # name for every assignment in it, so a reader of the receipt can title it.
+    return {'assignment_id': view['assignmentId'], 'conversation_id': view['request']['recipientId'],
+            'decision': decision, 'grant_revision': view['grantRevision'], 'revoked': view['revoked'],
             'result_revision': (view.get('review') or {}).get('resultRevision', execution.get('resultRevision')),
             'execution_status': execution.get('status'),
             'checkpoint_sha': (view.get('publication') or {}).get('checkpointSha'),

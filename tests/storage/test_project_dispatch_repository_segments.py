@@ -362,6 +362,34 @@ def test_an_index_walk_is_never_torn_by_point_updates(owned):
     assert recorded == sorted(written)
 
 
+def test_a_history_page_is_never_torn_by_births_committing_during_its_build(owned):
+    """GAME-UI-1 2026-11-13: the assignment page exceeded its 12 s deadline under load. It
+    required its load to start on the head its index list saw, so every birth committing in
+    between read the whole page again, and four in a row refused the page."""
+    c = owned
+    rows = [authorize(c, f'row-{index}') for index in range(3)]
+    real, writer, lists, born = c.repo.client, _writer(c, c.repo.client), [], []
+
+    class Racing:
+        def query(self, operation, payload, **kwargs):
+            if operation == 'project.dispatch.list' and payload.get('prefix') == 'assignments:order:':
+                lists.append(1)
+                born.append(writer.authorize(c.request, c.principal, f'birth-{len(born)}'))
+            return real().query(operation, payload, **kwargs)
+
+        def command(self, *args, **kwargs):
+            return real(write=True).command(*args, **kwargs)
+
+    c.repo.client = lambda **kw: Racing()
+    try:
+        page = c.repo.history_page()
+    finally:
+        c.repo.client = real
+    assert len(lists) == 1  # one build, never read again
+    assert [row['id'] for row in page['rows']] == [born[0]['id']] + [row['id'] for row in reversed(rows)]
+    assert page['rows'][1:] == [c.repo.read(row['id']) for row in reversed(rows)]
+
+
 def test_batch_replay_and_dependency_pins_survive_selected_reads(owned):
     from lib.project_dispatch.repository import ProjectDispatchError
     c = owned

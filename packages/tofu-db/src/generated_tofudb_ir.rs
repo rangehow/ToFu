@@ -674,7 +674,6 @@ pub const CONVERSATION_SYNC_EVENT_NAMESPACE: &str = "conversation_sync_events";
 pub const CONVERSATION_SYNC_AGE_INDEX_NAMESPACE: &str = "conversation_sync_events_by_created";
 pub const ATTEMPT_EVENT_SYNC_REFERENCE_NAMESPACE: &str = "attempt_event_sync_references";
 pub const MAX_SYNC_PRUNE_ROWS_PER_TRANSACTION: usize = 1000;
-pub const MAX_SYNC_PRUNE_MATERIALIZED_BYTES: usize = 67108864;
 pub const GENERATION_ATTEMPT_NAMESPACE: &str = "generation_attempts";
 pub const ATTEMPT_DISPATCHABLE_INDEX_NAMESPACE: &str = "generation_attempts_dispatchable";
 pub const MAX_DISPATCHABLE_ATTEMPTS_PER_QUERY: usize = 32;

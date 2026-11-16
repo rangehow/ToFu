@@ -3,8 +3,6 @@
 .debug-sec{margin:calc(var(--space-1) * 0.75) 0 calc(var(--space-1) * 1.75)}
 .debug-sec>summary{display:flex;align-items:center;gap:calc(var(--space-1) * 1.5);cursor:pointer;user-select:none;font-size:var(--font-size-sm);font-weight:var(--weight-semibold);color:var(--text-secondary);letter-spacing:.3px;list-style:none;padding:calc(var(--space-1) * 0.25) 0}
 .debug-sec>summary::-webkit-details-marker{display:none}
-.debug-sec>summary::before{content:'\25B8';font-size:var(--font-size-sm);transition:transform .15s}
-.debug-sec[open]>summary::before{transform:rotate(90deg)}
 .debug-sec-body{margin:var(--space-1) 0 calc(var(--space-1) * 0.5)}
 .debug-msg-body pre.debug-text{margin:0;padding:calc(var(--space-1) * 1.5) var(--space-2);white-space:pre-wrap;word-break:break-word;color:var(--text-secondary);background:color-mix(in srgb, var(--text-secondary) 7%, transparent);border:1px solid var(--border);border-radius:4px}
 .debug-text.debug-long{max-height:320px;overflow-y:auto}
@@ -21,8 +19,6 @@
 .debug-raw{margin:calc(var(--space-1) * 0.5) var(--space-2) calc(var(--space-1) * 1.5);border-top:1px dashed var(--border);padding-top:var(--space-1)}
 .debug-raw>summary{cursor:pointer;user-select:none;font-size:var(--font-size-sm);color:var(--text-secondary);list-style:none}
 .debug-raw>summary::-webkit-details-marker{display:none}
-.debug-raw>summary::before{content:'\25B8';font-size:var(--font-size-sm);margin-right:var(--space-1)}
-.debug-raw[open]>summary::before{content:'\25BE'}
 .debug-struct .debug-key,.debug-struct .debug-arg-key{color:var(--info-text);font-weight:var(--weight-semibold)}
 .debug-struct .debug-str{color:var(--success-text)}
 .debug-struct .debug-num{color:var(--warning-text)}

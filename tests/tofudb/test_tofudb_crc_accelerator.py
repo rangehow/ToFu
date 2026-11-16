@@ -172,6 +172,45 @@ def test_real_compiler_accelerator_matches_reference(accelerator, tmp_path):
     assert (tmp_path / '_tofudb_crc32c_native.so').stat().st_size <= accelerator.MAX_LIBRARY_BYTES
 
 
+def test_real_compiler_accelerator_lets_other_threads_run_during_a_checksum(accelerator, tmp_path):
+    """A frame checksum never freezes the process (2026-11-13 API-host freeze).
+
+    Received bodies can be mmapped spill files whose pages fault in from disk
+    under memory pressure; holding the GIL across that loop stops every
+    thread, including the event loop and LoopWatch.
+    """
+    import threading
+    import time
+    from tofu_db import wire
+    if not accelerator.shutil.which('cc'):
+        pytest.skip('C compiler unavailable')
+    accelerator._build(wire._NATIVE_CRC32C_SOURCE, tmp_path, wire._crc32c_fallback)
+    candidate = accelerator._candidate
+    assert candidate is not None
+    # Untouched calloc pages read as the shared zero page: long, but no RSS.
+    payload = bytes(256 * 1024 * 1024)
+    samples, running, stop = [], threading.Event(), threading.Event()
+
+    def observe():
+        running.set()
+        while not stop.is_set():
+            samples.append(time.perf_counter())
+            time.sleep(0.001)
+
+    observer = threading.Thread(target=observe, daemon=True)
+    observer.start()
+    assert running.wait(5)
+    begin = time.perf_counter()
+    candidate(payload)
+    end = time.perf_counter()
+    stop.set()
+    observer.join(5)
+    quarter = (end - begin) / 4
+    inside = [sample for sample in samples if begin + quarter < sample < end - quarter]
+    assert inside, (
+        f'no other thread ran during the middle half of a {end - begin:.3f}s checksum')
+
+
 def test_cache_key_budget_evicts_only_idle_entries(accelerator, tmp_path, monkeypatch):
     import os
     monkeypatch.setattr(accelerator.tempfile, 'gettempdir', lambda: str(tmp_path))

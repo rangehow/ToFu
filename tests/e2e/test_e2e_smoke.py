@@ -409,6 +409,18 @@ def test_tool_round_renders(page, assert_no_js_errors):
 def test_program_observation_and_measurements_render_and_restore(
         page, width, tmp_path, assert_no_js_errors, _programmatic_calling_enabled):
     """Real gateway → sync projection → rich card; include narrow and reload."""
+    def _debug_mode_on(route):
+        response = route.fetch()
+        body = response.json()
+        payload = body.get('data', body)
+        flags = payload['feature_flags'] if 'feature_flags' in payload else payload
+        flags['debug_mode'] = True  # execution counters are debug-only technical details
+        route.fulfill(response=response, json=body)
+
+    page.route('**/api/v*/server-config**', _debug_mode_on)
+    page.route('**/api/v4/features**', _debug_mode_on)
+    page.reload(wait_until='domcontentloaded')
+    _wait_app_ready(page)
     page.set_viewport_size({'width': width, 'height': 900})
     _wait_app_ready(page)
     page.locator('.new-chat-btn').click()

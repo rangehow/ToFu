@@ -16,6 +16,17 @@ export interface ChoiceInteraction {
   response?: string;
   /** Owner-provided status line: a pending note is information, not an unconfirmed answer. */
   note?: string;
+  /** What the asker proceeds with if nobody answers (a non-blocking question's stated default). */
+  defaultAnswer?: string;
+  /** Reading-language display of the question and its options (the conversation's translation);
+   * `question` and `options` stay the original text that answers and quotes carry. */
+  displayQuestion?: string;
+  displayOptions?: string[];
+  displayDescriptions?: string[];
+}
+export interface ChoiceRenderOptions {
+  /** Choosing a declared option answers at once (the compact studio card); otherwise Submit does. */
+  submitOnChoose?: boolean;
 }
 export interface ChoicePorts {
 
@@ -38,12 +49,13 @@ export function setGuidanceQuestion(target: HTMLElement, source: string, renderM
 }
 
 export function renderChoices(block: ChoiceBlock, ports: ChoicePorts | undefined, doc: Document = document,
-  renderMarkdown?: (source: string) => string) {
+  renderMarkdown?: (source: string) => string, options: ChoiceRenderOptions = {}) {
   const node = doc.createElement('form');
   node.className = 'rich-choices';
   const question = doc.createElement('div'); question.className = 'rich-guidance-question';
   const group = doc.createElement('fieldset');
   const legend = doc.createElement('legend');
+  const fallback = doc.createElement('p'); fallback.className = 'rich-guidance-default'; fallback.hidden = true;
   const status = doc.createElement('p'); status.className = 'rich-guidance-status';
   status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
   const text = (key: string, fallback: string) => ports?.text?.(key, fallback) ?? fallback;
@@ -53,7 +65,8 @@ export function renderChoices(block: ChoiceBlock, ports: ChoicePorts | undefined
   const reload = createButton({ label: text('rich.reload', 'Reload answer'), variant: 'ghost', size: 'sm' }, doc);
   reload.dataset.richControl = 'choices-reload';
   const toolbar = doc.createElement('div'); toolbar.className = 'ui-toolbar rich-guidance-actions'; toolbar.append(submit, reload);
-  node.append(question, group, status, toolbar);
+  if (options.submitOnChoose) node.classList.add('rich-choices--instant');
+  node.append(question, group, fallback, status, toolbar);
   let disposed = false;
   let flight: AbortController | null = null;
   let interaction: ChoiceInteraction | null = null;
@@ -91,19 +104,23 @@ export function renderChoices(block: ChoiceBlock, ports: ChoicePorts | undefined
 
     && (!value.descriptions || (Array.isArray(value.descriptions) && value.descriptions.length === value.options.length
       && value.descriptions.every(item => typeof item === 'string' && item.length <= 8192)))
+    && (!value.displayOptions || (Array.isArray(value.displayOptions) && value.displayOptions.length === value.options.length
+      && value.displayOptions.every(item => typeof item === 'string')))
     && (value.state !== 'answered' || typeof value.response === 'string');
   const apply = (value: ChoiceInteraction) => {
     if (!valid(value)) throw new Error('Invalid interaction projection');
     interaction = value;
-    setGuidanceQuestion(question, value.question, renderMarkdown);
+    setGuidanceQuestion(question, value.displayQuestion || value.question, renderMarkdown);
+    fallback.hidden = !value.defaultAnswer || value.state !== 'pending';
+    fallback.textContent = value.defaultAnswer ? `${text('rich.defaultAnswer', 'If unanswered')}: ${value.defaultAnswer}` : '';
     // Reuse controls on reload so native keyboard focus is not lost.
-    const descriptions = JSON.stringify(value.descriptions ?? []);
+    const descriptions = JSON.stringify([value.descriptions ?? [], value.displayOptions ?? [], value.displayDescriptions ?? []]);
     if (descriptions !== descriptionsIdentity || inputs.length !== value.options.length || inputs.some((input, index) => input.value !== value.options[index])) {
       descriptionsIdentity = descriptions;
       group.replaceChildren(legend); inputs.length = 0;
       ownCard.remove();
       value.options.forEach((option, index) => {
-        const { el, input } = createChoice({ type: 'radio', name: 'choice', label: option, value: option }, doc);
+        const { el, input } = createChoice({ type: 'radio', name: 'choice', label: value.displayOptions?.[index] || option, value: option }, doc);
         el.classList.add('rich-choice-option');
         input.dataset.richControl = `choice:${index}`;
         group.append(el); inputs.push(input);
@@ -111,7 +128,7 @@ export function renderChoices(block: ChoiceBlock, ports: ChoicePorts | undefined
         const body = doc.createElement('span'); body.className = 'rich-choice-option__text';
         body.append(...[...el.childNodes].filter(child => child !== input));
         el.append(body);
-        const description = value.descriptions?.[index];
+        const description = value.displayDescriptions?.[index] || value.descriptions?.[index];
         if (description) {
           const explanation = doc.createElement('span'); explanation.className = 'rich-choice-description';
           explanation.id = `rich-choice-description-${doc.defaultView?.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)}`;
@@ -161,9 +178,10 @@ export function renderChoices(block: ChoiceBlock, ports: ChoicePorts | undefined
       if (!disposed && flight === controller) { flight = null; setDisabled(); }
     }
   };
-  const change = () => {
+  const change = (event?: Event) => {
     selected = response();
     setDisabled();
+    if (options.submitOnChoose && event?.target instanceof HTMLInputElement && inputs.includes(event.target)) void run('submit');
   };
   // Typing an own answer selects it; Ctrl/Cmd+Enter submits like the other guidance inputs.
   const typeOwn = () => { if (!own.input.checked) own.input.checked = true; change(); };

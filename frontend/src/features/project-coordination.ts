@@ -2,7 +2,7 @@
  * this dialog owns read demand and view state, never execution or transcript state.
  */
 import type { CoordinationCanvasState } from './project-coordination-canvas';
-import { createButton, createDialog, createAlert, createTabs } from '../ui';
+import { createButton, createDialog, createAlert, createDisclosureSummary, createTabs } from '../ui';
 import './project-coordination.css';
 import { coordinationTaskDigest, createCoordinationBoard, projectCoordinationWorkGroups } from './project-coordination-board';
 import { coordinationText as text } from './project-coordination-text';
@@ -136,12 +136,12 @@ export async function openProjectCoordination(ports: ProjectCoordinationPorts): 
     const budgetView = ports.budget ? createCoordinatorBudget(ports.budget, scope()) : undefined;
     management = createCoordinationManagement(ports, { binding: () => binding!, valid, refresh: () => load(), inspect, diagnose });
     const authorization = document.createElement('details'); authorization.className = 'coordination-authorization';
-    authorization.append(text(t('projectCoordination.authorization'), 'summary'), controlForms);
+    authorization.append(createDisclosureSummary(document, t('projectCoordination.authorization')), controlForms);
     const usage = document.createElement('details'); usage.className = 'coordination-usage';
-    usage.append(text(t('coordinatorBudget.title'), 'summary'));
+    usage.append(createDisclosureSummary(document, t('coordinatorBudget.title')));
     if (budgetView) usage.append(budgetView.summary);
     const connections = document.createElement('details'); connections.className = 'coordination-connections';
-    connections.append(text(t('projectCoordination.connections'), 'summary'), resources, messages);
+    connections.append(createDisclosureSummary(document, t('projectCoordination.connections')), resources, messages);
     controls.append(management.el, controlFeedback, authorization, usage, connections);
     authorization.addEventListener('toggle', () => {
       if (!authorization.open || controlsLoaded) return;

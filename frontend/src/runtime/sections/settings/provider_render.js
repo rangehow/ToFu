@@ -234,7 +234,7 @@ function _renderModelRoutingProvidersTab(list) {
     html += '<details class="stg-provider-card stg-provider-card-v2" data-provider-id="' +
       escapeHtml(provider.provider_id) + '"' +
       (expandedIds.has(String(provider.provider_id)) ? ' open' : '') + '>' +
-      '<summary class="stg-provider-head stg-provider-head-v2">' +
+      '<summary class="stg-provider-head stg-provider-head-v2 ui-disclosure">' +
         '<div class="stg-provider-icon">' + _brandSvg(providerBrand, 22) + '</div>' +
         '<div class="stg-provider-info"><div class="stg-provider-name">' +
           escapeHtml(access.display_name || provider.name || provider.provider_id) + '</div>' +
@@ -243,7 +243,6 @@ function _renderModelRoutingProvidersTab(list) {
           '<span class="stg-badge">' + context.credentials.length + ' 个凭证</span>' +
           '<span class="stg-badge stg-badge-models">' + modelCount + ' 个模型</span>' +
           (access.enabled ? '' : '<span class="stg-badge off">已停用</span>') + '</div>' +
-        '<span class="stg-chevron">▾</span>' +
       '</summary>' +
       '<div class="stg-provider-body">' +
         '<div class="stg-field-grid">' +

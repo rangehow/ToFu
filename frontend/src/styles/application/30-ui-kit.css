@@ -634,3 +634,22 @@ dialog.ui-drawer:not([open]){display:none}
 
 /* Multiline is opt-in through the button factory; keep after base button rules. */
 .ui-btn--wrap{white-space:normal;overflow-wrap:anywhere;min-height:var(--control-h-md);height:auto;padding-block:var(--space-1);line-height:var(--leading-body)}
+
+/* ── Disclosure (ui/disclosure.ts) ─────────────────────────────────────────
+   The one fold control: the conversation cards' chevron (same 16-unit path
+   as DISCLOSURE_CHEVRON_SVG), right when closed, down when open. On a
+   <summary> the native marker is suppressed; on a button/row (or an empty
+   span leading one) the state is aria-expanded. Chevron box = --space-4, like the cards' inline SVG. */
+.ui-disclosure{list-style:none;cursor:pointer}
+.ui-disclosure::-webkit-details-marker{display:none}
+.ui-disclosure::marker{content:''}
+.ui-disclosure::before{
+  content:'';display:inline-block;flex:0 0 auto;align-self:center;vertical-align:-0.25em;
+  width:var(--space-4);height:var(--space-4);margin-inline-end:var(--space-1);
+  background:var(--text-tertiary);
+  -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m6.5 5 3 3-3 3' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/contain no-repeat;
+  mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m6.5 5 3 3-3 3' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/contain no-repeat;
+  transition:transform var(--motion-fast) var(--ease-standard);
+}
+details[open]>.ui-disclosure::before,.ui-disclosure[aria-expanded="true"]::before,
+[aria-expanded="true"]>.ui-disclosure:first-child::before{transform:rotate(90deg)}

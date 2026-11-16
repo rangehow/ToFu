@@ -11,7 +11,7 @@
  * repaints on `tofu:language-change`.
  */
 import type { RouterOwnerDelegationState } from '../api/router.generated';
-import { createChoice } from '../ui';
+import { createChoice, createDisclosureSummary } from '../ui';
 import { t } from '../i18n';
 
 export interface RouterOwnerDelegationPorts {
@@ -42,7 +42,7 @@ export function createRouterOwnerDelegation(ports: RouterOwnerDelegationPorts) {
 
   const settings = document.createElement('details');
   settings.className = 'router-owner-delegation';
-  const summary = localized(document.createElement('summary'), 'routerDelegation.summaryOff');
+  const summary = localized(createDisclosureSummary(document), 'routerDelegation.summaryOff');
   const body = document.createElement('div');
   body.className = 'router-owner-delegation-body';
   const hint = localized(document.createElement('p'), 'routerDelegation.hint');

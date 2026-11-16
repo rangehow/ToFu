@@ -264,36 +264,32 @@ def test_sync_events_stream_degrades_on_wedge_read_failures(monkeypatch):
         def __init__(self):
             self.calls = 0
 
-        def sequence_from_cursor(self, _conversation_id, _user_id, _cursor):
-            return 0
+        def position_from_cursor(self, _conversation_id, _user_id, _cursor):
+            from lib.conversation_sync.cursor import STREAM_START
+            return STREAM_START
 
-        def changes(self, _conversation_id, _user_id, *, after_sequence,
-                    limit):
+        def changes(self, _conversation_id, _user_id, *, after,
+                    limit, **_page_options):
+            from tests.support.conversation_replay import stream_page
             self.calls += 1
             if self.calls == 1:
-                return {'events': [], 'reset': None, 'hasMore': False}
+                return stream_page(after=after, cursor=lambda _sequence: 'c0')
             if self.calls == 2:
                 raise StorageError('database_timeout', 'deadline_elapsed')
-            return {
-                'events': [],
-                'reset': {'type': 'sync.reset_required', 'cursor': 'c1'},
-                'hasMore': False,
-            }
+            return stream_page(after=after, cursor=lambda _sequence: 'c0',
+                               reset={'type': 'sync.reset_required', 'cursor': 'c1'})
 
-        def heartbeat(self, conversation_id, user_id, sequence, *, degraded,
+        def heartbeat(self, conversation_id, user_id, cursor, *, degraded,
                       push_withheld=False):
             return {
                 'contract': 'tofu.conversation-sync.event/v1',
                 'type': 'sync.heartbeat',
                 'conversationId': conversation_id,
-                'cursor': 'c0',
+                'cursor': cursor,
                 'serverBootId': 'test',
                 'degraded': degraded,
                 'pushWithheld': push_withheld,
             }
-
-        def cursor_for_sequence(self, *_args):
-            return 'c0'
 
     app = Quart(__name__)
     app.config['TESTING'] = True

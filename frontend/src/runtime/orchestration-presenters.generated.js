@@ -9123,9 +9123,9 @@ function createOrchestrationInspectorContent(options) {
   function section(titleKey, icon, open, inner, hintKey) {
     var html = '<details class="orch-sec" data-orch-section-key="'
       + _escape(titleKey) + '"' + (open ? ' open' : '') + '>';
-    html += '<summary class="orch-sec-sum">' + (icon || '')
+    html += '<summary class="orch-sec-sum ui-disclosure">' + (icon || '')
       + '<span>' + _escape(_translate(titleKey)) + '</span>'
-      + '<span class="orch-sec-chev">\u203a</span></summary>'
+      + '</summary>'
       + '<div class="orch-sec-body">';
     if (hintKey) {
       html += '<div class="orch-sec-hint">'
@@ -9195,13 +9195,13 @@ function createOrchestrationInspectorContent(options) {
         return '<details class="orch-sec orch-runtrace-attempt" '
           + 'data-orch-section-key="trace-' + _escape(attempt.key) + '"'
           + (attempt.current ? ' open' : '') + '>'
-          + '<summary class="orch-sec-sum"><span>'
+          + '<summary class="orch-sec-sum ui-disclosure"><span>'
           + _escape(_translate('tm.trace.iter')) + ' ' + attempt.ordinal
           + ' / ' + attempt.total + ' · ' + _escape(status.label)
           + '</span>' + (delta && delta.label
             ? '<span class="orch-runtrace-delta">'
               + _escape(delta.label) + '</span>' : '')
-          + '<span class="orch-sec-chev">\u203a</span></summary>'
+          + '</summary>'
           + '<div class="orch-sec-body">' + _traceAttemptBody(attempt.trace)
           + '</div></details>';
       }).join('') + '</div>';

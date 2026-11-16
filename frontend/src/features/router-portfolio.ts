@@ -8,7 +8,7 @@
  * lines repaint on `tofu:language-change`.
  */
 import type { RouterPortfolioState } from '../api/router.generated';
-import { createChoice } from '../ui';
+import { createChoice, createDisclosureSummary } from '../ui';
 import { t } from '../i18n';
 
 export interface RouterPortfolioPorts {
@@ -36,7 +36,7 @@ export function createRouterPortfolio(ports: RouterPortfolioPorts) {
 
   const settings = document.createElement('details');
   settings.className = 'router-portfolio';
-  const summary = localized(document.createElement('summary'), 'routerPortfolio.summaryOff');
+  const summary = localized(createDisclosureSummary(document), 'routerPortfolio.summaryOff');
   const body = document.createElement('div');
   body.className = 'router-portfolio-body';
   const hint = localized(document.createElement('p'), 'routerPortfolio.hint');

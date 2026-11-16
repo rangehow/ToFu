@@ -1,25 +1,47 @@
 /* Registered tool cards (frontend/src/conversation/ui/tool-cards/): localized
    title + one-line summary in the header, structured body, technical details
    last. Checklist rows reuse 09-tool-progress.css item styles. */
+/* Collapsed line: the short localized title holds its place, the subject
+   alone truncates (its full text is the header's title tooltip), and outcome
+   pills stay whole. A hairline, not a dot, parts title
+   and subject: summaries already use " · " between their own facts. */
 .ptool-coord-header {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--space-1) var(--space-2);
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--space-2);
   min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
 }
-.ptool-coord-title { font-weight: var(--weight-medium); color: var(--text-primary); }
+.ptool-coord-title {
+  flex: 0 0 auto;
+  font-weight: var(--weight-medium);
+  color: var(--text-primary);
+}
+.ptool-coord-sep {
+  flex: 0 0 auto;
+  align-self: center;
+  width: var(--control-edge-inset);
+  height: var(--space-3);
+  overflow: hidden;
+  background: var(--border);
+  font-size: 0;
+}
 .ptool-coord-summary {
+  flex: 0 1000 auto;
   min-width: 0;
-  color: var(--text-secondary);
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--tool-row-meta-ink);
+  font-weight: var(--weight-regular);
 }
 .ptool-coord-chip {
-  display: inline-flex;
-  align-items: center;
+  flex: 0 0 auto;
+  display: inline-block;
   padding: 0 var(--space-2);
   border-radius: var(--radius-pill);
-  border: 1px solid var(--border-light);
+  border: var(--control-edge-inset) solid var(--border-light);
   font-size: var(--conversation-font-size-caption);
   line-height: 1.6;
   white-space: nowrap;
@@ -39,6 +61,7 @@
   color: var(--text-primary);
 }
 .ptool-coord-lead { margin: 0; color: var(--text-primary); }
+.ptool-coord-verdict strong { font-weight: var(--weight-semibold); }
 .ptool-coord-field { display: flex; gap: var(--space-2); align-items: baseline; min-width: 0; }
 .ptool-coord-label { flex: 0 0 auto; min-width: 6em; color: var(--text-tertiary); }
 .ptool-coord-value { min-width: 0; overflow-wrap: anywhere; display: inline-flex; flex-wrap: wrap; gap: var(--space-1); align-items: center; }
@@ -75,13 +98,59 @@
 .ptool-coord-worker > .ptool-coord-more { flex-basis: 100%; }
 .ptool-coord-worker-title { font-weight: var(--weight-medium); overflow-wrap: anywhere; }
 .ptool-coord-quotes li { padding-left: var(--space-2); border-left: 2px solid var(--border); color: var(--text-secondary); }
-.ptool-coord-steps { display: inline-flex; gap: var(--space-1); align-items: center; color: var(--text-tertiary); }
-.ptool-coord-more > summary, .ptool-coord-debug > summary, .ptool-coord-raw > summary {
+/* One disclosure control for every fold inside a card: the tool rows'
+   chevron, pointing right when closed and turning down when open. Folded
+   content hangs on the label's text edge, not under the chevron. */
+.ptool-coord-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: fit-content;
+  list-style: none;
   cursor: pointer;
   color: var(--text-secondary);
+  font-size: var(--conversation-font-size-meta);
+  line-height: var(--leading-title);
+  transition: color var(--motion-fast) var(--ease-standard);
 }
+.ptool-coord-toggle::-webkit-details-marker { display: none; }
+.ptool-coord-toggle::marker { content: ''; }
+.ptool-coord-toggle:hover { color: var(--text-primary); }
+.ptool-coord-toggle:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: var(--space-1); }
+.ptool-coord-toggle > svg {
+  flex: 0 0 auto;
+  width: var(--space-4);
+  height: var(--space-4);
+  color: var(--text-tertiary);
+  transition: transform var(--motion-fast) var(--ease-standard);
+}
+details[open] > .ptool-coord-toggle > svg { transform: rotate(90deg); }
+:is(.ptool-coord-more, .ptool-coord-original, .ptool-coord-debug, .ptool-coord-raw, .ptool-todo-history, .ptool-work-receipt) > :not(summary) {
+  margin-inline-start: calc(var(--space-4) + var(--space-1));
+}
+:is(.ptool-coord-more, .ptool-coord-original, .ptool-coord-debug, .ptool-work-receipt)[open] > summary { margin-bottom: var(--space-1); }
+/* Tool rows outside the conversation surface (paper panels) carry the same
+   turning chevron after their label; inside the surface,
+   23-reading-process.css draws it at the row's end and hides this one. */
+:is(.ptool-result-block, .ptool-memory-block, .ptool-convmeta-block, .ptool-todo-block, .sw-inbox-row) > summary .ptool-text::after {
+  content: '';
+  display: inline-block;
+  box-sizing: border-box;
+  width: calc(var(--space-1) * 1.5);
+  height: calc(var(--space-1) * 1.5);
+  margin-inline: var(--space-2) var(--space-1);
+  vertical-align: middle;
+  border-inline-end: var(--control-edge-inset) solid var(--text-tertiary);
+  border-block-end: var(--control-edge-inset) solid var(--text-tertiary);
+  transform: rotate(-45deg);
+  transition: transform var(--motion-fast) var(--ease-standard);
+}
+:is(.ptool-result-block, .ptool-memory-block, .ptool-convmeta-block, .ptool-todo-block, .sw-inbox-row)[open] > summary .ptool-text::after { transform: rotate(45deg); }
 .ptool-coord-prose { min-width: 0; overflow-wrap: anywhere; }
-.ptool-coord-more > .ptool-coord-prose { padding: var(--space-1) 0 0 var(--space-3); }
+/* A translated text's authored original, one click away. */
+.ptool-coord-original > .ptool-coord-toggle { color: var(--text-tertiary); font-size: var(--conversation-font-size-caption); }
+.ptool-coord-original > .ptool-coord-prose { color: var(--text-secondary); }
+.ptool-coord-translating { color: var(--text-tertiary); font-size: var(--conversation-font-size-caption); }
 .ptool-coord-open {
   align-self: flex-start;
   display: inline-flex;
@@ -98,10 +167,10 @@
 .ptool-coord-open:hover { background: var(--bg-hover); }
 .ptool-coord-open svg { width: var(--space-4); height: var(--space-4); }
 .ptool-coord-debug { color: var(--text-tertiary); }
-.ptool-coord-debug-row { display: flex; gap: var(--space-2); min-width: 0; padding-left: var(--space-3); }
+.ptool-coord-debug-row { display: flex; gap: var(--space-2); min-width: 0; }
 .ptool-coord-debug-row code { overflow-wrap: anywhere; font-family: var(--font-mono); }
 .ptool-coord-raw pre {
-  margin: var(--space-1) 0 0;
+  margin-block: var(--space-1) 0;
   max-height: 24em;
   overflow: auto;
   white-space: pre-wrap;

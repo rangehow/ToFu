@@ -9,10 +9,14 @@ from lib.boot_identity import BOOT_ID
 from lib.conversation_sync.settings_policy import public_conversation_settings
 from lib.conversation_sync.cursor import (
     ConversationCursorError,
+    ReplayPosition,
     decode_cursor,
     encode_cursor,
+    is_lineage_value,
 )
 from lib.conversation_sync.generated_contract import STREAM_POLICY
+from lib.storage.errors import StorageError
+from lib.storage.generated_v2_semantics import CONVERSATION_SYNC_LINEAGE as _LINEAGE
 from lib.conversation_sync.repository import ConversationSyncRepository
 from lib.conversation_sync.snapshot_query import ConversationSnapshotQuery
 from lib.conversation_sync.turn_images import (
@@ -23,6 +27,10 @@ from lib.conversation_sync.turn_images import (
     turn_image_owner_scope,
 )
 from lib.conversation_sync.validation import decode
+from lib.task_replay.task_event_contract import (
+    ATTEMPT_EVIDENCE_REFERENCE_KEY,
+    attempt_evidence_reference,
+)
 from lib.turn_image_transport import MAX_TURN_IMAGES
 from lib.turn_projection_segments import (
     change_without_provider_replay,
@@ -47,16 +55,45 @@ def _without_diagnostic_body(change: Any) -> Any:
     Its multi-megabyte request snapshots must not head-of-line block ordinary
     progress/terminal replay. The repository's full event remains untouched.
     """
-    if not isinstance(change, dict) or change.get('type') != 'attempt.event':
+    body = _attempt_body(change)
+    if body is None or ('event' not in body and ATTEMPT_EVIDENCE_REFERENCE_KEY not in body):
         return change
+    return _with_attempt_body(change, {
+        key: value for key, value in body.items()
+        if key not in ('event', ATTEMPT_EVIDENCE_REFERENCE_KEY)})
+
+
+def _attempt_body(change: Any) -> dict[str, Any] | None:
+    if not isinstance(change, dict) or change.get('type') != 'attempt.event':
+        return None
     payload = change.get('payload')
     attempt = payload.get('event') if isinstance(payload, dict) else None
     body = attempt.get('payload') if isinstance(attempt, dict) else None
-    if not isinstance(body, dict) or 'event' not in body:
+    return body if isinstance(body, dict) else None
+
+
+def _with_attempt_body(change: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
+    """Copy-on-write: the repository's stored change is never mutated."""
+    payload = change['payload']
+    return {**change, 'payload': {**payload, 'event': {**payload['event'], 'payload': body}}}
+
+
+def _with_referenced_evidence(change: Any, repository: ConversationSyncRepository) -> Any:
+    """Resolve the evidence an attempt event names to its task-event row.
+
+    The row is the frame's single durable copy (docs/STORAGE_EVENT_REPLAY.md,
+    "Diagnostic evidence is stored once"); a row retention already removed
+    leaves the body absent, as the ``none`` representation does.
+    """
+    body = _attempt_body(change)
+    reference = attempt_evidence_reference(body)
+    if reference is None:
         return change
-    return {**change, 'payload': {**payload, 'event': {
-        **attempt, 'payload': {key: value for key, value in body.items() if key != 'event'},
-    }}}
+    resolved = {key: value for key, value in body.items() if key != ATTEMPT_EVIDENCE_REFERENCE_KEY}
+    frame = repository.task_event(*reference)
+    if frame is not None:
+        resolved['event'] = frame
+    return _with_attempt_body(change, resolved)
 
 
 def _require_provider_replay_payload(value: str, segment_payload: str | None = None) -> None:
@@ -119,14 +156,70 @@ def adapt_turn_read(turn: Any) -> Any:
     return turn
 
 
+_LINEAGE_RESETS = STREAM_POLICY["cursorLineage"]["resetReasons"]
+_ABSENT = object()
+
+
+def _stored_lineage(stored: Any, *, operation: str) -> tuple[str, str]:
+    """The epoch and head digest an authority read beside its rows.
+
+    A result without them comes from an engine older than this tree; minting
+    lineage-free cursors from it would reopen the silent-divergence gap, so the
+    read fails closed instead.
+    """
+    epoch = stored.get(_LINEAGE["epochField"])
+    head_digest = stored.get(_LINEAGE["headDigestField"], _ABSENT)
+    if not is_lineage_value(epoch) or not (
+            head_digest is None or is_lineage_value(head_digest)):
+        raise StorageError(
+            "database_protocol_error", f"{operation} result carries no replay lineage")
+    return epoch, head_digest or ""
+
+
+def _lineage_reset_reason(
+    after: ReplayPosition, stored: Any, epoch: str, *, operation: str,
+) -> str | None:
+    """The reset a position's lineage requires at this read, if any.
+
+    Storage reports the digest of the change now at the position's sequence
+    (``anchorDigest``) from the same transaction as the page. A different
+    digest means crash recovery or a restore gave the sequence to another
+    change. An absent change left retention: only the open that minted the
+    cursor can vouch that no recovery reused its sequence since.
+    """
+    if after.sequence and not after.epoch:
+        return _LINEAGE_RESETS["withoutLineage"]
+    if stored.get("resetRequired"):
+        return str(stored.get("resetReason") or "cursor_invalid")
+    if not after.sequence:
+        return None
+    anchor = stored.get(_LINEAGE["anchorDigestField"], _ABSENT)
+    if anchor is None:
+        return None if after.epoch == epoch else _LINEAGE_RESETS["lineageUnproven"]
+    if not is_lineage_value(anchor):
+        raise StorageError(
+            "database_protocol_error",
+            f"{operation} result does not name the cursor's change")
+    return None if anchor == after.digest else _LINEAGE_RESETS["changeReplaced"]
+
+
 class ConversationSyncNotFound(LookupError):
     pass
 
 
 class ConversationTurnPageStale(RuntimeError):
-    def __init__(self, current_sync_sequence: int) -> None:
+    """No history page answers the reader at this read.
+
+    ``current_sync_sequence`` names the head the reader can catch up to. It is
+    None when the reader's own lineage is gone (``reason``, a cursor-lineage
+    reset reason): no head of the authority's lineage extends that replica,
+    which repairs from one snapshot instead.
+    """
+
+    def __init__(self, current_sync_sequence: int | None, *, reason: str | None = None) -> None:
         super().__init__("Conversation history page cursor is stale")
         self.current_sync_sequence = current_sync_sequence
+        self.reason = reason
 
 
 class ConversationSyncService:
@@ -225,6 +318,7 @@ class ConversationSyncService:
         if stored is None:
             raise ConversationSyncNotFound("Conversation not found")
         sequence = int(stored.get("syncSequence") or 0)
+        epoch, head_digest = _stored_lineage(stored, operation="turn.sync.snapshot")
         # Legacy/read-adapter boundary: pre-presentation Turn rows remain
         # readable without teaching the browser a second identity state
         # machine. New storage rows already carry the explicit value; only an
@@ -248,7 +342,8 @@ class ConversationSyncService:
             "conversationId": conversation_id,
             "conversationRevision": int(stored.get("conversationRevision") or 0),
             "syncSeq": sequence,
-            "cursor": encode_cursor(conversation_id, user_id, sequence),
+            "cursor": encode_cursor(
+                conversation_id, user_id, ReplayPosition(sequence, epoch, head_digest)),
             "serverBootId": BOOT_ID,
             "heartbeatIntervalMs": self.heartbeat_interval_ms,
             "settings": public_conversation_settings(stored.get("settings") or {}),
@@ -306,6 +401,7 @@ class ConversationSyncService:
         *,
         lane_id: str,
         expected_sync_sequence: int,
+        position: ReplayPosition | None = None,
         before_ordinal: int | None = None,
         limit: int = 64,
         segment_payload: str = "full",
@@ -322,12 +418,25 @@ class ConversationSyncService:
         and ``syncSeq`` names the head the page is exact for. The caller
         publishes the page once its own replay reaches that head. Only a head
         behind the caller, or one that keeps moving, remains stale.
+
+        ``position`` is the caller's replay position at
+        ``expected_sync_sequence``, decoded from the cursor it holds there.
+        Each read then reports the digest of the change now at that sequence,
+        and the page answers only in the caller's lineage, decided as for a
+        change page. A replaced or unprovable change there, or a head behind
+        the caller, is stale without a head: no head of this lineage extends
+        the caller's replica, which repairs from one snapshot. A caller without
+        a position (a browser loaded before lineage) keeps the sequence fence.
         """
         if tool_payload not in {"full", "lazy"} or (tool_payload == "lazy" and segment_payload != "refs"):
             raise ValueError("Lazy tool payload requires reference segments")
         _require_provider_replay_payload(provider_replay_payload, segment_payload)
         if segment_payload not in {"full", "refs"}:
             raise ValueError("Invalid conversation segment payload")
+        anchor = (
+            {"anchor_sequence": position.sequence}
+            if position is not None and position.sequence else {}
+        )
         sequence = expected_sync_sequence
         for _attempt in range(STREAMING_HEAD_READ_ATTEMPTS):
             stored = self._repository.turn_page(
@@ -339,6 +448,7 @@ class ConversationSyncService:
                 limit=limit,
 
                 **({"max_projection_bytes": max_projection_bytes} if max_projection_bytes else {}),
+                **anchor,
             )
             if stored is None:
                 raise ConversationSyncNotFound("Conversation not found")
@@ -346,11 +456,20 @@ class ConversationSyncService:
                 break
             head = int(stored.get("syncSequence") or 0)
             if head < expected_sync_sequence:
+                if position is not None:
+                    # As for a change page: a cursor beyond the head is invalid.
+                    raise ConversationTurnPageStale(None, reason="cursor_invalid")
                 raise ConversationTurnPageStale(head)
             sequence = head
         else:
             raise ConversationTurnPageStale(sequence)
         sequence = int(stored.get("syncSequence") or 0)
+        epoch, head_digest = _stored_lineage(stored, operation="turn.sync.page")
+        if position is not None:
+            reason = _lineage_reset_reason(
+                position, stored, epoch, operation="turn.sync.page")
+            if reason is not None:
+                raise ConversationTurnPageStale(None, reason=reason)
         response = {
             "ok": True,
             "contract": "tofu.conversation-sync.turn-page/v1",
@@ -359,7 +478,8 @@ class ConversationSyncService:
                 stored.get("conversationRevision") or 0
             ),
             "syncSeq": sequence,
-            "cursor": encode_cursor(conversation_id, user_id, sequence),
+            "cursor": encode_cursor(
+                conversation_id, user_id, ReplayPosition(sequence, epoch, head_digest)),
             "laneId": str(stored.get("laneId") or lane_id),
             "beforeOrdinal": int(stored.get("beforeOrdinal") or 0),
             "nextBeforeOrdinal": stored.get("nextBeforeOrdinal"),
@@ -469,69 +589,108 @@ class ConversationSyncService:
             )
         return decode_stored_turn_image(stored.get("base64"))
 
-    def sequence_from_cursor(
+    def position_from_cursor(
         self, conversation_id: str, user_id: int, cursor: str | None
-    ) -> int:
+    ) -> ReplayPosition:
         return decode_cursor(conversation_id, user_id, cursor)
-
-    def cursor_for_sequence(
-        self, conversation_id: str, user_id: int, sequence: int
-    ) -> str:
-        """Encode the public replay cursor for one authoritative sequence."""
-        return encode_cursor(conversation_id, user_id, sequence)
 
     def changes(
         self,
         conversation_id: str,
         user_id: int,
         *,
-        after_sequence: int,
+        after: ReplayPosition,
         limit: int = 500,
         diagnostic_payload: str = "full",
         provider_replay_payload: str = "full",
+        max_bytes: int | None = None,
+        cancellation=None,
     ) -> dict[str, Any]:
+        """Replay after a position, or the reset its lineage requires.
+
+        ``cursors`` names each returned event; ``position`` and ``cursor``
+        name the position after this page, verified in the read's authority
+        open; ``headCursor`` names the head. The stream passes ``position``
+        to its next page read, so each read re-verifies the lineage.
+        """
         if diagnostic_payload not in {"full", "none"}:
             raise ValueError("Invalid conversation diagnostic payload")
         _require_provider_replay_payload(provider_replay_payload)
+        # Only stream page reads carry these; other repositories take neither.
+        page_options = {key: value for key, value in (
+            ("max_bytes", max_bytes), ("cancellation", cancellation))
+            if value is not None}
         stored = self._repository.changes(
             conversation_id,
             user_id,
-            after_sequence=after_sequence,
+            after_sequence=after.sequence,
             limit=limit,
+            **page_options,
         )
         if stored is None:
             raise ConversationSyncNotFound("Conversation not found")
         head = int(stored.get("head") or 0)
-        if stored.get("resetRequired"):
-            reset = self.reset_required(
-                conversation_id, user_id, head,
-                reason=str(stored.get("resetReason") or "cursor_invalid"),
-            )
-            return {"head": head, "events": [], "reset": reset, "hasMore": False}
+        epoch, head_digest = _stored_lineage(stored, operation="turn.sync.changes")
+        head_cursor = encode_cursor(
+            conversation_id, user_id, ReplayPosition(head, epoch, head_digest))
+        reason = _lineage_reset_reason(after, stored, epoch, operation="turn.sync.changes")
+        if reason is not None:
+            return {
+                "head": head, "events": [], "cursors": [], "position": after,
+                "cursor": head_cursor, "headCursor": head_cursor,
+                "reset": self.reset_required(
+                    conversation_id, user_id, head_cursor, reason=reason),
+                "hasMore": False,
+            }
         events = list(stored.get("events") or [])
+        digests = stored.get(_LINEAGE["changeDigestsField"])
+        if (not isinstance(digests, list) or len(digests) != len(events)
+                or not all(is_lineage_value(digest) for digest in digests)):
+            raise StorageError(
+                "database_protocol_error",
+                "turn.sync.changes result does not name each change's lineage",
+            )
+        positions = [
+            ReplayPosition(int(event.get("syncSeq") or 0), epoch, digest)
+            for event, digest in zip(events, digests)
+        ]
         if diagnostic_payload == "none":
             events = [_without_diagnostic_body(event) for event in events]
+        else:
+            events = [_with_referenced_evidence(event, self._repository) for event in events]
         events = [public_change_with_stable_segments(event) for event in events]
         if provider_replay_payload == "none":
             events = [change_without_provider_replay(event) for event in events]
         for event in events:
             decode("ConversationChange", event)
+        if positions:
+            position = positions[-1]
+        else:
+            anchor = stored.get(_LINEAGE["anchorDigestField"])
+            position = ReplayPosition(
+                after.sequence, epoch, anchor if is_lineage_value(anchor) else after.digest)
         return {
             "head": head,
             "events": events,
+            "cursors": [
+                encode_cursor(conversation_id, user_id, item) for item in positions
+            ],
+            "position": position,
+            "cursor": encode_cursor(conversation_id, user_id, position),
+            "headCursor": head_cursor,
             "reset": None,
             "hasMore": bool(stored.get("hasMore")),
         }
 
     def reset_required(
-        self, conversation_id: str, user_id: int, sequence: int, *, reason: str,
+        self, conversation_id: str, user_id: int, cursor: str, *, reason: str,
     ) -> dict[str, Any]:
         """Require one authoritative snapshot instead of replay from a cursor."""
         return decode("SyncResetRequired", {
             "contract": "tofu.conversation-sync.event/v1",
             "type": "sync.reset_required",
             "conversationId": conversation_id,
-            "cursor": encode_cursor(conversation_id, user_id, sequence),
+            "cursor": cursor,
             "reason": reason,
         })
 
@@ -539,16 +698,17 @@ class ConversationSyncService:
         self,
         conversation_id: str,
         user_id: int,
-        sequence: int,
+        cursor: str,
         *,
         degraded: bool,
         push_withheld: bool = False,
     ) -> dict[str, Any]:
+        """Confirm liveness at the stream's last delivered cursor, verbatim."""
         heartbeat = {
             "contract": "tofu.conversation-sync.event/v1",
             "type": "sync.heartbeat",
             "conversationId": conversation_id,
-            "cursor": encode_cursor(conversation_id, user_id, sequence),
+            "cursor": cursor,
             "serverBootId": BOOT_ID,
             "degraded": bool(degraded),
             # Always explicit: the post-wedge heartbeat is what clears the

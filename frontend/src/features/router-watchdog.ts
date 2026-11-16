@@ -13,7 +13,7 @@
  * catalog is ready and on every language switch.
  */
 import type { RouterWatchdogReviewRequest, RouterWatchdogState } from '../api/router.generated';
-import { createButton, createChoice, createField, setFieldError } from '../ui';
+import { createButton, createChoice, createDisclosureSummary, createField, setFieldError } from '../ui';
 import { t } from '../i18n';
 import { setStableHidden } from '../conversation/ui/renderers/stable-dom';
 
@@ -59,7 +59,7 @@ export function createRouterWatchdogEntry(ports: RouterWatchdogPorts, hosts: Rou
 
   const settings = document.createElement('details');
   settings.className = 'router-watchdog';
-  const summary = localized(document.createElement('summary'), 'routerWatchdog.summaryOff');
+  const summary = localized(createDisclosureSummary(document), 'routerWatchdog.summaryOff');
   const off = document.createElement('div');
   off.className = 'router-watchdog-off';
   const hint = localized(document.createElement('p'), 'routerWatchdog.enableHint');

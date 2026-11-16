@@ -34,8 +34,8 @@ use crate::payload_segment::{
 use crate::transaction::{TransactionEnvelope, MAX_CARRIED_PAYLOAD_BYTES};
 use crate::vfs::{sync_directory_barrier, FileKind, OpenRequest, RealVfs, Vfs, VfsFile};
 use crate::wal::{
-    ActiveLog, WalBarrier, WalBarrierDriver, WalDurability, MAX_GROUP_ENCODED_BYTES,
-    MAX_GROUP_TRANSACTIONS, WAL_RECORD_OVERHEAD_BYTES,
+    abandon_if_uncovered, abandoned_uncovered, ActiveLog, WalBarrier, WalBarrierDriver,
+    WalDurability, MAX_GROUP_ENCODED_BYTES, MAX_GROUP_TRANSACTIONS, WAL_RECORD_OVERHEAD_BYTES,
 };
 use crate::{ACTIVE_LOG_CHECKPOINT_BYTES, ACTIVE_LOG_ROTATE_BYTES};
 
@@ -374,7 +374,6 @@ pub(crate) struct OnlineGcMarkSnapshot {
     pub staged_history: Vec<HistorySegmentReference>,
     pub committed_block_ids: Vec<BlockId>,
     pub payload_manifest_block_id: Option<BlockId>,
-    pub generation: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -452,7 +451,7 @@ impl Drop for Engine {
                 .restart_required
                 .load(std::sync::atomic::Ordering::Relaxed)
         {
-            if let Err(error) = self.flush_dirty_control() {
+            if let Err(error) = self.flush_dirty_control(ControlStaging::Staged) {
                 // No-panic/no-retry semantics stay: the failure only means
                 // the next open replays the WAL, but it is now observable.
                 crate::fsync_stats::note_drop_flush_failure();
@@ -1131,16 +1130,20 @@ impl Engine {
         Ok(())
     }
 
-    fn publish_control(&mut self, next: &ControlState) -> io::Result<()> {
+    fn publish_control(&mut self, next: &ControlState, staging: ControlStaging) -> io::Result<()> {
         crate::fsync_stats::note_publish_control();
         // CONTROL must never reference an unsynced WAL prefix. In `Normal`
         // durability the per-commit barrier is deferred to the background
         // flusher, so every publication performs it here first (a no-op in
         // `Strict` mode); a barrier failure is as ambiguous as a publication
-        // failure.
+        // failure, except a missed deadline before an unstaged publication:
+        // nothing was written and nothing changed, so it is abandoned.
         if let Err(error) = self.wal.sync_pending() {
-            self.restart_required
-                .store(true, std::sync::atomic::Ordering::Relaxed);
+            let error = match staging {
+                ControlStaging::Unstaged(publication) => abandon_if_uncovered(publication, error),
+                ControlStaging::Staged => error,
+            };
+            self.latch_unless_abandoned(&error);
             return Err(error);
         }
         // Synchronous publishers refuse to queue a CONTROL write behind an
@@ -1166,6 +1169,18 @@ impl Engine {
             return Err(error);
         }
         Ok(())
+    }
+
+    /// The one latch rule for a failed publication: an error from the first
+    /// CONTROL write on, or from a publisher that staged engine state, may have
+    /// partially landed and latches restart-required; a publication abandoned
+    /// before any CONTROL write and any state change (`wal::abandoned_uncovered`)
+    /// published nothing and never latches.
+    fn latch_unless_abandoned(&self, error: &io::Error) {
+        if !abandoned_uncovered(error) {
+            self.restart_required
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     pub fn is_restart_required(&self) -> bool {
@@ -1318,7 +1333,7 @@ impl Engine {
     /// must first catch the published durable point up in a standalone
     /// ordinary publication so every CONTROL transition stays explicable
     /// under the slot state-machine rules.
-    fn flush_dirty_control(&mut self) -> io::Result<()> {
+    fn flush_dirty_control(&mut self, staging: ControlStaging) -> io::Result<()> {
         let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_FLUSH_DIRTY);
         if !self.control_dirty {
             return Ok(());
@@ -1330,7 +1345,7 @@ impl Engine {
                 })?,
                 ..self.state.clone()
             };
-        self.publish_control(&next)?;
+        self.publish_control(&next, staging)?;
         self.state = next;
         self.control_dirty = false;
         Ok(())
@@ -1357,6 +1372,8 @@ impl Engine {
     const EARLY_DRAIN_WAL_DIVISOR: u64 = 2;
 
     pub(crate) fn require_write_admission(&self) -> io::Result<()> {
+        let _admission =
+            crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_WRITE_ADMISSION);
         self.require_usable_authority()?;
         if !self.rotation_in_flight
             && self.wal.len() >= self.rotation_threshold_bytes / Self::EARLY_DRAIN_WAL_DIVISOR
@@ -1730,6 +1747,8 @@ impl Engine {
         block_ids: &[BlockId],
         authority_root: Option<BlockId>,
     ) -> io::Result<()> {
+        let _spill =
+            crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_SPILL_REFERENCED_BLOCKS);
         let references: BTreeSet<BlockId> =
             block_ids.iter().copied().chain(authority_root).collect();
         if !self.rotation_in_flight
@@ -1953,14 +1972,9 @@ impl Engine {
         };
         // Strict worker handoff can also own unwritten frames. Cover the
         // captured logical prefix before any off-authority CONTROL chain.
-        let wal_cover = self.wal.publication_cover(Arc::clone(&self.vfs))?;
-        #[cfg(test)]
-        let wal_cover = wal_cover.map(|mut cover| {
-            if EXPIRE_PACK_ADOPTION_COVERS.with(std::cell::Cell::get) {
-                cover.expire_barrier_wait_for_test();
-            }
-            cover
-        });
+        let wal_cover = self
+            .wal
+            .publication_cover(Arc::clone(&self.vfs), "pack adoption")?;
         Ok(PackAdoptionPreparation::Ready(Box::new(
             PreparedPackAdoption {
                 segment_id,
@@ -2000,8 +2014,7 @@ impl Engine {
             // reclaims (docs/STORAGE_OPERATIONS.md, "A slow WAL sync during a
             // background publication").
             Err(error)
-                if (error.kind() == io::ErrorKind::WouldBlock && prepared.stop_requested())
-                    || abandoned_uncovered(&error) =>
+                if error.kind() == io::ErrorKind::WouldBlock && prepared.stop_requested() =>
             {
                 Err(error)
             }
@@ -2009,8 +2022,7 @@ impl Engine {
                 // The CONTROL chain may have partially landed; the in-memory
                 // generation is unusable until recovery, exactly like a
                 // synchronous publication failure.
-                self.restart_required
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                self.latch_unless_abandoned(&error);
                 Err(error)
             }
             Ok(()) => {
@@ -2898,7 +2910,6 @@ impl Engine {
             staged_history: self.staged_history.clone(),
             committed_block_ids,
             payload_manifest_block_id: self.state.payload_manifest_block_id,
-            generation: self.state.generation,
         })
     }
 
@@ -3243,7 +3254,7 @@ impl Engine {
                 "payload manifest root overlaps its loose victim set",
             ));
         }
-        self.flush_dirty_control()?;
+        self.flush_dirty_control(ControlStaging::Staged)?;
         {
             let _timer =
                 crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_CATALOG_WRITE);
@@ -3257,7 +3268,7 @@ impl Engine {
                 payload_manifest_block_id: Some(manifest_block_id),
                 ..self.state.clone()
             };
-        self.publish_control(&next)?;
+        self.publish_control(&next, ControlStaging::Staged)?;
         self.state = next;
         self.control_dirty = false;
         let install_timer =
@@ -3339,6 +3350,10 @@ impl Engine {
 
     pub(crate) fn stabilize_control_slots(&mut self) -> io::Result<()> {
         self.require_usable_authority()?;
+        // The WAL barrier wait precedes the CONTROL write and every state
+        // change here, so a missed deadline published nothing: it is abandoned
+        // like a background publication's cover, and the hold fails instead of
+        // latching. Every other barrier failure still latches.
         let next =
             ControlState {
                 generation: self.state.generation.checked_add(1).ok_or_else(|| {
@@ -3346,7 +3361,10 @@ impl Engine {
                 })?,
                 ..self.state.clone()
             };
-        self.publish_control(&next)?;
+        self.publish_control(
+            &next,
+            ControlStaging::Unstaged("CONTROL slot stabilization"),
+        )?;
         self.state = next;
         self.control_dirty = false;
         Ok(())
@@ -3570,7 +3588,7 @@ impl Engine {
             let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_CK_DRAIN);
             self.materialize_deferred_blocks()?;
         }
-        self.flush_dirty_control()?;
+        self.flush_dirty_control(ControlStaging::Staged)?;
         crate::fsync_stats::note_checkpoint();
         crate::fsync_stats::note_checkpoint_history_tail(self.unstaged_history_bytes as u64);
         let _segments_timer =
@@ -3665,7 +3683,7 @@ impl Engine {
         drop(_wal_timer);
         {
             let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_CK_CONTROL);
-            self.publish_control(&next)?;
+            self.publish_control(&next, ControlStaging::Staged)?;
         }
         self.control_dirty = false;
         {
@@ -3781,7 +3799,10 @@ impl Engine {
         if self.state.sealed_log.is_some() {
             return Err(rotation_backpressure());
         }
-        self.flush_dirty_control()?;
+        // The handover changes no engine state before its CONTROL publication
+        // succeeds (a successor file it created is reused by the retry), so a
+        // missed barrier deadline in either publication abandons it.
+        self.flush_dirty_control(ControlStaging::Unstaged("WAL generation handover"))?;
         let generation = self
             .state
             .active_log_generation
@@ -3817,7 +3838,7 @@ impl Engine {
                 }),
                 ..self.state.clone()
             };
-        self.publish_control(&next)?;
+        self.publish_control(&next, ControlStaging::Unstaged("WAL generation handover"))?;
         successor.set_durability(self.wal_durability);
         if let Some(barrier) = &self.wal_barrier {
             successor.attach_barrier(barrier);
@@ -3978,7 +3999,7 @@ impl Engine {
             let _stage = crate::fsync_stats::StageTimer::diagnostic(
                 crate::fsync_stats::STAGE_ROTATION_INSTALL_DIRTY_CONTROL,
             );
-            self.flush_dirty_control()?;
+            self.flush_dirty_control(ControlStaging::Staged)?;
         }
         crate::fsync_stats::note_checkpoint();
         crate::fsync_stats::note_checkpoint_history_tail(self.unstaged_history_bytes as u64);
@@ -4082,7 +4103,7 @@ impl Engine {
                 crate::fsync_stats::STAGE_ROTATION_INSTALL_CONTROL,
             );
             let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_CK_CONTROL);
-            self.publish_control(&next)?;
+            self.publish_control(&next, ControlStaging::Staged)?;
         }
         self.control_dirty = false;
         {
@@ -4153,7 +4174,7 @@ impl Engine {
                 "checkpoint lost its sealed WAL ownership",
             ));
         }
-        self.flush_dirty_control()?;
+        self.flush_dirty_control(ControlStaging::Staged)?;
         crate::fsync_stats::note_checkpoint();
         // Zero residual encoding under authority: all successor bytes remain
         // WAL-owned. This metric remains comparable to the legacy install.
@@ -4194,7 +4215,7 @@ impl Engine {
             let _timer = crate::fsync_stats::StageTimer::diagnostic(
                 crate::fsync_stats::STAGE_ROTATION_INSTALL_CONTROL,
             );
-            self.publish_control(&next)?;
+            self.publish_control(&next, ControlStaging::Staged)?;
         }
         self.state = next;
         self.control_dirty = false;
@@ -4658,6 +4679,7 @@ impl Engine {
         block_ids: &[BlockId],
         authority_state_update: Option<Option<BlockId>>,
     ) -> io::Result<CommitResult> {
+        let may_defer_spill = take_spill_deferral_permission();
         self.require_write_admission()?;
         // Referenced blocks may still be pending (staged without fsync by
         // write_block/put_deferred). Carrying their payloads in the WAL
@@ -4714,7 +4736,26 @@ impl Engine {
             inline_payload: inline_payload.to_vec(),
             authority_state_update,
         };
-        if carried_bytes > MAX_CARRIED_PAYLOAD_BYTES {
+        let spills = carried_bytes > MAX_CARRIED_PAYLOAD_BYTES;
+        if spills && may_defer_spill {
+            // Nothing is written or applied yet: the request dispatcher
+            // makes these durable without the authority and replays.
+            return Err(defer_spill(
+                block_ids
+                    .iter()
+                    .copied()
+                    .chain(authority_state_update.flatten())
+                    .collect(),
+            ));
+        }
+        crate::request_profile::note_engine_commit(
+            carried_bytes,
+            spills.then(|| {
+                carried.iter().filter(|slot| slot.is_some()).count()
+                    + usize::from(authority_state_carried.is_some())
+            }),
+        );
+        if spills {
             // Oversized references spill: make the pending blocks durable now
             // and log identifier-only references instead of growing an
             // unbounded WAL record. A large copy-on-write write set (search
@@ -4945,6 +4986,7 @@ impl std::fmt::Debug for PreparedRotationCheckpoint {
     }
 }
 
+#[derive(Default)]
 pub(crate) struct RotationSegmentOutcome {
     new_references: Vec<HistorySegmentReference>,
     payload_index_root_id: Option<BlockId>,
@@ -5141,68 +5183,100 @@ fn adoption_stopped_before_publication() -> io::Error {
     )
 }
 
-/// A pack adoption whose WAL cover the barrier worker had not synchronized
-/// by the barrier deadline: a slow but live fsync (2026-11-13 02:06, a
-/// DolphinFS stall past 30 s). The cover precedes every CONTROL write, so
-/// the adoption published nothing.
-#[derive(Debug)]
-struct AdoptionAbandonedUncovered(io::Error);
+/// What a synchronous CONTROL publisher changed before publishing. Its WAL
+/// barrier wait precedes the CONTROL write, so a missed deadline wrote
+/// nothing; whether it also changed nothing depends on the caller, which must
+/// say so here (docs/STORAGE_OPERATIONS.md, "A slow WAL sync during a
+/// background publication").
+#[derive(Clone, Copy, Debug)]
+enum ControlStaging {
+    /// Engine state changes only after the publication succeeds: a missed
+    /// barrier deadline abandons the named publication without latching.
+    Unstaged(&'static str),
+    /// Engine state was staged or moved before the publication: every barrier
+    /// failure, the deadline included, latches.
+    Staged,
+}
 
-impl std::fmt::Display for AdoptionAbandonedUncovered {
+/// What this thread's next foreground commit does with a carried set past
+/// `MAX_CARRIED_PAYLOAD_BYTES` (docs/TOFUDB_PUBLICATION_LATENCY.md, "Spills
+/// leave the authority").
+#[derive(Default)]
+enum SpillDeferral {
+    /// Spill under the authority, as every caller outside the request
+    /// dispatcher does.
+    #[default]
+    Inline,
+    /// Refuse the commit before any effect and leave its references here.
+    Allowed,
+    /// A commit was refused; these references must become durable first.
+    Deferred(BTreeSet<BlockId>),
+}
+
+thread_local! {
+    static SPILL_DEFERRAL: std::cell::RefCell<SpillDeferral> =
+        const { std::cell::RefCell::new(SpillDeferral::Inline) };
+}
+
+/// A commit refused because its referenced pending blocks must become
+/// durable before an identifier-only WAL record names them.
+#[derive(Debug)]
+struct SpillDeferred;
+
+impl std::fmt::Display for SpillDeferred {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "pack adoption abandoned before its CONTROL publication: {}",
-            self.0
+        formatter.write_str(
+            "commit deferred until its referenced blocks are durable outside the authority",
         )
     }
 }
 
-impl std::error::Error for AdoptionAbandonedUncovered {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.0)
-    }
-}
+impl std::error::Error for SpillDeferred {}
 
-fn abandon_if_uncovered(error: io::Error) -> io::Error {
-    if crate::wal::is_barrier_deadline(&error) {
-        io::Error::new(error.kind(), AdoptionAbandonedUncovered(error))
-    } else {
-        error
-    }
-}
+/// While alive, the first engine commit on this thread whose carried payloads
+/// pass the WAL record bound writes and applies nothing and returns
+/// `WouldBlock` instead of publishing its referenced pending blocks under the
+/// authority. Its references wait in [`SpillDeferralScope::take_deferred`];
+/// later commits on the thread spill inline.
+pub(crate) struct SpillDeferralScope(());
 
-/// Whether `error` is a pack adoption abandoned before publication because
-/// its WAL cover missed the barrier deadline ([`AdoptionAbandonedUncovered`]).
-pub(crate) fn abandoned_uncovered(error: &io::Error) -> bool {
-    error
-        .get_ref()
-        .is_some_and(|inner| inner.is::<AdoptionAbandonedUncovered>())
-}
-
-#[cfg(test)]
-thread_local! {
-    static EXPIRE_PACK_ADOPTION_COVERS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// While alive, the WAL covers of pack adoptions prepared on this thread
-/// reach their barrier deadline at once instead of after `MAX_BARRIER_WAIT`.
-#[cfg(test)]
-pub(crate) struct ExpiredPackAdoptionCovers(());
-
-#[cfg(test)]
-impl ExpiredPackAdoptionCovers {
-    pub(crate) fn on_this_thread() -> Self {
-        EXPIRE_PACK_ADOPTION_COVERS.with(|flag| flag.set(true));
+impl SpillDeferralScope {
+    pub(crate) fn allow() -> Self {
+        SPILL_DEFERRAL.with(|state| *state.borrow_mut() = SpillDeferral::Allowed);
         Self(())
     }
+
+    /// The references of the commit this scope deferred, if one did.
+    pub(crate) fn take_deferred(&self) -> Option<BTreeSet<BlockId>> {
+        SPILL_DEFERRAL.with(|state| match std::mem::take(&mut *state.borrow_mut()) {
+            SpillDeferral::Deferred(references) => Some(references),
+            _ => None,
+        })
+    }
 }
 
-#[cfg(test)]
-impl Drop for ExpiredPackAdoptionCovers {
+impl Drop for SpillDeferralScope {
     fn drop(&mut self) {
-        EXPIRE_PACK_ADOPTION_COVERS.with(|flag| flag.set(false));
+        SPILL_DEFERRAL.with(|state| *state.borrow_mut() = SpillDeferral::Inline);
     }
+}
+
+/// Consumes this thread's permission: only the first commit in a scope may
+/// defer, so a request that already committed never replays.
+fn take_spill_deferral_permission() -> bool {
+    SPILL_DEFERRAL.with(|state| {
+        let mut state = state.borrow_mut();
+        let allowed = matches!(*state, SpillDeferral::Allowed);
+        if allowed {
+            *state = SpillDeferral::Inline;
+        }
+        allowed
+    })
+}
+
+fn defer_spill(references: BTreeSet<BlockId>) -> io::Error {
+    SPILL_DEFERRAL.with(|state| *state.borrow_mut() = SpillDeferral::Deferred(references));
+    io::Error::new(io::ErrorKind::WouldBlock, SpillDeferred)
 }
 
 /// Phase 2, the whole fsync chain of a catalog adoption, driven WITHOUT the
@@ -5284,7 +5358,7 @@ pub(crate) fn publish_prepared_pack_adoption(
         return Err(adoption_stopped_before_publication());
     }
     if let Some(cover) = &prepared.wal_cover {
-        cover.sync().map_err(abandon_if_uncovered)?;
+        cover.sync()?;
     }
     let mut control = prepared
         .control
@@ -5326,5 +5400,21 @@ mod tests {
 }
 
 #[cfg(test)]
+#[path = "engine_restart_open_tests.rs"]
+mod restart_open_tests;
+
+#[cfg(test)]
+#[path = "engine_recovery_witness_tests.rs"]
+mod recovery_witness_tests;
+
+#[cfg(test)]
+#[path = "engine_recovery_lookup_tests.rs"]
+mod recovery_lookup_tests;
+
+#[cfg(test)]
 #[path = "engine_write_staging_tests.rs"]
 mod write_staging_tests;
+
+#[cfg(test)]
+#[path = "engine_window_liveness_tests.rs"]
+mod window_liveness_tests;

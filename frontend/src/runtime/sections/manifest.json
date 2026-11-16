@@ -688,6 +688,12 @@
       "createInspectorDisclosure",
       "syncInspectorDisclosure"
      ]
+    },
+    {
+     "source": "frontend/src/ui/index.ts",
+     "bindings": [
+      "DISCLOSURE_CHEVRON_SVG"
+     ]
     }
    ],
    "registryImports": [],

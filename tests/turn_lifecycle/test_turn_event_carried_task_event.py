@@ -892,13 +892,16 @@ def test_accepted_child_frame_uses_real_parent_attempt_fence(
 
 
 
-def test_large_debug_snapshot_attempt_event_is_delta_and_read_rehydrates(
+def test_large_debug_snapshot_is_stored_once_and_read_rehydrates(
         turn_service, storage):
     """A large live frame must not be written twice (event log + attempt).
 
-    The attempt event keeps the same shared-prefix delta the event log stores,
-    and ``read_events`` restores the complete wire frame for its consumers.
+    The event log stores the shared-prefix delta once; the attempt event names
+    that row, and ``read_events`` restores the complete wire frame for its
+    consumers.
     """
+    import json
+    from lib.task_replay.task_event_contract import ATTEMPT_EVIDENCE_REFERENCE_KEY
     from lib.tasks_pkg import manager
     from lib.tasks_pkg.manager.runtime import chat_task_runtime
     from lib.tasks_pkg.snapshot_delta import forget_projector_task
@@ -947,16 +950,18 @@ def test_large_debug_snapshot_attempt_event_is_delta_and_read_rehydrates(
         raw = storage.client.query('turn.events.list', {
             'attempt_id': attempt_id, 'user_id': 1, 'limit': 100,
         })
-        frames = [
-            row['payload']['event'] for row in raw
+        bodies = [
+            row['payload'] for row in raw
             if isinstance(row.get('payload'), dict)
-            and isinstance(row['payload'].get('event'), dict)
-            and row['payload']['event'].get('type') == 'messages_snapshot'
+            and row['payload'].get('updateKind') == 'messages_snapshot'
         ]
-        assert len(frames) == 2
-        # The baseline stays self-contained for a live debug panel.
-        assert frames[0]['messages'] == first_messages
-        assert frames[0]['tools'] == tools
+        assert len(bodies) == 2
+        # The attempt events store no frame; each names its event-log row.
+        assert all('event' not in body for body in bodies)
+        rows = {row['sequence']: row['event'] for row in storage.client.query(
+            'event.list', {'task_id': task_id, 'after_sequence': -1, 'limit': 100})}
+        frames = [rows[body[ATTEMPT_EVIDENCE_REFERENCE_KEY]['sequence']] for body in bodies]
+        assert all(body[ATTEMPT_EVIDENCE_REFERENCE_KEY]['taskId'] == task_id for body in bodies)
         # The growing frame is stored once as a prefix delta, not the full
         # 100 KB wire form.
         assert 'messages' not in frames[1]
@@ -964,7 +969,6 @@ def test_large_debug_snapshot_attempt_event_is_delta_and_read_rehydrates(
         assert frames[1]['prefixLen'] == len(first_messages)
         assert frames[1]['newMessages'] == second_messages[len(first_messages):]
         assert 'tools' not in frames[1]
-        import json
         assert (len(json.dumps(frames[1])) * 10
                 < len(json.dumps(second)))
 
@@ -976,10 +980,13 @@ def test_large_debug_snapshot_attempt_event_is_delta_and_read_rehydrates(
             and isinstance(row['payload'].get('event'), dict)
             and row['payload']['event'].get('type') == 'messages_snapshot'
         ]
+        assert replayed_frames[0]['messages'] == first_messages
+        assert replayed_frames[0]['tools'] == tools
         assert replayed_frames[1]['messages'] == second_messages
         assert replayed_frames[1]['tools'] == tools
         assert 'snapshotDeltaVersion' not in replayed_frames[1]
         assert 'prefixLen' not in replayed_frames[1]
+        assert all(ATTEMPT_EVIDENCE_REFERENCE_KEY not in row['payload'] for row in replayed)
     finally:
         chat_task_runtime.discard(task_id)
         forget_projector_task(task_id)

@@ -704,8 +704,7 @@ class _RootLoopHooks:
         checkpoint_round = round_num if phase == 'tools_in_flight' else round_num + 1
         checkpoint_invocation(self.task, self.messages, checkpoint_round, phase=phase)
         run_round_checkpoint_and_close(
-            self.task, self.state,
-            round_num=round_num, tid=self.request.tid)
+            self.task, round_num=round_num, tid=self.request.tid)
 
     def observe_abort(
         self,

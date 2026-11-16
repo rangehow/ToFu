@@ -150,7 +150,7 @@ def validate_turns(turns) -> None:
         or turns.get("attemptEventSyncReferenceNamespace")
         != "attempt_event_sync_references"
         or turns.get("maximumSyncPruneRowsPerTransaction") != 1_000
-        or turns.get("maximumSyncPruneMaterializedBytes") != 64 * 1024 * 1024
+        or "maximumSyncPruneMaterializedBytes" in turns
         or turns.get("maximumAttemptEventPruneAttemptsPerTransaction") != 64
         or turns.get("maximumAttemptEventPruneRowsPerTransaction") != 200_000
         or turns.get("maximumAttemptEventPruneMaterializedBytes") != 64 * 1024 * 1024

@@ -46,7 +46,7 @@ def test_failed_retained_read_card_reports_actual_work(
     messages = json.loads((ROOT/'frontend/src/i18n/locales'/f'{language}.json').read_text())
     page.evaluate('messages=>window.messages=messages', messages)
     page.add_script_tag(content=r'''
-      window._featureFlags={debug_mode:false};
+      window._featureFlags={debug_mode:true};
       window.Icon=()=>'<svg aria-hidden="true" viewBox="0 0 16 16"></svg>';
       window.escapeHtml=value=>String(value??'').replace(/[&<>"']/g,
         ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import shutil
 import sqlite3
 import time
 
@@ -21,7 +22,8 @@ pytestmark = pytest.mark.unit
 def session(tmp_path):
     connection = sqlite3.connect(tmp_path / "conversation-changes.db")
     connection.row_factory = sqlite3.Row
-    authority = SQLiteSession(connection)
+    # A backend open's identity; sync reads report the lineage epoch it derives.
+    authority = SQLiteSession(connection, event_read_epoch="conversation-changes-open")
     initialize_schema(authority)
     authority.execute(
         "INSERT INTO storage_conversations("
@@ -359,3 +361,101 @@ def test_turn_delete_expires_reference_prefix_before_attempt_events(session):
         "conversation_id": "conversation", "user_id": 1, "after": 3,
     })
     assert [change["type"] for change in tail["events"]] == ["turn.deleted"]
+
+
+class _OneMillisecondClock:
+    """The time module, with every wall-clock reading in the same millisecond."""
+
+    def time(self) -> float:
+        return 1_800_000_000.0
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
+def test_an_attempt_change_recovery_replaced_in_the_same_millisecond_resets_its_cursor(
+    tmp_path, monkeypatch,
+):
+    """Replay lineage covers the AttemptEvent a compact change row references.
+
+    The change row stores the event's identity and commit time, not the event.
+    Crash recovery can lose an event and its change, then commit a different
+    event at the same attempt and sync sequences within the same millisecond.
+    A cursor naming the lost event must then reset instead of resuming past
+    the replacement.
+    """
+    from lib.conversation_sync.cursor import ReplayPosition
+    from lib.conversation_sync.service import ConversationSyncService
+    from lib.storage_authority_sql.operations_pkg import _turns_core as core
+    from lib.storage_authority_sql.operations_pkg._turns_events import (
+        _insert_attempt_event,
+    )
+    from lib.storage_authority_sql.operations_pkg._turns_read import _turn_sync_changes
+
+    monkeypatch.setattr(core, "time", _OneMillisecondClock())
+    database, durable_point = tmp_path / "replay.db", tmp_path / "durable-point.db"
+
+    def open_authority(identity: str):
+        connection = sqlite3.connect(database)
+        connection.row_factory = sqlite3.Row
+        return connection, SQLiteSession(connection, event_read_epoch=identity)
+
+    def stream(session, text: str) -> None:
+        event = _attempt_event(sequence=2)
+        event["payload"]["text"] = text
+        _insert_attempt_event(
+            session, attempt_id="attempt", sequence=2, conversation_id="conversation",
+            turn_id="turn", projection_revision=2, event_type="projection_updated",
+            envelope=event, created_at=1_800_000_000_000,
+        )
+        _capture_attempt_change(session, event)
+
+    def replay_after(session, sequence: int) -> dict:
+        return _turn_sync_changes(session, {
+            "conversation_id": "conversation", "user_id": 1, "after": sequence,
+        })
+
+    connection, session = open_authority("open-before-the-crash")
+    initialize_schema(session)
+    session.execute(
+        "INSERT INTO storage_conversations("
+        "id,user_id,title,messages_json,created_at_ms,updated_at_ms,"
+        "settings_json,msg_count,search_text,rev) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        ("conversation", 1, "sync", _dump([]), 1, 1, _dump({}), 0, "", 1),
+    )
+    _capture_attempt_change(session, _seed_attempt(session))
+    connection.commit()
+    connection.close()
+    shutil.copyfile(database, durable_point)
+
+    connection, session = open_authority("open-before-the-crash")
+    stream(session, "lost")
+    connection.commit()
+    seen = replay_after(session, 1)
+    connection.close()
+    # Restoring the durable copy is exactly the state crash recovery leaves.
+    shutil.copyfile(durable_point, database)
+
+    connection, session = open_authority("open-after-recovery")
+    try:
+        stream(session, "recovered")
+        recovered = replay_after(session, 1)
+        lost, replacement = seen["events"][0], recovered["events"][0]
+        assert recovered["head"] == seen["head"] == 2, "recovery reused the sync sequence"
+        assert replacement["payload"]["event"]["seq"] == lost["payload"]["event"]["seq"]
+        assert replacement["occurredAt"] == lost["occurredAt"], "within the same millisecond"
+        assert replacement["payload"]["event"] != lost["payload"]["event"]
+        assert recovered["changeDigests"] != seen["changeDigests"], (
+            "the replacement event shares the lost event's digest")
+
+        class Replay:
+            def changes(self, conversation_id, user_id, *, after_sequence, limit, **_options):
+                assert (conversation_id, user_id) == ("conversation", 1)
+                return replay_after(session, after_sequence)
+
+        held = ReplayPosition(2, seen["authorityEpoch"], seen["headDigest"])
+        page = ConversationSyncService(Replay()).changes("conversation", 1, after=held)
+        assert page["reset"] is not None, "the cursor resumed past the replacement event"
+        assert page["reset"]["reason"] == "cursor_invalid"
+    finally:
+        connection.close()

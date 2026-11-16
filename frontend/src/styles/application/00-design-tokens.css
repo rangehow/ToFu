@@ -165,6 +165,12 @@
      Matches every existing ghost fallback (#fff) → zero visual change. */
   --text-on-accent:#fff;
 
+  /* Composer toolbar submenus: the count badge stays white on --accent in
+     every theme (unlike --text-on-accent); light theme swaps in a warm shadow. */
+  --submenu-count-ink:#fff;
+  --submenu-shadow-default:0 12px 40px rgba(0,0,0,0.36),0 2px 10px rgba(0,0,0,0.18);
+  --submenu-shadow-light:0 10px 30px rgba(50,42,26,0.14),0 2px 8px rgba(50,42,26,0.08);
+
   /* Scannable QR quiet zones stay white in every theme. */
   --qr-plate-background:#fff;
 
@@ -277,6 +283,16 @@
   --signal-latency-bar-gap:2px;
 }
 
+/* Swarm inbox receipts (08-injection-receipts.css): peer-bubble ink, update
+   card stripe/agent/error inks and raw payload surface. Themes override below. */
+:root{
+  --sw-peer-ink:#82aaff;
+  --sw-card-stripe:rgba(251,191,36,0.5);
+  --sw-card-agent-ink:#fbbf24;
+  --sw-card-error-ink:#ef4444;
+  --sw-raw-surface:rgba(255,255,255,0.02);
+}
+
 /* Warm charcoal and tofu cream. Light palettes remain independently selectable. */
 :root:not([data-theme]), :root[data-theme="dark"] {
   color-scheme: dark;
@@ -303,7 +319,8 @@
   --error-bg:color-mix(in srgb, var(--error-text) 8%, transparent);
   --error-border:color-mix(in srgb, var(--error-text) 30%, transparent);
   --success-text:var(--text-secondary);
-  --success-bg:transparent;
+  /* Success ink stays quiet; its pill keeps a visible fill like the other themes. */
+  --success-bg:color-mix(in srgb, var(--success-text) 12%, transparent);
   --success-border:var(--border);
   --warning-text:#e2c18b;
   --warning-bg:color-mix(in srgb, var(--warning-text) 8%, transparent);
@@ -325,6 +342,8 @@
 }
 
 [data-theme="light"]{
+  --sw-peer-ink:#3b5bdb;
+  --sw-raw-surface:rgba(0,0,0,0.03);
   --success-text:#19664D;
   --success-bg:rgba(31,122,92,0.08);
   --success-border:rgba(31,122,92,0.25);
@@ -344,6 +363,13 @@
 
 [data-theme="tofu"]{
   --font-ui:var(--sans-body);
+  --sw-peer-ink:#5b54c7;
+  --sw-card-stripe:#d98c3f;
+  --sw-card-agent-ink:#b06d28;
+  --sw-card-paper:#faf8f3;
+  --sw-card-paper-edge:#e0d9c8;
+  --sw-raw-surface:rgba(0,0,0,0.04);
+  --sw-raw-ink:#3a342c;
 
   /* CO-PILOT keeps its established paper/ink/gold chrome independently of chat. */
   --project-surface:#faf8f3;
@@ -381,4 +407,87 @@
     --motion-base:0.01s;
     --motion-slow:0.01s;
   }
+}
+
+/* Exact paints migrated verbatim (same value in every theme) from the legacy
+   03-paper-reader.css and 14-local-control.css sheets when they left the
+   frozen-copy list. Fold them into semantic roles when those screens are
+   redesigned; do not reuse them for new UI. */
+:root{
+  --legacy-hex-15803d:#15803d;
+  --legacy-hex-166534:#166534;
+  --legacy-hex-1a1a21:#1a1a21;
+  --legacy-hex-1e293b:#1e293b;
+  --legacy-hex-22c55e:#22c55e;
+  --legacy-hex-2a2a35:#2a2a35;
+  --legacy-hex-33333f:#33333f;
+  --legacy-hex-6a6a7a:#6a6a7a;
+  --legacy-hex-6b21a8:#6b21a8;
+  --legacy-hex-7e22ce:#7e22ce;
+  --legacy-hex-888:#888;
+  --legacy-hex-92400e:#92400e;
+  --legacy-hex-9898a8:#9898a8;
+  --legacy-hex-a855f7:#a855f7;
+  --legacy-hex-b08d57:#b08d57;
+  --legacy-hex-b45309:#b45309;
+  --legacy-hex-c084fc:#c084fc;
+  --legacy-hex-d29922:#d29922;
+  --legacy-hex-e2e8f0:#e2e8f0;
+  --legacy-hex-e6e6ea:#e6e6ea;
+  --legacy-hex-e8a13c:#e8a13c;
+  --legacy-hex-e8e8ed:#e8e8ed;
+  --legacy-hex-e8e8f0:#e8e8f0;
+  --legacy-hex-ef4444:#ef4444;
+  --legacy-hex-f59e0b:#f59e0b;
+  --legacy-hex-fbbf24:#fbbf24;
+  --legacy-hex-fff:#fff;
+  --legacy-rgba-0-0-0-a012:rgba(0,0,0,0.012);
+  --legacy-rgba-0-0-0-a03:rgba(0,0,0,0.03);
+  --legacy-rgba-0-0-0-a09:rgba(0,0,0,0.09);
+  --legacy-rgba-0-0-0-a15:rgba(0,0,0,.15);
+  --legacy-rgba-0-0-0-a18:rgba(0,0,0,0.18);
+  --legacy-rgba-0-0-0-a3:rgba(0,0,0,0.3);
+  --legacy-rgba-0-0-0-a3-rgba0003:rgba(0,0,0,.3);
+  --legacy-rgba-0-0-0-a35:rgba(0,0,0,0.35);
+  --legacy-rgba-0-0-0-a45:rgba(0,0,0,.45);
+  --legacy-rgba-0-0-0-a5:rgba(0,0,0,0.5);
+  --legacy-rgba-110-86-207-a04:rgba(110,86,207,0.04);
+  --legacy-rgba-110-86-207-a06:rgba(110,86,207,0.06);
+  --legacy-rgba-110-86-207-a28:rgba(110,86,207,.28);
+  --legacy-rgba-110-86-207-a4:rgba(110,86,207,.4);
+  --legacy-rgba-120-120-120-a12:rgba(120,120,120,.12);
+  --legacy-rgba-126-34-206-a05:rgba(126,34,206,0.05);
+  --legacy-rgba-126-34-206-a08:rgba(126,34,206,0.08);
+  --legacy-rgba-126-34-206-a1:rgba(126,34,206,0.1);
+  --legacy-rgba-126-34-206-a16:rgba(126,34,206,0.16);
+  --legacy-rgba-126-34-206-a35:rgba(126,34,206,0.35);
+  --legacy-rgba-126-34-206-a4:rgba(126,34,206,0.4);
+  --legacy-rgba-148-148-168-a18:rgba(148,148,168,0.18);
+  --legacy-rgba-168-85-247-a05:rgba(168,85,247,0.05);
+  --legacy-rgba-168-85-247-a06:rgba(168,85,247,0.06);
+  --legacy-rgba-168-85-247-a07:rgba(168,85,247,0.07);
+  --legacy-rgba-168-85-247-a10:rgba(168,85,247,0.10);
+  --legacy-rgba-168-85-247-a12:rgba(168,85,247,0.12);
+  --legacy-rgba-168-85-247-a14:rgba(168,85,247,0.14);
+  --legacy-rgba-168-85-247-a18:rgba(168,85,247,0.18);
+  --legacy-rgba-168-85-247-a20:rgba(168,85,247,0.20);
+  --legacy-rgba-168-85-247-a35:rgba(168,85,247,0.35);
+  --legacy-rgba-168-85-247-a4:rgba(168,85,247,0.4);
+  --legacy-rgba-168-85-247-a45:rgba(168,85,247,0.45);
+  --legacy-rgba-20-20-28-a95:rgba(20,20,28,0.95);
+  --legacy-rgba-21-128-61-a10:rgba(21,128,61,0.10);
+  --legacy-rgba-21-128-61-a4:rgba(21,128,61,0.4);
+  --legacy-rgba-22-163-74-a08:rgba(22,163,74,0.08);
+  --legacy-rgba-22-163-74-a35:rgba(22,163,74,0.35);
+  --legacy-rgba-232-161-60-a07:rgba(232,161,60,0.07);
+  --legacy-rgba-232-161-60-a35:rgba(232,161,60,0.35);
+  --legacy-rgba-239-68-68-a1:rgba(239,68,68,.1);
+  --legacy-rgba-255-255-255-a015:rgba(255,255,255,0.015);
+  --legacy-rgba-255-255-255-a12:rgba(255,255,255,0.12);
+  --legacy-rgba-34-197-94-a1:rgba(34,197,94,.1);
+  --legacy-rgba-34-197-94-a16:rgba(34,197,94,0.16);
+  --legacy-rgba-34-197-94-a4:rgba(34,197,94,0.4);
+  --legacy-rgba-99-102-241-a04:rgba(99,102,241,.04);
+  --legacy-rgba-99-102-241-a1:rgba(99,102,241,.1);
+  --legacy-rgba-99-102-241-a12:rgba(99,102,241,.12);
 }

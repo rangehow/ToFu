@@ -238,6 +238,7 @@ __pycache__/
 !/scripts/benchmark_verification.py
 !/scripts/verify.py
 !/scripts/analyze_agent_load.py
+!/scripts/harness_metrics.py
 !/scripts/tofudb_load_test.py
 !/scripts/agent_loop_load_test.py
 !/scripts/restart_interruptions.py

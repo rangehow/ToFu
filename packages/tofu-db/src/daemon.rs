@@ -400,9 +400,12 @@ pub(crate) fn run_rotation_driver(
             Ok(crate::engine::RotationPublication::Complete(sequence)) => Ok(sequence),
             Err(error) => Err(error),
         };
+        // A publication abandoned at its WAL cover is parked for retry,
+        // exactly like a publication-lane deferral.
         let transient_defer = matches!(
             result.as_ref().err(),
             Some(error) if error.kind() == io::ErrorKind::WouldBlock
+                || crate::wal::abandoned_uncovered(error)
         );
         // Drain retries are driver progress, not a reopened write lane.
         // Only publication or a terminal failure releases request waiters.
@@ -527,10 +530,14 @@ pub fn derive_auth_token(secret: &[u8]) -> io::Result<[u8; 32]> {
 }
 
 /// Graceful-stop WAL retirement on both engines (main authority + search
-/// projection). The overlay is merged before each retirement. The authority
-/// retires its window through the rotation pipeline, into indexed history
-/// without materializing staged blocks, so the stop costs the window's bytes,
-/// not one file per block (`Engine::retire_wal_window_for_stop`). An empty
+/// projection). The authority retires its window through the rotation
+/// pipeline, into indexed history without materializing staged blocks, so
+/// the stop costs the window's bytes, not one file per block
+/// (`Engine::retire_wal_window_for_stop`). It merges no overlay: the WAL
+/// already makes every delta durable, retirement carries unmerged deltas
+/// into history like every online rotation, and the next open replays them
+/// (`EntityDatabase::replay_overlay_deltas`). A full merge here cost 49.8 s
+/// of a 90 s stop budget after a replayed reopen (2026-11-13). An empty
 /// window is not an error; every real failure is logged and swallowed
 /// because the worst case is the status quo: the next open replays the WAL.
 pub(crate) fn checkpoint_wal_windows_for_fast_reopen(
@@ -547,16 +554,6 @@ pub(crate) fn checkpoint_wal_windows_for_fast_reopen(
             return;
         }
     };
-    if let Err(error) =
-        crate::engine_log::lifecycle_step("shutdown_timing", "authority_overlay_merge", || {
-            guard.merge_entity_overlay_fully()
-        })
-    {
-        crate::engine_log::warn(
-            "shutdown_checkpoint",
-            &format!("overlay merge before shutdown checkpoint failed: {error}"),
-        );
-    }
     match crate::engine_log::lifecycle_step("shutdown_timing", "authority_checkpoint", || {
         guard.retire_wal_window_for_stop()
     }) {
@@ -1016,8 +1013,8 @@ pub fn serve_supervised<R: Read + Send + 'static, W: Write>(
             })
         })
         .transpose();
-    // Stop the collector before the shutdown merge/checkpoint tail so its
-    // try_lock holds never contend with the final checkpoint commit.
+    // Stop the collector before the shutdown retirement tail so its
+    // try_lock holds never contend with the final retirement.
     let online_gc_result = online_gc_driver
         .map(|driver| {
             crate::engine_log::lifecycle_step("shutdown_timing", "online_gc", || {
@@ -1069,9 +1066,9 @@ pub fn serve_supervised<R: Read + Send + 'static, W: Write>(
     let parent_result = parent_lease.join_if_finished();
     // Every writer lane except the group barrier is now quiescent. Retire
     // both engines' active WAL windows BEFORE joining the barrier driver:
-    // the shutdown merge/checkpoint commit waits on that barrier, and
-    // joining it first made every overlay-enabled shutdown pay the 30 s
-    // barrier-wait deadline ("WAL barrier wait exceeded its deadline").
+    // the retirement's publication waits on that barrier, and joining it
+    // first made every overlay-enabled shutdown pay the 30 s barrier-wait
+    // deadline ("WAL barrier wait exceeded its deadline").
     // Boot-time WAL replay of the pre-shutdown window (tens of MiB on a
     // network mount) was the dominant startup cost. Best-effort — any
     // failure only means the next boot replays exactly what it replays
@@ -1514,6 +1511,64 @@ mod tests {
         let reopened = AuthorityDatabase::open_with_vfs(Path::new("/data"), dyn_vfs).unwrap();
         for (id, payload) in ids.iter().zip(&payloads) {
             assert_eq!(&reopened.read_block_for_test(*id).unwrap(), payload);
+        }
+    }
+
+    /// 2026-11-13 (GATE-R3 probe): the clean stop after a replayed reopen spent
+    /// 49.8 s of its 90 s budget merging the overlay in full under the
+    /// authority, and an overrun kill would replay the window again. The WAL
+    /// already makes every delta durable and retirement carries unmerged
+    /// deltas into history like every online rotation, so the stop merges
+    /// nothing; the next open replays the deltas into the overlay.
+    #[test]
+    fn a_graceful_stop_leaves_the_unmerged_overlay_to_replay_instead_of_merging_it() {
+        use crate::entity::EntityKey;
+        use crate::vfs::{DeterministicVfs, Vfs};
+        let vfs = Arc::new(DeterministicVfs::new(None));
+        vfs.create_dir(Path::new("/data")).unwrap();
+        vfs.sync_directory(Path::new("/")).unwrap();
+        let dyn_vfs: Arc<dyn Vfs> = vfs.clone();
+        let mut database =
+            AuthorityDatabase::initialize_with_vfs(Path::new("/data"), dyn_vfs).unwrap();
+        database.set_write_overlay_for_test(true);
+        database.engine_mut_for_test().attach_rotation_driver();
+        let key = |index: u32| EntityKey::new(7, 11, "records", &index.to_be_bytes()).unwrap();
+        for index in 0..512_u32 {
+            let mut transaction = database.begin(7, 11).unwrap();
+            database
+                .entity_put(&mut transaction, key(index), index.to_be_bytes().to_vec())
+                .unwrap();
+            database.commit(transaction).unwrap();
+        }
+        let pending = database.entity_overlay_entries_for_test();
+        assert!(pending >= 512, "{pending}");
+        let database = Arc::new(Mutex::new(database));
+        checkpoint_wal_windows_for_fast_reopen(&database, None);
+        let mut database = Arc::try_unwrap(database)
+            .ok()
+            .unwrap()
+            .into_inner()
+            .unwrap();
+        assert_eq!(
+            database.entity_overlay_entries_for_test(),
+            pending,
+            "the stop merged the overlay"
+        );
+        let state = database.engine_mut_for_test().state().clone();
+        assert_eq!(
+            state.checkpoint_sequence, state.durable_sequence,
+            "the stop left WAL to replay"
+        );
+        drop(database);
+        vfs.crash().unwrap();
+        let dyn_vfs: Arc<dyn Vfs> = vfs.clone();
+        let reopened = AuthorityDatabase::open_with_vfs(Path::new("/data"), dyn_vfs).unwrap();
+        for index in [0_u32, 255, 511] {
+            let mut read = reopened.begin(7, 11).unwrap();
+            assert_eq!(
+                reopened.entity_get(&mut read, &key(index)).unwrap(),
+                Some(index.to_be_bytes().to_vec())
+            );
         }
     }
 

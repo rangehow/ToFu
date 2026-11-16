@@ -61,7 +61,11 @@ def main():
                              ('CoordinatorProgressState', 'progressState'),
                              ('CoordinatorProgressHistoryGroup', 'progressHistoryGroup'),
                              ('CoordinatorProgressHistoryTask', 'progressHistoryTask'),
-                             ('CoordinatorProgressHistoryPage', 'progressHistoryPage')]:
+                             ('CoordinatorProgressHistoryPage', 'progressHistoryPage'),
+                             ('LeadDeliverableKind', 'deliverableKind'),
+                             ('LeadDeliverableTurn', 'deliverableTurn'),
+                             ('LeadDeliverable', 'deliverableItem'),
+                             ('LeadDeliverablePage', 'deliverablePage')]:
         content += f'export type {name} = ' + ts(schema['$defs'][definition], schema) + ';\n'
 
     message_schema = json.loads((ROOT / 'contracts/project_messages_v1.json').read_text())

@@ -81,14 +81,41 @@ def _has_inflight_round(task: dict) -> bool:
     )
 
 
-def checkpoint_task_partial(task: dict, force: bool = False, *, wait_for_durability: bool = True):
+def refresh_segment_mirror(task: dict, merged_tool_rounds: list | None = None) -> None:
+    """Rebuild the in-memory ``segments`` mirror the Turn projection copies on its next event.
+
+    The mirror places prose between tool cards. It is replaced wholesale, never
+    edited, so settled items are shared with the previous mirror.
+    """
+    try:
+        from lib.conversation_sync.settled_rows import settle_items
+        from lib.tasks_pkg.segments import assemble_segments
+
+        merged = _merge_tool_rounds(task) if merged_tool_rounds is None else merged_tool_rounds
+        task["segments"] = settle_items(
+            assemble_segments(task, merged=merged), previous=task.get("segments"))
+    except Exception:
+        logger.warning(
+            "[Checkpoint %s] Segment assembly failed",
+            task_log_tag(str(task.get("id") or "")),
+            exc_info=True,
+        )
+
+
+def checkpoint_task_partial(task: dict, force: bool = False, *, sampled: bool = False):
     """Persist executor recovery state without mutating the transcript.
 
     The turn event bridge owns the visible projection.  This checkpoint is a
     separate execution-recovery record used by polling and crash diagnostics.
     ``force`` preserves tool-only work before any prose has been produced.
-    Sampled round diagnostics can opt out of a synchronous durability fence;
-    authoritative event/interaction/terminal barriers retain their own owner.
+    A ``sampled`` checkpoint (each round end) copies progress and never waits
+    for a durability fence. A conversation attempt's Turn already commits that
+    progress through the ordered event bridge, and readers of its row read that
+    Turn (``durable_chat_replay``), so a sampled checkpoint of one writes no
+    row: it only refreshes the segment mirror. The provider boundary takes no
+    checkpoint for any task; it only refreshes the mirror. A recovery boundary
+    (``code_exec``) keeps its fenced write; authoritative
+    event/interaction/terminal barriers retain their own owner.
     """
     content, thinking, content_epoch = snapshot_task_text(task)
     if (
@@ -102,21 +129,10 @@ def checkpoint_task_partial(task: dict, force: bool = False, *, wait_for_durabil
     task_id = str(task.get("id") or "")
     conversation_id = str(task.get("convId") or "")
     merged_tool_rounds = _merge_tool_rounds(task)
+    refresh_segment_mirror(task, merged_tool_rounds)
 
-    try:
-        from lib.conversation_sync.settled_rows import settle_items
-        from lib.tasks_pkg.segments import assemble_segments
-
-        # The mirror is replaced wholesale, never edited: share it.
-        task["segments"] = settle_items(
-            assemble_segments(task, merged=merged_tool_rounds),
-            previous=task.get("segments"))
-    except Exception:
-        logger.warning(
-            "[Checkpoint %s] Segment assembly failed",
-            task_log_tag(task_id),
-            exc_info=True,
-        )
+    if sampled and is_conversation_attempt(task):
+        return None
 
     checkpoint_owned = True
     try:
@@ -156,9 +172,9 @@ def checkpoint_task_partial(task: dict, force: bool = False, *, wait_for_durabil
         )
         from lib.tasks_pkg.event_delivery import delivery_lane_for
         lane = delivery_lane_for(task)
-        if lane is not None and force and wait_for_durability:
-            # Explicit tool/round recovery boundaries keep their durability
-            # fence. Only sampled observer checkpoints may lag execution.
+        if lane is not None and force and not sampled:
+            # Recovery boundaries keep their durability fence. Only sampled
+            # checkpoints may lag execution.
             from lib.tasks_pkg.event_delivery import flush_task_events
             with lane.producer_lock:
                 flush_task_events(task)
@@ -181,7 +197,7 @@ def checkpoint_task_partial(task: dict, force: bool = False, *, wait_for_durabil
         logger.debug(
             "[Checkpoint %s] %s executor state: content=%d thinking=%d",
             task_log_tag(task_id),
-            "Queued" if lane is not None and not (force and wait_for_durability) else "Saved",
+            "Queued" if lane is not None and not (force and not sampled) else "Saved",
             len(content),
             len(thinking),
         )
@@ -222,4 +238,4 @@ def checkpoint_task_partial(task: dict, force: bool = False, *, wait_for_durabil
     return True
 
 
-__all__ = ["checkpoint_task_partial", "_update_proactive_execution_status"]
+__all__ = ["checkpoint_task_partial", "refresh_segment_mirror", "_update_proactive_execution_status"]

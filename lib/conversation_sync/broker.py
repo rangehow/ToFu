@@ -14,7 +14,11 @@ from collections.abc import Callable, Mapping
 import threading
 from typing import Any
 
-from lib.conversation_sync.cursor import ConversationCursorError, decode_cursor, encode_cursor
+from lib.conversation_sync.cursor import (
+    ConversationCursorError,
+    decode_sequence_hint,
+    encode_sequence_hint,
+)
 from lib.log import get_logger
 from lib.observability import record_stream_admission
 from lib.storage.commit_events import subscribe_committed_events
@@ -398,7 +402,7 @@ def _publish_invalidation(user_id: Any, event: Mapping[str, Any]) -> None:
             "contract": _INVALIDATION_CONTRACT,
             "type": "conversation.invalidated",
             "conversationId": conversation_id,
-            "cursorHint": encode_cursor(conversation_id, user_id, sequence),
+            "cursorHint": encode_sequence_hint(conversation_id, user_id, sequence),
             "userId": user_id,
         }, user_id=user_id)
     except Exception as exc:
@@ -443,7 +447,7 @@ def observe_delivery_frame(frame: Mapping[str, Any]) -> None:
     if not conversation_id or user_id is None or not isinstance(cursor, str):
         return
     try:
-        sequence = decode_cursor(conversation_id, user_id, cursor)
+        sequence = decode_sequence_hint(conversation_id, user_id, cursor)
     except ConversationCursorError:
         logger.warning("Ignored malformed conversation invalidation cursor")
         return

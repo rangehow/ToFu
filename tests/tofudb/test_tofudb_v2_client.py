@@ -50,6 +50,84 @@ from tofu_db.wire import (
 pytestmark = pytest.mark.unit
 
 
+def _socketpair_session():
+    client_socket, peer_socket = socket.socketpair()
+    client_socket.settimeout(10)
+    peer_socket.settimeout(10)
+    session = object.__new__(StorageV2Session)
+    session._owner_id = 11
+    session._tenant_id = 7
+    session._counter = 1
+    session._sock = client_socket
+    session.schema_id = STORAGE_SCHEMA_VERSION
+    session._response_admission = None
+    return session, peer_socket
+
+
+def _answer(peer_socket, correlation, payload: bytes) -> None:
+    """One response; a payload larger than one chunk travels as response chunks."""
+    chunks = [payload[offset:offset + MAX_BLOB_CHUNK_BYTES]
+              for offset in range(0, len(payload), MAX_BLOB_CHUNK_BYTES)]
+    if len(chunks) > 1:
+        for index, chunk in enumerate(chunks):
+            peer_socket.sendall(pack_frame(encode_message({
+                FIELD_KIND: KIND_RESPONSE_CHUNK, FIELD_PROTOCOL_VERSION: PROTOCOL_VERSION,
+                FIELD_CORRELATION_ID: correlation, FIELD_SCHEMA_ID: STORAGE_SCHEMA_VERSION,
+                FIELD_PAYLOAD: chunk, FIELD_STREAM_ID: correlation, FIELD_CHUNK_INDEX: index,
+                FIELD_FINAL: index + 1 == len(chunks)})))
+        payload = b""
+    peer_socket.sendall(pack_frame(encode_message({
+        FIELD_KIND: KIND_RESPONSE, FIELD_PROTOCOL_VERSION: PROTOCOL_VERSION,
+        FIELD_CORRELATION_ID: correlation, FIELD_SCHEMA_ID: STORAGE_SCHEMA_VERSION,
+        FIELD_PAYLOAD: payload, FIELD_STATUS: 0, FIELD_ERROR_CODE: None,
+        FIELD_ERROR_MESSAGE: None, FIELD_RETRYABLE: False})))
+
+
+def test_request_many_sends_every_request_first_and_leaves_a_streamed_one_unsent() -> None:
+    """The peer answers only after it has read both single-frame requests, so a
+    client that waited for an answer before sending would deadlock here."""
+    session, peer_socket = _socketpair_session()
+    large_response = b"y" * (MAX_BLOB_CHUNK_BYTES * 2 + 7)
+    seen: list[dict] = []
+    peer_failures: list[BaseException] = []
+
+    def peer() -> None:
+        try:
+            requests = [recv_frame(peer_socket) for _ in range(2)]
+            for message in requests:
+                assert message[FIELD_KIND] == KIND_REQUEST and message[FIELD_COMMAND_ID] is None
+                seen.append(json.loads(message[FIELD_PAYLOAD]))
+            _answer(peer_socket, requests[0][FIELD_CORRELATION_ID], b'{"n":0}')
+            _answer(peer_socket, requests[1][FIELD_CORRELATION_ID], large_response)
+            alone = recv_frame(peer_socket)
+            seen.append(json.loads(alone[FIELD_PAYLOAD]))
+            _answer(peer_socket, alone[FIELD_CORRELATION_ID], b'{"n":2}')
+        except BaseException as error:  # surface peer-thread assertions
+            peer_failures.append(error)
+            raise
+        finally:
+            peer_socket.close()
+
+    peer_thread = threading.Thread(target=peer, daemon=True)
+    peer_thread.start()
+    try:
+        first, streamed, third = session.request_many([
+            ("record.get", {"key": "a"}),
+            ("record.get", {"key": "x" * MAX_PAYLOAD_BYTES}),
+            ("record.get", {"key": "b"}),
+        ], deadline_unix_ms=10_000)
+        assert streamed is None
+        assert first.payload == b'{"n":0}' and third.payload == large_response
+        # The session stays aligned: a later lone request reads its own answer.
+        alone = session.request("record.get", {"key": "c"}, command_id=None, deadline_unix_ms=10_000)
+        assert alone.payload == b'{"n":2}'
+    finally:
+        session._sock.close()
+        peer_thread.join(timeout=10)
+    assert not peer_failures
+    assert [request["key"] for request in seen] == ["a", "b", "c"]
+
+
 @pytest.mark.parametrize("operation,command_id", [
     ("tool_result_artifact.put", "large-tool-result"),
     ("swarm.agent.save", "large-agent"),
@@ -478,7 +556,7 @@ def test_v2_client_retries_a_busy_command_with_the_same_command_id(monkeypatch):
     client = _histogram_client()
     attempts = []
 
-    def busy_once(operation, payload, *, timeout, command_id, deadline_unix_ms):
+    def busy_once(operation, payload, *, timeout, command_id, deadline_unix_ms, cancellation=None):
         attempts.append(command_id)
         if len(attempts) == 1:
             raise StorageError('database_busy', 'rotation in flight', True, 1)
@@ -498,7 +576,7 @@ def test_v2_client_retries_ambiguous_command_failures_with_same_receipt(monkeypa
     client = _histogram_client()
     attempts = []
 
-    def unavailable(operation, payload, *, timeout, command_id, deadline_unix_ms):
+    def unavailable(operation, payload, *, timeout, command_id, deadline_unix_ms, cancellation=None):
         attempts.append(command_id)
         raise StorageError('database_unavailable', 'lost ack', True, 1)
 
@@ -515,7 +593,8 @@ def test_v2_client_busy_command_budget_absorbs_sustained_backpressure(monkeypatc
     client = _histogram_client()
     attempts = []
 
-    def busy_five_times(operation, payload, *, timeout, command_id, deadline_unix_ms):
+    def busy_five_times(operation, payload, *, timeout, command_id, deadline_unix_ms,
+                        cancellation=None):
         attempts.append(command_id)
         if len(attempts) <= 5:
             raise StorageError('database_busy', 'rotation in flight', True, 1)
@@ -544,7 +623,7 @@ def test_v2_client_unsupervised_busy_command_keeps_its_attempt_bound(monkeypatch
     attempts = []
     clock = [1000.0]
 
-    def busy_forever(operation, payload, *, timeout, command_id, deadline_unix_ms):
+    def busy_forever(operation, payload, *, timeout, command_id, deadline_unix_ms, cancellation=None):
         attempts.append(command_id)
         assert timeout == 20.0
         clock[0] += timeout
@@ -661,7 +740,7 @@ def test_v2_client_replays_a_closed_connection_command_with_same_command_id(monk
     client = _histogram_client()
     attempts = []
 
-    def closed_once(operation, payload, *, timeout, command_id, deadline_unix_ms):
+    def closed_once(operation, payload, *, timeout, command_id, deadline_unix_ms, cancellation=None):
         attempts.append(command_id)
         if len(attempts) == 1:
             raise _ConnectionClosedError(

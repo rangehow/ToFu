@@ -123,11 +123,24 @@ Turn retirement; verify selected-store crash/Continue/query parity and recovery 
 
 - `src/wal_publication.rs` shares captured-prefix coverage across rotation,
   history pruning and pack adoption before off-authority CONTROL publication.
-  A cover still unsynchronized at the barrier deadline returns
-  `wal::BarrierDeadline`; pack adoption abandons on it before publication
-  instead of latching, while rotation and history compaction still latch
+  A cover still unsynchronized at the barrier deadline abandons its
+  publication itself (`wal::AbandonedUncovered`, recognized by
+  `wal::abandoned_uncovered`); all three publishers abandon before any
+  CONTROL write instead of latching, and an abandoned rotation re-parks its
+  encoded pair for the driver's retry. Synchronous `Engine::publish_control`
+  callers declare `ControlStaging`: unstaged ones (CONTROL slot
+  stabilization, the WAL generation handover) abandon a missed deadline,
+  staged ones latch; publication finishes latch through
+  `Engine::latch_unless_abandoned` only
   (`docs/STORAGE_OPERATIONS.md#a-slow-wal-sync-during-a-background-publication`).
-  Verify the two `a_pack_adoption_whose_wal_cover_*` specifications.
+  `wal::ExpiredPublicationCovers` expires the covers prepared, and the
+  pre-publication barrier waits made, on its thread. Verify the
+  `a_pack_adoption_whose_wal_cover_*`, `a_history_compaction_whose_wal_cover_*`,
+  `a_rotation_publication_whose_wal_cover_*`,
+  `a_control_slot_stabilization_whose_wal_barrier_*`,
+  `a_rotation_handover_whose_wal_barrier_*` and
+  `only_an_unstaged_control_publication_abandons_a_missed_barrier_deadline`
+  specifications.
 
 - `src/wal_write_buffer.rs` owns queued/inflight physical frames for the existing
   WAL barrier worker. The actual authority VFS must opt in; encryption stays on
@@ -136,11 +149,27 @@ Turn retirement; verify selected-store crash/Continue/query parity and recovery 
   Both durability tiers queue frames; responses wait in
   `WalBarrier::wait_acknowledged` (Strict: synced, Normal: written by the
   `tofu-db-wal-writer` thread), durable dependents in `wait_witness`. No
-  authority holder may perform a physical WAL write; verify
+  authority holder may perform a physical WAL write: the byte budget only
+  enables copying, a frame past it still queues, and only a disabled buffer
+  (encryption, stateful wrappers, zero budget) or a failed allocation writes
+  inline (`docs/TOFUDB_PUBLICATION_LATENCY.md#physical-wal-writes-on-the-existing-barrier-worker`).
+  Verify `a_frame_past_the_byte_budget_still_queues_and_the_appender_writes_nothing`,
   `server_liveness_tests.rs` and `tests/tofudb/test_wal_stall_liveness.py`.
 
 - Rejected current-WAL payload-prefix caching and its source/recovery boundaries:
   `docs/TOFUDB_PUBLICATION_LATENCY.md#rejected-current-wal-carried-payload-prefix-witnesses`.
+
+- A commit past `MAX_CARRIED_PAYLOAD_BYTES` may defer its spill when the
+  request dispatcher allows it (`engine::SpillDeferralScope`, first commit of
+  a request only): the engine refuses with `WouldBlock` before any effect,
+  the exclusive lane opens a publication window (rule S9), flushes the staged
+  blocks off the authority and replays once. Only blob-family content is
+  then found in the block cache and carried no more; freshly staged content
+  (copy-on-write pages, small-event stream segments, overlay-merge pages) is
+  staged again and still spills inline, as do callers outside the dispatcher
+  (`docs/TOFUDB_PUBLICATION_LATENCY.md#spills-leave-the-authority`). Verify
+  `a_commit_past_the_carried_bound_publishes_its_blocks_without_the_writer`
+  and the two `engine::tests` spill-deferral specifications.
 
 - Carried-payload recovery reuses verification only inside the current exclusive
   open, including historical copies. `engine_tests.rs` covers repeated reads,
@@ -220,8 +249,9 @@ Turn retirement; verify selected-store crash/Continue/query parity and recovery 
   dropout still wakes every waiter and counts `dropped_terminal_records`
   (lock-free, folded into the metrics snapshot). Round errors carrying
   rotation backpressure or `WouldBlock` publication conflicts, and a pack
-  adoption abandoned before publication (`engine::abandoned_uncovered`),
-  classify as conflict deferrals, never terminal worker failures — a terminal record
+  adoption or history slice abandoned before publication
+  (`wal::abandoned_uncovered`), classify as conflict deferrals, never
+  terminal worker failures — a terminal record
   reaches the listener health gate and recycles the daemon on a signal
   that is retryable by design. A space or quota refusal defers too while
   the authority is usable; a latch error (`engine::requires_reopen`) stays
@@ -335,6 +365,13 @@ Turn retirement; verify selected-store crash/Continue/query parity and recovery 
   locations (hash-ordered pages interleave every source, so removing them
   eagerly rewrote the whole table). Verify `engine::tests::history_retirement`,
   the `history_payload::tests` merge/lookup specifications and compaction faults.
+  A lookup reads one CRC-checked slice per level through each page's resident
+  directory, built from bytes verified like any page read, and answers through
+  the whole page whenever a slice disagrees (`docs/TOFUDB_BLOCK_READ_PATH.md`,
+  "History routing slices"). Every root a publisher installs must reach
+  `BlockStore::install_history_payload_catalog`, which carries directories
+  over. Verify the slice specifications beside
+  `a_history_resident_lookup_reads_one_verified_slice_per_level`.
   Authority prunes only outside the entity root's durable replay boundary;
   the first deferred write publishes that cursor atomically with its delta.
   Protocol and downgrade boundaries live in `docs/STORAGE_TOFUDB.md`; the
@@ -361,9 +398,11 @@ Turn retirement; verify selected-store crash/Continue/query parity and recovery 
   live in `engine_rotation_publication_tests.rs`; see `docs/TOFUDB_PUBLICATION_LATENCY.md`.
   The graceful stop runs this pipeline synchronously
   (`Engine::retire_wal_window_for_stop`), never `Engine::checkpoint`'s
-  materialization, and the adoption driver's stop abandons its publication
+  materialization, merges no overlay (unmerged deltas retire into history and
+  replay at open), and the adoption driver's stop abandons its publication
   before CONTROL (`PreparedPackAdoption::cancel_on`); verify
-  `daemon::tests::a_graceful_stop_retires_the_wal_window_into_indexed_history_without_materializing_staged_blocks`
+  `daemon::tests::a_graceful_stop_retires_the_wal_window_into_indexed_history_without_materializing_staged_blocks`,
+  `daemon::tests::a_graceful_stop_leaves_the_unmerged_overlay_to_replay_instead_of_merging_it`
   and `stopping_the_adoption_driver_abandons_a_full_catalog_merge_before_publication`
   (`docs/NATIVE_STORAGE_LIFECYCLE.md`).
 - `src/engine.rs` composes those primitives, owns the process lease, and visits
@@ -419,16 +458,34 @@ Turn retirement; verify selected-store crash/Continue/query parity and recovery 
   4,096 visits), and both background drivers keep
   their boot grace + crash-safe bounded stop join (a slow phase never
   stalls startup or shutdown). Online marks walk all of their roots through
-  `entity::visit_entity_page_graphs_once`: each page is read and marked
+  `entity::visit_entity_page_graphs_once_batched`: each page is read and marked
   once per mark, discovery walks run before the deferred persistent-pin and
   mount walks, a walk without discovery never satisfies one that needs it,
-  and kept subtree tallies let every root check its pin count. Marks run to
+  and kept subtree tallies let every root check its pin count. Each walk
+  reads its leaves, then the blob manifests their values name, in one batch
+  (`TraversalReader::get_batch`: one merge-join over the history routing,
+  each routing page read once and never admitted, hints answered only from
+  sources the current catalog retains, `get`'s path otherwise); a leaf's pin
+  records join its walk's tally at the walk's end and every page on its path
+  at once, and a page reached twice first reads the leaves deferred below it.
+  A deferred leaf keeps indexes into its walk's key arena (`LeafKeys`, each
+  bound stored once), and the mark's entity part is the one function
+  `mark_entity_graphs`. Verify `batched_walks_visit_read_and_count_what_the_per_page_walk_does`,
+  `a_page_reached_twice_in_one_walk_joins_the_records_of_its_deferred_leaves`,
+  `a_leaf_batch_reads_each_routing_page_once_and_admits_none` and the seeded
+  differentials `batched_walks_equal_per_page_walks_on_1000_random_graphs` and
+  `batched_marks_equal_per_page_marks_on_random_authorities`. Marks run to
   completion with no wall-clock budget; epoch pacing (120 s floor, 50% duty)
   bounds the collector instead. While the owner's `storage-reclaim` scheduler
   task is disabled, or its row cannot be read, the driver starts no epoch,
   doorbells and volume pressure included, and disabling it raises the running epoch's stop flag
   (`scheduler::SystemTaskWatch`), so every stop check the driver's shutdown
-  relies on also serves the pause. Online marks and backup-prune marks reach
+  relies on also serves the pause. A held driver still builds the read path
+  (first location table, packed filter: `build_read_path`) on the epoch
+  timer's floors without consuming a doorbell, and only the driver's own stop
+  ends those builds; verify
+  `a_disabled_reclaim_task_still_builds_the_location_table_and_the_packed_filter`
+  and `a_doorbell_rung_while_held_survives_the_read_path_builds`. Online marks and backup-prune marks reach
   value blocks through `backup::visit_semantic_value_references` (manifests
   only); both marks read through `BlockStore::traversal_reader` (the
   published catalog location table while it describes the installed
@@ -439,6 +496,13 @@ Turn retirement; verify selected-store crash/Continue/query parity and recovery 
   and both drivers report their own stats components. Verify the
   `tests_capture` reachability/cache and `tests_mark_cost` read-cost
   specifications and the `entity` `reachability_once_*` visitor specifications.
+  Every epoch scans the whole catalog one window at a time, confirms each
+  segment's dead set by its digest (`dead_set_digest`, no count) and rewrites
+  or retires every confirmed segment whose dead bytes reach its live bytes;
+  verify `the_second_epoch_reclaims_every_confirmed_segment_in_every_window`
+  and `a_segment_is_rewritten_once_its_dead_bytes_reach_its_live_bytes`.
+  `authority_gc.rs::AuthorityGarbageCollectionSession::census` (`tofu-db
+  gc-census`) measures catalog liveness on a closed copy and reclaims nothing.
   Superseded segment files never wait for a mark: the segment lane runs
   before marking, confirms orphans by two unchanged observations and
   re-validates each one under its own hold, including both CONTROL slots
@@ -480,9 +544,11 @@ Turn retirement; verify selected-store crash/Continue/query parity and recovery 
   refused attempt retries after at least as long as the run has already been
   refused (geometric backoff, no constant), and a stop ends the run, also
   one raised while a hold waits: the attempt re-checks it under the mutex and
-  `stop_and_join` unparks a paused run. Only the epoch's capture stays a
-  `try_lock` that defers the epoch. Verify `tests_short_holds`
-  (`deletion_holds_wait_for_an_authority_held_at_every_attempt_instead_of_backing_off`).
+  `stop_and_join` unparks a paused run. The epoch's capture waits in
+  `lock()` too and re-checks the stop flag under the mutex (a sampled capture
+  deferred all 147 search epochs on 2026-11-15). Verify `tests_short_holds`
+  (`deletion_holds_wait_for_an_authority_held_at_every_attempt_instead_of_backing_off`)
+  and `a_capture_behind_a_mostly_held_mutex_waits_instead_of_deferring`.
   Every loose-victim hold first makes both CONTROL slots name the current
   physical roots (`ControlFile::slots_name_only_physical_roots`, rule S8),
   and a copy's hold re-checks that both slots name the installed catalog,
@@ -517,7 +583,8 @@ Turn retirement; verify selected-store crash/Continue/query parity and recovery 
   close; embedded driver-stop timings use fixed names under opt-in diagnostics.
 - `src/block.rs` publishes one catalog location table per installed catalog
   publication (`catalog_locations`): the online GC driver builds the first
-  table off the authority mutex when an epoch is due, before its capture
+  table off the authority mutex when an epoch is due, before its capture,
+  and on the epoch timer while epochs are held
   (`publish_first_catalog_locations`); whole-store passes derive a stale
   table and reuse a current one; the overlay drain driver's poll starts
   each later derivation, the authority's and the open search index's, on its
@@ -540,7 +607,7 @@ Turn retirement; verify selected-store crash/Continue/query parity and recovery 
   `a_current_location_table_sends_uncatalogued_blocks_to_their_loose_copy`,
   `traversal_readers_share_the_current_published_location_table`,
   `the_first_catalog_location_table_is_built_once`,
-  `driver_publishes_the_first_catalog_location_table_while_epochs_defer` and
+  `driver_publishes_the_first_catalog_location_table_while_the_capture_waits` and
   `worker_derives_the_published_location_tables_of_the_authority_and_the_search_index`;
   design and measurements: `docs/TOFUDB_BLOCK_READ_PATH.md`.
 - `src/payload_segment.rs` shares one read handle per segment
@@ -569,8 +636,10 @@ Turn retirement; verify selected-store crash/Continue/query parity and recovery 
   excluded the block under the still-installed publication; `put_loose` and
   `flush_pending_selection`, which also run off the mutex, take their
   absent-file path on an open miss. No install reads an index its
-  publication did not add: a clean open leaves the filter unbuilt, only a
-  store with nothing catalogued builds it at an install, and the online GC
+  publication did not add: every open leaves the filter unbuilt (a crashed
+  open's recovery builds and publishes the catalog location table instead,
+  `prepare_carried_recovery_until`; verify `engine::recovery_lookup_tests`),
+  only a store with nothing catalogued builds it at an install, and the online GC
   driver builds or rebuilds (saturation) it off the authority mutex beside
   the first location table (`build_packed_filter`), converging on the
   installed catalog; `note_packed` never rescans. An install the build
@@ -583,7 +652,7 @@ Turn retirement; verify selected-store crash/Continue/query parity and recovery 
   `block::packed_filter_tests` (incl. the install-swap seam spec),
   `authority::packed_filter_tests`,
   `full_catalog_merge_inserts_only_its_chunk_into_the_packed_filter`,
-  `driver_builds_the_packed_filter_off_the_mutex_while_epochs_defer`
+  `driver_builds_the_packed_filter_off_the_mutex_while_the_capture_waits`
   and the loose-race specifications beside
   `a_catalogued_block_reads_through_its_segment_whatever_happens_to_its_loose_copy`;
   design and measurements: `docs/TOFUDB_BLOCK_READ_PATH.md`, "Packed filter
@@ -747,7 +816,9 @@ Turn retirement; verify selected-store crash/Continue/query parity and recovery 
   identity reuse, empty-event progress and cursor/pin crash tests; lifecycle and
   retained-state costs live in `docs/STORAGE_EVENT_REPLAY.md`. Attempt-event
   retention deletes exact witnessed rows within one rebaseable overlay delta,
-  never a structural range; verify `turn/event_prune_tests.rs`.
+  never a structural range; verify `turn/event_prune_tests.rs`. Conversation-sync
+  retention (`sync_prune`) sizes each transaction the same way; verify
+  `turn/sync_prune_tests.rs`.
 - `src/turn/tombstone_migration.rs` preserves source deletion clocks through
   atomic Turn claims and delta/age indexes; private get/scan validate both.
 - `src/turn/attempt_migration.rs` owns terminal Attempt snapshots and their
@@ -777,17 +848,28 @@ Turn retirement; verify selected-store crash/Continue/query parity and recovery 
   plus the exclusion namespace); pages/cursors and the lazy candidate filter in
   `turn_search_query.rs`, public text extraction in `search_text.rs`, and
   archive reads in `compaction_search_source.rs`. The `turn_search_worker.rs`
-  maintenance round reads every source page from one batch-scoped pinned read
+  maintenance round reads its sources from one batch-scoped pinned read
   replica — never under the foreground authority mutex; only the exact-token
-  acknowledge touches the writer. Native limits derive from
+  acknowledge touches the writer. A dirty conversation costs what changed:
+  the worker diffs its `turns_by_updated` revisions and archive IDs against
+  the scope's per-item records and reads, writes or retracts only those items
+  (`docs/STORAGE_TOFUDB.md#per-turn-search-maintenance-2026-11-13`). A new
+  Turn-document writer must move the updated-index row and advance the
+  revision when it changes searchable fields; `turn::search_projection_revision_tests`
+  enumerates the writers. Native limits derive from
   `contracts/conversation_search_v2.json` through `gen_tofudb_ir_contract.py`;
   the index design record is in `docs/STORAGE_TOFUDB.md`. `search_dirty.rs`
   also owns the volatile per-scope commit sequence: flagged commits ring the
   existing maintenance condvar, and READY waits for a round whose empty dirty
   listing observed every counted commit. Verify `maintenance`, `search_dirty`
-  and `turn_search_worker` tests plus the projection relocation integration.
+  and `turn_search_worker` tests (including `footprint_tests`) plus the
+  projection relocation integration.
 - `src/turn_search_runtime.rs` owns capacity admission and retryable deferred
-  opening off the request mutex on the existing maintenance worker; `search_volume.rs` consumes generated geometry policy. The opened
+  opening off the request mutex on the existing maintenance worker, and
+  `retire_history_slice`, which the maintenance worker runs after each search
+  batch so retained index history never pins superseded pages (verify
+  `retired_index_history_lets_the_collector_reclaim_superseded_generations`,
+  `every_search_history_retirement_fault_reopens_with_identical_answers`); `search_volume.rs` consumes generated geometry policy. The opened
   codec is crate-private. Source and index reuse `OnlineGcDatabase` ports and
   the same collector; verify `turn_search_runtime` and online-GC fault suites.
 - `project_brain_recovery.rs` owns header-bound active-work summaries and
@@ -857,7 +939,9 @@ Turn retirement; verify selected-store crash/Continue/query parity and recovery 
   opens. Only the current CONTROL catalog and verified payload bytes establish
   a hit; cache loss/corruption never proves absence or fails authority open.
   Clean, empty-WAL opens skip the recovery catalog pass; nonempty WAL replay
-  keeps it. Regression gates live in block/engine/cache tests; bounds and
+  keeps it as one verified pass that publishes the catalog location table and
+  records the WAL references' exact positions (no packed filter, routes or
+  membership witnesses). Regression gates live in block/engine/cache tests; bounds and
   measurements live in `docs/STORAGE_TOFUDB.md`.
 - `src/payload_routing.rs` owns budgeted verified-prefix routes published with
   the payload catalog; unknown segments stay explicit fallback candidates.

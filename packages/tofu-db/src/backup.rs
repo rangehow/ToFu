@@ -1254,6 +1254,7 @@ where
 /// The same block identities as `visit_semantic_value_blocks`, for marks
 /// that need reachability only. Stream segments and blob chunks are leaves:
 /// their payloads hold no references, so only blob manifests are read.
+#[cfg(test)]
 pub(crate) fn visit_semantic_value_references<ReadBlock, VisitReference>(
     key: &crate::entity::EntityKey,
     value: &[u8],
@@ -1264,10 +1265,17 @@ where
     ReadBlock: FnMut(BlockId) -> io::Result<Vec<u8>>,
     VisitReference: FnMut(BlockId) -> io::Result<()>,
 {
-    if let Some(block_id) = crate::stream::stored_segment_block_reference(key, value)? {
-        visit_reference(block_id)?;
-    }
-    if let Some(reference) = semantic_value_blob_reference(key, value)? {
+    let mut blob = None;
+    visit_semantic_value_references_deferring_blob(
+        key,
+        value,
+        &mut visit_reference,
+        |reference| {
+            blob = Some(reference);
+            Ok(())
+        },
+    )?;
+    if let Some(reference) = blob {
         crate::blob::visit_blob_references(
             key.tenant_id(),
             key.owner_user_id(),
@@ -1275,6 +1283,26 @@ where
             read_block,
             visit_reference,
         )?;
+    }
+    Ok(())
+}
+
+/// [`visit_semantic_value_references`] with the blob manifest's read left to
+/// the caller: the stream segment is visited now, and the blob reference,
+/// whose manifest must be read, goes to `defer_blob` (an online mark reads a
+/// batch of manifests at once, then calls `blob::visit_read_blob_references`
+/// with this value's tenant and owner).
+pub(crate) fn visit_semantic_value_references_deferring_blob(
+    key: &crate::entity::EntityKey,
+    value: &[u8],
+    mut visit_reference: impl FnMut(BlockId) -> io::Result<()>,
+    mut defer_blob: impl FnMut(crate::blob::BlobReference) -> io::Result<()>,
+) -> io::Result<()> {
+    if let Some(block_id) = crate::stream::stored_segment_block_reference(key, value)? {
+        visit_reference(block_id)?;
+    }
+    if let Some(reference) = semantic_value_blob_reference(key, value)? {
+        defer_blob(reference)?;
     }
     Ok(())
 }

@@ -103,9 +103,9 @@ fn turn_event_batch_state(database: &mut AuthorityDatabase, conversation: &str, 
     let rows = execute(database, &request("event.list", 11, json!({
         "task_id": TURN_EVENT_BATCH_TASK, "after_sequence": -1, "limit": 1000
     }), None), 9_000).unwrap();
-    let changes = execute(database, &request("turn.sync.changes", 11, json!({
+    let changes = crate::turn::without_sync_lineage(execute(database, &request("turn.sync.changes", 11, json!({
         "conversation_id": conversation, "user_id": 11, "after": 0
-    }), None), 9_000).unwrap();
+    }), None), 9_000).unwrap());
     (turn, attempt_events, rows, changes)
 }
 

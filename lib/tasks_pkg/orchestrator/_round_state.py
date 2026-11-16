@@ -16,7 +16,8 @@ Shape rulings (owner, recorded in docs/modules/task_engine.md §5):
     16 locals and excluded those two; the versioned ``ProviderStreamResult``
     later added one explicit carrier so terminal stream state is not degraded
     back to the legacy tuple; model_round_start holds only the restored logical
-    frontier, never the chassis's current index (16 fields total).
+    frontier, never the chassis's current index. The round checkpoint no longer
+    has a throttle timestamp to carry (15 fields total).
   * task-dict channels (``_peer_inject_pending`` etc.) are NOT here either —
     their owner is the task (crash-recovery / sync layer consume them
     directly); absorbing them would create a second source of truth.
@@ -37,7 +38,7 @@ __all__ = ['RoundState']
 
 @dataclass
 class RoundState:
-    """Flat bag of the 16 cross-iteration values (see module docstring)."""
+    """Flat bag of the 15 cross-iteration values (see module docstring)."""
 
     # ── constructor-required: resolved model config (fallback swaps these
     #    in-loop at the llm_result write-back) ──
@@ -49,7 +50,6 @@ class RoundState:
     exit_reason: str = 'running'                # set by natural/error exit
     abort_phase: str | None = None              # was _abort_detected_phase
     consecutive_tool_timeouts: int = 0          # breaker counter (≥3 → halt)
-    last_checkpoint_ts: float = 0.0             # crash-checkpoint throttle
 
     # ── llm results (sticky "last round" values, read post-loop) ──
     assistant_msg: dict[str, Any] | None = None

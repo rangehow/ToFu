@@ -486,6 +486,41 @@ Verify with `tests/slides/test_slides_motion.py`; its LibreOffice import test
 runs when `soffice` is on `PATH`. Keynote, WPS and real PowerPoint
 playback are unverified.
 
+### Content grounding and delivery (slides benchmark)
+
+Measured by the blind benchmark in [`SLIDES_BENCHMARK.md`](../SLIDES_BENCHMARK.md)
+(Tofu vs PPTAgent and SlideDeck AI on the same six documents).
+
+**Problem:** with caller-supplied material, research still ran on the topic
+and the material reached page authors only as one raw blob, so pages drifted
+to generic headings and derived numbers (13.7 numbers per baseline deck not
+in the source, against 0.17 for PPTAgent). A forced layout-variety rule made
+outlines invent decorative charts and diagrams. Separately, every Tofu deck
+(6/6) was refused at the `layout_qa` gate, so nothing was delivered even
+though the judge scored the refused decks above both competitors.
+**Decision:** supplied material is the evidence authority: it becomes
+verbatim units `[M#]` (`material.py`), the outline must cite them on every
+content page, and each page author receives its cited units verbatim with
+qualifiers kept. Outline and author prompts require assertion titles carrying
+the decisive number, one point per page, charts only for comparable numbers,
+and, for interviews, own decisions separated from team results. The author
+gate rejects visible numbers absent from the deck's evidence and text below
+the projection legibility floor. Layout QA measures line boxes, not font
+content areas: a half-leading deficit is neither overflow nor collision,
+while the PowerPoint reserve stays measured from the content area. The
+zero-LLM text-box growth repair reserves PowerPoint metrics on both sides of
+a middle-anchored box and repeats until a round keeps nothing. Native charts
+write `c:invertIfNegative=0`, without which LibreOffice draws negative bars
+as their absolute value.
+**Alternatives considered:** a pixel tolerance on overflow (a tuning knob that
+also hides real overflow); dropping the zero-finding gate (ships clipped
+text); keeping web research beside the material (dilutes the authority with
+unsourced cards); keeping the variety rule (judges penalised decorative
+figures with no data).
+Verify with `tests/slides/test_slides_content_grounding.py`,
+`tests/slides/test_slides_material_input.py` and
+`tests/slides/test_chart_preview_portability.py`.
+
 ## Stage contract
 
 A `Stage` declares:

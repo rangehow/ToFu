@@ -301,7 +301,6 @@ def test_stream_settlement_keeps_the_full_prompt(harness, monkeypatch, provider_
         dict(provider_usage)))
     monkeypatch.setattr(strm, 'make_provider_abort_check', lambda _task: None)
     monkeypatch.setattr(strm, 'append_event', lambda *a, **kw: None)
-    monkeypatch.setattr(strm, 'checkpoint_task_partial', lambda *a, **kw: None)
     task = {**_task(harness['conv'], KIMI), 'aborted': False}
     messages = [{'role': 'user', 'content': 'hi'}]
     harness['ceiling'] = 10_000_000

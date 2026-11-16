@@ -2,6 +2,7 @@
 //! remain in tests.rs/tests_fault.rs; same-volume SIGKILL controls are ignored.
 use super::tests::{metrics, test_budget};
 use super::*;
+use crate::backup::visit_semantic_value_references;
 use crate::entity::{visit_entity_page_graph_with_values, EntityKey};
 use crate::history::{HistoryManifest, HistorySegmentReference, MAX_HISTORY_SEGMENTS};
 use crate::vfs::{
@@ -199,7 +200,7 @@ pub(super) fn unmarked_epoch(
         segment_dead_next: BTreeMap::new(),
         unlinked_loose: Vec::new(),
         confirmed_temp: None,
-        rewrite_victim: None,
+        rewrite_victims: Vec::new(),
         compaction_ids: Vec::new(),
         scan_failure: None,
         confirmed_loose_planned: false,

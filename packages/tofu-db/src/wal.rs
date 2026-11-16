@@ -157,6 +157,35 @@ struct FlushError {
     message: String,
 }
 
+impl FlushError {
+    /// The latched failure as each later caller receives it.
+    fn replicate(&self) -> io::Error {
+        io::Error::new(self.kind, LatchedFlushFailure(self.message.clone()))
+    }
+}
+
+/// A WAL write or sync failure the barrier latched, as every later caller
+/// receives it. The outcome of each commit it did not cover stays unknown
+/// until the authority reopens, and a receipt resolves a retried command, so
+/// `semantic_executor::map_storage_error` answers it retryable.
+#[derive(Debug)]
+pub(crate) struct LatchedFlushFailure(String);
+
+impl std::fmt::Display for LatchedFlushFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for LatchedFlushFailure {}
+
+/// Whether `error` is a latched WAL failure ([`LatchedFlushFailure`]).
+pub(crate) fn is_latched_flush_failure(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<LatchedFlushFailure>())
+}
+
 #[derive(Debug, Default)]
 struct WalBarrierState {
     path: PathBuf,
@@ -235,11 +264,16 @@ impl WalBarrierShared {
                 "WAL write buffer belongs to another generation",
             ));
         }
+        // A closed component, like a closed embedded runtime: the restarted
+        // authority serves the retry.
         if state.stop || state.closing {
-            return Err(io::Error::other("WAL barrier is closed"));
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "WAL barrier is closed",
+            ));
         }
         if let Some(error) = &state.error {
-            return Err(io::Error::new(error.kind, error.message.clone()));
+            return Err(error.replicate());
         }
         if !state.writes.queue(offset, parts)? {
             return Ok(false);
@@ -261,7 +295,7 @@ impl WalBarrierShared {
             "queuedFrames":writes.queued_frames,"writtenFrames":writes.written_frames,
             "writtenBatches":writes.written_batches,"writtenBytes":writes.written_bytes,
             "writeNanos":writes.write_nanos,"synchronousFallbacks":writes.synchronous_fallbacks,
-            "scope":"one barrier lifetime; queued/inflight exact frame bytes exclude queue/allocator metadata; writes do not credit durability; byte budget controls reuse not admission"})
+            "scope":"one barrier lifetime; queued/inflight exact frame bytes exclude queue/allocator metadata; writes do not credit durability; a nonzero byte budget enables copying and every frame queues, never admission; synchronous fallbacks are a disabled buffer or a failed allocation"})
     }
 
     /// Witness posted by the append path after each write: the barrier must
@@ -474,7 +508,7 @@ impl WalBarrierShared {
     pub fn barrier_error(&self) -> Option<io::Error> {
         let state = self.state.lock().ok()?;
         let error = state.error.as_ref()?;
-        Some(io::Error::new(error.kind, error.message.clone()))
+        Some(error.replicate())
     }
 
     /// Parks the caller until the barrier covers `len`, an error is latched,
@@ -520,7 +554,7 @@ impl WalBarrierShared {
             .map_err(|_| io::Error::other("WAL barrier state poisoned"))?;
         loop {
             if let Some(error) = guard.error.as_ref() {
-                return Err(io::Error::new(error.kind, error.message.clone()));
+                return Err(error.replicate());
             }
             if guard.path != witness.path || covered(&guard) >= witness.len {
                 return Ok(());
@@ -1238,7 +1272,14 @@ impl ActiveLog {
         if let Some(barrier) = &self.barrier {
             let _wait =
                 crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_WAL_BARRIER_WAIT);
-            barrier.wait_synced(self.len, std::time::Instant::now() + MAX_BARRIER_WAIT)?;
+            let deadline = std::time::Instant::now() + MAX_BARRIER_WAIT;
+            #[cfg(test)]
+            let deadline = if publication::covers_expire_on_this_thread() {
+                std::time::Instant::now()
+            } else {
+                deadline
+            };
+            barrier.wait_synced(self.len, deadline)?;
             return Ok(pending);
         }
         sync_data_barrier(self.file.as_mut())?;
@@ -1273,6 +1314,8 @@ impl ActiveLog {
                 return Ok(hash);
             }
         }
+        let _inline =
+            crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_WAL_INLINE_WRITE);
         // A failure proven to have written nothing leaves the log as it was
         // (`vfs::NothingWritten`); the engine decides whether that needs reopen.
         self.file.write_all_vectored_at_proving_nothing_written(
@@ -1357,6 +1400,8 @@ impl ActiveLog {
         let next_len = current_len
             .checked_add(bytes.len() as u64)
             .ok_or_else(|| invalid_data("active WAL length overflow"))?;
+        let _inline =
+            crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_WAL_INLINE_WRITE);
         self.file.write_all_vectored_at_proving_nothing_written(
             current_len,
             &mut [io::IoSlice::new(&bytes)],
@@ -2077,7 +2122,9 @@ mod buffer_tests;
 
 #[path = "wal_publication.rs"]
 mod publication;
-pub(crate) use publication::PublicationWalCover;
+#[cfg(test)]
+pub(crate) use publication::ExpiredPublicationCovers;
+pub(crate) use publication::{abandon_if_uncovered, abandoned_uncovered, PublicationWalCover};
 
 #[cfg(test)]
 #[path = "wal_query_cache_health_tests.rs"]

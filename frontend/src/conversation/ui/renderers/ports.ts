@@ -64,6 +64,10 @@ export interface ClassicConversationRendererPorts {
   renderTurnContextParts?(
     block: Extract<ConversationBlockViewModel, { kind: 'context' }>,
   ): { fold: string; rail: string } | null;
+  /** Repaint a mounted tool card when a fact it shows settles later; returns the unsubscribe. */
+  subscribeToolCards?(listener: () => void): () => void;
+  /** Debug mode reveals technical details (execution counters) on program cards. */
+  debugEnabled?(): boolean;
   /** Transitional rich tool/program-timeline port; output is sanitized. */
   renderToolBlockHtml?(
     block: Extract<ConversationBlockViewModel, { kind: 'tool' | 'program' }>,

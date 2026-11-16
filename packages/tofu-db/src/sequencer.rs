@@ -427,7 +427,7 @@ impl CommitSequencer {
         guard
             .requests
             .try_reserve(1)
-            .map_err(|_| io::Error::other("sequencer request allocation failed"))?;
+            .map_err(crate::resource_exhaustion::reservation_error)?;
         guard.queued_bytes = queued_bytes;
         guard.requests.push_back(Request {
             transaction,

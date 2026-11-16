@@ -17,6 +17,7 @@ import type {
 import { assignmentStatus, cleanTitle, type CoordinationGraphStatus } from '../project-coordination-graph';
 import { modelForRole, type CharacterModel } from '../office-game/office-character';
 import { deriveAttention, type OpenQuestion, type RouterAttention } from './attention';
+import { stableHash } from './hash';
 
 export type TeamKind = 'router' | 'project' | 'watchdog';
 export type PersonRole = 'router' | 'lead' | 'worker' | 'watchdog';
@@ -81,12 +82,6 @@ export interface PersonLabels { router: string; watchdog: string; lead(team: str
 const SEATED: ReadonlySet<CoordinationGraphStatus> = new Set(['running', 'queued', 'waiting', 'blocked']);
 /** Workers whose title names no role still look like distinct people, stable per conversation. */
 const CAST: ReadonlyArray<CharacterModel> = ['executor', 'engineer', 'researcher', 'writer', 'analyst', 'reviewer', 'general'];
-
-export function stableHash(text: string): number {
-  let hash = 2166136261;
-  for (let index = 0; index < text.length; index += 1) hash = Math.imul(hash ^ text.charCodeAt(index), 16777619);
-  return hash >>> 0;
-}
 
 /** A Worker is named by its task: the bracketed or CODE: tag its lead gave it, else the title's start. */
 export function personName(title: string): { name: string; detail: string } {

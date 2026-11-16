@@ -132,7 +132,36 @@ def recv_frame(
     *,
     before_payload: Callable[[int], Any] | None = None,
 ) -> dict[str, Any]:
-    raw_size = _recv_exact(sock, _HEADER.size)
+    return _recv_frame(lambda count, frame_start=False: _recv_exact(sock, count),
+                       before_payload=before_payload)
+
+
+def _closed_mid_frame(_at_frame_boundary: bool) -> StorageError:
+    return StorageError('database_unavailable', 'Storage connection closed mid-frame', True, 100)
+
+
+class PipelinedFrames:
+    """The response frames of one pipelined connection, read in order.
+
+    One receive can carry several queued responses; ``drained`` says whether
+    no bytes beyond the frames read so far arrived.
+    """
+
+    def __init__(self, sock: socket.socket):
+        from tofu_db._frame_body import ReceiveBuffer
+        self._received = ReceiveBuffer(sock, _closed_mid_frame)
+
+    @property
+    def drained(self) -> bool:
+        return self._received.drained
+
+    def recv(self, *, before_payload: Callable[[int], Any] | None = None) -> dict[str, Any]:
+        return _recv_frame(self._received.read_exact, before_payload=before_payload)
+
+
+def _recv_frame(read_exact: Callable[..., Any], *,
+                before_payload: Callable[[int], Any] | None = None) -> dict[str, Any]:
+    raw_size = read_exact(_HEADER.size, frame_start=True)
     (size,) = _HEADER.unpack(raw_size)
     if size <= 0 or size > MAX_FRAME_BYTES:
         raise StorageError(
@@ -140,7 +169,7 @@ def recv_frame(
     reservation = before_payload(size) if before_payload is not None else None
     from tofu_db._frame_body import received_frame_body
     try:
-        with received_frame_body(lambda count: _recv_exact(sock, count), size, reservation) as body:
+        with received_frame_body(lambda count: read_exact(count), size, reservation) as body:
             with memoryview(body) as view:
                 value = orjson.loads(view)
     except orjson.JSONDecodeError as exc:
@@ -162,7 +191,7 @@ def send_frame(sock: socket.socket, message: Mapping[str, Any], *,
 
 
 __all__ = [
-    'FrozenPayload', 'MAX_FRAME_BYTES', 'PROTOCOL_VERSION', 'canonical_json',
+    'FrozenPayload', 'MAX_FRAME_BYTES', 'PROTOCOL_VERSION', 'PipelinedFrames', 'canonical_json',
     'encode_frame', 'encode_json_value', 'recv_frame', 'send_frame',
     'validate_finite_json_numbers',
     'validate_operation', 'wire_payload',

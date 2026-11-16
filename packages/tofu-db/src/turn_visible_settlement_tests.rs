@@ -189,7 +189,8 @@ impl Flow {
         json!({
             "turns":read(database, "turn.list", json!({"conversation_id":"phase-conversation"})),
             "revision":read(database, "turn.revision", json!({"conversation_id":"phase-conversation"})),
-            "sync":read(database, "turn.sync.changes", json!({"conversation_id":"phase-conversation", "after":0})),
+            "sync":crate::turn::without_sync_lineage(
+                read(database, "turn.sync.changes", json!({"conversation_id":"phase-conversation", "after":0}))),
             "attempt":read(database, "turn.attempt.get", json!({"attempt_id":self.child_attempt(1)})),
             "events":self.events(database, 1),
             "outbox":database.logical_outbox_status(7, 11).unwrap().last_sequence,

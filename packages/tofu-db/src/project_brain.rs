@@ -849,7 +849,57 @@ fn install_checkpoint_if_due(
         PROJECT_BRAIN_EVENT_INDEX_NAMESPACE,
         &index_end_bytes,
     )?;
-    database.entity_retire_range(transaction, &index_start, &index_end)?;
+    retire_event_indexes(database, transaction, &index_start, &index_end)
+}
+
+/// Retires a project's event index rows below a checkpoint's retained tail with
+/// exact tombstones: a structural range retirement would drain the
+/// authority-wide overlay under the writer before this commit. Every index key
+/// of a project has the length of `end`, so the transaction's own overlay
+/// envelope room (`entity_overlay_delta_room`) sets how many tombstones fit.
+/// The scan reads one row past that budget, and its pages are the witnesses
+/// that refuse a commit racing an insertion into the range. Rows the envelope
+/// cannot carry keep the structural retirement.
+fn retire_event_indexes(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    start: &EntityKey,
+    end: &EntityKey,
+) -> io::Result<()> {
+    let room = database.entity_overlay_delta_room(transaction);
+    let budget = room / crate::entity::overlay_write_bytes(end.encoded().len(), None);
+    let mut rows = Vec::new();
+    let mut cursor = start.clone();
+    loop {
+        let limit =
+            (budget + 1 - rows.len()).min(crate::generated_tofudb_ir::MAX_ENTITY_RANGE_ROWS);
+        let page = database.entity_scan(transaction, &cursor, end, limit)?;
+        let exhausted = page.len() < limit;
+        if let Some((last, _)) = page.last() {
+            let mut successor = last.key_bytes().to_vec();
+            successor.push(0);
+            cursor = EntityKey::new(
+                transaction.tenant_id(),
+                transaction.owner_user_id(),
+                PROJECT_BRAIN_EVENT_INDEX_NAMESPACE,
+                &successor,
+            )?;
+        }
+        rows.extend(page.into_iter().map(|(key, _)| key));
+        if exhausted || rows.len() > budget {
+            break;
+        }
+    }
+    let tombstone_bytes = rows
+        .iter()
+        .map(|key| crate::entity::overlay_write_bytes(key.encoded().len(), None))
+        .sum::<usize>();
+    if rows.len() > budget || tombstone_bytes > room {
+        return database.entity_retire_range(transaction, start, end);
+    }
+    for key in rows {
+        database.entity_delete(transaction, key)?;
+    }
     Ok(())
 }
 
@@ -3127,6 +3177,241 @@ mod tests {
         assert_eq!(rebuilt["replayedEvents"], 0);
         assert_eq!(rebuilt["projection"]["narratives"][0]["text"], "checkpoint");
         database.commit(rebuild_transaction).unwrap();
+    }
+
+    /// The second checkpoint of a busy project: the first retained event
+    /// indexes from 602, 1,200 more events cross the threshold again, and the
+    /// new checkpoint at 2,402 retires the 1,201 rows below 1,803. Returns the
+    /// command response, every index row left, and the overlay's entry count
+    /// before and after the checkpoint commit.
+    #[allow(clippy::type_complexity)]
+    fn second_checkpoint(overlay: bool) -> (Value, Vec<(Vec<u8>, Vec<u8>)>, usize, usize) {
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        database.set_write_overlay_for_test(overlay);
+        let project_key = SECOND_CHECKPOINT_PROJECT;
+        seed_second_checkpoint(&mut database);
+        let mut unrelated = database.begin(7, 11).unwrap();
+        database
+            .entity_put(
+                &mut unrelated,
+                EntityKey::new(7, 11, "unrelated", b"pending").unwrap(),
+                b"keep".to_vec(),
+            )
+            .unwrap();
+        database.commit(unrelated).unwrap();
+        let pending = database.entity_overlay_entries_for_test();
+
+        let mut checkpoint = database.begin(7, 11).unwrap();
+        let response = command(&database, &mut checkpoint, &second_checkpoint_request()).unwrap();
+        database.commit(checkpoint).unwrap();
+        let after = database.entity_overlay_entries_for_test();
+        let rows = project_index_rows(&database, project_key);
+        (
+            serde_json::from_slice(&response).unwrap(),
+            rows,
+            pending,
+            after,
+        )
+    }
+
+    const SECOND_CHECKPOINT_PROJECT: &str = "/second-checkpoint";
+
+    fn second_checkpoint_request() -> CommandRequest {
+        CommandRequest {
+            project_key: SECOND_CHECKPOINT_PROJECT.to_owned(),
+            action: CommandAction::NarrativeAdd,
+            payload: json!({"text": "second checkpoint", "kind": "note"})
+                .as_object()
+                .unwrap()
+                .clone(),
+            timestamp: 2,
+        }
+    }
+
+    fn project_index_rows(
+        database: &AuthorityDatabase,
+        project_key: &str,
+    ) -> Vec<(Vec<u8>, Vec<u8>)> {
+        let mut inspect = database.begin(7, 11).unwrap();
+        let (start, end) = EntityKey::prefix_range(
+            7,
+            11,
+            PROJECT_BRAIN_EVENT_INDEX_NAMESPACE,
+            &project_digest(project_key),
+        )
+        .unwrap();
+        let mut rows = Vec::new();
+        let mut cursor = start;
+        loop {
+            let page = database
+                .entity_scan(
+                    &mut inspect,
+                    &cursor,
+                    &end,
+                    crate::generated_tofudb_ir::MAX_ENTITY_RANGE_ROWS,
+                )
+                .unwrap();
+            let Some((last, _)) = page.last() else { break };
+            let mut successor = last.key_bytes().to_vec();
+            successor.push(0);
+            cursor =
+                EntityKey::new(7, 11, PROJECT_BRAIN_EVENT_INDEX_NAMESPACE, &successor).unwrap();
+            rows.extend(
+                page.into_iter()
+                    .map(|(key, value)| (key.key_bytes().to_vec(), value)),
+            );
+        }
+        rows
+    }
+
+    fn seed_second_checkpoint(database: &mut AuthorityDatabase) {
+        let project_key = SECOND_CHECKPOINT_PROJECT;
+        let mut seed = database.begin(7, 11).unwrap();
+        let mut projection = empty_projection(11, project_key);
+        projection.insert("headSequence".to_owned(), Value::from(2400_u64));
+        projection.insert("checkpointSequence".to_owned(), Value::from(1201_u64));
+        save_projection(database, &mut seed, project_key, &projection, 1).unwrap();
+        let project_stream = stream_key(&seed, project_key).unwrap();
+        database
+            .stream_append(
+                &mut seed,
+                project_stream,
+                1,
+                vec![StreamEvent::new(1, "seed", b"seed".to_vec()).unwrap()],
+            )
+            .unwrap();
+        for sequence in 602..=2400 {
+            let index = event_index_key(&seed, project_key, sequence).unwrap();
+            database
+                .entity_put(&mut seed, index, position(1, 1))
+                .unwrap();
+        }
+        database.commit(seed).unwrap();
+    }
+
+    #[test]
+    fn checkpoint_index_retirement_conflicts_with_an_index_insert_after_its_scan() {
+        // The scan that enumerates the retired rows is their only witness:
+        // a row inserted into the range after it must refuse the commit.
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        database.set_write_overlay_for_test(true);
+        seed_second_checkpoint(&mut database);
+        let before = project_index_rows(&database, SECOND_CHECKPOINT_PROJECT);
+        let mut checkpoint = database.begin(7, 11).unwrap();
+        command(&database, &mut checkpoint, &second_checkpoint_request()).unwrap();
+        let mut insertion = database.begin(7, 11).unwrap();
+        let inserted = event_index_key(&insertion, SECOND_CHECKPOINT_PROJECT, 1).unwrap();
+        database
+            .entity_put(&mut insertion, inserted.clone(), position(1, 1))
+            .unwrap();
+        database.commit(insertion).unwrap();
+        assert_eq!(
+            database.commit(checkpoint).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        let mut expected = before;
+        expected.insert(0, (inserted.key_bytes().to_vec(), position(1, 1)));
+        assert_eq!(
+            project_index_rows(&database, SECOND_CHECKPOINT_PROJECT),
+            expected
+        );
+    }
+
+    /// After a crash at any VFS operation of the checkpoint commit, the reopened
+    /// store holds either the whole old state (checkpoint 1,201, indexes from
+    /// 602) or the whole new one (checkpoint 2,402, indexes from 1,803): the
+    /// 1,201 index tombstones never land apart from the checkpoint.
+    fn assert_checkpoint_recovers_one_atomic_prefix(
+        vfs: std::sync::Arc<crate::vfs::DeterministicVfs>,
+    ) {
+        vfs.crash().unwrap();
+        vfs.arm_fault(None).unwrap();
+        let database =
+            AuthorityDatabase::open_with_vfs(std::path::Path::new("/data"), vfs).unwrap();
+        let mut read = database.begin(7, 11).unwrap();
+        let projection = load_projection(&database, &mut read, SECOND_CHECKPOINT_PROJECT).unwrap();
+        let first = |rows: &[(Vec<u8>, Vec<u8>)]| {
+            rows.first()
+                .map(|(key, _)| u64::from_be_bytes(key[32..40].try_into().unwrap()))
+        };
+        let rows = project_index_rows(&database, SECOND_CHECKPOINT_PROJECT);
+        let sequence = |name: &str| projection.get(name).and_then(Value::as_u64);
+        match sequence("checkpointSequence") {
+            Some(1201) => {
+                assert_eq!(sequence("headSequence"), Some(2400));
+                assert_eq!((rows.len(), first(&rows)), (1799, Some(602)));
+            }
+            Some(2402) => {
+                assert_eq!(sequence("headSequence"), Some(2402));
+                assert_eq!((rows.len(), first(&rows)), (600, Some(1803)));
+            }
+            other => panic!(
+                "partial checkpoint recovered: checkpointSequence {other:?}, {} rows",
+                rows.len()
+            ),
+        }
+    }
+
+    fn faulted_checkpoint(
+        fault: Option<crate::vfs::FaultRule>,
+    ) -> std::sync::Arc<crate::vfs::DeterministicVfs> {
+        use crate::vfs::Vfs;
+        let vfs = std::sync::Arc::new(crate::vfs::DeterministicVfs::new(None));
+        vfs.create_dir(std::path::Path::new("/data")).unwrap();
+        vfs.sync_directory(std::path::Path::new("/")).unwrap();
+        let mut database =
+            AuthorityDatabase::initialize_with_vfs(std::path::Path::new("/data"), vfs.clone())
+                .unwrap();
+        database.set_write_overlay_for_test(true);
+        seed_second_checkpoint(&mut database);
+        vfs.arm_fault(None).unwrap();
+        vfs.arm_fault(fault).unwrap();
+        let mut checkpoint = database.begin(7, 11).unwrap();
+        if command(&database, &mut checkpoint, &second_checkpoint_request()).is_ok() {
+            let _ = database.commit(checkpoint);
+        }
+        drop(database);
+        vfs
+    }
+
+    #[test]
+    fn every_checkpoint_commit_fault_recovers_one_atomic_prefix() {
+        use crate::vfs::{FaultAction, FaultRule, Operation};
+        let baseline = faulted_checkpoint(None);
+        let trace = baseline.trace().unwrap();
+        assert_checkpoint_recovers_one_atomic_prefix(baseline);
+        for operation_number in 1..=trace.len() as u64 {
+            assert_checkpoint_recovers_one_atomic_prefix(faulted_checkpoint(Some(FaultRule {
+                operation_number,
+                action: FaultAction::ErrorBefore(io::ErrorKind::Interrupted),
+            })));
+        }
+        for (index, operation) in trace.iter().enumerate() {
+            if operation == &Operation::Write {
+                assert_checkpoint_recovers_one_atomic_prefix(faulted_checkpoint(Some(FaultRule {
+                    operation_number: index as u64 + 1,
+                    action: FaultAction::ShortWrite(7),
+                })));
+            }
+        }
+    }
+
+    #[test]
+    fn checkpoint_install_retires_old_event_indexes_without_draining_the_overlay() {
+        let (structural_response, structural_rows, _, _) = second_checkpoint(false);
+        let (response, rows, pending, after) = second_checkpoint(true);
+        assert_eq!(response["projection"]["headSequence"], 2402);
+        let sequences: Vec<u64> = rows
+            .iter()
+            .map(|(key, _)| u64::from_be_bytes(key[32..40].try_into().unwrap()))
+            .collect();
+        assert_eq!(sequences, (1803..=2402).collect::<Vec<u64>>());
+        assert!(pending > 0, "the fixture left no pending overlay write");
+        assert!(after > pending,
+            "the checkpoint drained {pending} pending overlay entries to {after}: it took the tree path");
+        assert_eq!((response, rows), (structural_response, structural_rows));
     }
 }
 

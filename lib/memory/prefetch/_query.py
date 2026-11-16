@@ -70,16 +70,33 @@ def _selection_text(text: str) -> str:
     turns (design record "Owner understanding", Decision 8). Both are dropped,
     so a coordination role selects by the owner's own words. A Worker selects
     by its Coordinator's brief: the brief is its task, and the owner's request
-    is only linked, not repeated, in its input. The envelope owners define the
+    is only linked, not repeated, in its input. A lead's program-written input
+    selects by its subject only: a relayed report or question by what the
+    Project Router said, a continuation brief by its due promises or applied
+    default, and a status notice by nothing. The envelope owners define the
     markers.
     """
+    from lib.project_dispatch.continuation import continuation_brief_subject
     from lib.project_dispatch.delegation import follow_up_instruction, worker_input_brief
     from lib.router.forwarding import strip_router_evidence
+    from lib.router.relay import relay_notice_subject
+    from lib.turn_initiation import is_nonhuman_notice
     brief = worker_input_brief(text)
     if brief is not None:
-        return brief
+        subject = continuation_brief_subject(brief)
+        return brief if subject is None else subject
     instruction = follow_up_instruction(text)
-    return strip_router_evidence(text) if instruction is None else instruction
+    if instruction is not None:
+        return instruction
+    relayed = relay_notice_subject(text)
+    if relayed is not None:
+        return relayed
+    if is_nonhuman_notice(text):
+        # A status notice (restart, scheduled wake, quiet hours, ...) states no
+        # task: nothing in it is the owner's words or a brief.
+        return ''
+    subject = continuation_brief_subject(text)
+    return strip_router_evidence(text) if subject is None else subject
 
 
 def _extract_current_user_request(messages: list,

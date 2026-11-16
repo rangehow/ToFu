@@ -34,7 +34,7 @@ fn byte_window_returns_newest_suffix_and_drains_every_ordinal_once() {
     loop {
         let page: Value = serde_json::from_slice(&sync_page(
             &database, &mut transaction, "byte-window", "main", before, 64,
-            head, 65536, &mut || false,
+            head, 0, 65536, &mut || false,
         ).unwrap().unwrap()).unwrap();
         let turns = page["turns"].as_array().unwrap();
         assert_eq!(turns.len(), 1); // the oversized turn still makes progress
@@ -49,7 +49,7 @@ fn byte_window_returns_newest_suffix_and_drains_every_ordinal_once() {
     assert_eq!(full["turns"].as_array().unwrap().len(), 4);
     let stale: Value = serde_json::from_slice(&sync_page(
         &database, &mut transaction, "byte-window", "main", 3, 64,
-        head + 1, 65536, &mut || false,
+        head + 1, 0, 65536, &mut || false,
     ).unwrap().unwrap()).unwrap();
     assert_eq!(stale["stale"], json!(true));
     let mut other = database.begin_with_identity_claim_scopes(7, 12).unwrap();

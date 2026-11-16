@@ -1104,16 +1104,594 @@
         let engine = database.writer_engine().unwrap();
         let mut visits = EntityPageVisits::default();
         let mut visited = BTreeSet::new();
-        walk_entity_page_graph(reachability_root(held_root.unwrap(), false), Some(&mut visits),
+        walk_entity_page_graph(reachability_root(held_root.unwrap(), false), Some(&mut visits), None,
             |id| engine.read_block(id), |id, _| { assert!(visited.insert(id)); Ok(()) }, |_, _| Ok(()))
         .unwrap();
         assert!(visits.deferred.is_empty(), "a walk without discovery finds no pins");
         let mut rewalked = 0;
-        walk_entity_page_graph(reachability_root(held_root.unwrap(), true), Some(&mut visits),
+        walk_entity_page_graph(reachability_root(held_root.unwrap(), true), Some(&mut visits), None,
             |id| { rewalked += 1; engine.read_block(id) }, |id, _| { assert!(visited.insert(id)); Ok(()) }, |_, _| Ok(()))
         .unwrap();
         assert!(rewalked > 0);
         assert_eq!(visits.deferred, vec![pin_c_root.unwrap()], "the discovery walk finds pin c");
+    }
+
+    /// What one walk-once visit did, order-free: page visits, value visits
+    /// and block reads by count, and its walked and skipped counts or error.
+    #[derive(Debug, PartialEq, Eq)]
+    struct WalkRecord {
+        outcome: Result<(usize, u64), String>,
+        pages: BTreeMap<BlockId, u64>,
+        values: BTreeMap<(Vec<u8>, Vec<u8>), u64>,
+        reads: BTreeMap<BlockId, u64>,
+    }
+
+    /// Walks `roots` once per page, or with each walk's leaves read in one
+    /// batch in reverse id order; also returns how many leaves batches read.
+    fn record_walk(
+        roots: &[Option<BlockId>],
+        read: &dyn Fn(BlockId) -> io::Result<Vec<u8>>,
+        batched: bool,
+    ) -> (WalkRecord, u64) {
+        let pages = std::cell::RefCell::new(BTreeMap::<BlockId, u64>::new());
+        let values = std::cell::RefCell::new(BTreeMap::<(Vec<u8>, Vec<u8>), u64>::new());
+        let reads = std::cell::RefCell::new(BTreeMap::<BlockId, u64>::new());
+        let note_read = |id: BlockId| {
+            *reads.borrow_mut().entry(id).or_default() += 1;
+            read(id)
+        };
+        let visit_page = |id: BlockId, _: &[u8]| {
+            *pages.borrow_mut().entry(id).or_default() += 1;
+            Ok(())
+        };
+        let visit_value = |key: &EntityKey, value: &[u8]| {
+            *values.borrow_mut().entry((key.encoded().to_vec(), value.to_vec())).or_default() += 1;
+            Ok(())
+        };
+        let mut batched_leaves = 0;
+        let outcome = if batched {
+            let mut read_leaves = |ids: &[BlockId], visit: &mut dyn FnMut(BlockId, Vec<u8>) -> io::Result<()>| -> io::Result<()> {
+                for id in ids.iter().rev() {
+                    batched_leaves += 1;
+                    visit(*id, note_read(*id)?)?;
+                }
+                Ok(())
+            };
+            let mut expanded = || -> io::Result<()> { Ok(()) };
+            visit_entity_page_graphs_once_batched(
+                roots,
+                LeafBatching { read: &mut read_leaves, expanded: &mut expanded },
+                &note_read,
+                visit_page,
+                visit_value,
+            )
+        } else {
+            visit_entity_page_graphs_once(roots, note_read, visit_page, visit_value)
+        };
+        let record = WalkRecord {
+            outcome: outcome
+                .map(|walk| (walk.walked_pages, walk.skipped_pages))
+                .map_err(|error| format!("{:?}: {error}", error.kind())),
+            pages: pages.into_inner(),
+            values: values.into_inner(),
+            reads: reads.into_inner(),
+        };
+        (record, batched_leaves)
+    }
+
+    /// The batched walk visits, reads and counts what the per-page walk does,
+    /// or fails with the same error.
+    fn assert_batched_walk_equals_per_page_walk(
+        roots: &[Option<BlockId>],
+        read: &dyn Fn(BlockId) -> io::Result<Vec<u8>>,
+    ) -> WalkRecord {
+        let (per_page, _) = record_walk(roots, read, false);
+        let (batched, batched_leaves) = record_walk(roots, read, true);
+        if per_page.outcome.is_ok() {
+            assert_eq!(batched, per_page);
+            assert!(batched_leaves > 0, "the batched walk deferred no leaf");
+        } else {
+            assert_eq!(batched.outcome, per_page.outcome);
+        }
+        per_page
+    }
+
+    /// Leaves read in one batch per walk change nothing a mark sees: pin
+    /// leaves several roots share (one root's count validates only through
+    /// kept tallies), a leaf a discovery root and a later persistent-pin walk
+    /// share, and a pin-count mismatch that only a deferred leaf records.
+    #[test]
+    fn batched_walks_visit_read_and_count_what_the_per_page_walk_does() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = EntityDatabase::initialize(directory.path()).unwrap();
+        let mut roots = shared_pin_catalog_roots(&mut database);
+        {
+            let engine = database.writer_engine().unwrap();
+            let record = assert_batched_walk_equals_per_page_walk(&roots, &|id| engine.read_block(id));
+            assert!(record.outcome.is_ok(), "{:?}", record.outcome);
+            assert!(record.pages.len() > 10, "fixture: {} pages", record.pages.len());
+        }
+        let count_key = persistent_root_pin_count_key().unwrap();
+        let mut force = database
+            .begin_with_additional_scope_prefixes(7, 11, vec![count_key.encoded().to_vec()])
+            .unwrap();
+        database
+            .put(&mut force, count_key, encode_persistent_root_pin_count(999).unwrap())
+            .unwrap();
+        database.commit(force).unwrap();
+        roots.push(database.snapshot().root);
+        {
+            let engine = database.writer_engine().unwrap();
+            let record = assert_batched_walk_equals_per_page_walk(&roots, &|id| engine.read_block(id));
+            let error = record.outcome.unwrap_err();
+            assert!(error.contains("does not match its catalog"), "{error}");
+        }
+
+        let (_directory, database, roots, _) = pin_reached_through_another_pin();
+        let engine = database.writer_engine().unwrap();
+        let record = assert_batched_walk_equals_per_page_walk(&roots, &|id| engine.read_block(id));
+        assert!(record.outcome.is_ok(), "{:?}", record.outcome);
+    }
+
+    /// Leaves under a range mount, walked by the mount's deferred walk.
+    #[test]
+    fn batched_walks_read_the_leaves_under_a_range_mount_like_the_per_page_walk() {
+        let directory = tempfile::tempdir().unwrap();
+        let range_key = |index: u32| EntityKey::new(7, 11, "mount_walk", &index.to_be_bytes()).unwrap();
+        let ranges = [(range_key(500), range_key(4_500))];
+        let mut database = EntityDatabase::initialize(directory.path()).unwrap();
+        database.set_write_overlay_enabled(false);
+        let mut seed = database.begin(7, 11).unwrap();
+        for index in 0..5_000_u32 {
+            database.put(&mut seed, range_key(index), vec![index as u8; 32]).unwrap();
+        }
+        database.commit(seed).unwrap();
+        let mut retire = database.begin(7, 11).unwrap();
+        database.stage_persistent_range_snapshot_pin(&mut retire, b"walk", &ranges).unwrap();
+        database.retire_range(&mut retire, &ranges[0].0, &ranges[0].1).unwrap();
+        database.commit(retire).unwrap();
+        let mut restore = database.begin(7, 11).unwrap();
+        database.stage_persistent_range_snapshot_restore(&mut restore, b"walk", &ranges).unwrap();
+        database.commit(restore).unwrap();
+        let root = database.snapshot().root;
+        let engine = database.writer_engine().unwrap();
+        assert!(
+            engine.read_block(root.unwrap()).unwrap().starts_with(ROOT_DIRECTORY_MAGIC),
+            "fixture: the root is a directory with a range mount"
+        );
+        let record = assert_batched_walk_equals_per_page_walk(&[root], &|id| engine.read_block(id));
+        assert!(record.outcome.is_ok(), "{:?}", record.outcome);
+    }
+
+    /// A page a walk reaches twice joins its subtree's kept tally the second
+    /// time. When that subtree's leaves were deferred, they are read first, so
+    /// the join sees their records: here the leaf holds the pin-count record,
+    /// and the second path's join is a duplicate count in both walks. A
+    /// batched walk that joined before reading the leaf would join nothing
+    /// and pass.
+    #[test]
+    fn a_page_reached_twice_in_one_walk_joins_the_records_of_its_deferred_leaves() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = EntityDatabase::initialize(directory.path()).unwrap();
+        database.set_write_overlay_enabled(false);
+        let mut seed = database.begin(7, 11).unwrap();
+        database.put(&mut seed, key(1), b"one".to_vec()).unwrap();
+        database.commit(seed).unwrap();
+        let mut pin = database.begin(7, 11).unwrap();
+        database.stage_persistent_snapshot_pin(&mut pin, b"twice").unwrap();
+        database.commit(pin).unwrap();
+        let leaf_id = database.snapshot().root.unwrap();
+        let engine = database.writer_engine().unwrap();
+        let Page::Leaf(entries) = Page::decode(&engine.read_block(leaf_id).unwrap()).unwrap() else {
+            panic!("fixture: a one-leaf tree");
+        };
+        let first = entries.first().unwrap().0.clone();
+        let mut past_last = entries.last().unwrap().0.clone();
+        past_last.push(0xff);
+        let encode = |page: Page| {
+            let bytes = page.encode().unwrap();
+            (BlockId::for_payload(&bytes), bytes)
+        };
+        let (first_parent, first_parent_bytes) = encode(Page::Internal {
+            level: 1,
+            children: vec![Child { lower_bound: first.clone(), block_id: leaf_id }],
+        });
+        let (second_parent, second_parent_bytes) = encode(Page::Internal {
+            level: 1,
+            children: vec![Child { lower_bound: past_last.clone(), block_id: leaf_id }],
+        });
+        let (root, root_bytes) = encode(Page::Internal {
+            level: 2,
+            children: vec![
+                Child { lower_bound: first, block_id: first_parent },
+                Child { lower_bound: past_last, block_id: second_parent },
+            ],
+        });
+        let crafted = BTreeMap::from([
+            (root, root_bytes),
+            (first_parent, first_parent_bytes),
+            (second_parent, second_parent_bytes),
+        ]);
+        let read = |id: BlockId| crafted.get(&id).cloned().map_or_else(|| engine.read_block(id), Ok);
+        let record = assert_batched_walk_equals_per_page_walk(&[Some(root)], &read);
+        let error = record.outcome.unwrap_err();
+        assert!(error.contains("duplicate persistent entity root pin count record"), "{error}");
+    }
+
+    /// A leaf batch that fails (a stopped mark) fails the walk, and no page of
+    /// that batch is visited.
+    #[test]
+    fn a_failed_leaf_batch_fails_the_walk_before_visiting_its_leaves() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = EntityDatabase::initialize(directory.path()).unwrap();
+        let roots = shared_pin_catalog_roots(&mut database);
+        let engine = database.writer_engine().unwrap();
+        let mut requested = Vec::new();
+        let mut read_leaves = |ids: &[BlockId], _: &mut dyn FnMut(BlockId, Vec<u8>) -> io::Result<()>| -> io::Result<()> {
+            requested.extend_from_slice(ids);
+            Err(io::Error::new(io::ErrorKind::WouldBlock, "online GC epoch stopped"))
+        };
+        let mut expanded = || -> io::Result<()> { panic!("a failed batch was reported expanded") };
+        let mut visited = BTreeSet::new();
+        let error = visit_entity_page_graphs_once_batched(
+            &roots,
+            LeafBatching { read: &mut read_leaves, expanded: &mut expanded },
+            |id| engine.read_block(id),
+            |id, _| {
+                visited.insert(id);
+                Ok(())
+            },
+            |_, _| Ok(()),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert!(!requested.is_empty());
+        assert!(requested.iter().all(|id| !visited.contains(id)), "a leaf of the failed batch was visited");
+    }
+
+    fn splitmix64(state: &mut u64) -> u64 {
+        *state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut value = *state;
+        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        value ^ (value >> 31)
+    }
+
+    /// The seeded choices of one random walk case.
+    struct Seeded(u64);
+
+    impl Seeded {
+        fn below(&mut self, bound: u64) -> u64 {
+            splitmix64(&mut self.0) % bound.max(1)
+        }
+
+        fn chance(&mut self, percent: u64) -> bool {
+            self.below(100) < percent
+        }
+    }
+
+    /// The leaves of one B+Tree in key order: id, first and last key.
+    fn tree_leaves(read: &dyn Fn(BlockId) -> io::Result<Vec<u8>>, root: BlockId) -> Vec<(BlockId, Vec<u8>, Vec<u8>)> {
+        let mut leaves = Vec::new();
+        visit_entity_page_graph(Some(root), read, |id, encoded| {
+            if let Page::Leaf(entries) = Page::decode(encoded)? {
+                if let (Some(first), Some(last)) = (entries.first(), entries.last()) {
+                    leaves.push((id, first.0.clone(), last.0.clone()));
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+        leaves
+    }
+
+    struct RandomWalkCase {
+        database: EntityDatabase,
+        roots: Vec<Option<BlockId>>,
+        crafted: BTreeMap<BlockId, Vec<u8>>,
+    }
+
+    /// One seeded store and the roots a mark could hold over it: live and
+    /// earlier roots that share most pages, persistent pins found by discovery
+    /// (and walked without it), pins removed again, a range mount, a root that
+    /// is a leaf, sometimes a pin count that disagrees with its pins, and
+    /// crafted pages over the store's leaves: parents in key order that may end
+    /// with a second reference to a leaf an earlier parent holds (one walk
+    /// reaches it twice) or record a wrong witness. The roots come in a random
+    /// order.
+    fn random_walk_case(seed: u64) -> RandomWalkCase {
+        let mut random = Seeded(seed);
+        let vfs = Arc::new(DeterministicVfs::new(None));
+        vfs.create_dir(std::path::Path::new("/data")).unwrap();
+        vfs.sync_directory(std::path::Path::new("/")).unwrap();
+        let shared: Arc<dyn Vfs> = vfs;
+        let mut database = EntityDatabase::initialize_with_vfs(std::path::Path::new("/data"), shared).unwrap();
+        database.set_write_overlay_enabled(false);
+        let key_space = 16 + if random.chance(10) { random.below(4_000) } else { random.below(600) };
+        let mut written = BTreeSet::new();
+        let mut pins: Vec<String> = Vec::new();
+        let mut serial = 0_u32;
+        let mut roots = Vec::new();
+        for _ in 0..1 + random.below(6) {
+            let mut transaction = database.begin(7, 11).unwrap();
+            for _ in 0..1 + random.below(key_space) {
+                let index = random.below(key_space) as u16;
+                if written.contains(&index) && random.chance(15) {
+                    database.delete(&mut transaction, key(index)).unwrap();
+                    written.remove(&index);
+                } else {
+                    let size = 1 + if random.chance(5) { random.below(3_000) } else { random.below(300) } as usize;
+                    database.put(&mut transaction, key(index), vec![random.below(256) as u8; size]).unwrap();
+                    written.insert(index);
+                }
+            }
+            database.commit(transaction).unwrap();
+            if random.chance(40) {
+                let name = format!("pin-{serial}");
+                serial += 1;
+                let mut transaction = database.begin(7, 11).unwrap();
+                if database.stage_persistent_snapshot_pin(&mut transaction, name.as_bytes()).is_ok()
+                    && database.commit(transaction).is_ok()
+                {
+                    pins.push(name);
+                }
+            }
+            if !pins.is_empty() && random.chance(20) {
+                let name = pins.swap_remove(random.below(pins.len() as u64) as usize);
+                let mut transaction = database.begin(7, 11).unwrap();
+                if database.remove_persistent_snapshot_pin(&mut transaction, name.as_bytes()).unwrap_or(false) {
+                    let _ = database.commit(transaction);
+                }
+            }
+            if random.chance(50) {
+                roots.push(database.snapshot().root);
+            }
+        }
+        let mut crafted = BTreeMap::new();
+        if let Some(tree_root) = database.snapshot().root {
+            let engine = database.writer_engine().unwrap();
+            let read = |id: BlockId| engine.read_block(id);
+            if !read(tree_root).unwrap().starts_with(ROOT_DIRECTORY_MAGIC) {
+                let leaves = tree_leaves(&read, tree_root);
+                if !leaves.is_empty() && random.chance(20) {
+                    roots.push(Some(leaves[random.below(leaves.len() as u64) as usize].0));
+                }
+                if leaves.len() >= 2 && random.chance(35) {
+                    let chosen: Vec<&(BlockId, Vec<u8>, Vec<u8>)> =
+                        leaves.iter().filter(|_| random.chance(70)).collect();
+                    if chosen.len() >= 2 {
+                        let parent_count = 1 + random.below(3_u64.min(chosen.len() as u64)) as usize;
+                        let mut runs: Vec<Vec<Child>> = vec![Vec::new(); parent_count];
+                        for (position, leaf) in chosen.iter().enumerate() {
+                            runs[position * parent_count / chosen.len()]
+                                .push(Child { lower_bound: leaf.1.clone(), block_id: leaf.0 });
+                        }
+                        // Walks visit children in key order, so a second
+                        // reference past the last chosen leaf is reached after
+                        // the first: walk-once skips it unchecked, and the
+                        // walk accepts unless the leaf holds pin records.
+                        if random.chance(60) {
+                            let shared_leaf = chosen[random.below(chosen.len() as u64) as usize].0;
+                            let mut bound = chosen.last().unwrap().2.clone();
+                            bound.push(0xff);
+                            runs.last_mut().unwrap().push(Child { lower_bound: bound, block_id: shared_leaf });
+                        }
+                        if random.chance(10) {
+                            let run = random.below(runs.len() as u64) as usize;
+                            let child = random.below(runs[run].len() as u64) as usize;
+                            runs[run][child].lower_bound.push(0x01);
+                        }
+                        let mut parents = Vec::new();
+                        for run in runs.into_iter().filter(|run| !run.is_empty()) {
+                            let lower_bound = run[0].lower_bound.clone();
+                            if let Ok(bytes) = (Page::Internal { level: 1, children: run }).encode() {
+                                let id = BlockId::for_payload(&bytes);
+                                crafted.insert(id, bytes);
+                                parents.push(Child { lower_bound, block_id: id });
+                            }
+                        }
+                        if !parents.is_empty() {
+                            if let Ok(bytes) = (Page::Internal { level: 2, children: parents }).encode() {
+                                let id = BlockId::for_payload(&bytes);
+                                crafted.insert(id, bytes);
+                                roots.push(Some(id));
+                            }
+                        }
+                    }
+                }
+            }
+            roots.push(Some(tree_root));
+        }
+        if written.len() >= 4 && random.chance(15) {
+            let present: Vec<u16> = written.iter().copied().collect();
+            let first = present[random.below(present.len() as u64) as usize];
+            let second = present[random.below(present.len() as u64) as usize];
+            let ranges = [(key(first.min(second)), key(first.max(second).saturating_add(1)))];
+            let name = format!("mount-{serial}");
+            let mut retire = database.begin(7, 11).unwrap();
+            let retired = database.stage_persistent_range_snapshot_pin(&mut retire, name.as_bytes(), &ranges).is_ok()
+                && database.retire_range(&mut retire, &ranges[0].0, &ranges[0].1).is_ok()
+                && database.commit(retire).is_ok();
+            if retired {
+                let mut restore = database.begin(7, 11).unwrap();
+                if database.stage_persistent_range_snapshot_restore(&mut restore, name.as_bytes(), &ranges).is_ok() {
+                    let _ = database.commit(restore);
+                }
+            }
+        }
+        if random.chance(5) {
+            let count_key = persistent_root_pin_count_key().unwrap();
+            let mut force = database
+                .begin_with_additional_scope_prefixes(7, 11, vec![count_key.encoded().to_vec()])
+                .unwrap();
+            database
+                .put(&mut force, count_key, encode_persistent_root_pin_count(1 + random.below(9) as usize).unwrap())
+                .unwrap();
+            database.commit(force).unwrap();
+        }
+        roots.push(database.snapshot().root);
+        for index in (1..roots.len()).rev() {
+            let other = random.below(index as u64 + 1) as usize;
+            roots.swap(index, other);
+        }
+        RandomWalkCase { database, roots, crafted }
+    }
+
+    /// Walks one random case once per page and with its leaves batched; true
+    /// when the per-page walk accepted it.
+    fn assert_random_walk_case(seed: u64, outcomes: &mut BTreeMap<String, u64>) -> bool {
+        let case = random_walk_case(seed);
+        let engine = case.database.writer_engine().unwrap();
+        let read = |id: BlockId| case.crafted.get(&id).cloned().map_or_else(|| engine.read_block(id), Ok);
+        let (per_page, _) = record_walk(&case.roots, &read, false);
+        let (batched, batched_leaves) = record_walk(&case.roots, &read, true);
+        match (&per_page.outcome, &batched.outcome) {
+            (Ok(_), _) => {
+                assert_eq!(batched, per_page, "seed {seed}");
+                let outcome = if batched_leaves > 0 { "accepted, leaves batched" } else { "accepted, no leaf batched" };
+                *outcomes.entry(outcome.to_owned()).or_default() += 1;
+                true
+            }
+            (Err(per_page_error), Err(batched_error)) => {
+                let outcome = if per_page_error == batched_error {
+                    format!("rejected alike: {per_page_error}")
+                } else {
+                    format!("rejected: per-page {per_page_error} | batched {batched_error}")
+                };
+                *outcomes.entry(outcome).or_default() += 1;
+                false
+            }
+            (Err(error), Ok(_)) => panic!("seed {seed}: the per-page walk failed ({error}); the batched walk accepted"),
+        }
+    }
+
+    /// Seeded random graphs (C2 of the online-mark hotfix review): wherever
+    /// the per-page walk accepts a case, the batched walk visits the same
+    /// pages and values as often, reads every block as often and walks and
+    /// skips as many pages; wherever it rejects one, the batched walk rejects
+    /// it too. A mark that omitted a block deterministically would delete it
+    /// after two marks, and the two-mark rule cannot notice.
+    fn assert_batched_walks_equal_per_page_walks(seeds: std::ops::Range<u64>) {
+        let mut outcomes = BTreeMap::new();
+        let accepted = seeds.clone().filter(|seed| assert_random_walk_case(*seed, &mut outcomes)).count();
+        println!("walk_differential: seeds={seeds:?} accepted={accepted} outcomes={outcomes:#?}");
+        assert!(outcomes.contains_key("accepted, leaves batched"), "{outcomes:?}");
+        assert!(outcomes.keys().any(|outcome| outcome.starts_with("rejected")), "{outcomes:?}");
+    }
+
+    #[test]
+    fn batched_walks_equal_per_page_walks_on_1000_random_graphs() {
+        assert_batched_walks_equal_per_page_walks(0..1_000);
+    }
+
+    #[test]
+    #[ignore]
+    fn batched_walks_equal_per_page_walks_on_10000_random_graphs() {
+        assert_batched_walks_equal_per_page_walks(0..10_000);
+    }
+
+    fn process_kib(field: &str) -> u64 {
+        std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|status| {
+                status
+                    .lines()
+                    .find(|line| line.starts_with(field))
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .and_then(|value| value.parse().ok())
+            })
+            .unwrap_or(0)
+    }
+
+    /// Peak memory of one mark-sized walk (C4 of the online-mark hotfix
+    /// review), run by hand on an isolated VM with `--ignored --nocapture`, each
+    /// arm in its own process: a crafted tree of `TOFU_DB_WALK_BENCH_LEAVES`
+    /// one-entry leaves (production's 11-09 mark walked 6.21M pages) under
+    /// internal pages of 128 children, walked once per page
+    /// (`TOFU_DB_WALK_BENCH_ARM=per-page`) or with its leaves in one batch
+    /// (`batched`). The peak RSS is reset after the tree is built, so the
+    /// printed growth is the walk's own.
+    #[test]
+    #[ignore]
+    fn measure_walk_memory_on_a_crafted_tree() {
+        let Some(leaves) = std::env::var("TOFU_DB_WALK_BENCH_LEAVES").ok().and_then(|value| value.parse::<usize>().ok())
+        else {
+            return;
+        };
+        let arm = std::env::var("TOFU_DB_WALK_BENCH_ARM").unwrap_or_else(|_| "batched".to_owned());
+        let fanout = 128;
+        let mut pages: HashMap<BlockId, Vec<u8>> = HashMap::with_capacity(leaves + leaves / (fanout - 1) + 2);
+        let mut level: Vec<(Vec<u8>, BlockId)> = Vec::with_capacity(leaves);
+        for index in 0..leaves {
+            let key = EntityKey::new(7, 11, "conversation_turn", format!("{index:032x}").as_bytes())
+                .unwrap()
+                .encoded()
+                .to_vec();
+            let bytes = Page::Leaf(vec![(key.clone(), EntityValue { version: 1, value: Some(vec![0x5a; 16]) })])
+                .encode()
+                .unwrap();
+            let id = BlockId::for_payload(&bytes);
+            pages.insert(id, bytes);
+            level.push((key, id));
+        }
+        let mut page_level = 1_u8;
+        while level.len() > 1 {
+            let parents: Vec<(Vec<u8>, BlockId)> = level
+                .chunks(fanout)
+                .map(|children| {
+                    let bytes = Page::Internal {
+                        level: page_level,
+                        children: children
+                            .iter()
+                            .map(|(lower_bound, block_id)| Child { lower_bound: lower_bound.clone(), block_id: *block_id })
+                            .collect(),
+                    }
+                    .encode()
+                    .unwrap();
+                    let id = BlockId::for_payload(&bytes);
+                    pages.insert(id, bytes);
+                    (children[0].0.clone(), id)
+                })
+                .collect();
+            level = parents;
+            page_level += 1;
+        }
+        let root = level[0].1;
+        drop(level);
+        std::fs::write("/proc/self/clear_refs", "5").unwrap();
+        let rss_before = process_kib("VmRSS:");
+        let read = |id: BlockId| {
+            pages.get(&id).cloned().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "crafted page missing"))
+        };
+        let started = std::time::Instant::now();
+        let walk = if arm == "per-page" {
+            visit_entity_page_graphs_once(&[Some(root)], &read, |_, _| Ok(()), |_, _| Ok(()))
+        } else {
+            let mut read_leaves =
+                |ids: &[BlockId], visit: &mut dyn FnMut(BlockId, Vec<u8>) -> io::Result<()>| -> io::Result<()> {
+                    for id in ids {
+                        visit(*id, read(*id)?)?;
+                    }
+                    Ok(())
+                };
+            let mut expanded = || -> io::Result<()> { Ok(()) };
+            visit_entity_page_graphs_once_batched(
+                &[Some(root)],
+                LeafBatching { read: &mut read_leaves, expanded: &mut expanded },
+                read,
+                |_, _| Ok(()),
+                |_, _| Ok(()),
+            )
+        }
+        .unwrap();
+        println!(
+            "walk_memory: arm={arm} leaves={leaves} levels={page_level} walked_pages={} skipped_pages={} elapsed_ms={} \
+             rss_before_kib={rss_before} peak_growth_kib={}",
+            walk.walked_pages,
+            walk.skipped_pages,
+            started.elapsed().as_millis(),
+            process_kib("VmHWM:").saturating_sub(rss_before),
+        );
     }
 
     #[test]

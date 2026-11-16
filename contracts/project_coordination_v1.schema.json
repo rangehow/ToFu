@@ -54,6 +54,49 @@
     }
   },
   "$defs": {
+    "deliverableKind": {
+      "description": "report: a report_to_user(kind=delivery) message; file/deck/document: a published response file (a deck is a .pptx or .pptd file), rich response or long-form report; merge: a Worker result its lead accepted and merged, as the studio's trophy shelf shows it (the server projects reports and artifacts only).",
+      "enum": ["report", "file", "deck", "document", "merge"]
+    },
+    "deliverableTurn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["conversationId", "turnId"],
+      "properties": {
+        "conversationId": {"type": "string", "minLength": 1, "maxLength": 256},
+        "turnId": {"type": "string", "minLength": 1, "maxLength": 256},
+        "ordinal": {"type": "integer", "minimum": 0}
+      }
+    },
+    "deliverableItem": {
+      "description": "One deliverable of one lead conversation (docs/PROJECT_COORDINATION.md, Lead deliverables). Opening it shows the artifact (artifactId), the report (summary is its message) or the Worker result Turn (result). source is the message in the lead's conversation that produced it, when known.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "title", "projectPath", "createdAt", "source"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "maxLength": 300},
+        "kind": {"$ref": "#/$defs/deliverableKind"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 300},
+        "projectPath": {"type": "string", "maxLength": 4096},
+        "createdAt": {"type": "integer", "minimum": 0},
+        "source": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/deliverableTurn"}]},
+        "artifactId": {"type": "string", "minLength": 1, "maxLength": 128},
+        "format": {"type": "string", "maxLength": 64},
+        "summary": {"type": "string", "maxLength": 4000},
+        "result": {"$ref": "#/$defs/deliverableTurn"}
+      }
+    },
+    "deliverablePage": {
+      "description": "One page of a lead conversation's deliverables, newest first. Pages hold at most 64 items, the coordination API's page bound (conversationPage); nextCursor reads the next older page.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["conversationId", "items", "nextCursor"],
+      "properties": {
+        "conversationId": {"type": "string", "minLength": 1, "maxLength": 256},
+        "items": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/deliverableItem"}},
+        "nextCursor": {"anyOf": [{"type": "null"}, {"type": "string", "minLength": 1, "maxLength": 600}]}
+      }
+    },
 
     "conversationPage": {
       "description": "A bounded owner-catalog page filtered to this project. Empty pages can have a cursor; shells are conversations, not execution assignments. Reads never create, authorize or launch work.",

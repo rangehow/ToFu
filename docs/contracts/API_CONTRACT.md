@@ -936,6 +936,11 @@ cancellation and never releases resources underneath a live provider call.
 Explicit owner Stop/supersede, provider or network failure, transport
 deadlines, shutdown, crash, and power loss can still terminate work; a crash can
 lose memory-only increments from the current provider call before convergence.
+A task without a conversation writes its task row once per round, at the round
+end, so a crash between a round's provider return and its round end also drops
+that round's narration from its cold row; `code_exec`'s fenced boundary still
+writes before code runs
+([sampled checkpoints](../modules/task_engine.md#persistence-discipline)).
 
 ### 2.14 Project-path selection and recent history
 
@@ -1566,6 +1571,10 @@ read-only) → `progressState` in `contracts/project_coordination_v1.schema.json
 Coordinator task history (`GET /api/v4/project/coordination/progress/history?path=&group=&q=&cursor=`,
 scope `conversations`, read-only, opaque cursor, 400 for an unknown group or a
 cursor of another query) → `progressHistoryPage` in the same schema;
+lead deliverables (`GET /api/v4/project/coordination/deliverables?conversationId=&path=&cursor=`,
+scope `conversations`, read-only, projected from the lead's report Turns and artifact rows, newest
+first, opaque cursor (400 when malformed), 403 for a conversation the caller does not own; push hint `{projectKey, kind: "lead_deliverable",
+conversationId}` on the `project` channel) → `deliverablePage` in the same schema;
 channel accounts, threads and outbox (`/api/v4/channels/*`,
 `routes/api_v1/channels.py`, behavior [CHANNELS.md](../CHANNELS.md)) →
 `contracts/channels_v1.schema.json`. See

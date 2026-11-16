@@ -377,6 +377,7 @@ def test_optional_sibling_never_waives_mandatory_import(tmp_path, optional_impor
     'benchmarks/task_event_delivery_contention.py',
     'benchmarks/turn_event_batch.py',
     'scripts/analyze_agent_load.py',
+    'scripts/harness_metrics.py',
 ))
 @pytest.mark.parametrize('mode', ('internal', 'opensource'))
 def test_portable_diagnostic_test_dependencies_follow_retained_source_policy(

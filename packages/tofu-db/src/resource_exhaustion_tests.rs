@@ -579,6 +579,52 @@ fn production_sources(directory: &Path, sources: &mut Vec<PathBuf>) {
     }
 }
 
+/// Every fallible reservation's failure is classified by `reservation_error`:
+/// wrapped as `io::Error::other` (the sequencer's queue, the logical outbox
+/// queue and sink, the embedded phase scheduler) it reached the storage
+/// mapping's default arm and answered a non-retryable `database_internal`
+/// instead of the retryable allocation-reservation refusal (DB-6, R4b B10
+/// condition C1).
+#[test]
+fn every_reservation_failure_is_classified_by_reservation_error() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut sources = Vec::new();
+    production_sources(&root, &mut sources);
+    assert!(
+        sources.iter().any(|path| path.ends_with("sequencer.rs")),
+        "the gate must scan the sequencer"
+    );
+    let mut offenders = Vec::new();
+    for path in &sources {
+        let code = blank_test_items(&blank_comments_and_literals(
+            &std::fs::read_to_string(path).unwrap(),
+        ));
+        let mut from = 0;
+        while let Some(found) = code[from..].find("try_reserve") {
+            let start = from + found;
+            let end = code[start..]
+                .find(';')
+                .map_or(code.len(), |offset| start + offset);
+            if code[start..end].contains("Error::other") {
+                offenders.push(format!(
+                    "{}:{}",
+                    path.strip_prefix(&root).unwrap().display(),
+                    code[..start].matches('\n').count() + 1
+                ));
+            }
+            from = start + "try_reserve".len();
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "map a try_reserve failure with crate::resource_exhaustion::reservation_error: as \
+         io::Error::other it answers a non-retryable database_internal:\n{}",
+        offenders.join("\n")
+    );
+    let mapped = map_storage_error(reservation_error(reservation()));
+    assert!(mapped.retryable(), "{mapped:?}");
+}
+
 #[test]
 fn every_resource_refusal_declares_its_class() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");

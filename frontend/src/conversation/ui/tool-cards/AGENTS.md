@@ -8,8 +8,11 @@ tools with JSON-object results. `coordination.ts` holds the presenters,
 and `values.ts` argument/result parsing (including spilled partial results).
 
 Presenters are pure: copy comes only from `toolCard.*` keys through the
-injected translator, task names only through the work directory, and IDs only
-through `debug()`. No DOM, transport, timers or durable state; the one click
+injected translator, task names only through the work directory, model-authored
+free text only through `context.freeText` (display translation), and IDs only
+through `debug()`, which renders in debug mode only. `enrichment.ts` owns the
+facts that settle after paint (an assignment's conversation, translations) and
+notifies subscribed blocks to repaint. No DOM, transport, timers or durable state; the one click
 behavior (`handleToolCardClick`) opens a conversation through an injected port.
 Keep the lazy-result markup contract that `../renderers/tool-blocks.ts` binds.
 

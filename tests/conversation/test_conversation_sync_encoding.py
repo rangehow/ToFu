@@ -8,6 +8,9 @@ import threading
 
 import pytest
 
+from lib.conversation_sync.cursor import STREAM_START
+from tests.support.conversation_replay import stream_page
+
 pytestmark = pytest.mark.unit
 
 
@@ -30,20 +33,16 @@ def _stream_fixture(monkeypatch):
         heartbeat_interval_ms = 1
 
         @staticmethod
-        def sequence_from_cursor(*_args):
-            return 0
+        def position_from_cursor(*_args):
+            return STREAM_START
 
         @staticmethod
-        def cursor_for_sequence(_cid, _owner, sequence):
-            return f"cursor-{sequence}"
-
-        @staticmethod
-        def changes(_cid, _owner, *, after_sequence, limit):
+        def changes(_cid, _owner, *, after, limit, **_page_options):
             if limit == 1:
-                return {"events": [], "reset": None, "hasMore": False}
-            if after_sequence == 0:
-                return {"events": events, "reset": None, "hasMore": True}
-            return {"events": [], "reset": reset, "hasMore": False}
+                return stream_page(after=after)
+            if after.sequence == 0:
+                return stream_page(events, after=after, has_more=True)
+            return stream_page(after=after, reset=reset)
 
     broker = ConversationWakeBroker(owner_history_capacity=16)
     monkeypatch.setattr(routes, "broker", broker)

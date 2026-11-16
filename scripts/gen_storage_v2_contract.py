@@ -63,6 +63,7 @@ def _load() -> dict:
             "deadlineElapsed": 408,
             "conflict": 409,
             "resourceExhausted": 429,
+            "internal": 500,
             "notImplemented": 501,
             "unavailable": 503,
             "integrityFailure": 550,
@@ -192,6 +193,22 @@ def _load() -> dict:
             or any(name not in reason_diag["reasonNames"] for name in non_retryable)):
         raise ValueError("storage.v2 non-retryable exhaustion reasons are invalid")
     return document
+
+
+_LINEAGE_FIELDS = ("epochField", "headDigestField", "changeDigestsField", "anchorDigestField")
+
+
+def _conversation_sync_lineage(document: dict) -> dict:
+    """The lineage facts both authorities report and the sync service reads."""
+    lineage = document["applicationSemantics"].get("conversationSyncLineage")
+    if (not isinstance(lineage, dict)
+            or lineage.get("operations") != ["turn.sync.changes", "turn.sync.page", "turn.sync.snapshot"]
+            or any(not isinstance(lineage.get(field), str) or not lineage[field].isidentifier()
+                   for field in _LINEAGE_FIELDS)
+            or len({lineage[field] for field in _LINEAGE_FIELDS}) != len(_LINEAGE_FIELDS)
+            or lineage.get("hexDigits") != 16):
+        raise ValueError("storage.v2 conversation sync lineage is incomplete")
+    return lineage
 
 
 def _render(document: dict | None = None) -> str:
@@ -344,7 +361,8 @@ def _render(document: dict | None = None) -> str:
     )
     buffer = document["walWriteBuffer"]
     if (buffer["worker"] != "existing-wal-barrier-worker"
-            or buffer["overflow"] != "synchronous-original-write-path-no-admission"
+            or buffer["overflow"]
+            != "every-frame-queues-past-the-budget-allocation-failure-uses-the-synchronous-original-write-path-no-admission"
             or buffer["headroomDivisor"] <= 0 or buffer["fallbackCapacityBytes"] <= 0):
         raise ValueError("WAL buffer must reuse the barrier worker without admission")
     lines.append(f'pub const WAL_WRITE_BUFFER_CONTRACT: &str = "{buffer["contract"]}";')
@@ -360,12 +378,22 @@ def _render(document: dict | None = None) -> str:
         str(name not in non_retryable).lower()
         for name in reasons["reasonNames"])
     lines.append(f'pub const NATIVE_RESOURCE_EXHAUSTION_REASON_RETRYABLE: [bool; {len(reasons["reasonNames"])}] = [{retryable}];')
+    lineage = _conversation_sync_lineage(document)
+    for field in _LINEAGE_FIELDS:
+        lines.append(
+            f'pub(crate) const CONVERSATION_SYNC_{_constant_name(field)}: &str = "{lineage[field]}";')
+    lines.append(f'pub(crate) const CONVERSATION_SYNC_LINEAGE_HEX_DIGITS: usize = {lineage["hexDigits"]};')
     for name, fields in document["requiredFields"].items():
         rendered = ", ".join(str(field) for field in fields)
         lines.append(
             f"pub(crate) const REQUIRED_{_constant_name(name)}_FIELDS: &[u8] = &[{rendered}];"
         )
     return "\n".join(lines) + "\n"
+
+
+def _lineage_python(document: dict) -> dict:
+    lineage = _conversation_sync_lineage(document)
+    return {key: lineage[key] for key in ("operations", *_LINEAGE_FIELDS, "hexDigits")}
 
 
 def main() -> int:
@@ -379,6 +407,7 @@ def main() -> int:
         + f"OWNER_OMITTED_OPERATIONS = {tuple(semantics['ownerOmittedOperations'])!r}\n"
         + f"BOUNDED_PROGRESS_OPERATIONS = {semantics['boundedProgressOperations']!r}\n"
         + f"NOTIFICATION_TOPICS = {semantics['notificationTopics']!r}\n"
+        + f"CONVERSATION_SYNC_LINEAGE = {_lineage_python(document)!r}\n"
         + f"MIN_NATIVE_FASTPATH_SYNC_INTERVAL_MS = {document['nativeFastpath']['intervalMilliseconds']['minimum']}\n"
         + f"MAX_NATIVE_FASTPATH_SYNC_INTERVAL_MS = {document['nativeFastpath']['intervalMilliseconds']['maximum']}\n"
         + f"MIN_NATIVE_FASTPATH_FSYNC_SPEEDUP = {document['nativeFastpath']['minimumFsyncSpeedup']}\n"

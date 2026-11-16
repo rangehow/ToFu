@@ -208,7 +208,7 @@ def test_live_snapshot_and_command_bases_replay_without_duplicate_narration(
             assert turn['projection'] == stored['projection']
             assert snapshot['scope']['ownerId'] == 1
             assert snapshot['scope']['threadId'] == 'conv-sync-a'
-            baselines.append((snapshot['syncSeq'], turn['projectionRevision'],
+            baselines.append((snapshot['cursor'], turn['projectionRevision'],
                               deepcopy(turn['projection'])))
         assert raw_turn() == stored, 'public reads must not mutate authority'
 
@@ -251,8 +251,9 @@ def test_live_snapshot_and_command_bases_replay_without_duplicate_narration(
     assert record_task_event(task, {'type': 'tool_start'})
     remember_snapshots()
     expected = raw_turn()['projection']
-    for sequence, revision, projection in baselines:
-        changes = service.changes('conv-sync-a', 1, after_sequence=sequence)
+    for cursor, revision, projection in baselines:
+        changes = service.changes(
+            'conv-sync-a', 1, after=service.position_from_cursor('conv-sync-a', 1, cursor))
         assert changes['reset'] is None
         for change in changes['events']:
             event = change['payload'].get('event')
@@ -1043,11 +1044,12 @@ def test_v3_create_retry_and_snapshot_share_one_authority(
         attempt["attemptId"] == first["attempt"]["attemptId"]
         for attempt in snapshot["attempts"]
     )
-    assert sync_routes._service.sequence_from_cursor(
+    assert sync_routes._service.position_from_cursor(
         "conv-sync-a", 1, snapshot["cursor"],
-    ) == snapshot["syncSeq"]
+    ).sequence == snapshot["syncSeq"]
     replay = sync_routes._service.changes(
-        "conv-sync-a", 1, after_sequence=0,
+        "conv-sync-a", 1, after=sync_routes._service.position_from_cursor(
+            "conv-sync-a", 1, None),
     )
     assert replay["reset"] is None
     assert replay["events"]
@@ -1327,27 +1329,25 @@ def test_v3_finite_stream_releases_subscription(
         heartbeat_interval_ms = 15_000
 
         @staticmethod
-        def sequence_from_cursor(_conversation_id, _user_id, _cursor):
-            return 0
+        def position_from_cursor(_conversation_id, _user_id, _cursor):
+            from lib.conversation_sync.cursor import STREAM_START
+            return STREAM_START
 
         @staticmethod
         def changes(
-            conversation_id, _user_id, *, after_sequence, limit,
+            conversation_id, _user_id, *, after, limit, **_page_options,
         ):
-            assert after_sequence == 0
+            from tests.support.conversation_replay import stream_page
+            assert after.sequence == 0
             if limit == 1:
-                return {"events": [], "reset": None, "hasMore": False}
-            return {
-                "events": [],
-                "hasMore": False,
-                "reset": {
-                    "contract": "tofu.conversation-sync.event/v1",
-                    "type": "sync.reset_required",
-                    "conversationId": conversation_id,
-                    "cursor": "cursor-reset",
-                    "reason": "test_complete",
-                },
-            }
+                return stream_page(after=after)
+            return stream_page(after=after, reset={
+                "contract": "tofu.conversation-sync.event/v1",
+                "type": "sync.reset_required",
+                "conversationId": conversation_id,
+                "cursor": "cursor-reset",
+                "reason": "test_complete",
+            })
 
     isolated_broker = ConversationWakeBroker(owner_history_capacity=16)
     monkeypatch.setattr(sync_routes, "_service", FiniteService())
@@ -1369,7 +1369,7 @@ def test_v3_finite_stream_releases_subscription(
 def test_v3_catch_up_beyond_the_window_re_anchors_from_the_stored_head(
     flask_client, conversation_sync_db,
 ):
-    from lib.conversation_sync.cursor import encode_cursor
+    from lib.conversation_sync.cursor import ReplayPosition, encode_cursor
     from lib.turn_lifecycle import create_turn_pair
 
     create_turn_pair(
@@ -1379,10 +1379,11 @@ def test_v3_catch_up_beyond_the_window_re_anchors_from_the_stored_head(
         config={"model": "gpt-4o"},
         user_id=1,
     )
-    head = conversation_sync_db.query(
+    stored = conversation_sync_db.query(
         "turn.sync.changes",
         {"conversation_id": "conv-sync-a", "user_id": 1, "after": 0},
-    )["head"]
+    )
+    head = stored["head"]
 
     response = flask_client.get(
         "/api/v4/conversations/conv-sync-a/events",
@@ -1398,7 +1399,8 @@ def test_v3_catch_up_beyond_the_window_re_anchors_from_the_stored_head(
     assert "event: sync.reset_required" in blocks[0]
     reset = json.loads(blocks[0].split("data: ", 1)[1])
     assert reset["reason"] == "replay_exceeds_window"
-    assert reset["cursor"] == encode_cursor("conv-sync-a", 1, head)
+    assert reset["cursor"] == encode_cursor("conv-sync-a", 1, ReplayPosition(
+        head, stored["authorityEpoch"], stored["headDigest"]))
 
 
 def test_v3_start_failure_persists_and_returns_complete_actionable_error(
@@ -1490,7 +1492,7 @@ def test_push_withheld_wedge_rides_snapshot_and_heartbeat(
 
             # …and the service stamps it on heartbeats (contract-validated).
             beat = service.heartbeat(
-                "conv-sync-a", 1, 1, degraded=True, push_withheld=True)
+                "conv-sync-a", 1, payload["cursor"], degraded=True, push_withheld=True)
             assert beat["degraded"] is True
             assert beat["pushWithheld"] is True
 
@@ -1756,8 +1758,9 @@ def test_v3_read_routes_map_contract_drift_to_a_typed_informative_500(
         def turn_page(self, *args, **kwargs):
             raise drift
 
-        def sequence_from_cursor(self, *args, **kwargs):
-            return 0
+        def position_from_cursor(self, *args, **kwargs):
+            from lib.conversation_sync.cursor import STREAM_START
+            return STREAM_START
 
         def changes(self, *args, **kwargs):
             raise drift
@@ -1961,7 +1964,8 @@ def _stale_until_head(heads):
                 return {"stale": True, "syncSequence": head}
             return {"conversationRevision": head, "syncSequence": head, "laneId": "main",
                     "beforeOrdinal": 7, "nextBeforeOrdinal": 6, "hasMore": True,
-                    "totalTurns": 7, "turns": [], "attempts": []}
+                    "totalTurns": 7, "turns": [], "attempts": [],
+                    "authorityEpoch": "00000000000000e7", "headDigest": f"{head:016x}"}
 
     return Repository(), reads
 

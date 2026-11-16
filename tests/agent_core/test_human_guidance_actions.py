@@ -500,7 +500,7 @@ function chatRound(round) {
   check('chat_choice_reply_routes_original_answer_with_card_quote',
     JSON.stringify(replyRequests.at(-1)) === JSON.stringify({
       conversationId: 'conv-chat', guidanceId: 'chat-choice',
-      quote: 'Pick one', responseText: 'Choice A\nuser_note: 中文备注',
+      quote: 'Pick one\n\n[question chat-choice]', responseText: 'Choice A\nuser_note: 中文备注',
     })
     && requests.length === beforeChatRequests
     && lateRequests.length === beforeChatLate
@@ -524,7 +524,7 @@ function chatRound(round) {
   check('drafted_chat_reply_shows_info_toast_without_marking',
     JSON.stringify(replyRequests.at(-1)) === JSON.stringify({
       conversationId: 'conv-chat', guidanceId: 'chat-free',
-      quote: 'Explain', responseText: '中文回答',
+      quote: 'Explain\n\n[question chat-free]', responseText: '中文回答',
     })
     && translations.length === beforeChatTranslations
     && marks.length === marksBeforeDraft
@@ -556,7 +556,7 @@ function chatRound(round) {
   await flush();
   check('chat_batch_reply_quotes_questions_and_sends_indexed_answers',
     replyRequests.at(-1).guidanceId === 'chat-batch'
-    && replyRequests.at(-1).quote === '1. Pick\n\n2. Explain'
+    && replyRequests.at(-1).quote === '1. Pick\n\n2. Explain\n\n[question chat-batch]'
     && replyRequests.at(-1).responseText === '1. A\n2. why'
     && marks.at(-1)[1] === 'chat-batch');
 

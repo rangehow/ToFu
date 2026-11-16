@@ -11,7 +11,8 @@ Entry points: ``router_home_location(user_id)`` (pure path, no effects),
 ``is_router_home(user_id, path)`` and ``owner_resources(user_id)`` (the
 owner's shared resource registry, docs/ROUTER.md R13).
 
-Creation writes README.md and .gitignore, runs ``git init`` (which makes the
+Creation writes README.md, .gitignore and the write-once ``RESOURCES.md``
+seed (documented sources only, never secrets), runs ``git init`` (which makes the
 home its own repository top level even when the data directory lies inside a
 source checkout), then reuses ``prepare_managed_repository`` for the baseline
 commit, generated AGENTS.md guidance and shared-data policy. Existing files and
@@ -42,12 +43,115 @@ their reviewed results are published here. Projects keep their own
 repositories; the router reaches them through their Project Routers.
 
 Do not store credentials here.
+
+## Owner resource registry
+
+`RESOURCES.md` is the owner-wide registry of GPUs, queues, keys and storage
+the owner can lend a project (docs/ROUTER.md R13). Leads read it through
+`list_project_leads`; a Router-home Worker reviews and publishes each update.
+It names resources and how to obtain them — never a secret value.
 '''
 _GITIGNORE = '''# Tofu Global Router home. Runtime, dependency and cache trees are never versioned.
 .tofu*/
 node_modules/
 __pycache__/
 .venv/
+'''
+
+
+_RESOURCES = '''# Owner resource registry
+
+GPUs, queues, keys and storage the owner can lend a project. Leads read this
+file through `list_project_leads` (R13); a Router-home Worker reviews and
+publishes every update, including this seed. **Never store a secret here** —
+name the resource and how to obtain it, never its value.
+
+Every row names its source, when it was read and how. Re-read a source before
+planning work: queue capacity, strategy and authorization change without
+notice, and a dated observation is not a grant.
+
+## Hope GPU and CPU queues
+
+Source: `scripts/hope_patrol/queues.json`, read 2026-11-16. Those are the
+queues the owner's Hope account used on 2026-11-13 (HOPE-STUCK-RUN-1 audit,
+HOPE_SUBMIT.md CPU lanes); each answered `get_yarn_apps` on that date. To
+refresh, read the live queue and resource-code strategy through the Hope MCP
+(`$yourprovider-hope-platform`); `scripts/hope_patrol/queues.json` records which
+queues the compute patrol scans and grows when a lane uses a new one.
+
+| Queue | Kind |
+| --- | --- |
+| `root.hldy_training_cluster.your-user.h910c_training_data` | 910C training; forced 16-GPU worker allocation, see below |
+| `root.hldy_training_cluster.your-user.h910c_elastic` | 910C elastic |
+| `root.hldy_training_cluster.your-user.h910c_elastic_2` | 910C elastic |
+| `root.hldy_training_cluster.your-user.h910c_m17_public` | 910C public m17 |
+| `root.hldy_training_cluster.hadoop-scalellm.910c_exp` | 910C experiment |
+| `root.hldy_training_cluster.your-user.longcat_pro_v` | GPU |
+| `root.hldy_training_cluster.your-user.efficient_910c` | 910C |
+| `root.hldy_training_cluster.your-user.h910_pretrain_sp` | 910 pretrain |
+| `root.hldy_training_cluster.your-user.h800_pretrain_sp` | H800 pretrain |
+| `root.hldy_training_cluster.your-user.h800_code_sp` | H800 code |
+| `root.hldy_training_cluster.your-user.p_exp` | GPU experiment |
+| `root.hldy_training_cluster.your-user.cpu_weight_convert` | CPU weight conversion |
+| `root.shxs_training_cluster.your-user.h800_lite_pretrain` | H800 lite pretrain |
+| `root.shxs_training_cluster.your-user.h800_elastic` | H800 elastic |
+| `root.zw05_training_cluster.your-user.llm_second` | GPU |
+| `root.zw05_training_cluster.your-user.llm_debug` | Debug; overstep force-kill |
+| `root.zw05_training_cluster.your-user.cpu_job` | CPU; pod admission limit |
+| `root.zw05_training_cluster.hadoop-omni.debug` | Debug |
+| `root.zw06_training_cluster.your-user.hal_post_train` | Post-train |
+| `root.hlsc_training_cluster.your-user.omni_production` | Production |
+
+Also observed for this account, in
+`bundles/yourprovider/skills/yourprovider-hope-platform/references/queues.md` (read
+2026-11-16; capacities measured 2026-09-09, historical only):
+
+| Queue | Detail |
+| --- | --- |
+| `root.shxs_training_cluster.your-user.autoresearch_agent` | H200 eval queue; the only queue resource code `longcat_harness` binds to |
+| `root.shxs_training_cluster.your-user.h800_eval_agent` | H200 eval; submit needs orchestration priority P2 |
+| `root.shxs_training_cluster.your-user.autoresearch_cpu` | CPU, small footprints |
+| `root.zw06_training_cluster.your-user.cpu_job` | CPU; free memory was too small for a DataLoader pod |
+
+RSI-team observations (B300 `b300_rsi_eval`, GPU sandbox
+`gpu_sandbox_h800_roce`, `h800_m17_public` / `h800_m17_eval`, public pool) are
+in `references/rsi-queues-2026q4.md` (2026-10-30). A queue named there is an
+observation, not an allocation; confirm before submitting.
+
+## Resource codes and off-limits queues
+
+`longcat_harness` (P0, granted by the owner 2026-09-03) and `auto_harness`
+(default plan, experiment concurrency quota 128) are documented with their
+bindings in `references/queues.md`. Read the current strategy — never reuse a
+historical cap, and never switch codes to evade a restriction. Queue bans are
+machine-readable in `HOPE_QUEUE_POLICY.json` beside this file (R16); every
+submission path enforces them, and the m17 entry is global.
+
+## Keys and credentials
+
+No key value belongs in this file. Names and where to get one:
+
+| Key | How to obtain |
+| --- | --- |
+| `dev_example_corp_token` | dev.internal.example.com Personal Access Token, in the owner's Tofu credential vault |
+| `github_token` | GitHub PAT, in the owner's Tofu credential vault |
+| `pypi_token` | PyPI token, in the owner's Tofu credential vault |
+| Hope / MLP access | Browser SSO session of the owner, through the configured Hope MCP |
+| Eval API keys | The evaluation project's own launchers under `evaluations/`; ask its lead |
+
+## Storage
+
+| Storage | How to obtain |
+| --- | --- |
+| Shared workspace filesystem | `abtest_workdir`, `output`, `uploads` and `.eval-runs` roots of the owner's Tofu deployment |
+| S3Plus | For job assets and weights; see `references/rsi-queues-2026q4.md`. CPU queue region must match storage region |
+
+## Refresh
+
+Re-read each source named above before relying on a row. To change the
+registry, delegate a Router-home Worker: it edits this file with the new
+source and read date, and its reviewed publication lands here. Until then
+`list_project_leads` reports `available=true` for this seed's facts only.
 '''
 
 
@@ -146,6 +250,10 @@ def router_home_path(user_id: int) -> str:
     home = router_home_location(user_id)
     os.makedirs(home, exist_ok=True)
     if os.path.isdir(os.path.join(home, '.git')) and _has_commit(home):
+        # R13: a home created before the registry seed must not point leads at a
+        # missing RESOURCES.md. Write-once; the owner or a reviewed Worker may
+        # edit or delete it afterwards and nothing here restores or overwrites it.
+        _write_once(os.path.join(home, 'RESOURCES.md'), _RESOURCES)
         return home
     # The same cross-process per-root lock as managed repository preparation:
     # concurrent `git init` runs race on template and config lock files.
@@ -153,6 +261,7 @@ def router_home_path(user_id: int) -> str:
     with _repo_lock(home):
         _write_once(os.path.join(home, 'README.md'), _README)
         _write_once(os.path.join(home, '.gitignore'), _GITIGNORE)
+        _write_once(os.path.join(home, 'RESOURCES.md'), _RESOURCES)
         if not os.path.lexists(os.path.join(home, '.git')):
             initialized = _git(home, 'init', '-q')
             if initialized.returncode:

@@ -6,8 +6,12 @@ from lib.turn_image_transport import (
     legacy_turn_image_payload,
 )
 from collections.abc import Mapping
+import hashlib
+import json
 from lib.storage_authority_sql.adapters.base import Session
 from lib.storage.errors import StorageError
+from lib.storage.generated_v2_semantics import CONVERSATION_SYNC_LINEAGE as _LINEAGE
+from lib.conversation_sync.generated_contract import OPENAPI_SCHEMAS as _SYNC_SCHEMAS
 from lib.conversation_sync.dispatch_contract import (
     CONVERSATION_EXECUTOR_DISPATCH_MODE,
 )
@@ -40,6 +44,96 @@ from lib.storage_authority_sql.operations_pkg._turns_events import _insert_attem
 
 
 _CONVERSATION_CHANGE_DELETE_KEY_CHUNK = 256
+
+# Replay lineage (contracts/storage_v2.json conversationSyncLineage): the
+# stored columns a change row's digest covers, in framing order. An
+# AttemptEvent reference row also covers the event it references, as the
+# change-row queries select it (``attempt_event_json``).
+_LINEAGE_COLUMNS = (
+    "change_type", "turn_id", "attempt_id", "attempt_sequence", "created_at",
+    "event_json",
+)
+_REFERENCE_LINEAGE_COLUMNS = (*_LINEAGE_COLUMNS, "attempt_event_json")
+_LINEAGE_UNREAD = object()
+
+
+def _sync_lineage_epoch(session: Session) -> str:
+    """This backend open's lineage epoch, derived from its per-open identity.
+
+    Every SQL backend open mints a fresh random ``event_read_epoch`` shared by
+    its sessions; a sequence can be reused only across a reopen (a restore or
+    crash recovery), which therefore always changes this value.
+    """
+    identity = getattr(session, "event_read_epoch", "")
+    if not identity:
+        raise StorageError(
+            "database_internal",
+            "Conversation sync lineage requires the backend open identity")
+    return hashlib.sha256(
+        b"tofu.conversation-sync.lineage-epoch\0" + identity.encode("utf-8")
+    ).hexdigest()[:_LINEAGE["hexDigits"]]
+
+
+def _change_row_digest(row: Mapping[str, Any]) -> str:
+    """SHA-256 over one change row's length-framed stored columns.
+
+    Rows are insert-only, so the digest is stable for the row's lifetime; a
+    different change committed at a reused sequence differs in at least its
+    commit time or content. An AttemptEvent reference row stores only its
+    event's identity and commit time, which an event recovery commits at the
+    same attempt and sync sequences within one millisecond reproduces, so its
+    digest also covers the referenced event exactly as stored; the retained
+    reference keeps that event immutable.
+    """
+    digest = hashlib.sha256()
+    columns = (
+        _LINEAGE_COLUMNS if row["attempt_sequence"] is None
+        else _REFERENCE_LINEAGE_COLUMNS
+    )
+    for column in columns:
+        value = row[column]
+        if value is None:
+            encoded = b"n"
+        elif isinstance(value, (bytes, bytearray, memoryview)):
+            encoded = b"b" + bytes(value)
+        elif isinstance(value, str):
+            encoded = b"s" + value.encode("utf-8")
+        elif isinstance(value, int):
+            encoded = b"i" + str(value).encode("ascii")
+        else:
+            # A backend that decodes JSON documents returns them parsed.
+            encoded = b"j" + json.dumps(
+                value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+            ).encode("utf-8")
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+    return digest.hexdigest()[:_LINEAGE["hexDigits"]]
+
+
+def _change_digest_at(
+    session: Session, conv_id: str, user_id: int, sequence: int,
+) -> str | None:
+    """The digest of the change at ``sequence``; None at 0 or once pruned."""
+    if sequence <= 0:
+        return None
+    row = session.fetch_one(
+        _CHANGE_ROW_COLUMNS + _CHANGE_ROWS_FROM + "AND c.sync_sequence=?",
+        (conv_id, user_id, sequence),
+    )
+    return None if row is None else _change_row_digest(row)
+
+
+def _with_sync_lineage(
+    result: dict[str, Any], session: Session, conv_id: str, user_id: int,
+    head: int, head_digest: Any = _LINEAGE_UNREAD,
+) -> dict[str, Any]:
+    """Add the epoch and head digest read in the caller's transaction."""
+    result[_LINEAGE["epochField"]] = _sync_lineage_epoch(session)
+    result[_LINEAGE["headDigestField"]] = (
+        _change_digest_at(session, conv_id, user_id, head)
+        if head_digest is _LINEAGE_UNREAD else head_digest
+    )
+    return result
 
 
 def _turn_get(session: Session, payload: Mapping[str, Any]) -> Any:
@@ -1350,7 +1444,7 @@ def _turn_sync_snapshot(session: Session, payload: Mapping[str, Any]) -> Any:
         for key, value in settings.items()
         if key not in _SYNC_PRIVATE_SETTING_KEYS
     }
-    result = {
+    result = _with_sync_lineage({
         "conversationId": conv_id,
         "conversationRevision": int(conversation["rev"] or 0),
         "syncSequence": sync_sequence,
@@ -1358,7 +1452,7 @@ def _turn_sync_snapshot(session: Session, payload: Mapping[str, Any]) -> Any:
         "turns": [_turn_public(session, row) for row in turns],
         "attempts": [_attempt_public(row) for row in attempts],
         "queueItems": queue_items,
-    }
+    }, session, conv_id, user_id, sync_sequence)
     active_phase = _snapshot_active_attempt_phase(
         session, turns, attempts, conversation_id=conv_id, user_id=user_id,
     )
@@ -1431,7 +1525,9 @@ def _turn_sync_page(session: Session, payload: Mapping[str, Any]) -> Any:
     browser can merge them with the same lane/ordinal reducer used by live
     snapshots. ``LIMIT + 1`` proves ``hasMore`` without loading the remaining
     history. Only each paged Turn's current attempt is included; historical
-    attempt logs have their own bounded endpoint.
+    attempt logs have their own bounded endpoint. A positive
+    ``anchor_sequence`` (the reader's applied head) adds ``anchorDigest``, the
+    digest of the change now at it, from this read.
     """
     conv_id, user_id = _turn_identity(payload)
     lane_id = _required_text(payload, "lane_id", 128)
@@ -1448,6 +1544,7 @@ def _turn_sync_page(session: Session, payload: Mapping[str, Any]) -> Any:
     expected_sync_sequence = _integer(
         payload, "sync_sequence", minimum=0
     )
+    anchor_sequence = _integer(payload, "anchor_sequence", default=0, minimum=0)
     conversation = session.fetch_one(
         "SELECT rev FROM storage_conversations WHERE id=? AND user_id=?",
         (conv_id, user_id),
@@ -1486,7 +1583,7 @@ def _turn_sync_page(session: Session, payload: Mapping[str, Any]) -> Any:
     next_before_ordinal = (
         int(page_rows[0]["ordinal"]) if page_rows else None
     )
-    return {
+    page = _with_sync_lineage({
         "conversationId": conv_id,
         "conversationRevision": int(conversation["rev"] or 0),
         "syncSequence": sync_sequence,
@@ -1497,14 +1594,108 @@ def _turn_sync_page(session: Session, payload: Mapping[str, Any]) -> Any:
         "totalTurns": int(total_row["total"] or 0) if total_row else 0,
         "turns": [_turn_public(session, row) for row in page_rows],
         "attempts": [_attempt_public(row) for row in attempts],
-    }
+    }, session, conv_id, user_id, sync_sequence)
+    if anchor_sequence:
+        page[_LINEAGE["anchorDigestField"]] = (
+            page[_LINEAGE["headDigestField"]] if anchor_sequence == sync_sequence
+            else _change_digest_at(session, conv_id, user_id, anchor_sequence)
+        )
+    return page
+
+
+# max_bytes accepts a subscription's windowBytes (contracts/conversation_sync_v3.yaml).
+_WINDOW_BYTES = _SYNC_SCHEMAS["ConversationEventSubscription"]["properties"]["windowBytes"]
+CHANGE_PAGE_MIN_BYTES = _WINDOW_BYTES["minimum"]
+CHANGE_PAGE_MAX_BYTES = _WINDOW_BYTES["maximum"]
+
+
+def _encoded_change_bytes(event: Mapping[str, Any]) -> int:
+    """The contract's page measure: the event's compact UTF-8 JSON encoding."""
+    import orjson
+
+    return len(orjson.dumps(event))
+
+
+_CHANGE_ROWS_FROM = (
+    "FROM storage_conversation_changes AS c "
+    "LEFT JOIN storage_attempt_events AS e "
+    "ON c.attempt_sequence IS NOT NULL "
+    "AND e.attempt_id=c.attempt_id AND e.sequence=c.attempt_sequence "
+    "AND e.conversation_id=c.conversation_id AND e.turn_id=c.turn_id "
+    "WHERE c.conversation_id=? AND c.user_id=? "
+)
+_CHANGE_ROW_COLUMNS = (
+    "SELECT c.conversation_id,c.user_id,c.sync_sequence,c.change_type,"
+    "c.turn_id,c.attempt_id,c.attempt_sequence,c.event_json,c.created_at,"
+    "e.payload_json AS attempt_event_json "
+)
+
+
+def _byte_bounded_change_page(
+    session: Session, *, conv_id: str, user_id: int, after: int, limit: int,
+    max_bytes: int,
+) -> tuple[list[Mapping[str, Any]], list[dict[str, Any]]]:
+    """Rows and public changes whose encoded bytes total at most ``max_bytes``.
+
+    Stored UTF-8 sizes choose each candidate batch without transferring the
+    other payloads; the exact measure is each built change's encoded length,
+    so every authority cuts a page at the same change. The first change is
+    always admitted so a page that starts with an oversized change progresses.
+    """
+    from lib.storage_authority_sql.adapters.text_size import utf8_length_expression
+
+    change_length = utf8_length_expression(session.backend, "event_json")
+    attempt_length = utf8_length_expression(session.backend, "payload_json")
+    sizes = session.fetch_all(
+        f"SELECT c.sync_sequence,{change_length}+COALESCE({attempt_length},0) "
+        "AS stored_bytes " + _CHANGE_ROWS_FROM
+        + "AND c.sync_sequence>? ORDER BY c.sync_sequence LIMIT ?",
+        (conv_id, user_id, after, limit),
+    )
+    rows: list[Mapping[str, Any]] = []
+    events: list[dict[str, Any]] = []
+    used = 0
+    start = 0
+    while start < len(sizes):
+        end, candidate = start, 0
+        while end < len(sizes) and (
+                end == start or used + candidate + int(sizes[end]["stored_bytes"] or 0)
+                <= max_bytes):
+            candidate += int(sizes[end]["stored_bytes"] or 0)
+            end += 1
+        batch = session.fetch_all(
+            _CHANGE_ROW_COLUMNS + _CHANGE_ROWS_FROM
+            + "AND c.sync_sequence>=? AND c.sync_sequence<=? ORDER BY c.sync_sequence",
+            (conv_id, user_id, int(sizes[start]["sync_sequence"]),
+             int(sizes[end - 1]["sync_sequence"])),
+        )
+        for row in batch:
+            event = _conversation_change_from_row(row)
+            size = _encoded_change_bytes(event)
+            if events and used + size > max_bytes:
+                return rows, events
+            rows.append(row)
+            events.append(event)
+            used += size
+        start = end
+    return rows, events
 
 
 def _turn_sync_changes(session: Session, payload: Mapping[str, Any]) -> Any:
-    """Read one contiguous ordered conversation-change page after a cursor."""
+    """Read one contiguous ordered conversation-change page after a cursor.
+
+    With ``max_bytes`` the page also stops before the change that would take
+    its encoded changes past that many bytes (never before the first change)
+    and the result says ``maxBytesApplied``.
+    """
     conv_id, user_id = _turn_identity(payload)
     after = _integer(payload, "after", default=0, minimum=0)
     limit = _integer(payload, "limit", default=500, minimum=1, maximum=2000)
+    max_bytes = (
+        _integer(payload, "max_bytes", minimum=CHANGE_PAGE_MIN_BYTES,
+                 maximum=CHANGE_PAGE_MAX_BYTES)
+        if "max_bytes" in payload else None
+    )
     conversation = session.fetch_one(
         "SELECT 1 AS present FROM storage_conversations WHERE id=? AND user_id=?",
         (conv_id, user_id),
@@ -1513,44 +1704,57 @@ def _turn_sync_changes(session: Session, payload: Mapping[str, Any]) -> Any:
         return None
     head = _conversation_sync_head(session, conv_id, user_id)
     if after > head:
-        return {
+        return _with_sync_lineage({
             "head": head,
             "events": [],
             "resetRequired": True,
             "resetReason": "cursor_invalid",
-        }
-    rows = session.fetch_all(
-        "SELECT c.conversation_id,c.user_id,c.sync_sequence,c.change_type,"
-        "c.turn_id,c.attempt_id,c.attempt_sequence,c.event_json,c.created_at,"
-        "e.payload_json AS attempt_event_json "
-        "FROM storage_conversation_changes AS c "
-        "LEFT JOIN storage_attempt_events AS e "
-        "ON c.attempt_sequence IS NOT NULL "
-        "AND e.attempt_id=c.attempt_id AND e.sequence=c.attempt_sequence "
-        "AND e.conversation_id=c.conversation_id AND e.turn_id=c.turn_id "
-        "WHERE c.conversation_id=? AND c.user_id=? AND c.sync_sequence>? "
-        "ORDER BY c.sync_sequence LIMIT ?",
-        (conv_id, user_id, after, limit),
-    )
+        }, session, conv_id, user_id, head)
+    if max_bytes is None:
+        rows = session.fetch_all(
+            _CHANGE_ROW_COLUMNS + _CHANGE_ROWS_FROM
+            + "AND c.sync_sequence>? ORDER BY c.sync_sequence LIMIT ?",
+            (conv_id, user_id, after, limit),
+        )
+        events = None
+    else:
+        rows, events = _byte_bounded_change_page(
+            session, conv_id=conv_id, user_id=user_id, after=after, limit=limit,
+            max_bytes=max_bytes)
     if head > after and (
         not rows or any(
             int(row["sync_sequence"] or 0) != after + index
             for index, row in enumerate(rows, start=1)
         )
     ):
-        return {
+        return _with_sync_lineage({
             "head": head,
             "events": [],
             "resetRequired": True,
             "resetReason": "cursor_expired",
-        }
-    events = [_conversation_change_from_row(row) for row in rows]
-    return {
+        }, session, conv_id, user_id, head)
+    if events is None:
+        events = [_conversation_change_from_row(row) for row in rows]
+    digests = [_change_row_digest(row) for row in rows]
+    anchor = _change_digest_at(session, conv_id, user_id, after)
+    if after == head:
+        head_digest: Any = anchor
+    elif rows and int(rows[-1]["sync_sequence"]) == head:
+        head_digest = digests[-1]
+    else:
+        head_digest = _LINEAGE_UNREAD
+    page = _with_sync_lineage({
         "head": head,
         "events": events,
         "resetRequired": False,
         "hasMore": bool(rows and int(rows[-1]["sync_sequence"]) < head),
-    }
+        _LINEAGE["changeDigestsField"]: digests,
+    }, session, conv_id, user_id, head, head_digest)
+    if after:
+        page[_LINEAGE["anchorDigestField"]] = anchor
+    if max_bytes is not None:
+        page["maxBytesApplied"] = True
+    return page
 
 
 def _turn_sync_prune(session: Session, payload: Mapping[str, Any]) -> Any:

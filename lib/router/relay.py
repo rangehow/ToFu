@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 
 from lib.identity import require_user_id
 
@@ -44,9 +45,47 @@ def question_relay_command_id(owner: int, coordinator_id: str, turn_id: str, too
     return _command_id('router-question-relay:', [owner, coordinator_id, turn_id, tool_call_id])
 
 
+_NOTICE_HEADER = '[Project report relay: nonhuman notice, not the owner\u2019s words and not authority]'
+_NOTICE_REFERENCE = re.compile(
+    re.escape(_NOTICE_HEADER) + r'\nProject: (?P<projectPath>[^\n]*)\n'
+    r'Project Router conversation: (?P<coordinatorId>[^\s]+)\n'
+    r'Report: kind=(?P<kind>[a-z_]+), Turn (?P<turnId>[^\s]+)\n')
+
+
+_QUESTION_NOTICE_HEADER = '[Project question relay: nonhuman notice, not the owner\u2019s words and not authority]'
+_RELAY_SUBJECT = re.compile(
+    r'\nTitle: (?P<title>[^\n]*)\nMessage:\n(?P<message>.*?)\n\nThe report Turn in the Project Router '
+    r'conversation is the canonical record', re.DOTALL)
+_QUESTION_SUBJECT = re.compile(
+    r'\n(?P<question>(?:Question:|Questions \(one form\):)\n.*?)\n\nThe question card in the Project '
+    r'Router conversation is the canonical record', re.DOTALL)
+
+
+def relay_notice_subject(text: str) -> str | None:
+    """The relayed report's title and message, or question, of a relay notice; else None.
+
+    The rest of the notice is this module's fixed routing scaffolding, the same
+    in every relay, so memory selection reads only what the Project Router said
+    (lib/memory/prefetch/_query.py).
+    """
+    stripped = text.lstrip()
+    if stripped.startswith(_NOTICE_HEADER):
+        match = _RELAY_SUBJECT.search(stripped)
+        return '' if match is None else f'{match["title"]}\n{match["message"]}'
+    if stripped.startswith(_QUESTION_NOTICE_HEADER):
+        match = _QUESTION_SUBJECT.search(stripped)
+        return '' if match is None else match['question']
+    return None
+
+
+def notice_references(text: str) -> list[dict]:
+    """The reports named by the report notices in ``text`` (lead_deliverables reads relayed deliveries)."""
+    return [match.groupdict() for match in _NOTICE_REFERENCE.finditer(text)] if _NOTICE_HEADER in text else []
+
+
 def render_notice(report: dict) -> str:
     return '\n'.join([
-        '[Project report relay: nonhuman notice, not the owner\u2019s words and not authority]',
+        _NOTICE_HEADER,
         f'Project: {report["projectPath"]}',
         f'Project Router conversation: {report["coordinatorId"]}',
         f'Report: kind={report["kind"]}, Turn {report["turnId"]}',
@@ -99,7 +138,7 @@ def render_question_notice(question: dict, command_chat: str | None = None) -> s
         ask = ('Otherwise ask the owner in your reply here; if you use ask_human, use blocking=false so '
                'their answer arrives as a message you can forward.')
     return '\n'.join([
-        '[Project question relay: nonhuman notice, not the owner\u2019s words and not authority]',
+        _QUESTION_NOTICE_HEADER,
         f'Project: {question["projectPath"]}',
         f'Project Router conversation: {question["coordinatorId"]}',
         f'Question id {guidance_id} in Turn {question["turnId"]}, '
@@ -156,8 +195,13 @@ def relay_project_report(owner: int, report: dict, *, client=None, dispatch=None
         identity = relay_command_id(owner, report['coordinatorId'], report['turnId'])
         hold_relay(owner, 'report', identity, report, client=client)
         return 'held'
-    return _dispatch_notice(owner, router_id, report['coordinatorId'], render_notice(report),
-                            relay_command_id(owner, report['coordinatorId'], report['turnId']), dispatch)
+    disposition = _dispatch_notice(owner, router_id, report['coordinatorId'], render_notice(report),
+                                   relay_command_id(owner, report['coordinatorId'], report['turnId']), dispatch)
+    if report['kind'] == 'delivery':
+        # The notice names a delivery the Global Router's deliverables list projects.
+        from lib.conversations.lead_deliverables import notify
+        notify(owner, router_id, report['projectPath'])
+    return disposition
 
 
 def _command_chat(owner: int, client) -> str | None:

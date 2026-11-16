@@ -129,6 +129,12 @@ _STORAGE_WRITE_FENCE_EXEMPT_PATHS = frozenset({
     '/api/v4/update/restart',
     '/api/v1/update/shutdown',
     '/api/v4/update/shutdown',
+    # Browser diagnostics sinks only write log files (logger 'frontend' and
+    # the client-error log). Fencing them lost every browser line of the
+    # 2026-11-13 02:07-02:18 storage outage, the window diagnosis needed.
+    '/api/client-error',
+    '/api/v1/logs/client',
+    '/api/v4/logs/client',
 })
 
 # The human's approval decision is the second leg of the UI restart flow

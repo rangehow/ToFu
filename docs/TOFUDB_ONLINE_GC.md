@@ -326,6 +326,9 @@ The owner pauses both collectors at runtime by disabling the built-in
 `storage-reclaim` scheduler task: `held` is true in both collectors' metrics,
 no epoch starts, and the running one stops at its next stop check
 ([STORAGE_OPERATIONS.md](STORAGE_OPERATIONS.md#pausing-backups-and-reclamation)).
+A held driver still builds the first catalog location table and the packed
+filter, on the epoch timer's floors and without consuming a doorbell; those
+read-path builds stop only on the driver's own stop.
 
 ## Test plan (test ladder, smallest first)
 
@@ -1717,9 +1720,8 @@ still precedes it. A refused hold (`WouldBlock`) keeps the geometric backoff.
 The attempt checks the stop flag again once it holds the mutex, so a stop
 raised while it waited ends the run before that hold acts. Every pause wakes
 on a stop: `stop_and_join` unparks the driver thread, so a run paused by its
-backoff ends at once instead of being detached. The epoch's capture still
-uses `try_lock` and defers a contended epoch, which retries after the minimum
-epoch interval with no growing wait.
+backoff ends at once instead of being detached. Since 2026-11-15 the
+epoch's capture waits as well ("The capture waits for the mutex" below).
 
 Waiting cannot deadlock. A collector thread holds no other lock when it calls
 `lock()`: `visit_block_shards` runs its visitor with no lock held, and a built
@@ -2144,3 +2146,226 @@ Verification (each failing before the change unless noted):
 the live error text), and the guard
 `victims_a_stopped_scan_unlinked_never_confirm_from_the_older_suspects`.
 The live reclamation rate needs the deployed engine.
+
+## The capture waits for the mutex (2026-11-15)
+
+Problem. An epoch's capture sampled its database mutex with `try_lock` and
+deferred the whole epoch when it was held. The search worker keeps the search
+index's mutex for nearly all of its time (one short hold per page it indexes,
+back to back). On 2026-11-15 the search collector deferred all 147 epochs it
+attempted in 4.9 hours (`system.metrics.searchGarbageCollector`:
+`deferred_epochs=147`, `epochs_completed=0`, `failed_epochs=0`), so nothing in
+the 182 GiB index was ever collected. It is the probability argument of
+"Collector holds wait for the mutex" again: a sample fails with the
+probability p that the mutex is held, and at p near 1 the epoch never starts.
+
+Decision. The capture waits in `lock()` like every later hold and re-checks
+the stop flag once it holds the mutex, so a stop raised while it waited
+defers the epoch before anything is captured. The capture is an in-memory
+copy, so a waiting foreground waits for at most that one short hold, as for
+every deletion hold. Waiting cannot deadlock for the reasons given there: the
+collector thread holds no other lock when it waits, and nothing waits for the
+collector while holding a database mutex. A poisoned mutex still defers.
+
+Alternatives rejected: a capture deadline or retry count (a tuning knob);
+special-casing the search index (the source authority's foreground reaches
+the same occupancy under load, and the argument does not depend on the
+owner); reading the search worker's posting blocks off its mutex (still worth
+doing for the worker's own latency, but the collector must not depend on how
+long another owner holds the mutex).
+
+Verification (`authority_gc_online/tests.rs`):
+`a_capture_behind_a_mostly_held_mutex_waits_instead_of_deferring` (a holder
+keeps the mutex 20 ms of every 21 ms; two epochs complete, zero deferrals and
+the orphan is reclaimed; with the old `try_lock` capture the first epoch
+deferred and the specification failed) and
+`a_stop_raised_while_the_capture_waits_defers_without_capturing`. The driver
+specifications `driver_publishes_the_first_catalog_location_table_while_the_capture_waits`
+and `driver_builds_the_packed_filter_off_the_mutex_while_the_capture_waits`
+keep the off-mutex table and filter builds and now also see the waiting
+epoch complete once the holder lets go.
+
+## Every confirmed segment is reclaimed each epoch (2026-11-15)
+
+Problem. The payload scan visited one window of
+`MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED` (16) catalog segments per epoch,
+kept each window for two epochs to confirm its dead sets, remembered at most 64
+dead sets and rewrote at most one segment per epoch (plus one pressure
+consolidation). A full catalog of 4,096 segments took 512 epochs to sweep
+once. On 2026-11-16 a copy of the source authority held 57.7 GB of catalogued
+payload of which at most 9.2 GB was reachable (`tofu-db gc-census`, see
+`docs/STORAGE_OPERATIONS.md`): 24 segments entirely dead and 3,974 at least
+half dead, while the live collector reclaimed about 2.6 GB/h against 3-5 GB/h
+of new segment bytes. Superseded versions therefore accumulated without bound.
+
+Decision. Each epoch scans the whole installed catalog, one window at a time
+(a window still bounds the ID lists in memory and is answered by one pass over
+the mark runs). A segment's dead set is remembered as a 32-byte BLAKE3 digest
+of its sorted dead IDs (`dead_set_digest`) for every segment, not a set for 64
+of them, and a segment whose digest the previous completed mark recorded
+identically is confirmed (rule S1 unchanged: two consecutive marks, the second
+at least the minimum interval after the first). A confirmed segment is a
+victim when it is entirely dead, or when its dead payload bytes reach its live
+payload bytes: a rewrite copies the live bytes to free the dead ones, so the
+bytes the collector writes never exceed the bytes it frees, and every segment
+it leaves is at least half live (the 1:1 point is where copying and freeing
+balance, not a tuned ratio; a segment below it waits until more of it dies,
+or for pressure consolidation). The deletion phase then reclaims every victim
+in catalog order: a pressure consolidation
+first (it subsumes the rewrites of its victims), then each remaining victim,
+built off the mutex and published under its own hold, one segment of
+temporary disk at a time. A plan holds only segment references; the deletion
+phase reads each window's retained blocks again from the same mark and skips a
+segment whose digest no longer matches. `WouldBlock` still proves that nothing
+was published, so only then is a built segment discarded, and the victim
+confirms again next epoch.
+
+Cost: one mark-run pass per catalog window instead of one per epoch. The mark
+spill is sized by the live set (19 MB on the source authority, which sits in
+the page cache), so the 256 passes of a full catalog read about 4.9 GB of
+cached runs; segment indexes are read once per epoch. Memory stays one window.
+
+Alternatives rejected. More windows per epoch chosen by time or count (a
+tuning knob). Keeping full dead sets for every segment (tens of millions of
+IDs at live scale). One merged pass over every segment index at once (the
+whole catalog's IDs in memory, 1.7 GB on the search index). Rebuilding a store
+offline (`collect-garbage --execute` removes one item per round and re-scans a
+window each time; on the 182 GB search copy it freed 3 GiB in 15 minutes).
+
+Verification (`authority_gc_online/tests.rs`):
+`the_second_epoch_reclaims_every_confirmed_segment_in_every_window` (49
+segments across four windows, half fully dead and half with equal dead and
+live bytes: the second epoch reclaims every dead block and keeps every live
+one; before, one segment per epoch). On copies of the live stores the second
+epoch rewrote or retired 3,991 source and 4,082 search segments
+(docs/STORAGE_OPERATIONS.md, "Durable store growth inventory, 2026-11-15"), `every_epoch_verifies_every_payload_catalog_window` (a corrupt
+segment in the last window fails the first epoch),
+`a_segment_is_rewritten_once_its_dead_bytes_reach_its_live_bytes` (1,000 dead
+beside 3,000 live bytes waits, 2,500 beside 1,000 is rewritten),
+`cancelled_epochs_do_not_advance_catalog_confirmation` (a stopped epoch leaves
+the recorded digests unchanged and reclaims nothing), and
+`tests_mark_cost::segment_window_scan_reads_each_mark_run_once` (one pass over
+the runs per window, digests equal to the exact dead sets). The fault matrices
+of `tests_fault.rs` and `tests_segment_reclaim.rs` run unchanged.
+
+## Leaves read in one batch (2026-11-13)
+
+Problem. The production authority mark has not finished since 2026-11-09:
+ten processes in a row restarted it before it completed. On 11-13 one
+process's mark read 8.7 TB in 8.6 h without finishing, and 99.8% of those
+bytes were history routing pages. A block that lives only in retained
+history resolves through `RoutingRoot::visit_locations`, which reads one page
+per routing level for every lookup. With 357,651 retained segments, the
+routing held 365M locations in 6,614 pages (27.7 GB) on five levels. Each
+history-resident lookup therefore read about 21 MB, the mark resolved about
+14 such blocks per second, and its ~3.5M history-resident pages needed about
+70 h (TOFUDB-BACKGROUND-IO-1, step 1).
+
+Decision.
+
+- The mark walks its roots through `entity::visit_entity_page_graphs_once_batched`.
+  - Each walk reads its other pages as it reaches them and defers every page
+    reached at level 0 (a leaf).
+  - Once those are done, it reads all the deferred leaves in one batch
+    (`TraversalReader::get_batch`).
+  - The blob manifests named by the leaves' values are then read in one more
+    batch (`backup::visit_semantic_value_references_deferring_blob`,
+    `blob::visit_read_blob_references`).
+- A batch resolves the blocks the location table does not serve through one
+  merge-join over the routing (`RoutingRoot::prepare_traversal_lookup`).
+  - Each routing page that holds one of those blocks is read once, not once
+    per block and level.
+  - Pages are not admitted to the block cache: one pass reads more routing
+    pages than the cache holds. This changes only the mark's own reads;
+    per-block history-resident lookups read one slice of a page per level
+    ([TOFUDB_BLOCK_READ_PATH.md, "History routing slices"](TOFUDB_BLOCK_READ_PATH.md#history-routing-slices-2026-11-13)).
+  - Each page's content hash is verified on every read, and its structure is
+    validated once per pass.
+  - Blocks are then read by source and offset.
+- Routing answers are hints. A hinted copy must verify and must lie in a source
+  the current history catalog retains, so it answers exactly when the exact
+  path's history lookup would. Anything else takes `get`'s own path, and only
+  that path may report a block missing: a block that moved, a source retired
+  during the batch, or a failed read.
+- The batched walk visits the same pages and values as the per-page walk,
+  walks and skips the same counts, checks every root's pin count against the
+  same records, and fails when the per-page walk fails. Only the order of
+  leaf visits changes.
+  - A deferred leaf's pin records join its walk's tally when the walk ends.
+    Joined earlier, they would count toward pages still on the frontier whose
+    subtrees do not hold them.
+  - They also join the kept tally of every page on the leaf's path at once, so
+    a later walk's admits see final tallies.
+  - When a walk reaches a page for the second time, it first reads the leaves
+    deferred below that page.
+- Stops: the batch checks the stop flag before every routing page read and
+  every block read.
+- Memory: one walk's deferred leaves and the prepared hints. A deferred leaf
+  keeps its id, the page it was reached from and two indexes into the walk's
+  key arena (`LeafKeys`). Siblings are deferred one after another and a
+  leaf's upper bound is its next sibling's lower bound, so the arena stores
+  each bound once: about one key per leaf. No count bounds them
+  (principle 3); their measured peak is under Verification below.
+- The mark's entity part is one function, `authority_gc_online::mark_entity_graphs`,
+  which the specifications and measurements below run.
+- Not done: opening loose files before a stat. In a batch, history hints come
+  before the loose probe, so a history-resident leaf costs no failed loose
+  lookup. The per-block `get` keeps stat-then-open; open-first would save one
+  stat per loose read and nothing for history-resident blocks.
+
+Alternatives rejected.
+
+- A decoded per-pass routing table: about 7.3 GB at production shape.
+- Batches of the DFS frontier: about 2k ids still touch about 1,700 of the
+  largest level's 5,700 pages.
+- A routing-page cache sized by a setting: a knob (principle 5).
+- A level-synchronous traversal: it changes the walk-once and pin-tally
+  mechanics the marks depend on.
+
+Not fixed here:
+
+- The history backlog itself (DB-4's lane). Its per-lookup cost of ~21 MB of
+  routing pages is gone with history routing slices.
+- Internal pages, still read one lookup each.
+- The decode of every retained history segment on each mark (R5, the carried
+  mark).
+
+Verification:
+
+- Equivalence specs: `entity::tests::batched_walks_visit_read_and_count_what_the_per_page_walk_does`,
+  `batched_walks_read_the_leaves_under_a_range_mount_like_the_per_page_walk`,
+  `a_page_reached_twice_in_one_walk_joins_the_records_of_its_deferred_leaves`
+  and `a_failed_leaf_batch_fails_the_walk_before_visiting_its_leaves`.
+- Seeded differentials (a mark that omitted a block deterministically would
+  delete it after two marks, and the two-mark rule cannot notice):
+  - `entity::tests::batched_walks_equal_per_page_walks_on_1000_random_graphs`
+    (10,000 in the ignored `..._on_10000_random_graphs`): random stores with
+    shared copy-on-write roots, persistent pins walked with and without
+    discovery, removed pins, range mounts, leaf roots, pin counts that
+    disagree with their pins, and crafted pages that reach one leaf twice in a
+    walk or record a wrong witness. Equal page and value multisets, read
+    counts and walked/skipped counts where the per-page walk accepts; a
+    rejection wherever it rejects.
+  - `tests_mark_cost::batched_marks_equal_per_page_marks_on_random_authorities`
+    (400 in the ignored variant) and
+    `batched_mark_equals_the_per_page_mark_over_packed_blocks`:
+    `mark_entity_graphs` against the per-page mark with inline manifest reads,
+    on authorities whose pages, manifests, chunks and stream segments are
+    history-resident, packed, loose or in the WAL, with persistent pins.
+- Memory and cost at production shape (run by hand on a VM, ignored):
+  `entity::tests::measure_walk_memory_on_a_crafted_tree` (millions of leaves
+  under one root) and `tests_mark_cost::build_mark_bench_store` with
+  `measure_mark_arm` (both arms over copies of one history-resident store:
+  live-set digest, walked/skipped, wall time, `/proc` read bytes and calls,
+  peak RSS growth). Measured on a VM with 6.2M leaves under one root (five
+  levels, 6,248,821 pages, all in memory, so no I/O): the batched walk's peak
+  RSS growth was 1.31 GiB against 0.49 GiB for the per-page walk (+0.82 GiB),
+  and the walk took 13.7 s against 6.8 s.
+- Cost specs: `tests_mark_cost::a_leaf_batch_reads_each_routing_page_once_and_admits_none`
+  (failing first: block by block read a routing page per run per block; with
+  routing slices, a page whole once for its directory),
+  `a_leaf_batch_stops_before_its_next_read` and
+  `a_mark_over_history_resident_pages_batches_its_routing_reads_with_unchanged_marks`.
+- The production-shaped measurement (GC read bytes and syscalls per mark,
+  peak RSS, foreground commit p99 and holds of 1 s or more during the mark)
+  lives in `.eval-runs/tofudb-background-io-20261113/`.

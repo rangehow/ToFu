@@ -172,6 +172,7 @@ def test_storage_v2_machine_contract_has_fixed_complete_bounded_fields():
             "deadlineElapsed": 408,
             "conflict": 409,
             "resourceExhausted": 429,
+            "internal": 500,
             "notImplemented": 501,
             "unavailable": 503,
             "integrityFailure": 550,

@@ -12,6 +12,7 @@ use super::tests::test_budget;
 use super::tests_capture::unmarked_epoch;
 use super::*;
 use crate::authority::AuthorityTransaction;
+use crate::backup::visit_semantic_value_references;
 use crate::entity::{visit_entity_page_graph_with_values, EntityKey};
 use crate::payload_segment::read_path_counters;
 use crate::vfs::{
@@ -39,6 +40,8 @@ struct ReadLog {
     /// (segment, offset, bytes) of every payload-segment read.
     segment_reads: Vec<(Uuid, u64, usize)>,
     loose_opens: u64,
+    /// File names of the loose blocks opened for reading, in order.
+    loose_open_names: Vec<String>,
     loose_bytes: u64,
     mark_run_bytes: u64,
 }
@@ -68,7 +71,13 @@ impl Vfs for CountingVfs {
         let source = if let Some(segment) = segment_of(path) {
             Source::Segment(segment)
         } else if path.extension().is_some_and(|extension| extension == "blk") {
-            self.log.lock().unwrap().loose_opens += 1;
+            let mut log = self.log.lock().unwrap();
+            log.loose_opens += 1;
+            log.loose_open_names.extend(
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_owned),
+            );
             Source::Loose
         } else if path
             .extension()
@@ -780,8 +789,7 @@ fn mark_reads_and_inserts_each_page_shared_by_pinned_roots_once() {
 #[test]
 fn segment_window_scan_reads_each_mark_run_once() {
     let (_vfs, database) = mark_cost_authority();
-    let mut collector = OnlineGarbageCollector::new(test_budget());
-    collector.payload_window_cursor = Some(0);
+    let collector = OnlineGarbageCollector::new(test_budget());
     let capture = database
         .lock()
         .unwrap()
@@ -801,20 +809,25 @@ fn segment_window_scan_reads_each_mark_run_once() {
     let mut expected_dead = BTreeMap::new();
     for (segment, reference) in catalog.iter().enumerate() {
         let mut dead = Vec::new();
-        for (position, id) in store
+        let mut retained = Vec::new();
+        let block_ids = store
             .open_segment(reference.segment_id)
             .unwrap()
             .block_ids()
-            .enumerate()
-        {
+            .collect::<Vec<_>>();
+        for (position, id) in block_ids.iter().copied().enumerate() {
             if segment < window_len && position % 4 == segment % 4 && Some(id) != protected {
                 dead.push(id);
             } else {
                 live.push(id);
+                retained.push(id);
             }
         }
         if !dead.is_empty() {
-            expected_dead.insert(reference.segment_id, dead);
+            expected_dead.insert(
+                reference.segment_id,
+                super::dead_set_digest(&block_ids, &retained),
+            );
         }
     }
     assert_eq!(expected_dead.len(), window_len);
@@ -870,11 +883,688 @@ fn segment_window_scan_reads_each_mark_run_once() {
          mark_run_bytes_read={run_bytes}",
         spilled.run_count, spilled.spill_bytes,
     );
+    // The scan covers the whole catalog, one pass over the runs per window.
+    let windows = SEGMENTS.div_ceil(window_len) as u64;
     assert!(
-        run_bytes <= spilled.spill_bytes,
-        "a window of {window_len} segments read {run_bytes} mark-run bytes; one pass over {} runs is {}",
+        run_bytes <= windows * spilled.spill_bytes,
+        "{windows} windows of {window_len} segments read {run_bytes} mark-run bytes; one pass over {} runs is {}",
         spilled.run_count,
         spilled.spill_bytes,
     );
     marks.cleanup().unwrap();
+}
+
+/// Retires the authority's WAL window into indexed history the way a
+/// rotation does: nothing is materialized into a segment or a loose file.
+fn retire_window(authority: &mut AuthorityDatabase) {
+    authority.merge_entity_overlay_fully().unwrap();
+    authority.retire_wal_window_for_stop().unwrap();
+}
+
+/// An authority whose payloads live only in indexed history: `windows` WAL
+/// windows of `per_window` blocks, each retired like a rotation, so the
+/// history routing holds one run per window, merged like a binary counter.
+/// Reopened, so nothing is staged or cached.
+fn history_resident_blocks(
+    windows: usize,
+    per_window: usize,
+) -> (
+    Arc<CountingVfs>,
+    AuthorityDatabase,
+    BTreeMap<BlockId, Vec<u8>>,
+) {
+    let inner = Arc::new(DeterministicVfs::new(None));
+    inner.create_dir(Path::new("/data")).unwrap();
+    inner.sync_directory(Path::new("/")).unwrap();
+    let vfs = Arc::new(CountingVfs {
+        inner,
+        log: Arc::default(),
+    });
+    let mut authority =
+        AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
+    authority.engine_mut_for_test().attach_rotation_driver();
+    let mut payloads = BTreeMap::new();
+    for window in 0..windows {
+        for index in 0..per_window {
+            let payload = format!("history-resident {window:03}/{index:05} ")
+                .repeat(16)
+                .into_bytes();
+            payloads.insert(
+                authority.commit_block_payload_for_test(&payload).unwrap(),
+                payload,
+            );
+        }
+        retire_window(&mut authority);
+    }
+    drop(authority);
+    let authority = AuthorityDatabase::open_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
+    (vfs, authority, payloads)
+}
+
+fn routing_page_names(blocks: &BlockStore) -> BTreeSet<String> {
+    blocks
+        .history_routing_page_ids_for_test()
+        .iter()
+        .map(|id| format!("{}.blk", id.to_hex()))
+        .collect()
+}
+
+fn routing_opens(log: &ReadLog, pages: &BTreeSet<String>) -> usize {
+    log.loose_open_names
+        .iter()
+        .filter(|name| pages.contains(*name))
+        .count()
+}
+
+/// History-resident blocks read block by block cost one routing page per run
+/// per block until history routing slices (production: ~5 pages of 4 MB per
+/// lookup, so a mark resolved ~14 blocks/s); with slices each routing page is
+/// read whole once, for its slice directory, and then one slice of it per run
+/// per block. One leaf batch resolves them through one merge-join over the
+/// routing: whatever the block cache holds, every routing page is read at
+/// most once and none enters the cache, and each block reads back verified.
+#[test]
+fn a_leaf_batch_reads_each_routing_page_once_and_admits_none() {
+    let (vfs, authority, payloads) = history_resident_blocks(7, 600);
+    let blocks = authority.block_store_shared();
+    let pages = routing_page_names(&blocks);
+    assert!(
+        pages.len() >= 3,
+        "fixture: one routing run per occupied level, {} pages",
+        pages.len()
+    );
+    let ids: Vec<BlockId> = payloads.keys().copied().collect();
+
+    blocks.set_cache_capacity_bytes(0).unwrap();
+    let reader = blocks.traversal_reader(|| Ok(())).unwrap();
+    vfs.take();
+    for id in &ids {
+        assert_eq!(&reader.get(*id).unwrap(), &payloads[id]);
+    }
+    let per_block = routing_opens(&vfs.take(), &pages);
+    drop(reader);
+
+    assert!(
+        per_block <= pages.len(),
+        "block by block read routing pages whole {per_block} times; there are {}",
+        pages.len()
+    );
+
+    for cache_bytes in [0, 256 * 1024 * 1024] {
+        blocks.set_cache_capacity_bytes(cache_bytes).unwrap();
+        let reader = blocks.traversal_reader(|| Ok(())).unwrap();
+        vfs.take();
+        let mut read = BTreeMap::new();
+        reader
+            .get_batch(&ids, &|| Ok(()), &mut |id, payload| {
+                assert!(
+                    read.insert(id, payload).is_none(),
+                    "a batch returned {} twice",
+                    id.to_hex()
+                );
+                Ok(())
+            })
+            .unwrap();
+        let batched = routing_opens(&vfs.take(), &pages);
+        println!(
+            "leaf_batch: cache_bytes={cache_bytes} blocks={} routing_pages={} \
+             per_block_routing_reads={per_block} batch_routing_reads={batched}",
+            ids.len(),
+            pages.len(),
+        );
+        assert_eq!(read, payloads, "every block reads back verified");
+        assert!(
+            batched <= pages.len(),
+            "with a {cache_bytes}-byte cache a batch read routing pages {batched} times; there are {}",
+            pages.len()
+        );
+        for id in blocks.history_routing_page_ids_for_test() {
+            assert!(
+                !blocks.cache_contains_for_test(id),
+                "a batch admitted routing page {}",
+                id.to_hex()
+            );
+        }
+    }
+}
+
+/// A stop raised during a batch ends it before its next read.
+#[test]
+fn a_leaf_batch_stops_before_its_next_read() {
+    let (_vfs, authority, payloads) = history_resident_blocks(3, 200);
+    let blocks = authority.block_store_shared();
+    let reader = blocks.traversal_reader(|| Ok(())).unwrap();
+    let ids: Vec<BlockId> = payloads.keys().copied().collect();
+    let stop = std::cell::Cell::new(false);
+    let check = || {
+        if stop.get() {
+            return Err(would_block("online GC epoch stopped"));
+        }
+        Ok(())
+    };
+    let mut visited = 0;
+    let error = reader
+        .get_batch(&ids, &check, &mut |_, _| {
+            visited += 1;
+            if visited == 10 {
+                stop.set(true);
+            }
+            Ok(())
+        })
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+    assert_eq!(visited, 10, "the batch read past its stop");
+}
+
+/// The written, merged and retired records of `write_records`, window by
+/// window, so a mark's entity pages and blob manifests are history-resident.
+fn history_resident_pages_authority() -> (Arc<CountingVfs>, Arc<Mutex<AuthorityDatabase>>) {
+    let inner = Arc::new(DeterministicVfs::new(None));
+    inner.create_dir(Path::new("/data")).unwrap();
+    inner.sync_directory(Path::new("/")).unwrap();
+    let vfs = Arc::new(CountingVfs {
+        inner,
+        log: Arc::default(),
+    });
+    let mut authority =
+        AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
+    authority.engine_mut_for_test().attach_rotation_driver();
+    write_records(&mut authority);
+    retire_window(&mut authority);
+    let mut transaction = authority.begin(7, 11).unwrap();
+    authority
+        .stage_persistent_snapshot_pin(&mut transaction, b"history-resident-pin")
+        .unwrap();
+    authority.commit(transaction).unwrap();
+    retire_window(&mut authority);
+    for window in 0..5_u32 {
+        let mut transaction = authority.begin(7, 11).unwrap();
+        for index in 0..40_u32 {
+            let key =
+                EntityKey::new(7, 11, "markcost", &(index * 61 + window).to_be_bytes()).unwrap();
+            authority
+                .entity_put(
+                    &mut transaction,
+                    key,
+                    format!("window-{window}-{index}").into_bytes(),
+                )
+                .unwrap();
+        }
+        authority.commit(transaction).unwrap();
+        retire_window(&mut authority);
+    }
+    drop(authority);
+    let authority = AuthorityDatabase::open_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
+    (vfs, Arc::new(Mutex::new(authority)))
+}
+
+/// A mark over history-resident pages and manifests: its marks cover every
+/// root's per-page walk. Each walk resolves its leaves and then their
+/// manifests in one batch each, so the mark reads each routing page at most
+/// once per batch however many blocks it resolves; the per-page walk reads
+/// each routing page whole at most once, for its slice directory.
+#[test]
+fn a_mark_over_history_resident_pages_batches_its_routing_reads_with_unchanged_marks() {
+    let (vfs, database) = history_resident_pages_authority();
+    let blocks = database.lock().unwrap().block_store_shared();
+    blocks.set_cache_capacity_bytes(0).unwrap();
+    let pages = routing_page_names(&blocks);
+    assert!(!pages.is_empty(), "fixture: history routing");
+    let roots = {
+        let capture = database
+            .lock()
+            .unwrap()
+            .online_gc_capture(test_budget().maximum_temporary_bytes)
+            .unwrap();
+        let mut roots = vec![capture.snapshot.authority_state_root];
+        roots.extend(capture.snapshot.pinned_roots.iter().copied().map(Some));
+        roots
+    };
+    vfs.take();
+    let per_root = per_root_walks(&blocks, &roots);
+    let per_root_reads = routing_opens(&vfs.take(), &pages);
+
+    let collector = OnlineGarbageCollector::new(test_budget());
+    let capture = database
+        .lock()
+        .unwrap()
+        .online_gc_capture(test_budget().maximum_temporary_bytes)
+        .unwrap();
+    let mut epoch = unmarked_epoch(capture, &collector);
+    vfs.take();
+    collector
+        .build_marks(&mut epoch, &AtomicBool::new(false))
+        .unwrap();
+    let mark_reads = routing_opens(&vfs.take(), &pages);
+    let mut marks = epoch.marks.take().unwrap();
+    marks.finish().unwrap();
+    let mut marked = BTreeSet::new();
+    for shard in 0..=u8::MAX {
+        marked.extend(marks.live_for_shard(shard).unwrap());
+    }
+    marks.cleanup().unwrap();
+    println!(
+        "history_resident_mark: walked_blocks={} routing_pages={} per_root_routing_reads={per_root_reads} \
+         mark_routing_reads={mark_reads}",
+        per_root.marked.len(),
+        pages.len(),
+    );
+    assert!(
+        per_root.marked.is_subset(&marked),
+        "the mark covers every root's walk"
+    );
+    // Two walks, the state root's and its persistent pin's, each with one leaf
+    // batch and one manifest batch.
+    assert!(
+        mark_reads <= 2 * 2 * pages.len(),
+        "the mark read routing pages {mark_reads} times: more than once per page per batch"
+    );
+    assert!(
+        per_root_reads <= pages.len(),
+        "walking root by root read routing pages whole {per_root_reads} times; there are {}",
+        pages.len()
+    );
+}
+
+/// The entity part of a mark before "Leaves read in one batch" (engine
+/// f3102951): every page read alone, every blob manifest read inline.
+fn mark_entity_graphs_per_page(
+    roots: &[Option<BlockId>],
+    reader: &crate::block::TraversalReader<'_>,
+    insert: &dyn Fn(BlockId) -> io::Result<()>,
+) -> io::Result<crate::entity::EntityPageGraphsWalk> {
+    crate::entity::visit_entity_page_graphs_once(
+        roots,
+        |block_id| reader.get(block_id),
+        |block_id, _| insert(block_id),
+        |key, value| {
+            visit_semantic_value_references(key, value, |block_id| reader.get(block_id), insert)
+        },
+    )
+}
+
+/// Marks the entity graphs of `roots` both ways, each through its own reader,
+/// and asserts the same walked and skipped pages and the same marked blocks.
+fn assert_batched_mark_equals_per_page_mark(
+    blocks: &BlockStore,
+    roots: &[Option<BlockId>],
+    case: &str,
+) -> usize {
+    let per_page = RefCell::new(BTreeSet::new());
+    let per_page_walk = {
+        let reader = blocks.traversal_reader(|| Ok(())).unwrap();
+        mark_entity_graphs_per_page(roots, &reader, &|id| {
+            per_page.borrow_mut().insert(id);
+            Ok(())
+        })
+        .unwrap()
+    };
+    let batched = RefCell::new(BTreeSet::new());
+    let batched_walk = {
+        let reader = blocks.traversal_reader(|| Ok(())).unwrap();
+        mark_entity_graphs(roots, &reader, &|| Ok(()), &|id| {
+            batched.borrow_mut().insert(id);
+            Ok(())
+        })
+        .unwrap()
+    };
+    assert_eq!(
+        (batched_walk.walked_pages, batched_walk.skipped_pages),
+        (per_page_walk.walked_pages, per_page_walk.skipped_pages),
+        "{case}: walked and skipped pages"
+    );
+    let (per_page, batched) = (per_page.into_inner(), batched.into_inner());
+    assert!(
+        batched == per_page,
+        "{case}: batched-only {:?}, per-page-only {:?}",
+        batched.difference(&per_page).collect::<Vec<_>>(),
+        per_page.difference(&batched).collect::<Vec<_>>()
+    );
+    batched.len()
+}
+
+fn splitmix64(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    let mut value = *state;
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
+}
+
+/// A seeded authority: entity records, versioned documents (blob manifests
+/// and chunks) and stream appends over several WAL windows, each window
+/// retired into indexed history, checkpointed, or left in the WAL, with
+/// persistent pins taken between windows; reopened, so nothing a mark reads
+/// is cached or staged by the writer that wrote it.
+fn random_authority(seed: u64) -> AuthorityDatabase {
+    let mut state = seed;
+    let mut below = |bound: u64| splitmix64(&mut state) % bound.max(1);
+    let vfs = Arc::new(DeterministicVfs::new(None));
+    vfs.create_dir(Path::new("/data")).unwrap();
+    vfs.sync_directory(Path::new("/")).unwrap();
+    let mut authority =
+        AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
+    authority.engine_mut_for_test().attach_rotation_driver();
+    for window in 0..1 + below(5) {
+        let mut transaction = authority.begin(7, 11).unwrap();
+        for _ in 0..1 + below(500) {
+            let index = below(2_000) as u32;
+            let key = EntityKey::new(7, 11, "markrandom", &index.to_be_bytes()).unwrap();
+            let value = vec![(window as u8) ^ (index as u8); 1 + below(600) as usize];
+            authority.entity_put(&mut transaction, key, value).unwrap();
+        }
+        authority.commit(transaction).unwrap();
+        for document in 0..below(3) {
+            let logical_key = format!("document-{window}-{document}");
+            let length = 32 + below(24 * 1024) as usize;
+            let text: String = (0..length)
+                .map(|position| char::from(b'a' + ((position as u64 * 7 + window) % 26) as u8))
+                .collect();
+            let mut transaction = authority.begin(7, 11).unwrap();
+            crate::versioned_document::put(
+                &authority,
+                &mut transaction,
+                crate::versioned_document::PutRequest {
+                    key: EntityKey::new(7, 11, "markrandomdocs", logical_key.as_bytes()).unwrap(),
+                    namespace: "markrandomdocs".into(),
+                    logical_key,
+                    value_json: serde_json::to_vec(&text).unwrap(),
+                    expected_version: None,
+                    updated_at_ms: 1,
+                },
+            )
+            .unwrap();
+            authority.commit(transaction).unwrap();
+        }
+        if below(3) == 0 {
+            let stream = crate::stream::StreamKey::new(
+                7,
+                11,
+                "markrandom",
+                format!("task-{window}").as_bytes(),
+            )
+            .unwrap();
+            let events = (0..1 + below(4))
+                .map(|sequence| {
+                    crate::stream::StreamEvent::new(
+                        sequence as i64,
+                        "delta",
+                        vec![sequence as u8; 256 + below(16 * 1024) as usize],
+                    )
+                    .unwrap()
+                })
+                .collect();
+            let mut transaction = authority.begin(7, 11).unwrap();
+            authority
+                .stream_append(&mut transaction, stream, 1, events)
+                .unwrap();
+            authority.commit(transaction).unwrap();
+        }
+        if below(3) == 0 {
+            let mut transaction = authority.begin(7, 11).unwrap();
+            authority
+                .stage_persistent_snapshot_pin(
+                    &mut transaction,
+                    format!("random-pin-{window}").as_bytes(),
+                )
+                .unwrap();
+            authority.commit(transaction).unwrap();
+        }
+        match below(3) {
+            0 => retire_window(&mut authority),
+            1 => {
+                authority.checkpoint_for_test().unwrap();
+            }
+            _ => {}
+        }
+    }
+    drop(authority);
+    AuthorityDatabase::open_with_vfs(Path::new("/data"), vfs).unwrap()
+}
+
+fn assert_batched_marks_equal_per_page_marks(seeds: std::ops::Range<u64>) {
+    let mut marked = 0;
+    for seed in seeds.clone() {
+        let authority = random_authority(seed);
+        let capture = authority
+            .online_gc_capture(test_budget().maximum_temporary_bytes)
+            .unwrap();
+        let mut roots = vec![capture.snapshot.authority_state_root];
+        roots.extend(capture.snapshot.pinned_roots.iter().copied().map(Some));
+        let blocks = authority.block_store_shared();
+        if seed % 2 == 1 {
+            blocks.set_cache_capacity_bytes(0).unwrap();
+        }
+        marked +=
+            assert_batched_mark_equals_per_page_mark(&blocks, &roots, &format!("seed {seed}"));
+    }
+    println!("mark_differential: seeds={seeds:?} marked_blocks={marked}");
+}
+
+/// The online mark's entity part (`mark_entity_graphs`) marks exactly what
+/// the per-page mark of engine f3102951 marks, with the same walked and
+/// skipped pages, on seeded authorities whose pages, blob manifests, chunks
+/// and stream segments are history-resident, loose or in the WAL, with
+/// persistent pins (C2 of the online-mark hotfix review).
+#[test]
+fn batched_marks_equal_per_page_marks_on_random_authorities() {
+    assert_batched_marks_equal_per_page_marks(0..40);
+}
+
+#[test]
+#[ignore]
+fn batched_marks_equal_per_page_marks_on_400_random_authorities() {
+    assert_batched_marks_equal_per_page_marks(0..400);
+}
+
+/// The same equality where every entity-reachable block is packed into
+/// shuffled payload segments, read through the location table and through
+/// the exact catalog path alone.
+#[test]
+fn batched_mark_equals_the_per_page_mark_over_packed_blocks() {
+    let (_vfs, database) = mark_cost_authority();
+    let guard = database.lock().unwrap();
+    let capture = guard
+        .online_gc_capture(test_budget().maximum_temporary_bytes)
+        .unwrap();
+    let mut roots = vec![capture.snapshot.authority_state_root];
+    roots.extend(capture.snapshot.pinned_roots.iter().copied().map(Some));
+    let blocks = guard.block_store_shared();
+    for located in [true, false] {
+        crate::block::set_catalog_locations_disabled_for_test(!located);
+        let marked = assert_batched_mark_equals_per_page_mark(
+            &blocks,
+            &roots,
+            &format!("located={located}"),
+        );
+        crate::block::set_catalog_locations_disabled_for_test(false);
+        assert!(marked > 100, "fixture: {marked} marked blocks");
+    }
+}
+
+fn process_kib(field: &str) -> u64 {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|status| {
+            status
+                .lines()
+                .find(|line| line.starts_with(field))
+                .and_then(|line| line.split_whitespace().nth(1))
+                .and_then(|value| value.parse().ok())
+        })
+        .unwrap_or(0)
+}
+
+fn process_io() -> BTreeMap<String, u64> {
+    std::fs::read_to_string("/proc/self/io")
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            Some((name.trim().to_owned(), value.trim().parse().ok()?))
+        })
+        .collect()
+}
+
+/// Builds the production-shape mark bench store (C3 of the online-mark hotfix
+/// review), run by hand on an isolated VM with `--ignored --nocapture`:
+/// `TOFU_DB_MARK_BENCH_DIR` (an empty directory on a real filesystem) gets
+/// an authority whose entity records, versioned documents and persistent pins
+/// are written over `TOFU_DB_MARK_BENCH_WINDOWS` WAL windows of
+/// `TOFU_DB_MARK_BENCH_RECORDS` records each (overwriting earlier keys), every
+/// window retired into indexed history as production's rotations do, so live
+/// pages are history-resident and the routing grows run by run.
+#[test]
+#[ignore]
+fn build_mark_bench_store() {
+    let Some(directory) = std::env::var_os("TOFU_DB_MARK_BENCH_DIR") else {
+        return;
+    };
+    let setting = |name: &str, default: u64| {
+        std::env::var(name)
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(default)
+    };
+    let windows = setting("TOFU_DB_MARK_BENCH_WINDOWS", 48);
+    let records = setting("TOFU_DB_MARK_BENCH_RECORDS", 20_000);
+    let directory = Path::new(&directory);
+    std::fs::create_dir_all(directory).unwrap();
+    let vfs: Arc<dyn Vfs> = Arc::new(crate::vfs::RealVfs);
+    let mut authority = AuthorityDatabase::initialize_with_vfs(directory, vfs).unwrap();
+    authority.engine_mut_for_test().attach_rotation_driver();
+    let mut state = 0x6d61_726b_6265_6e63_u64;
+    let key_space = (records * windows / 2).max(1);
+    let started = Instant::now();
+    for window in 0..windows {
+        let mut written = 0;
+        while written < records {
+            let mut transaction = authority.begin(7, 11).unwrap();
+            for _ in 0..(records - written).min(2_000) {
+                let index = splitmix64(&mut state) % key_space;
+                let key = EntityKey::new(7, 11, "markbench", &index.to_be_bytes()).unwrap();
+                let value = vec![window as u8; 64 + (splitmix64(&mut state) % 384) as usize];
+                authority.entity_put(&mut transaction, key, value).unwrap();
+                written += 1;
+            }
+            authority.commit(transaction).unwrap();
+        }
+        for document in 0..4_u64 {
+            let logical_key = format!("document-{window}-{document}");
+            let text: String = (0..16 * 1024_u64)
+                .map(|position| char::from(b'a' + ((position + window * 3 + document) % 26) as u8))
+                .collect();
+            let mut transaction = authority.begin(7, 11).unwrap();
+            crate::versioned_document::put(
+                &authority,
+                &mut transaction,
+                crate::versioned_document::PutRequest {
+                    key: EntityKey::new(7, 11, "markbenchdocs", logical_key.as_bytes()).unwrap(),
+                    namespace: "markbenchdocs".into(),
+                    logical_key,
+                    value_json: serde_json::to_vec(&text).unwrap(),
+                    expected_version: None,
+                    updated_at_ms: 1,
+                },
+            )
+            .unwrap();
+            authority.commit(transaction).unwrap();
+        }
+        if window % 8 == 0 {
+            let mut transaction = authority.begin(7, 11).unwrap();
+            authority
+                .stage_persistent_snapshot_pin(
+                    &mut transaction,
+                    format!("bench-{window}").as_bytes(),
+                )
+                .unwrap();
+            authority.commit(transaction).unwrap();
+        }
+        retire_window(&mut authority);
+    }
+    drop(authority);
+    println!(
+        "mark_bench_store: dir={} windows={windows} records_per_window={records} build_ms={}",
+        directory.display(),
+        started.elapsed().as_millis()
+    );
+}
+
+/// One arm of the C3/C4 measurement, run by hand on an isolated VM with
+/// `--ignored --nocapture`, each arm in its own process over its own copy of
+/// the bench store (`TOFU_DB_MARK_BENCH_DIR`): `TOFU_DB_MARK_BENCH_ARM=per-page`
+/// is engine f3102951's entity mark, `batched` is `mark_entity_graphs`.
+/// `TOFU_DB_MARK_BENCH_CACHE_BYTES` sets the block cache (production's
+/// routing is far larger than its cache; 0 admits nothing). The peak RSS is
+/// reset after the store opens and the location table is built, so the
+/// printed growth is the mark's own plus the list of marked ids both arms
+/// keep (`inserted_bytes`); the digest is BLAKE3 over the sorted distinct
+/// marked block ids.
+#[test]
+#[ignore]
+fn measure_mark_arm() {
+    let Some(directory) = std::env::var_os("TOFU_DB_MARK_BENCH_DIR") else {
+        return;
+    };
+    let arm = std::env::var("TOFU_DB_MARK_BENCH_ARM").unwrap_or_else(|_| "batched".to_owned());
+    let vfs: Arc<dyn Vfs> = Arc::new(crate::vfs::RealVfs);
+    let authority = AuthorityDatabase::open_with_vfs(Path::new(&directory), vfs).unwrap();
+    let blocks = authority.block_store_shared();
+    if let Some(bytes) = std::env::var("TOFU_DB_MARK_BENCH_CACHE_BYTES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+    {
+        blocks.set_cache_capacity_bytes(bytes).unwrap();
+    }
+    let capture = authority.online_gc_capture(u64::MAX).unwrap();
+    let mut roots = vec![capture.snapshot.authority_state_root];
+    roots.extend(capture.snapshot.pinned_roots.iter().copied().map(Some));
+    let reader = blocks.traversal_reader(|| Ok(())).unwrap();
+    std::fs::write("/proc/self/clear_refs", "5").unwrap();
+    let rss_before = process_kib("VmRSS:");
+    let io_before = process_io();
+    let inserted = RefCell::new(Vec::new());
+    let insert = |id: BlockId| -> io::Result<()> {
+        inserted.borrow_mut().push(id);
+        Ok(())
+    };
+    let started = Instant::now();
+    let walk = match arm.as_str() {
+        "per-page" => mark_entity_graphs_per_page(&roots, &reader, &insert),
+        "batched" => mark_entity_graphs(&roots, &reader, &|| Ok(()), &insert),
+        other => panic!("unknown arm {other}"),
+    }
+    .unwrap();
+    let elapsed = started.elapsed();
+    let io_after = process_io();
+    let peak = process_kib("VmHWM:");
+    let inserted_bytes = inserted.borrow().capacity() * std::mem::size_of::<BlockId>();
+    let mut live = inserted.into_inner();
+    live.sort_unstable();
+    live.dedup();
+    let mut digest = blake3::Hasher::new();
+    for id in &live {
+        digest.update(&id.0);
+    }
+    let delta = |name: &str| {
+        io_after
+            .get(name)
+            .copied()
+            .unwrap_or(0)
+            .saturating_sub(io_before.get(name).copied().unwrap_or(0))
+    };
+    println!(
+        "mark_arm: arm={arm} roots={} walked_pages={} skipped_pages={} live_blocks={} digest={} elapsed_ms={} \
+         rchar={} read_bytes={} syscr={} rss_before_kib={rss_before} peak_growth_kib={} inserted_bytes={inserted_bytes}",
+        roots.iter().flatten().count(),
+        walk.walked_pages,
+        walk.skipped_pages,
+        live.len(),
+        digest.finalize().to_hex(),
+        elapsed.as_millis(),
+        delta("rchar"),
+        delta("read_bytes"),
+        delta("syscr"),
+        peak.saturating_sub(rss_before),
+    );
 }

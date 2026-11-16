@@ -6,6 +6,7 @@ import { projectCoordinationGraph,
   type CoordinationGraphEdge, type CoordinationGraphNode, type CoordinationGraphOptions, type CoordinationGraphStatus } from './project-coordination-graph';
 import { t } from '../i18n';
 import { coordinationText } from './project-coordination-text';
+import { createDisclosureSummary } from '../ui';
 import { createCoordinationCanvas, type CoordinationCanvasState } from './project-coordination-canvas';
 import type { CoordinationWork } from './project-coordination';
 
@@ -83,7 +84,7 @@ export function createCoordinationBoard(
     tasksOnly: hooks.tasksOnly, filter: hooks.filter }));
   const topology = document.createElement('details'); topology.className = 'coordination-topology';
   topology.dataset.coordinationDisclosure = 'topology'; topology.open = false;
-  const summary = coordinationText(t('projectCoordination.dependencyGraph'), 'summary');
+  const summary = createDisclosureSummary(document, t('projectCoordination.dependencyGraph'));
   summary.dataset.coordinationFocus = 'topology'; topology.append(summary);
   let mounted = false;
   const mount = () => {
@@ -99,7 +100,7 @@ export function createCoordinationBoard(
   state.graphOpen = topology.open;
   root.append(topology);
   const coverage = document.createElement('details'); coverage.className = 'coordination-graph-coverage';
-  const title = document.createElement('summary'); title.textContent = t('projectCoordination.graph.coverage');
+  const title = createDisclosureSummary(document, t('projectCoordination.graph.coverage'));
   coverage.append(title, coordinationText(graphText(graph.source === 'assignments' ? 'assignmentCoverage' : 'workCoverage'), 'small'));
   if (graph.total !== null) coverage.append(coordinationText(t('projectCoordination.graph.progress', { completed: graph.completed, total: graph.total }), 'small'));
   if (graph.delivered !== null) coverage.append(coordinationText(t('projectCoordination.graph.delivery', { count: graph.delivered }), 'small'));

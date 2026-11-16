@@ -160,11 +160,11 @@ fn state(database: &AuthorityDatabase) -> Value {
             .unwrap()
             .unwrap(),
     );
-    let sync = parse(
+    let sync = crate::turn::without_sync_lineage(parse(
         sync_changes(database, &mut tx, CONVERSATION, 0, 1000, &mut || false)
             .unwrap()
             .unwrap(),
-    );
+    ));
     let header = parse(
         crate::conversation_header::get(
             database,

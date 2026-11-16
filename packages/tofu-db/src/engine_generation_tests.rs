@@ -74,7 +74,7 @@
             engine.commit(b"durable predecessor").unwrap();
             let snapshot = generation_snapshot(&mut engine);
             engine.commit(b"durable successor").unwrap();
-            engine.flush_dirty_control().unwrap();
+            engine.flush_dirty_control(ControlStaging::Staged).unwrap();
             let predecessor = crate::wal::active_log_path(Path::new("/data"), 1).unwrap();
             let successor = crate::wal::active_log_path(Path::new("/data"), 2).unwrap();
             drop(snapshot);
@@ -121,7 +121,7 @@
     fn generation_handover_successor_ack_and_completion_survive_every_io_fault() {
         let (seed, mut engine) = initialized_simulated_engine();
         engine.commit_transaction(b"one", &[b"old durable payload"]).unwrap();
-        engine.flush_dirty_control().unwrap();
+        engine.flush_dirty_control(ControlStaging::Staged).unwrap();
         std::mem::forget(engine);
         seed.crash().unwrap();
         let perform = |engine: &mut Engine, acknowledged: &mut bool| -> io::Result<()> {
@@ -131,7 +131,7 @@
             };
             engine.commit_transaction(b"two", &[b"new durable payload"])?;
             *acknowledged = true;
-            engine.flush_dirty_control()?;
+            engine.flush_dirty_control(ControlStaging::Staged)?;
             let outcome = encode_rotation_segments(&snapshot);
             engine.finish_rotation_checkpoint(snapshot, outcome)?;
             Ok(())

@@ -126,7 +126,9 @@ impl Engine {
             captured_state: self.state.clone(),
             control_dirty: self.control_dirty,
             control: Arc::clone(&self.control),
-            wal_cover: self.wal.publication_cover(Arc::clone(&self.vfs))?,
+            wal_cover: self
+                .wal
+                .publication_cover(Arc::clone(&self.vfs), "history compaction")?,
             restart_required: Arc::clone(&self.restart_required),
             completed: false,
             lazy_routing_retirement: true,
@@ -212,10 +214,13 @@ impl Engine {
         }
         let outcome = match outcome {
             Ok(outcome) => outcome,
+            // The unlocked CONTROL publication may have partially landed and
+            // latches. One abandoned before any CONTROL write did not: the
+            // promoted segments are orphans the segment lane reclaims, and the
+            // next slice retires again (docs/STORAGE_OPERATIONS.md, "A slow WAL
+            // sync during a background publication").
             Err(error) => {
-                // The unlocked CONTROL publication may have partially landed.
-                self.restart_required
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                self.latch_unless_abandoned(&error);
                 return Err(error);
             }
         };

@@ -2,7 +2,7 @@
  * composer quotes and authoritative branch creation remain injected ports.
  * Entry points: createSelectionPopup, renderReplyQuotePreviews.
  */
-import { createButton, createIconButton } from './ui';
+import { createButton, createDisclosureSummary, createIconButton } from './ui';
 import { iconHtml } from './icons';
 import { createLifecycleScope } from './lifecycle';
 import type { Translator } from './i18n';
@@ -221,7 +221,7 @@ export function renderReplyQuotePreviews(container: HTMLElement, quotes: readonl
     const details = document.createElement('details');
     details.dataset.quote = text;
     details.open = expanded.has(text);
-    const summary = document.createElement('summary');
+    const summary = createDisclosureSummary(document);
     const label = document.createElement('span');
     label.className = 'reply-quote-preview-label';
     label.textContent = t('selection.quoted');

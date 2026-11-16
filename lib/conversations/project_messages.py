@@ -1,7 +1,7 @@
 """Project conversation messages: durable context, not an execution scheduler.
 
 Entry points execute/inject/confirm/page_view/validate_sender/lead_role use portable record
-CAS and owned metadata. No private transcript reads, daemon, automatic model wake, permission
+writes and owned metadata. No private transcript reads, daemon, automatic model wake, permission
 grants or second task lifecycle. Originals stay immutable; consideration is
 explicit. `ProjectMailbox` keeps append-only segmented history without a
 lifetime count through generic `record.get`/`record.put` point operations only;
@@ -11,6 +11,7 @@ leads (`crossProject` in the contract, docs/ROUTER.md R13) and from the bound
 Watchdog (R7).
 """
 from __future__ import annotations
+import bisect
 import copy
 from html import escape
 import hashlib
@@ -37,6 +38,10 @@ INPUT_STATES = CONTRACT['$defs']['inputState']['enum']
 DECISIONS = TOOLS[2]['function']['parameters']['properties']['decision']['enum']
 CROSS_PROJECT = CONTRACT['crossProject']
 UNCERTAIN = 'Concurrent/uncertain mailbox update; query the same message identity before retrying'
+# What an arrival holds once its ticket is given up: no original ever lands there.
+VOID = {'void': True}
+# record.list's per-page bound on every authority (SQL and native); the offline conversion pages by it.
+RECORD_LIST_PAGE = 1000
 NOT_A_LEAD_SENDER = ('Only project leads (the Global Router and Project Routers) message other projects; '
                      'a Worker or other conversation messages its own project and relays through its lead')
 NOT_A_LEAD_TARGET = ('Across projects only another project\u2019s lead is addressable (list them with '
@@ -133,6 +138,15 @@ def _integers(value, *names) -> bool:
         isinstance(value.get(name), int) and not isinstance(value.get(name), bool) for name in names)
 
 
+def _claim(locator) -> tuple[str, int]:
+    """A message locator: ('ticket', n) for a send, ('segment', n) for a head-era append."""
+    if isinstance(locator, dict) and len(locator) == 1:
+        claimed = next(iter(locator))
+        if claimed in ('ticket', 'segment') and _integers(locator, claimed) and locator[claimed] >= (claimed == 'ticket'):
+            return claimed, locator[claimed]
+    raise StorageError('database_integrity', 'Invalid project message locator')
+
+
 def _valid_messages(messages) -> bool:
     if not isinstance(messages, list):
         return False
@@ -154,11 +168,16 @@ def _valid_messages(messages) -> bool:
 class ProjectMailbox:
     """Append-only, segmented history of one original owner/project/recipient.
 
-    The head record is the only append CAS: it holds the open segment and the
-    sealed-segment count. Each append claims its message locator first; sealing
-    a full segment writes its copy, sender pointers and pending index before
-    the head advances, so a sealed original stays point-readable at a stable
-    position. Reads never write.
+    A send never writes the head. It takes a ticket (the version an
+    unconditional write of the tickets record commits; each authority
+    serializes writes to one record, so senders never conflict), claims its
+    message locator and creates its immutable original at that ticket. The
+    recipient's acquisition and receipts absorb arrivals into the head's open
+    segment in ticket order, so the head has one writer. Sealing a full segment
+    writes its copy, sender pointers and pending index before the head
+    advances, so a sealed original stays point-readable at a stable position.
+    Readers place arrivals not yet absorbed after the absorbed history, in
+    ticket order, and never write.
     """
     def __init__(self, owner: int, project: str, recipient: str, *, client=None):
         require_user_id(owner, context='project mailbox')
@@ -182,9 +201,26 @@ class ProjectMailbox:
         return copy.deepcopy(row['value']), int(row['version'])
 
     def _put(self, key: str, value: dict, version: int):
-        self.client(write=True).command('record.put', {
-            'namespace': CONTRACT['namespace'], 'key': key,
-            'value': value, 'expected_version': version}, 'project-message:' + uuid.uuid4().hex)
+        """Write at ``version``; return the version committed when the receipt names it.
+
+        A conflict whose record already holds exactly ``value`` is this write's
+        outcome, committed by another writer of the same state (two recipient
+        passes absorbing the same arrivals): it succeeds at the version read,
+        with no second write. Any other conflict is raised.
+        """
+        try:
+            receipt = self.client(write=True).command('record.put', {
+                'namespace': CONTRACT['namespace'], 'key': key,
+                'value': value, 'expected_version': version}, 'project-message:' + uuid.uuid4().hex)
+        except StorageError as exc:
+            if exc.code != 'database_conflict':
+                raise
+            current, current_version = self._get(key)
+            if current != value:
+                raise
+            return current_version
+        written = receipt.get('version') if isinstance(receipt, dict) else None
+        return written if isinstance(written, int) and not isinstance(written, bool) else None
 
     def _create(self, key: str, value: dict):
         """Write one immutable index row; an identical earlier write is success."""
@@ -199,22 +235,78 @@ class ProjectMailbox:
             if current != value:
                 raise StorageError('database_integrity', 'Project mailbox index changed') from exc
 
+    def _settle(self, key: str, value: dict) -> dict:
+        """Create ``key`` with ``value`` once; return what it holds afterwards, ours or an earlier write."""
+        for _ in range(LIMITS['casAttempts']):
+            try:
+                self._put(key, value, 0)
+                return value
+            except StorageError as exc:
+                if exc.code != 'database_conflict' and not exc.retryable:
+                    raise
+            current, _ = self._get(key)
+            if current is not None:
+                return current
+        raise ProjectMessageError(UNCERTAIN)
+
     def head(self):
-        """Open segment, sealed count and the unlocated legacy prefix.
+        """The absorbed history: open segment, sealed count and ticket state, normalized.
 
         A head without ``sealed`` is a legacy single-record mailbox: open
-        segment 0 whose originals have no locators until it is sealed.
+        segment 0 whose originals have no locators until it is sealed. A head
+        with ``messages`` predates tickets, so its tickets start after its
+        originals, or was converted back to that form for an earlier version.
+        Writers that predate tickets keep head fields they do not know, so a
+        converted head resumes the ``tickets`` and ``voided`` it carries: the
+        next ticket lands after every original it holds, earlier writers'
+        appends included. The recipient's next head write stores the ticketed
+        form (open segment under ``open``), which writers that predate tickets
+        refuse.
         """
         value, version = self._get(self.key)
         if value is None:
-            return {'binding': self.binding, 'messages': [], 'sealed': 0, 'unlocated': 0}, 0
-        if 'sealed' not in value and isinstance(value.get('messages'), list):
-            value.update(sealed=0, unlocated=len(value['messages']))
-        if (value.get('binding') != self.binding or not _integers(value, 'sealed', 'unlocated')
-                or value['sealed'] < 0 or not _valid_messages(value.get('messages'))
-                or len(value['messages']) > self.size or not 0 <= value['unlocated'] <= len(value['messages'])):
+            value = {'binding': self.binding, 'messages': [], 'sealed': 0, 'unlocated': 0}
+        if 'open' in value:
+            head = {key: value.get(key) for key in
+                    ('binding', 'sealed', 'unlocated', 'ticketBase', 'tickets', 'voided', 'stalled')}
+            head.update(messages=value['open'], ticketed=True)
+        else:
+            messages = value.get('messages')
+            if 'sealed' not in value and isinstance(messages, list):
+                value = {**value, 'sealed': 0, 'unlocated': len(messages)}
+            head = {'binding': value.get('binding'), 'messages': messages, 'sealed': value.get('sealed'),
+                    'unlocated': value.get('unlocated'), 'ticketBase': None, 'tickets': value.get('tickets', 0),
+                    'voided': value.get('voided', []), 'stalled': None, 'ticketed': False}
+            if _integers(head, 'sealed', 'tickets') and isinstance(messages, list) and isinstance(head['voided'], list):
+                head['ticketBase'] = (head['sealed'] * self.size + len(messages)
+                                      - head['tickets'] + len(head['voided']))
+        if not self._valid_head(head):
             raise StorageError('database_integrity', 'Invalid project mailbox')
-        return value, version
+        return head, version
+
+    def _valid_head(self, head) -> bool:
+        voided, stalled = head['voided'], head['stalled']
+        return (head['binding'] == self.binding
+                and _integers(head, 'sealed', 'unlocated', 'ticketBase', 'tickets')
+                and min(head['sealed'], head['ticketBase'], head['tickets']) >= 0
+                and _valid_messages(head['messages']) and len(head['messages']) <= self.size
+                and 0 <= head['unlocated'] <= len(head['messages'])
+                and isinstance(voided, list) and all(type(ticket) is int for ticket in voided)
+                and voided == sorted(set(voided)) and all(1 <= ticket <= head['tickets'] for ticket in voided)
+                and (stalled is None or type(stalled) is int and stalled == head['tickets'] + 1)
+                and head['sealed'] * self.size + len(head['messages'])
+                == head['ticketBase'] + head['tickets'] - len(voided))
+
+    def _stored(self, head) -> dict:
+        """The ticketed head record; writers that predate tickets find no ``messages`` and refuse it."""
+        return {'binding': self.binding, 'open': head['messages'], 'sealed': head['sealed'],
+                'unlocated': head['unlocated'], 'ticketBase': head['ticketBase'], 'tickets': head['tickets'],
+                'voided': head['voided'], 'stalled': head['stalled']}
+
+    @staticmethod
+    def _position(head, ticket: int) -> int:
+        """The stable position of an absorbed ticket that holds an original."""
+        return head['ticketBase'] + ticket - 1 - bisect.bisect_left(head['voided'], ticket)
 
     def _segment(self, number: int):
         value, version = self._get(self._key('segment', segment=number))
@@ -227,51 +319,89 @@ class ProjectMailbox:
             raise StorageError('database_integrity', 'Invalid project mailbox segment')
         return value, version
 
-    def _sealed_groups(self, head, ids) -> dict[int, set]:
-        # Callers read the head first: an original it no longer holds was sealed
-        # with a locator written before that seal's head CAS.
-        groups = {}
-        for message_id in ids if head['sealed'] else ():
+    def _where(self, head, ids) -> dict[str, tuple[str, int]]:
+        """Where each original outside the open segment lives: ('segment', n) or ('arrival', ticket).
+
+        Callers read the head first and search its open segment themselves. A
+        locator naming nothing committed (a crashed head-era append, a voided
+        ticket) leaves its ID absent.
+        """
+        where = {}
+        for message_id in ids:
             if not _is_message_id(message_id):
                 continue
             locator, _ = self._get(self._key('message', message=message_id))
             if locator is None:
                 continue
-            if not _integers(locator, 'segment'):
-                raise StorageError('database_integrity', 'Invalid project message locator')
-            if locator['segment'] < head['sealed']:
-                groups.setdefault(locator['segment'], set()).add(message_id)
-        return groups
+            claimed, number = _claim(locator)
+            if claimed == 'segment':
+                if number < head['sealed']:
+                    where[message_id] = ('segment', number)
+            elif number > head['tickets']:
+                where[message_id] = ('arrival', number)
+            else:
+                index = bisect.bisect_left(head['voided'], number)
+                if index == len(head['voided']) or head['voided'][index] != number:
+                    position = self._position(head, number)
+                    if position < head['sealed'] * self.size:
+                        where[message_id] = ('segment', position // self.size)
+        return where
 
-    def locate(self, head, ids) -> dict[str, tuple[int, dict]]:
+    def locate(self, head, ids, tail=None) -> dict[str, tuple[int, dict]]:
         """Exact originals with their stable positions, consistent with ``head``.
 
-        A locator left by an append that never committed names a segment that
-        does not hold its ID; that ID is simply absent.
+        Arrivals not yet absorbed take the positions after the absorbed history
+        in ticket order (``tail``, read when one is asked for).
         """
         base = head['sealed'] * self.size
         found = {m['id']: (base + i, m) for i, m in enumerate(head['messages']) if m['id'] in ids}
-        for number, group in sorted(self._sealed_groups(head, set(ids) - found.keys()).items()):
+        where = self._where(head, set(ids) - found.keys())
+        groups = {}
+        for message_id, (claimed, number) in where.items():
+            if claimed == 'segment':
+                groups.setdefault(number, set()).add(message_id)
+        for number, group in sorted(groups.items()):
             for i, m in enumerate(self._segment(number)[0]['messages']):
                 if m['id'] in group:
                     found[m['id']] = (number * self.size + i, m)
+        arriving = {message_id for message_id, (claimed, _) in where.items() if claimed == 'arrival'}
+        if arriving:
+            start = base + len(head['messages'])
+            for i, m in enumerate(self._tail(head) if tail is None else tail):
+                if m['id'] in arriving:
+                    found[m['id']] = (start + i, m)
         return found
 
     def get(self, message_id: str):
-        head, _ = self.head()
-        found = self.locate(head, {message_id}).get(message_id)
-        return found[1] if found else None
+        return self.find({message_id}).get(message_id)
 
     def find(self, ids) -> dict[str, dict]:
+        """Exact originals by ID; an arrival not yet absorbed is read alone, without a position."""
         head, _ = self.head()
-        return {message_id: row for message_id, (_, row) in self.locate(head, set(ids)).items()}
+        ids = set(ids)
+        found = {m['id']: m for m in head['messages'] if m['id'] in ids}
+        groups = {}
+        for message_id, (claimed, number) in self._where(head, ids - found.keys()).items():
+            if claimed == 'segment':
+                groups.setdefault(number, set()).add(message_id)
+                continue
+            arrival = self._arrival(number)
+            if arrival is not None and arrival != VOID and arrival['id'] == message_id:
+                found[message_id] = arrival
+        for number, group in sorted(groups.items()):
+            for m in self._segment(number)[0]['messages']:
+                if m['id'] in group:
+                    found[m['id']] = m
+        return found
 
-    def read(self, start: int = 0, end: int | None = None, head=None) -> list[dict]:
+    def read(self, start: int = 0, end: int | None = None, head=None, tail=None) -> list[dict]:
         """Originals at stable positions ``[start, end)`` in submission order."""
         if head is None:
             head, _ = self.head()
+        if tail is None:
+            tail = self._tail(head)
         sealed_end = head['sealed'] * self.size
-        total = sealed_end + len(head['messages'])
+        total = sealed_end + len(head['messages']) + len(tail)
         end = total if end is None else min(end, total)
         rows, position = [], max(0, start)
         while position < min(end, sealed_end):
@@ -280,7 +410,7 @@ class ProjectMailbox:
             rows += self._segment(number)[0]['messages'][offset:stop - number * self.size]
             position = stop
         if end > sealed_end:
-            rows += head['messages'][max(position, sealed_end) - sealed_end:end - sealed_end]
+            rows += (head['messages'] + tail)[max(position, sealed_end) - sealed_end:end - sealed_end]
         return rows
 
     def page(self, before_id: str = '', sender: str = '') -> dict:
@@ -289,25 +419,26 @@ class ProjectMailbox:
         ``total`` counts every matching original older than the cursor.
         """
         head, revision = self.head()
+        tail = self._tail(head)
         if sender:
-            rows, total = self._sender_page(head, before_id, sender)
+            rows, total = self._sender_page(head, tail, before_id, sender)
         else:
-            total = (self._cursor(head, before_id, '') if before_id
-                     else head['sealed'] * self.size + len(head['messages']))
-            rows = self.read(max(0, total - PAGE_MESSAGES), total, head)
+            total = (self._cursor(head, tail, before_id, '') if before_id
+                     else head['sealed'] * self.size + len(head['messages']) + len(tail))
+            rows = self.read(max(0, total - PAGE_MESSAGES), total, head, tail)
         return {'messages': rows, 'total': total, 'revision': revision}
 
-    def _cursor(self, head, before_id: str, sender: str) -> int:
-        found = self.locate(head, {before_id}).get(before_id)
+    def _cursor(self, head, tail, before_id: str, sender: str) -> int:
+        found = self.locate(head, {before_id}, tail).get(before_id)
         if found is None or (sender and found[1]['sender'] != sender):
             raise ProjectMessageError('Pagination ID is not in this scoped mailbox')
         return found[0]
 
-    def _sender_page(self, head, before_id: str, sender: str):
+    def _sender_page(self, head, tail, before_id: str, sender: str):
         """One sender's newest page through its linked sealed segments, not a scan."""
         base = head['sealed'] * self.size
-        own = [(base + i, m) for i, m in enumerate(head['messages']) if m['sender'] == sender]
-        cursor = self._cursor(head, before_id, sender) if before_id else None
+        own = [(base + i, m) for i, m in enumerate(head['messages'] + tail) if m['sender'] == sender]
+        cursor = self._cursor(head, tail, before_id, sender) if before_id else None
         if cursor is not None and cursor < base:
             number = cursor // self.size
             segment = self._segment(number)[0]
@@ -414,39 +545,100 @@ class ProjectMailbox:
                     raise
         raise StorageError('database_conflict', 'Concurrent project mailbox pending index update')
 
-    def _claim(self, head, message_id: str):
-        """Point the ID's locator at the segment this append commits into.
+    def _drawn(self) -> int:
+        """Tickets drawn so far: the tickets record's version, 0 before the first send."""
+        return self._get(self._key('tickets'))[1]
 
-        The expected-version write doubles as the history-wide idempotency
-        check and returns the committed original when one exists. A locator is
-        replaced only when proven dangling; any writer that could still commit
-        under it holds a stale head and fails its CAS.
+    def _draw(self, message_id: str, after: int) -> int:
+        """A new ticket: the version an unconditional write of the tickets record commits.
+
+        The command ID is fixed per message and voided predecessor, so an
+        uncertain draw replays its ticket instead of drawing another.
         """
-        target = head['sealed'] + (1 if len(head['messages']) >= self.size else 0)
-        key = self._key('message', message=message_id)
-        version = 0
+        command = 'project-message-ticket:' + _digest(f'{self.key}:{message_id}:{after}')
         for _ in range(LIMITS['casAttempts']):
             try:
-                self._put(key, {'segment': target}, version)
-                return None
+                receipt = self.client(write=True).command('record.put', {
+                    'namespace': CONTRACT['namespace'], 'key': self._key('tickets'),
+                    'value': {'messageId': message_id}}, command)
+            except StorageError as exc:
+                if not exc.retryable:
+                    raise
+                continue
+            ticket = receipt.get('version') if isinstance(receipt, dict) else None
+            if not isinstance(ticket, int) or isinstance(ticket, bool) or ticket < 1:
+                raise StorageError('database_integrity', 'Invalid project mailbox ticket')
+            return ticket
+        raise ProjectMessageError(UNCERTAIN)
+
+    def _move_claim(self, key: str, ticket: int, version: int) -> bool:
+        """Point the message locator at ``ticket`` from ``version``; False when another attempt moved it."""
+        for _ in range(LIMITS['casAttempts']):
+            try:
+                self._put(key, {'ticket': ticket}, version)
+                return True
             except StorageError as exc:
                 if exc.code != 'database_conflict' and not exc.retryable:
                     raise
-            locator, version = self._get(key)
-            if locator is None:
-                continue
-            if not _integers(locator, 'segment'):
-                raise StorageError('database_integrity', 'Invalid project message locator')
-            if locator['segment'] == target:
-                return None
-            if locator['segment'] > target:
-                raise StorageError('database_conflict', 'A newer head revision claimed this message')
-            if locator['segment'] < head['sealed']:
-                committed = next((m for m in self._segment(locator['segment'])[0]['messages']
-                                  if m['id'] == message_id), None)
-                if committed is not None:
-                    return committed
-        raise StorageError('database_conflict', 'Concurrent project message locator update')
+            current, current_version = self._get(key)
+            if current == {'ticket': ticket}:
+                return True
+            if current_version != version:
+                return False
+        raise ProjectMessageError(UNCERTAIN)
+
+    def _arrival(self, ticket: int):
+        """The original at ``ticket``, VOID, or None while its sender has not written it."""
+        value, _ = self._get(self._key('arrival', ticket=ticket))
+        if value is not None and value != VOID and not _valid_messages([value]):
+            raise StorageError('database_integrity', 'Invalid project mailbox arrival')
+        return value
+
+    def _fill(self, ticket: int, value: dict) -> dict:
+        """Create the arrival at ``ticket`` once; return what it holds: an original or VOID."""
+        stored = self._settle(self._key('arrival', ticket=ticket), value)
+        if stored != VOID and not _valid_messages([stored]):
+            raise StorageError('database_integrity', 'Invalid project mailbox arrival')
+        return stored
+
+    def _tail(self, head) -> list[dict]:
+        """Originals drawn after the absorbed history, in ticket order.
+
+        Missing and void tickets are skipped, and so is a copy of an original the
+        history already holds (a retry of a head-era original made before its
+        locator existed).
+        """
+        rows, seen = [], {m['id'] for m in head['messages']}
+        for ticket in range(head['tickets'] + 1, self._drawn() + 1):
+            arrival = self._arrival(ticket)
+            if arrival is not None and arrival != VOID and arrival['id'] not in seen:
+                seen.add(arrival['id'])
+                rows.append(arrival)
+        return rows
+
+    def _locate_head_era(self, head):
+        """Give head-era originals without a locator theirs before the head is stored in ticketed form.
+
+        A retry of one of them that claimed a ticket first yields to it: the
+        original committed first, and absorption drops the copy (``_absorb_into``).
+        """
+        for m in head['messages'][:head['unlocated']]:
+            key = self._key('message', message=m['id'])
+            for _ in range(LIMITS['casAttempts']):
+                current, version = self._get(key)
+                if current == {'segment': head['sealed']}:
+                    break
+                if current is not None and _claim(current)[0] != 'ticket':
+                    raise StorageError('database_integrity', 'Project mailbox index changed')
+                try:
+                    self._put(key, {'segment': head['sealed']}, version)
+                    break
+                except StorageError as exc:
+                    if exc.code != 'database_conflict' and not exc.retryable:
+                        raise
+            else:
+                raise ProjectMessageError(UNCERTAIN)
+        head['unlocated'] = 0
 
     def _seal(self, head, revision: int):
         """Seal the full open segment; every write precedes the advancing head CAS."""
@@ -486,6 +678,129 @@ class ProjectMailbox:
         head['sealed'] = number + 1
         head['unlocated'] = max(0, head['unlocated'] - self.size)
 
+    def absorb(self):
+        """The recipient's write: absorb drawn arrivals into the history in ticket order.
+
+        Each head CAS takes at most the open segment's room, sealing a full
+        segment first. A missing original stops the pass and is remembered as
+        ``stalled``; the next pass that still finds it missing voids that
+        ticket, so absorption never waits for a sender (a live one draws again).
+        Returns the head and revision it ended with.
+        """
+        head, revision = self.head()
+        drawn, conflicts = self._drawn(), 0
+        while True:
+            outcome = self._absorb_into(head, revision, drawn)
+            if outcome is None:
+                return head, revision
+            try:
+                written = self._put(self.key, self._stored(head), revision)
+            except StorageError as exc:
+                if exc.code != 'database_conflict' and not exc.retryable:
+                    raise
+                conflicts += 1
+                if conflicts >= LIMITS['casAttempts']:
+                    raise ProjectMessageError(UNCERTAIN) from exc
+                head, revision = self.head()
+                continue
+            if written is None:
+                head, revision = self.head()
+            else:
+                head['ticketed'], revision = True, written
+            if outcome == 'stalled':
+                return head, revision
+
+    def convert_back(self) -> dict:
+        """Store this mailbox in the head-era form that writers before tickets read; offline only.
+
+        The application is stopped, so no sender draws or writes meanwhile.
+        Every drawn ticket is absorbed (one never written is voided), every
+        ``{ticket}`` claim is pointed at its original's segment (segment 0 when
+        its ticket holds no original: those writers prove it dangling and
+        replace it on retry), and the head is stored last under ``messages``
+        with every original located. It keeps ``tickets`` and ``voided``, which
+        those writers preserve, so this version resumes them (``head``).
+        Tickets and arrivals stay. Converting a converted mailbox, or one that
+        never took a ticket, writes nothing. Returns what this call changed.
+        """
+        before = self.head()[0]['tickets']
+        head, revision = self._absorb_drawn()
+        claims = self._claims_to_segments(head)
+        if head['ticketed']:
+            self._put(self.key, {'binding': self.binding, 'messages': head['messages'], 'sealed': head['sealed'],
+                                 'unlocated': head['unlocated'], 'ticketBase': head['ticketBase'],
+                                 'tickets': head['tickets'], 'voided': head['voided'], 'stalled': None}, revision)
+        return {'tickets': head['tickets'] - before, 'claims': claims, 'head': head['ticketed']}
+
+    def _absorb_drawn(self):
+        """Absorb every drawn ticket; with no sender live, a pass's stall is voided by the next pass."""
+        head, revision = self.absorb()
+        while head['tickets'] < self._drawn():
+            progress = head['tickets'], head['stalled']
+            head, revision = self.absorb()
+            if (head['tickets'], head['stalled']) == progress:
+                raise ProjectMessageError(UNCERTAIN)
+        return head, revision
+
+    def _claims_to_segments(self, head) -> int:
+        """Point each ``{ticket}`` claim of this mailbox at a segment; return how many moved."""
+        prefix, after, moved = self._key('message', message=''), '', 0
+        while True:
+            page = self.client().query('record.list', {'namespace': CONTRACT['namespace'], 'prefix': prefix,
+                                                       'after_key': after, 'limit': RECORD_LIST_PAGE})
+            if not isinstance(page, list) or len(page) > RECORD_LIST_PAGE:
+                raise StorageError('database_integrity', 'Invalid project mailbox claim page')
+            if not page:
+                return moved
+            for row in page:
+                key = row.get('key')
+                if not isinstance(key, str) or not key.startswith(prefix) or key <= after:
+                    raise StorageError('database_integrity', 'Invalid project mailbox claim page')
+                after = key
+                claimed, ticket = _claim(row.get('value'))
+                if claimed == 'ticket':
+                    segment = self._claimed_segment(head, key[len(prefix):], ticket)
+                    self._put(key, {'segment': segment}, row.get('version'))
+                    moved += 1
+
+    def _claimed_segment(self, head, message_id: str, ticket: int) -> int:
+        """The segment holding the original ``ticket`` carries for ``message_id``; 0 when it carries none."""
+        index = bisect.bisect_left(head['voided'], ticket)
+        if ticket > head['tickets'] or (index < len(head['voided']) and head['voided'][index] == ticket):
+            return 0
+        arrival = self._arrival(ticket)
+        if arrival is None or arrival == VOID or arrival['id'] != message_id:
+            return 0
+        return self._position(head, ticket) // self.size
+
+    def _absorb_into(self, head, revision: int, drawn: int):
+        """Absorb into ``head`` in place: None (nothing drawn), 'absorbed' or 'stalled'.
+
+        An original counts only at the ticket its locator claims and only once;
+        a ticket holding anything else is voided like one never written.
+        """
+        if head['tickets'] >= drawn:
+            return None
+        self._locate_head_era(head)
+        if len(head['messages']) >= self.size:
+            self._seal(head, revision)
+        ticket = head['tickets'] + 1
+        while ticket <= drawn and len(head['messages']) < self.size:
+            arrival = self._arrival(ticket)
+            if arrival is None:
+                if head['stalled'] != ticket:
+                    head['stalled'] = ticket
+                    return 'stalled'
+                arrival = self._fill(ticket, VOID)
+            if (arrival == VOID or any(m['id'] == arrival['id'] for m in head['messages'])
+                    or self._get(self._key('message', message=arrival['id']))[0] != {'ticket': ticket}):
+                head['voided'].append(ticket)
+            else:
+                head['messages'].append(arrival)
+            head['tickets'], head['stalled'] = ticket, None
+            ticket += 1
+        return 'absorbed'
+
     def pending(self, head, eligible, exclude):
         """Submitted, unconsidered originals of eligible senders, oldest first.
 
@@ -511,13 +826,14 @@ class ProjectMailbox:
                 yield sealed_end + i, m
 
     def _apply(self, ids: set, mutate) -> dict[str, dict]:
-        """CAS receipt changes onto exact originals in the head or their sealed segments."""
+        """CAS receipt changes onto exact originals, absorbing arrivals first (the recipient's write)."""
         for _ in range(LIMITS['casAttempts']):
-            head, revision = self.head()
+            head, revision = self.absorb()
             rows = [m for m in head['messages'] if m['id'] in ids]
             if [m for m in rows if mutate(m)]:
+                self._locate_head_era(head)
                 try:
-                    self._put(self.key, head, revision)
+                    self._put(self.key, self._stored(head), revision)
                 except StorageError as exc:
                     if exc.code != 'database_conflict' and not exc.retryable:
                         raise
@@ -526,7 +842,12 @@ class ProjectMailbox:
         else:
             raise ProjectMessageError(UNCERTAIN)
         result = {m['id']: m for m in rows}
-        for number, group in sorted(self._sealed_groups(head, ids - result.keys()).items()):
+        groups = {}
+        for message_id, (claimed, number) in self._where(head, ids - result.keys()).items():
+            if claimed == 'arrival':
+                raise ProjectMessageError(UNCERTAIN)  # behind a stalled ticket until a later pass
+            groups.setdefault(number, set()).add(message_id)
+        for number, group in sorted(groups.items()):
             result.update(self._apply_sealed(number, group, mutate))
         return result
 
@@ -551,8 +872,37 @@ class ProjectMailbox:
             return {m['id']: m for m in rows}
         raise ProjectMessageError(UNCERTAIN)
 
+    def _head_era_original(self, number: int, message_id: str):
+        """The original a head-era append committed under segment ``number``, or None once it never can.
+
+        A head that predates tickets may still take that append from a writer of
+        the earlier version; storing the head in ticketed form refuses them, so
+        the claim is then provably unfilled.
+        """
+        head, revision = self.head()
+        if number < head['sealed']:
+            return next((m for m in self._segment(number)[0]['messages'] if m['id'] == message_id), None)
+        found = next((m for m in head['messages'] if m['id'] == message_id), None)
+        if found is not None or head['ticketed']:
+            return found
+        self._locate_head_era(head)
+        try:
+            self._put(self.key, self._stored(head), revision)
+        except StorageError as exc:
+            if exc.code != 'database_conflict' and not exc.retryable:
+                raise
+            raise ProjectMessageError(UNCERTAIN) from exc
+        return None
+
     def submit(self, sender: str, args: dict, task_id: str, *, sender_project: str = ''):
-        """Append one original; ``sender_project`` marks a lead's cross-project message."""
+        """Append one original at a ticket of its own; the head is never written.
+
+        ``sender_project`` marks a lead's cross-project message. Idempotent by
+        message ID: a retry finds the locator its first attempt claimed and
+        returns the same original, completing the write the first attempt may
+        have lost. A claimed ticket found void (its sender was lost before
+        writing it) is replaced by a new ticket, so the original lands exactly once.
+        """
         text, key, kind = args.get('content'), args.get('idempotency_key'), args.get('kind', 'reference')
 
         if isinstance(text, str):
@@ -572,23 +922,36 @@ class ProjectMailbox:
             body['senderProject'] = sender_project
         message = {**body, 'id': message_id, 'state': 'submitted', 'revision': 1,
                    'senderTaskId': task_id, 'submittedAt': int(time.time() * 1000), 'decision': None}
+
+        def same(old):
+            if old['id'] != message_id:
+                raise StorageError('database_integrity', 'Project mailbox ticket holds another original')
+            if any(old.get(k) != v for k, v in body.items()):
+                raise ProjectMessageError('Idempotency key reused with changed message')
+            return old
+        locator_key = self._key('message', message=message_id)
+        voided = 0
         for _ in range(LIMITS['casAttempts']):
-            head, revision = self.head()
-            try:
-                old = next((m for m in head['messages'] if m['id'] == message_id), None)
-                old = old or self._claim(head, message_id)
-                if old is not None:
-                    if any(old.get(k) != v for k, v in body.items()):
-                        raise ProjectMessageError('Idempotency key reused with changed message')
-                    return old
-                if len(head['messages']) >= self.size:
-                    self._seal(head, revision)
-                head['messages'].append(message)
-                self._put(self.key, head, revision)
-                return message
-            except StorageError as exc:
-                if exc.code != 'database_conflict' and not exc.retryable:
-                    raise
+            locator, version = self._get(locator_key)
+            if locator is not None:
+                claimed, number = _claim(locator)
+                if claimed == 'segment':
+                    old = self._head_era_original(number, message_id)
+                    if old is not None:
+                        return same(old)
+                elif number != voided:
+                    stored = self._fill(number, message)
+                    if stored != VOID:
+                        return same(stored)
+                    voided = number
+            ticket = self._draw(message_id, voided)
+            if not self._move_claim(locator_key, ticket, version):
+                self._fill(ticket, VOID)  # never claimed: give it up so absorption never waits on it
+                continue
+            stored = self._fill(ticket, message)
+            if stored != VOID:
+                return same(stored)
+            voided = ticket
         raise ProjectMessageError(UNCERTAIN)
 
     def confirm(self, ids: list[str], task_id: str, round_num: int, *, turn_id='', attempt_id=''):
@@ -739,7 +1102,13 @@ def inject(task: dict, messages: list[dict], round_num: int):
     try:
         owner, recipient, project = identity(task)
         mailbox = ProjectMailbox(owner, project, recipient)
-        head, _ = mailbox.head()
+        try:
+            head, _ = mailbox.absorb()
+        except (StorageError, ProjectMessageError):
+            # Absorbing is the recipient's write; without it this round still
+            # offers what the history already holds, and the next one absorbs.
+            logger.warning('Project mailbox absorption deferred mailbox=%s', mailbox.key, exc_info=True)
+            head, _ = mailbox.head()
         sender_validity = {}
         def eligible(sender):
             if sender not in sender_validity:

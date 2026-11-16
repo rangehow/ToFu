@@ -12,10 +12,11 @@
  * `[data-deferred-tool-body]`) consumed by `../renderers/tool-blocks.ts`.
  */
 import type {
-  ToolCardChrome, ToolPresentationPorts, ToolPresenter, ToolPresenterContext, ToolSummary,
+  FreeText, ToolCardChrome, ToolPresentationPorts, ToolPresenter, ToolPresenterContext, ToolSummary,
   WorkDirectory, WorkRecord,
 } from './contracts';
 import { COORDINATION_TOOL_PRESENTERS } from './coordination';
+import { createToolCardEnrichment, type ToolCardEnrichment } from './enrichment';
 import { genericFieldsHtml } from './generic';
 import { chipHtml, debugHtml, escape } from './markup';
 import { readToolView, record, type ToolView } from './values';
@@ -38,15 +39,28 @@ export interface ToolCardPresentation {
   hasPresenter(round: unknown): boolean;
   /** A failed round's plain-language reason from its presenter, or '' for the generic one. */
   failureText(round: unknown): string;
+  /** Called when a card's late facts (a task title, a translation) settle; returns the unsubscribe. */
+  subscribe(listener: () => void): () => void;
+  /** Repaint subscribed cards after a setting they read changed (translation, debug mode). */
+  refresh(): void;
 }
 
-function createWorkDirectory(ports: ToolPresentationPorts): WorkDirectory {
+function createWorkDirectory(ports: ToolPresentationPorts, enrichment: ToolCardEnrichment): WorkDirectory {
   // Delegations name their assignments once; a page revisits the same few.
   const assignments = new Map<string, WorkRecord>();
-  const conversationTitle = (conversationId: string): string => (conversationId
-    ? ports.conversationTitle(conversationId)?.trim() ?? '' : '');
+  // The catalog holds only loaded pages of Worker conversations; an older one is looked up once.
+  // undefined while that lookup runs, so no card paints a placeholder it must retract.
+  const conversationTitle = (conversationId: string): string | undefined => {
+    if (!conversationId) return '';
+    const known = ports.conversationTitle(conversationId)?.trim();
+    if (known) return known;
+    const looked = enrichment.conversationTitle(conversationId);
+    if (!looked) return '';
+    return looked.settled ? looked.value : undefined;
+  };
   return {
     remember(assignmentId, work) {
+      if (!assignmentId) return;
       const known = assignments.get(assignmentId);
       assignments.set(assignmentId, {
         title: work.title || known?.title || '',
@@ -55,21 +69,34 @@ function createWorkDirectory(ports: ToolPresentationPorts): WorkDirectory {
       });
     },
     knows: (assignmentId) => assignments.has(assignmentId),
+    /**
+     * Every assignment of a Worker conversation (follow-ups included) is named
+     * by that conversation's title; an assignment this page never saw is looked
+     * up once, and its title is '' until the lookup settles.
+     */
     taskTitle(assignmentId, conversationId = '') {
       const known = assignments.get(assignmentId);
-      return known?.title
-        || conversationTitle(known?.conversationId || conversationId)
-        || ports.translate('toolCard.unnamedTask');
+      if (known?.title) return known.title;
+      let conversation = known?.conversationId || conversationId;
+      if (!conversation) {
+        const looked = enrichment.assignmentConversation(assignmentId);
+        if (looked && !looked.settled) return '';
+        conversation = looked?.value ?? '';
+      }
+      const title = conversationTitle(conversation);
+      return title === undefined ? '' : title || ports.translate('toolCard.unnamedTask');
     },
     acceptance: (assignmentId) => assignments.get(assignmentId)?.acceptance ?? [],
-    conversationTitle: (conversationId) => conversationTitle(conversationId)
-      || ports.translate('toolCard.unnamedConversation'),
+    conversationTitle(conversationId) {
+      const title = conversationTitle(conversationId);
+      return title === undefined ? '' : title || ports.translate('toolCard.unnamedConversation');
+    },
   };
 }
 
 function summaryHtml(title: string, summary: ToolSummary): string {
   return `<span class="ptool-coord-title">${escape(title)}</span>`
-    + (summary.text ? `<span class="ptool-coord-summary">${escape(summary.text)}</span>` : '')
+    + (summary.text ? `<span class="ptool-coord-sep" aria-hidden="true"> · </span><span class="ptool-coord-summary">${escape(summary.text)}</span>` : '')
     + (summary.chips ?? []).map(chipHtml).join('');
 }
 
@@ -91,8 +118,14 @@ function cardHtml(
 }
 
 export function createToolCardPresentation(ports: ToolPresentationPorts): ToolCardPresentation {
+  const enrichment = createToolCardEnrichment(ports);
+  const freeText = (source: string): FreeText => {
+    const translation = enrichment.translation(source);
+    if (translation?.settled && translation.value) return { shown: translation.value, original: source, pending: false };
+    return { shown: source, original: '', pending: Boolean(translation && !translation.settled) };
+  };
   const context: ToolPresenterContext = {
-    t: ports.translate, markdown: ports.markdown, work: createWorkDirectory(ports),
+    t: ports.translate, markdown: ports.markdown, work: createWorkDirectory(ports, enrichment), freeText,
   };
 
   function presenter(view: ToolView): ToolPresenter | null {
@@ -114,6 +147,7 @@ export function createToolCardPresentation(ports: ToolPresentationPorts): ToolCa
   }
 
   function debugSection(view: ToolView, found: ToolPresenter | null): string {
+    if (!ports.debugEnabled?.()) return '';
     return debugHtml(context.t('toolCard.debug.title'), found?.debug?.(view, context) ?? [],
       context.t('toolCard.debug.raw'), view.resultText);
   }
@@ -135,6 +169,8 @@ export function createToolCardPresentation(ports: ToolPresentationPorts): ToolCa
       const found = presenter(view);
       return found && FAILED.has(view.status) ? found.failure?.(view, context) ?? '' : '';
     },
+    subscribe: (listener) => enrichment.subscribe(listener),
+    refresh: () => enrichment.refresh(),
     renderCardHtml(round, chrome) {
       const view = readToolView(round);
       const found = presenter(view);

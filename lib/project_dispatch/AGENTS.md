@@ -231,7 +231,10 @@ index, each immutable admission once per process; the head's assignment count is
 its only freshness witness. It is display evidence, never admission input.
 `service.HistoryPreviews` lets a page reuse a result preview only for the exact
 Turn revision and status it read; the route keeps one page per owner/project.
-A build whose client disconnected stops before its next row (`HistoryBuildCancelled`).
+A build reads its rows' Turns, attempts and delivery workspaces kind by kind in one
+exchange each (`service._HistoryEvidence`), and `SegmentedDispatch.get_many` reads a
+point selection's documents together; every value is still a live read of that build.
+A build whose client disconnected stops before its next exchange or row (`HistoryBuildCancelled`).
 Page rows are the contract's `historyRow` request projection; exact
 commands/assignments remain point queries returning complete views. A page's
 dependency states are display evidence evaluated against that page's `snapshot`;

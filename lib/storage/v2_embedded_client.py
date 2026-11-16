@@ -68,6 +68,9 @@ class _EmbeddedSessionAdapter:
     def probe_liveness(self) -> bool:
         return not self._runtime.closed
 
+    def interrupt(self) -> None:
+        """An in-process execute cannot be woken; its owner stops retrying."""
+
     def request(
         self,
         operation: str,
@@ -121,6 +124,11 @@ class _EmbeddedSessionAdapter:
                 50,
             )
         return response
+
+    def request_many(self, requests, *, deadline_unix_ms: int) -> list[_EmbeddedResponse]:
+        """In-process calls have no round trip to share: each request runs in turn."""
+        return [self.request(operation, body, command_id=None, deadline_unix_ms=deadline_unix_ms)
+                for operation, body in requests]
 
     def close(self) -> None:
         # The supervisor owns the runtime lifecycle; the pool facade holds

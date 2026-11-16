@@ -7,6 +7,7 @@
  * in place from the authoritative response, and a successful accept nudges
  * the preview rebuild through the same path as the editor save. */
 import { apiFailure } from '../../api/errors';
+import { createDisclosureSummary } from '../../ui';
 import type {
   PaperDocumentsApi,
   PaperProposalEditV1,
@@ -86,8 +87,8 @@ function renderCardBody(
     const row = document.createElement('details');
     row.className = `paper-proposal-hunk paper-proposal-hunk-${edit.status}`;
     row.dataset.proposalIndex = String(edit.index);
-    const summary = document.createElement('summary');
-    summary.className = 'paper-proposal-hunk-summary';
+    const summary = createDisclosureSummary(document);
+    summary.classList.add('paper-proposal-hunk-summary');
     const index = document.createElement('span');
     index.className = 'paper-proposal-hunk-idx';
     index.textContent = String(edit.index + 1);

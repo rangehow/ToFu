@@ -9,7 +9,7 @@ from tofu_db._loopback import create_connection
 import threading
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from lib.log import get_logger
@@ -18,7 +18,8 @@ from lib.storage.errors import StorageError
 from lib.storage.frame_admission import FrameByteAdmission
 from lib.storage.commit_events import publish_committed_events, publish_committed_operation
 from lib.storage.protocol import (
-    PROTOCOL_VERSION, recv_frame, send_frame, validate_operation, wire_payload,
+    PROTOCOL_VERSION, PipelinedFrames, encode_frame, recv_frame, send_frame, validate_operation,
+    wire_payload,
 )
 from lib.storage.retry_log import retry_log_throttle
 from lib.storage.session_pool import SessionPool
@@ -35,6 +36,8 @@ _RETRYABLE_CODES = {'database_timeout', 'database_busy', 'database_unavailable'}
 # classified server error (read-pool acquisition timeout, interrupted query)
 # reaches the client instead of losing the race to an opaque local timeout.
 _SOCKET_GRACE_S = 1.0
+# A pipelined read whose answer is still to be decided (``query_many``).
+_UNANSWERED = object()
 # An idle keep-alive socket is reused only within this fraction of the
 # Sidecar's advertised idle timeout, so the server's idle close can never race
 # a request written into the socket (the storage.v2 pool keeps the same margin
@@ -87,6 +90,11 @@ class _SidecarSocket:
 
     def __init__(self, endpoint: tuple[str, int], timeout: float):
         self.sock = create_connection(endpoint, timeout=timeout)
+        # A pipelined train is one request ending in a short segment; Nagle
+        # plus delayed ACK would hold each train for ~40 ms, and the Sidecar's
+        # idle keep-alive timeout could reap the socket between two trains.
+        # storage.v2 sets the same option for the same reason (wire.py).
+        self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
     def probe_liveness(self) -> bool:
         """An idle reply socket must hold no bytes and no peer close."""
@@ -240,6 +248,7 @@ class StorageClient:
         deadline: float | None,
         command_id: str | None = None,
         priority: str = 'user',
+        cancellation=None,
     ) -> Any:
         operation = validate_operation(operation)
         timeout = self._timeout if deadline is None else max(0.001, float(deadline))
@@ -266,11 +275,16 @@ class StorageClient:
                 result = self._attempt(
                     kind, operation, payload, timeout=timeout,
                     command_id=command_id, priority=priority,
+                    cancellation=cancellation,
                 )
                 _record_rpc(kind, operation, started_at, 'success')
                 observe_storage_service(kind, operation, time.monotonic() - started_at)
                 return result
             except StorageError as exc:
+                if cancellation is not None and cancellation.cancelled:
+                    # The owner left: no replay of its interrupted read.
+                    _record_rpc(kind, operation, started_at, 'cancelled')
+                    raise
                 retry_classified = (
                     exc.retryable and exc.code in _RETRYABLE_CODES)
                 command_replay_safe = (
@@ -429,8 +443,112 @@ class StorageClient:
         operation: str,
         payload: Mapping[str, Any] | None = None,
         deadline: float | None = None,
+        *,
+        cancellation=None,
     ) -> Any:
-        return self._call('query', operation, payload, deadline=deadline)
+        return self._call('query', operation, payload, deadline=deadline,
+                          cancellation=cancellation)
+
+    def query_many(
+        self,
+        requests: Sequence[tuple[str, Mapping[str, Any] | None]],
+        deadline: float | None = None,
+    ) -> list[Any]:
+        """Reads answered in order over one pipelined exchange.
+
+        Element ``i`` is what ``query(*requests[i])`` returns, or the
+        ``StorageError`` it raises. The authority answers each read on its own,
+        exactly as a lone ``query``. A read answered with a classified transient
+        failure, or left unanswered because the exchange failed, is read again
+        through ``query`` and its whole replay policy.
+        """
+        requests = [(validate_operation(operation), payload) for operation, payload in requests]
+        outcomes: list[Any] = [_UNANSWERED] * len(requests)
+        if len(requests) > 1:
+            timeout = self._timeout if deadline is None else max(0.001, float(deadline))
+            started_at = time.monotonic()
+            for index, answer in enumerate(self._pipeline(requests, timeout=timeout)):
+                operation = requests[index][0]
+                if isinstance(answer, StorageError):
+                    if answer.retryable and answer.code in _RETRYABLE_CODES:
+                        continue
+                    _record_rpc('query', operation, started_at, 'error')
+                else:
+                    _record_rpc('query', operation, started_at, 'success')
+                    observe_storage_service('query', operation, time.monotonic() - started_at)
+                outcomes[index] = answer
+        for index, outcome in enumerate(outcomes):
+            if outcome is _UNANSWERED:
+                try:
+                    outcomes[index] = self.query(*requests[index], deadline=deadline)
+                except StorageError as error:
+                    outcomes[index] = error
+        return outcomes
+
+    def _pipeline(self, requests, *, timeout: float) -> list[Any]:
+        """Answers (result or classified ``StorageError``) of a prefix of ``requests``.
+
+        Each connection carries the requests that fit its send buffer, so a
+        send never waits on a sidecar that is itself waiting for its answers to
+        be read; every frame but a connection's last asks the sidecar to read
+        another one at once. A transport or framing failure ends the exchange:
+        the answers read so far are returned and the caller reads the rest again.
+        """
+        deadline_unix_ms = int((time.time() + timeout) * 1000)
+        messages = [{
+            'protocol': PROTOCOL_VERSION, 'request_id': uuid.uuid4().hex, 'auth': self._token,
+            'kind': 'query', 'operation': operation, 'payload': wire_payload(payload),
+            'deadline_unix_ms': deadline_unix_ms,
+        } for operation, payload in requests]
+        answers: list[Any] = []
+        try:
+            while len(answers) < len(messages):
+                with create_connection(self.endpoint, timeout=timeout) as sock:
+                    sock.settimeout(timeout + _SOCKET_GRACE_S)
+                    capacity = sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
+                    start, end, frames, size = len(answers), len(answers), [], 0
+                    while end < len(messages):
+                        frame = encode_frame({**messages[end], 'keep_alive': True})
+                        if frames and size + len(frame) > capacity:
+                            break
+                        frames.append(frame)
+                        size += len(frame)
+                        end += 1
+                    frames[-1] = encode_frame(messages[end - 1])
+                    sock.sendall(b''.join(frames))
+                    received = PipelinedFrames(sock)
+                    for message in messages[start:end]:
+                        answers.append(self._pipelined_answer(received, message['request_id']))
+                    if not received.drained:
+                        raise StorageError('database_protocol_error',
+                                           'Storage sent bytes after the pipelined responses')
+        except (StorageError, OSError, TimeoutError):
+            pass
+        return answers
+
+    def _pipelined_answer(self, received: PipelinedFrames, request_id: str) -> Any:
+        reservation = None
+
+        def admit_response_frame(size: int):
+            nonlocal reservation
+            reservation = self._response_frame_admission.reserve_frame(size)
+            self._response_frame_admission.observe_frame('response', size)
+            return reservation
+        try:
+            response = received.recv(before_payload=admit_response_frame)
+        finally:
+            if reservation is not None:
+                reservation.close()
+        error = response.get('error')
+        if (response.get('protocol') != PROTOCOL_VERSION or response.get('request_id') != request_id
+                or not response.get('ok') and not isinstance(error, Mapping)):
+            # An uncorrelated answer (a capacity rejection answers before it
+            # reads a frame) or a malformed one ends this exchange.
+            raise StorageError('database_protocol_error', 'Storage pipelined response correlation failed',
+                               operation_id=request_id)
+        if not response.get('ok'):
+            return StorageError.from_payload(error)
+        return response.get('result')
 
     def command(
         self,

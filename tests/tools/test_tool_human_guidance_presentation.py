@@ -361,9 +361,10 @@ const chatCard = document.querySelector('.hg-card');
 check('non_blocking_choice_is_an_interactive_chat_reply_card',
   chatCard?.dataset.hgReply === 'chat'
   && chatCard.dataset.gid === hostileId
-  && chatCard.dataset.hgQuote === '<Pick a "plan"> & go'
+  // The quote ends with the question id, which binds the chat reply to this question.
+  && chatCard.dataset.hgQuote === `<Pick a "plan"> & go\n\n[question ${hostileId}]`
   && chatChoiceHtml.includes(
-    'data-hg-quote="&lt;Pick a &quot;plan&quot;&gt; &amp; go"',
+    'data-hg-quote="&lt;Pick a &quot;plan&quot;&gt; &amp; go',
   )
   && chatCard.querySelector('.hg-badge').textContent === 'non-blocking-local'
   && chatCard.querySelector('.hg-reply-hint').textContent
@@ -406,7 +407,7 @@ check('non_blocking_free_text_quote_is_bounded',
   document.querySelector('textarea.hg-textarea[data-gid="chat-free"]') !== null
   && chatFreeHtml.includes('submitHumanGuidanceFreeText(this)')
   && chatFreeQuote.length === 4096
-  && chatFreeQuote.endsWith('…')
+  && chatFreeQuote.endsWith('…\n\n[question chat-free]')
   && !chatFreeQuote.includes('QUOTE_TAIL'));
 
 const chatBatchHtml = presentation.renderGuidanceHtml({
@@ -424,7 +425,7 @@ const chatBatchHtml = presentation.renderGuidanceHtml({
 }, { iconHtml: '' });
 document.body.innerHTML = chatBatchHtml;
 check('non_blocking_batch_quotes_numbered_questions_by_form_position',
-  document.querySelector('.hg-card').dataset.hgQuote === '1. Pick\n\n3. Explain'
+  document.querySelector('.hg-card').dataset.hgQuote === '1. Pick\n\n3. Explain\n\n[question chat-batch]'
   && document.querySelectorAll('.hg-batch-section').length === 3
   && chatBatchHtml.includes('submitBatchAnswers(this)'));
 

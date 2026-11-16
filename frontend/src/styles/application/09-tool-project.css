@@ -35,14 +35,6 @@
 .ptool-convmeta-block > summary:hover {
   background: var(--accent-subtle);
 }
-.ptool-convmeta-block > summary .ptool-text::after {
-  content: " ▸";
-  font-size: var(--font-size-xs);
-  opacity: 0.5;
-}
-.ptool-convmeta-block[open] > summary .ptool-text::after {
-  content: " ▾";
-}
 .ptool-convmeta-src {
   display: inline-flex;
   align-items: center;

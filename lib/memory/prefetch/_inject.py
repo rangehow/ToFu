@@ -13,12 +13,16 @@ _RELEVANT_MEMORIES_TAG = '<relevant_memories>'
 
 def _trust_line(memory: dict) -> str:
     """``- trust: <class> (<source>, <date>)`` from the lesson's stored provenance."""
-    from lib.memory.contracts import memory_trust_class
+    from lib.memory.contracts import lesson_trust_class
     provenance = memory.get('provenance') or {}
     source = str(provenance.get('source_class') or '')
-    trust = memory_trust_class(memory.get('status'), source,
-                               provenance.get('edited_source_class'))
+    trust = lesson_trust_class(memory)
     detail = source.replace('_', ' ') if source else 'unrecorded source'
+    if provenance.get('verified_by'):
+        detail += ', confirmed by an accepted result'
+    repeats = len(memory.get('recurrences') or {})
+    if repeats:
+        detail += f', mistake repeated {repeats}x'
     at = str(provenance.get('at') or '')[:10]
     return f'- trust: {trust} ({detail}{", " + at if at else ""})\n'
 

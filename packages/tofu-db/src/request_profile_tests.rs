@@ -457,3 +457,57 @@ fn sampled_requests_total_the_phases_of_their_holds() {
     });
     drop(guard);
 }
+
+#[test]
+fn commit_shapes_belong_to_the_hold_that_noted_them() {
+    use crate::entity::EntityCommitShape;
+    let oversized = EntityCommitShape {
+        writes: 3,
+        delta_bytes: 400,
+        retired_ranges: false,
+        mounted_ranges: true,
+        fits_overlay_envelope: false,
+    };
+    let empty = EntityCommitShape {
+        writes: 0,
+        delta_bytes: 4,
+        retired_ranges: false,
+        mounted_ranges: false,
+        fits_overlay_envelope: true,
+    };
+    note_entity_commit(oversized, false);
+    note_engine_commit(10, None);
+    let first = begin_hold().unwrap();
+    assert_eq!(
+        finish_hold(first, 1, false).commits,
+        HoldCommits::default(),
+        "commits noted outside a hold belong to no hold"
+    );
+    let second = begin_hold().unwrap();
+    note_entity_commit(oversized, false);
+    note_entity_commit(empty, true);
+    note_engine_commit(5_000, Some(3));
+    note_engine_commit(7, None);
+    assert_eq!(
+        finish_hold(second, 1, false).commits,
+        HoldCommits {
+            entity_commits: 2,
+            tree_commits: 1,
+            writes: 3,
+            delta_bytes: 404,
+            retired_ranges: false,
+            mounted_ranges: true,
+            over_overlay_envelope: true,
+            engine_commits: 2,
+            carried_bytes: 5_007,
+            spills: 1,
+            spilled_blocks: 3
+        }
+    );
+    let third = begin_hold().unwrap();
+    assert_eq!(
+        finish_hold(third, 1, false).commits,
+        HoldCommits::default(),
+        "a new hold starts empty"
+    );
+}

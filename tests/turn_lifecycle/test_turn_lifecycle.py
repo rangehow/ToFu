@@ -667,9 +667,11 @@ def test_rejected_snapshot_evidence_is_shed_once_and_the_frame_commits(
         chat_sidecar, monkeypatch, caplog):
     """Snapshot evidence never mutates the Turn projection. A deterministic
     rejection of the frame (e.g. unencodable request content) must cost only
-    that evidence: one retry without the inline copy and with an explicitly
-    degraded carried row commits the projection patch and the sequence, so
-    the run is not killed by a debug frame."""
+    that evidence: one retry with an explicitly degraded carried row commits
+    the projection patch and the sequence, so the run is not killed by a debug
+    frame. The carried row is the evidence's only copy; the attempt event
+    names it (docs/STORAGE_EVENT_REPLAY.md, 'Diagnostic evidence is stored
+    once')."""
     import logging
     import threading
 
@@ -716,7 +718,7 @@ def test_rejected_snapshot_evidence_is_shed_once_and_the_frame_commits(
             'task_id': task_id, 'sequence': 1, 'event': snapshot,
         }) == 'carried'
 
-    assert fake.calls == [(True, False), (False, True)]
+    assert fake.calls == [(False, False), (False, True)]
     stored = real_client.query('event.list', {
         'task_id': task_id, 'after_sequence': 0, 'limit': 1})
     assert stored[0]['event']['type'] == 'messages_snapshot'

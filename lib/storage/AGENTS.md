@@ -39,6 +39,13 @@ adds explicit owner scope and bypasses generic command receipts/retries.
 Embedded control retains its existing runtime lifetime. None selects a backend
 or sends semantic writes into reserved checkpoint namespaces.
 
+`port.query_many` is the one entry for independent reads: both protocol clients
+pipeline them in one exchange (storage.v1 `keep_alive` frames read back to
+back, storage.v2 `request_many`), each answered exactly like a
+lone `query`; transient or unanswered reads go back through `query`. Contract:
+`docs/STORAGE.md`, "Commands, queries, and idempotency"; verify
+`tests/storage/test_storage_query_many.py` on all three authorities.
+
 ## Verification
 
 Run `tests/storage_authority_sql/test_storage_process_boundary.py` and focused client/supervision tests,

@@ -126,7 +126,11 @@ no new threshold or setting is introduced.
   `statvfs`/`disk_usage` and never walks a projection.
 - The monitor reclaims a yielded copy off the launch path: only this
   authority's exact namespace, only when no engine holds its `LOCK` flock, by
-  renaming it out of the namespace and removing it in the background. An
+  renaming it out of the namespace and removing it in the background. A
+  launch also records its owner in `<identity>.authority` beside the leaf;
+  another namespace in the same automatic base goes the same way once its
+  marked authority no longer exists
+  ([orphaned namespaces](STORAGE_OPERATIONS.md#orphaned-search-projection-namespaces)). An
   interrupted removal is found again by its exact retired name; foreign
   namespaces, symlinks and the serving directory are never touched. A launch's
   decision and the reclaim's check-and-rename are serialized.

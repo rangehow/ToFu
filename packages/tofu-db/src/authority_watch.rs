@@ -226,14 +226,21 @@ pub(crate) fn hold_phase_of_stage(stage: usize) -> Option<HoldPhase> {
         | STAGE_AUTHORITY_COMMIT_STREAM_PREPARE
         | profile::BLOB_CODEC_COMPRESS
         | profile::STREAM_SEGMENT_ENCODE
-        | profile::STREAM_SEGMENT_FRESH_PUBLISH => HoldPhase::Stage,
+        | profile::STREAM_SEGMENT_FRESH_PUBLISH
+        | STAGE_SPILL_REFERENCED_BLOCKS => HoldPhase::Stage,
         STAGE_AUTHORITY_COMMIT_VALIDATE_REBASE
         | STAGE_OVERLAY_VALIDATE_HEAD_VERSIONS
         | STAGE_OVERLAY_VALIDATE_ORIGINAL_BLIND_VERSIONS
         | STAGE_OVERLAY_VALIDATE_RANGE_WITNESSES
         | STAGE_OVERLAY_VALIDATE_PENDING_ONLY => HoldPhase::Validate,
-        STAGE_ENGINE_COMMIT | STAGE_BUILDER | STAGE_ENCODE | STAGE_CARRIED | STAGE_WAL
-        | STAGE_COMMIT_TAIL => HoldPhase::Journal,
+        STAGE_ENGINE_COMMIT
+        | STAGE_BUILDER
+        | STAGE_ENCODE
+        | STAGE_CARRIED
+        | STAGE_WAL
+        | STAGE_COMMIT_TAIL
+        | STAGE_WRITE_ADMISSION
+        | STAGE_WAL_INLINE_WRITE => HoldPhase::Journal,
         STAGE_WAL_BARRIER_WAIT | STAGE_WAL_BARRIER_SYNC | STAGE_CK_WAIT | profile::VFS_SYNC => {
             HoldPhase::Sync
         }
@@ -306,6 +313,8 @@ pub(crate) fn hold_phase_of_stage(stage: usize) -> Option<HoldPhase> {
         | STAGE_ROTATION_INSTALL_WAIT
         | STAGE_EMBEDDED_WAIT_RESPONSE
         | STAGE_EMBEDDED_QUEUE_WAIT
+        | STAGE_BACKGROUND_PACK_WAKE
+        | STAGE_LOOSE_SHARD_JOIN
         | profile::FIFO_WAIT
         | profile::MUTEX_WAIT
         | profile::BLOB_CODEC_WAIT => HoldPhase::Wait,
@@ -431,7 +440,8 @@ fn milliseconds(nanos: u64) -> String {
 /// `operation=<op> elapsed_ms=<n> phases=<phase>:<ms>,... stages=<stage>:<ms>,...`
 /// Both lists are exclusive milliseconds in descending order; `phases` sums to
 /// the elapsed time. A hold nested in another attributed hold on the same
-/// thread prints no lists: the outer hold's line carries its spans.
+/// thread prints no lists: the outer hold's line carries its spans. The
+/// commit fields (`push_commit_fields`) follow the lists.
 fn hold_message(
     operation: &str,
     elapsed: Duration,
@@ -461,10 +471,61 @@ fn hold_message(
         message.push_str(" stages=");
         message.push_str(&list(&mut report.stages.iter().copied()));
     }
+    push_commit_fields(&mut message, &report.commits);
     if report.invalid_spans != 0 {
         message.push_str(&format!(" invalid_spans={}", report.invalid_spans));
     }
     message
+}
+
+/// Entity commits: ` commit=<overlay|tree> [commits=<n>] writes=<n> delta_bytes=<n>
+/// [structural=<retired|mounted|retired,mounted>]`, where `tree` means a
+/// commit published a tree root instead of an overlay delta. Each tripped
+/// bound: ` oversized=<overlay_envelope|carried_payload|overlay_envelope,carried_payload>`
+/// (`overlay_delta_fits_envelope`, `MAX_CARRIED_PAYLOAD_BYTES`). Engine
+/// commits: ` carried_bytes=<n> [spilled_blocks=<n>]`. Sums over the hold.
+fn push_commit_fields(message: &mut String, commits: &crate::request_profile::HoldCommits) {
+    use std::fmt::Write;
+    if commits.entity_commits != 0 {
+        let path = if commits.tree_commits == 0 {
+            "overlay"
+        } else {
+            "tree"
+        };
+        let _ = write!(message, " commit={path}");
+        if commits.entity_commits > 1 {
+            let _ = write!(message, " commits={}", commits.entity_commits);
+        }
+        let _ = write!(
+            message,
+            " writes={} delta_bytes={}",
+            commits.writes, commits.delta_bytes
+        );
+        let structural = match (commits.retired_ranges, commits.mounted_ranges) {
+            (true, true) => "retired,mounted",
+            (true, false) => "retired",
+            (false, true) => "mounted",
+            (false, false) => "",
+        };
+        if !structural.is_empty() {
+            let _ = write!(message, " structural={structural}");
+        }
+    }
+    let oversized = match (commits.over_overlay_envelope, commits.spills != 0) {
+        (true, true) => "overlay_envelope,carried_payload",
+        (true, false) => "overlay_envelope",
+        (false, true) => "carried_payload",
+        (false, false) => "",
+    };
+    if !oversized.is_empty() {
+        let _ = write!(message, " oversized={oversized}");
+    }
+    if commits.engine_commits != 0 {
+        let _ = write!(message, " carried_bytes={}", commits.carried_bytes);
+        if commits.spills != 0 {
+            let _ = write!(message, " spilled_blocks={}", commits.spilled_blocks);
+        }
+    }
 }
 
 /// Probe cadence. Cheap enough that 40 probes fit the wedge threshold;
@@ -696,9 +757,10 @@ mod tests {
             assert_eq!(background_hold(name).unwrap() as u8, hold as u8);
         }
         eprintln!(
-            "authority_hold_resources: counters={} timer={}",
+            "authority_hold_resources: counters={} timer={} commits={}",
             std::mem::size_of_val(&HOLD_COUNTERS),
-            std::mem::size_of::<AuthorityHoldTimer<'_>>()
+            std::mem::size_of::<AuthorityHoldTimer<'_>>(),
+            std::mem::size_of::<crate::request_profile::HoldCommits>()
         );
     }
 
@@ -713,6 +775,7 @@ mod tests {
             phases,
             stages: vec![("get_unc_ok", 1_400_000_000), ("wal", 99_800_000)],
             invalid_spans: 0,
+            commits: Default::default(),
         };
         assert_eq!(hold_message("turn.event.record", Duration::from_millis(2_400), Some(&report)),
             "operation=turn.event.record elapsed_ms=2400 phases=read:1500.2,sync:400.0,other:400.0,\
@@ -725,9 +788,158 @@ mod tests {
             phases: [0; HOLD_PHASE_NAMES.len()],
             stages: Vec::new(),
             invalid_spans: 2,
+            commits: Default::default(),
         };
         assert!(hold_message("x", Duration::from_secs(1), Some(&crossing))
             .ends_with(" invalid_spans=2"));
+    }
+
+    /// One attributed hold around one real commit, as the dispatch hold wraps a
+    /// command's commit; returns the line the hold prints once it is slow.
+    fn committed_hold_line(
+        database: &mut AuthorityDatabase,
+        build: impl FnOnce(&AuthorityDatabase, &mut crate::authority::AuthorityTransaction),
+    ) -> String {
+        let mut transaction = database.begin(7, 11).unwrap();
+        build(database, &mut transaction);
+        let token = crate::request_profile::begin_hold().unwrap();
+        database.commit(transaction).unwrap();
+        let report = crate::request_profile::finish_hold(token, 1_000_000_000, true);
+        hold_message("spec", Duration::from_secs(1), Some(&report))
+    }
+
+    fn hold_field<'a>(line: &'a str, name: &str) -> Option<&'a str> {
+        line.split(' ')
+            .find_map(|token| token.strip_prefix(name)?.strip_prefix('='))
+    }
+
+    fn hold_stage_names(line: &str) -> Vec<&str> {
+        hold_field(line, "stages").map_or_else(Vec::new, |stages| {
+            stages
+                .split(',')
+                .filter_map(|stage| stage.split_once(':').map(|(name, _)| name))
+                .collect()
+        })
+    }
+
+    #[test]
+    fn slow_hold_lines_name_the_commit_path_and_what_the_engine_carried_or_spilled() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        database.set_write_overlay_for_test(true);
+        let key = |index: usize| {
+            crate::entity::EntityKey::new(7, 11, "hold_shape", format!("row-{index:06}").as_bytes())
+                .unwrap()
+        };
+        let put_bytes = crate::entity::overlay_write_bytes(key(0).encoded().len(), Some(100));
+
+        let overlay = committed_hold_line(&mut database, |db, tx| {
+            for index in 0..3 {
+                db.entity_put(tx, key(index), vec![1; 100]).unwrap();
+            }
+        });
+        let delta = (4 + 3 * put_bytes).to_string();
+        assert_eq!(hold_field(&overlay, "commit"), Some("overlay"), "{overlay}");
+        assert_eq!(hold_field(&overlay, "writes"), Some("3"), "{overlay}");
+        assert_eq!(
+            hold_field(&overlay, "delta_bytes"),
+            Some(delta.as_str()),
+            "{overlay}"
+        );
+        assert_eq!(hold_field(&overlay, "structural"), None, "{overlay}");
+        assert_eq!(hold_field(&overlay, "oversized"), None, "{overlay}");
+        assert!(hold_field(&overlay, "carried_bytes").is_some(), "{overlay}");
+        assert_eq!(hold_field(&overlay, "spilled_blocks"), None, "{overlay}");
+        assert!(
+            hold_stage_names(&overlay).contains(&"write_admission"),
+            "{overlay}"
+        );
+
+        // More delta than the whole family inline bound can carry.
+        let rows = crate::transaction::MAX_INLINE_BYTES / put_bytes + 1;
+        let oversized = committed_hold_line(&mut database, |db, tx| {
+            for index in 0..rows {
+                db.entity_put(tx, key(index), vec![2; 100]).unwrap();
+            }
+        });
+        let (writes, delta) = (rows.to_string(), (4 + rows * put_bytes).to_string());
+        assert_eq!(
+            hold_field(&oversized, "commit"),
+            Some("tree"),
+            "{oversized}"
+        );
+        assert_eq!(
+            hold_field(&oversized, "writes"),
+            Some(writes.as_str()),
+            "{oversized}"
+        );
+        assert_eq!(
+            hold_field(&oversized, "delta_bytes"),
+            Some(delta.as_str()),
+            "{oversized}"
+        );
+        assert_eq!(
+            hold_field(&oversized, "oversized"),
+            Some("overlay_envelope"),
+            "{oversized}"
+        );
+        assert_eq!(hold_field(&oversized, "structural"), None, "{oversized}");
+
+        let structural = committed_hold_line(&mut database, |db, tx| {
+            db.entity_retire_range(tx, &key(0), &key(10)).unwrap();
+            db.entity_put(tx, key(rows), vec![3; 100]).unwrap();
+        });
+        assert_eq!(
+            hold_field(&structural, "commit"),
+            Some("tree"),
+            "{structural}"
+        );
+        assert_eq!(
+            hold_field(&structural, "structural"),
+            Some("retired"),
+            "{structural}"
+        );
+        assert_eq!(hold_field(&structural, "writes"), Some("1"), "{structural}");
+        assert_eq!(hold_field(&structural, "oversized"), None, "{structural}");
+
+        // Pending blocks past the WAL-carried bound make the commit spill them.
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let blob: Vec<u8> = (0..crate::transaction::MAX_CARRIED_PAYLOAD_BYTES + (256 << 10))
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state as u8
+            })
+            .collect();
+        let spilled = committed_hold_line(&mut database, |db, tx| {
+            db.stage_blob(tx, &mut std::io::Cursor::new(&blob), blob.len() as u64)
+                .unwrap();
+            db.entity_put(tx, key(rows + 1), vec![4; 100]).unwrap();
+        });
+        let carried: usize = hold_field(&spilled, "carried_bytes")
+            .expect(&spilled)
+            .parse()
+            .unwrap();
+        assert!(
+            carried > crate::transaction::MAX_CARRIED_PAYLOAD_BYTES,
+            "{spilled}"
+        );
+        assert_eq!(hold_field(&spilled, "commit"), Some("overlay"), "{spilled}");
+        assert_eq!(
+            hold_field(&spilled, "oversized"),
+            Some("carried_payload"),
+            "{spilled}"
+        );
+        let blocks: usize = hold_field(&spilled, "spilled_blocks")
+            .expect(&spilled)
+            .parse()
+            .unwrap();
+        assert!(blocks > 0, "{spilled}");
+        assert!(
+            hold_stage_names(&spilled).contains(&"spill_referenced_blocks"),
+            "{spilled}"
+        );
     }
 
     #[test]
@@ -791,6 +1003,27 @@ mod tests {
             hold_phase_of_stage(crate::fsync_stats::STAGE_IR_COMMIT),
             None
         );
+        // The engine commit's formerly untimed spans: admission and an inline
+        // WAL write are journal work, a spill stages blocks, and the packer
+        // lock and the loose-shard join are waits on other threads.
+        use crate::fsync_stats::{
+            STAGE_BACKGROUND_PACK_WAKE, STAGE_LOOSE_SHARD_JOIN, STAGE_SPILL_REFERENCED_BLOCKS,
+            STAGE_WAL_INLINE_WRITE, STAGE_WRITE_ADMISSION,
+        };
+        for (stage, phase) in [
+            (STAGE_WRITE_ADMISSION, HoldPhase::Journal),
+            (STAGE_WAL_INLINE_WRITE, HoldPhase::Journal),
+            (STAGE_SPILL_REFERENCED_BLOCKS, HoldPhase::Stage),
+            (STAGE_BACKGROUND_PACK_WAKE, HoldPhase::Wait),
+            (STAGE_LOOSE_SHARD_JOIN, HoldPhase::Wait),
+        ] {
+            assert_eq!(
+                hold_phase_of_stage(stage),
+                Some(phase),
+                "{}",
+                crate::fsync_stats::STAGE_NAMES[stage]
+            );
+        }
     }
 
     #[test]

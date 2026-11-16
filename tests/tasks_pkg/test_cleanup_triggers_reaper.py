@@ -86,7 +86,10 @@ def test_storage_outage_in_cleanup_step_is_logged_without_traceback(
 
     def _fenced():
         raise StorageError(
-            'database_unavailable', 'Storage runtime recovery is stopped',
+            'database_unavailable',
+            'Storage runtime is degraded after repeated sidecar crashes; it '
+            'stays fenced while the start is retried minutes apart, and a '
+            'server process restart retries at once',
             retryable=False)
 
     def _broken():

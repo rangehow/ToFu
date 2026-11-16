@@ -252,6 +252,43 @@ Decision: recording applies telemetry to the in-memory snapshot at once and coal
 
 Consequences: a crash (SIGKILL/OOM) loses at most one interval of telemetry, never a committed decision. Other processes see counters up to one interval late, so their credential auto-disable can lag by that much. When processes interleave 429s and successes on one key, the cross-process 429 streak is ordered per batch. A billing stop still costs its caller one commit, without holding `_lock`; on an async dispatch loop that commit runs on the loop thread, as every outcome did before.
 
+#### Telemetry is published without a durability barrier
+
+Problem: every telemetry flush still rewrote the whole store with an fsync.
+On STORAGE-PRESSURE-COMPARE-1's fixed task that was 4 fsyncs per Turn, one per
+model round (`.eval-runs/write-amp-20261113/results/ATTRIBUTION.md`).
+Telemetry needs no barrier: its contract is already a crash-loss window. But
+the barrier cannot simply be dropped from the one shared file, because a power
+loss during an unsynchronized rewrite could lose the decisions inside it.
+
+Decision: the two durability classes live in two documents of one store.
+- `key_stats.json` keeps the overrides and billing stops, plus a `generation`.
+  A decision commit rewrites it with an fsync and bumps the generation. That
+  rewrite also carries all telemetry so far, so the generation retires the
+  telemetry document it absorbed.
+- A telemetry-only commit, decided under the store flock by comparing
+  decisions before and after the batch, publishes `key_stats.telemetry.json`
+  instead: one atomic replace without fsync, naming the generation and day it
+  extends. It never rewrites the decision document.
+- Readers merge a telemetry document only when it names the current
+  generation and day. It then is the complete telemetry, folds included, and
+  the decision document contributes decisions only.
+- A torn, stale or foreign telemetry document is ignored and republished by
+  the next telemetry commit. A power loss therefore loses at most the
+  telemetry since the last decision commit, never a decision.
+- The store fingerprint covers both documents, so freshness checks stay one
+  observation (`_store_fingerprint`).
+
+Alternatives rejected:
+- Dropping the fsync of the single shared document would expose decisions to
+  power loss.
+- A per-process telemetry file needs a reader-side merge across processes and
+  per-process retirement.
+- An append-only telemetry journal adds a format and a compaction owner for
+  reconstructible data.
+
+Spec: `tests/key_stats/test_key_stats_telemetry_durability.py`.
+
 Alternatives rejected:
 - Per-success writes without fsync still rewrite the store and take the flock on the request path, serialized under `_lock`.
 - A background thread per write creates unbounded threads and reorders writes.

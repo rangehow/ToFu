@@ -55,6 +55,9 @@ export interface LeadOfficePorts {
   currentConversationId(): string;
   subscribe(refresh: () => void): () => void;
   navigate(conversationId: string): void;
+  /** Opens the conversation at its newest open ask_human question with the composer replying to it
+   * (the same handler as the studio's "answer in conversation"). */
+  openQuestion(conversationId: string): void;
   /** Shows the project's folder and opens its coordinator. */
   openProject(path: string, conversationId: string): void;
 }
@@ -112,7 +115,8 @@ export function createLeadOffice(ports: LeadOfficePorts) {
   function current(own: number) { return own === generation && !!context; }
   function activate(target: OfficeActivation) {
     if (target.kind === 'project') ports.openProject(target.path, target.conversationId);
-    else ports.navigate(target.conversationId);
+    else if (!target.asking) ports.navigate(target.conversationId);
+    if (target.asking) ports.openQuestion(target.conversationId);
   }
 
   function mountCanvas() {

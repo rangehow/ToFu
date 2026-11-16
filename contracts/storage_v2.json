@@ -206,6 +206,7 @@
       "deadlineElapsed": 408,
       "conflict": 409,
       "resourceExhausted": 429,
+      "internal": 500,
       "notImplemented": 501,
       "unavailable": 503,
       "integrityFailure": 550
@@ -433,6 +434,18 @@
       "type": "boolean",
       "default": false,
       "translationPolicy": "Preserve conversation updated_at for all derived translation commits; advance Turn and conversation revisions and sync publication. Read the current activity timestamp inside the storage transaction. Ordinary edits advance activity."
+    },
+    "conversationSyncLineage": {
+      "operations": ["turn.sync.changes", "turn.sync.page", "turn.sync.snapshot"],
+      "epochField": "authorityEpoch",
+      "headDigestField": "headDigest",
+      "changeDigestsField": "changeDigests",
+      "anchorDigestField": "anchorDigest",
+      "hexDigits": 16,
+      "epoch": "64 bits of OS randomness drawn once per authority open after recovery completes and shared by its read replicas; never persisted or reused. A published commit is lost only with a reopen, so a sequence is never reused within one epoch. The SQL authority derives it from its backend open's identity.",
+      "digest": "The first 64 bits of SHA-256 over the change's committed record exactly as stored: native, the value bytes stored for its key (a blob-backed row's manifest bytes); SQL, the row's length-framed stored columns. An AttemptEvent reference row stores only its event's identity and commit time, so its digest also covers the referenced event exactly as stored: native, the reference's and the event's stored value bytes, each length-framed; SQL, the event's payload_json after the row's columns. Stable for the row's lifetime, since the retained reference keeps its event immutable, and never compared across authorities.",
+      "results": "Every result carries authorityEpoch and headDigest (null at head 0 or when the head change left replay retention), read in the same transaction as its rows. turn.sync.changes also carries changeDigests, one per returned change, and for after > 0 anchorDigest: the digest of the change at after, null when it left retention. turn.sync.page accepts an optional anchor_sequence (the reader's applied head); a page read with anchor_sequence > 0 carries anchorDigest, the digest of the change at it, null when it left retention.",
+      "onlineRewrite": "Replay rows are insert-only. A future online rewrite of a row's stored bytes must keep the row's original digest or accept one reset per client across the next epoch change; either way no client diverges silently."
     }
   },
   "nativeResourceExhaustionDiagnostics": {
@@ -468,7 +481,7 @@
     "worker": "existing-wal-barrier-worker",
     "durability": "exact-captured-prefix-after-physical-write-and-sync",
     "acknowledgement": "both-tiers-queue-frames-so-no-authority-holder-performs-the-physical-write; strict-responds-after-the-worker-sync; normal-responds-after-the-worker-physical-write-and-the-sync-stays-the-interval-backstop",
-    "overflow": "synchronous-original-write-path-no-admission",
+    "overflow": "every-frame-queues-past-the-budget-allocation-failure-uses-the-synchronous-original-write-path-no-admission",
     "vfs": "explicit-independent-handle-capability-stateful-wrappers-default-disabled",
     "accounting": "queued-and-inflight-exact-frame-bytes-through-deallocation-excludes-queue-and-allocator-metadata",
     "close": "refuse-new-queued-writes-drain-final-prefix-join-before-reclamation",

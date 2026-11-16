@@ -1,5 +1,5 @@
 /** Executable specifications for the office game engine's pure modules:
- * the fixed-step loop's sleep/keyframe/catch-up semantics and camera math. */
+ * the loop's frame-time stepping, sleep/keyframe/catch-up semantics and camera math. */
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),ts=require('typescript');
@@ -18,18 +18,37 @@ function scheduler(){
 }
 const near=(a,b)=>assert.ok(Math.abs(a-b)<1e-6,`${a} != ${b}`);
 
-test('the loop advances exact fixed steps of visible time and renders once per frame',()=>{
+const sum=list=>list.reduce((total,value)=>total+value,0);
+
+test('every frame advances exactly its visible time in steps of at most STEP_MS and renders once',()=>{
  const s=scheduler(),steps=[],renders=[];let busy=true;
  const loop=createGameLoop({...s.ports,visible:()=>true,step:dt=>steps.push(dt),render:now=>renders.push(now),nextWake:()=>busy?0:Infinity});
  loop.wake();assert.equal(s.frames.size,1);
  s.frame(1000);assert.equal(steps.length,0,'the first frame after sleep only renders');
- s.frame(1000+STEP_MS*2.5);assert.equal(steps.length,2);assert.ok(steps.every(dt=>dt===STEP_MS));
- s.frame(1000+STEP_MS*3);assert.equal(steps.length,3,'the fractional remainder carries over');
+ s.frame(1000+STEP_MS*2.5);near(sum(steps),STEP_MS*2.5);assert.equal(steps.length,3);assert.ok(steps.every(dt=>dt<=STEP_MS));
+ s.frame(1000+STEP_MS*3);near(sum(steps),STEP_MS*3);
  assert.equal(renders.length,3);
  // A stalled tab replays at most MAX_FRAME_MS of simulation in one burst.
- s.frame(1000+STEP_MS*3+60_000);assert.equal(steps.length,3+Math.round(MAX_FRAME_MS/STEP_MS));
+ const before=sum(steps);s.frame(1000+STEP_MS*3+60_000);near(sum(steps)-before,MAX_FRAME_MS);assert.ok(steps.every(dt=>dt<=STEP_MS));
  busy=false;s.frame(70_000);assert.equal(s.frames.size,0);assert.equal(s.timers.size,0,'an idle world owns no callbacks');
  loop.dispose();
+});
+
+test('motion never judders: no frame drops or doubles a step when frame times do not divide into steps',()=>{
+ // A 60 Hz display's frames with timestamps coarsened to 0.1 ms (16.7, 16.6, 16.7, ...), and a 144 Hz display.
+ for(const period of [1000/60,1000/144]){
+  const s=scheduler();let advanced=0;
+  const loop=createGameLoop({...s.ports,visible:()=>true,step:dt=>{advanced+=dt;},render(){},nextWake:()=>0});
+  loop.wake();
+  let previous=Math.round(1000*10)/10;s.frame(previous);
+  for(let index=1;index<=240;index++){
+   const now=Math.round((1000+index*period)*10)/10;
+   advanced=0;s.frame(now);
+   near(advanced,now-previous);
+   previous=now;
+  }
+  loop.dispose();
+ }
 });
 
 test('a world with only keyframes sleeps on one timer and resumes without replaying slept time',()=>{
@@ -106,5 +125,45 @@ test('the accessible target layer follows the world while HUD insets ease, not o
  await settled(()=>stage.camera.insets.right===400);
  near(parseFloat(button().style.left),expected().x);near(parseFloat(button().style.top),expected().y);
  assert.ok(Math.abs(parseFloat(button().style.left)-400)>100,'the docked window moved the world');
+ stage.dispose();d.window.close();
+});
+
+test('spatial navigation picks the nearest target inside the pressed direction, else the nearest on that side',()=>{
+ const {nearestInDirection}=load('engine/targets.ts');
+ const targets=[{x:0,y:0,id:'a'},{x:100,y:4,id:'b'},{x:60,y:200,id:'c'},{x:-90,y:0,id:'d'}];
+ assert.equal(nearestInDirection(targets[0],targets.slice(1),'right')?.id,'b');
+ assert.equal(nearestInDirection(targets[0],targets.slice(1),'down')?.id,'c');
+ assert.equal(nearestInDirection(targets[0],targets.slice(1),'left')?.id,'d');
+ assert.equal(nearestInDirection(targets[0],targets.slice(1),'up'),null);
+});
+
+test('a camera that fits the view keeps its scale under a docked panel and pans within what stays visible',()=>{
+ const c=camera.createCamera(1600,900);c.fit='contain';c.fitTo='view';camera.resizeCamera(c,1600,900);
+ near(camera.cameraScale(c),1);assert.equal(camera.overflows(c),false);
+ camera.setInsets(c,{top:0,right:600,bottom:0,left:0});
+ near(camera.cameraScale(c),1);assert.equal(camera.overflows(c),true,'the panel crops the floor');
+ camera.panBy(c,-10_000,0);near(c.x,1600-500);
+ const framed=camera.createCamera(1600,900);framed.fit='contain';camera.resizeCamera(framed,1600,900);
+ camera.setInsets(framed,{top:0,right:600,bottom:0,left:0});near(camera.cameraScale(framed),1000/1600);
+});
+
+test('arrow keys move focus between targets on a targets stage and the camera follows it again',async()=>{
+ const d=new JSDOM('<div id="host"></div>',{pretendToBeVisual:true});
+ Object.assign(global,{window:d.window,document:d.window.document});
+ d.window.HTMLCanvasElement.prototype.getContext=()=>null;
+ const stage=loadTree('engine/stage').mountStage(document.getElementById('host'),{label:'Stage',fontFamily:'sans-serif',gestures:'camera',navigation:'targets'});
+ const targets=[{id:'left',label:'Left',x:100,y:300,width:40,height:20},{id:'right',label:'Right',x:700,y:310,width:40,height:20},
+  {id:'below',label:'Below',x:120,y:600,width:40,height:20}];
+ let steps=0;
+ stage.setScene({width:960,height:720,backdrop:()=>undefined,step(_dt,input){if(input.axis.x||input.axis.y)steps++;},draw(){},nextWake:()=>Infinity,
+  hit:()=>'',activate(){},targets:()=>targets});
+ const deadline=Date.now()+20000;
+ while(Date.now()<deadline&&!document.querySelector('.evo-target[data-target=below]'))await new Promise(resolve=>setTimeout(resolve,16));
+ const press=key=>document.activeElement.dispatchEvent(new d.window.KeyboardEvent('keydown',{key,code:key,bubbles:true}));
+ document.querySelector('.evo-target[data-target=left]').focus();
+ press('ArrowRight');assert.equal(document.activeElement.dataset.target,'right');
+ press('ArrowLeft');assert.equal(document.activeElement.dataset.target,'left');
+ press('ArrowDown');assert.equal(document.activeElement.dataset.target,'below');
+ press('KeyD');assert.equal(steps,0,'a targets stage has no held movement');
  stage.dispose();d.window.close();
 });

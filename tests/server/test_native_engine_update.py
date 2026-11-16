@@ -38,8 +38,8 @@ def project(tmp_path, monkeypatch):
     (crate / 'Cargo.toml').write_text('[package]\nname = "tofu-db"\nversion = "0.2.0"\n')
     (tmp_path / '.env').write_text('TOFU_PERSONAL_STORAGE_BACKEND=tofudb\nTOFUDB_EXPECTED_SHA256=' + 'a' * 64 + '\n')
     (tmp_path / 'contracts').mkdir()
-    for name in ('storage_v2.json', 'native_storage_connection_v2.json'):
-        (tmp_path / 'contracts' / name).write_text('{}')
+    for relative in engines.APPLICATION_STORAGE_CONTRACTS:
+        (tmp_path / relative).write_text('{}')
     (tmp_path / 'VERSION').write_text('1.2.3')
     return tmp_path
 
@@ -74,6 +74,47 @@ def test_launch_refuses_stale_engine_by_default_even_if_provenance_claims_curren
     monkeypatch.delenv('TOFUDB_REQUIRE_FRESH_ENGINE', raising=False)
     with pytest.raises(engines.EnginePreparationError, match='does not match'):
         supervisor._advise_tofudb_engine_staleness(str(engine))
+
+
+# A wrapper or the engine itself may write to stderr: a shell's setlocale
+# warning in a container without C.UTF-8, a library or allocator notice.
+LOCALE_WARNING = '/bin/sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)'
+EXIT_NOTICE = 'notice: allocator statistics disabled'
+
+
+def warning_binary(path, stdout):
+    """A stand-in engine that warns on stderr around its --build-info stdout."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('#!/bin/sh\n'
+                    f'echo {shlex.quote(LOCALE_WARNING)} >&2\n'
+                    f"cat <<'TOFU_BUILD_INFO'\n{stdout}\nTOFU_BUILD_INFO\n"
+                    f'echo {shlex.quote(EXIT_NOTICE)} >&2\n')
+    path.chmod(0o755)
+    return path
+
+
+def test_a_stderr_warning_does_not_refuse_an_engine_with_a_valid_identity(project, monkeypatch):
+    import lib.storage.supervisor as supervisor
+    info = {'format': 'tofu-db-build.v1', 'source_sha256': engines.source_fingerprint(project),
+            'version': 'test', 'embedded_allocator': 'system'}
+    engine = warning_binary(project / 'deployed/tofu-db', json.dumps(info))
+    monkeypatch.setattr(supervisor, '_tofudb_checkout_root', lambda: project)
+    # tests/conftest.py turns an escaping admission refusal into a skip; here the
+    # refusal is the defect under test, so it fails the spec.
+    try:
+        identity = engines.build_identity(engine)
+        supervisor._advise_tofudb_engine_staleness(str(engine))  # storage start admits it
+    except engines.EngineAdmissionRefusedError as refused:
+        pytest.fail(f'a stderr warning refused an engine with a valid identity: {refused}')
+    assert identity == info
+
+
+def test_an_invalid_identity_is_refused_with_the_engines_stderr(project):
+    engine = warning_binary(project / 'deployed/tofu-db', 'tofu-db 0.2.0 (no build identity)')
+    with pytest.raises(engines.EngineAdmissionRefusedError, match='no verifiable source identity') as refused:
+        engines.build_identity(engine)
+    assert LOCALE_WARNING in str(refused.value)
+    assert EXIT_NOTICE in str(refused.value)
 
 
 def test_prepare_downloads_matching_engine_without_cargo_and_reuses_it(project, monkeypatch):
@@ -388,6 +429,8 @@ def test_resolve_cargo_prefers_declared_toolchain_roots(tmp_path):
     home = cargo_in(tmp_path / 'home/.cargo/bin')
     project = tmp_path / 'project'
     project.mkdir()
+    (tmp_path / 'rustup').mkdir()
+    (tmp_path / 'explicit-rustup').mkdir()
     (project / '.env').write_text(
         f'CARGO_HOME={tmp_path / "declared"}\nRUSTUP_HOME={tmp_path / "rustup"}\n')
     service = {'HOME': str(tmp_path / 'home'), 'PATH': str(tmp_path / 'path')}
@@ -398,11 +441,63 @@ def test_resolve_cargo_prefers_declared_toolchain_roots(tmp_path):
     assert environment['PATH'] == os.pathsep.join((str(tmp_path / 'declared/bin'), service['PATH']))
     assert 'CARGO_HOME' not in service  # the caller's mapping is never rewritten
 
-    explicit = {**service, 'RUSTUP_HOME': '/explicit/rustup'}
-    assert engines.resolve_cargo(explicit, root=project)[1]['RUSTUP_HOME'] == '/explicit/rustup'
+    explicit = {**service, 'RUSTUP_HOME': str(tmp_path / 'explicit-rustup')}
+    assert engines.resolve_cargo(explicit, root=project)[1]['RUSTUP_HOME'] == str(tmp_path / 'explicit-rustup')
     assert engines.resolve_cargo(service)[0] == on_path
     assert engines.resolve_cargo({**service, 'CARGO_HOME': str(tmp_path / 'empty')})[0] == on_path
     assert engines.resolve_cargo({**service, 'PATH': str(tmp_path / 'none')})[0] == home
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX executable permission')
+def test_stale_process_toolchain_root_falls_through_to_project_env(tmp_path, monkeypatch, capsys):
+    """A server started before the toolchain moved still carries the old
+    CARGO_HOME/RUSTUP_HOME (2026-11-16: /home/your-user/.cargo, absent on
+    the new host); the .env's FMG toolchain is used and the stale path is
+    reported once."""
+    monkeypatch.setattr(engines, '_REPORTED_IGNORED_TOOLCHAIN_ROOTS', set())
+    fmg = tmp_path / 'FMG/your-username'
+    (fmg / '.cargo/bin').mkdir(parents=True)
+    (fmg / '.rustup').mkdir()
+    (fmg / '.cargo/bin/cargo').write_text('#!/bin/sh\n')
+    (fmg / '.cargo/bin/cargo').chmod(0o755)
+    (tmp_path / 'path').mkdir()
+    (tmp_path / 'path/cargo').write_text('#!/bin/sh\n')
+    (tmp_path / 'path/cargo').chmod(0o755)
+    project = tmp_path / 'project'
+    project.mkdir()
+    (project / '.env').write_text(f'CARGO_HOME={fmg / ".cargo"}\nRUSTUP_HOME={fmg / ".rustup"}\n')
+    stale = tmp_path / 'home/your-user'
+    service = {'HOME': str(tmp_path / 'home'), 'PATH': str(tmp_path / 'path'),
+               'CARGO_HOME': str(stale / '.cargo'), 'RUSTUP_HOME': str(stale / '.rustup')}
+
+    resolution = engines.resolve_cargo_source(service, root=project)
+
+    assert resolution.cargo == str(fmg / '.cargo/bin/cargo')
+    assert resolution.source == f'CARGO_HOME from the project .env ({fmg / ".cargo"})'
+    assert (resolution.environment['CARGO_HOME'], resolution.environment['RUSTUP_HOME']) == (
+        str(fmg / '.cargo'), str(fmg / '.rustup'))
+    assert resolution.ignored == (
+        f'RUSTUP_HOME={stale / ".rustup"} from the process environment does not exist',
+        f'CARGO_HOME={stale / ".cargo"} from the process environment does not exist')
+    reported = capsys.readouterr().err
+    assert reported.count(str(stale / '.cargo')) == 1 and str(fmg / '.cargo/bin/cargo') in reported
+    assert engines.resolve_cargo(service, root=project)[0] == resolution.cargo
+    assert capsys.readouterr().err == ''  # each skipped declaration is reported once
+    assert service['CARGO_HOME'] == str(stale / '.cargo')  # the caller's mapping is untouched
+
+    # Without a valid declaration the stale root is dropped and PATH decides.
+    on_path = engines.resolve_cargo_source(service)
+    assert (on_path.cargo, on_path.source) == (str(tmp_path / 'path/cargo'), 'cargo on PATH')
+    assert 'CARGO_HOME' not in on_path.environment and 'RUSTUP_HOME' not in on_path.environment
+
+
+def test_build_names_the_skipped_stale_toolchain_when_no_cargo_is_found(project, tmp_path):
+    stale = tmp_path / 'home/your-user/.cargo'
+    environment = {'HOME': str(tmp_path / 'home'), 'CARGO_HOME': str(stale),
+                   'PATH': str(tmp_path / 'empty-path')}
+    with pytest.raises(engines.EnginePreparationError,
+                       match=f'Ignored CARGO_HOME={stale} from the process environment does not exist'):
+        engines._build(project, tmp_path, environment)
 
 
 def test_build_does_not_borrow_ambient_path(project, monkeypatch, tmp_path):

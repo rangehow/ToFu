@@ -11,10 +11,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from lib.conversation_sync.cursor import ReplayPosition
 from lib.conversation_sync.service import ConversationSyncService
 from lib.conversation_sync.validation import decode
 from lib.turn_projection_patch import build_projection_patch
 from lib.turn_projection_segments import snapshot_with_reference_tool_segments
+from tests.support.conversation_replay import SCRIPTED_EPOCH, scripted_digest, with_lineage
 
 pytest_plugins = ("tests._chat_sidecar",)
 
@@ -77,11 +79,12 @@ def test_stream_view_drops_evidence_operations_and_keeps_order_and_revisions():
                'payload': {'status': 'running', 'phase': None, 'projectionPatch': patch}}
     change = {'contract': 'tofu.conversation-sync.event/v1', 'type': 'attempt.event',
               'conversationId': 'conv', 'syncSeq': 9, 'occurredAt': 1, 'payload': {'event': attempt}}
-    stored = {'head': 9, 'events': [change], 'hasMore': False}
+    stored = with_lineage({'head': 9, 'events': [change], 'hasMore': False}, 8)
     original = deepcopy(stored)
     service = ConversationSyncService(SimpleNamespace(changes=lambda *_a, **_k: stored))
+    position = ReplayPosition(8, SCRIPTED_EPOCH, scripted_digest(8))
 
-    projected = service.changes('conv', 7, after_sequence=8, diagnostic_payload='none',
+    projected = service.changes('conv', 7, after=position, diagnostic_payload='none',
                                 provider_replay_payload='none')
     event = projected['events'][0]
     view_patch = event['payload']['event']['payload']['projectionPatch']
@@ -91,9 +94,9 @@ def test_stream_view_drops_evidence_operations_and_keeps_order_and_revisions():
     assert event['syncSeq'] == 9 and stored == original
     decode('ConversationChange', event)
     decode('AttemptEvent', event['payload']['event'])
-    assert service.changes('conv', 7, after_sequence=8)['events'] == original['events']
+    assert service.changes('conv', 7, after=position)['events'] == original['events']
     with pytest.raises(ValueError, match='provider replay'):
-        service.changes('conv', 7, after_sequence=8, provider_replay_payload='partial')
+        service.changes('conv', 7, after=position, provider_replay_payload='partial')
 
 
 @pytest.mark.unit

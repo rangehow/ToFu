@@ -497,6 +497,84 @@ describe('catch-up budget', () => {
     expect(sources[2].request).toMatchObject({ after: 'cursor-40', cursorSource: 'snapshot' });
   });
 });
+describe('replay lineage', () => {
+  // The server answers a cursor whose change it no longer holds at that
+  // sequence (crash recovery or a restore gave it to another change), one
+  // past retention from an earlier authority open, or one issued before
+  // cursors carried lineage, with sync.reset_required. Cursors stay opaque
+  // here: the browser reloads from one snapshot and resumes at its cursor.
+  it.each(['cursor_invalid', 'cursor_expired', 'protocol_mismatch'])(
+    'a %s reset reloads one authoritative snapshot and resumes at its cursor', async reason => {
+      const { coordinator, api, sources, onSnapshot, onProtocolError } = fixture();
+      await coordinator.resume();
+      sources[0].emit('turn.deleted', {
+        syncSeq: 2, occurredAt: 1, payload: { deletedTurnIds: ['lost'] } }, 'c2.lost-change');
+      expect(coordinator.cursor).toBe('c2.lost-change');
+      coordinator.pause();
+      await coordinator.wake();
+      expect(sources[1].request).toMatchObject({ after: 'c2.lost-change' });
+      expect(sources[1].request.cursorSource).toBeUndefined();
+      expect(api.snapshot).toHaveBeenCalledTimes(1);
+
+      api.snapshot.mockResolvedValueOnce(snapshot(3));
+      sources[1].emit('sync.reset_required', { cursor: 'c2.head-3', reason }, 'c2.head-3');
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onProtocolError).not.toHaveBeenCalled();
+      expect(sources[1].closed).toBe(true);
+      expect(api.snapshot).toHaveBeenCalledTimes(2);
+      expect(onSnapshot).toHaveBeenLastCalledWith(
+        expect.objectContaining({ syncSeq: 3, cursor: 'cursor-3', authoritativeFull: true }));
+      expect(coordinator.cursor).toBe('cursor-3');
+      expect(sources).toHaveLength(3);
+      expect(sources[2].request).toMatchObject({ after: 'cursor-3', cursorSource: 'snapshot' });
+
+      // The resumed stream confirms the snapshot's cursor verbatim: no second reset.
+      sources[2].emit('sync.heartbeat', {
+        cursor: 'cursor-3', serverBootId: 'boot', degraded: false }, 'cursor-3');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.snapshot).toHaveBeenCalledTimes(2);
+      expect(sources).toHaveLength(3);
+    });
+
+  // A history page is fenced by the replica's lineage: the read names the
+  // cursor of the applied head, so the server answers only a page of the
+  // lineage this replica replayed.
+  const page = (syncSeq: number) => ({
+    conversationId: 'conv', laneId: 'main', syncSeq, turns: [], attempts: [],
+    beforeOrdinal: 7, nextBeforeOrdinal: 1, totalTurns: 9, hasMore: true,
+  } as unknown as import('../api/conversation-sync.generated').ConversationTurnPage);
+
+  it('a history read names the cursor of the applied head', async () => {
+    const { coordinator, api, sources } = fixture({ onTurnPage: vi.fn() });
+    await coordinator.resume();
+    api.turnPage.mockImplementation(async (_id, _lane, syncSeq) => page(syncSeq));
+    await coordinator.loadTurnPage('main', 7, 8);
+    sources[0].emit('turn.deleted', {
+      syncSeq: 2, occurredAt: 1, payload: { deletedTurnIds: ['old'] } }, 'c2.head-2');
+    await coordinator.loadTurnPage('main', 7, 8);
+
+    expect(api.turnPage.mock.calls.map(call => [call[2], call[5]?.query?.cursor]))
+      .toEqual([[1, 'cursor-1'], [2, 'c2.head-2']]);
+  });
+
+  it('a page refused for its lineage repairs from one snapshot and reads under its cursor', async () => {
+    const onTurnPage = vi.fn();
+    const { coordinator, api } = fixture({ onTurnPage });
+    await coordinator.hydrate(false);
+    api.snapshot.mockResolvedValue(snapshot(9));
+    api.turnPage
+      .mockRejectedValueOnce(Object.assign(new Error('HTTP 409'),
+        { status: 409, body: { ok: false, error: 'history_page_stale' } }))
+      .mockImplementationOnce(async (_id, _lane, syncSeq) => page(syncSeq));
+
+    await expect(coordinator.loadTurnPage('main', 7, 8)).resolves.toMatchObject({ syncSeq: 9 });
+    expect(api.snapshot).toHaveBeenCalledTimes(2);
+    expect(api.turnPage.mock.calls.map(call => [call[2], call[5]?.query?.cursor]))
+      .toEqual([[1, 'cursor-1'], [9, 'cursor-9']]);
+    expect(onTurnPage).toHaveBeenCalledTimes(1);
+  });
+});
 describe('transport liveness and observer isolation', () => {
   it('requests state replay without inline Inspector bodies and preserves cursor identity', () => {
     const url = new URL(conversationSyncApi.eventsUrl('conv', 'cursor +/1', 'page', 7), 'http://localhost');

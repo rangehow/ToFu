@@ -652,7 +652,7 @@ function _lcNoticeJoinedNode(nodes) {
  * the operator/assistant reads it directly. Collapsed by default so it
  * never competes with the ONE primary install action. */
 function _lcDiagInboxHtml() {
-  return '<details class="lc-details lc-diag"><summary>' +
+  return '<details class="lc-details lc-diag"><summary class="ui-disclosure">' +
     _lcEsc(_lcT('local.diagTitle', '电脑连不上？把桌面版的诊断信息粘贴到这里')) +
     '</summary>' +
     '<p class="lc-substep">' + _lcEsc(_lcT('local.diagDesc',

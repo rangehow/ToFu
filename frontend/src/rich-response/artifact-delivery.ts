@@ -4,7 +4,7 @@
  * only panel-owned published-ID endpoints/actions can initiate delivery.
  */
 import type { ArtifactPreviewLink, ArtifactPreviewPage, ArtifactPreviewPages } from '../api/endpoint-registry/artifacts';
-import { createButton, createDialog } from '../ui';
+import { createButton, createDialog, createDisclosureSummary } from '../ui';
 
 const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
 const SAFE_LINK_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
@@ -79,8 +79,7 @@ export function renderPublishedFile(host: HTMLElement, value: unknown, ports: Ar
 
   const details = doc.createElement('details');
   details.className = 'artifact-file-card-details';
-  const detailsLabel = doc.createElement('summary');
-  detailsLabel.textContent = text('delivery.details', 'File details');
+  const detailsLabel = createDisclosureSummary(doc, text('delivery.details', 'File details'));
   const list = doc.createElement('dl');
   for (const [key, fallback, data] of [
     ['delivery.filename', 'Filename', meta.filename],

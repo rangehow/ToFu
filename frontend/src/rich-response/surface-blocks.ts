@@ -1,7 +1,7 @@
 /** Pure data presenters for metrics, explanatory notices and task progress.
  * Native markup owns semantics and SVG; model strings are always inert text.
  */
-import { createProgress } from '../ui';
+import { createDisclosureSummary, createProgress } from '../ui';
 import type { metric_grid, workflow, notice } from './contract.generated';
 export type SurfaceText = (key: string, fallback: string) => string;
 export const surfaceNode = (doc: Document, tag: string, text = '', className = '') => {
@@ -43,7 +43,7 @@ export function renderSurfaceBlock(doc: Document, block: metric_grid | workflow 
       const path=doc.createElementNS(svg.namespaceURI,'polyline');
       path.setAttribute('points',item.history.map((value,index)=>`${item.history!.length===1?100:index/(item.history!.length-1)*200},${36-(value/scale-low)/span*32}`).join(' '));
       svg.append(path);card.append(svg);
-      const values=doc.createElement('details');values.append(node('summary',text('rich.surface.values','Source values')),node('p',item.history.map(number).join(', ')));card.append(values);
+      const values=doc.createElement('details');values.append(createDisclosureSummary(doc,text('rich.surface.values','Source values')),node('p',item.history.map(number).join(', ')));card.append(values);
     }
     host.append(card);
   }

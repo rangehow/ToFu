@@ -1,7 +1,7 @@
 /** Read-only coordination reference controls. No debug flag, transcript renderer
  * or hidden request: exact identifiers remain selectable if clipboard fails.
  */
-import { createButton } from '../ui';
+import { createButton, createDisclosureSummary } from '../ui';
 import { t } from '../i18n';
 
 export interface CoordinationReference {
@@ -18,7 +18,7 @@ export function coordinationReferenceText(reference: CoordinationReference): str
 export function createCoordinationReference(reference: CoordinationReference, key: string, inspect?: (id: string) => void): HTMLElement {
   const root = document.createElement('div'); root.className = 'coordination-reference';
   const fold = document.createElement('details'); fold.dataset.coordinationDisclosure = `reference:${key}`;
-  const summary = document.createElement('summary'); summary.textContent = t('projectCoordination.inspectReference');
+  const summary = createDisclosureSummary(document, t('projectCoordination.inspectReference'));
   summary.dataset.coordinationFocus = `inspect:${key}`;
   const value = document.createElement('pre'); value.textContent = coordinationReferenceText(reference); value.tabIndex = 0;
   fold.append(summary, value);

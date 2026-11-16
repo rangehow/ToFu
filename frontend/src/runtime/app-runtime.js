@@ -175,6 +175,7 @@ const openCoordinatorTaskHistory = (ports) => import('../features/coordinator-ta
 // The lead office loads with its game stage and art when a lead first shows in the studio
 // mode's sidebar; the classic mode (application-shell/landing.ts) never imports it.
 const loadLeadOffice = () => import('../features/lead-office/office');
+const loadLeadDeliverables = () => import('../features/lead-deliverables/classic');
 import { readLanding, subscribeLanding } from '../application-shell/landing';
 import {
   conversationFullIdById as queryConversationFullIdById,
@@ -274,6 +275,7 @@ import {
 import { createHumanGuidancePresentationStore } from '../conversation/application/human-guidance-presentation';
 
 import { createAuthenticatedChoiceInteractionPorts } from '../conversation/application/choice-interaction';
+import { findQuestionFocus } from '../conversation/application/question-focus';
 
 import { createTurnCommandId } from '../core/turn-command';
 import {
@@ -441,8 +443,37 @@ const toolResultPresentation = createToolResultPresentation({
 const toolCardPresentation = createToolCardPresentation({
   translate: t,
   markdown: source => renderMarkdown(source),
-  conversationTitle: conversationId => convTitleById(conversationId),
+  // '' (not the untitled label) when the catalog does not name it, so the card can look further.
+  conversationTitle: conversationId => queryConversationTitleById(conversations, conversationId, ''),
+  debugEnabled: () => typeof _featureFlags !== 'undefined' && !!_featureFlags.debug_mode,
+  /* A review/cancel receipt older than its conversation_id field names only the
+   * assignment; its durable record names the Worker conversation. */
+  async assignmentConversation(assignmentId) {
+    const conv = conversations.find(item => item?.id === activeConvId);
+    const projectPath = String(conv?.projectPath || '').trim();
+    if (!projectPath) return '';
+    const page = await Api.project.coordinationAssignments(projectPath, undefined, { assignmentId });
+    const row = (page?.assignments || []).find(item => item?.assignmentId === assignmentId);
+    return String(row?.request?.recipientId || '');
+  },
+  // The catalog holds only loaded pages of Worker conversations.
+  async lookupConversationTitle(conversationId) {
+    const preview = await Api.conversations.preview(conversationId);
+    return String(preview?.title || '');
+  },
+  // Model-authored card text follows the conversation's translation setting, like its messages.
+  translationTarget: () => {
+    const conv = conversations.find(item => item?.id === activeConvId);
+    return conv && convAutoTranslate(conv) && typeof _uiTranslateTarget === 'function'
+      ? _uiTranslateTarget() : '';
+  },
+  async translateText(source, target) {
+    if (await _isAlreadyInTarget(source, target)) return source;
+    return _callTranslateAPI(source, target);
+  },
 });
+// Settings (a lazy bundle) repaints tool cards when debug mode changes.
+runtimeScope.refreshToolCards = () => toolCardPresentation.refresh();
 const {
   renderCompactionLabelHtml: renderToolResultCompactionLabelHtml,
   renderWriteResultHtml: renderWriteToolResultHtml,
@@ -9410,7 +9441,7 @@ const _toolGroupPorts = {
   cleanTranslation: (content) => typeof stripNoTranslateTags === 'function' ? stripNoTranslateTags(content) : content,
   renderLine: (round, searching) => _renderUnifiedToolLine(round, searching),
   renderSwarm: (round, allRounds, inspectorAnchorHtml) => typeof _buildSwarmPanelHTML === 'function' ? _buildSwarmPanelHTML(round, allRounds, inspectorAnchorHtml) : null,
-  renderProgram: (round, batched) => programExecutionCardHtml(round, (key, _fallback, values) => t(key, values), batched),
+  renderProgram: (round, batched) => programExecutionCardHtml(round, (key, _fallback, values) => t(key, values), batched, _toolGroupPorts.debugEnabled()),
   debugEnabled: () => typeof _featureFlags !== 'undefined' && !!_featureFlags.debug_mode,
   taskIdForRound: (round) => typeof _riTaskIdForRound === 'function' ? _riTaskIdForRound(round) : '',
   debugLog: (message) => { if (typeof debugLog === 'function') debugLog(message, 'info'); },
@@ -9975,20 +10006,20 @@ let _turnNavigationHost = null;
 let _turnNavigationConvId = '';
 let _turnJumpEpoch = 0;
 
-function scrollToTurn(turnId) {
+function scrollToTurn(turnId, target) {
   const stableTurnId = typeof turnId === 'string' ? turnId : '';
   if (!stableTurnId) return;
   const epoch = ++_turnJumpEpoch;
   const conversationId = typeof getActiveConv === 'function' ? getActiveConv()?.id : '';
   if (typeof conversationId !== 'string' || !conversationId) return;
   const reveal = runtimeScope.ConversationSurfacePresentation?.revealTurn;
-  if (reveal?.(conversationId, stableTurnId)) return;
+  if (reveal?.(conversationId, stableTurnId, target)) return;
   runtimeScope.requestAuthoritativeConversationRender(conversationId, { forceScroll: false });
   if (typeof requestAnimationFrame === 'function') {
     requestAnimationFrame(() => requestAnimationFrame(() => {
       if (epoch !== _turnJumpEpoch || typeof getActiveConv !== 'function'
         || getActiveConv()?.id !== conversationId) return;
-      if (!runtimeScope.ConversationSurfacePresentation?.revealTurn?.(conversationId, stableTurnId)) {
+      if (!runtimeScope.ConversationSurfacePresentation?.revealTurn?.(conversationId, stableTurnId, target)) {
         console.warn('[turnNav] Turn node unavailable after convergence:', stableTurnId);
       }
     }));
@@ -10016,6 +10047,41 @@ async function openConversationAtTurn(conversationId, turn) {
 }
 /* The office world's "show in the conversation" (features/world.ts) uses this same owner. */
 runtimeScope.openConversationAtTurn = openConversationAtTurn;
+
+/* "Answer in conversation" (the studio question card, a '?' lead in the sidebar's lead office): open the
+ * conversation scrolled to the question's own card, highlighted, with the composer replying to it (a
+ * removable reply-quote chip that carries the question id, so the sent message answers that question).
+ * `question` names one ({ turnId, ordinal, guidanceId }); without it the newest open question is used.
+ * Pure selection lives in conversation/application/question-focus.ts. */
+async function openConversationAtQuestion(conversationId, question) {
+  const epoch = ++_turnJumpEpoch;
+  await loadConversation(conversationId);
+  const active = () => (epoch === _turnJumpEpoch && typeof getActiveConv === 'function'
+    && getActiveConv()?.id === conversationId ? getActiveConv() : null);
+  const conv = active();
+  if (!conv) return false;
+  const guidanceId = typeof question?.guidanceId === 'string' ? question.guidanceId : '';
+  if (question?.turnId && Number.isInteger(question.ordinal) && question.ordinal > 0) {
+    try {
+      await runtimeScope.ConversationTurnStore.hydrateConversationRound(
+        conv, 'main', { turnId: question.turnId, ordinal: question.ordinal });
+    } catch (error) {
+      // The loaded tail may still hold it; the lookup below decides.
+      console.warn('[turnNav] question Turn unavailable:', error?.message || error);
+    }
+  }
+  if (!active()) return false;
+  const focus = findQuestionFocus(runtimeScope.ConversationTurnRead?.ordered?.(conv) || [], guidanceId);
+  if (!focus) {
+    if (question?.turnId) scrollToTurn(question.turnId);
+    return false;
+  }
+  scrollToTurn(focus.turnId, { guidanceId: focus.guidanceId });
+  if (typeof _addReplyQuote === 'function') _addReplyQuote(focus.quote);
+  document.getElementById('userInput')?.focus({ preventScroll: true });
+  return true;
+}
+runtimeScope.openConversationAtQuestion = openConversationAtQuestion;
 
 function buildTurnNav(conv) {
   const nav = document.getElementById('turnNav');
@@ -14281,18 +14347,19 @@ const _nativeTurnRenderers = createClassicConversationRenderers({
     },
   },
   choiceInteractions(conversationId, turnId) {
-    return createAuthenticatedChoiceInteractionPorts({
-      conversationId, turnId,
-      commandId: createTurnCommandId,
-      text: (key, fallback) => { const value = typeof t === 'function' ? t(key) : ''; return value && value !== key ? value : fallback; },
-      replyInChat: (request) => replyToGuidanceInChat(request),
-    });
+    return _guidanceAnswerPorts(conversationId, turnId, (request) => replyToGuidanceInChat(request));
   },
   inspectToolEffect(reference, signal) {
     return conversationSyncApi.inspectToolEffect(
       reference.conversationId, reference.turnId, reference.operationId, reference.ownerScope,
       { signal, timeout: 30_000 },
     );
+  },
+  subscribeToolCards(listener) {
+    return toolCardPresentation.subscribe(listener);
+  },
+  debugEnabled() {
+    return typeof _featureFlags !== 'undefined' && !!_featureFlags?.debug_mode;
   },
   loadToolResult(reference, signal) {
     return conversationSyncApi.turnToolResult(
@@ -15045,8 +15112,8 @@ runtimeScope.ConversationSurfacePresentation = Object.freeze({
   ownsConversation(conversationId) {
     return _conversationSurfaceController.ownsConversation(conversationId);
   },
-  revealTurn(conversationId, turnId) {
-    return _conversationSurfaceController.revealTurn(conversationId, turnId);
+  revealTurn(conversationId, turnId, target) {
+    return _conversationSurfaceController.revealTurn(conversationId, turnId, target);
   },
   isNearLatest(threshold) {
     return _conversationSurfaceController.isNearLatest(threshold);
@@ -15070,6 +15137,51 @@ function _conversationReadState(conversationOrId) {
   return conversationId
     ? runtimeScope.ConversationTurnStore?.readRuntimeState?.(conversationId) || null
     : null;
+}
+
+/* Ports of the one ask_human answer control (rich-response/guidance-answer.ts) for one question's Turn:
+ * the classic card answers in the open conversation; a card outside it (the studio person panel) first
+ * opens that conversation so the quoted chat reply leaves through the same composer and send pipeline. */
+function _guidanceAnswerPorts(conversationId, turnId, replyInChat) {
+  return createAuthenticatedChoiceInteractionPorts({
+    conversationId, turnId,
+    commandId: createTurnCommandId,
+    text: (key, fallback) => { const value = typeof t === 'function' ? t(key) : ''; return value && value !== key ? value : fallback; },
+    replyInChat,
+    displayTranslation: (request) => _guidanceDisplayTranslation(request),
+  });
+}
+runtimeScope.guidanceAnswerPorts = (conversationId, turnId) => _guidanceAnswerPorts(
+  conversationId, turnId, async (request) => {
+    if (getActiveConv()?.id !== request.conversationId) await loadConversation(request.conversationId);
+    return replyToGuidanceInChat(request);
+  });
+
+/* A question card reads in the conversation's language: when the conversation translates, the question
+ * and its options are shown translated (EN->CN, the same browser translation the retained question
+ * overlay uses, cached in its presentation store); null leaves them as written. */
+const _GUIDANCE_TRANSLATION_SEPARATOR = '\n‖‖‖\n';
+async function _guidanceDisplayTranslation({ conversationId, guidanceId, question, options, descriptions }) {
+  const conv = conversations.find(item => item?.id === conversationId);
+  if (!conv || !convAutoTranslate(conv)) return null;
+  const project = (state) => state?.translatedQuestion ? {
+    question: state.translatedQuestion,
+    options: options.map((option, index) => state.translatedOptions?.[index]?.label || option),
+    descriptions: descriptions.map((text, index) => state.translatedOptions?.[index]?.description || text),
+  } : null;
+  const known = project(humanGuidancePresentation.read(conversationId, guidanceId));
+  if (known) return known;
+  const parts = [question, ...options.flatMap((option, index) => [option, descriptions[index] || ''])];
+  const translated = String(await _callTranslateAPI(parts.join(_GUIDANCE_TRANSLATION_SEPARATOR), 'Chinese', 'English') || '')
+    .split(/\n?‖‖‖\n?/);
+  if (!translated[0]) return null;
+  const translatedOptions = options.map((_option, index) => ({
+    ...(translated[1 + index * 2] ? { label: translated[1 + index * 2] } : {}),
+    ...(translated[2 + index * 2] && descriptions[index] ? { description: translated[2 + index * 2] } : {}),
+  }));
+  return project(humanGuidancePresentation.patch(conversationId, guidanceId, {
+    translating: false, translatedQuestion: translated[0], translatedOptions,
+  }));
 }
 
 runtimeScope.ConversationTurnRead = Object.freeze({
@@ -17932,6 +18044,8 @@ function toggleAutoTranslate() {
   if (btn) btn.classList.toggle("active", autoTranslate);
   if (badge) badge.style.display = autoTranslate ? "" : "none";
   captureActiveConversationSettings();
+  // Tool cards show model-authored text translated under the same setting.
+  toolCardPresentation.refresh();
   debugLog(`Auto-Translate: ${autoTranslate ? "ON" : "OFF"}`, "success");
 
   // One-time hint about <notranslate> when first enabling
@@ -22133,6 +22247,69 @@ let backgroundConversationActivity = new Map();
   var routerOfficeSlot = document.createElement('div');
   routerOfficeSlot.className = 'lead-office-slot';
   routerOfficeSlot.hidden = true;
+  /* Narrow bridge to the typed lead deliverables (features/lead-deliverables/list.ts),
+   * loaded when a lead first shows in the classic sidebar; delete with the retained
+   * presence adapter. A lead's 成果 list sits right after its office slot, above the
+   * archive of conversations it started. Only the classic mode shows it: the studio's
+   * office opens the same deliverables from its desks and shelf. */
+  var projectDeliverablesSlot = document.createElement('div');
+  projectDeliverablesSlot.className = 'lead-deliverables-slot';
+  projectDeliverablesSlot.hidden = true;
+  projectOfficeSlot.after(projectDeliverablesSlot);
+  var routerDeliverablesSlot = document.createElement('div');
+  routerDeliverablesSlot.className = 'lead-deliverables-slot';
+  routerDeliverablesSlot.hidden = true;
+  var leadDeliverablesModule = null, leadDeliverablesLoading = null, leadDeliverableLists = {};
+  var leadDeliverablesExpanded = new Map();
+  function placeLeadDeliverables() {
+    var classic = readLanding() !== 'world';
+    var headquarters = !routerEntryHost.hidden;
+    var routerId = globalRouter ? globalRouter.conversationId() : '';
+    var projectLead = sidebar.querySelector('[data-coordinator-id]')?.dataset.coordinatorId || '';
+    var targets = {
+      project: classic && !headquarters && projectLead ? { leadId: projectLead, path: sidebarPath() || '' } : null,
+      router: classic && headquarters && routerId ? { leadId: routerId, path: globalRouter.home() || '' } : null,
+    };
+    if ((targets.project || targets.router) && !leadDeliverablesModule) { loadLeadDeliverablesModule(); return; }
+    [['project', projectDeliverablesSlot], ['router', routerDeliverablesSlot]].forEach(function (entry) {
+      var key = entry[0], slot = entry[1], target = targets[key];
+      var list = leadDeliverableLists[key];
+      if (!target) {
+        list?.hide();
+        if (!slot.hidden) slot.hidden = true;
+        return;
+      }
+      if (!list) list = leadDeliverableLists[key] = leadDeliverablesModule.createLeadDeliverables(leadDeliverablesPorts);
+      if (list.root.parentNode !== slot) slot.append(list.root);
+      if (slot.hidden) slot.hidden = false;
+      list.show(target);
+    });
+  }
+  function loadLeadDeliverablesModule() {
+    if (leadDeliverablesLoading || typeof loadLeadDeliverables !== 'function') return;
+    leadDeliverablesLoading = loadLeadDeliverables().then(function (module) {
+      leadDeliverablesModule = module;
+      leadDeliverablesPorts.opener = module.createDeliverableOpener(module.runtimeOpenPorts());
+      placeLeadDeliverables();
+    }).catch(function (error) {
+      // The lead entries stay fully usable; the next sidebar paint retries the import.
+      leadDeliverablesLoading = null;
+      console.warn('[LeadDeliverables] load failed', error);
+    });
+  }
+  var leadDeliverablesPorts = {
+    read: function (target, cursor, signal) { return Api.project.leadDeliverables(target.leadId, target.path, cursor, signal); },
+    subscribe: function (handler) {
+      pushSubscribe('project', '*', handler);
+      return function () { pushUnsubscribe('project', '*', handler); };
+    },
+    onReconnect: function (listener) {
+      return typeof pushOnReconnect === 'function' ? pushOnReconnect(listener) : function () {};
+    },
+    opener: null,
+    readExpanded: function (id) { return leadDeliverablesExpanded.has(id) ? leadDeliverablesExpanded.get(id) : null; },
+    writeExpanded: function (id, expanded) { leadDeliverablesExpanded.set(id, expanded); },
+  };
   var leadOffice = null, leadOfficeLoading = null, floorFacts = null, headquartersFacts = null, officeLeadId = '';
   function runningFlags(row) {
     var flags = _convStatusFlags(row);
@@ -22156,6 +22333,7 @@ let backgroundConversationActivity = new Map();
       leadOffice.show({ altitude: headquarters ? 'headquarters' : 'floor', path: facts.scope.path,
         leadId: facts.binding.conversationId, board: facts.board, report: facts.report });
     }
+    placeLeadDeliverables();
     // The archive group drops its running tally while the office shows that work.
     var shown = leadOffice?.leadId() || '';
     if (shown !== officeLeadId) { officeLeadId = shown; coordinatorConversationGroups?.refresh(); }
@@ -22209,6 +22387,7 @@ let backgroundConversationActivity = new Map();
       return function () { pushUnsubscribe('project', '*', refresh); stopReconnect?.(); };
     },
     navigate: function (id) { if (typeof loadConversation === 'function') loadConversation(id); },
+    openQuestion: function (id) { void runtimeScope.openConversationAtQuestion?.(id, null); },
     // A project floor of the headquarters goes down to that project, as its rail entry does.
     openProject: function (path, id) {
       var folder = (typeof getFolders === 'function' ? getFolders() : []).find(function (item) {
@@ -22229,6 +22408,7 @@ let backgroundConversationActivity = new Map();
   routerEntryHost.id = 'globalRouterEntry';
   column.insertBefore(routerEntryHost, sidebar);
   routerEntryHost.after(routerOfficeSlot);
+  routerOfficeSlot.after(routerDeliverablesSlot);
   var routerHeaderHost = document.createElement('div');
   var watchdogHeaderHost = document.createElement('div');
   host.before(routerHeaderHost, watchdogHeaderHost);
@@ -22342,14 +22522,14 @@ let backgroundConversationActivity = new Map();
       var pins = [];
       // Each group follows its entry's office slot: the archive sits under the team view.
       var project = sidebar.querySelector('[data-coordinator-id]')?.dataset.coordinatorId;
-      if (project) pins.push({ id: project, path: sidebarPath(), host: projectOfficeSlot });
+      if (project) pins.push({ id: project, path: sidebarPath(), host: projectDeliverablesSlot });
       // Both router conversations stay reserved, so neither becomes a replaced
       // Coordinator's row. Only the main coordinator groups its work, and only
       // beneath its card while the card is shown; the Watchdog never delegates.
       if (globalRouter.conversationId()) pins.push({
-        id: globalRouter.conversationId(), path: routerEntryHost.hidden ? '' : globalRouter.home() || '', host: routerOfficeSlot,
+        id: globalRouter.conversationId(), path: routerEntryHost.hidden ? '' : globalRouter.home() || '', host: routerDeliverablesSlot,
       });
-      if (routerWatchdog.conversationId()) pins.push({ id: routerWatchdog.conversationId(), path: '', host: routerOfficeSlot });
+      if (routerWatchdog.conversationId()) pins.push({ id: routerWatchdog.conversationId(), path: '', host: routerDeliverablesSlot });
       return pins;
     },
     historySettled: function () { return !sidebar.querySelector('.coordination-leader[aria-busy="true"]'); },
@@ -22409,6 +22589,7 @@ let backgroundConversationActivity = new Map();
       delete runtimeScope.recoverProjectCoordination;
       surface.destroy(); sidebarSurface.destroy(); headquartersSurface.destroy(); globalRouter.destroy(); routerWatchdog.destroy();
       coordinatorConversationGroups.destroy(); leadOffice?.destroy(); stopLandingWatch();
+      Object.values(leadDeliverableLists).forEach(function (list) { list.destroy(); });
     }
   });
   runtimeScope.presenceRefresh();

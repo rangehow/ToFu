@@ -69,7 +69,8 @@ class FifoAuthority:
         self.concurrent_duplicate_sends = 0
         self.foreign_commits = 0
 
-    def attempt(self, operation, payload, *, timeout, command_id, deadline_unix_ms):
+    def attempt(self, operation, payload, *, timeout, command_id, deadline_unix_ms,
+                cancellation=None):
         from lib.storage.errors import StorageError
 
         if operation == 'event.append_batch':

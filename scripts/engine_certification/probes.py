@@ -10,7 +10,9 @@ is drilled with its own client.
             2099 probe rows, write once, stop cleanly (stdin EOF)
   crash     commit, wait for the online GC's first location table, commit
             twice during the off-mutex packed-filter build, SIGKILL before it
-            finishes
+            finishes: the engine runs with the packed_filter_build_pause
+            failpoint, so the kill follows the build's own step=paused marker
+            (after its first index read), never a guessed delay
   killstop  acknowledge 30 writes, close stdin (ordered shutdown), SIGKILL at
             ``step=authority_checkpoint state=start``
 
@@ -34,11 +36,16 @@ import time
 KILLSTOP_COMMITS = 30
 KILLSTOP_STEP = 'authority_checkpoint'
 CRASH_COMMITS = ('before-first-table', 'during-build-1', 'during-build-2')
+# The engine's fault-injection point (packages/tofu-db/src/block.rs, FAILPOINT_ENVIRONMENT).
+PACKED_FILTER_BUILD_PAUSE = ('TOFU_DB_FAILPOINT', 'packed_filter_build_pause')
 
 
-def _engine(engine: str, root: Path, token: str, durability: str, stderr) -> subprocess.Popen:
+def _engine(engine: str, root: Path, token: str, durability: str, stderr,
+            failpoint: tuple[str, str] | None = None) -> subprocess.Popen:
     environment = {'PATH': '/usr/bin:/bin', 'HOME': str(root), 'TOFU_DB_WRITE_OVERLAY': '1',
                    'TOFU_STORAGE_TOKEN': token, 'TOFU_DB_DURABILITY': durability}
+    if failpoint:
+        environment[failpoint[0]] = failpoint[1]
     return subprocess.Popen([engine, 'serve', '--data-dir', str(root / 'tofudb-authority'),
                              '--owner-id', '1', '--tenant-id', '1'],
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr, env=environment)
@@ -125,14 +132,21 @@ def crash(args) -> dict:
     root = Path(args.root)
     token = secrets.token_hex(32)
     result = {'engine': args.engine, 'root': str(root), 'commits': []}
-    first_table, built = threading.Event(), threading.Event()
+    first_table, paused, built, build_reached = (threading.Event() for _ in range(4))
+    paused_marker = (f'step=paused failpoint={PACKED_FILTER_BUILD_PAUSE[1]} '
+                     f'root={root / "tofudb-authority"}/')  # the authority's block store, never another's
 
     def watch(text):
         if '"target":"catalog_locations"' in text and 'source=first' in text:
             first_table.set()
-        if '"target":"packed_filter"' in text and 'step=built' in text:
-            built.set()
-    child = _engine(args.engine, root, token, 'strict', subprocess.PIPE)
+        if '"target":"packed_filter"' in text:
+            if paused_marker in text:
+                paused.set()
+                build_reached.set()
+            if 'step=built' in text:
+                built.set()
+                build_reached.set()
+    child = _engine(args.engine, root, token, 'strict', subprocess.PIPE, PACKED_FILTER_BUILD_PAUSE)
     threading.Thread(target=_drain, args=(child.stderr, Path(args.out).with_suffix('.stderr.jsonl'), watch),
                      daemon=True).start()
     started = time.time()
@@ -152,9 +166,14 @@ def crash(args) -> dict:
         result['first_table_never_published'] = True
     else:
         result['first_table_s'] = round(time.time() - started, 1)
-        time.sleep(5)  # Inside the packed-filter build that follows the first table.
-        for label in CRASH_COMMITS[1:]:
-            commit(label)
+        # The build follows the first table; the failpoint holds it open until the kill.
+        if not build_reached.wait(600):
+            result['build_never_reached'] = True
+        elif paused.is_set():
+            result['paused_s'] = round(time.time() - started, 1)
+            for label in CRASH_COMMITS[1:]:
+                commit(label)
+    result['paused_inside_build'] = paused.is_set()
     result['built_before_kill'] = built.is_set()
     os.kill(child.pid, signal.SIGKILL)
     result['killed_at_s'] = round(time.time() - started, 1)

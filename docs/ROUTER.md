@@ -310,7 +310,17 @@ lose its usage account and fences).
 
 **Reviewed notices can conclude without an answer.** An exact `[SILENT]` is a
 declared outcome only for a bound Global Router Turn whose parent is a
-nonhuman channel/peer notice. The engine checks the durable parent and every
+nonhuman notice of any kind (`turn_initiation.is_nonhuman_notice_turn`):
+a channel event, a project report or question relay, a scheduled wake such
+as the keepalive, a timer or any other nonhuman initiator. One quiet-terminal
+contract covers every wake kind; human and unknown initiators never qualify.
+Problem: the gate admitted only channel/peer parents while the Router prompt
+prescribes `[SILENT]` for any event that needs nothing, so every quiet
+`*/30` keepalive (a `proactive` scheduled wake) was refused, burned both
+terminal-recovery attempts and settled `abnormal_stop` (empty_stop).
+Decision: the parent test is "nonhuman", shared with the empty_stop resume
+below. Alternative rejected: listing wake initiators one by one (the next
+wake kind would fail the same way). The engine checks the durable parent and every
 steer of this Turn by its recorded author: committed, pending in the inbox,
 or drained into this request before its consumption is confirmed. Model
 history is never steer evidence: it keeps earlier Turns' labelled owner-steer
@@ -1850,6 +1860,21 @@ projects. Nothing else changes.
   following a link; a long text arrives in pages through the artifact
   readers). Workers read it by absolute path; Global Router home Workers update
   it through ordinary reviewed publication.
+
+  **Seed.** R13 named the file before anything wrote it, so a home whose
+  registry lane never published reported `available=false` while leads were
+  pointed at it. `router_home_path` now writes `RESOURCES.md` once — at
+  creation and on the first open of a pre-existing home that lacks it — from
+  `_RESOURCES` in `lib/router/home.py`: the queues of
+  `scripts/hope_patrol/queues.json` (the compute patrol's documented seed,
+  itself sourced from the owner's 2026-11-13 Hope account audit), the queue
+  and resource-code observations of the Hope skill's `references/queues.md`
+  and `references/rsi-queues-2026q4.md`, and key/storage rows that name only
+  how to obtain each one. A seed row names its source and read date and is
+  not a live capacity or grant. The write is write-once: an owner or
+  reviewed-Worker edit — or deletion — is never overwritten or restored, so
+  `available=false` remains truthful when the owner removes it. The seed
+  holds no secret value and no secret-shaped material.
 - **Audit.** Every cross-project message is an immutable original in the
   recipient's owner-scoped mailbox (sender, `senderProject`, kind, time and
   receipts). The sender reads it with `get_project_messages` (outgoing), the

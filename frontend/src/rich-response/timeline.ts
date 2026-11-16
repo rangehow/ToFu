@@ -1,6 +1,7 @@
 /** Timeline presentation only: validated contract data -> text DOM and numeric SVG geometry.
  * Called by renderer.ts; no resource loading, model styles, HTML or lifecycle state.
  */
+import { createDisclosureSummary } from '../ui';
 import type { timeline } from './contract.generated';
 
 type Text = (key: string, fallback: string) => string;
@@ -95,7 +96,7 @@ export function renderTimeline(doc: Document, block: timeline, text: Text): HTML
 
   const fallback = doc.createElement('details');
   fallback.className = 'rich-timeline-data';
-  const disclosure = element('summary', text('rich.timelineData', 'Timeline data'));
+  const disclosure = createDisclosureSummary(doc, text('rich.timelineData', 'Timeline data'));
   disclosure.dataset.richControl = 'timeline-data';
   fallback.append(disclosure);
   const wrap = element('div'); wrap.className = 'rich-table-scroll'; wrap.tabIndex = 0;

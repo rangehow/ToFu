@@ -108,7 +108,7 @@ def _running_task(conv_id, task_id):
 
 
 def _drain_notify_sequences(client, conv_id):
-    from lib.conversation_sync.cursor import decode_cursor
+    from lib.conversation_sync.cursor import decode_sequence_hint
 
     async def drain_ready():
         frames = []
@@ -117,7 +117,7 @@ def _drain_notify_sequences(client, conv_id):
         return frames
 
     return [
-        decode_cursor(conv_id, 1, frame['cursorHint'])
+        decode_sequence_hint(conv_id, 1, frame['cursorHint'])
         for frame in asyncio.run(drain_ready())
         if frame.get('type') == 'conversation.invalidated'
         and frame.get('conversationId') == conv_id

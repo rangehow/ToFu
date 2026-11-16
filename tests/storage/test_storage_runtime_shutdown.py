@@ -1,7 +1,9 @@
-"""Storage shutdown must not certify while an auto-restart can reacquire."""
+"""Storage shutdown must not certify while an auto-restart can reacquire, and
+calls waiting out a transient failure learn that the runtime is stopping."""
 
 from __future__ import annotations
 
+import logging
 import threading
 
 import pytest
@@ -88,3 +90,110 @@ def test_late_restart_handshake_cannot_publish_ready_after_stop():
     assert errors == []
     assert runtime.ready is False
     assert runtime.status()['state'] == 'stopped'
+
+
+class _RecoveryPortSupervisor:
+    """Supervisor double whose client takes the runtime's recovery port at
+    start, as the native storage.v2 client does."""
+
+    def __init__(self) -> None:
+        self.callback = None
+        self.ready = False
+        self.client = self
+        self.recover = None
+
+    def add_crash_callback(self, callback) -> None:
+        self.callback = callback
+
+    def bind_runtime_recovery(self, recover) -> None:
+        self.recover = recover
+
+    def start(self):
+        self.ready = True
+        return self
+
+    def health(self):
+        return {'ready': True}
+
+    def stop(self, timeout=10.0) -> None:
+        self.ready = False
+
+    def status(self):
+        return {
+            'ready': self.ready,
+            'state': 'ready' if self.ready else 'stopped',
+            'backend': 'tofudb',
+            'pid': None,
+            'port': None,
+            'last_exit_code': None,
+        }
+
+
+# Outlasts the test: only a runtime state change can end a caller's pause.
+_PAUSE_LONGER_THAN_THE_TEST_S = 600.0
+
+
+def _stop_with_callers_mid_retry(runtime, recover, count):
+    """Stop ``runtime`` while ``count`` callers pause on its recovery port,
+    as the client's retry loop does between attempts; return their outcomes."""
+    outcomes = []
+
+    def wait_out_a_transient_failure():
+        try:
+            outcomes.append(recover(_PAUSE_LONGER_THAN_THE_TEST_S))
+        except StorageError as error:
+            outcomes.append(error)
+
+    callers = [threading.Thread(target=wait_out_a_transient_failure, daemon=True)
+               for _ in range(count)]
+    for caller in callers:
+        caller.start()
+    # Let them park. A caller arriving after the stop gets the same answer.
+    threading.Event().wait(0.2)
+    assert all(caller.is_alive() for caller in callers)
+    runtime.stop(timeout=5.0)
+    for caller in callers:
+        caller.join(timeout=5.0)
+    assert not any(caller.is_alive() for caller in callers)
+    return outcomes
+
+
+def test_stop_tells_a_caller_mid_retry_that_the_runtime_is_stopping():
+    """A stop must not read like a breaker trip to a call waiting it out.
+
+    r4b-n2000-1 (2026-11-14): the harness stopped the app at its tier timeout,
+    and every call then pausing between replays failed with the one text a
+    breaker trip also produced, so the stop read as a breaker trip. The stop
+    names itself and stays final.
+    """
+    supervisor = _RecoveryPortSupervisor()
+    runtime = StorageRuntime(supervisor)
+    assert runtime.start() is supervisor
+
+    [error] = _stop_with_callers_mid_retry(runtime, supervisor.recover, 1)
+
+    assert isinstance(error, StorageError)
+    assert error.code == 'database_unavailable'
+    assert error.message == 'Storage runtime is stopping'
+    assert error.retryable is False
+
+
+def test_each_stop_logs_once_that_it_ended_calls_mid_retry(caplog):
+    """One warning per stop names the state, however many calls it ends."""
+    supervisor = _RecoveryPortSupervisor()
+    runtime = StorageRuntime(supervisor)
+    with caplog.at_level(logging.WARNING, logger='tofu.storage.runtime'):
+        for callers in (3, 1):  # two stop episodes
+            assert runtime.start() is supervisor
+            outcomes = _stop_with_callers_mid_retry(
+                runtime, supervisor.recover, callers)
+            assert [error.code for error in outcomes] == [
+                'database_unavailable'] * callers
+
+    lines = [record.getMessage() for record in caplog.records
+             if record.name == 'tofu.storage.runtime'
+             and 'mid-retry' in record.getMessage()]
+    assert len(lines) == 2, lines
+    for line in lines:
+        assert 'stopping' in line
+        assert 'degraded' not in line

@@ -56,7 +56,29 @@ def isolated_stats(monkeypatch, tmp_path):
 
 
 def _on_disk(stats_path):
-    return json.loads(stats_path.read_text(encoding='utf-8'))
+    """The store as a fresh reader sees it: the decision document, with the
+    telemetry document published for its generation (``lib/key_stats/_state.py``,
+    ``_read_telemetry``) carrying the current day and its counters."""
+    from lib.key_stats._state import _telemetry_path
+    document = json.loads(stats_path.read_text(encoding='utf-8'))
+    telemetry_path = Path(_telemetry_path(str(stats_path)))
+    try:
+        telemetry = json.loads(telemetry_path.read_text(encoding='utf-8'))
+    except (FileNotFoundError, ValueError):
+        return document
+    if telemetry.get('base') != document.get('generation', 0):
+        return document
+    from lib.key_stats._state import _TELEMETRY_FIELDS
+    # A bound telemetry document is the complete telemetry of its day; the
+    # decision document contributes decisions only.
+    stats = document.get('stats', {}) if document.get('day') == telemetry.get('day') else {}
+    stats = {pk: decisions for pk, decisions in (
+        (pk, {field: value for field, value in entry.items() if field not in _TELEMETRY_FIELDS})
+        for pk, entry in stats.items())
+        if any(value not in (None, False, {}, '') for value in decisions.values())}
+    for pk, fields in telemetry.get('stats', {}).items():
+        stats.setdefault(pk, {}).update(fields)
+    return {**document, 'day': telemetry.get('day'), 'stats': stats}
 
 
 _WORKER = r'''
@@ -134,7 +156,7 @@ def test_cross_process_counters_and_overrides_do_not_lose_updates(tmp_path):
     outputs = [process.communicate(timeout=30) for process in processes]
     assert all(process.returncode == 0 for process in processes), outputs
 
-    document = json.loads(stats_path.read_text(encoding='utf-8'))
+    document = _on_disk(stats_path)
     assert document['stats'][PAIR]['success'] == 8
     assert document['overrides'] == {
         f'{PROVIDER}::key-{index}': False for index in range(5)
@@ -347,7 +369,7 @@ def test_repeated_write_failures_replay_all_increments_after_recovery(
         assert ks.flush_key_stats() is False
         assert ks.flush_key_stats() is False
 
-    on_disk = json.loads(stats_path.read_text(encoding='utf-8'))
+    on_disk = _on_disk(stats_path)
     assert (on_disk.get('stats') or {}).get(PAIR) is None
     assert ks.get_today_stats(PROVIDER, KEY)['success'] == 2
     # Retries re-queue one coalesced batch instead of one per attempt.
@@ -358,7 +380,7 @@ def test_repeated_write_failures_replay_all_increments_after_recovery(
     assert ks.flush_key_stats() is True
 
     assert ks.get_today_stats(PROVIDER, KEY)['success'] == 3
-    persisted = json.loads(stats_path.read_text(encoding='utf-8'))
+    persisted = _on_disk(stats_path)
     assert persisted['stats'][PAIR]['success'] == 3
 
 

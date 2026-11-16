@@ -13,3 +13,11 @@ export function validGuidanceAnswer(mode:string|undefined,options:string[],quest
         &&typeof value.answer==='string'&&Boolean(value.answer.trim()));
   }catch{return false;}
 }
+
+/** The reply quote that binds a chat answer to one ask_human question: the question as the owner reads it,
+ * then its id on its own last line, so the model (and the record) knows exactly which question the reply
+ * answers. Every answer path (the question card, "answer in conversation") builds its quote here. */
+export function guidanceReplyQuote(guidanceId:string,question:string):string{
+  const text=question.trim();
+  return guidanceId?`${text}\n\n[question ${guidanceId}]`:text;
+}

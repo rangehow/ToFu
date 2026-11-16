@@ -40,15 +40,38 @@ export function sectionHtml(heading: string, innerHtml: string): string {
     : '';
 }
 
+/** A labeled disclosure around already-escaped markup. */
+export function disclosureHtml(label: string, innerHtml: string, open = false): string {
+  return innerHtml
+    ? `<details class="ptool-coord-more"${open ? ' open' : ''}><summary>${escape(label)}</summary>${innerHtml}</details>`
+    : '';
+}
+
 /** Long prose stays one click away; `markdownHtml` is the trusted renderer's output. */
 export function collapsibleHtml(label: string, markdownHtml: string, open = false): string {
-  return markdownHtml
-    ? `<details class="ptool-coord-more"${open ? ' open' : ''}><summary>${escape(label)}</summary><div class="ptool-coord-prose md-content">${markdownHtml}</div></details>`
-    : '';
+  return markdownHtml ? disclosureHtml(label, `<div class="ptool-coord-prose md-content">${markdownHtml}</div>`, open) : '';
+}
+
+/**
+ * Free text as shown (its translation when there is one) with the authored
+ * original behind a toggle; both arguments are already-escaped markup.
+ */
+export function translatedTextHtml(
+  shownHtml: string, originalHtml: string, labels: { readonly original: string; readonly translating: string },
+  pending: boolean,
+): string {
+  return shownHtml
+    + (originalHtml ? `<details class="ptool-coord-original"><summary>${escape(labels.original)}</summary>${originalHtml}</details>` : '')
+    + (pending ? `<span class="ptool-coord-translating">${escape(labels.translating)}</span>` : '');
 }
 
 export function leadHtml(sentence: string): string {
   return sentence ? `<p class="ptool-coord-lead">${escape(sentence)}</p>` : '';
+}
+
+/** The card's one-line outcome, above its explanation. */
+export function verdictHtml(sentence: string): string {
+  return sentence ? `<p class="ptool-coord-lead ptool-coord-verdict"><strong>${escape(sentence)}</strong></p>` : '';
 }
 
 export function checkRowHtml(kind: MarkKind, stateLabel: string, titleHtml: string, detailHtml = ''): string {

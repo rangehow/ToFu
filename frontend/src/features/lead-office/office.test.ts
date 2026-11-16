@@ -58,7 +58,7 @@ function harness() {
     leadActivity: vi.fn(() => ({ streaming: false, awaitingHuman: false })),
     currentConversationId: () => current,
     subscribe: vi.fn(refresh => { pushes.push(refresh); return unsubscribe; }),
-    navigate: vi.fn(), openProject: vi.fn(),
+    navigate: vi.fn(), openQuestion: vi.fn(), openProject: vi.fn(),
   };
   const office = createLeadOffice(ports);
   document.body.replaceChildren(office.root);

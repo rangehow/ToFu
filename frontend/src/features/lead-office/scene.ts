@@ -54,8 +54,8 @@ const LEAD_PLATE = { x: 8, y: 8, width: 104, height: 56 } as const;
 const ORIGIN = { x: 0, y: 0 } as const;
 
 export type OfficeActivation =
-  | { kind: 'conversation'; conversationId: string }
-  | { kind: 'project'; path: string; conversationId: string };
+  | { kind: 'conversation'; conversationId: string; asking?: boolean }
+  | { kind: 'project'; path: string; conversationId: string; asking?: boolean };
 
 export interface LeadOfficeSceneText {
   /** Accessible name of the lead's room. */
@@ -487,10 +487,15 @@ export function createLeadOfficeScene(ports: {
       if (!entry) return;
       const room = entry.room;
       if (room.kind === 'project') {
-        if (room.project.coordinatorId) ports.activate({ kind: 'project', path: room.project.path, conversationId: room.project.coordinatorId });
+        if (room.project.coordinatorId) {
+          ports.activate({ kind: 'project', path: room.project.path, conversationId: room.project.coordinatorId,
+            ...(room.project.questions ? { asking: true } : {}) });
+        }
         return;
       }
-      if (entry.conversationId) ports.activate({ kind: 'conversation', conversationId: entry.conversationId });
+      // A lead with the '?' marker opens at its question, not at the bottom of its conversation.
+      const asking = room.kind === 'lead' && view.lead.state === 'asking';
+      if (entry.conversationId) ports.activate({ kind: 'conversation', conversationId: entry.conversationId, ...(asking ? { asking } : {}) });
     },
     setStill(next) {
       still = next;

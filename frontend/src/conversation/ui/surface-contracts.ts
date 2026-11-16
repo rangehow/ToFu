@@ -97,13 +97,17 @@ export interface ConversationSurfaceRenderers {
   ): void;
 }
 
+/** One block inside a revealed Turn: the ask_human question with this guidance id. */
+export interface RevealTarget { guidanceId: string }
+
 export interface ScrollAnchorPort<Snapshot = unknown> {
   readonly following?: boolean;
   capture(root: HTMLElement): Snapshot;
   restore(root: HTMLElement, snapshot: Snapshot): void;
   followLatest?(root: HTMLElement, options?: { force?: boolean }): void;
-  /** Exact navigation shares follow/layout cancellation and scoped geometry. */
-  scrollToTurn?(root: HTMLElement, turnId: string, onScroll?: () => void): boolean;
+  /** Exact navigation shares follow/layout cancellation and scoped geometry. A target narrows the
+   * alignment to one block of the Turn (an ask_human question) and highlights it. */
+  scrollToTurn?(root: HTMLElement, turnId: string, onScroll?: () => void, target?: RevealTarget): boolean;
   isNearBottom?(threshold?: number): boolean;
 
   suspendFollow?(): void;
@@ -189,8 +193,8 @@ export interface ConversationSurface {
   showEarlier(): boolean;
   showLater(): boolean;
 
-  /** Mount the bounded target window and align its Turn in the owned viewport. */
-  revealTurn(turnId: string): boolean;
+  /** Mount the bounded target window and align its Turn (or the target block in it) in the owned viewport. */
+  revealTurn(turnId: string, target?: RevealTarget): boolean;
   isNearLatest(threshold?: number): boolean;
   followLatest(options?: { force?: boolean }): void;
   dispose(): void;

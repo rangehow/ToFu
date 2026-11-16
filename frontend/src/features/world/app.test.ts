@@ -58,7 +58,7 @@ function shown(root: HTMLElement) {
 it('shows a loading state, never an empty office or an error, until a cold 20 s office read answers', async () => {
   const root = document.createElement('div');
   document.body.append(root);
-  const page = mountWorld(root, { openChat() {}, dock() {}, classic() {}, push: null });
+  const page = mountWorld(root, { openChat() {}, openQuestion() {}, answerPorts: () => undefined, dock() {}, classic() {}, push: null });
   const loading = { busy: 'true', loading: t('common.loading'), empty: false };
   expect(shown(root)).toEqual({ ...loading, progress: t('world.loading.progress', { done: 0, total: 1 }) });
   expect(page.office()!.people.size).toBe(0);
@@ -92,7 +92,7 @@ it('seats the Global Router as soon as it answers, without waiting for the folde
   }));
   const root = document.createElement('div');
   document.body.append(root);
-  const page = mountWorld(root, { openChat() {}, dock() {}, classic() {}, push: null });
+  const page = mountWorld(root, { openChat() {}, openQuestion() {}, answerPorts: () => undefined, dock() {}, classic() {}, push: null });
   await vi.advanceTimersByTimeAsync(1_000);
   shown(root);
   expect([...page.office()!.people.keys()]).toEqual([ROUTER]);

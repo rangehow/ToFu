@@ -439,6 +439,13 @@ Turn retirement; verify selected-store crash/Continue/query parity and recovery 
   and both drivers report their own stats components. Verify the
   `tests_capture` reachability/cache and `tests_mark_cost` read-cost
   specifications and the `entity` `reachability_once_*` visitor specifications.
+  Every epoch scans the whole catalog one window at a time, confirms each
+  segment's dead set by its digest (`dead_set_digest`, no count) and rewrites
+  or retires every confirmed segment whose dead bytes reach its live bytes;
+  verify `the_second_epoch_reclaims_every_confirmed_segment_in_every_window`
+  and `a_segment_is_rewritten_once_its_dead_bytes_reach_its_live_bytes`.
+  `authority_gc.rs::AuthorityGarbageCollectionSession::census` (`tofu-db
+  gc-census`) measures catalog liveness on a closed copy and reclaims nothing.
   Superseded segment files never wait for a mark: the segment lane runs
   before marking, confirms orphans by two unchanged observations and
   re-validates each one under its own hold, including both CONTROL slots
@@ -480,9 +487,11 @@ Turn retirement; verify selected-store crash/Continue/query parity and recovery 
   refused attempt retries after at least as long as the run has already been
   refused (geometric backoff, no constant), and a stop ends the run, also
   one raised while a hold waits: the attempt re-checks it under the mutex and
-  `stop_and_join` unparks a paused run. Only the epoch's capture stays a
-  `try_lock` that defers the epoch. Verify `tests_short_holds`
-  (`deletion_holds_wait_for_an_authority_held_at_every_attempt_instead_of_backing_off`).
+  `stop_and_join` unparks a paused run. The epoch's capture waits in
+  `lock()` too and re-checks the stop flag under the mutex (a sampled capture
+  deferred all 147 search epochs on 2026-11-15). Verify `tests_short_holds`
+  (`deletion_holds_wait_for_an_authority_held_at_every_attempt_instead_of_backing_off`)
+  and `a_capture_behind_a_mostly_held_mutex_waits_instead_of_deferring`.
   Every loose-victim hold first makes both CONTROL slots name the current
   physical roots (`ControlFile::slots_name_only_physical_roots`, rule S8),
   and a copy's hold re-checks that both slots name the installed catalog,
@@ -540,7 +549,7 @@ Turn retirement; verify selected-store crash/Continue/query parity and recovery 
   `a_current_location_table_sends_uncatalogued_blocks_to_their_loose_copy`,
   `traversal_readers_share_the_current_published_location_table`,
   `the_first_catalog_location_table_is_built_once`,
-  `driver_publishes_the_first_catalog_location_table_while_epochs_defer` and
+  `driver_publishes_the_first_catalog_location_table_while_the_capture_waits` and
   `worker_derives_the_published_location_tables_of_the_authority_and_the_search_index`;
   design and measurements: `docs/TOFUDB_BLOCK_READ_PATH.md`.
 - `src/payload_segment.rs` shares one read handle per segment
@@ -583,7 +592,7 @@ Turn retirement; verify selected-store crash/Continue/query parity and recovery 
   `block::packed_filter_tests` (incl. the install-swap seam spec),
   `authority::packed_filter_tests`,
   `full_catalog_merge_inserts_only_its_chunk_into_the_packed_filter`,
-  `driver_builds_the_packed_filter_off_the_mutex_while_epochs_defer`
+  `driver_builds_the_packed_filter_off_the_mutex_while_the_capture_waits`
   and the loose-race specifications beside
   `a_catalogued_block_reads_through_its_segment_whatever_happens_to_its_loose_copy`;
   design and measurements: `docs/TOFUDB_BLOCK_READ_PATH.md`, "Packed filter
@@ -787,7 +796,11 @@ Turn retirement; verify selected-store crash/Continue/query parity and recovery 
   listing observed every counted commit. Verify `maintenance`, `search_dirty`
   and `turn_search_worker` tests plus the projection relocation integration.
 - `src/turn_search_runtime.rs` owns capacity admission and retryable deferred
-  opening off the request mutex on the existing maintenance worker; `search_volume.rs` consumes generated geometry policy. The opened
+  opening off the request mutex on the existing maintenance worker, and
+  `retire_history_slice`, which the maintenance worker runs after each search
+  batch so retained index history never pins superseded pages (verify
+  `retired_index_history_lets_the_collector_reclaim_superseded_generations`,
+  `every_search_history_retirement_fault_reopens_with_identical_answers`); `search_volume.rs` consumes generated geometry policy. The opened
   codec is crate-private. Source and index reuse `OnlineGcDatabase` ports and
   the same collector; verify `turn_search_runtime` and online-GC fault suites.
 - `project_brain_recovery.rs` owns header-bound active-work summaries and

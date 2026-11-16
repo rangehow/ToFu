@@ -106,6 +106,12 @@ the transcript seed of a pre-history head are "Task history" in
 store, and the board stays the only checklist. Verify
 `test_coordinator_task_history.py` and the history HTTP journey.
 
+`lead_deliverables.py` projects each lead conversation's deliverables at read
+time from their owners (delivery report Turns, relayed report notices, artifact
+rows); it stores nothing, never add a deliverables store ("Lead deliverables" in
+`docs/PROJECT_COORDINATION.md`). Verify `tests/project_mod/test_lead_deliverables.py`
+and `tests/storage/test_lead_deliverables_authority.py`.
+
 `coordinator_continuation.py` builds the state a Coordinator wake acts on, read at
 its birth and appended to the wake's fixed brief: open board tasks, unanswered
 owner questions and only actionable Worker states ("Continuation context is

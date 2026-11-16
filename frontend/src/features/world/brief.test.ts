@@ -37,7 +37,8 @@ describe('a person panel leads with what they did, the evidence and the decision
     const input = tofu({ reports: reportProgress, questions: openQuestions(LEAD, [askTurn]) });
     const person = projectOffice(NOW, [input], labels).people.get(LEAD)!;
     const brief = projectBrief(person, input, NOW);
-    expect(brief.decisions).toEqual([{ question: '**Only you** can approve the Paper A run: keep 8 jobs or cut to 4?',
+    expect(brief.decisions).toEqual([{ guidanceId: openQuestions(LEAD, [askTurn])[0].guidanceId, conversationId: LEAD, project: input.name,
+      question: '**Only you** can approve the Paper A run: keep 8 jobs or cut to 4?',
       blocking: true, fallback: '', turn: { turnId: askTurn.turnId, ordinal: 530 }, at: askTurn.createdAt }]);
     expect(brief.overdue.map(item => item.slips)).toEqual([15]);
     expect(brief.lead).toMatchObject({ kind: 'report', reportKind: 'progress', unread: true,

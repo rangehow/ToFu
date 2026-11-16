@@ -9,6 +9,7 @@
 import { renderRichResponse, disposeRichResponse } from '../../../rich-response/renderer';
 
 import { projectRichToolResult } from '../../../rich-response/tool-result';
+import { guidancePromptBlock, isGuidanceAnswerMode } from '../../../rich-response/guidance-answer';
 import {
   type ConversationBlockViewModel,
   type ConversationTurnViewModel,
@@ -41,7 +42,11 @@ import { renderToolEffectNotice } from './tool-effect-notice';
 import { toolEffectNotice } from '../../presentation/tool-effect-presentation';
 
 
-interface ToolBodyState { materialized: boolean; detach?: () => void; rich?: HTMLElement; choices?: ChoicePorts; choiceScope?: string }
+interface ToolBodyState {
+  materialized: boolean; detach?: () => void; rich?: HTMLElement; choices?: ChoicePorts; choiceScope?: string;
+  /** Unsubscribes this block from tool-card facts that settle after paint (titles, translations). */
+  unsubscribeCard?: () => void;
+}
 const toolBodies = new WeakMap<HTMLElement, ToolBodyState>();
 
 /** Retired by Surface unmount; no listeners or result bodies outlive the block. */
@@ -50,6 +55,7 @@ export function disposeToolBody(node: HTMLElement): void {
   const rich = toolBodies.get(node)?.rich;
   if (rich) disposeRichResponse(rich);
   toolBodies.get(node)?.detach?.();
+  toolBodies.get(node)?.unsubscribeCard?.();
   toolBodies.delete(node);
 }
 
@@ -95,6 +101,8 @@ function renderToolBlockContent(
   const loaded = loadedToolResult(node, reference);
   const bodyState = toolBodies.get(node) ?? { materialized: false };
   toolBodies.set(node, bodyState);
+  bodyState.unsubscribeCard?.();
+  bodyState.unsubscribeCard = undefined;
 
   const choiceConversationId = turn.source?.conversationId;
   const choiceScope = JSON.stringify([choiceConversationId, turn.turnId]);
@@ -103,8 +111,13 @@ function renderToolBlockContent(
     bodyState.choiceScope = choiceScope;
     if (bodyState.rich) disposeRichResponse(bodyState.rich);
   }
-  if (block.round?.toolName === 'ask_human' && ['choice','batch'].includes(String(block.round.guidanceType ?? ''))
-      && block.round.guidanceId && bodyState.choices) {
+  // "Answer in conversation" scrolls to and highlights this question by its id (conversation-viewport.ts).
+  const guidanceId = block.round?.toolName === 'ask_human' && typeof block.round.guidanceId === 'string' ? block.round.guidanceId : '';
+  if (guidanceId) node.dataset.guidanceId = guidanceId;
+  else delete node.dataset.guidanceId;
+  const guidanceMode = block.round?.guidanceType;
+  const questionRound = block.round;
+  if (questionRound && guidanceId && isGuidanceAnswerMode(guidanceMode) && bodyState.choices) {
     disposeLazyToolResult(node); bodyState.detach?.(); bodyState.detach = undefined;
     bodyState.rich ??= node.ownerDocument.createElement('div');
     // Shared summary/effect owners may add siblings. Keep the mounted form in
@@ -114,14 +127,15 @@ function renderToolBlockContent(
       header = node.ownerDocument.createElement('div');
       node.replaceChildren(header, bodyState.rich);
     }
-    paintQuestionSummary(header, block.round, ports);
+    paintQuestionSummary(header, questionRound, ports);
     resetManagedHtml(node);
     node.dataset.rendererMode = 'native-choice';
-    renderRichResponse(bodyState.rich, { version: 1, title: ports.localizedText?.('rich.question', 'Question') ?? 'Question',
-      blocks: [{ type: block.round.guidanceType === 'choice' ? 'choice_prompt' : 'form_prompt', id: 'human-choice', title: ports.localizedText?.('rich.question', 'Question') ?? 'Question', interactionId: block.round.guidanceId }] },
+    const questionTitle = ports.localizedText?.('rich.question', 'Question') ?? 'Question';
+    renderRichResponse(bodyState.rich, { version: 1, title: questionTitle,
+      blocks: [guidancePromptBlock(guidanceMode, guidanceId, questionTitle)] },
       { conversationId: turn.source.conversationId, choices: bodyState.choices,
         renderMarkdown: source => ports.renderSafeMarkdownHtml(source),
-        interactionSnapshot: JSON.stringify([turn.status, block.round.status, block.round.guidanceResponse]), text: (key, fallback) => ports.localizedText?.(key, fallback) ?? fallback });
+        interactionSnapshot: JSON.stringify([turn.status, questionRound.status, questionRound.guidanceResponse]), text: (key, fallback) => ports.localizedText?.(key, fallback) ?? fallback });
     return;
   }
 
@@ -164,6 +178,9 @@ function renderToolBlockContent(
 
     mountRich();
     bodyState.detach = undefined;
+    if (node.querySelector('[data-tool-card]')) {
+      bodyState.unsubscribeCard = ports.subscribeToolCards?.(() => renderToolBlock(node, block, turn, ports));
+    }
     const details = node.querySelector<HTMLDetailsElement>('.ptool-result-block');
     if (details?.querySelector('[data-deferred-tool-body]')) {
       const reveal = (): void => {

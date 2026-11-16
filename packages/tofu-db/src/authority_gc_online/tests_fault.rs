@@ -912,7 +912,7 @@ fn marked_epoch_for_test(
         segment_dead_next: BTreeMap::new(),
         unlinked_loose: Vec::new(),
         confirmed_temp: None,
-        rewrite_victim: None,
+        rewrite_victims: Vec::new(),
         compaction_ids: Vec::new(),
         scan_failure: None,
         confirmed_loose_planned: false,

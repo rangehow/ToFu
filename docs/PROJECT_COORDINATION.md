@@ -310,7 +310,29 @@ Workers, and returns `wait=settled` at once when none is pending, so polling a
 reported Worker never loops a model. Durable attempt/delivery evidence
 alone declares settlement: a terminal notification only starts a prompt recheck
 every 0.5 s for up to 10 s, because it can precede the attempt's durable status;
-otherwise a 5 s recheck covers notification loss and queued admission. Polls
+otherwise a 5 s recheck covers notification loss and queued admission. A recheck
+reads a Worker again only when it can have changed: one whose task runs in this
+process (pending or running, not aborted, in the task runtime) once its terminal
+notification fires here or it no longer runs here, and any other Worker
+(another process, still queued, settled, or delivering) at each recheck. The
+Coordinator task keeps the last row of each Worker still running here
+(`_coordinatorWaitRows`), so a later poll reads none of them either. A Worker
+whose end fired is read at every recheck until the wait ends, since the
+notification can precede its durable status. Problem (old-repo SCALE-COORD-1,
+38c9c6b3a4, ported 2026-11-16): every recheck and every poll call re-read all
+watched Workers, so a lead's wait cost O(Workers) storage reads per 5 s and
+checked input only between full passes. Measured with a 0.15 s settlement read
+(`tests/project_mod/test_coordinator_wait_reads.py` setup, default rechecks):
+at 10/30 Workers running here, reads during a 12 s idle wait 30/49 before, 0
+after; a repeat poll 1.95 s/6.44 s before, 0.01 s after; one Worker's end to the
+poll's return 2.57 s/9.70 s before, 0.39 s/0.48 s after; a project message
+during a 30-Worker wait was not seen before the 30 s deadline before, 4.3 s
+after (the durable input read cadence). Decision: a recheck costs O(changes).
+Alternatives rejected: a shorter recheck interval (a knob, still O(N) per
+recheck); one batched exchange for every view (still O(N) per recheck; the R5
+per-request change index is the storage-side answer). Accepted: a Worker
+revoked or settled by another process while its task still runs here is seen
+when that task ends here, not at the next recheck. Polls
 read only the assignment row itself (no policy rows or prerequisites), attempt
 status, Turn metadata and delivery receipt
 (`view_for_coordinator(settlement_only=True)`), and each poll observes the
@@ -336,8 +358,10 @@ Coordinator conversation's inbox holds a steer (a human chat message, forwarded
 request or channel batch) or another background completion, checked every wait
 slice; or once a steer another server process committed to the live Turn, or an
 incoming project message submitted after the call started, appears at a durable
-read (the first check, then at most every 5 s). It is checked before the first
-wait, so input already waiting ends the call at once. Its instruction
+read (the first check, then at most every 5 s). It is checked when the call
+starts, so input already waiting ends the call after one read of its Workers;
+input that arrives during the wait ends a pass between two Worker reads (a
+Worker not reached is `unread` and named pending). Its instruction
 names the still-pending Worker IDs to wait on next; Workers keep running and the
 input arrives at the round boundary right after the tool result. When nothing
 is pending any more the call returns `wait=settled` with its news instead, and
@@ -1225,7 +1249,11 @@ sessions and tells the human what matters.
   and returns at once; the human's answer is an ordinary message quoting
   the question (the card fills the composer's existing reply-quote and sends,
   or adds to an existing draft), so it steers a live turn or starts the next
-  one. `blocking=true` waits as before; a chat message sent instead of the card
+  one. The quote ends with `[question <guidanceId>]`, so the reply names the
+  exact question it answers; the office's question card and "answer in
+  conversation" use the same answer control and quote
+  ([FRONTEND_ARCHITECTURE.md](FRONTEND_ARCHITECTURE.md), "Owner questions in
+  the office"). `blocking=true` waits as before; a chat message sent instead of the card
   ends the wait and reaches the model as the answer or new direction. Only a
   steer the seam authored as human input counts, and a Global Router forward
   of the owner's message only once `require_human_turn` verifies it: channel
@@ -2275,6 +2303,69 @@ and `tests/frontend/test_lead_office_scene_browser.py` (real Canvas2D: every
 state, hand-off and review captures, day and night, hover card and click, a
 six-Worker profile, hidden/offscreen/disposed sleep, reduced motion; evidence
 in `output/studio-redesign/after/`).
+
+### Lead deliverables (owner request 2026-11-16)
+
+Problem: in the classic view a lead's deliverables (delivery reports, published
+files and decks, merged Worker results) were scattered through very long
+conversations, so the owner scrolled back to find them; and in the studio,
+clicking a deliverable only opened the lead's conversation.
+
+Decision: a read-time projection over the owners that already hold the
+deliverables, with no store of its own (owner direction 2026-11-16: reuse the
+existing report/delivery owners, no parallel store)
+(`lib/conversations/lead_deliverables.py`; `deliverableItem`/`deliverablePage`
+in `contracts/project_coordination_v1.schema.json`). Each read of
+`GET /api/v4/project/coordination/deliverables` walks the lead's main lane
+newest-first through `turn_lifecycle.lane_turns_newest_first` (one bounded
+`turn.sync.page` per Turn, so a long conversation never hits the
+whole-conversation response bound) and the conversation's artifact rows:
+
+- delivery reports: the lead's own canonical `coordinator_report.delivery`
+  Turns (`CoordinatorReports`); the item's title and summary are the Turn's
+  `title\n\nmessage` content. The Global Router's relayed deliveries are the
+  report relay notices in its Turns: `lib/router/relay.py` owns both the notice
+  format (`render_notice`) and its parser (`notice_references`); each named
+  report is read from the Project Router's canonical Turn, so a forged or
+  deleted reference lists nothing.
+- published files, decks and documents: the artifact rows
+  (`lib.artifacts.core.list_artifacts`) from `publish_response_file`, rich
+  responses and long-form reports. A `.pptx`/`.pptd` file is a deck, another
+  file a file, a rich response or long-form report a document; workspace
+  writes, inline images and scanner snippets are not deliverables. The source
+  message is the oldest Turn whose tool round carries the `artifactId`.
+
+Items are newest first, 64 per page (the coordination page bound); the cursor
+is the previous page's last `(createdAt, item digest)`, so a page boundary is
+stable while new deliverables arrive. Reads require the caller to own the
+conversation (403 otherwise); a malformed cursor is a 400. Producers send only
+a push hint, `{kind: "lead_deliverable", conversationId}` on the project
+channel: `CoordinatorReports` for a delivery, the relay for the Global Router,
+and `rich_response` for a published artifact. A Worker result a finished request
+merged reaches the list through the delivery report the finish requires; the
+studio's trophy shelf opens such a result as a `merge` item it builds itself.
+Cost: each read walks the whole main lane, comparable to opening the
+conversation once; the list is read when shown and on hints.
+
+One item model and one opener serve both modes
+(`frontend/src/features/lead-deliverables/`). Opening an item shows the
+deliverable itself: an artifact in the artifact panel (file preview, deck
+viewer), a report as the conversation's own `report_to_user` card in a dialog,
+a merge at its Worker's result Turn. The secondary action ("Go to message")
+opens the lead's message at that exact Turn. In the classic view, presence
+places a 成果 section after each shown lead's office slot (the Global Router's
+card, a project's Coordinator row), above the archive of conversations it
+started; older pages load on demand, so lists of any length are complete. A
+`lead_deliverable` push for the shown lead and a push reconnect re-read the first
+page. In the studio, a delivery on the desk and a trophy on the shelf build the
+same item (same identity) and call the same opener, whose Turn port docks the
+office's conversation column; other desk documents still open their author's brief.
+
+Alternatives rejected: a pointer ledger written by each producer (the first
+implementation; a parallel store that needed seeding and could disagree with
+the reports and artifacts it copied); scraping Turns in the browser (only
+covers loaded windows); deriving the list from the latest-report head (it keeps
+only the newest report); a second studio-only implementation.
 
 ### Office team facts (2026-11-13)
 
@@ -4405,7 +4496,8 @@ result." when the JSON stayed under 1 MB. Each call also materialized the
 projection and persisted it as a multi-megabyte artifact.
 
 Decision: both tools return a compact effect receipt: `assignment_id`,
-`decision` (`accept`/`reject`/`rework`, or `cancelled`), `grant_revision`,
+`conversation_id` (the Worker conversation; its title names the task in the
+Coordinator's tool cards), `decision` (`accept`/`reject`/`rework`, or `cancelled`), `grant_revision`,
 `revoked`, `result_revision`, `execution_status`, `checkpoint_sha`, `delivery`,
 `canonical_delivery` and `next_step`, plus `acceptance_counts` for work with
 acceptance checks (above). The service answers from the
@@ -4958,6 +5050,23 @@ held row per pass); persisting the cause in the receipt (a new durable receipt
 field and a write per cause change, only to deduplicate a log line). Specs:
 `test_publication_pin_retires_the_stale_hold_without_publishing` and the pin
 and cause cases in `test_coordinator_publication_recovery.py`.
+
+Problem (pin before release): the pin and the release are two writes. A poll
+issued in the same tool batch as the accept (2026-11-17: 8cc1d672, 9b1975d4 and
+0b0efeb3, each polled within 0.4-2.4 s of its review) read the committed pin with
+the receipt the receiver held as awaiting review seconds earlier, settled as
+`held` with `project_publication_authority_missing`, and asked the Coordinator to
+act; the next poll found it delivered. A receiver pass that read the assignment
+before the pin can also rewrite that hold after the release. Decision:
+`delivery_view` reruns the same live fence, ignoring the remembered refusal, for
+a blocked `project_publication_authority_missing` receipt whose assignment read
+holds a pin; a cleared fence projects `pending`, a live refusal (a revocation
+after the accept) stays `blocked`. The fence then forgets the stale refusal, so
+the receiver's next pass delivers even when the release lost the race.
+Alternatives rejected: taking the repository lock in every settlement read (a
+poll would wait behind delivery Git work), and the pin-time comparison above.
+Spec: `test_a_hold_decided_before_the_accept_is_never_reported_as_held_after_it`
+in `test_publication_hold_causes.py`.
 
 Problem (duplicated content): overlapping Worker chains re-carry commits already
 delivered under other SHAs. `git apply --3way` cannot merge a creation patch

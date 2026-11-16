@@ -25,6 +25,15 @@ require_shipped_graph()
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(autouse=True)
+def _no_engine_certification(monkeypatch):
+    """These lifecycle specs drive the real checkout's serverctl; never run its engine gate.
+
+    tests/server/test_engine_certification_gate.py owns that behavior.
+    """
+    monkeypatch.setattr(serverctl, 'certify_head_engine_before', lambda _operation: '')
+
+
 class _TTYBuffer(io.StringIO):
     def isatty(self):
         return True

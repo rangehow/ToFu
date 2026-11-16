@@ -200,6 +200,41 @@
   border-radius: 0.7em;
   background: color-mix(in srgb, var(--studio-ask) 26%, var(--studio-parchment));
 }
+/* The question card leads a lead's brief: question, the shared answer control, "answer in conversation". */
+.w-question-card {
+  margin-bottom: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--studio-warn);
+  border-radius: 0.7em;
+  background: color-mix(in srgb, var(--studio-ask) 26%, var(--studio-parchment));
+  font-size: var(--font-size-md);
+  /* The shared answer control reads the application theme; the brief is parchment in every theme. */
+  --text-primary: var(--studio-ink);
+  --text-secondary: var(--studio-ink-muted);
+  --text-tertiary: var(--studio-ink-muted);
+  --bg-primary: var(--studio-parchment);
+  --bg-secondary: var(--studio-parchment);
+  --bg-tertiary: var(--studio-parchment-deep);
+  --bg-hover: color-mix(in srgb, var(--studio-brass) 22%, var(--studio-parchment));
+  --bg-active: color-mix(in srgb, var(--studio-brass) 36%, var(--studio-parchment));
+  --border: color-mix(in srgb, var(--studio-ink) 22%, transparent);
+  --accent: var(--studio-brass);
+  --accent-hover: var(--studio-brass-bright);
+  --accent-subtle: color-mix(in srgb, var(--studio-brass) 24%, transparent);
+  --text-on-accent: var(--studio-ink);
+  color: var(--studio-ink);
+}
+.w-question-card[data-state="answered"] { border-color: var(--studio-good-ink); background: color-mix(in srgb, var(--studio-good) 22%, var(--studio-parchment)); }
+.w-question-top { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-1); }
+.w-question-top .w-brief-head { margin: 0; }
+.w-question-badge { padding: 0 var(--space-2); border-radius: 999px; background: var(--studio-good); color: var(--studio-good-ink); font-size: var(--font-size-xs); font-weight: 800; }
+.w-question-pager { display: inline-flex; align-items: center; gap: var(--space-1); margin-left: auto; font-size: var(--font-size-sm); font-variant-numeric: tabular-nums; }
+.w-question-meta { font-size: var(--font-size-xs); }
+.w-question-card .rich-guidance-question { max-height: 16em; overflow: auto; font-size: var(--font-size-md); }
+.w-question-actions { display: flex; justify-content: flex-end; margin-top: var(--space-2); }
+.w-brief-more { margin-top: var(--space-2); }
+.w-brief-more-summary { margin-bottom: var(--space-3); color: var(--studio-ink-muted); font-size: var(--font-size-xs); font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; cursor: pointer; }
+.w-brief-more-summary:focus-visible { outline: 2px solid var(--studio-info-ink); outline-offset: 2px; }
 .w-link { padding: 0; border: 0; background: none; color: var(--studio-info-ink); font: inherit; font-size: var(--font-size-sm); text-decoration: underline; cursor: pointer; }
 .w-link-primary { padding: var(--space-1) var(--space-3); border-radius: 999px; background: var(--studio-brass); color: var(--studio-ink); font-weight: 700; text-decoration: none; }
 .w-link:focus-visible { outline: 2px solid var(--studio-info-ink); outline-offset: 2px; }

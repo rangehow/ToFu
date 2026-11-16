@@ -664,6 +664,8 @@ function toggleAutoTranslate() {
   if (btn) btn.classList.toggle("active", autoTranslate);
   if (badge) badge.style.display = autoTranslate ? "" : "none";
   captureActiveConversationSettings();
+  // Tool cards show model-authored text translated under the same setting.
+  toolCardPresentation.refresh();
   debugLog(`Auto-Translate: ${autoTranslate ? "ON" : "OFF"}`, "success");
 
   // One-time hint about <notranslate> when first enabling

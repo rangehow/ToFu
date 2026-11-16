@@ -978,7 +978,7 @@ fn consolidation_failing_between_its_control_publications_keeps_every_victim() {
                     .collect()
             })
             .collect();
-        let plan = ConsolidationPlan {
+        let plan = ConsolidationPlanBuild {
             victims,
             retained_per_victim,
         };

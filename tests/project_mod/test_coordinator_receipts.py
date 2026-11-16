@@ -17,7 +17,7 @@ __all__ = ('runtime', 'base_runtime', 'context')
 
 pytestmark = pytest.mark.unit
 
-RECEIPT = {'assignment_id', 'decision', 'grant_revision', 'revoked', 'result_revision',
+RECEIPT = {'assignment_id', 'conversation_id', 'decision', 'grant_revision', 'revoked', 'result_revision',
            'execution_status', 'checkpoint_sha', 'delivery', 'canonical_delivery', 'next_step'}
 
 
@@ -49,6 +49,7 @@ def test_review_receipt_names_decision_revisions_and_delivery_only(run, monkeypa
                      decision=decision, note='Verified the exact evidence')
     assert set(receipt) == RECEIPT, receipt
     assert receipt['assignment_id'] == worker['id'] and receipt['decision'] == decision
+    assert receipt['conversation_id'] == worker['request']['recipientId']
     assert (receipt['grant_revision'], receipt['result_revision']) == (worker['grant']['revision'], 1)
     assert receipt['revoked'] is False and receipt['execution_status'] == 'completed'
     assert receipt['checkpoint_sha'] is None and receipt['canonical_delivery'] is True
@@ -74,6 +75,7 @@ def test_cancel_receipt_names_the_withdrawn_grant_and_replays_identically(run, m
     receipt = r.call('cancel_project_work', assignment_id=active['id'])
     assert set(receipt) == RECEIPT, receipt
     assert receipt['assignment_id'] == active['id'] and receipt['decision'] == 'cancelled'
+    assert receipt['conversation_id'] == active['request']['recipientId']
     assert receipt['revoked'] is True and receipt['grant_revision'] == active['grant']['revision'] + 1
     assert receipt['execution_status'] == 'interrupted'
     assert not _echoes_view(r, active, receipt)

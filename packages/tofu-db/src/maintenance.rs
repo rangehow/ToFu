@@ -210,6 +210,13 @@ pub struct MaintenanceMetrics {
     pub search_retry_deferrals: u64,
     pub search_maximum_failure_backoff_milliseconds: u64,
     pub search_page_budget_exhaustions: u64,
+    /// History the search index retired (`TurnSearchProjection::retire_history_slice`)
+    /// and the segments it retained after its latest slice.
+    pub search_retired_history_segments: u64,
+    pub search_retained_history_segments: u32,
+    pub search_history_retirement_failures: u64,
+    /// The longest single hold of the index mutex any retirement slice took.
+    pub search_history_retirement_max_hold_us: u64,
     pub tool_result_artifacts_pruned: u64,
     pub tool_result_prune_backlog_rounds: u64,
     pub attempt_events_pruned: u64,
@@ -1058,6 +1065,9 @@ fn run_worker(
                 }
             }
         }
+        if let Some(search_projection) = search_projection {
+            retire_search_history(shared, search_projection);
+        }
         if shared
             .state
             .lock()
@@ -1498,6 +1508,55 @@ fn run_round(
                 // authority stays usable, so a later round adopts again.
                 Err(error) if crate::engine::abandoned_uncovered(&error) => RoundOutcome::Conflict,
                 Err(error) => RoundOutcome::Terminal(error),
+            }
+        }
+    }
+}
+
+/// Retires every retirable history slice of the search index, one slice per
+/// pair of short holds, until none is left or the worker stops. The index is
+/// derived data, so the retained bound is the source's own
+/// (`history_retained_segments`); a failure is logged and retried next round.
+fn retire_search_history(
+    shared: &Shared,
+    search_projection: &Arc<Mutex<crate::turn_search_projection::TurnSearchProjection>>,
+) {
+    loop {
+        if shared.stop.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
+        match crate::turn_search_projection::TurnSearchProjection::retire_history_slice(
+            search_projection,
+            shared.config.history_retained_segments,
+        ) {
+            Ok(Some(retired)) => update_metrics(
+                shared,
+                |metrics| {
+                    metrics.search_retired_history_segments = metrics
+                        .search_retired_history_segments
+                        .saturating_add(u64::from(retired.metrics.retired_segments));
+                    metrics.search_retained_history_segments = retired.metrics.retained_segments;
+                    metrics.search_history_retirement_max_hold_us = metrics
+                        .search_history_retirement_max_hold_us
+                        .max(u64::try_from(retired.longest_hold.as_micros()).unwrap_or(u64::MAX));
+                },
+                Backoff::Keep,
+            ),
+            Ok(None) => return,
+            Err(error) => {
+                crate::engine_log::warn(
+                    "search_history",
+                    &format!("history retirement failed; the next round retries: kind={:?} error={error}", error.kind()),
+                );
+                update_metrics(
+                    shared,
+                    |metrics| {
+                        metrics.search_history_retirement_failures =
+                            metrics.search_history_retirement_failures.saturating_add(1);
+                    },
+                    Backoff::Keep,
+                );
+                return;
             }
         }
     }
@@ -2371,6 +2430,53 @@ mod tests {
             .is_empty());
     }
 
+    /// docs/STORAGE_OPERATIONS.md, "Search projection history retirement":
+    /// the worker that indexes also retires the index's history down to the
+    /// source's retained bound, so superseded index pages become collectable.
+    #[test]
+    fn scheduler_retires_search_index_history_to_the_retained_bound() {
+        let authority_directory = tempfile::tempdir().unwrap();
+        let projection_directory = tempfile::tempdir().unwrap();
+        let database = Arc::new(Mutex::new(
+            AuthorityDatabase::initialize(authority_directory.path()).unwrap(),
+        ));
+        let mut index =
+            TurnSearchProjection::initialize(projection_directory.path(), 1 << 24).unwrap();
+        for generation in 0..6 {
+            let generation = format!("generation-{generation}");
+            index
+                .begin_conversation_rebuild(7, 11, "conversation", &generation, 1)
+                .unwrap();
+            index
+                .finalize_conversation_rebuild(7, 11, "conversation", &generation)
+                .unwrap();
+            index.checkpoint_wal_window_for_shutdown().unwrap();
+        }
+        let history = |index: &mut TurnSearchProjection| {
+            index
+                .database_mut_for_test()
+                .engine_mut_for_test()
+                .history_segment_count()
+        };
+        assert!(history(&mut index) >= 6);
+        let projection = Arc::new(Mutex::new(index));
+        let scheduler = MaintenanceScheduler::start_with_search(
+            Arc::clone(&database),
+            Some(Arc::clone(&projection)),
+            vec![MaintenanceScope::new(7, 11).unwrap()],
+            MaintenanceSchedulerConfig::for_history_test(Duration::from_millis(10), 1, 2),
+        )
+        .unwrap();
+        let metrics = wait_for(&scheduler.observer(), |metrics| {
+            metrics.search_retained_history_segments == 2
+        });
+        assert!(metrics.search_retired_history_segments >= 4);
+        assert_eq!(metrics.search_history_retirement_failures, 0);
+        assert!(metrics.search_history_retirement_max_hold_us > 0);
+        scheduler.stop_and_join().unwrap();
+        assert_eq!(history(&mut projection.lock().unwrap()), 2);
+    }
+
     /// Search is admitted on an empty owner and the worker is idle behind the
     /// 60 s backoff ceiling: inside the 20 s wait bound, only a commit-side
     /// wake can start another round.
@@ -2385,10 +2491,20 @@ mod tests {
             MaintenanceSchedulerConfig::for_test(Duration::from_millis(10), 1),
         )
         .unwrap();
+        // Admission ends in a round of its own; a no-work round can precede
+        // it, so the idle round must follow the end of admission.
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while projection.lock().unwrap().owner_indexing(7, 11).unwrap() {
+            assert!(Instant::now() < deadline, "search admission never finished");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let admitted_no_work_rounds = scheduler.observer().metrics().unwrap().no_work_rounds;
         let idle = {
             // The state lock excludes every scheduling decision, so a re-arm
             // still in flight also selects the ceiling.
-            let mut state = wait_for_round(&scheduler, |metrics| metrics.no_work_rounds >= 1);
+            let mut state = wait_for_round(&scheduler, |metrics| {
+                metrics.no_work_rounds > admitted_no_work_rounds
+            });
             let ceiling = Duration::from_millis(MAX_MAINTENANCE_IDLE_INTERVAL_MILLISECONDS);
             state.next_idle_interval = ceiling;
             state.round_deadline = Instant::now() + ceiling;

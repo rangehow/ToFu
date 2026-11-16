@@ -45,7 +45,8 @@ def make_engine_tree(root: Path) -> Path:
     for name in ('Cargo.lock', 'build.rs', 'src/lib.rs'):
         (crate / name).write_text(name + '\n')
     (root / 'contracts').mkdir(exist_ok=True)
-    for name in ('storage_v2.json', 'native_storage_connection_v2.json', 'storage_operations_v1.json'):
+    for name in ('storage_v2.json', 'native_storage_connection_v2.json', 'tofudb_ir_v1.json',
+                 'storage_operations_v1.json'):
         (root / 'contracts' / name).write_text(json.dumps({'contract': name}))
     (root / '.env').write_text('TOFU_PERSONAL_STORAGE_BACKEND=tofudb\n')
     return root
@@ -149,13 +150,16 @@ def test_uncertified_head_keeps_the_deployed_engine(project, binding, capsys, mo
 
 # ── 2. a changed or unknown storage contract refuses ──────────────────────────
 
-@pytest.mark.parametrize('deployed', ['changed-contract', 'legacy-receipt', 'nothing-deployed'])
+@pytest.mark.parametrize('deployed', ['changed-contract', 'changed-ir', 'legacy-receipt', 'nothing-deployed'])
 def test_uncertified_head_is_refused_when_the_deployed_engine_cannot_serve_it(project, deployed, monkeypatch):
     engine = binary(project / 'staging/tofu-db', engines.source_fingerprint(project))
     dest = project / DEST
     if deployed == 'changed-contract':
         deploy(project, engine, contract=engines.storage_contract_sha256(project))
         (project / 'contracts/storage_v2.json').write_text('{"contract": "a new operation"}')
+    elif deployed == 'changed-ir':
+        deploy(project, engine, contract=engines.storage_contract_sha256(project))
+        (project / 'contracts/tofudb_ir_v1.json').write_text('{"turn.get": "content_preview_chars"}')
     elif deployed == 'legacy-receipt':
         deploy(project, engine)
     before = dest.read_bytes() if dest.exists() else None
@@ -381,6 +385,143 @@ def test_explicit_start_prepares_the_storage_engine(project, monkeypatch):
     assert spawned == [{'reset_failed_storage': True, 'prepare_engine': True}]
 
 
+# ── 5. a normal start certifies HEAD itself, or refuses before any stop ───────
+
+def _git(root: Path, *argv: str) -> None:
+    import subprocess
+    subprocess.run(['git', '-C', str(root), '-c', 'user.name=t', '-c', 'user.email=t@example.invalid',
+                    '-c', 'commit.gpgsign=false', *argv], check=True, capture_output=True)
+
+
+def _ir_only_change_after_deployment(project: Path, monkeypatch) -> tuple[Path, Path]:
+    """The 2026-11-16 shape: deployed engine bound to the old contract, then an IR change lands."""
+    (project / '.gitignore').write_text('packages/tofu-db/target/\nstaging/\ndata/\nlogs/\n')
+    _git(project, 'init', '-q')
+    _git(project, 'add', '-A')
+    _git(project, 'commit', '-q', '-m', 'deployed generation')
+    dest = deploy(project, binary(project / 'staging/old/tofu-db', engines.source_fingerprint(project)),
+                  contract=engines.storage_contract_sha256(project))
+    (project / 'contracts/tofudb_ir_v1.json').write_text('{"turn.get": "content_preview_chars"}')
+    change_engine_source(project, 'regenerated IR operations')  # f87e54390c also changed the engine
+    _git(project, 'commit', '-q', '-am', 'IR: turn.get content_preview_chars')
+    authority = project / 'data/tofudb-authority'
+    (authority / 'payload-segments').mkdir(parents=True)
+    (authority / 'CONTROL').write_text('control')
+    (authority / 'LOCK').write_text('')
+    monkeypatch.setenv('TOFUDB_BIN', str(dest))
+    monkeypatch.delenv('TOFU_PERSONAL_STORAGE_BACKEND', raising=False)
+    monkeypatch.delenv('TOFUDB_EXPECTED_SHA256', raising=False)
+    return dest, authority
+
+
+def _gate(project: Path, ran: list):
+    """scripts/engine_certify.py's effect: it publishes HEAD's record for the checkout's contract."""
+    def run(root, commit, fixture, work_root):
+        ran.append((commit, fixture))
+        head = engines.source_fingerprint(root)
+        certify(root, binary(root / 'staging/gate/tofu-db', head), contract=engines.storage_contract_sha256(root))
+        return 0
+    return run
+
+
+def _serverctl(project: Path, monkeypatch, *, running: bool):
+    import serverctl
+    monkeypatch.setattr(serverctl, 'PROJECT', str(project))
+    monkeypatch.setattr(serverctl, '_remote_status', lambda: {'running': running})
+    monkeypatch.setattr(serverctl, '_approve_restart_if_needed', lambda _args: True)
+    # The real preparation, in process instead of its fresh child interpreter.
+    monkeypatch.setattr(serverctl, 'prepare_native_engine_artifact',
+                        lambda *_a, **_k: engines.prepare(project) and '')
+    monkeypatch.setattr(serverctl, 'prepare_source_frontend_artifact', lambda *_a, **_k: '')
+    monkeypatch.setattr(serverctl, '_StartupProgress', lambda *_a: argparse.Namespace(
+        start=lambda: None, finish=lambda **_k: None))
+    posted = []
+    monkeypatch.setattr(serverctl, '_post', lambda action, **body: posted.append(action) or {
+        'ok': False, 'message': 'stubbed manager'})
+    return serverctl, posted
+
+
+@pytest.mark.parametrize('door', ['start', 'restart'])
+def test_a_normal_start_certifies_and_deploys_heads_engine_after_an_ir_change(project, monkeypatch, door):
+    dest, authority = _ir_only_change_after_deployment(project, monkeypatch)
+    if door == 'restart':
+        # The running server holds its store; the last record's intact fixture is used instead.
+        import fcntl
+        lease = (authority / 'LOCK').open('rb')
+        fcntl.flock(lease, fcntl.LOCK_EX)
+        fixture = project / 'staging/fixture'
+        (fixture / 'payload-segments').mkdir(parents=True)
+        (fixture / 'CONTROL').write_text('fixture control')
+        old = certify(project, dest, contract='0' * 64)
+        document = json.loads((old / certification.RECORD_FILE).read_text())
+        document['fixture'] = {'path': str(fixture), 'control_sha256': certification.sha256_file(fixture / 'CONTROL')}
+        (old / certification.RECORD_FILE).write_text(json.dumps(document))
+    else:
+        fixture = authority
+    with pytest.raises(engines.UncertifiedEngineRefusedError):
+        engines.prepare(project)  # what the start hit before: no record for HEAD's new contract
+    ran = []
+    monkeypatch.setattr(engines, '_run_engine_gate', _gate(project, ran))
+    serverctl, posted = _serverctl(project, monkeypatch, running=door == 'restart')
+
+    if door == 'start':
+        serverctl.managed_start([])
+    else:
+        serverctl.cmd_restart(serverctl.build_parser().parse_args(['restart']))
+
+    head = engines.source_fingerprint(project)
+    contract = engines.storage_contract_sha256(project)
+    assert ran == [(subprocess_head(project), fixture)]
+    assert posted == [door]  # the manager is asked only after the engine is certified
+    record, _problem = certification.passing_record(project, head, contract)
+    assert record is not None
+    if door == 'start':  # start prepares here; a restart's manager prepares the same record
+        assert engines.build_identity(dest)['source_sha256'] == head
+        assert json.loads((dest.parent / 'build.json').read_text())['storage_contract_sha256'] == contract
+    assert engines.prepare(project) is (door == 'restart')
+    engines.verify_admissible(dest, project)
+
+
+def subprocess_head(root: Path) -> str:
+    import subprocess
+    return subprocess.run(['git', '-C', str(root), 'rev-parse', 'HEAD'], capture_output=True, text=True,
+                          check=True).stdout.strip()
+
+
+@pytest.mark.parametrize('obstacle', ['store-in-use', 'uncommitted-ir', 'gate-fails'])
+def test_impossible_automatic_certification_refuses_before_anything_is_stopped(
+        project, monkeypatch, capsys, obstacle):
+    dest, authority = _ir_only_change_after_deployment(project, monkeypatch)
+    before = dest.read_bytes()
+    ran = []
+    if obstacle == 'store-in-use':
+        import fcntl
+        lease = (authority / 'LOCK').open('rb')
+        fcntl.flock(lease, fcntl.LOCK_EX)
+        assert lease  # held until the test ends
+    elif obstacle == 'uncommitted-ir':
+        (project / 'contracts/tofudb_ir_v1.json').write_text('{"turn.get": "uncommitted"}')
+    monkeypatch.setattr(engines, '_run_engine_gate',
+                        lambda *args: ran.append(args) or 1 if obstacle == 'gate-fails'
+                        else pytest.fail('the gate never runs when its result could not certify HEAD'))
+    serverctl, posted = _serverctl(project, monkeypatch, running=True)
+
+    code = serverctl.cmd_restart(serverctl.build_parser().parse_args(['restart']))
+
+    assert code == 1
+    assert posted == []  # the manager was never asked, so the running server was not stopped
+    assert dest.read_bytes() == before
+    output = capsys.readouterr().err.splitlines()
+    [line] = [line for line in output if line.startswith('Cannot restart Tofu')]
+    assert output[-1] == line  # the refusal is one line and nothing follows it
+    assert line.startswith("Cannot restart Tofu: Cannot certify HEAD's storage engine")
+    assert 'nothing was stopped' in line
+    expected = {'store-in-use': 'serverctl.py stop', 'uncommitted-ir': 'contracts/tofudb_ir_v1.json',
+                'gate-fails': '--deploy-uncertified-engine'}[obstacle]
+    assert expected in line
+    assert len(ran) == (obstacle == 'gate-fails')
+
+
 # ── shared contract identity and deployment receipts ──────────────────────────
 
 def test_storage_contract_identity_covers_application_and_compiled_contracts(project):
@@ -388,7 +529,10 @@ def test_storage_contract_identity_covers_application_and_compiled_contracts(pro
     (project / 'VERSION').write_text('9.9.9')
     (project / 'contracts/unrelated_v1.json').write_text('{}')
     assert engines.storage_contract_sha256(project) == before
-    for name in ('storage_v2.json', 'native_storage_connection_v2.json', 'storage_operations_v1.json'):
+    # tofudb_ir_v1.json: an engine kept across the turn.get content_preview_chars
+    # IR change ignored the field and the assignment list failed (500, 2026-11-16).
+    for name in ('storage_v2.json', 'native_storage_connection_v2.json', 'tofudb_ir_v1.json',
+                 'storage_operations_v1.json'):
         (project / 'contracts' / name).write_text('{"changed": true}')
         assert engines.storage_contract_sha256(project) != before
         before = engines.storage_contract_sha256(project)

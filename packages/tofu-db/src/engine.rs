@@ -374,7 +374,6 @@ pub(crate) struct OnlineGcMarkSnapshot {
     pub staged_history: Vec<HistorySegmentReference>,
     pub committed_block_ids: Vec<BlockId>,
     pub payload_manifest_block_id: Option<BlockId>,
-    pub generation: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2898,7 +2897,6 @@ impl Engine {
             staged_history: self.staged_history.clone(),
             committed_block_ids,
             payload_manifest_block_id: self.state.payload_manifest_block_id,
-            generation: self.state.generation,
         })
     }
 

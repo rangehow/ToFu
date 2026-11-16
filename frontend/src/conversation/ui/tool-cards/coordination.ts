@@ -4,7 +4,8 @@
  * finish/cancel, conversation control and project messages.
  * Every word comes from `context.t`; every name of project work goes through
  * the work directory, so a card shows task titles and keeps IDs in its
- * technical details. Entry point: COORDINATION_TOOL_PRESENTERS.
+ * debug-only technical details; model-authored text goes through
+ * `context.freeText`. Entry point: COORDINATION_TOOL_PRESENTERS.
  */
 import type { I18nKey, I18nParamsFor } from '../../../i18n';
 
@@ -12,12 +13,12 @@ import type { I18nKey, I18nParamsFor } from '../../../i18n';
 type PlainKey = { [K in I18nKey]: [I18nParamsFor<K>] extends [never] ? K : never }[I18nKey];
 
 import type {
-  ToolChip, ToolChipTone, ToolPresenter, ToolPresenterContext, ToolSummary,
+  ToolChip, ToolChipTone, ToolDebugField, ToolPresenter, ToolPresenterContext, ToolSummary,
 } from './contracts';
-import { genericFieldsHtml } from './generic';
+import { genericFieldsHtml, readableKey } from './generic';
 import {
-  checkRowHtml, chipHtml, collapsibleHtml, escape, fieldHtml, leadHtml, listHtml,
-  openConversationHtml, sectionHtml, type MarkKind,
+  checkRowHtml, chipHtml, disclosureHtml, escape, fieldHtml, leadHtml, listHtml,
+  openConversationHtml, sectionHtml, translatedTextHtml, verdictHtml, type MarkKind,
 } from './markup';
 import { CHECKLIST_ICONS } from '../checklist-card/items';
 import { count, isRecord, list, record, text, type ToolView, type UnknownRecord } from './values';
@@ -47,6 +48,12 @@ const VERDICTS: Readonly<Record<string, Labelled>> = Object.freeze({
   accept: ['toolCard.review.accept', 'ok'],
   rework: ['toolCard.review.rework', 'warn'],
   reject: ['toolCard.review.reject', 'err'],
+});
+
+const REVIEW_TITLES: Readonly<Record<string, PlainKey>> = Object.freeze({
+  accept: 'toolCard.review.titleAccept',
+  rework: 'toolCard.review.titleRework',
+  reject: 'toolCard.review.titleReject',
 });
 
 const CHECK_MARKS: Readonly<Record<string, readonly [MarkKind, PlainKey]>> = Object.freeze({
@@ -119,14 +126,43 @@ function strings(value: unknown): readonly string[] {
   return list(value).map(text).filter(Boolean);
 }
 
-function markdownSection(context: ToolPresenterContext, label: string, source: string, open = false): string {
-  return source ? collapsibleHtml(label, context.markdown(source), open) : '';
+/**
+ * Model-authored free text under the conversation's translation setting: the
+ * translation when there is one, the original behind a toggle. `inline` keeps
+ * short text (check evidence) as escaped text instead of Markdown.
+ */
+function proseHtml(context: ToolPresenterContext, source: string, inline = false): string {
+  if (!source) return '';
+  const { shown, original, pending } = context.freeText(source);
+  const render = (value: string): string => (inline ? escape(value)
+    : `<div class="ptool-coord-prose md-content">${context.markdown(value)}</div>`);
+  return translatedTextHtml(render(shown), original ? render(original) : '',
+    { original: context.t('toolCard.original'), translating: context.t('toolCard.translating') }, pending);
 }
+
+function markdownSection(context: ToolPresenterContext, label: string, source: string, open = false): string {
+  return source ? disclosureHtml(label, proseHtml(context, source), open) : '';
+}
+
+/** Receipts and Worker rows name an assignment's conversation, which titles it. */
+function rememberConversation(context: ToolPresenterContext, assignmentId: string, conversationId: string): void {
+  if (assignmentId && conversationId) context.work.remember(assignmentId, { conversationId });
+}
+
+/** Identifiers, revisions and commits: technical details, shown in debug mode only. */
+const TECHNICAL_KEY = /(?:^|_)(?:id|ids|sha|revision|key)$|(?:Id|Ids|Sha|Revision|Key)$/;
 
 function resultFieldsHtml(view: ToolView, context: ToolPresenterContext, omit: readonly string[]): string {
   if (!view.result) return '';
-  const rest = Object.fromEntries(Object.entries(view.result).filter(([key]) => !omit.includes(key)));
+  const rest = Object.fromEntries(Object.entries(view.result)
+    .filter(([key]) => !omit.includes(key) && !TECHNICAL_KEY.test(key)));
   return genericFieldsHtml(rest, context.t, context.markdown);
+}
+
+function technicalResultFields(view: ToolView): readonly ToolDebugField[] {
+  return Object.entries(view.result ?? {})
+    .filter(([key, value]) => TECHNICAL_KEY.test(key) && value !== null && value !== undefined && value !== '')
+    .map(([key, value]) => [readableKey(key), typeof value === 'string' ? value : JSON.stringify(value)] as const);
 }
 
 /* ── delegate_project_work ─────────────────────────────────────────── */
@@ -206,7 +242,8 @@ const taskBoard: ToolPresenter = {
       chips: active ? [{ label: t('toolCard.board.active', { n: active }), tone: 'info' }] : [],
     };
   },
-  body(view, { t }) {
+  body(view, context) {
+    const { t } = context;
     const tasks = boardTasks(view);
     const rows = tasks.map((task) => {
       const state = TASK_STATES[task.status] ?? TASK_STATES.pending;
@@ -217,7 +254,8 @@ const taskBoard: ToolPresenter = {
         + `<span class="ptool-todo-text"><span class="ptool-coord-task-title">${escape(task.title)}</span>${due}${progress}</span>`
         + '</div>';
     }).join('');
-    return leadHtml(boardSentence(view))
+    const sentence = boardSentence(view);
+    return (sentence ? `<div class="ptool-coord-lead">${proseHtml(context, sentence, true)}</div>` : '')
       + (rows ? `<div class="ptool-todo-list ptool-coord-board">${rows}</div>`
         : `<div class="ptool-todo-empty">${escape(t('toolCard.board.empty'))}</div>`);
   },
@@ -231,18 +269,62 @@ function deliveryStatus(view: ToolView): string {
   return text(record(view.result?.delivery).status);
 }
 
+function reviewDecision(view: ToolView): string {
+  return text(view.args.decision) || text(view.result?.decision);
+}
+
+function reviewAssignment(view: ToolView): string {
+  return text(view.args.assignment_id) || text(view.result?.assignment_id);
+}
+
+/**
+ * What the review did to the code, from the delivery state and the decision
+ * together: a reject or rework of a result that was already merged records a
+ * judgment and undoes nothing.
+ */
+type ReviewOutcome = 'merged' | 'mergedEarlier' | 'merging' | 'held' | 'noMerge' | 'notMerged' | 'pending';
+
+function reviewOutcome(view: ToolView): ReviewOutcome {
+  const decision = reviewDecision(view);
+  const delivery = deliveryStatus(view);
+  if (decision === 'rework' || decision === 'reject') return delivery === 'delivered' ? 'mergedEarlier' : 'notMerged';
+  if (decision !== 'accept') return 'pending';
+  if (delivery === 'delivered') return 'merged';
+  if (delivery === 'blocked' || delivery === 'held') return 'held';
+  return text(view.args.checkpoint_sha) || text(view.result?.checkpoint_sha) ? 'merging' : 'noMerge';
+}
+
+function reviewVerdictLine(view: ToolView, context: ToolPresenterContext): string {
+  const { t } = context;
+  const decision = reviewDecision(view);
+  switch (reviewOutcome(view)) {
+    case 'merged': return t('toolCard.review.verdictMerged');
+    case 'mergedEarlier': return decision === 'reject'
+      ? t('toolCard.review.verdictMergedEarlierReject') : t('toolCard.review.verdictMergedEarlierRework');
+    case 'merging': return t('toolCard.review.verdictMerging');
+    case 'held': {
+      const reason = text(record(view.result?.delivery).reason);
+      return reason ? t('toolCard.review.verdictHeldReason', { reason }) : t('toolCard.review.verdictHeld');
+    }
+    case 'noMerge': return t('toolCard.review.verdictNoMerge');
+    case 'notMerged': return decision === 'reject'
+      ? t('toolCard.review.verdictNotMergedReject') : t('toolCard.review.verdictNotMergedRework');
+    case 'pending': return '';
+  }
+}
+
 function reviewExplanation(view: ToolView, context: ToolPresenterContext): string {
   const { t } = context;
-  const decision = text(view.args.decision) || text(view.result?.decision);
-  if (decision === 'rework') return t('toolCard.review.explainRework');
-  if (decision === 'reject') return t('toolCard.review.explainReject');
-  if (decision !== 'accept') return t('toolCard.review.explainPending');
-  const checkpoint = text(view.args.checkpoint_sha) || text(view.result?.checkpoint_sha);
-  if (!checkpoint) return t('toolCard.review.explainNoMerge');
-  const delivery = deliveryStatus(view);
-  if (delivery === 'delivered') return t('toolCard.review.explainMerged');
-  if (delivery === 'blocked' || delivery === 'held') return t('toolCard.review.explainHeld');
-  return t('toolCard.review.explainMerging');
+  switch (reviewOutcome(view)) {
+    case 'merged': return t('toolCard.review.explainMerged');
+    case 'mergedEarlier': return t('toolCard.review.explainRecorded');
+    case 'merging': return t('toolCard.review.explainMerging');
+    case 'held': return t('toolCard.review.explainHeld');
+    case 'noMerge': return t('toolCard.review.explainNoMerge');
+    case 'notMerged': return reviewDecision(view) === 'reject'
+      ? t('toolCard.review.explainReject') : t('toolCard.review.explainRework');
+    case 'pending': return t('toolCard.review.explainPending');
+  }
 }
 
 interface ReviewCheck { readonly check: number; readonly verdict: string; readonly evidence: string }
@@ -261,21 +343,34 @@ function checkCounts(view: ToolView): { met: number; total: number } | null {
   return checks.length ? { met: checks.filter((check) => check.verdict === 'met').length, total: checks.length } : null;
 }
 
+/** The code's state in one chip; the decision itself is in the title. */
 function mergeChip(view: ToolView, context: ToolPresenterContext): ToolChip | null {
-  const decision = text(view.args.decision) || text(view.result?.decision);
-  if (decision !== 'accept' || !(text(view.args.checkpoint_sha) || text(view.result?.checkpoint_sha))) return null;
-  return labelled(DELIVERY_STATUS, deliveryStatus(view) || 'pending', context.t);
+  const { t } = context;
+  switch (reviewOutcome(view)) {
+    case 'merged': return { label: t('toolCard.delivery.delivered'), tone: 'ok' };
+    case 'mergedEarlier': return { label: t('toolCard.delivery.deliveredEarlier'), tone: 'muted' };
+    case 'merging': return { label: t('toolCard.delivery.pending'), tone: 'info' };
+    case 'held': return labelled(DELIVERY_STATUS, deliveryStatus(view), t);
+    default: return null;
+  }
+}
+
+function rememberReview(view: ToolView, context: ToolPresenterContext): void {
+  rememberConversation(context, reviewAssignment(view), text(view.result?.conversation_id));
 }
 
 const review: ToolPresenter = {
-  title: (_view, { t }) => t('toolCard.review.title'),
+  title(view, { t }) {
+    const decision = reviewDecision(view);
+    return Object.prototype.hasOwnProperty.call(REVIEW_TITLES, decision) ? t(REVIEW_TITLES[decision]) : t('toolCard.review.title');
+  },
   summary(view, context) {
     const { t } = context;
+    rememberReview(view, context);
     const counts = checkCounts(view);
     return {
-      text: context.work.taskTitle(text(view.args.assignment_id) || text(view.result?.assignment_id)),
+      text: context.work.taskTitle(reviewAssignment(view)),
       chips: chips(
-        labelled(VERDICTS, text(view.args.decision) || text(view.result?.decision), t),
         counts ? { label: t('toolCard.review.checksMet', counts), tone: counts.met === counts.total ? 'ok' : 'warn' } : null,
         mergeChip(view, context),
       ),
@@ -283,27 +378,18 @@ const review: ToolPresenter = {
   },
   body(view, context) {
     const { t } = context;
-    const assignmentId = text(view.args.assignment_id) || text(view.result?.assignment_id);
+    rememberReview(view, context);
+    const assignmentId = reviewAssignment(view);
     const criteria = context.work.acceptance(assignmentId);
     const rows = reviewChecks(view).map(({ check, verdict, evidence }) => {
       const [kind, label] = CHECK_MARKS[verdict] ?? CHECK_MARKS.unknown;
       const criterion = criteria[check - 1] || t('toolCard.review.checkNumber', { n: check });
-      return checkRowHtml(kind, t(label), escape(criterion), escape(evidence));
+      return checkRowHtml(kind, t(label), escape(criterion), proseHtml(context, evidence, true));
     });
-    const verdict = labelled(VERDICTS, text(view.args.decision) || text(view.result?.decision), t);
-    const merged = deliveryStatus(view) === 'delivered';
-    const merge = mergeChip(view, context);
-    // pending → merged, with the current step lit; a held/blocked merge shows its own chip.
-    const steps = merge && ['pending', 'delivered', 'working'].includes(deliveryStatus(view) || 'pending')
-      ? `<span class="ptool-coord-steps">${chipHtml({ label: t('toolCard.delivery.pending'), tone: merged ? 'muted' : 'info' })}<span aria-hidden="true">→</span>${chipHtml({ label: t('toolCard.delivery.delivered'), tone: merged ? 'ok' : 'muted' })}</span>`
-      : merge ? chipHtml(merge) : '';
-    const reason = text(record(view.result?.delivery).reason);
     return [
+      verdictHtml(reviewVerdictLine(view, context)),
       leadHtml(reviewExplanation(view, context)),
       fieldHtml(t('toolCard.field.task'), escape(context.work.taskTitle(assignmentId))),
-      fieldHtml(t('toolCard.field.verdict'), verdict ? chipHtml(verdict) : ''),
-      fieldHtml(t('toolCard.field.merge'), steps),
-      fieldHtml(t('toolCard.field.reason'), escape(reason)),
       sectionHtml(t('toolCard.review.checks'), listHtml(rows)),
       markdownSection(context, t('toolCard.review.note'), text(view.args.note), true),
     ].join('');
@@ -326,7 +412,15 @@ function polledWorkers(view: ToolView): readonly UnknownRecord[] {
   return list(view.result?.workers).filter(isRecord);
 }
 
+/** Every Worker row names its conversation; learned from the collapsed row, before any card opens. */
+function rememberWorkers(view: ToolView, context: ToolPresenterContext): void {
+  for (const worker of polledWorkers(view)) {
+    rememberConversation(context, text(worker.assignment_id), text(worker.conversation_id));
+  }
+}
+
 function workerTitle(worker: UnknownRecord, context: ToolPresenterContext): string {
+  rememberConversation(context, text(worker.assignment_id), text(worker.conversation_id));
   return context.work.taskTitle(text(worker.assignment_id), text(worker.conversation_id));
 }
 
@@ -337,7 +431,9 @@ const pollWorkers: ToolPresenter = {
     return ids.length > 0 && ids.every((id) => context.work.knows(id));
   },
   title: (_view, { t }) => t('toolCard.poll.title'),
-  summary(view, { t }) {
+  summary(view, context) {
+    const { t } = context;
+    rememberWorkers(view, context);
     const workers = polledWorkers(view);
     if (!workers.length) return { text: t('toolCard.poll.waitingFor', { n: strings(view.args.ids).length }) };
     const running = workers.filter((worker) => ACTIVE_EXECUTION.has(text(worker.status))).length;
@@ -355,7 +451,7 @@ const pollWorkers: ToolPresenter = {
       const delivery = labelled(DELIVERY_STATUS, worker.canonical_delivery === true ? 'delivered' : text(record(worker.delivery).status), t);
       const excerpt = text(worker.result_excerpt);
       return `<li class="ptool-coord-worker"><span class="ptool-coord-worker-title">${escape(workerTitle(worker, context))}</span>${chipsHtml(chips(status, delivery))}`
-        + `${excerpt ? collapsibleHtml(t('toolCard.poll.result'), context.markdown(excerpt)) : ''}</li>`;
+        + `${markdownSection(context, t('toolCard.poll.result'), excerpt)}</li>`;
     });
     const running = workers.filter((worker) => ACTIVE_EXECUTION.has(text(worker.status))).map((worker) => {
       const status = labelled(EXECUTION_STATUS, text(worker.status), t);
@@ -385,6 +481,7 @@ const assignmentRead: ToolPresenter = {
     const assignmentId = text(view.args.assignment_id);
     const value = view.result ?? {};
     const request = record(value.request);
+    rememberConversation(context, assignmentId, text(request.recipientId));
     const acceptance = strings(request.acceptance);
     if (acceptance.length) context.work.remember(assignmentId, { acceptance });
     const execution = record(value.execution);
@@ -419,7 +516,7 @@ const report: ToolPresenter = {
     const message = text(view.args.message);
     return [
       fieldHtml(t('toolCard.field.published'), view.result?.published === true ? escape(t('toolCard.report.published')) : ''),
-      message ? `<div class="ptool-coord-prose md-content">${context.markdown(message)}</div>` : '',
+      proseHtml(context, message),
     ].join('');
   },
   debug: (view, { t }) => [
@@ -441,24 +538,42 @@ const finish: ToolPresenter = {
       ? context.t('toolCard.finish.explainNeedsUser') : context.t('toolCard.finish.explainComplete')),
     resultFieldsHtml(view, context, ['next_step']),
   ].join(''),
-  debug: (view, { t }) => [[t('toolCard.debug.turn'), text(view.args.report_turn_id)]],
+  debug: (view, { t }) => [[t('toolCard.debug.turn'), text(view.args.report_turn_id)], ...technicalResultFields(view)],
 };
+
+function rememberCancel(view: ToolView, context: ToolPresenterContext): void {
+  rememberConversation(context, text(view.args.assignment_id), text(view.result?.conversation_id));
+}
 
 const cancel: ToolPresenter = {
   title: (_view, { t }) => t('toolCard.cancel.title'),
-  summary: (view, context) => ({
-    text: context.work.taskTitle(text(view.args.assignment_id)),
-    chips: chips(labelled(EXECUTION_STATUS, view.result?.revoked === true ? 'cancelled' : text(view.result?.execution_status), context.t)),
-  }),
+  summary(view, context) {
+    rememberCancel(view, context);
+    return {
+      text: context.work.taskTitle(text(view.args.assignment_id)),
+      chips: chips(
+        labelled(EXECUTION_STATUS, view.result?.revoked === true ? 'cancelled' : text(view.result?.execution_status), context.t),
+        view.result?.canonical_delivery === true ? { label: context.t('toolCard.delivery.deliveredEarlier'), tone: 'muted' } : null,
+      ),
+    };
+  },
   body(view, context) {
     const { t } = context;
+    rememberCancel(view, context);
+    // Cancelling withdraws the grant; it never reverts a result that was already merged.
+    const explanation = view.result?.canonical_delivery === true ? t('toolCard.cancel.explainMerged')
+      : view.result?.revoked === true ? t('toolCard.cancel.explain') : '';
     return [
-      leadHtml(view.result?.revoked === true ? t('toolCard.cancel.explain') : ''),
+      leadHtml(explanation),
       fieldHtml(t('toolCard.field.task'), escape(context.work.taskTitle(text(view.args.assignment_id)))),
       fieldHtml(t('toolCard.field.status'), chipsHtml(chips(labelled(EXECUTION_STATUS, text(view.result?.execution_status), t)))),
     ].join('');
   },
-  debug: (view, { t }) => [[t('toolCard.debug.assignment'), text(view.args.assignment_id)]],
+  debug: (view, { t }) => [
+    [t('toolCard.debug.assignment'), text(view.args.assignment_id)],
+    [t('toolCard.debug.resultRevision'), String(count(view.result?.result_revision) ?? '')],
+    [t('toolCard.debug.grantRevision'), String(count(view.result?.grant_revision) ?? '')],
+  ],
 };
 
 /* ── control_conversation ─────────────────────────────────────────── */
@@ -481,7 +596,7 @@ const control: ToolPresenter = {
       fieldHtml(t('toolCard.field.action'), escape(controlAction(view, t))),
       fieldHtml(t('toolCard.field.conversation'), escape(context.work.conversationTitle(conversationId))),
       fieldHtml(t('toolCard.field.model'), escape(text(view.args.model))),
-      fieldHtml(t('toolCard.field.reason'), escape(text(view.args.reason))),
+      fieldHtml(t('toolCard.field.reason'), proseHtml(context, text(view.args.reason), true)),
       markdownSection(context, t('toolCard.control.instruction'), text(view.args.instruction), true),
       openConversationHtml(conversationId, t('toolCard.control.open')),
     ].join('');
@@ -502,15 +617,18 @@ function messageKind(value: unknown, t: ToolPresenterContext['t']): string {
 
 const sendMessage: ToolPresenter = {
   title: (_view, { t }) => t('toolCard.message.sendTitle'),
-  summary: (view, context) => ({
-    text: context.t('toolCard.message.to', { recipient: context.work.conversationTitle(text(view.args.conversation_id)) }),
-    chips: [{ label: messageKind(view.args.kind || 'reference', context.t), tone: 'muted' }],
-  }),
+  summary(view, context) {
+    const recipient = context.work.conversationTitle(text(view.args.conversation_id));
+    return {
+      text: recipient ? context.t('toolCard.message.to', { recipient }) : '',
+      chips: [{ label: messageKind(view.args.kind || 'reference', context.t), tone: 'muted' }],
+    };
+  },
   body(view, context) {
     const content = text(view.args.content);
     return [
       fieldHtml(context.t('toolCard.field.recipient'), escape(context.work.conversationTitle(text(view.args.conversation_id)))),
-      content ? `<div class="ptool-coord-prose md-content">${context.markdown(content)}</div>` : '',
+      proseHtml(context, content),
     ].join('');
   },
   debug: (view, { t }) => [
@@ -533,7 +651,7 @@ const readMessages: ToolPresenter = {
       const decision = labelled(MESSAGE_DECISIONS, text(message.decision), context.t);
       return `<li class="ptool-coord-message"><span class="ptool-coord-worker-title">${escape(sender)}</span>`
         + `${chipHtml({ label: messageKind(message.kind, context.t), tone: 'muted' })}${decision ? chipHtml(decision) : ''}`
-        + `<div class="ptool-coord-prose md-content">${context.markdown(text(message.content))}</div></li>`;
+        + `${proseHtml(context, text(message.content))}</li>`;
     });
     return rows.length ? listHtml(rows, 'ptool-coord-messages') : leadHtml(context.t('toolCard.message.none'));
   },
@@ -550,7 +668,10 @@ const considerMessage: ToolPresenter = {
 
 const workers: ToolPresenter = {
   title: (_view, { t }) => t('toolCard.workers.title'),
-  summary: (view, { t }) => ({ text: view.result ? t('toolCard.workers.count', { n: list(view.result.workers).length }) : '' }),
+  summary(view, context) {
+    rememberWorkers(view, context);
+    return { text: view.result ? context.t('toolCard.workers.count', { n: list(view.result.workers).length }) : '' };
+  },
   body(view, context) {
     const rows = list(view.result?.workers).filter(isRecord).map((worker) => {
       const status = labelled(EXECUTION_STATUS, text(worker.status), context.t);
@@ -565,6 +686,7 @@ function titledOnly(key: PlainKey, summary?: (view: ToolView, context: ToolPrese
     title: (_view, { t }) => t(key),
     summary: summary ?? (() => ({ text: '' })),
     body: (view, context) => resultFieldsHtml(view, context, ['next_step']),
+    debug: technicalResultFields,
   };
 }
 

@@ -42,9 +42,6 @@ use crate::vfs::{sync_directory_barrier, FileKind, Vfs};
 /// uncommitted write can straddle the two scans (rule S1/S4). Any ordinary
 /// transaction or upload staging completes far below this interval.
 pub const ONLINE_GC_MIN_EPOCH_INTERVAL: Duration = Duration::from_secs(120);
-/// Segment dead-set memory kept across one epoch boundary for two-mark
-/// confirmation; segments beyond the cap simply confirm in a later epoch.
-const MAX_TRACKED_SEGMENT_DEAD_SETS: usize = 64;
 /// Idle backoff cap after an epoch that reclaimed nothing.
 const ONLINE_GC_MAX_IDLE_INTERVAL: Duration = Duration::from_secs(3600);
 /// Victim cap for one pressure consolidation merge.
@@ -53,6 +50,21 @@ const PRESSURE_CONSOLIDATION_VICTIMS: usize = 8;
 const WORK_DIRECTORY: &str = "authority-gc/online";
 const MARKS_DIRECTORY: &str = "marks";
 const SUSPECTS_DIRECTORIES: [&str; 2] = ["suspects-0", "suspects-1"];
+
+/// Digest of a segment's dead set: its sorted block IDs absent from the sorted
+/// retained ones. Two marks confirm a segment's dead blocks when their digests
+/// agree; 32 bytes per segment replace the sets themselves, so confirmation
+/// tracks every catalogued segment without a count.
+fn dead_set_digest(block_ids: &[BlockId], retained_ids: &[BlockId]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"tofu-db:online-gc:segment-dead-set:v1\0");
+    for block_id in block_ids {
+        if retained_ids.binary_search(block_id).is_err() {
+            hasher.update(&block_id.0);
+        }
+    }
+    *hasher.finalize().as_bytes()
+}
 
 fn would_block(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::WouldBlock, message)
@@ -112,6 +124,13 @@ pub struct OnlineGarbageCollectionMetrics {
     pub failed_epochs: u64,
     /// The latest such error, cleared by the next epoch that completes.
     pub epoch_error: Option<String>,
+    /// How long the latest and the slowest epoch capture waited for the
+    /// database mutex, and how long it then held it, in microseconds: the
+    /// cost the capture adds to the mutex's other holders.
+    pub last_capture_wait_us: u64,
+    pub max_capture_wait_us: u64,
+    pub last_capture_hold_us: u64,
+    pub max_capture_hold_us: u64,
 }
 
 /// What the driver loop learns from one `run_epoch` call.
@@ -133,12 +152,16 @@ struct Epoch {
     suspects_directory: PathBuf,
     suspects_next: Option<SpillMarkSet>,
     temp_candidate_next: Option<PathBuf>,
-    segment_dead_next: BTreeMap<Uuid, Vec<BlockId>>,
+    /// Digest of each catalogued segment's nonempty dead set under this
+    /// epoch's mark (`dead_set_digest`); the next epoch confirms from it.
+    segment_dead_next: BTreeMap<Uuid, [u8; 32]>,
     /// Every block whose file this epoch's loose deletion hold removed, or
     /// may have removed.
     unlinked_loose: Vec<BlockId>,
     confirmed_temp: Option<BlockTemporaryFileCandidate>,
-    rewrite_victim: Option<(PayloadSegmentReference, Vec<BlockId>)>,
+    /// Every catalogued segment whose dead set two marks confirmed, in catalog
+    /// order; the deletion phase rewrites or retires each one in turn.
+    rewrite_victims: Vec<PayloadSegmentReference>,
     /// The open compaction segment: at most one segment's blocks, because
     /// the scan packs each segment the format limits close before admitting
     /// the next block.
@@ -164,7 +187,8 @@ struct Epoch {
     consolidations: u64,
     consolidated_victims: u64,
     consolidation: Option<ConsolidationPlan>,
-    pressure_candidates: Vec<(PayloadSegmentReference, Vec<BlockId>, usize)>,
+    /// Consolidation candidates: reference, retained and dead block counts.
+    pressure_candidates: Vec<(PayloadSegmentReference, usize, usize)>,
 }
 
 /// What one completed mark walked and recorded; logged once per mark
@@ -194,7 +218,23 @@ struct SegmentReclaim {
 
 /// One pressure-mode consolidation: several small/dead-heavy segments
 /// merge into a single replacement, freeing catalog slots.
+/// Victims of one consolidation; their retained blocks are read again from
+/// the epoch's mark when it is built (`retained_window`).
 struct ConsolidationPlan {
+    victims: Vec<PayloadSegmentReference>,
+}
+
+/// One catalog segment under an epoch's mark (`retained_window`).
+struct WindowSegment {
+    retained_ids: Vec<BlockId>,
+    digest: [u8; 32],
+    dead_blocks: usize,
+    dead_bytes: u64,
+    live_bytes: u64,
+}
+
+/// A consolidation with its victims' retained blocks, ready to build.
+struct ConsolidationPlanBuild {
     victims: Vec<PayloadSegmentReference>,
     retained_per_victim: Vec<Vec<BlockId>>,
 }
@@ -211,7 +251,7 @@ struct PreviousEpoch {
     /// Orphan segment files (name -> size) seen by the last segment lane
     /// observation; marks play no part in their confirmation.
     orphan_observation: BTreeMap<String, u64>,
-    segment_dead: BTreeMap<Uuid, Vec<BlockId>>,
+    segment_dead: BTreeMap<Uuid, [u8; 32]>,
 }
 
 /// One run of single-file deletion holds (docs/TOFUDB_ONLINE_GC.md, "One
@@ -407,11 +447,6 @@ pub struct OnlineGarbageCollector {
     expedite: Arc<AtomicBool>,
     previous: PreviousEpoch,
     suspects_parity: usize,
-    // Catalog traversal is collector-owned: idle authorities do not change
-    // generation. Each window receives two completed epochs so previous-dead
-    // confirmation stays consecutive; failed/cancelled attempts do not advance.
-    payload_window_cursor: Option<usize>,
-    payload_window_second_epoch: bool,
     next_epoch_not_before: Instant,
     min_epoch_interval: Duration,
     idle_interval: Duration,
@@ -477,8 +512,6 @@ impl OnlineGarbageCollector {
                 segment_dead: BTreeMap::new(),
             },
             suspects_parity: 0,
-            payload_window_cursor: None,
-            payload_window_second_epoch: false,
             next_epoch_not_before: Instant::now(),
             min_epoch_interval,
             idle_interval: min_epoch_interval,
@@ -656,6 +689,17 @@ impl OnlineGarbageCollector {
         );
     }
 
+    fn note_capture(&self, waited: Duration, held: Duration) {
+        if let Ok(mut metrics) = self.metrics.write() {
+            let waited = u64::try_from(waited.as_micros()).unwrap_or(u64::MAX);
+            let held = u64::try_from(held.as_micros()).unwrap_or(u64::MAX);
+            metrics.last_capture_wait_us = waited;
+            metrics.max_capture_wait_us = metrics.max_capture_wait_us.max(waited);
+            metrics.last_capture_hold_us = held;
+            metrics.max_capture_hold_us = metrics.max_capture_hold_us.max(held);
+        }
+    }
+
     fn note_deferred(&self) {
         if let Ok(mut metrics) = self.metrics.write() {
             metrics.deferred_epochs += 1;
@@ -719,14 +763,27 @@ impl OnlineGarbageCollector {
             return Ok((OnlineGarbageCollectionOutcome::Deferred, false));
         }
         // Phase 1: snapshot hold. O(in-memory capture) plus the fence re-arm.
+        // The capture waits for the mutex like every later hold: a holder that
+        // keeps it almost all the time (the search worker on its index) made a
+        // sampled capture defer every epoch, so nothing was ever reclaimed
+        // (docs/TOFUDB_ONLINE_GC.md, "The capture waits for the mutex").
+        let capture_requested = Instant::now();
         let (capture, orphan_observation_inputs) = {
-            let database_guard = match database.try_lock() {
+            let database_guard = match database.lock() {
                 Ok(guard) => guard,
                 Err(_) => {
                     self.note_deferred();
                     return Ok((OnlineGarbageCollectionOutcome::Deferred, false));
                 }
             };
+            // A stop raised while the capture waited ends the epoch before it
+            // captures anything.
+            if stop.load(Ordering::Acquire) {
+                drop(database_guard);
+                self.note_deferred();
+                return Ok((OnlineGarbageCollectionOutcome::Deferred, false));
+            }
+            let capture_held = Instant::now();
             let captured = database_guard.gc_budget(self.budget).and_then(|budget| {
                 self.budget = budget;
                 let database = database_guard.gc_database()?;
@@ -738,6 +795,8 @@ impl OnlineGarbageCollector {
                     orphan_observation_inputs,
                 ))
             });
+            drop(database_guard);
+            self.note_capture(capture_held - capture_requested, capture_held.elapsed());
             match captured {
                 Ok(captured) => captured,
                 Err(error) => {
@@ -760,7 +819,7 @@ impl OnlineGarbageCollector {
             segment_dead_next: BTreeMap::new(),
             unlinked_loose: Vec::new(),
             confirmed_temp: None,
-            rewrite_victim: None,
+            rewrite_victims: Vec::new(),
             compaction_ids: Vec::new(),
             scan_failure: None,
             confirmed_loose_planned: false,
@@ -846,15 +905,6 @@ impl OnlineGarbageCollector {
         // Phase 5: rotate epoch memory and publish metrics.
         self.previous.temp_candidate = epoch.temp_candidate_next.take();
         self.previous.segment_dead = std::mem::take(&mut epoch.segment_dead_next);
-        let cursor = self
-            .payload_window_cursor
-            .unwrap_or(epoch.capture.snapshot.generation as usize);
-        self.payload_window_cursor = Some(if self.payload_window_second_epoch {
-            cursor.wrapping_add(1)
-        } else {
-            cursor
-        });
-        self.payload_window_second_epoch = !self.payload_window_second_epoch;
         if let Some(marks) = epoch.marks.take() {
             let _ = marks.cleanup();
         }
@@ -1401,7 +1451,6 @@ impl OnlineGarbageCollector {
         // across two marks, already enforced by the scan above.
         candidates.sort_by_key(|(reference, _, _)| reference.file_bytes);
         let mut victims = Vec::new();
-        let mut retained_per_victim = Vec::new();
         let mut retained_bytes = 0_u64;
         let mut retained_blocks = 0_usize;
         // The replacement is one segment: its retained union must fit the
@@ -1411,45 +1460,109 @@ impl OnlineGarbageCollector {
             .budget
             .maximum_temporary_bytes
             .min(MAX_SEGMENT_PAYLOAD_BYTES);
-        for (reference, retained_ids, _) in candidates {
+        for (reference, retained, _) in candidates {
             if victims.len() >= PRESSURE_CONSOLIDATION_VICTIMS {
                 break;
             }
             // A fully dead victim adds nothing to the replacement.
-            let next_bytes = if retained_ids.is_empty() {
+            let next_bytes = if retained == 0 {
                 retained_bytes
             } else {
                 retained_bytes.saturating_add(reference.file_bytes)
             };
-            let next_blocks = retained_blocks + retained_ids.len();
-            if !retained_ids.is_empty()
-                && (next_bytes > byte_limit || next_blocks > MAX_SEGMENT_BLOCKS)
-            {
+            let next_blocks = retained_blocks + retained;
+            if retained != 0 && (next_bytes > byte_limit || next_blocks > MAX_SEGMENT_BLOCKS) {
                 continue;
             }
             victims.push(reference);
-            retained_per_victim.push(retained_ids);
             retained_bytes = next_bytes;
             retained_blocks = next_blocks;
         }
         if victims.len() >= 2 {
             // Consolidation subsumes a rewrite that shares a victim; never
             // run both against the same segment in one epoch.
-            if epoch.rewrite_victim.as_ref().is_some_and(|(reference, _)| {
-                victims
+            epoch.rewrite_victims.retain(|reference| {
+                !victims
                     .iter()
                     .any(|victim| victim.segment_id == reference.segment_id)
-            }) {
-                epoch.rewrite_planned = false;
-                epoch.rewrite_victim = None;
-            }
-            epoch.consolidation = Some(ConsolidationPlan {
-                victims,
-                retained_per_victim,
             });
+            epoch.rewrite_planned = !epoch.rewrite_victims.is_empty();
+            epoch.consolidation = Some(ConsolidationPlan { victims });
         }
     }
 
+    /// Each segment's retained blocks under `marks` (the installed catalog's
+    /// protected manifest block always retained) and the digest of its dead
+    /// set, for at most one window of segments: one pass over the mark runs
+    /// answers the whole window, whose ID lists bound its memory.
+    fn retained_window(
+        &self,
+        epoch: &Epoch,
+        blocks: &Arc<BlockStore>,
+        marks: &SpillMarkSet,
+        selected: &[PayloadSegmentReference],
+        stop: &AtomicBool,
+    ) -> io::Result<Vec<WindowSegment>> {
+        let mut window = Vec::with_capacity(selected.len());
+        let mut lengths = Vec::with_capacity(selected.len());
+        for reference in selected {
+            if stop.load(Ordering::Acquire) {
+                return Err(would_block("online GC epoch stopped"));
+            }
+            blocks.verify_payload_segment(reference)?;
+            let segment = blocks
+                .payload_segment_store()?
+                .open_segment(reference.segment_id)?;
+            let (block_ids, segment_lengths): (Vec<_>, Vec<_>) = segment.index_entries().unzip();
+            window.push(block_ids);
+            lengths.push(segment_lengths);
+        }
+        if stop.load(Ordering::Acquire) {
+            return Err(would_block("online GC epoch stopped"));
+        }
+        let mut retained_window = window.clone();
+        marks.retain_live_ids_per_segment(&mut retained_window)?;
+        Ok(window
+            .into_iter()
+            .zip(retained_window)
+            .zip(lengths)
+            .map(|((block_ids, mut retained_ids), lengths)| {
+                if let Some(protected) = epoch
+                    .capture
+                    .snapshot
+                    .payload_manifest_block_id
+                    .filter(|id| block_ids.binary_search(id).is_ok())
+                {
+                    if let Err(position) = retained_ids.binary_search(&protected) {
+                        retained_ids.insert(position, protected);
+                    }
+                }
+                let digest = dead_set_digest(&block_ids, &retained_ids);
+                let mut dead_bytes = 0;
+                let mut live_bytes = 0;
+                for (block_id, length) in block_ids.iter().zip(lengths) {
+                    if retained_ids.binary_search(block_id).is_ok() {
+                        live_bytes += u64::from(length);
+                    } else {
+                        dead_bytes += u64::from(length);
+                    }
+                }
+                WindowSegment {
+                    dead_blocks: block_ids.len() - retained_ids.len(),
+                    retained_ids,
+                    digest,
+                    dead_bytes,
+                    live_bytes,
+                }
+            })
+            .collect())
+    }
+
+    /// Plans reclamation over the whole installed catalog, one window of
+    /// `MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED` segments at a time: every
+    /// segment whose dead set the previous mark saw identically is a victim
+    /// (rule S1), not only one per epoch (docs/TOFUDB_ONLINE_GC.md, "Every
+    /// confirmed segment is reclaimed each epoch").
     fn scan_segment_window(
         &self,
         epoch: &mut Epoch,
@@ -1462,93 +1575,45 @@ impl OnlineGarbageCollector {
         };
         let manifest_segments_len = manifest.segments.len();
         let references = manifest.segments;
-        if references.is_empty() {
-            return Ok(());
-        }
-        let window_count = references
-            .len()
-            .div_ceil(MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED);
-        let window = self
-            .payload_window_cursor
-            .unwrap_or(epoch.capture.snapshot.generation as usize)
-            % window_count;
-        let start = window * MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED;
-        let selected = &references[start
-            ..references
-                .len()
-                .min(start + MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED)];
-        let mut window = Vec::with_capacity(selected.len());
-        for reference in selected {
-            if stop.load(Ordering::Acquire) {
-                return Err(would_block("online GC epoch stopped"));
-            }
-            blocks.verify_payload_segment(reference)?;
-            window.push(
-                blocks
-                    .payload_segment_store()?
-                    .open_segment(reference.segment_id)?
-                    .block_ids()
-                    .collect::<Vec<_>>(),
-            );
-        }
-        if stop.load(Ordering::Acquire) {
-            return Err(would_block("online GC epoch stopped"));
-        }
-        // One pass over the mark runs answers every segment of the window.
-        let mut retained_window = window.clone();
-        marks.retain_live_ids_per_segment(&mut retained_window)?;
-        for ((reference, block_ids), mut retained_ids) in
-            selected.iter().zip(window).zip(retained_window)
-        {
-            if let Some(protected) = epoch
-                .capture
-                .snapshot
-                .payload_manifest_block_id
-                .filter(|id| block_ids.binary_search(id).is_ok())
-            {
-                if let Err(position) = retained_ids.binary_search(&protected) {
-                    retained_ids.insert(position, protected);
+        for selected in references.chunks(MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED) {
+            let window = self.retained_window(epoch, blocks, marks, selected, stop)?;
+            for (reference, segment) in selected.iter().zip(window) {
+                let WindowSegment {
+                    retained_ids,
+                    digest,
+                    dead_blocks: dead,
+                    dead_bytes,
+                    live_bytes,
+                } = segment;
+                let confirmed = dead != 0
+                    && self.previous.segment_dead.get(&reference.segment_id) == Some(&digest);
+                if dead != 0 {
+                    epoch.segment_dead_next.insert(reference.segment_id, digest);
                 }
-            }
-            let mut dead_ids = block_ids
-                .iter()
-                .copied()
-                .filter(|block_id| retained_ids.binary_search(block_id).is_err())
-                .collect::<Vec<_>>();
-            dead_ids.sort_unstable();
-            let confirmed = self
-                .previous
-                .segment_dead
-                .get(&reference.segment_id)
-                .is_some_and(|previous_dead| *previous_dead == dead_ids);
-            if !dead_ids.is_empty() && epoch.segment_dead_next.len() < MAX_TRACKED_SEGMENT_DEAD_SETS
-            {
-                epoch
-                    .segment_dead_next
-                    .insert(reference.segment_id, dead_ids.clone());
-            }
-            // Catalog-pressure consolidation candidates: any segment with
-            // two-mark-confirmed dead content, or a small fully-live file
-            // (nothing excluded, so no fence question at all).
-            if self.catalog_pressure(manifest_segments_len)
-                && ((confirmed && !dead_ids.is_empty())
-                    || (dead_ids.is_empty()
-                        && reference.file_bytes <= self.budget.maximum_temporary_bytes / 4))
-            {
-                epoch
-                    .pressure_candidates
-                    .push((*reference, retained_ids.clone(), dead_ids.len()));
-            }
-            if dead_ids.is_empty() {
-                continue;
-            }
-            if confirmed
-                && epoch.rewrite_victim.is_none()
-                && (retained_ids.is_empty()
-                    || reference.file_bytes <= self.budget.maximum_temporary_bytes)
-            {
-                epoch.rewrite_planned = true;
-                epoch.rewrite_victim = Some((*reference, retained_ids.clone()));
+                // Catalog-pressure consolidation candidates: any segment with
+                // two-mark-confirmed dead content, or a small fully-live file
+                // (nothing excluded, so no fence question at all).
+                if self.catalog_pressure(manifest_segments_len)
+                    && (confirmed
+                        || (dead == 0
+                            && reference.file_bytes <= self.budget.maximum_temporary_bytes / 4))
+                {
+                    epoch
+                        .pressure_candidates
+                        .push((*reference, retained_ids.len(), dead));
+                }
+                // A rewrite copies the live bytes to free the dead ones, so
+                // it runs once a segment frees at least what it copies: the
+                // bytes rewriting copies never exceed the bytes it reclaims,
+                // and every segment it leaves is at least half live.
+                if confirmed
+                    && (retained_ids.is_empty()
+                        || (dead_bytes >= live_bytes
+                            && reference.file_bytes <= self.budget.maximum_temporary_bytes))
+                {
+                    epoch.rewrite_planned = true;
+                    epoch.rewrite_victims.push(*reference);
+                }
             }
         }
         self.plan_consolidation(epoch, manifest_segments_len);
@@ -1582,15 +1647,53 @@ impl OnlineGarbageCollector {
             return Err(error);
         }
 
-        // Catalog-pressure consolidation: build off-mutex, publish under
-        // one hold; runs ahead of the single-segment rewrite at pressure.
+        // The marks the scan planned with answer the victims' retained
+        // blocks again here, one window at a time, so a plan holds only
+        // segment references. Each window's digests must still match what
+        // the scan confirmed; the marks are unchanged, so they always do.
+        let Some(marks) = epoch.marks.take() else {
+            return Ok(());
+        };
+        let reclaimed = self.reclaim_planned_segments(database, epoch, &blocks, &marks, stop);
+        epoch.marks = Some(marks);
+        reclaimed?;
+
+        // Loose compaction: the scan packed every segment the format limits
+        // closed; the trailing one packs here.
+        if !epoch.compaction_ids.is_empty() {
+            self.pack_compaction_segment(database, epoch, &blocks, stop)?;
+        }
+        Ok(())
+    }
+
+    /// Catalog-pressure consolidation first (it subsumes rewrites sharing a
+    /// victim, removed at planning), then every confirmed segment in catalog
+    /// order: each is built off-mutex and published under its own hold, so
+    /// temporary disk and memory stay one segment and one window.
+    fn reclaim_planned_segments<D: OnlineGcDatabase>(
+        &self,
+        database: &Arc<Mutex<D>>,
+        epoch: &mut Epoch,
+        blocks: &Arc<BlockStore>,
+        marks: &SpillMarkSet,
+        stop: &AtomicBool,
+    ) -> io::Result<()> {
         if let Some(plan) = epoch.consolidation.take() {
             if stop.load(Ordering::Acquire) {
                 return Err(would_block("online GC epoch stopped"));
             }
-            let built = self.build_consolidation_segment(&blocks, &plan)?;
+            let retained_per_victim = self
+                .retained_window(epoch, blocks, marks, &plan.victims, stop)?
+                .into_iter()
+                .map(|segment| segment.retained_ids)
+                .collect::<Vec<_>>();
+            let plan = ConsolidationPlanBuild {
+                victims: plan.victims,
+                retained_per_victim,
+            };
+            let built = self.build_consolidation_segment(blocks, &plan)?;
             let built_reference = built.as_ref().map(|built| built.1);
-            let publish = publish_under_hold(database, &blocks, stop, |database| {
+            let publish = publish_under_hold(database, blocks, stop, |database| {
                 database.online_gc_finish_consolidation(
                     &plan.victims,
                     &plan.retained_per_victim,
@@ -1606,7 +1709,7 @@ impl OnlineGarbageCollector {
                 Err(error) => {
                     if error.kind() == io::ErrorKind::WouldBlock {
                         if let Some((segment, _)) = built {
-                            self.discard_built_segment(&blocks, &segment);
+                            self.discard_built_segment(blocks, &segment);
                         }
                     } else {
                         return Err(error);
@@ -1615,52 +1718,59 @@ impl OnlineGarbageCollector {
             }
         }
 
-        // Segment rewrite: build off-mutex, publish under one hold.
-        if let Some((reference, retained_ids)) = epoch.rewrite_victim.take() {
-            if stop.load(Ordering::Acquire) {
-                return Err(would_block("online GC epoch stopped"));
-            }
-            let built = self.build_replacement_segment(&blocks, &reference, &retained_ids)?;
-            let built_reference = built.as_ref().map(|built| built.1);
-            let publish = publish_under_hold(database, &blocks, stop, |database| {
-                database.online_gc_finish_segment_reclaim(
-                    reference.segment_id,
-                    &reference,
-                    &retained_ids,
-                    built_reference,
-                )
-            });
-            match publish {
-                Ok(metrics) => {
-                    epoch.reclaimed_bytes += metrics.retired_file_bytes;
-                    if metrics.replacement_segment_id.is_some() {
-                        epoch.segments_rewritten += 1;
-                    } else {
-                        epoch.segments_retired += 1;
-                    }
+        let victims = std::mem::take(&mut epoch.rewrite_victims);
+        for selected in victims.chunks(MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED) {
+            let window = self.retained_window(epoch, blocks, marks, selected, stop)?;
+            for (reference, segment) in selected.iter().zip(window) {
+                let WindowSegment {
+                    retained_ids,
+                    digest,
+                    ..
+                } = segment;
+                if epoch.segment_dead_next.get(&reference.segment_id) != Some(&digest) {
+                    continue;
                 }
-                Err(error) => {
-                    // WouldBlock always proves the publish never happened
-                    // (physical-lane busy, catalog moved, relink fence), so
-                    // the built file is still ours to discard. Every other
-                    // error may follow a durable publish: the built segment
-                    // is then either catalog-referenced or an orphan a later
-                    // epoch sweeps — discarding it could destroy live data.
-                    if error.kind() == io::ErrorKind::WouldBlock {
-                        if let Some((segment, _)) = built {
-                            self.discard_built_segment(&blocks, &segment);
+                // Segment rewrite: build off-mutex, publish under one hold.
+                if stop.load(Ordering::Acquire) {
+                    return Err(would_block("online GC epoch stopped"));
+                }
+                let built = self.build_replacement_segment(blocks, reference, &retained_ids)?;
+                let built_reference = built.as_ref().map(|built| built.1);
+                let publish = publish_under_hold(database, blocks, stop, |database| {
+                    database.online_gc_finish_segment_reclaim(
+                        reference.segment_id,
+                        reference,
+                        &retained_ids,
+                        built_reference,
+                    )
+                });
+                match publish {
+                    Ok(metrics) => {
+                        epoch.reclaimed_bytes += metrics.retired_file_bytes;
+                        if metrics.replacement_segment_id.is_some() {
+                            epoch.segments_rewritten += 1;
+                        } else {
+                            epoch.segments_retired += 1;
                         }
-                    } else {
-                        return Err(error);
+                    }
+                    Err(error) => {
+                        // WouldBlock always proves the publish never happened
+                        // (physical-lane busy, catalog moved, relink fence), so
+                        // the built file is still ours to discard and the
+                        // segment confirms again next epoch. Every other error
+                        // may follow a durable publish: the built segment is
+                        // then either catalog-referenced or an orphan a later
+                        // epoch sweeps — discarding it could destroy live data.
+                        if error.kind() == io::ErrorKind::WouldBlock {
+                            if let Some((segment, _)) = built {
+                                self.discard_built_segment(blocks, &segment);
+                            }
+                        } else {
+                            return Err(error);
+                        }
                     }
                 }
             }
-        }
-
-        // Loose compaction: the scan packed every segment the format limits
-        // closed; the trailing one packs here.
-        if !epoch.compaction_ids.is_empty() {
-            self.pack_compaction_segment(database, epoch, &blocks, stop)?;
         }
         Ok(())
     }
@@ -1870,7 +1980,7 @@ impl OnlineGarbageCollector {
     fn build_consolidation_segment(
         &self,
         blocks: &Arc<BlockStore>,
-        plan: &ConsolidationPlan,
+        plan: &ConsolidationPlanBuild,
     ) -> io::Result<Option<(PayloadSegment, PayloadSegmentReference)>> {
         let mut retained: Vec<BlockId> =
             plan.retained_per_victim.iter().flatten().copied().collect();
@@ -1983,10 +2093,10 @@ impl OnlineGarbageCollectionObserver {
     }
 }
 
-/// Dedicated `tofu-db-online-gc` thread. The epoch's capture is a `try_lock`
-/// that defers a contended epoch; every later hold waits for the mutex after
-/// the collector's duty pause, so the foreground waits for at most one short
-/// hold (docs/TOFUDB_ONLINE_GC.md, "Collector holds wait for the mutex").
+/// Dedicated `tofu-db-online-gc` thread. The epoch's capture and every later
+/// hold wait for the mutex (holds after the collector's duty pause), so the
+/// foreground waits for at most one short hold (docs/TOFUDB_ONLINE_GC.md,
+/// "Collector holds wait for the mutex", "The capture waits for the mutex").
 pub struct OnlineGarbageCollectionDriver<D: OnlineGcDatabase = AuthorityDatabase> {
     stop: Arc<AtomicBool>,
     /// The owner's storage-reclaim task: a stop also raises its interrupt,

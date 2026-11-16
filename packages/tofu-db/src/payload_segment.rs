@@ -155,6 +155,13 @@ impl PayloadSegment {
         self.entries.iter().map(|entry| entry.block_id)
     }
 
+    /// Every indexed block with its stored payload length, in ID order.
+    pub(crate) fn index_entries(&self) -> impl ExactSizeIterator<Item = (BlockId, u32)> + '_ {
+        self.entries
+            .iter()
+            .map(|entry| (entry.block_id, entry.payload_len))
+    }
+
     pub fn get(&self, block_id: BlockId) -> io::Result<Option<Vec<u8>>> {
         let Some(entry) = self.entry_for_block(block_id) else {
             return Ok(None);

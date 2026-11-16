@@ -258,6 +258,69 @@
   var routerOfficeSlot = document.createElement('div');
   routerOfficeSlot.className = 'lead-office-slot';
   routerOfficeSlot.hidden = true;
+  /* Narrow bridge to the typed lead deliverables (features/lead-deliverables/list.ts),
+   * loaded when a lead first shows in the classic sidebar; delete with the retained
+   * presence adapter. A lead's 成果 list sits right after its office slot, above the
+   * archive of conversations it started. Only the classic mode shows it: the studio's
+   * office opens the same deliverables from its desks and shelf. */
+  var projectDeliverablesSlot = document.createElement('div');
+  projectDeliverablesSlot.className = 'lead-deliverables-slot';
+  projectDeliverablesSlot.hidden = true;
+  projectOfficeSlot.after(projectDeliverablesSlot);
+  var routerDeliverablesSlot = document.createElement('div');
+  routerDeliverablesSlot.className = 'lead-deliverables-slot';
+  routerDeliverablesSlot.hidden = true;
+  var leadDeliverablesModule = null, leadDeliverablesLoading = null, leadDeliverableLists = {};
+  var leadDeliverablesExpanded = new Map();
+  function placeLeadDeliverables() {
+    var classic = readLanding() !== 'world';
+    var headquarters = !routerEntryHost.hidden;
+    var routerId = globalRouter ? globalRouter.conversationId() : '';
+    var projectLead = sidebar.querySelector('[data-coordinator-id]')?.dataset.coordinatorId || '';
+    var targets = {
+      project: classic && !headquarters && projectLead ? { leadId: projectLead, path: sidebarPath() || '' } : null,
+      router: classic && headquarters && routerId ? { leadId: routerId, path: globalRouter.home() || '' } : null,
+    };
+    if ((targets.project || targets.router) && !leadDeliverablesModule) { loadLeadDeliverablesModule(); return; }
+    [['project', projectDeliverablesSlot], ['router', routerDeliverablesSlot]].forEach(function (entry) {
+      var key = entry[0], slot = entry[1], target = targets[key];
+      var list = leadDeliverableLists[key];
+      if (!target) {
+        list?.hide();
+        if (!slot.hidden) slot.hidden = true;
+        return;
+      }
+      if (!list) list = leadDeliverableLists[key] = leadDeliverablesModule.createLeadDeliverables(leadDeliverablesPorts);
+      if (list.root.parentNode !== slot) slot.append(list.root);
+      if (slot.hidden) slot.hidden = false;
+      list.show(target);
+    });
+  }
+  function loadLeadDeliverablesModule() {
+    if (leadDeliverablesLoading || typeof loadLeadDeliverables !== 'function') return;
+    leadDeliverablesLoading = loadLeadDeliverables().then(function (module) {
+      leadDeliverablesModule = module;
+      leadDeliverablesPorts.opener = module.createDeliverableOpener(module.runtimeOpenPorts());
+      placeLeadDeliverables();
+    }).catch(function (error) {
+      // The lead entries stay fully usable; the next sidebar paint retries the import.
+      leadDeliverablesLoading = null;
+      console.warn('[LeadDeliverables] load failed', error);
+    });
+  }
+  var leadDeliverablesPorts = {
+    read: function (target, cursor, signal) { return Api.project.leadDeliverables(target.leadId, target.path, cursor, signal); },
+    subscribe: function (handler) {
+      pushSubscribe('project', '*', handler);
+      return function () { pushUnsubscribe('project', '*', handler); };
+    },
+    onReconnect: function (listener) {
+      return typeof pushOnReconnect === 'function' ? pushOnReconnect(listener) : function () {};
+    },
+    opener: null,
+    readExpanded: function (id) { return leadDeliverablesExpanded.has(id) ? leadDeliverablesExpanded.get(id) : null; },
+    writeExpanded: function (id, expanded) { leadDeliverablesExpanded.set(id, expanded); },
+  };
   var leadOffice = null, leadOfficeLoading = null, floorFacts = null, headquartersFacts = null, officeLeadId = '';
   function runningFlags(row) {
     var flags = _convStatusFlags(row);
@@ -281,6 +344,7 @@
       leadOffice.show({ altitude: headquarters ? 'headquarters' : 'floor', path: facts.scope.path,
         leadId: facts.binding.conversationId, board: facts.board, report: facts.report });
     }
+    placeLeadDeliverables();
     // The archive group drops its running tally while the office shows that work.
     var shown = leadOffice?.leadId() || '';
     if (shown !== officeLeadId) { officeLeadId = shown; coordinatorConversationGroups?.refresh(); }
@@ -334,6 +398,7 @@
       return function () { pushUnsubscribe('project', '*', refresh); stopReconnect?.(); };
     },
     navigate: function (id) { if (typeof loadConversation === 'function') loadConversation(id); },
+    openQuestion: function (id) { void runtimeScope.openConversationAtQuestion?.(id, null); },
     // A project floor of the headquarters goes down to that project, as its rail entry does.
     openProject: function (path, id) {
       var folder = (typeof getFolders === 'function' ? getFolders() : []).find(function (item) {
@@ -354,6 +419,7 @@
   routerEntryHost.id = 'globalRouterEntry';
   column.insertBefore(routerEntryHost, sidebar);
   routerEntryHost.after(routerOfficeSlot);
+  routerOfficeSlot.after(routerDeliverablesSlot);
   var routerHeaderHost = document.createElement('div');
   var watchdogHeaderHost = document.createElement('div');
   host.before(routerHeaderHost, watchdogHeaderHost);
@@ -467,14 +533,14 @@
       var pins = [];
       // Each group follows its entry's office slot: the archive sits under the team view.
       var project = sidebar.querySelector('[data-coordinator-id]')?.dataset.coordinatorId;
-      if (project) pins.push({ id: project, path: sidebarPath(), host: projectOfficeSlot });
+      if (project) pins.push({ id: project, path: sidebarPath(), host: projectDeliverablesSlot });
       // Both router conversations stay reserved, so neither becomes a replaced
       // Coordinator's row. Only the main coordinator groups its work, and only
       // beneath its card while the card is shown; the Watchdog never delegates.
       if (globalRouter.conversationId()) pins.push({
-        id: globalRouter.conversationId(), path: routerEntryHost.hidden ? '' : globalRouter.home() || '', host: routerOfficeSlot,
+        id: globalRouter.conversationId(), path: routerEntryHost.hidden ? '' : globalRouter.home() || '', host: routerDeliverablesSlot,
       });
-      if (routerWatchdog.conversationId()) pins.push({ id: routerWatchdog.conversationId(), path: '', host: routerOfficeSlot });
+      if (routerWatchdog.conversationId()) pins.push({ id: routerWatchdog.conversationId(), path: '', host: routerDeliverablesSlot });
       return pins;
     },
     historySettled: function () { return !sidebar.querySelector('.coordination-leader[aria-busy="true"]'); },
@@ -534,6 +600,7 @@
       delete runtimeScope.recoverProjectCoordination;
       surface.destroy(); sidebarSurface.destroy(); headquartersSurface.destroy(); globalRouter.destroy(); routerWatchdog.destroy();
       coordinatorConversationGroups.destroy(); leadOffice?.destroy(); stopLandingWatch();
+      Object.values(leadDeliverableLists).forEach(function (list) { list.destroy(); });
     }
   });
   runtimeScope.presenceRefresh();

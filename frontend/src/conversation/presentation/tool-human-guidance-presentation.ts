@@ -11,6 +11,7 @@
  */
 
 import { escapeHtmlText } from '../../html-safety';
+import { guidanceReplyQuote } from '../../rich-response/guidance-values';
 import type { I18nArgs, I18nKey, Translator } from '../../i18n';
 import {
   record, field, scalarText as safeText, type BoundedText,
@@ -354,9 +355,13 @@ export function createToolHumanGuidancePresentation(
       });
     }
     if (!text) text = safeText(field(round, 'guidanceQuestion')).trim();
-    return text.length > REPLY_QUOTE_UNITS
-      ? `${text.slice(0, REPLY_QUOTE_UNITS - 1)}…`
+    // The id line is part of the bounded quote, so the action layer's bound never cuts it off.
+    const guidanceId = boundedText(field(round, 'guidanceId'), IDENTIFIER_UNITS).value;
+    const room = REPLY_QUOTE_UNITS - (guidanceReplyQuote(guidanceId, '').length);
+    const bounded = text.length > room
+      ? `${text.slice(0, room - 1)}…`
       : text;
+    return guidanceReplyQuote(guidanceId, bounded);
   }
 
   function renderAwaitingCard(round: unknown, chatReply = false): string {

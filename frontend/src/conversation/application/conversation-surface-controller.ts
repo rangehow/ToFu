@@ -26,6 +26,7 @@ import {
 
 import { mergeTranslationActivity } from './translation-activity';
 import type { RoundOutlineTranslator } from '../ui/round-outline';
+import type { RevealTarget } from '../ui/surface-contracts';
 
 const RETAINED_TAIL_CONVERSATIONS = 64;
 
@@ -91,7 +92,7 @@ export interface ConversationSurfaceController {
   isNearLatest(threshold?: number): boolean;
   followLatest(options?: { force?: boolean }): void;
 
-  revealTurn(conversationId: string, turnId: string): boolean;
+  revealTurn(conversationId: string, turnId: string, target?: RevealTarget): boolean;
   disposeConversation(conversationId: string): void;
   dispose(): void;
 }
@@ -461,12 +462,12 @@ export function createConversationSurfaceController(
       expandedBranchLaneId = laneId;
       repaintPresentation();
     },
-    revealTurn(conversationId, turnId) {
+    revealTurn(conversationId, turnId, target) {
       if (disposed || committing || !host.isActive(conversationId)) return false;
       if (pending?.conversation.id === conversationId && !tryCommit()) return false;
       const activeSurface = surface;
       if (surfaceConversationId !== conversationId || !activeSurface) return false;
-      return tryCommit(() => activeSurface.revealTurn(turnId));
+      return tryCommit(() => activeSurface.revealTurn(turnId, target));
     },
     isNearLatest(threshold) {
       return !surface || !host.isActive(surfaceConversationId) || surface.isNearLatest(threshold);

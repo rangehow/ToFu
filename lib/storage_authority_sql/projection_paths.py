@@ -246,7 +246,46 @@ def prepare_search_projection_paths(data_dir: Path, *,
     decision = automatic_placement_decision(data_dir, paths, launch=True)
     if decision is not None and not decision['selected']:
         return fallback
+    try:
+        record_projection_owner(paths.directory, paths.authority_directory)
+    except OSError:
+        return fallback
     return paths
+
+
+OWNER_MARKER_SUFFIX = '.authority'
+
+
+def projection_owner_marker(namespaced: Path) -> Path:
+    """Sibling file naming the authority that owns an automatic namespace.
+
+    It lives beside the index leaf, never inside it: native open treats an
+    existing leaf as an index. The monitor reclaims a namespace whose marker
+    names an authority that no longer exists (``native_fastpath_auto``).
+    """
+    return namespaced.with_name(namespaced.name + OWNER_MARKER_SUFFIX)
+
+
+def read_projection_owner(namespaced: Path) -> Path | None:
+    """The marked owner, only when the marker is consistent with its namespace."""
+    try:
+        text = projection_owner_marker(namespaced).read_text(encoding='utf-8')
+    except (OSError, UnicodeDecodeError):
+        return None
+    owner = Path(text)
+    if not owner.is_absolute() or namespace_identity(owner) != namespaced.name:
+        return None
+    return owner
+
+
+def record_projection_owner(namespaced: Path, authority: Path) -> None:
+    """Write the owner marker before the engine opens the namespace (atomic)."""
+    if read_projection_owner(namespaced) == authority:
+        return
+    marker = projection_owner_marker(namespaced)
+    temporary = marker.with_name(f'.{marker.name}.{os.getpid()}.tmp')
+    temporary.write_text(str(authority), encoding='utf-8')
+    os.replace(temporary, marker)
 
 
 def prepare_search_projection_directory(directory: Path, authority: Path) -> Path:

@@ -36,6 +36,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+import contextlib
 import hashlib
 import json
 import os
@@ -920,6 +921,59 @@ def _retire_projection_copy(copy: Path) -> Path | None:
             os.close(descriptor)
 
 
+def _forget_owner_marker(namespaced: Path) -> None:
+    """Drop a namespace's owner marker once neither it nor a retired copy remains."""
+    from lib.storage_authority_sql.projection_paths import projection_owner_marker
+
+    if os.path.lexists(namespaced) or any(
+            _retired_copy_name(name, namespaced.name) for name in os.listdir(namespaced.parent)):
+        return
+    with contextlib.suppress(FileNotFoundError):
+        os.unlink(projection_owner_marker(namespaced))
+
+
+def _retire_orphaned_namespaces(namespace: Path, identity: str) -> list[Path]:
+    """Retire other authorities' copies whose marked authority no longer exists.
+
+    Scratch servers, tests and removed worktrees place their projection under
+    the same host-local base; nothing else ever reclaims it once their
+    authority is gone. Only a namespace whose owner marker is consistent with
+    its name and names a missing authority qualifies, and only while no engine
+    holds its ``LOCK``. Unmarked namespaces belong to installations that have
+    not launched since markers exist and are left alone.
+    """
+    from lib.storage_authority_sql.projection_paths import (
+        OWNER_MARKER_SUFFIX,
+        read_projection_owner,
+    )
+
+    retired: list[Path] = []
+    with os.scandir(namespace) as entries:
+        names = [entry.name for entry in entries]
+    marked = {name[:-len(OWNER_MARKER_SUFFIX)] for name in names
+              if name.endswith(OWNER_MARKER_SUFFIX)}
+    for name in sorted(marked):
+        if name == identity or len(name) != 64 or not set(name) <= _HEX:
+            continue
+        copy = namespace / name
+        owner = read_projection_owner(copy)
+        if owner is None or os.path.lexists(owner):
+            continue
+        # The marker stays until the copy and every retired leftover of it are
+        # gone, so an interrupted removal is found again by the next pass.
+        retired.extend(Path(namespace / other) for other in names
+                       if _retired_copy_name(other, name) and _owned_directory(namespace / other))
+        if _owned_directory(copy):
+            moved = _retire_projection_copy(copy)
+            if moved is not None:
+                logger.info('Retiring the search projection %s: its authority %s no longer '
+                            'exists', copy, owner)
+                retired.append(moved)
+        elif not os.path.lexists(copy):
+            _forget_owner_marker(copy)
+    return retired
+
+
 def _start_projection_removal(retired: list[Path]) -> None:
     """One background remover per process; leftovers are found again by name."""
     global _projection_removal
@@ -982,6 +1036,11 @@ def _reclaim_projection_copies(data_dir: Path, candidate: Path, active: str, now
 
             _update_state(data_dir, update)
     if namespace.name == _PROJECTION_NAMESPACE and _owned_directory(namespace):
+        orphans = _retire_orphaned_namespaces(namespace, identity)
+        if orphans:
+            outcomes.extend({'directory': str(path), 'outcome': 'orphan-retired'}
+                            for path in orphans)
+            retired.extend(orphans)
         with os.scandir(namespace) as entries:
             for entry in entries:
                 if _retired_copy_name(entry.name, identity) and _owned_directory(Path(entry.path)):
@@ -989,6 +1048,10 @@ def _reclaim_projection_copies(data_dir: Path, candidate: Path, active: str, now
     retired = list(dict.fromkeys(retired))
     if retired:
         remove(retired)
+        # A synchronous removal is complete here; a background one leaves the
+        # markers for the next pass, which finds its leftovers through them.
+        for base in dict.fromkeys(path.name.split(_RETIRED_MARK)[0] for path in retired):
+            _forget_owner_marker(namespace / base)
     if not retired and not outcomes:
         return {}
     return {'retired': [str(path) for path in retired], 'waiting': waiting}

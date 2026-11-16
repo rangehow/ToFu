@@ -79,8 +79,7 @@
     },
     {
       "path": "02-composer-menus.css",
-      "responsibility": "composer menus",
-      "legacyTokenSha256": "a10184354bd0e0ce3a65f4499af12b69edbece63ab6c702842ee54dbdcd4d79f"
+      "responsibility": "composer menus"
     },
     {
       "path": "02-model-picker-layout.css",
@@ -723,6 +722,11 @@
       "path": "36-lead-office.css",
       "responsibility": "Lead office team view beneath a lead's sidebar entry",
       "featureEntry": "frontend/src/features/lead-office/office.ts"
+    },
+    {
+      "path": "36-lead-deliverables.css",
+      "responsibility": "Lead deliverables (成果) list beneath a lead's sidebar entry and its report reader",
+      "featureEntry": "frontend/src/features/lead-deliverables/list.ts"
     },
     {
       "path": "34-coordinator-task-history.css",

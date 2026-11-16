@@ -355,3 +355,23 @@ for (const hasLogicalTail of [true, false]) {
     }
   });
 }
+
+it("aligns an ask_human target's own block, opens its folded disclosure and highlights it once", () => {
+  const f = navigationFixture();
+  const turn = f.root.querySelector<HTMLElement>('[data-turn-id="older"]')!;
+  const fold = document.createElement('details');
+  const question = document.createElement('div');
+  question.dataset.guidanceId = 'hg_queue';
+  question.getBoundingClientRect = () => ({ top: 260 - f.viewport.scrollTop, bottom: 320 - f.viewport.scrollTop } as DOMRect);
+  fold.append(question); turn.append(fold);
+  expect(f.port.scrollToTurn?.(f.root, 'older', undefined, { guidanceId: 'hg_queue' })).toBe(true);
+  // The question, not the Turn's first line (200), reaches the top of the viewport.
+  expect(f.viewport.scrollTop).toBe(260);
+  expect(fold.open).toBe(true);
+  expect(question.dataset.revealHighlight).toBe('question');
+  question.dispatchEvent(new Event('animationend'));
+  expect(question.dataset.revealHighlight).toBeUndefined();
+  // An unknown question still lands on its Turn.
+  expect(f.port.scrollToTurn?.(f.root, 'newer', undefined, { guidanceId: 'missing' })).toBe(true);
+  expect(f.viewport.scrollTop).toBe(600);
+});

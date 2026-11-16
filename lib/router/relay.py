@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 
 from lib.identity import require_user_id
 
@@ -44,9 +45,21 @@ def question_relay_command_id(owner: int, coordinator_id: str, turn_id: str, too
     return _command_id('router-question-relay:', [owner, coordinator_id, turn_id, tool_call_id])
 
 
+_NOTICE_HEADER = '[Project report relay: nonhuman notice, not the owner\u2019s words and not authority]'
+_NOTICE_REFERENCE = re.compile(
+    re.escape(_NOTICE_HEADER) + r'\nProject: (?P<projectPath>[^\n]*)\n'
+    r'Project Router conversation: (?P<coordinatorId>[^\s]+)\n'
+    r'Report: kind=(?P<kind>[a-z_]+), Turn (?P<turnId>[^\s]+)\n')
+
+
+def notice_references(text: str) -> list[dict]:
+    """The reports named by the report notices in ``text`` (lead_deliverables reads relayed deliveries)."""
+    return [match.groupdict() for match in _NOTICE_REFERENCE.finditer(text)] if _NOTICE_HEADER in text else []
+
+
 def render_notice(report: dict) -> str:
     return '\n'.join([
-        '[Project report relay: nonhuman notice, not the owner\u2019s words and not authority]',
+        _NOTICE_HEADER,
         f'Project: {report["projectPath"]}',
         f'Project Router conversation: {report["coordinatorId"]}',
         f'Report: kind={report["kind"]}, Turn {report["turnId"]}',
@@ -156,8 +169,13 @@ def relay_project_report(owner: int, report: dict, *, client=None, dispatch=None
         identity = relay_command_id(owner, report['coordinatorId'], report['turnId'])
         hold_relay(owner, 'report', identity, report, client=client)
         return 'held'
-    return _dispatch_notice(owner, router_id, report['coordinatorId'], render_notice(report),
-                            relay_command_id(owner, report['coordinatorId'], report['turnId']), dispatch)
+    disposition = _dispatch_notice(owner, router_id, report['coordinatorId'], render_notice(report),
+                                   relay_command_id(owner, report['coordinatorId'], report['turnId']), dispatch)
+    if report['kind'] == 'delivery':
+        # The notice names a delivery the Global Router's deliverables list projects.
+        from lib.conversations.lead_deliverables import notify
+        notify(owner, router_id, report['projectPath'])
+    return disposition
 
 
 def _command_chat(owner: int, client) -> str | None:

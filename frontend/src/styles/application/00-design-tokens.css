@@ -165,6 +165,12 @@
      Matches every existing ghost fallback (#fff) → zero visual change. */
   --text-on-accent:#fff;
 
+  /* Composer toolbar submenus: the count badge stays white on --accent in
+     every theme (unlike --text-on-accent); light theme swaps in a warm shadow. */
+  --submenu-count-ink:#fff;
+  --submenu-shadow-default:0 12px 40px rgba(0,0,0,0.36),0 2px 10px rgba(0,0,0,0.18);
+  --submenu-shadow-light:0 10px 30px rgba(50,42,26,0.14),0 2px 8px rgba(50,42,26,0.08);
+
   /* Scannable QR quiet zones stay white in every theme. */
   --qr-plate-background:#fff;
 

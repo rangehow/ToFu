@@ -13,6 +13,11 @@ import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.generated_rust import format_generated_rust  # noqa: E402
+
 SOURCE = ROOT / 'lib/agent_verdict/_handoff.py'
 DECLARATIONS = {
     'VU_DONE_SENTINEL', '_PROGRESS_RE', '_VERDICT_RE',
@@ -116,9 +121,10 @@ def render_outputs():
         '}', '',
     ])
     rust.extend(['];', ''])
+    rust_output = ROOT / 'packages/tofu-db/src/turn/agent_machine_tokens.generated.rs'
     return {
         ROOT / 'frontend/src/conversation/presentation/agent-machine-tokens.generated.ts': '\n'.join(ts),
-        ROOT / 'packages/tofu-db/src/turn/agent_machine_tokens.generated.rs': '\n'.join(rust),
+        rust_output: format_generated_rust('\n'.join(rust), rust_output),
     }
 
 

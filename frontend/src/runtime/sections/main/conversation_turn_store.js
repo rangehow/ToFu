@@ -951,18 +951,16 @@ const _nativeTurnRenderers = createClassicConversationRenderers({
     },
   },
   choiceInteractions(conversationId, turnId) {
-    return createAuthenticatedChoiceInteractionPorts({
-      conversationId, turnId,
-      commandId: createTurnCommandId,
-      text: (key, fallback) => { const value = typeof t === 'function' ? t(key) : ''; return value && value !== key ? value : fallback; },
-      replyInChat: (request) => replyToGuidanceInChat(request),
-    });
+    return _guidanceAnswerPorts(conversationId, turnId, (request) => replyToGuidanceInChat(request));
   },
   inspectToolEffect(reference, signal) {
     return conversationSyncApi.inspectToolEffect(
       reference.conversationId, reference.turnId, reference.operationId, reference.ownerScope,
       { signal, timeout: 30_000 },
     );
+  },
+  subscribeToolCards(listener) {
+    return toolCardPresentation.subscribe(listener);
   },
   loadToolResult(reference, signal) {
     return conversationSyncApi.turnToolResult(
@@ -1715,8 +1713,8 @@ runtimeScope.ConversationSurfacePresentation = Object.freeze({
   ownsConversation(conversationId) {
     return _conversationSurfaceController.ownsConversation(conversationId);
   },
-  revealTurn(conversationId, turnId) {
-    return _conversationSurfaceController.revealTurn(conversationId, turnId);
+  revealTurn(conversationId, turnId, target) {
+    return _conversationSurfaceController.revealTurn(conversationId, turnId, target);
   },
   isNearLatest(threshold) {
     return _conversationSurfaceController.isNearLatest(threshold);
@@ -1740,6 +1738,51 @@ function _conversationReadState(conversationOrId) {
   return conversationId
     ? runtimeScope.ConversationTurnStore?.readRuntimeState?.(conversationId) || null
     : null;
+}
+
+/* Ports of the one ask_human answer control (rich-response/guidance-answer.ts) for one question's Turn:
+ * the classic card answers in the open conversation; a card outside it (the studio person panel) first
+ * opens that conversation so the quoted chat reply leaves through the same composer and send pipeline. */
+function _guidanceAnswerPorts(conversationId, turnId, replyInChat) {
+  return createAuthenticatedChoiceInteractionPorts({
+    conversationId, turnId,
+    commandId: createTurnCommandId,
+    text: (key, fallback) => { const value = typeof t === 'function' ? t(key) : ''; return value && value !== key ? value : fallback; },
+    replyInChat,
+    displayTranslation: (request) => _guidanceDisplayTranslation(request),
+  });
+}
+runtimeScope.guidanceAnswerPorts = (conversationId, turnId) => _guidanceAnswerPorts(
+  conversationId, turnId, async (request) => {
+    if (getActiveConv()?.id !== request.conversationId) await loadConversation(request.conversationId);
+    return replyToGuidanceInChat(request);
+  });
+
+/* A question card reads in the conversation's language: when the conversation translates, the question
+ * and its options are shown translated (EN->CN, the same browser translation the retained question
+ * overlay uses, cached in its presentation store); null leaves them as written. */
+const _GUIDANCE_TRANSLATION_SEPARATOR = '\n‖‖‖\n';
+async function _guidanceDisplayTranslation({ conversationId, guidanceId, question, options, descriptions }) {
+  const conv = conversations.find(item => item?.id === conversationId);
+  if (!conv || !convAutoTranslate(conv)) return null;
+  const project = (state) => state?.translatedQuestion ? {
+    question: state.translatedQuestion,
+    options: options.map((option, index) => state.translatedOptions?.[index]?.label || option),
+    descriptions: descriptions.map((text, index) => state.translatedOptions?.[index]?.description || text),
+  } : null;
+  const known = project(humanGuidancePresentation.read(conversationId, guidanceId));
+  if (known) return known;
+  const parts = [question, ...options.flatMap((option, index) => [option, descriptions[index] || ''])];
+  const translated = String(await _callTranslateAPI(parts.join(_GUIDANCE_TRANSLATION_SEPARATOR), 'Chinese', 'English') || '')
+    .split(/\n?‖‖‖\n?/);
+  if (!translated[0]) return null;
+  const translatedOptions = options.map((_option, index) => ({
+    ...(translated[1 + index * 2] ? { label: translated[1 + index * 2] } : {}),
+    ...(translated[2 + index * 2] && descriptions[index] ? { description: translated[2 + index * 2] } : {}),
+  }));
+  return project(humanGuidancePresentation.patch(conversationId, guidanceId, {
+    translating: false, translatedQuestion: translated[0], translatedOptions,
+  }));
 }
 
 runtimeScope.ConversationTurnRead = Object.freeze({

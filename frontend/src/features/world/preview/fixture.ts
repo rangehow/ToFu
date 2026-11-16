@@ -1,6 +1,10 @@
 /** Fixture source for the office preview: a recorded live snapshot (preview/record_fixture.py output) served
  * as a static WorldLive, optionally scaled to N running Workers, with one scripted report for checking the
- * walk-in. Preview-only: the application reads live data through live.ts. Entry point: fixtureLive. */
+ * walk-in, and answer ports for the leads' recorded questions (the production choice-interaction adapter over
+ * the fixture's Turns: an answer settles the question in the fixture, as the server would). Preview-only: the
+ * application reads live data through live.ts. Entry point: fixtureLive. */
+import { createChoiceInteractionPorts } from '../../../conversation/application/choice-interaction';
+import type { ChoicePorts } from '../../../rich-response/choices';
 import type { ProjectDispatchHistoryRow } from '../../../api/project-dispatch.generated';
 import type { CoordinatorConversationPage } from '../../../api/project-coordination.generated';
 import { openQuestions, type QuestionTurn } from '../attention';
@@ -29,7 +33,11 @@ function scaled(teams: LiveTeam[], total: number) {
   }
 }
 
-export function fixtureLive(snapshot: FixtureSnapshot, onChange: () => void, options: { scale?: number } = {}): WorldLive & { report(team: string): string | null } {
+export function fixtureLive(snapshot: FixtureSnapshot, onChange: () => void, options: { scale?: number } = {}): WorldLive & {
+  report(team: string): string | null;
+  answerPorts(conversationId: string, turnId: string): ChoicePorts | undefined;
+  replies: Array<{ conversationId: string; guidanceId: string; quote: string; responseText: string }>;
+} {
   const teams: LiveTeam[] = snapshot.teams.map(team => ({
     key: team.key, name: team.name, color: team.color, kind: team.kind, leadId: team.leadId, order: team.order,
     team: ok(team.team), assignments: ok(team.kind === 'project' ? team.assignments ?? null : []),
@@ -38,7 +46,46 @@ export function fixtureLive(snapshot: FixtureSnapshot, onChange: () => void, opt
   }));
   if (options.scale) scaled(teams, options.scale);
   let revision = 9_000_000;
+  const replies: Array<{ conversationId: string; guidanceId: string; quote: string; responseText: string }> = [];
+  const questionTeam = (conversationId: string) => snapshot.teams.find(team => team.leadId === conversationId && team.questionTurns);
+  const settle = (fixture: FixtureTeam) => {
+    const team = teams.find(each => each.key === fixture.key)!;
+    team.questions = { ...ok(openQuestions(fixture.leadId, fixture.questionTurns!)), at: team.questions.at + 1 };
+    onChange();
+  };
+  const turnOf = (fixture: FixtureTeam, turnId: string) => {
+    const turn = fixture.questionTurns!.find(each => each.turnId === turnId);
+    if (!turn) throw new Error('No such Turn');
+    return { status: 'running', settlement: null, projectionRevision: 1, ...turn, conversationId: fixture.leadId };
+  };
   return {
+    replies,
+    answerPorts(conversationId, turnId) {
+      const fixture = questionTeam(conversationId);
+      if (!fixture) return undefined;
+      return createChoiceInteractionPorts({
+        conversationId, turnId, commandId: () => `preview-${++revision}`,
+        readTurn: async () => turnOf(fixture, turnId),
+        createAttempt: async (_conversation, _turn, body) => {
+          const turn = fixture.questionTurns!.find(each => each.turnId === turnId)!;
+          const rounds = (turn.projection?.toolRounds || []).map(raw => {
+            const round = raw as Record<string, unknown>;
+            return round.guidanceId === body.guidanceId
+              ? { ...round, status: 'done', guidanceResponse: body.humanResponse, guidanceAnswerCommandId: body.commandId } : round;
+          });
+          turn.projection = { ...turn.projection, toolRounds: rounds };
+          window.setTimeout(() => settle(fixture), 0);
+          return { attempt: { turnId, commandId: body.commandId, operation: 'answer_guidance' }, turn: turnOf(fixture, turnId) };
+        },
+        replyInChat: async request => {
+          replies.push(request);
+          const last = fixture.questionTurns!.reduce((top, turn) => Math.max(top, turn.ordinal), 0);
+          fixture.questionTurns!.push({ turnId: `reply-${++revision}`, ordinal: last + 1, actor: 'human', createdAt: Date.now() });
+          window.setTimeout(() => settle(fixture), 0);
+          return 'sent';
+        },
+      });
+    },
     state: { teams, started: true, error: '', facts: null, loading: false },
     start: async () => { onChange(); },
     refreshAll: () => onChange(),

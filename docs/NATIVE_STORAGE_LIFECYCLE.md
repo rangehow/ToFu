@@ -386,6 +386,26 @@ live execution hosts; a liveness timeout cannot prove exit. Verify
 `test_host_retirement_covers_only_other_hosts` and
 `test_stop_settles_an_attempt_whose_host_handed_off_the_serving_lock`.
 
+A serving era that ended on the same host retires the same way. **Problem:** a
+container restarted under its old hostname (a pod restart) gets a new PID
+namespace, so the kernel cannot see the previous execution host and a host
+retirement deliberately never covers the reading host; its entered Attempts
+would stay running exactly like the 2026-11-16 host move. **Decision:** the lock
+stamp keeps `<pid>@<host>` as its first line (the only line `stop.sh`, the
+guard, `server_manager` and storage preflight read) and adds a JSON era line
+`{"boot", "pid_namespace"}`. Acquiring a same-host lock whose era differs from
+the acquirer's records `tofu.era-retired/v1`
+(`process-exits/eras/<sha256(era)>.json`), and `owner_state` treats that era's
+processes as dead. A stamp without an era line (written before this change)
+proves nothing, and the stale-lock reclaim path, which unlinks a contended
+lock, retires nothing because a contended flock does not show the old era
+ended. **Alternatives rejected:** treating every unobservable same-host
+namespace as dead settles Attempts of a sibling container that may still run;
+keying retirement by hostname alone would retire the reading host's own live
+processes. Verify
+`test_acquiring_a_lock_an_earlier_era_of_this_host_named_retires_that_era` and
+`test_era_retirement_covers_only_that_era_never_the_readers`.
+
 An explicit replacement retires an unconfirmed native storage close the same
 way (owner request 2026-11-06, "a refused restart must never leave Tofu
 down"). Problem: the 22:34 restart stopped the API, then the storage host's
@@ -714,8 +734,10 @@ Decision: restarts deploy only certified engines.
   reads records and re-verifies the bytes, required check verdicts and the
   engine's reported source; it has no write path.
 - **Storage contract identity.** `native_engine.storage_contract_sha256` hashes
-  `contracts/storage_v2.json`, `contracts/native_storage_connection_v2.json`
-  and every `contracts/*` entry of the engine's Cargo `external-inputs`.
+  `contracts/storage_v2.json`, `contracts/native_storage_connection_v2.json`,
+  the operation IR `contracts/tofudb_ir_v1.json` (an engine kept across an IR
+  change would silently ignore new payload fields) and every `contracts/*`
+  entry of the engine's Cargo `external-inputs`.
   Records are keyed by engine source *and* contract because the contract covers
   files the engine fingerprint does not. Deployments record the contract of the
   tree they prepared in `build.json`; manual `deploy_tofudb_engine.py` runs
@@ -747,6 +769,22 @@ Decision: restarts deploy only certified engines.
   `build.json` says `UNCERTIFIED operator override <id> by <operator>: <reason>`.
   A failed override refuses the restart. `install.sh` passes the decision only
   for a first deployment, when nothing is deployed yet.
+- **Automatic certification before a normal start** (requested 2026-11-16 by the project coordinator for the owner:
+  an IR-only contract change must not leave `serverctl start`/`restart` or
+  `migrate_host.py --start` refusing). Before serverctl asks the manager for
+  anything, `native_engine.certify_head_before_start` checks the same decision;
+  when preparation would refuse, it runs `scripts/engine_certify.py` for HEAD's
+  commit itself (outside the 1,200 s preparation budget: the gate takes 1-2 h;
+  measured 2026-11-16 on this host: build 166 s, both isolated certifications
+  7 s and 6 s, the recorded f3102951 run's cargo/load/ff-native/rollback
+  checks 623-4,011 s each), then the ordinary preparation deploys the new
+  record. Fixture: this checkout's own store when no engine holds its `LOCK`
+  (a stopped server), else the newest record's fixture whose `CONTROL` still
+  matches; the work root is `packages/tofu-db/target/engine-certify-work`.
+  Uncommitted engine inputs or contracts, no settled fixture, a work root on
+  another filesystem, or a failing gate refuse with one actionable line before
+  the manager is asked to stop anything. The operator override skips it; the
+  in-app restart and the manager's own spawns do not run it.
 - **Automatic spawns** (crash, planned and lease recovery) prepare only the
   frontend; the new storage host's admission keeps or refuses the deployed
   engine. Starting the manager is not an engine decision either.
@@ -782,7 +820,8 @@ the deployed engine's own commit is certified (`--commit`), or the operator
 overrides once.
 
 Alternatives rejected: running the gate inside restart preparation (1-2 h against
-a 1,200 s budget); records in Git or backfilled from a worker's `/tmp`; automatic
+a 1,200 s budget; the CLI runs it before preparation instead); certifying with
+only build+certify (a record must carry every required check); records in Git or backfilled from a worker's `/tmp`; automatic
 rollback to the newest certified engine (downgrades cross on-disk format
 boundaries); `storage_v2.json` alone as the contract (the compiled operation
 catalog changes independently); a runtime-handshake digest (itself an engine

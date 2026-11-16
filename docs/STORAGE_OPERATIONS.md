@@ -999,6 +999,155 @@ read owns only its existing call-local buffer; no worker, resident cache or
 persistent growth is added. Paired FUSE warm-read component measurement and
 limits: [length reuse](STORAGE_PERFORMANCE_CHARTER.md#loose-block-length-reuse).
 
+## Durable store growth inventory, 2026-11-15
+
+Measured read-only on the live host (the store was migrated at about 15:00
+CST on 11-15; listings 01:46 and 02:05 CST on 11-16) and on reflink or rsync
+copies taken in the order CONTROL, WAL, then immutable files. Rates come from
+file mtimes (new segment files per hour) and from two listings. Class: D =
+durable user state, R = reconstructible derived data, G = garbage or expired.
+
+| store / family | before | rate | class | lifecycle now |
+|---|---:|---:|---|---|
+| source authority payload segments (DolphinFS) | 4,089 segments, 58.2 GB files, 57.7 GB payload | +1.8 GiB in 19 min net; 2.4-3.3 GiB/h of new segment files | at most 9.2 GB D, at least 48.5 GB G | whole-catalog segment reclamation |
+| source authority loose blocks | about 625 files, 209 garbage (268 MB) | - | D/G | unchanged loose collector |
+| source authority WAL, retained history | 15-24 MB active, 64 segments | bounded | D | unchanged rotation and retirement |
+| search projection, serving namespace (local disk) | 151.7 GiB (migration inventory) -> 181 GiB (01:47) -> 205.6 GiB (04:53) -> 230.2 GiB (`scripts/resource_inventory.py --record`, 08:00), 4,293 segment files, 12,751 loose | +7.7-7.9 GiB/h net (about 185-190 GiB/day); 15 GiB/h of new segments, 30-55 GiB/h while rebuilding | R; 99.99% kept live only by 22,234 retained history segments | history retirement + whole-catalog reclamation |
+| search projection, other namespaces under the same host base | 13 directories, 46 GiB, no engine holding them | 13 in about 6 h | R/G | owner marker; reclaimed once the owner authority is gone |
+| SQL sidecar database | none: the native backend is selected | - | - | - |
+| uploads | 1.5 KB (attachments live in TofuDB blobs) | - | D | - |
+| native online backup closed store | 129 KB | - | R | unchanged |
+| logs | 103 MB | - | G after retention | log maintenance, 256 MiB family budget |
+| export (operator outputs), mcp-cache, desktop_dist | 518 MB, 395 MB, 371 MB (one release) | one-off | D, R, R | unchanged |
+
+Why the bytes persisted:
+
+- The search projection never retired its history, and retained history keeps
+  every block its transactions wrote reachable (`visit_gc_stable_transaction_blocks`),
+  so every superseded index page stayed live ("Search projection history
+  retirement" below).
+- Its collector never ran: the epoch capture sampled the index mutex, which
+  the search worker holds almost continuously (147 of 147 epochs deferred by
+  01:50, 215 of 218 by 04:53,
+  [TOFUDB_ONLINE_GC.md](TOFUDB_ONLINE_GC.md#the-capture-waits-for-the-mutex-2026-11-15)).
+- The source collector rewrote at most one segment per epoch from a 16-segment
+  window, a 512-epoch sweep of a full catalog, while overlay merges and
+  history promotion supersede blocks across every segment
+  ([TOFUDB_ONLINE_GC.md](TOFUDB_ONLINE_GC.md#every-confirmed-segment-is-reclaimed-each-epoch-2026-11-15)).
+- Search namespaces of other authorities (scratch servers, tests, removed
+  worktrees) under the shared host base had no owner and no lifecycle.
+
+Before/after on copies of the same live state, with this release's engine
+(`packages/tofu-db/examples/storage_growth_replay.rs`, epochs back to back on
+local disk; the live collector paces them by its 120 s floor and 50% duty):
+
+| copy | before | after | epochs | epoch time |
+|---|---:|---:|---|---|
+| source authority | 59.3 GB (incl. 1.1 GB copy-window extras) | 9.6 GB (-84%) | 4 | 171, 679, 144, 116 s |
+| search projection | 194.4 GB | 7.4 GB (-96%) | history retirement + 3 | 441, 1,184, 180 s |
+
+The first epoch confirms; the second rewrites or retires every confirmed
+segment (3,991 on the source copy, 4,082 on the search copy; the
+rewrite rule leaves segments under half dead for later); later epochs
+remove the replaced files once their retirement delay passed. Only the first
+pass over an accumulated backlog costs minutes; afterwards an epoch only
+rewrites segments whose dead bytes reached their live bytes. Epoch times are
+from a loaded host (both replays and a `cargo test` ran concurrently).
+`tofu-db verify` walks both reclaimed copies with `verdict=ok`,
+`missing_blocks=0` (4,037/4,037 and 3,807/3,807 segments).
+
+### Measuring liveness with gc-census
+
+`tofu-db gc-census --data-dir <closed store or copy>` builds the offline
+collector's mark once and reports, for the whole payload catalog, file and
+payload bytes, reachable blocks and bytes, retained history segments and the
+block references they keep live, and the segments that are fully or at least
+half dead. It reclaims nothing; it opens the store exclusively, so run it on a
+copy (`cp -r --reflink=always` on XFS, or rsync of the immutable files after
+CONTROL and the WAL). It reads every segment index sixteen times (one pass per
+sixteenth of the hash space, which bounds memory): 540 s and 420 MB RSS for the
+58 GB source copy, 350 s and 1.1 GB for the 182 GB search copy on local disk.
+
+### Search projection history retirement
+
+Problem: WAL windows of the search index were sealed into history and never
+retired (the source's maintenance round retires only its own history), and a
+retained history segment keeps every block its transactions wrote reachable.
+Decision: the maintenance worker that indexes also retires the index's history
+after each search batch, to the source's own retained bound
+(`history_retained_segments`), one slice per pair of short holds of the index
+mutex (`TurnSearchProjection::retire_history_slice`), until nothing is
+retirable or the worker stops. Failures count in
+`maintenance.searchHistoryRetirementFailures` and retry next round;
+`searchRetiredHistorySegments` and `searchRetainedHistorySegments` show
+progress. No setting is added. Alternatives rejected: rebuilding the index
+whenever it grows (downtime and another publication lifecycle, and a size
+threshold is a knob); disabling history for the index (recovery and the
+shared engine path depend on sealed windows). Verification:
+`turn_search_runtime::tests::retired_index_history_lets_the_collector_reclaim_superseded_generations`
+(24 generations: 1,622,812 -> 846,283 bytes, identical answers before and
+after a reopen), `every_search_history_retirement_fault_reopens_with_identical_answers`
+(every I/O error, short write and dropped sync of a retirement, then crash,
+reopen, retire and two collector epochs), and
+`maintenance::tests::scheduler_retires_search_index_history_to_the_retained_bound`.
+
+### Foreground cost of reclamation
+
+Measured 2026-11-16 on one 77-CPU host with the production-shaped harness
+(`scripts/tofudb_load_test.py --reuse-seed --scales 1,5 --duration 300`, one
+shared seed, root on local XFS), alternating the base engine (A, shared branch
+`6433ddefb`) and this release (B) in twelve legs. Engine-side cost does not
+grow. At 5x, per leg pair, B wrote the same or fewer bytes per change (A/B
+0.54/0.49, 0.50/0.51, 0.52/0.51, 0.46/0.47, 0.46/0.49, 0.55/0.43 MB), waited
+for the authority as long or shorter (A 0.99-8.3 ms, B 0.69-4.6 ms average),
+had WAL syncs as long (0.7-1.1 ms both), and used the same engine CPU
+(A 0.38-0.58, B 0.31-0.53 cores). Client percentiles move with the host's disk, not
+with the engine: at 5x the `turn.event.record` p50 spans 28-247 ms for A and
+64-555 ms for B, and the p99 spans 0.9-2.3 s for A and 0.7-3.8 s for B. The
+heartbeat and `turn.sync.changes` percentiles behave the same way. The
+slower legs coincide with WAL syncs of 2-2.5 ms at 1x and with the harness
+falling below its 68 events/s target (57 and 48 events/s), in both variants.
+A client-latency verdict therefore needs a quiet volume; rerun on a dedicated
+host from each variant's checkout with that checkout's certified engine:
+
+```sh
+python3 scripts/tofudb_load_test.py --root <non-tmpfs dir>/<leg> --engine <certified tofu-db> \
+    --reuse-seed --scales 1,5 --duration 300 --run-id <leg>   # legs A B A B, same seed copy
+```
+
+The search collector and history retirement hold the index mutex briefly. In
+the harness at 1x and 5x, B's search collector completed every epoch (A
+deferred 2-5 of 5). Its capture held the index mutex at most 0.8-4.0 ms and
+waited for it at most 0.05-0.8 s; it waits as a mutex waiter and blocks
+nobody. A history retirement slice held it at most 8-27 us. On a copy of the
+216 GB live index (`turn_search_runtime::tests::search_latency_while_the_index_is_reclaimed`,
+opt-in), search queries issued every 5 ms had p50/p99 52.9/703 ms idle and
+42.5/765 ms while 2,833 retirement slices and two collector epochs ran
+(25,287 queries; the epochs reclaimed 233.8 GB). The backlog's longest holds
+were 96 ms (a retirement slice) and 71 ms (a capture of 22,234 retained
+segments), so the worst query rose from 0.80 s to 1.41 s while the backlog
+drained. Once retired history stays at its bound, those holds return to the
+harness's microseconds.
+
+### Orphaned search projection namespaces
+
+An automatic placement now writes `<base>/tofudb-search/<identity>.authority`
+(the canonical authority path) before the engine opens the namespace; the
+marker sits beside the index leaf, never inside it. The supervisor monitor
+(`native_fastpath_auto.maintain_search_projection`) retires and removes any
+other namespace in the same automatic base whose marker is consistent with its
+name and names an authority that no longer exists, only while no engine holds
+its `LOCK`; the marker goes once the copy and its retired leftovers are gone,
+so an interrupted removal resumes from it. Unmarked namespaces (installations
+that have not launched since markers exist) and explicitly configured bases
+are never touched. The 13 unmarked namespaces found on 11-15 (46 GiB) predate
+the marker; the filesystem-artifacts cleanup removed them once no process held
+their `LOCK` (rebuild on demand covers a stopped owner), and markers keep the
+next ones from accumulating. Verification: `tests/storage/test_search_projection_capacity.py`
+(`test_copies_whose_authority_is_gone_are_reclaimed_and_live_ones_kept`,
+`test_an_interrupted_orphan_removal_resumes_from_its_marker`,
+`test_a_launch_marks_its_namespace_beside_the_index_leaf`).
+
 ## Loose-block growth and online compaction
 
 Every live loose block is one file, one inode and one metadata operation per
@@ -1117,8 +1266,9 @@ first minutes after a deploy. After that, roll back like this:
    `OLD verify --data-dir data/tofudb-authority` is the full read-only walk.
 6. Check out the older revision and `python3 serverctl.py start`: preparation
    builds and certifies its engine, which opens the converted authority. The
-   search projection (`data/projections/tofudb-search`) runs no history
-   compaction and needs no conversion (step 3 on it reports `none` or `1`).
+   search projection (`data/projections/tofudb-search`) retires history
+   without writing routing pages and needs no conversion (step 3 on it
+   reports `none` or `1`).
 
 What stays impossible, and when:
 - Once a slice has run, no older engine opens the authority until step 4 has

@@ -936,6 +936,6 @@ replacement's), `authority::packed_filter_tests` (after a clean open the first
 spill reads only its own segment's index; a spill while the build is suspended
 neither waits for it nor scans; a crash while it is suspended loses no
 acknowledged commit), `engine::tests::full_catalog_merge_inserts_only_its_chunk_into_the_packed_filter`,
-`authority_gc_online::tests::driver_builds_the_packed_filter_off_the_mutex_while_epochs_defer`
+`authority_gc_online::tests::driver_builds_the_packed_filter_off_the_mutex_while_the_capture_waits`
 and `packed_filter_rebuild_before_batch_publication_cannot_hide_durable_blocks`
 (`note_packed` never rescans).

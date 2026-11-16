@@ -1,10 +1,12 @@
 /** Tofu office: the game-led landing workspace inside the application shell. Composes the live read-only
  * sources, the office projection and its report events, the open-plan scene, the HUD and the person panel,
- * with one requestAnimationFrame-coalesced render per change. The only interaction is choosing someone to
+ * with one requestAnimationFrame-coalesced render per change. The interaction is choosing someone to
  * talk to: a person or a document opens that person's panel (brief first, then the application's own chat
- * through the shell). Esc closes the panel; arrows and Enter work in the office.
+ * through the shell); a lead's open question is answered in its card through the shared answer control, or
+ * "in the conversation" at that question. Esc closes the panel; arrows and Enter work in the office.
  * Entry point: mountWorld (returns teardown and the route hook). */
 import { t } from '../../i18n';
+import type { ChoicePorts } from '../../rich-response/choices';
 import { projectBrief, type TurnRef } from './brief';
 import { reportEvents } from './events';
 import { createHud, type PushState } from './hud';
@@ -17,28 +19,46 @@ import { assignmentStatus } from '../project-coordination-graph';
 import { createOffice } from './office';
 import { createPanel } from './panel';
 import type { OpenTarget } from './scene';
+import { createDeliverableOpener, runtimeOpenPorts, type DeliverableOpener } from '../lead-deliverables/open';
+import { mergeDeliverable, reportDeliverable, type LeadDeliverable } from '../lead-deliverables/model';
 
 export type ConversationDock = 'closed' | 'brief' | 'chat';
 /** What the world asks of the application shell; it never reaches into chat chrome itself. */
 export interface WorldShell {
   /** Show this person's real conversation in the application's chat column, optionally at one Turn. */
   openChat(conversationId: string, turn: TurnRef | null): void;
+  /** Show this person's conversation at one ask_human question, highlighted, with the composer replying to it. */
+  openQuestion(conversationId: string, question: { turnId: string; ordinal?: number; guidanceId: string }): void;
+  /** Ports of the shared answer control for one question's Turn (undefined: not answerable here). */
+  answerPorts(conversationId: string, turnId: string): ChoicePorts | undefined;
   dock(mode: ConversationDock): void;
   classic(): void;
   push: PushPort | null;
 }
-export interface WorldOptions { live?: (onChange: () => void) => WorldLive; now?: () => number }
+export interface WorldOptions {
+  live?: (onChange: () => void) => WorldLive; now?: () => number;
+  /** The deliverable opener; default: the application's (lead-deliverables/open.ts) with this office's chat. */
+  deliverables?: (openTurn: (conversationId: string, turn: TurnRef) => void) => DeliverableOpener;
+}
 
 /** One team's projection input. Office facts, where the server has them, are the authority for who is
  * busy, which owner questions are open (the text still comes from the lead's tail) and open incidents. */
 const sourcesOf = (team: LiveTeam) => [team.team, team.assignments, team.progress, team.reports, team.questions];
 
-function input(team: LiveTeam, facts: FactsView | null, busy: ReadonlySet<string> | null, alarms: number | null): TeamInput {
+/** A question answered from its card leaves the office at once (its '?' marker clears); the key is dropped
+ * once the reads no longer list it, so the authority decides from then on. */
+const answerKey = (conversationId: string, guidanceId: string) => `${conversationId}\u0000${guidanceId}`;
+
+function input(team: LiveTeam, facts: FactsView | null, busy: ReadonlySet<string> | null, alarms: number | null,
+  answered: Set<string>, listed: Set<string>): TeamInput {
   const sources = sourcesOf(team);
+  const questions = factQuestions(facts, team.leadId, team.questions.value) ?? team.questions.value;
+  for (const question of questions || []) listed.add(answerKey(question.conversationId, question.guidanceId));
   return {
     key: team.key, kind: team.kind, name: team.name, color: team.color, leadId: team.leadId,
     team: team.team.value, assignments: team.assignments.value, progress: team.progress.value,
-    reports: team.reports.value, questions: factQuestions(facts, team.leadId, team.questions.value) ?? team.questions.value,
+    reports: team.reports.value,
+    questions: questions && questions.filter(question => !answered.has(answerKey(question.conversationId, question.guidanceId))),
     failed: sources.some(source => source.status === 'error'), held: new Set(),
     ...(busy ? { busy } : {}), ...(team.kind === 'watchdog' && alarms !== null ? { alarms } : {}),
   };
@@ -54,6 +74,7 @@ export function mountWorld(root: HTMLElement, shell: WorldShell, options: WorldO
   const held = new Map<string, Map<string, { at: number; reads: number }>>();
   const arrived: DeskDocument[] = [];
   const opened = new Set<string>();
+  const answered = new Set<string>();
   const live = (options.live || (onChange => createWorldLive(onChange, shell.push)))(schedule);
   const labels: PersonLabels = {
     router: t('world.role.router'), watchdog: t('world.role.watchdog'), lead: team => t('world.role.lead', { team }),
@@ -70,6 +91,13 @@ export function mountWorld(root: HTMLElement, shell: WorldShell, options: WorldO
       shell.openChat(id, turn);
     },
     brief: () => dock('brief'),
+    answerPorts: decision => shell.answerPorts(decision.conversationId, decision.turn.turnId),
+    answerInChat: decision => {
+      panel.setTab('chat');
+      dock('chat');
+      shell.openQuestion(decision.conversationId, { ...decision.turn, guidanceId: decision.guidanceId });
+    },
+    answered: decision => { answered.add(answerKey(decision.conversationId, decision.guidanceId)); schedule(); },
   });
   const empty = document.createElement('p');
   empty.className = 'w-empty';
@@ -132,6 +160,36 @@ export function mountWorld(root: HTMLElement, shell: WorldShell, options: WorldO
     return true;
   }
 
+  /** A deliverable's Turn opens in this office's docked conversation column, beside its person's panel. */
+  function chatAt(conversationId: string, turn: TurnRef) {
+    panelFocus = undefined;
+    if (personOf(conversationId) && showBrief(conversationId, true)) {
+      panel.setTab('chat');
+      scene.select(conversationId);
+    }
+    dock('chat');
+    shell.openChat(conversationId, turn);
+  }
+  const deliverables = (options.deliverables || (openTurn => createDeliverableOpener(runtimeOpenPorts({ openTurn }))))(chatAt);
+
+  /** The deliverable a desk document or trophy shows: the same item the classic sidebar lists. */
+  function deliverableOf(document: DeskDocument | Office['trophies'][number]): LeadDeliverable | null {
+    if ('kind' in document) {
+      if (document.kind !== 'deliverable' || document.ref.source !== 'lead-report') return null;
+      const input = inputs.get(document.team);
+      const latest = input?.reports?.latest;
+      const ref = document.ref;
+      return reportDeliverable({
+        conversationId: ref.conversationId, turnId: ref.turnId, title: document.title, createdAt: document.at,
+        content: latest?.turnId === ref.turnId ? latest.content : document.title,
+        ordinal: latest?.turnId === ref.turnId ? latest.ordinal : undefined,
+        projectPath: input?.reports?.projectPath || document.team,
+      });
+    }
+    return mergeDeliverable({ assignmentId: document.ref.assignmentId, title: document.title, conversationId: document.ref.conversationId,
+      turnId: document.ref.turnId, projectPath: inputs.get(document.team)?.reports?.projectPath || document.team, createdAt: 0 });
+  }
+
   function open(target: OpenTarget) {
     if (!office) return;
     let personId = target.id;
@@ -142,6 +200,13 @@ export function mountWorld(root: HTMLElement, shell: WorldShell, options: WorldO
       const desk = [...office.documents, ...arrived].find(each => each.id === target.id);
       const source = desk || office.trophies.find(each => each.id === target.id);
       if (!source) return;
+      // A deliverable opens itself (report card, Worker result), not its author's conversation.
+      const item = deliverableOf(source);
+      if (item && deliverables.open(item)) {
+        if (desk) opened.add(desk.id);
+        schedule();
+        return;
+      }
       personId = source.ref.conversationId;
       panelFocus = source.ref;
       panelTeam = source.team;
@@ -194,9 +259,10 @@ export function mountWorld(root: HTMLElement, shell: WorldShell, options: WorldO
     const facts = live.state.facts;
     const busy = busyConversations(facts);
     const alarms = openAlarms(facts);
+    const listed = new Set<string>();
     for (const team of live.state.teams) {
       const previous = inputs.get(team.key);
-      const value = input(team, facts, busy, alarms);
+      const value = input(team, facts, busy, alarms, answered, listed);
       for (const member of team.team.value?.conversations || []) titles.set(member.conversationId, member.title);
       if (previous) {
         for (const event of reportEvents(previous, value, titles)) {
@@ -222,6 +288,7 @@ export function mountWorld(root: HTMLElement, shell: WorldShell, options: WorldO
       next.set(team.key, value);
     }
     inputs = next;
+    for (const key of answered) if (!listed.has(key)) answered.delete(key);
     office = projectOffice(time, [...next.values()], labels);
     const leadDocuments = new Set(office.documents.map(document => document.id));
     office.documents = [...office.documents, ...arrived.filter(document => !leadDocuments.has(document.id))]

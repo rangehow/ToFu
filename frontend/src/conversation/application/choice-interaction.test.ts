@@ -109,7 +109,7 @@ describe('non-blocking questions answer through the chat', () => {
     await expect(ports.submit('hg_chat', '  ', 'cmd', signal())).rejects.toThrow('undeclared');
     const answered = await ports.submit('hg_chat', 'Under 500', 'cmd', signal());
     expect(replyInChat).toHaveBeenCalledWith({ conversationId: 'owned', guidanceId: 'hg_chat',
-      quote: 'Which nightly budget?', responseText: 'Under 500' });
+      quote: 'Which nightly budget?\n\n[question hg_chat]', responseText: 'Under 500' });
     expect(createAttempt).not.toHaveBeenCalled();
     expect(answered).toMatchObject({ state: 'answered', response: 'Under 500' });
     expect(answered.note).toContain('toolHumanGuidance.repliedInChat');
@@ -135,7 +135,32 @@ describe('non-blocking questions answer through the chat', () => {
       readTurn: async () => turn, createAttempt: vi.fn(), commandId: () => 'cmd', replyInChat });
     await ports.submit('hg_chat', JSON.stringify([{ index: 1, answer: 'Parking' }, { index: 0, answer: 'Low' }]), 'cmd', signal());
     expect(replyInChat).toHaveBeenCalledWith(expect.objectContaining({
-      quote: '1. Budget?\n\n2. Anything else?', responseText: '1. Low\n2. Parking' }));
+      quote: '1. Budget?\n\n2. Anything else?\n\n[question hg_chat]', responseText: '1. Low\n2. Parking' }));
+  });
+
+  it("carries the question's stated default and shows the question in the conversation's reading language", async () => {
+    const displayTranslation = vi.fn(async () => ({ question: '每晚预算是多少？', options: ['500 以下', '500 到 1000'] }));
+    const replyInChat = vi.fn(async () => 'sent' as const);
+    const ports = createChoiceInteractionPorts({ conversationId: 'owned', turnId: 'turn',
+      readTurn: async () => asked({ guidanceDefault: 'Under 500' }), createAttempt: vi.fn(), commandId: () => 'cmd',
+      replyInChat, displayTranslation });
+    const loaded = await ports.load('hg_chat', signal());
+    expect(displayTranslation).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'owned', guidanceId: 'hg_chat',
+      question: 'Which nightly budget?', options: ['Under 500', '500 to 1000'] }), expect.anything());
+    expect(loaded).toMatchObject({ defaultAnswer: 'Under 500', question: 'Which nightly budget?', displayQuestion: '每晚预算是多少？',
+      options: ['Under 500', '500 to 1000'], displayOptions: ['500 以下', '500 到 1000'] });
+    // The answer and its quote keep the original text the model asked in; the card keeps reading translated.
+    const answered = await ports.submit('hg_chat', 'Under 500', 'cmd', signal());
+    expect(replyInChat).toHaveBeenCalledWith(expect.objectContaining({ quote: 'Which nightly budget?\n\n[question hg_chat]', responseText: 'Under 500' }));
+    expect(answered).toMatchObject({ state: 'answered', displayQuestion: '每晚预算是多少？' });
+  });
+
+  it('shows the question as written when its translation fails', async () => {
+    const ports = createChoiceInteractionPorts({ conversationId: 'owned', turnId: 'turn', readTurn: async () => asked(),
+      createAttempt: vi.fn(), commandId: () => 'cmd', displayTranslation: async () => { throw new Error('offline'); } });
+    const loaded = await ports.load('hg_chat', signal());
+    expect(loaded.question).toBe('Which nightly budget?');
+    expect(loaded.displayQuestion).toBeUndefined();
   });
 
   it('refuses without a chat reply port rather than inventing a guidance command', async () => {

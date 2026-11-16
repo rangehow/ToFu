@@ -1374,6 +1374,23 @@ under a longer stall; ignoring the token permits obsolete workers; removing
 recovery altogether strands crashed workers. The bounded RPC deadline remains
 a transport budget, independent of task duration.
 
+**Problem:** a released unsettled claim was offered again immediately, so the
+service that released it reclaimed it. When its recovery evidence cannot
+change locally (an entered Attempt whose owner ran on a host that has since
+moved, with no recorded exit), each job looped through claim, refusal and
+release hundreds of times a minute. Every `settlement_unconfirmed` also paused
+all claims for `failureBackoffMilliseconds`, so fresh Attempts waited 7–12 s,
+once 1,052 s, before their claim (2026-11-16, about 21 such jobs).
+**Decision:** the release defers the job by one `workerLeaseMilliseconds`, the
+time an absent holder's lease would expire, and an unknown domain settlement
+no longer pauses the claim loop: that job carries its own not-before time.
+Authority-level outcomes (`lease_lost`, `protocol_error`, unconfirmed terminal
+or suspension writes) keep the shared backoff. **Alternatives rejected:**
+treating foreign evidence as death replays effects; a separate backoff
+setting adds a tuning knob for a delay the lease contract already defines;
+holding the claim until the process exits strands the job behind a
+long-lived service.
+
 Problem: a detached descendant's held-claim read after its root Turn settled
 turned transient storage pressure into a model-permission refusal. Decision:
 this proof uses the existing effect-free persistence wait, retaining the same

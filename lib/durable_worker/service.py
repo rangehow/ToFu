@@ -201,7 +201,12 @@ class DurableWorkerService:
             match result.state:
                 case 'succeeded' | 'failed' | 'cancelled' | 'suspended' | 'idle':
                     pass
-                case 'lease_lost' | 'protocol_error' | 'terminal_unconfirmed' | 'suspension_unconfirmed' | 'settlement_unconfirmed':
+                case 'settlement_unconfirmed':
+                    # One job's domain verdict, not authority health: the
+                    # runner released that job with its own not-before time.
+                    logger.warning('[DurableWorker] worker outcome requires recovery: %s task=%s detail=%s',
+                                   result.state, result.task_id or '-', result.detail or '-')
+                case 'lease_lost' | 'protocol_error' | 'terminal_unconfirmed' | 'suspension_unconfirmed':
                     logger.warning('[DurableWorker] worker outcome requires recovery: %s task=%s detail=%s',
                                    result.state, result.task_id or '-', result.detail or '-')
                     backoff_until = now + self._policy['failureBackoffMilliseconds'] / 1000

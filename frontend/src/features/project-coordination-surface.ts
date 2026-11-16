@@ -12,7 +12,7 @@ import {
   type CoordinatorProgressCard, type CoordinatorProgressView,
 } from './coordinator-progress';
 import type { CoordinatorProgressBoard, CoordinatorReportState } from '../api/project-coordination.generated';
-import { coordinationText } from './project-coordination-board';
+import { coordinationText } from './project-coordination-text';
 import { createRouterWorkerModel, type RouterWorkerModelControl } from './router-worker-model';
 import { createCoordinatorConversationId } from './coordinator-conversation-id';
 import type { ProjectCoordinationPorts } from './project-coordination';

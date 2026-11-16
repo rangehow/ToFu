@@ -3,7 +3,7 @@ import type { CoordinatorUsageState } from '../api/project-dispatch.generated';
 import type { CoordinationBinding } from '../api/project-coordination.generated';
 import { createAlert } from '../ui';
 import { t } from '../i18n';
-import { coordinationText as text } from './project-coordination-board';
+import { coordinationText as text } from './project-coordination-text';
 
 export interface CoordinatorBudgetPorts {
   read(path: string, signal?: AbortSignal): Promise<CoordinatorUsageState>;

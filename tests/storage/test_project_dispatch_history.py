@@ -95,7 +95,8 @@ def test_page_reads_a_worker_turn_body_only_when_its_revision_changes(storage, c
     def query(operation, payload, *args, **kwargs):
         result = real(operation, payload, *args, **kwargs)
         if operation == 'turn.get':
-            reads.append('body' if payload.get('include_projection', True) else 'metadata')
+            reads.append('preview' if 'content_preview_chars' in payload
+                         else 'body' if payload.get('include_projection', True) else 'metadata')
         return result
     monkeypatch.setattr(storage.client, 'query', query)
     service = ProjectDispatchService(repo, commands=object(), history_previews=HistoryPreviews())
@@ -106,11 +107,12 @@ def test_page_reads_a_worker_turn_body_only_when_its_revision_changes(storage, c
         assert execution['result'] == {'content': report[:2000]}
         return execution, list(reads)
     first, first_reads = build()
-    assert first_reads == ['body']
+    # The authority cuts the preview: no build decodes the Worker's projection body.
+    assert first_reads == ['preview']
     assert build() == (first, ['metadata'])
     report = publish('revised report ' * 400)
     revised, revised_reads = build()
-    assert revised_reads == ['metadata', 'body']
+    assert revised_reads == ['metadata', 'preview']
     assert revised['resultRevision'] > first['resultRevision']
     assert build() == (revised, ['metadata'])
 
@@ -156,7 +158,8 @@ def test_dependency_states_read_prerequisite_turns_as_metadata(storage, context,
 
     def query(operation, payload, *args, **kwargs):
         if operation == 'turn.get' and payload['conversation_id'] == 'recipient':
-            reads.append('body' if payload.get('include_projection', True) else 'metadata')
+            reads.append('preview' if 'content_preview_chars' in payload
+                         else 'body' if payload.get('include_projection', True) else 'metadata')
         return real(operation, payload, *args, **kwargs)
     monkeypatch.setattr(storage.client, 'query', query)
     states = repo.dependency_states(dependent)
@@ -168,7 +171,7 @@ def test_dependency_states_read_prerequisite_turns_as_metadata(storage, context,
     assert repo.dependency_states(dependent) == states and reads == ['metadata', 'body']
     repo.turn_get = turn_get
     service = ProjectDispatchService(repo, commands=object(), history_previews=HistoryPreviews())
-    for expected in (['metadata', 'body'], ['metadata', 'metadata']):
+    for expected in (['metadata', 'preview'], ['metadata', 'metadata']):
         reads.clear()
         page = service.history_page(principal=principal)
         assert page['assignments'][0]['dependencyStates'] == states
@@ -207,8 +210,9 @@ def test_page_dependency_rows_add_no_snapshot_reads(owned, monkeypatch):
                                          'conversationId': 'recipient', 'taskId': 'task-prerequisite',
                                          'status': 'completed'}}
     source = c.repo.turn_get
+    from tests.support.turn_reads import turn_read
     c.repo.turn_get = lambda conversation, turn, **kwargs: (
-        deepcopy(turns[turn]) if turn in turns else source(conversation, turn, **kwargs))
+        turn_read(turns[turn], **kwargs) if turn in turns else source(conversation, turn, **kwargs))
     c.repo.attempt_get = lambda attempt, **kwargs: deepcopy(attempts.get(attempt))
     prerequisite = authorize(c, 'prerequisite')
     c.repo.bind_execution(prerequisite['id'], 'turn-prerequisite', 'attempt-prerequisite')

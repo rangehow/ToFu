@@ -30,10 +30,10 @@ def dependency_context(context, monkeypatch):
             c.turn_body_reads.append(turn)
         if turn not in c.turns:
             return source_get(conv, turn, **kw)
-        value = deepcopy(c.turns[turn])
-        if value is not None and not kw.get('include_projection', True) and not c.bodies_for_metadata_reads:
-            value.pop('projection')
-        return value
+        if c.bodies_for_metadata_reads:
+            return deepcopy(c.turns[turn])
+        from tests.support.turn_reads import turn_read
+        return turn_read(c.turns[turn], **kw)
     def attempts(identity, **kw):
         c.evidence_reads.append(('attempt', identity))
         return deepcopy(c.attempts.get(identity))

@@ -1,5 +1,9 @@
 """History reads only its result preview; exact evidence remains complete and detached.
 
+A history build never reads a Turn projection: the authority returns metadata
+plus the content preview (``content_preview_chars``), so the API host decodes
+no multi-MB Worker projection to show 2,000 characters.
+
 A later page reads Turn metadata and reuses a preview only for the exact Turn
 revision and status it was derived from; every other evidence port stays live.
 Page rows carry the contract's historyRequest projection; exact lookups do not.
@@ -41,9 +45,17 @@ def evidence(context):
                'taskId': 'worker-task', 'status': 'completed'}
     reads = []
 
-    def read_turn(conversation, identity, *, user_id, include_projection=True):
-        reads.append((conversation, identity, user_id, include_projection))
-        return turn if include_projection else {key: value for key, value in turn.items() if key != 'projection'}
+    def read_turn(conversation, identity, *, user_id, include_projection=True, content_preview_chars=None):
+        # Emulates the authority: a preview read returns metadata plus the cut content.
+        mode = 'preview' if content_preview_chars is not None else include_projection
+        reads.append((conversation, identity, user_id, mode))
+        if include_projection:
+            return turn
+        metadata = {key: value for key, value in turn.items() if key != 'projection'}
+        if content_preview_chars is not None:
+            content = turn['projection'].get('content')
+            metadata['contentPreview'] = content[:content_preview_chars] if isinstance(content, str) else None
+        return metadata
 
     service = ProjectDispatchService(c.repo, commands=object(), turn_get=read_turn,
                                     attempt_get=lambda *args, **kwargs: attempt)
@@ -97,7 +109,7 @@ def test_history_preserves_non_text_result_preview(evidence, content):
     turn['projection']['content'] = content
     for _ in range(2):
         assert service.history_page(principal=c.principal)['assignments'][0]['execution']['result'] == {}
-    assert [read[3] for read in reads] == [True, False]
+    assert [read[3] for read in reads] == ['preview', False]
     assert copies == []
 
 
@@ -106,7 +118,7 @@ def test_unchanged_turn_reuses_its_exact_preview_without_reading_the_body(eviden
     first = service.history_page(principal=c.principal)
     assert service.history_page(principal=c.principal) == first
     assert first['assignments'][0]['execution']['result'] == {'content': turn['projection']['content'][:2000]}
-    assert reads == [('recipient', 'worker-turn', c.repo.owner, True),
+    assert reads == [('recipient', 'worker-turn', c.repo.owner, 'preview'),
                      ('recipient', 'worker-turn', c.repo.owner, False)]
     assert copies == []
 
@@ -121,9 +133,9 @@ def test_changed_turn_revision_or_status_displays_the_new_body(evidence, change)
     assert execution['result'] == {'content': 'revised evidence'}
     assert execution['resultRevision'] == turn['projectionRevision']
     assert execution['status'] == 'interrupted'
-    assert [read[3] for read in reads] == [True, False, True]
+    assert [read[3] for read in reads] == ['preview', False, 'preview']
     service.history_page(principal=c.principal)
-    assert [read[3] for read in reads] == [True, False, True, False]
+    assert [read[3] for read in reads] == ['preview', False, 'preview', False]
 
 
 def test_retained_previews_are_only_the_latest_page_of_each_owner_project(evidence, context):
@@ -135,13 +147,13 @@ def test_retained_previews_are_only_the_latest_page_of_each_owner_project(eviden
         turn_get=service.turn_get, attempt_get=service.attempt_get, history_previews=shared)
     assert other_project.history_page(principal=c.principal)['assignments'] == []
     service.history_page(principal=c.principal)
-    assert [read[3] for read in reads] == [True, False]
+    assert [read[3] for read in reads] == ['preview', False]
     # A build displays only its principal's tenant; its slot then retains nothing.
     tenant_b = PrincipalContext.user(subject_id='user:7', owner_user_id=7, tenant_id='tenant-b', scopes=['chat'])
     assert service.history_page(principal=tenant_b)['assignments'] == []
     assert service.history_page(principal=c.principal)['assignments'][0]['execution']['result'] == {
         'content': turn['projection']['content'][:2000]}
-    assert [read[3] for read in reads] == [True, False, True]
+    assert [read[3] for read in reads] == ['preview', False, 'preview']
 
 
 @pytest.mark.parametrize('remembered', [False, True])
@@ -173,10 +185,12 @@ def bound_rows(context):
         c.repo.bind_execution(row['id'], f'turn-{number}', f'attempt-{number}')
     reads = []
 
-    def read_turn(conversation, identity, *, user_id, include_projection=True):
+    def read_turn(conversation, identity, *, user_id, include_projection=True, content_preview_chars=None):
         reads.append(identity)
         turn = {'turnId': identity, 'conversationId': 'recipient', 'actor': 'assistant', 'projectionRevision': 1}
-        return {**turn, 'projection': {'content': 'result ' + identity}} if include_projection else turn
+        if include_projection:
+            return {**turn, 'projection': {'content': 'result ' + identity}}
+        return {**turn, 'contentPreview': 'result ' + identity} if content_preview_chars else turn
 
     def read_attempt(identity, *, user_id):
         reads.append(identity)

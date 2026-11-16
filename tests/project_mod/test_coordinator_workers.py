@@ -44,7 +44,8 @@ def runtime(base_runtime, monkeypatch):
     r.attempts['coordinator-attempt'] = {'conversationId': 'coordinator', 'turnId': 'coordinator-turn',
         'attemptId': 'coordinator-attempt', 'taskId': r.task['id'], 'status': 'running', 'createdAt': 1_000_000,
         'config': deepcopy(r.task['config'])}
-    r.c.repo.turn_get = lambda conv, turn, **kw: deepcopy(r.turns.get(turn))
+    from tests.support.turn_reads import turn_read
+    r.c.repo.turn_get = lambda conv, turn, **kw: turn_read(r.turns.get(turn), **kw)
 
     def attempt_get(attempt, *, user_id=None, include_execution_config=False):
         # Like turn.attempt.get: the accepted execution config only on request.

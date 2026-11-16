@@ -48,6 +48,11 @@ def _turn_get(session: Session, payload: Mapping[str, Any]) -> Any:
     include_projection = payload.get('include_projection', True)
     if type(include_projection) is not bool:
         raise StorageError('database_protocol_error', 'Invalid Turn projection flag')
+    preview_chars = payload.get('content_preview_chars')
+    if preview_chars is not None and (include_projection or type(preview_chars) is not int or preview_chars < 1):
+        raise StorageError('database_protocol_error', 'Invalid Turn content preview')
+    if preview_chars is not None:
+        return _turn_content_preview(session, conv_id, user_id, turn_id, preview_chars)
     columns = '*' if include_projection else (
         'turn_id,presentation_id,conversation_id,lane_id,parent_turn_id,ordinal,'
         'actor,kind,run_id,status,current_attempt_id,projection_revision,'
@@ -61,6 +66,20 @@ def _turn_get(session: Session, payload: Mapping[str, Any]) -> Any:
     if row is None:
         return None
     return _turn_public(session, row) if include_projection else _turn_public_metadata(row)
+
+
+def _turn_content_preview(session: Session, conv_id: str, user_id: int, turn_id: str, chars: int) -> Any:
+    """Metadata plus ``contentPreview``, the first ``chars`` code points of the public content."""
+    row = session.fetch_one(
+        "SELECT * FROM storage_conversation_turns "
+        "WHERE conversation_id=? AND user_id=? AND turn_id=?",
+        (conv_id, user_id, turn_id),
+    )
+    if row is None:
+        return None
+    content = (_turn_public(session, row).get('projection') or {}).get('content')
+    return {**_turn_public_metadata(row),
+            'contentPreview': content[:chars] if isinstance(content, str) else None}
 
 
 def _turn_timing_trace_get(session: Session, payload: Mapping[str, Any]) -> Any:

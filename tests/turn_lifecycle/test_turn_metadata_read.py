@@ -62,3 +62,70 @@ def test_metadata_response_cannot_smuggle_a_body(monkeypatch, private_field):
     with pytest.raises(StorageError) as caught:
         turns.get_turn('conversation', 'turn', user_id=7, include_projection=False)
     assert caught.value.code == 'database_protocol_error'
+
+
+def test_content_preview_is_metadata_plus_the_authority_cut_prefix(storage, monkeypatch):
+    """A history page shows 2,000 characters of a multi-MB Worker projection.
+
+    Measured 2026-11-15: one assignment-history build read 31 complete Worker
+    Turns (57.4 MiB, up to 6.5 MiB each) in the API host for a 355 KiB page.
+    """
+    monkeypatch.setattr(turns, '_turn_client', lambda **kwargs: storage.client)
+    conversation = 'preview-read'
+    content = '结果：\U0001F600' + 'growing answer ' * 24000
+    created = turns.append_settled_turn(conversation,
+        command_id='preview-seed', actor='assistant', projection={'content': content}, user_id=1,
+        conversation_defaults={'allowCreate': True, 'title': 'Preview'})
+    turn_id = created['turn']['turnId']
+    metadata = turns.get_turn(conversation, turn_id, user_id=1, include_projection=False)
+
+    preview = turns.get_turn(conversation, turn_id, user_id=1, include_projection=False,
+                             content_preview_chars=2000)
+
+    assert preview == {**metadata, 'contentPreview': content[:2000]}
+    assert turns.get_turn(conversation, turn_id, user_id=1, include_projection=False,
+                          content_preview_chars=4)['contentPreview'] == '结果：\U0001F600'
+    with pytest.raises(turns.LifecycleNotFound):
+        turns.get_turn(conversation, 'missing', user_id=1, include_projection=False,
+                       content_preview_chars=2000)
+    for flag, chars in [(None, 8), (True, 8), (False, 0), (False, -1), (False, '8')]:
+        payload = {'conversation_id': conversation, 'turn_id': turn_id, 'user_id': 1,
+                   'content_preview_chars': chars}
+        if flag is not None:
+            payload['include_projection'] = flag
+        with pytest.raises(StorageError) as caught:
+            storage.client.query('turn.get', payload)
+        assert caught.value.code == 'database_protocol_error'
+
+
+def test_content_preview_of_non_text_content_is_null(storage, monkeypatch):
+    monkeypatch.setattr(turns, '_turn_client', lambda **kwargs: storage.client)
+    created = turns.append_settled_turn('preview-parts',
+        command_id='preview-parts-seed', actor='assistant', projection={'content': ['parts']},
+        user_id=1, conversation_defaults={'allowCreate': True, 'title': 'Preview'})
+    preview = turns.get_turn('preview-parts', created['turn']['turnId'], user_id=1,
+                             include_projection=False, content_preview_chars=2000)
+    assert preview['contentPreview'] is None
+
+
+@pytest.mark.parametrize('response', [{'turnId': 'turn'}, {'turnId': 'turn', 'contentPreview': 'x' * 9},
+                                      {'turnId': 'turn', 'contentPreview': {'content': 'x'}}])
+def test_content_preview_response_is_bounded_and_present(monkeypatch, response):
+    class Client:
+        def query(self, operation, payload):
+            assert payload['content_preview_chars'] == 8 and payload['include_projection'] is False
+            return response
+    monkeypatch.setattr(turns, '_turn_client', lambda **kwargs: Client())
+    with pytest.raises(StorageError) as caught:
+        turns.get_turn('conversation', 'turn', user_id=7, include_projection=False,
+                       content_preview_chars=8)
+    assert caught.value.code == 'database_protocol_error'
+
+
+@pytest.mark.parametrize('include_projection,chars', [(True, 8), (False, 0), (False, True), (False, '8')])
+def test_invalid_content_preview_is_rejected_before_storage(monkeypatch, include_projection, chars):
+    monkeypatch.setattr(turns, '_turn_client',
+        lambda **kwargs: pytest.fail('Invalid content preview reached storage'))
+    with pytest.raises(TypeError, match='content preview'):
+        turns.get_turn('conversation', 'turn', user_id=7, include_projection=include_projection,
+                       content_preview_chars=chars)

@@ -13,6 +13,8 @@ import json
 
 import pytest
 
+from tests.support.turn_reads import turn_read
+
 from lib.project_dispatch import acceptance
 from lib.project_dispatch.repository import ProjectDispatchError, _validate_schema
 from tests.project_mod.test_coordinator_continuation import end, run as run
@@ -215,7 +217,7 @@ def test_an_owner_authorized_assignment_shows_its_checks_and_an_owner_accept_lea
     attempt = {'attemptId': 'worker-attempt', 'turnId': 'worker-turn', 'conversationId': 'recipient',
                'taskId': 'worker-task', 'status': 'completed'}
     service = ProjectDispatchService(c.repo, commands=SimpleNamespace(create_turn=create_turn),
-                                     turn_get=lambda *args, **kwargs: turn,
+                                     turn_get=lambda *args, **kwargs: turn_read(turn, **kwargs),
                                      attempt_get=lambda *args, **kwargs: attempt)
     row = c.repo.authorize({**c.request, 'acceptance': CHECKS}, c.principal, 'owner-checked')
     assert service.dispatch(row['id'], principal=c.principal)['dispatch'] == 'accepted'

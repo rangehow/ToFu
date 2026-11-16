@@ -211,6 +211,33 @@ def _retained_since(task: dict) -> float:
                float(task.get('_workerFinishedAt') or 0))
 
 
+_RELEASED_VALUE_TYPES = (str, int, float, bool, bytes, type(None))
+
+
+def _release_evicted(tasks: list[dict]) -> None:
+    """Drop every reference an expired settled carrier still holds.
+
+    A settled task's private ports point back at it: its execution account
+    (``_active``), progress sinks, observer closures, a refused frame's copied
+    context and stored exceptions whose frames hold the task. Those cycles keep
+    its replay window alive until a full cyclic collection, which a large heap
+    makes rare. Registry eviction ends the carrier's in-process life, so it
+    keeps only scalar identity (id, status, timestamps) for any late holder.
+    A dict still registered elsewhere or owing event delivery is left intact.
+    """
+    if not tasks:
+        return
+    runtimes = task_abort_signal.registered_runtimes()
+    for task in tasks:
+        task_id = str(task.get('id') or '')
+        if task.get('_eventDeliveryPending') or any(
+                runtime.get(task_id) is task for runtime in runtimes):
+            continue
+        for key in [key for key, value in task.items()
+                    if not isinstance(value, _RELEASED_VALUE_TYPES)]:
+            task.pop(key, None)
+
+
 def _make_envelope(error, *, context: str, source: str) -> Optional[dict]:
     """Lazy boundary around the package-owned error normalizer."""
     from lib.error_envelope import normalize_envelope
@@ -440,6 +467,7 @@ class TaskRuntime:
             '_executionTerminalizing': False,
         }
         capacity_evicted = []
+        capacity_released = []
         over_capacity = False
         with self._lock:
             if task_id not in self._tasks and len(self._tasks) >= self.max_tasks:
@@ -453,8 +481,10 @@ class TaskRuntime:
                     victim_id = str(victim.get('id') or '')
                     if victim_id and self._tasks.pop(victim_id, None) is not None:
                         capacity_evicted.append(victim_id)
+                        capacity_released.append(victim)
                 over_capacity = len(self._tasks) >= self.max_tasks
             self._tasks[task_id] = task
+        _release_evicted(capacity_released)
         task_abort_signal.ensure_watcher()
         if capacity_evicted:
             logger.info(
@@ -1827,11 +1857,14 @@ class TaskRuntime:
         ttl = self.ttl if max_age is None else max_age
         now = time.time()
         expired = []
+        released = []
         with self._lock:
             for tid, task in list(self._tasks.items()):
                 if _terminal_reclaimable(task) and now - _retained_since(task) > ttl:
                     expired.append(tid)
+                    released.append(task)
                     del self._tasks[tid]
+        _release_evicted(released)
         if expired:
             # INFO (was debug) + the evicted id prefixes: cleanup_stale is one
             # of only TWO registry-eviction paths (with discard_task), and a

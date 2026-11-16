@@ -292,7 +292,7 @@ def test_structured_body_static_pins():
                 'debug.structImage'):
         assert all(key in locale for locale in locales), \
             f'{key} missing from native locale JSON'
-    css = open(os.path.join(ROOT, 'frontend/src/styles/application/02-inspector-structure.css'),
+    css = open(os.path.join(ROOT, 'frontend/src/features/inspector/structure.css'),
                encoding='utf-8').read()
     for cls in ('.debug-struct', '.debug-tc-card', '.debug-arg-val',
                 '.debug-raw', '.debug-json'):

@@ -3,7 +3,7 @@
  */
 import type { CoordinationCanvasState } from './project-coordination-canvas';
 import { createButton, createDialog, createAlert, createTabs } from '../ui';
-import '../styles/application/33-project-coordination.css';
+import './project-coordination.css';
 import { coordinationText as text, coordinationTaskDigest, createCoordinationBoard, projectCoordinationWorkGroups } from './project-coordination-board';
 export { projectCoordinationWorkGroups } from './project-coordination-board';
 import { t } from '../i18n';

@@ -22,7 +22,7 @@ import {
   HISTORY_GROUPS, appendPage, historyRows, historyTotal, rowOffsets, rowSignature, visibleRange,
   type HistoryCounts, type HistoryFilter, type HistoryRow,
 } from './coordinator-task-history-model';
-import '../styles/application/34-coordinator-task-history.css';
+import './coordinator-task-history.css';
 
 export interface CoordinatorTaskHistoryQuery { group?: CoordinatorProgressHistoryGroup; q?: string; cursor?: string }
 

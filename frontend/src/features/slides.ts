@@ -1,4 +1,4 @@
-import '../styles/application/09-slide-editor.css';
+import './slide-editor.css';
 /** Demand-loaded editor composition; runtime supplies transport and composer ports only. */
 import { invokeFeatureEntry, type FeatureCallable } from '../runtime-bridge';
 import { featureRegistry, getFeatureBinding } from '../feature-registry';

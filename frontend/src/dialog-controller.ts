@@ -4,7 +4,7 @@
  * Entry point: createAppDialogController. Dependencies: injected document,
  * scheduler, localized copy, warning logger and the manifest-owned stylesheet.
  */
-import './styles/application/08-app-dialogs.css';
+import './app-dialogs.css';
 
 export interface AppDialogSchedule {
   setTimeout(callback: () => void, delayMs: number): number;

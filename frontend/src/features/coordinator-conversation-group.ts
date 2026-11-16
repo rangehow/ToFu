@@ -7,7 +7,7 @@ import { createButton } from '../ui';
 import type { CoordinatorConversationPage } from '../api/project-coordination.generated';
 import { setStableAttribute, setStableData, setStableHidden, setStableText } from '../conversation/ui/renderers/stable-dom';
 import { folderIcon } from './project/folder-icons';
-import '../styles/application/33-project-coordination.css';
+import './project-coordination.css';
 
 export interface CoordinatorConversationRow {
   id: string;

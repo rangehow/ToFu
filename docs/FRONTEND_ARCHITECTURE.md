@@ -714,7 +714,7 @@ requesting the application preserves the waterfall. Tests: `main.test.ts`,
   storm (`tests/myday/test_myday_calendar_single_flight.py`).
   `frontend/src/features/background.ts` has no presenter import: cache-first
   digest refresh and reminders can preload without parsing the panel. The
-  board's styles are the deferred `16-my-day-goals.css` of the same chunk.
+  board's styles are `frontend/src/features/myday-goals.css`, imported by the same chunk.
   Static empty, check and delete SVG markup has one immutable typed owner in
   `frontend/src/features/myday/presentation-assets.ts`.
 - Conversation catalog instant-paint metadata lives in the typed

@@ -124,7 +124,6 @@
   opacity: 0;
   transition: opacity 0.15s;
 }
-.stg-matrix-scroll.can-scroll-right::after { opacity: 1; }
 /* Left-edge fade sits over the sticky first column when content is
    scrolled: implemented via a ::before on the table wrapper is not
    possible (sticky columns), so a class toggled from scroll events

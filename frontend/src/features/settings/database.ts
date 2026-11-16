@@ -8,6 +8,7 @@
  * module only renders state and issues bounded API calls.
  */
 
+import './database.css';
 import { featureRegistry } from '../../feature-registry';
 import { createButton, createChoice, createDialog, createField } from '../../ui';
 

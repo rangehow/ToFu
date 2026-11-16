@@ -652,11 +652,6 @@
   border-radius: var(--s-radius);
   background: var(--s-cream);
 }
-.mcp-add-actions {
-  display: flex;
-  gap: var(--space-2);
-  margin-top: 10px;
-}
 /* Install Modal */
 .mcp-install-modal-overlay {
   position: fixed;

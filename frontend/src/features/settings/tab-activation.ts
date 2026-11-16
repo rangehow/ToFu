@@ -5,13 +5,22 @@
 import {featureRegistry} from '../../feature-registry';
 import {currentSettingsReadSession, type SettingsReadSession} from './panel-read-session';
 
-const panels: Readonly<Record<string, {populate: string; destroy?: string; refreshOnVisit?: boolean}>> = {
+interface IndependentPanel {
+  populate: string;
+  destroy?: string;
+  refreshOnVisit?: boolean;
+  /** Demand-loads the owner that registers `populate`, keeping it out of the Settings chunk. */
+  load?: () => Promise<unknown>;
+}
+
+const panels: Readonly<Record<string, IndependentPanel>> = {
   mcp: {populate: '_populateMcpTab'},
   skills: {populate: '_populateSkillsTab', destroy: '_destroySkills'},
   tools: {populate: 'populateToolsInventory', destroy: '_destroyToolsInventory'},
   knowledge: {populate: '_populateKnowledgeTab', destroy: '_destroyKnowledgeTab', refreshOnVisit: true},
   preferences: {populate: '_populatePreferencesTab', destroy: '_destroyPreferences'},
-  database: {populate: '_populateDatabaseTab', destroy: '_destroyDatabaseTab', refreshOnVisit: true},
+  database: {populate: '_populateDatabaseTab', destroy: '_destroyDatabaseTab', refreshOnVisit: true,
+    load: () => import('./database')},
   dx: {populate: '_populateDxTab', destroy: '_destroyDxTab', refreshOnVisit: true},
   github: {populate: '_populateGitHubTab', destroy: '_destroyGitHubTab', refreshOnVisit: true},
   wecom: {populate: '_populateWecomTab', destroy: '_destroyWecomTab', refreshOnVisit: true},
@@ -25,7 +34,14 @@ export function activateIndependentSettingsTab(tab: string): void {
   const session = currentSettingsReadSession(), panel = panels[tab];
   if (!session?.isCurrent() || !panel) return;
   const populate = featureRegistry[panel.populate];
-  if (typeof populate !== 'function') return;
+  if (typeof populate !== 'function') {
+    if (panel.load) void panel.load().then(() => {
+      if (session.isCurrent() && typeof featureRegistry[panel.populate] === 'function') {
+        activateIndependentSettingsTab(tab);
+      }
+    });
+    return;
+  }
   let visited = visits.get(session);
   if (!visited) { visited = new Set(); visits.set(session, visited); }
   const first = !visited.has(tab);

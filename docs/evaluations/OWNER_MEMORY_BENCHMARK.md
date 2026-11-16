@@ -202,6 +202,16 @@ Its results (experiment 1 killed, experiment 1b inconclusive, experiment 1c not 
 the powered stale-memory follow-up to 1c's K3, passed) are recorded in
 [`modules/context_engineering.md`](../modules/context_engineering.md), "Owner-profile experiments".
 
+## Longitudinal replay
+
+The benchmark above measures one point in time. `replay` (same package)
+measures change over time: each real defect's recorded request is replayed
+against the lesson store from just before and just after its lesson, scored
+blind, with an interference arm of unrelated tasks. Design, the 2026-11-16
+baseline and its limits are in
+[`MEMORY_COMPOUNDING_REPORT.md`](../MEMORY_COMPOUNDING_REPORT.md) section 6;
+stages and commands are in `evaluations/owner_memory/README.md`.
+
 ## Reproduce
 
 ```bash
@@ -227,6 +237,9 @@ Size concurrency to what the AppId has been measured to sustain:
   beside 11–35 production opus rounds per minute on the same AppId.
 - **Unmeasured AppIds:** start at two calls in flight and let the first 429
   end the run.
+- **`0733` answered 401 on 2026-11-16**; the replay baseline ran on `6672` at
+  two calls in flight: 752 calls (rubric, replay and judge, refusal retries
+  included), no 429.
 
 Accepted baseline: `private/runs/baseline-union` (union of stopped/resumed runs
 with identical base digests and harness source; per-dir provenance recorded in

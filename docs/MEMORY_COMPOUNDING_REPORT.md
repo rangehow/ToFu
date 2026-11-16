@@ -1,8 +1,10 @@
 # Does Tofu get better the more it is used? Memory and lead-knowledge report (2026-11-17)
 
 This is a one-time report written for the owner's question. Delete it once the owner has decided on the gap list.
-No code was changed. Every live measurement was a read: memory files read in place, plus loopback `GET`s through
-`debug/inspect_conversation.py`'s `_DiagnosticAPI`. Private owner content is reported only as counts.
+Sections 1–5 changed no code. Every live measurement in them was a read: memory files read in place, plus loopback `GET`s
+through `debug/inspect_conversation.py`'s `_DiagnosticAPI`. Section 6 adds the replay benchmark that the gap list proposed
+(`evaluations/owner_memory/replay.py`) and its first measurement. Private owner content is reported only as counts and
+topics.
 
 ## 给主人的一页摘要
 
@@ -26,7 +28,15 @@ No code was changed. Every live measurement was a read: memory files read in pla
 - 这个 skill 一天内被三个项目加载了 10 次。
 - 负责人自己不能写经验，也不能改文件。他们的知识存在信箱和对话里，要靠 Worker 落地。
 
-**最小的验证办法：** 按时间回放。拿真实缺陷写下的经验，在"这条经验写之前"和"之后"两个语料快照上重跑同一个请求，看回答是否避开了这个缺陷。详见第 4 节。
+**第一次纵向测量（2026-11-16，见第 6 节）：仍然没有证明"越用越好"。**
+
+- 拿 23 个真实缺陷经验，在"这条经验写之前"和"写之后"两个语料快照上重放同一个录制请求，盲评回答是否避开缺陷。
+- 两组避开率都是 4.3%（69 次里各 3 次），差值 0.0 个百分点，95% 区间 [−8.3, +7.3]。
+- 主要原因有两个：
+  - 现有预取只在 12/23 个案例里把这条新经验注入回去，其余 11 个案例的请求逐字节相同。
+  - 第一轮回答几乎都还在探查阶段，没走到缺陷那一步（138 次里"踩坑"0 次）。
+- 干扰组：18 个无关任务在小语料和大语料上都是 100% 在正轨，没有退化。
+- 这套基准可以一条命令重跑，用来测并行 Worker 改的记忆机制。
 
 ## 1. Verdict: not shown
 
@@ -34,7 +44,7 @@ No code was changed. Every live measurement was a read: memory files read in pla
 |---|---|---|
 | Memory helps at one point in time | MEMORY-EVAL baseline: application 31.7% with prefetch, 28.3% without; Coordinator full context 56.2% → 43.8% without prefetch (`docs/modules/context_engineering.md`, "Owner understanding: design record", Decision 8; `docs/OLD_REPO_RECOVERY_MEMORY.md`, "Experiment findings"; raw `.eval-runs/owner-memory/private/baseline-report.txt`, coordinator/full `appliedRate` 0.5625) | partially shown (small effect, one snapshot) |
 | An always-present owner profile helps at one point in time | 1b K1 +20.0 pp; 1c K1 +16.1 pp [+5.4, +28.6] but 1c NOT PASSED (K3) (`k3-1c/REPORT-k3.md`); FM-2x2 PASS (`fm2x2/private/analysis.json` `verdict: {profile|L1: PASS, profile|L0: PASS}`) | shown in the lab; **not in production**: Phase 1 is unmerged (`docs/OLD_REPO_RECOVERY_MEMORY.md` §A) and My Context has 0 active items |
-| The system improves as it is used (compounding) | No experiment varies corpus age or usage. Every arm adds one carrier to recorded round-0 requests on a frozen or drifted corpus. 1c and FM-2x2 froze the lesson corpus on purpose (`context_engineering.md`, 1c "Corpus", FM-2x2 "Design"; frozen corpora in `k4-1c/corpus-*`). The benchmark measures application "in a later, unrelated turn" (`docs/evaluations/OWNER_MEMORY_BENCHMARK.md`), which tests recall of a stated fact, not growth. | **not shown: nothing measures it** |
+| The system improves as it is used (compounding) | Earlier experiments never varied corpus age. The before/after-lesson replay (§6, 2026-11-16) now does: on 23 real defects, avoidance is 4.3% before and 4.3% after the lesson, difference 0.0 pp, 95% CI [−8.3, +7.3] | **not shown: measured once, no detectable effect** |
 | Live use makes memory better | §2: the corpus grows, but injection is fixed at 2 items per Turn, 3.4% of injected items are opened, 1 of 477 is cited, owner items are 0, and lifecycle states are 0 | **not shown**; inputs accumulate, use does not visibly improve |
 
 So "the more it's used, the better it gets" is **not demonstrated**. What is demonstrated: memory and the profile each help a little
@@ -189,7 +199,7 @@ This loop is lead-driven and manual. No memory mechanism produced it.
 
 ## 4. Gaps and the smallest proof or fix (no knobs)
 
-1. **Nothing measures compounding.**
+1. **Nothing measured compounding.** Done as §6; the first result is null, and §6.6 names what limits it.
    - **Smallest experiment, a time-sliced replay.** Take lessons written for a real defect that carry `provenance.conversation_id`/`turn_id`.
      135 lessons have this, all created 11-13 … 11-16. Only the 12 from 11-15 onward have source Turns in the live store; the other 123
      need the old store (gap 7), or new lessons collected as use continues.
@@ -234,3 +244,162 @@ This loop is lead-driven and manual. No memory mechanism produced it.
    Each states its method and limit. A weekly outcome trend could not be measured (3-day store).
 3. **Lead channels (§3):** each row gives writer, reader, cross-project scope and observed count.
 4. **Gaps (§4):** gaps with the smallest experiment or mechanism; none adds a knob. No code was changed; this file is the only change.
+
+## 6. First longitudinal measurement: before/after-lesson replay (2026-11-16)
+
+This section records the baseline on the current code (`eval/opencode-glm53-tb21` at `4d4f42e353`). A parallel Worker is changing
+the memory mechanisms; rerun the same command under a new run name to measure them against the same frozen cases (§6.7).
+
+### 6.1 Design (frozen before any replay)
+
+Harness: `python -m evaluations.owner_memory replay` (`evaluations/owner_memory/replay.py`; stages and contracts in
+`evaluations/owner_memory/README.md`). It builds on the owner-memory benchmark:
+
+- recorded provider requests (`bases.capture_task_request`);
+- production prefetch and composer (`prompts.build_request`);
+- the frozen-store format (`corpus.write_slice`, `FrozenCorpus`);
+- the transport and its stop rules.
+
+Its pieces:
+
+- **Corpus.** One copy of every lesson store was frozen at 2026-11-16T18:08Z: 4 stores (tofu, parallel, knowledge, global),
+  2,606 files, digest `c8d22181…`. No lesson in any store was edited after 2026-11-15T08:00, so slicing by each file's
+  `created` reproduces the store exactly at any instant in the window. Lessons deleted before the freeze cannot be reconstructed;
+  §6.5 found none among the recorded selections.
+- **Cases.** Every lesson whose `provenance` names a source Turn still in the live store: 31 candidates.
+  - A fixed model (`claude-opus-5.5`, rubric prompt digest in `cases.json`) read each lesson and its request. It decided whether
+    the lesson records a real defect, and wrote avoid and hit signs that a grader can apply without seeing the lesson.
+  - **23 cases were included.** 1 was excluded as a design record. 7 were excluded because the gateway refused every rubric
+    call: the parallel project's 910C/TAUD training cluster.
+  - Frozen at 2026-11-16T19:07Z, digest `bb02e6c8…`.
+- **Arms.** Each case replays the source attempt's recorded first-round request (real system blocks, tools, parameters and
+  history). Only `relevant_memories` is recomputed, by production prefetch over:
+  - **before:** every lesson created strictly before the lesson;
+  - **after:** the same set plus that lesson only.
+- **Interference arm.** A seeded sample (seed 20261116) of 20 other Worker Turns whose conversations wrote no lesson, replayed
+  over:
+  - **smaller:** the experiment's earliest store, before its first case lesson (299–2,536 files per project);
+  - **larger:** the store at selection (303–2,553 files).
+- **Replay.** Model `kunlunbedrock.claude-opus-5.5-m17` with each request's own parameters; 3 trials per case arm and 2 per
+  interference arm; arms interleaved in a seeded order.
+  - No tool executes.
+  - A read of lessons the arm's snapshot holds returns their content, as production would.
+  - Any other tool call ends the replay. What is scored is therefore the start of the work: text, reasoning summary and first
+    tool calls.
+- **Blind scoring.** The judge (`claude-opus-5.5`) grades every row in a seeded shuffled order. Its input never contains the
+  arm, and every lesson name either arm injected is masked in the response.
+  - Case outcomes: `avoided`, `hit` or `not_reached`.
+  - Interference outcome: on-task `yes` / `partial` / `no`, scored 1 / 0.5 / 0.
+- **Statistics.** Per-case difference after − before, averaged over cases. 95% interval from a two-stage bootstrap (10,000
+  resamples) over source requests, then trials, because several lessons share one request. Pooled rates carry Wilson intervals.
+  The interference arm passes if the lower bound of larger − smaller exceeds −0.10, FM-2x2's non-inferiority margin.
+
+### 6.2 Per-case results (judge-scored)
+
+"Injected" means production prefetch put the new lesson into the after-arm request. Where it did not, the two arms sent
+byte-identical requests.
+
+| Case | Store | Defect (topic) | Injected | Before: avoided/hit/n | After: avoided/hit/n |
+|---|---|---|---|---|---|
+| C01 | parallel | read-only storage misreported as quota exceeded | yes | 0/0/3 | 0/0/3 |
+| C02 | tofu | headless Chromium hang from unreachable fontconfig path | no | 0/0/3 | 0/0/3 |
+| C03 | tofu | Rust toolchain relocation off frozen volume | yes | 0/0/3 | 0/0/3 |
+| C04 | tofu | wrong delta base causing false delivery conflicts | yes | 0/0/3 | 0/0/3 |
+| C05 | tofu | task delta diffed from baseline, not merge-base | yes | 0/0/3 | 0/0/3 |
+| C06 | tofu | Playwright browser path hidden by cache redirect | yes | 0/0/3 | 0/0/3 |
+| C07 | knowledge | read-only tree migration and Hope payload packaging | no | 0/0/3 | 0/0/3 |
+| C08 | tofu | git checkout timeout permanently blocks delivery | yes | 0/0/3 | 0/0/3 |
+| C09 | tofu | order-dependent test via module-level manifest cache | yes | 0/0/3 | 0/0/3 |
+| C10 | knowledge | Hope job stop failures and slow-loading liveness | no | 0/0/3 | 0/0/3 |
+| C11 | parallel | missing model credential for live pilot | yes | 0/0/3 | 1/0/3 |
+| C12 | tofu | restoring ruff, clippy and fmt lint gates | yes | 0/0/3 | 0/0/3 |
+| C13 | knowledge | Hope CUDA queue probe config pitfalls | no | 0/0/3 | 0/0/3 |
+| C14 | tofu | parallel sub-agent stalls on unconfirmed tool effects | no | 1/0/3 | 0/0/3 |
+| C15 | parallel | E2 harness runtime path and rundir traps | yes | 0/0/3 | 0/0/3 |
+| C16 | global | vendored MCP launcher pin and uv cutoff | no | 0/0/3 | 0/0/3 |
+| C17 | parallel | runtime commit detection for post-commit verifier | yes | 0/0/3 | 0/0/3 |
+| C18 | tofu | cross-host process exit evidence for recovery | no | 0/0/3 | 0/0/3 |
+| C19 | tofu | stuck attempts after host handoff | no | 2/0/3 | 1/0/3 |
+| C20 | global | hope metadata error misread as missing code version | yes | 0/0/3 | 1/0/3 |
+| C21 | global | mtskills SkillHub headless SSO login via CIBA | no | 0/0/3 | 0/0/3 |
+| C22 | global | MCP server silently loads stale installed package | no | 0/0/3 | 0/0/3 |
+| C23 | tofu | engine gate crash probe fixture size | no | 0/0/3 | 0/0/3 |
+
+### 6.3 Aggregate
+
+| Subset | Cases | Avoided before [Wilson 95%] | Avoided after [Wilson 95%] | After − before [bootstrap 95%] | Hit before / after |
+|---|---:|---|---|---|---|
+| All | 23 | 4.3% (3/69) [1.5, 12.0] | 4.3% (3/69) [1.5, 12.0] | **+0.0 pp [−8.3, +7.3]**; 2 cases up, 2 down, 19 same | 0 / 0 |
+| Lesson injected | 12 | 0.0% (0/36) [0.0, 9.6] | 5.6% (2/36) [1.5, 18.1] | +5.6 pp [0.0, +16.7] | 0 / 0 |
+| Lesson not injected (identical requests) | 11 | 9.1% (3/33) | 3.0% (1/33) | −6.1 pp [−18.2, +3.0]: sampling noise | 0 / 0 |
+
+**Verdict: compounding is not shown.** A lesson written for a real defect does not measurably change how the same request is
+started.
+
+### 6.4 Interference arm (no regression)
+
+The judge refused every row of 2 of the 20 sampled tasks (both from the 910C cluster). That leaves 18 tasks with 36 rows per arm;
+for 16 of them the larger store changed the injected lessons.
+
+| Subset | Tasks | On-task, smaller [Wilson 95%] | On-task, larger [Wilson 95%] | Larger − smaller [bootstrap 95%] | Verdict (margin −0.10) |
+|---|---:|---|---|---|---|
+| All | 18 | 100% [90.4, 100] | 100% [90.4, 100] | 0.0 [0.0, 0.0] | no regression |
+| Injection changed | 16 | 100% [89.3, 100] | 100% [89.3, 100] | 0.0 [0.0, 0.0] | no regression |
+
+The bootstrap interval is degenerate (every row is on task), so the Wilson bounds are the informative ones. The store grew only
+4–17 lessons per project over the window, so this tests the window's growth, not a corpus twice the size.
+
+### 6.5 Validity checks
+
+- **Snapshot parity.** Prefetch over the store as of each source attempt's start reproduced the memories the recorded request
+  actually carried in 14 of 23 cases.
+  - The 9 mismatches differ in one of the two slots. All the lessons the recorded requests carried still exist.
+  - The mismatches are consistent with prefetch-query code that changed after those Turns (`6a66c62932`, 2026-11-15 18:21Z, in
+    `lib/memory/prefetch/_query.py`). The replay uses current code in both arms on purpose.
+- **Judge agreement.** I hand-labelled blind (no arm, names masked) a seeded sample of 30 judged case rows.
+  - Agreement was 29/30 (96.7%). Cohen's κ is 0.0, uninformative here because the judge called all 30 rows `not_reached`.
+  - I also checked the 6 rows the judge called `avoided`, blind to arm though not to the judge's verdict. I agree with 4.
+  - Substituting all 36 hand labels gives +1.4 pp [−3.0, +6.9] overall and +2.8 pp [0.0, +11.1] where the lesson was injected,
+    the same conclusion.
+- **Gateway refusals.** 3 replay rows were refused and succeeded when retried; all 218 rows are usable. 8 interference rows
+  could not be judged (§6.4).
+- **Cost.** Replays $53.05 (218 rows, $0.24 each). Judge $2.71. Rubrics $0.91. Price card: USD per million tokens, input 4,
+  cached 0.4, cache write 5, output 20.
+
+### 6.6 What limits this measurement
+
+1. **Retrieval is the first bottleneck.** In 11 of 23 cases, production prefetch did not select the lesson for the very request
+   that produced it. Prefetch picks 2 lessons by metadata BM25 on the request text, and long multi-goal envelopes rank other
+   lessons first. No downstream mechanism can help these cases.
+2. **First-response scope.** The model's first round is almost always discovery: git status, grep, reading docs. 132 of 138 case
+   rows were `not_reached` and none was `hit`, so the measure sits near its floor.
+   - Defects that occur mid-task (a hang during visual tests, a conflict at delivery) cannot appear in the first round, even when
+     the rubric author expected them to (`observableEarly` was true for 22 of 23 cases).
+   - A mid-turn replay from the recorded round just before the defective action would be more sensitive. It needs per-case
+     decision points, and per-round handling of the memory carriers.
+3. **The lesson is the outcome of the replayed request.** Where the lesson was injected, the model often said that the memory
+   suggests the work "may already be done" and checked that first. This arm partly measures "the same task asked again", not
+   "a later, different request that meets the same defect". Truly recurring defects need the later requests that met them, and
+   nothing records those links (§4 gap 2).
+4. **Coverage.** 3 days of live history and 23 cases. The 910C/TAUD cluster is missing because the gateway refuses its content.
+
+### 6.7 Reproduce and re-measure
+
+```bash
+# private root and cases are already frozen; every stage resumes
+.venv/bin/python3 -m evaluations.owner_memory replay \
+  --private <canonical>/.eval-runs/memory-replay/private \
+  --key-hints 6672 --stop-on-429 --jobs 2 --run-name <name>
+# blind hand-label check of the judge: --stage sheet, fill handlabels.json, --stage agree
+```
+
+- **Where the data is.** The baseline lives in `<canonical>/.eval-runs/memory-replay/private/runs/baseline/` (`report.json`,
+  `report.md`, `calibration.json`, `parity.json`). Nothing under the private root is committed. The committed tests
+  (`tests/evaluations/test_owner_memory_replay.py`) use synthetic lessons only.
+- **Measuring a mechanism change.** Run the command under a new `--run-name`. A run directory refuses rows whose request digests
+  or replay semantics differ from its own, so the comparison stays on the same frozen cases.
+- **After the parallel mechanism changes landed** (merged at `d5844809df`, touching `lib/memory/prefetch/_inject.py`, `_query.py` and
+  `_run.py`): a dry run with no model calls builds every request and gives the same retrieval (12 of 23 lessons injected) and
+  parity (14 of 23). Whether they change outcomes needs a model rerun under a new run name.
+- **AppIds.** At the time of this run, AppId `0733` (used by FM-2x2) answered 401. A 401 or 403 now stops a run at once
+  (`82155085f9`).

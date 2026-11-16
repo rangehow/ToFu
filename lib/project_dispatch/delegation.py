@@ -18,6 +18,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from lib.identity import PrincipalContext
+from lib.storage.model_continuation import model_context_revision
 from .repository import CONTRACT, ProjectDispatchError, _validate_schema
 
 # ``((repository key, request budget id), first row)`` a Coordinator task keeps.
@@ -579,9 +580,10 @@ def successor_brief(predecessor, instruction):
 class ReviewResultChanged(ProjectDispatchError):
     """The reviewed result revision is not the completed Worker Turn's current one; nothing was recorded.
 
-    A completed Turn's projection revision still advances after completion: display
-    enrichment (auto-translation overlays) and late background-command output rewrite
-    its projection, so a revision read by ``poll`` can be stale by the time of review.
+    The result revision is the Turn's ``modelContextRevision``: display-only
+    enrichment (translation overlays, usage, timing) never advances it, but a
+    genuine change such as late background-command output does, after which the
+    reviewer must judge the result again.
     """
 
     code = 'result_revision_changed'
@@ -593,7 +595,7 @@ class ReviewResultChanged(ProjectDispatchError):
         self.details = {'requested_result_revision': requested, 'current_result_revision': current,
                         'checkpoint_sha': checkpoint_sha}
         self.recovery = (f'Nothing was recorded. The completed Worker result advanced to revision {current} '
-                         '(e.g. a translation overlay or late command output). Re-read it with '
+                         '(e.g. late background-command output). Re-read it with '
                          'get_project_assignment if it may have changed, then repeat review_project_work '
                          f'with result_revision={current}'
                          + (f' and checkpoint_sha={checkpoint_sha}' if checkpoint_sha else '') + '.')
@@ -630,8 +632,8 @@ def review_worker(repository, task, arguments):
                 or turn.get('turnId') != execution.get('turnId') or turn.get('actor') != 'assistant'
                 or turn.get('conversationId') != row['request']['recipientId']):
             raise ValueError('Review requires the exact current completed worker result')
-        if turn.get('projectionRevision') != arguments['result_revision']:
-            raise ReviewResultChanged(arguments['result_revision'], turn.get('projectionRevision'),
+        if model_context_revision(turn) != arguments['result_revision']:
+            raise ReviewResultChanged(arguments['result_revision'], model_context_revision(turn),
                                       _registered_checkpoint(repository, row))
         review = {'actor': 'coordinator', 'decision': arguments['decision'],
                   'note': arguments['note'], 'resultRevision': arguments['result_revision']}
@@ -649,14 +651,15 @@ def review_worker(repository, task, arguments):
             # The pinned publication asked for again, e.g. by a restart-resumed
             # attempt whose cut call had committed: the recorded judgment stands.
             review = recorded
-        # The same execution can gain later projection revisions after review
+        # The same execution can gain a later result revision after review
         # (late background-command output). An accept is re-affirmed with its
-        # checkpoint at the current revision: a pinned one keeps its checkpoint,
-        # and one recorded without a pin keeps its note and gains the pin.
+        # checkpoint at the current revision, which was verified above: a pinned
+        # one keeps its checkpoint, and one recorded without a pin keeps its
+        # note and gains the pin. Reviews recorded before result revisions
+        # excluded display-only updates hold a higher projection revision, so
+        # currency, not ordering, decides.
         reaffirm = accepts and recorded != review and (
-            checkpoint == old['checkpointSha'] and review['resultRevision'] > recorded['resultRevision']
-            if old is not None else
-            review['note'] == recorded['note'] and review['resultRevision'] >= recorded['resultRevision'])
+            checkpoint == old['checkpointSha'] if old is not None else review['note'] == recorded['note'])
         if recorded is not None and recorded != review and not reaffirm:
             if accepts and old is None:
                 from .publication import PublicationRefused

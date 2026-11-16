@@ -253,7 +253,8 @@ def test_finish_requires_exact_review_delivery_and_published_report(run):
     r.workspaces[task]['origin']['delivery']['state'] = 'delivered'
     r.turns[first['execution']['turnId']]['projectionRevision'] = 2
     assert 'exact result' in r.call('finish_project_request', **args)['error']
-    r.turns[first['execution']['turnId']]['projectionRevision'] = 1
+    # A display-only update (a translation overlay) leaves the result revision.
+    r.turns[first['execution']['turnId']]['modelContextRevision'] = 1
     done = r.call('finish_project_request', **args)
     assert done['reason'] == 'complete' and r.call('finish_project_request', **args) == done
     assert 'settled' in r.call('delegate_project_work', **{**r.args, 'idempotency_key': 'late'})['error']

@@ -1430,7 +1430,12 @@ class StorageSupervisor:
                     # stderr=None inheritance lost every respawned child's
                     # output and kept engine errors out of app.log/incident.
                     stderr=subprocess.PIPE,
-                    text=True,
+                    # Never decode with the locale codec (cp1252 on Windows):
+                    # one undecodable child byte raised UnicodeDecodeError,
+                    # which ended the stderr drainer, lost the failure tail
+                    # and left the pipe to fill until the child blocked.
+                    encoding='utf-8',
+                    errors='replace',
                     bufsize=1,
                     close_fds=(os.name != 'nt'),
                     creationflags=creationflags,

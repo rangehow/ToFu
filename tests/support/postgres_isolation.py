@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
+
 
 
 def postgres_dsn_source(request, directory: Path) -> Path:
@@ -21,7 +23,13 @@ def postgres_dsn_source(request, directory: Path) -> Path:
     if configured:
         return Path(configured)
     source = directory / 'postgres-cluster-dsn'
-    source.write_text(request.getfixturevalue('postgres_cluster'))
+    try:
+        dsn = request.getfixturevalue('postgres_cluster')
+    except pytest.skip.Exception as exc:
+        # Callers run only under the TOFU_STORAGE_TEST_POSTGRES=1 opt-in; a
+        # skip there would report an untested PostgreSQL lane as green.
+        pytest.fail(f'PostgreSQL lane has no server: {exc}')
+    source.write_text(dsn)
     source.chmod(0o600)
     return source
 

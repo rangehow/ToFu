@@ -420,6 +420,34 @@ def test_supervisor_startup_refusal_names_child_exit_code_and_stderr(tmp_path, m
     assert forwarded
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='the byte-injecting launcher is a POSIX shell script')
+def test_undecodable_child_stderr_keeps_the_drainer_and_failure_tail(tmp_path, monkeypatch):
+    """A child byte the parent cannot decode must not end stderr draining."""
+    import sys
+
+    launcher = tmp_path / 'python-launcher'
+    launcher.write_text(
+        '#!/bin/sh\n'
+        "printf '\\377\\201 undecodable child output\\n' >&2\n"
+        f'exec "{sys.executable}" "$@"\n')
+    launcher.chmod(0o700)
+    monkeypatch.setattr(sys, 'executable', str(launcher))
+    monkeypatch.delenv('TOFU_STORAGE_TEST_POSTGRES_DSN_FILE', raising=False)
+    forwarded = []
+    supervisor = StorageSupervisor(
+        project_root=tmp_path, backend='postgres', startup_timeout=60,
+        child_stderr_forward=forwarded.append)
+    try:
+        with pytest.raises(RuntimeError) as raised:
+            supervisor.start()
+    finally:
+        supervisor.stop()
+    message = str(raised.value)
+    assert '[exit_code=2; stderr: ' in message
+    assert 'requires TOFU_STORAGE_TEST_POSTGRES_DSN_FILE' in message
+    assert forwarded[0] == '\ufffd\ufffd undecodable child output\n'
+
+
 def test_parent_watch_fails_closed_without_a_valid_owner_channel():
     import lib.storage_authority_sql.__main__ as sidecar_main
 

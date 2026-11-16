@@ -59,7 +59,13 @@ jobs:
           enable-cache: true
       - name: Install PostgreSQL binaries
         if: matrix.backend == 'postgres'
-        run: sudo apt-get update && sudo apt-get install -y postgresql
+        # Debian packages keep initdb/postgres off PATH; without them every
+        # [postgres] case would skip and the lane would pass untested.
+        run: |
+          sudo apt-get update && sudo apt-get install -y postgresql
+          bindir="$(ls -d /usr/lib/postgresql/*/bin | sort -V | tail -n 1)"
+          test -x "$bindir/initdb" && test -x "$bindir/postgres"
+          echo "$bindir" >> "$GITHUB_PATH"
       - name: Install package and test dependencies
         run: uv lock --check && uv sync --frozen --extra test
       - name: Run portable storage contracts

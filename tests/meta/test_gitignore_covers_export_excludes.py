@@ -72,6 +72,7 @@ _EXTRA_KEEPERS = {
     'tests/export/test_export_git_reads.py',
     'tests/evaluations/test_yourprovider_sandbox_score.py',
     'tests/evaluations/test_owner_memory_benchmark.py',
+    'tests/evaluations/test_owner_memory_replay.py',
     'tests/deploy/test_migrate_host.py',
     'tests/deploy/test_verify_checkout_view.py',
     # Verifies the internal-only bundles/yourprovider/skills source, absent publicly.

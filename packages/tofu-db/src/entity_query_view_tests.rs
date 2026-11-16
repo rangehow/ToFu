@@ -260,3 +260,107 @@ fn published_query_replicas_isolate_private_overlay_retirement() {
     assert_eq!(get(&shared_right), None);
     assert_eq!(get(&writer), Some(b"committed".to_vec()));
 }
+
+/// Visibility follows WAL acknowledgement (docs/TOFUDB_WAL_BARRIER_SCHEDULING.md,
+/// "Visibility follows acknowledgement"). A Strict commit whose frame is queued
+/// but not yet synced is invisible to readers; a crash then loses exactly that
+/// commit, and what the reader saw survives. Before the fix the reader saw
+/// "unacknowledged", which the crash erased.
+#[test]
+fn a_reader_never_sees_a_commit_a_crash_before_its_acknowledgement_erases() {
+    let vfs = Arc::new(DeterministicVfs::new(None));
+    vfs.create_dir(Path::new("/data")).unwrap();
+    vfs.sync_directory(Path::new("/")).unwrap();
+    let mut writer = EntityDatabase::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
+    writer.set_write_overlay_enabled(true);
+    let barrier = crate::wal::WalBarrierShared::buffered_for_test(1 << 20);
+    writer
+        .writer_engine_mut()
+        .unwrap()
+        .attach_wal_barrier(&barrier)
+        .unwrap();
+    let view = writer.enable_published_queries().unwrap();
+    put(&mut writer, b"acknowledged");
+    barrier.sync_for_test(vfs.as_ref()).unwrap();
+    assert_eq!(
+        get(&view.try_build().unwrap().unwrap()),
+        Some(b"acknowledged".to_vec())
+    );
+    put(&mut writer, b"unacknowledged");
+    assert_eq!(get(&writer), Some(b"unacknowledged".to_vec()));
+    let observed = get(&view.try_build().unwrap().unwrap());
+    assert_eq!(
+        observed,
+        Some(b"acknowledged".to_vec()),
+        "a reader saw a commit whose WAL frame was not acknowledged"
+    );
+    assert!(
+        view.with_healthy_current_snapshot(|snapshot| snapshot != writer.current_snapshot())
+            .unwrap(),
+        "cached answers are keyed by the acknowledged snapshot"
+    );
+    drop(view);
+    std::mem::forget(writer);
+    vfs.crash().unwrap();
+    let reopened = EntityDatabase::open_with_vfs(Path::new("/data"), vfs).unwrap();
+    assert_eq!(
+        get(&reopened),
+        observed,
+        "the crash erased what a reader saw"
+    );
+}
+
+/// Acknowledgement makes the newest covered publication readable at the next
+/// read, Normal tier included (written, not synced). Every staged root and,
+/// while anything is staged, the readable root hold a pin taken under the
+/// writer; a tree commit that replaces the root while it is staged keeps the
+/// readable one intact, and nothing stays pinned once all is acknowledged.
+#[test]
+fn acknowledgement_publishes_the_newest_covered_root_and_releases_its_pins() {
+    let vfs = Arc::new(DeterministicVfs::new(None));
+    vfs.create_dir(Path::new("/data")).unwrap();
+    let mut writer = EntityDatabase::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
+    writer.set_write_overlay_enabled(true);
+    writer
+        .writer_engine_mut()
+        .unwrap()
+        .set_wal_durability(crate::wal::WalDurability::Normal)
+        .unwrap();
+    let barrier = crate::wal::WalBarrierShared::buffered_for_test(1 << 20);
+    writer
+        .writer_engine_mut()
+        .unwrap()
+        .attach_wal_barrier(&barrier)
+        .unwrap();
+    let view = writer.enable_published_queries().unwrap();
+    put(&mut writer, b"first");
+    barrier.write_for_test(vfs.as_ref()).unwrap();
+    assert_eq!(
+        get(&view.try_build().unwrap().unwrap()),
+        Some(b"first".to_vec())
+    );
+    assert_eq!(writer.snapshot_pin_metrics().unwrap().active_handles, 0);
+    let readable = writer.current_snapshot();
+    put(&mut writer, b"second");
+    writer.set_write_overlay_enabled(false);
+    put(&mut writer, b"third");
+    assert_ne!(writer.current_snapshot().root, readable.root);
+    assert!(writer.pinned_snapshots().unwrap().contains(&readable));
+    assert!(writer.snapshot_pin_metrics().unwrap().active_handles >= 3);
+    assert_eq!(
+        get(&view.try_build().unwrap().unwrap()),
+        Some(b"first".to_vec())
+    );
+    assert_eq!(
+        get(&view.try_build_latest().unwrap().unwrap()),
+        Some(b"third".to_vec()),
+        "rehearsals validate against the newest publication"
+    );
+    barrier.write_for_test(vfs.as_ref()).unwrap();
+    assert_eq!(
+        get(&view.try_build().unwrap().unwrap()),
+        Some(b"third".to_vec())
+    );
+    assert_eq!(writer.snapshot_pin_metrics().unwrap().active_handles, 0);
+    assert!(writer.pinned_snapshots().unwrap().is_empty());
+}

@@ -18,9 +18,11 @@ fn liveness_job(task_id: &str) -> Request {
 
 /// Normal durability (every network volume in production): the workspace-meta
 /// bulk write's frame reaches a volume that stalls. A lease renewal and a claim
-/// still commit and a read still answers during the stall, because the stalled
-/// write belongs to the WAL worker, not to an authority holder; once the volume
-/// accepts the write, one more batch acknowledges both queued commits.
+/// still commit (their frames queue behind it) and a read still answers during
+/// the stall, because the stalled write belongs to the WAL worker, not to an
+/// authority holder. Readers see neither commit until the WAL acknowledges it
+/// (visibility follows acknowledgement); once the volume accepts the write,
+/// one more batch acknowledges both queued commits and both become visible.
 #[test]
 fn stalled_wal_write_never_holds_the_authority_against_renewals_claims_or_reads() {
     let directory = tempfile::tempdir().unwrap();
@@ -66,6 +68,7 @@ fn stalled_wal_write_never_holds_the_authority_against_renewals_claims_or_reads(
     let read = request("record.get", 11, json!({"namespace": "liveness", "key": "read"}));
     let job = |task_id: &str| request("worker_job.get", 11, json!({"task_id": task_id, "user_id": 11}));
     let batches = || barrier.write_buffer_metrics()["writtenBatches"].as_u64().unwrap();
+    let queued = || barrier.write_buffer_metrics()["queuedFrames"].as_u64().unwrap();
     let batches_before = batches();
 
     let (stalled, release) = vfs.block_next_wal_write();
@@ -82,32 +85,40 @@ fn stalled_wal_write_never_holds_the_authority_against_renewals_claims_or_reads(
                 thread::sleep(Duration::from_millis(1));
             }
         };
+        let queued_before = queued();
         let renewal = scope.spawn(|| respond(&stores, &session, &renewal));
         let claim = scope.spawn(|| respond(&stores, &session, &claim));
         let read_value = respond(&stores, &session, &read)["value"]["answer"].clone();
-        // Both commits become visible to published reads while the volume
-        // still stalls the bulk write; nothing waits for its holder.
+        // Both commits queue their frames behind the stalled write; nothing
+        // waits for its holder.
         let committed_during_stall = {
             let deadline = Instant::now() + Duration::from_secs(5);
             loop {
-                let renewed = respond(&stores, &session, &job("renewed"))["replayCursor"] == json!(7);
-                let claimed = respond(&stores, &session, &job("queued"))["claimOwner"] == json!("claimer");
-                if renewed && claimed { break true; }
+                if queued() >= queued_before + 2 { break true; }
                 if Instant::now() >= deadline { break false; }
                 thread::sleep(Duration::from_millis(5));
             }
         };
+        let invisible_during_stall =
+            respond(&stores, &session, &job("renewed"))["replayCursor"] != json!(7)
+                && respond(&stores, &session, &job("queued"))["claimOwner"] != json!("claimer");
         let still_stalled = !bulk.is_finished();
         release.send(()).unwrap();
         let bulk = bulk.join().unwrap();
         let renewal = renewal.join().unwrap();
         let claim = claim.join().unwrap();
-        (authority_free, read_value, committed_during_stall, still_stalled, bulk, renewal, claim)
+        let visible_after = respond(&stores, &session, &job("renewed"))["replayCursor"] == json!(7)
+            && respond(&stores, &session, &job("queued"))["claimOwner"] == json!("claimer");
+        (authority_free, read_value, committed_during_stall, invisible_during_stall, still_stalled,
+         bulk, renewal, claim, visible_after)
     });
-    let (authority_free, read_value, committed_during_stall, still_stalled, bulk, renewal, claim) = observed;
+    let (authority_free, read_value, committed_during_stall, invisible_during_stall, still_stalled,
+         bulk, renewal, claim, visible_after) = observed;
     assert!(authority_free, "a stalled physical WAL write must not hold the authority mutex");
     assert_eq!(read_value, 42, "reads answer while the volume stalls");
     assert!(committed_during_stall, "the renewal and the claim commit while the volume stalls");
+    assert!(invisible_during_stall, "readers never see a commit before its WAL acknowledgement");
+    assert!(visible_after, "both commits are visible once acknowledged");
     assert!(still_stalled, "the bulk response waits for its own write");
     assert_eq!(bulk["origin"]["bulk"].as_str().map(str::len), Some(3_000));
     assert_eq!(renewal["ok"], true);

@@ -131,12 +131,19 @@ impl PublishedQueryView {
         let result = self.entities.try_build()?;
         Some(result.map(|entities| options.build(entities)))
     }
-    /// `try_build` with private blob staging, for a command that rehearses
-    /// its reads before it queues for the writer. Never committed.
+    /// The newest publication, acknowledged or not, for commit rehearsals
+    /// that answer no reader (`PublishedEntityReads::try_build_latest`).
+    pub(crate) fn try_build_latest(&self) -> Option<io::Result<AuthorityDatabase>> {
+        let options = self.options.try_read().ok()?;
+        let result = self.entities.try_build_latest()?;
+        Some(result.map(|entities| options.build(entities)))
+    }
+    /// `try_build_latest` with private blob staging, for a command that
+    /// rehearses its reads before it queues for the writer. Never committed.
     pub(crate) fn try_build_rehearsal(&self) -> Option<io::Result<AuthorityDatabase>> {
         let options = self.options.try_read().ok()?;
         let encoder = options.blob_encoder.clone()?;
-        let result = self.entities.try_build()?;
+        let result = self.entities.try_build_latest()?;
         Some(result.and_then(|entities| options.build(entities).into_rehearsal_replica(encoder)))
     }
     pub(crate) fn observer(&self) -> PublishedQueryObserver {

@@ -39,6 +39,81 @@ one batch. No batch size, linger timer or cap applies. The
 commits-per-write ratio with its utilization explanation lives in
 [the performance charter](STORAGE_PERFORMANCE_CHARTER.md#tofudb-hot-paths-on-the-production-dolphinfs-client-2026-11-15).
 
+## Visibility follows acknowledgement
+
+Problem: group commit moved the physical WAL write off the authority, but
+every commit still replaced the published query view under the writer, before
+its frame was acknowledged (Strict: synced; Normal: written by the
+`tofu-db-wal-writer` thread). During a log stall a reader could answer from a
+commit whose frame a process kill would erase: on STORAGE-PRESSURE-COMPARE-1's
+kill schedule a `turn.sync.changes` head appeared 43 ms after its WAL write was
+held and was gone after restart. Commit-watch hints, the authority fallback
+for queries and refusals computed on a preparation replica leaked the same
+unacknowledged state.
+
+Decision: nothing answers from a commit before the acknowledgement point its
+own response waits for.
+
+- `entity_query_view.rs` stages each publication with the WAL witness it
+  covers. A read first promotes the newest staged publication the barrier
+  acknowledges (`WalBarrierShared::acknowledges`, the predicate of
+  `wait_acknowledged`), then pins it as before. A command's response is
+  acknowledged before it is sent, so any later read sees it
+  (read-your-writes); a query during a stall sees the last acknowledged state
+  instead of blocking. Cached answers (`try_cached`) promote without blocking
+  and refuse when they cannot tell.
+- Each staged root, and the readable root while anything is staged, holds a
+  snapshot pin taken under the writer: the writer has moved past them, so
+  reclamation must not outrun their readers. Promotion releases the pins it
+  supersedes after the swap; nothing stays pinned once all is acknowledged.
+  `system.metrics.publishedReadView.unacknowledgedViews` counts staged views.
+- Commit rehearsals (`try_build_latest`) keep validating against the newest
+  publication: they answer no reader, and an older root than the command's
+  own snapshot would only refuse it spuriously.
+- The authority fallback for queries waits for the witness it captured;
+  parallel-lane refusals and commit-watch answers (`worker_control.rs`) wait
+  for everything requested so far (`wait_requested_acknowledged`), which
+  covers the state they report.
+
+Commands still execute and take effect under the writer at once: a renewal or
+claim during a stall commits (its frame queues) and later commands, claims
+included, see it; only readers wait for acknowledgement. No knob, batch size
+or timer is added; the barrier, its tiers and `MAX_BARRIER_WAIT` are
+unchanged.
+
+Alternatives considered: (1) make every read wait for the acknowledgement of
+the snapshot it reads — correct, but a stalled write then blocks every reader
+of every key, which `test_wal_stall_liveness.py` forbids; (2) keep only the
+newest unacknowledged view instead of a queue — under steady load the newest
+view may never be acknowledged when a read looks, so readers fall arbitrarily
+far behind and lose read-your-writes; (3) publish from the barrier threads
+when they advance the frontier — puts view replacement and pin release on the
+WAL writer's critical path and still needs the reader-side check for the
+frontier updates outside those threads (inline appends, rotation); (4) write
+the frame under the writer again — reintroduces the 2026-11-07 renewal
+fencing that group commit removed.
+
+Measurement (2026-11-17, `scripts/tofudb_load_test.py --scales 1,3 --duration
+120 --seed-scale 0.5`, Normal tier; A = engine at `8683b837b5`, B = this
+change; legs A1 B1 A2 B2 B3 A3, each from its own source export): every leg
+had zero errors and the same completed work (3x events 5,520-5,523 in the calm
+legs). Host load rose from 7 to 72 during B1/A2, which moved both of them
+equally; in the calm pair B3/A3, 3x `turn.event.record` p50/p99 was
+1.13/62.7 ms vs 1.13/56.4 ms, `record.get` 0.21/0.70 vs 0.21/0.69 ms,
+`turn.sync.changes` 0.36/1.56 vs 0.37/1.58 ms, `worker_job.heartbeat`
+0.32/1.04 vs 0.32/1.25 ms, `engine_commit` 0.091 vs 0.082 ms and engine CPU
+25.4 vs 25.2 s. The commit path is not materially slower; per-read promotion
+cost is below the harness's resolution.
+
+Verification: `entity::query_view_tests::a_reader_never_sees_a_commit_a_crash_before_its_acknowledgement_erases`
+(deterministic VFS: queued Strict frame, read, crash, reopen) fails on the
+previous engine (the reader saw the erased value) and passes;
+`acknowledgement_publishes_the_newest_covered_root_and_releases_its_pins`,
+`worker_control::tests::a_watch_answers_only_after_the_wal_acknowledges_the_change_it_reports`,
+`server::tests::stalled_wal_write_never_holds_the_authority_against_renewals_claims_or_reads`
+and, against a built engine, `tests/tofudb/test_wal_unacknowledged_visibility.py`
+(including a SIGKILL during the stall) and `test_wal_stall_liveness.py`.
+
 ## Performance anchors
 
 `wal_barrier_sync` measures each worker fsync; the `wal_barrier` component

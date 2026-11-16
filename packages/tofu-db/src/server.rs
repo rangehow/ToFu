@@ -899,15 +899,36 @@ fn build_replica_until(
         admission,
     )? {
         AuthorityAcquisition::Acquired(authority) => {
-            let _probe = crate::request_profile::Probe::new(crate::request_profile::REPLICA_BUILD);
+            let probe = crate::request_profile::Probe::new(crate::request_profile::REPLICA_BUILD);
             let captured = match purpose {
-                ReplicaPurpose::Query => authority.build_read_replica(),
-                ReplicaPurpose::Preparation => authority.build_preparation_replica(),
+                // The writer's state may hold commits the WAL has not yet
+                // acknowledged; a query answers from it only once it is.
+                ReplicaPurpose::Query => authority
+                    .build_read_replica()
+                    .and_then(|replica| Ok((replica, authority.wal_acknowledgement_witness()?))),
+                // A command's response waits for its own, later witness.
+                ReplicaPurpose::Preparation => authority
+                    .build_preparation_replica()
+                    .map(|replica| (replica, None)),
             };
-            match captured {
-                Ok(replica) => Ok(ReplicaBuildOutcome::Built(replica)),
-                Err(error) => Ok(ReplicaBuildOutcome::Rejected(error)),
+            drop(authority);
+            drop(probe);
+            let (replica, acknowledgement) = match captured {
+                Ok(captured) => captured,
+                Err(error) => return Ok(ReplicaBuildOutcome::Rejected(error)),
+            };
+            if let Some((barrier, witness)) = acknowledgement {
+                let _wait =
+                    crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_WAL_BARRIER_WAIT);
+                match barrier.wait_acknowledged(&witness, started_at + wait_budget) {
+                    Ok(()) => {}
+                    Err(error) if crate::wal::is_barrier_deadline(&error) => {
+                        return Ok(ReplicaBuildOutcome::DeadlineElapsed)
+                    }
+                    Err(error) => return Ok(ReplicaBuildOutcome::Rejected(error)),
+                }
             }
+            Ok(ReplicaBuildOutcome::Built(replica))
         }
         AuthorityAcquisition::DeadlineElapsed => Ok(ReplicaBuildOutcome::DeadlineElapsed),
         AuthorityAcquisition::ConnectionClosed => Ok(ReplicaBuildOutcome::ConnectionClosed),
@@ -1512,7 +1533,18 @@ fn try_parallel_command(
 ) -> io::Result<Option<RequestDispatch>> {
     match prepare_parallel_command(stores, session, admitted, now_unix_ms, connection_alive)? {
         ParallelPreparationOutcome::Fallback => Ok(None),
-        ParallelPreparationOutcome::Finished(response) => Ok(Some(response)),
+        ParallelPreparationOutcome::Finished(response) => {
+            // A refusal can report state its preparation replica read before
+            // the WAL acknowledged it; answer once everything requested is.
+            if let (Some(barrier), RequestDispatch::Responded(_)) = (&stores.wal_barrier, &response)
+            {
+                let _wait =
+                    crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_WAL_BARRIER_WAIT);
+                barrier
+                    .wait_requested_acknowledged(Instant::now() + crate::wal::MAX_BARRIER_WAIT)?;
+            }
+            Ok(Some(response))
+        }
         ParallelPreparationOutcome::Prepared(prepared) => finish_parallel_command(
             stores,
             session,
@@ -1813,7 +1845,7 @@ fn prepared_commit_refused_off_lock(
     };
     let _rehearsal =
         crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_PARALLEL_COMMIT_REHEARSAL);
-    let Some(Ok(head)) = view.try_build() else {
+    let Some(Ok(head)) = view.try_build_latest() else {
         return false;
     };
     match head.rehearse_commit_validation(transaction) {

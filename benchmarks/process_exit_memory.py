@@ -161,6 +161,11 @@ def observe(command, *, timeout_seconds=120, allow_threaded_children=False):
      for pid in list(live|pending):
       try:os.kill(pid,signal.SIGKILL)
       except ProcessLookupError:pass  # The owned tracee exited before kill reached it.
+      # Linux >=6.0 marks a last exiting thread group-exited before its exit stop,
+      # so SIGKILL is dropped there; only a resume lets that tracee finish exiting.
+      try:trace(CONT,pid,signal.SIGKILL)
+      except OSError as error:
+       if error.errno!=errno.ESRCH:raise
      try:pid,wait=os.waitpid(-1,WALL)
      except ChildProcessError:break
      except InterruptedError:continue

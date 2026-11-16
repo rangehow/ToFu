@@ -10,7 +10,8 @@
  * Pure (no DOM). Entry points: createActor, setRest, setHome, startErrand, stepActor, settleActor, actorPose, isMoving. */
 import { DOCS, STATES, type PersonState } from './assets/manifest.generated';
 import { waitingSpots, type OfficeLayout, type Point } from './layout';
-import { stableHash, type DeskDocument, type Person } from './model';
+import { stableHash } from './hash';
+import type { DeskDocument, Person } from './model';
 import { pointAlong, rerouteFrom, resolve, routeBetween, routeLength, samePlace, seatAt, type Place, type Waypoint } from './routes';
 
 export type Rest = { kind: 'seat' } | { kind: 'spot'; index: number } | { kind: 'gone' };

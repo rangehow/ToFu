@@ -2960,8 +2960,13 @@ unless the chat is docked, and a turn in the hidden column has no paint opportun
   has held for a frame: a settled frame blits two layers and draws the sprites, and the stage sleeps while
   nothing moves (it wakes on the art's beat while people type, else on the hour for the skies). Rooms never
   shrink while the office is open (each team keeps the most desks it has needed), a floor plan that does
-  change blends by identity (`tween.ts`: rooms slide, new pods fade in), seats and the spots in the line at
-  the owner's door keep their person.
+  change blends by identity (`tween.ts`: rooms by team, pods and desks by index, decor by the key of its
+  place): rooms slide and resize; something leaving fades out over the first half of the blend and something
+  arriving fades in over the second, so neither competes with the motion; a pod or desk that comes or goes
+  inside a room rides with that room and is clipped to it, and its person shows with it. Seats and the spots
+  in the line at the owner's door keep their person. On this host the stage's catch-up bound
+  (`MAX_FRAME_MS`) lets a main-thread stall of over a second skip part of a blend; the audit measured those
+  only while the first reads load.
 - `actors.ts` gives every person a desk, a rest (the desk, a spot at the owner's door, or gone) and the
   walk there along the walkways (`routes.ts`: waypoints that bend with a blending floor). A Worker who
   arrives walks in through the entrance, one who leaves walks out (and turns round where it stands when

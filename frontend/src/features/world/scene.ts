@@ -28,7 +28,8 @@ import {
   allocateSlots, BOARD_GRID, fitOffice, SEATED_SHOWN, SEATS_PER_POD, shelfSlots, TROPHY_H, TROPHY_W,
   waitingSpots, type OfficeLayout, type Rect, type Seat, type TeamShape,
 } from './layout';
-import { firstLine, stableHash, type DeskDocument, type Office, type Person, type Team, type Trophy } from './model';
+import { stableHash } from './hash';
+import { firstLine, type DeskDocument, type Office, type Person, type Team, type Trophy } from './model';
 import {
   CLUTTER_CHOICES, drawFloor, drawFurniture, drawLighting, drawRug, drawWall, FLOOR_TILE, NOISE_SIZE, PALETTE, paintFloorTile,
   paintNoiseTile, paintPod, paintWindow, POD_BLEED, rr, seeded, windowSlots, type Atlas,
@@ -72,7 +73,10 @@ const HOUR_MS = 3_600_000;
 const NO_ALPHA: ReadonlyMap<string, number> = new Map();
 
 interface HitBox { id: string; kind: 'person' | 'document' | 'extra'; x: number; y: number; w: number; h: number; label: string; detail: string; data: Record<string, string> }
-interface Drawn { actor: Actor; pose: Pose; sheet: CanvasImageSource | null; fade: number }
+/** `room`: the opacity of the room or pod the person sits in while it arrives or leaves in a floor-plan blend,
+ * and the room's box to clip to while their pod fades (null: no clip). */
+interface Drawn { actor: Actor; pose: Pose; sheet: CanvasImageSource | null; fade: number; room: { alpha: number; clip: Rect | null } }
+const SETTLED_ROOM = { alpha: 1, clip: null };
 /** A full-view layer in device pixels: `key` names what it holds, `pending` the key the previous frame wanted;
  * the counts say how often frames blitted it, rebuilt it or drew the content directly. */
 interface CachedLayer { canvas: HTMLCanvasElement | null; key: string; pending: string; hits: number; builds: number; direct: number }
@@ -432,13 +436,20 @@ export function createWorldScene(ports: WorldScenePorts) {
     const sx = pose.column * CELL.w * scale, sy = STATES[pose.state].row * CELL.h * scale;
     const box = boxOf(pose);
     const alpha = ctx.globalAlpha;
-    ctx.globalAlpha = alpha * pose.alpha * item.fade;
+    ctx.save();
+    if (item.room.clip) clipTo(ctx, item.room.clip);
+    ctx.globalAlpha = alpha * pose.alpha * item.fade * item.room.alpha;
     const carry = pose.carry && pose.hand ? `carry-${pose.carry}` as SpriteName : null;
     const carryArt = carry ? spriteArt(carry) : null;
     if (carry && carryArt && !pose.front) sprite(ctx, carry, box.x + pose.hand!.x, box.y + pose.hand!.y, carryArt.size[0], carryArt.size[1]);
     ctx.drawImage(sheet, sx, sy, CELL.w * scale, box.h * scale, box.x, box.y, box.w, box.h);
     if (carry && carryArt && pose.front) sprite(ctx, carry, box.x + pose.hand!.x, box.y + pose.hand!.y, carryArt.size[0], carryArt.size[1]);
-    ctx.globalAlpha = alpha;
+    ctx.restore();
+  }
+
+  function clipTo(ctx: CanvasRenderingContext2D, room: Rect) {
+    rr(ctx, room.x, room.y, room.w, room.h, 12);
+    ctx.clip();
   }
 
   /** The actor's sheet for the shown theme, or the one it was drawn with until that decodes; each sheet's people
@@ -625,8 +636,13 @@ export function createWorldScene(ports: WorldScenePorts) {
         zone.pods.forEach((pod, index) => {
           const layer = podLayer(atlas, look, zone.key, index, level, layout);
           if (!layer) return;
-          ctx.globalAlpha = reveal * furniture * zoneAlpha(zone.key) * (blend.podAlpha.get(`${zone.key}:${index}`) ?? 1);
+          const fading = blend.podAlpha.get(`${zone.key}:${index}`);
+          ctx.save();
+          // A pod arriving or leaving in a room that is still growing or shrinking stays inside the room.
+          if (fading !== undefined) clipTo(ctx, zone);
+          ctx.globalAlpha = reveal * furniture * zoneAlpha(zone.key) * (fading ?? 1);
           ctx.drawImage(layer, pod.x - POD_BLEED, pod.y - POD_BLEED, pod.w + POD_BLEED * 2, pod.h + POD_BLEED * 2);
+          ctx.restore();
         });
       }
     }
@@ -665,12 +681,23 @@ export function createWorldScene(ports: WorldScenePorts) {
       drawBoard(ctx, layout);
       drawTrophies(ctx, layout, office.trophies);
     }
+    /** A person sitting at a desk that arrives or leaves with its room or pod shows with that desk. */
+    const roomOf = (actor: Actor): Drawn['room'] => {
+      if (actor.walk || !actor.at || !samePlace(actor.at, actor.home)) return SETTLED_ROOM;
+      const home = actor.home;
+      if (home.kind === 'watchdog') return blend.watchdogAlpha < 1 ? { alpha: blend.watchdogAlpha, clip: null } : SETTLED_ROOM;
+      if (home.kind !== 'seat') return SETTLED_ROOM;
+      const pod = home.slot < 0 ? undefined : blend.podAlpha.get(`${home.zone}:${Math.floor(home.slot / SEATS_PER_POD)}`);
+      const alpha = zoneAlpha(home.zone) * (pod ?? 1);
+      if (alpha >= 1 && pod === undefined) return SETTLED_ROOM;
+      return { alpha, clip: pod === undefined ? null : layout.zones.find(zone => zone.key === home.zone) ?? null };
+    };
     // People, back to front, with their lit screens beneath them.
     const drawn: Drawn[] = [];
     const sceneStill = still || frame.still;
     for (const actor of actors.values()) {
       const pose = actorPose(actor, layout, beat, sceneStill);
-      if (pose) drawn.push({ actor, pose, ...sheetOf(actor) });
+      if (pose) drawn.push({ actor, pose, ...sheetOf(actor), room: roomOf(actor) });
     }
     drawn.sort((a, b) => a.pose.y - b.pose.y);
     if (atlas) {
@@ -678,15 +705,18 @@ export function createWorldScene(ports: WorldScenePorts) {
         const seat = seatAt(layout, item.actor.home);
         if (!seat || item.actor.screen <= 0) continue;
         const box = screenBox(seat, item.actor.home.kind === 'watchdog' ? layout.watchdog?.station ?? null : null);
-        ctx.globalAlpha = reveal * furniture * item.actor.screen;
+        ctx.save();
+        if (item.room.clip) clipTo(ctx, item.room.clip);
+        ctx.globalAlpha = reveal * furniture * item.actor.screen * item.room.alpha;
         sprite(ctx, box.name, box.x, box.y, box.w, box.h);
+        ctx.restore();
       }
     }
     const hoverId = frame.hover, focusId = frame.focus;
     for (const item of drawn) {
       if (item.actor.id === selected || item.actor.id === hoverId) {
         const ring = boxOf(item.pose);
-        ctx.globalAlpha = reveal * item.pose.alpha * (item.actor.id === selected ? 1 : 0.55);
+        ctx.globalAlpha = reveal * item.pose.alpha * item.room.alpha * (item.actor.id === selected ? 1 : 0.55);
         ctx.beginPath(); ctx.ellipse(ring.x + ring.w / 2, ring.y + ring.h + 1, ring.w * 0.7, 4.5, 0, 0, Math.PI * 2);
         ctx.strokeStyle = item.actor.id === selected ? '#f3d488' : 'rgba(251, 241, 218, 0.9)'; ctx.lineWidth = 2; ctx.stroke();
       }
@@ -714,7 +744,7 @@ export function createWorldScene(ports: WorldScenePorts) {
       const mark = spriteArt(name);
       const box = boxOf(item.pose);
       const bob = emphasis === 'decision' && !sceneStill ? Math.sin(((beat + item.actor.phase) * Math.PI) / 6) * 1.6 : 0;
-      ctx.globalAlpha = reveal * item.pose.alpha * item.fade;
+      ctx.globalAlpha = reveal * item.pose.alpha * item.fade * item.room.alpha;
       sprite(ctx, name, box.x + box.w / 2 - mark.anchor[0], box.y - mark.size[1] + bob, mark.size[0], mark.size[1]);
     }
     ctx.globalAlpha = reveal;
@@ -905,6 +935,7 @@ export function createWorldScene(ports: WorldScenePorts) {
       const counts = (slot: CachedLayer) => ({ hits: slot.hits, builds: slot.builds, direct: slot.direct });
       return {
         tweening: Boolean(from), layout: target, shown: layout,
+        fading: { zones: Object.fromEntries(shown?.zoneAlpha ?? []), pods: Object.fromEntries(shown?.podAlpha ?? []) },
         layers: { floor: counts(floorLayer), light: counts(lightLayer) },
         capacity: Object.fromEntries(capacity),
         actors: [...actors.values()].map(actor => ({

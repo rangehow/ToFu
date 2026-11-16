@@ -102,6 +102,35 @@ describe('office scene', () => {
     expect(newcomer.walking || newcomer.at === 'seat').toBe(true);
   });
 
+  it('fades the room of a team that appears later in once its space has opened, never at once', () => {
+    const scene = mount();
+    const withTeams = (keys: string[]) => {
+      const office = officeWith(3);
+      const extra = keys.map(key => input(key, 'project', `lead-${key.slice(1)}`, [`${key.slice(1)}-1`], [`${key.slice(1)}-1`]));
+      const more = projectOffice(0, extra, LABELS);
+      return { ...office, teams: [...office.teams, ...more.teams], people: new Map([...office.people, ...more.people]) };
+    };
+    scene.update(withTeams([]), false);
+    run(scene, 2000);
+    scene.update(withTeams(['/late']), false);
+    // Until the blend starts the shown floor is the old one, without the new room; then it starts invisible.
+    expect(scene.inspect().shown!.zones.some(zone => zone.key === '/late')).toBe(false);
+    run(scene, STEP);
+    let previous = scene.inspect().fading.zones['/late'];
+    expect(previous).toBe(0);
+    let elapsed = 0;
+    while (scene.inspect().tweening) {
+      run(scene, STEP);
+      elapsed += STEP;
+      const now = scene.inspect().fading.zones['/late'] ?? 1;
+      expect(now).toBeGreaterThanOrEqual(previous);
+      expect(now - previous).toBeLessThan(0.2);
+      previous = now;
+    }
+    expect(elapsed).toBeGreaterThan(400);
+    expect(scene.layout()!.zones.some(zone => zone.key === '/late')).toBe(true);
+  });
+
   it('fades people in and out where they sit while the first reads settle, moving nobody', () => {
     const scene = mount();
     scene.update(officeWith(4), true);

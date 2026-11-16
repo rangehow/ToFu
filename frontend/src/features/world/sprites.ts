@@ -3,7 +3,8 @@
  * Entry points: sheetFor, artRole, FEET, portraitStyle. Dependency: assets/manifest.generated.ts. */
 import type { CharacterModel } from '../office-game/office-character';
 import { CELL, PEOPLE, ROWS, STATES, type PersonRole as ArtRole, type WorldTheme } from './assets/manifest.generated';
-import { stableHash, type Person } from './model';
+import { stableHash } from './hash';
+import type { Person } from './model';
 
 export const FEET = { x: CELL.feet[0], y: CELL.feet[1] } as const;
 

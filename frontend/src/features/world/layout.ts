@@ -6,6 +6,7 @@
  * so every desk reaches the owner's door and the way out. Seats keep their slot while their person stays
  * (allocateSlots), so the office never reshuffles.
  * Entry points: fitOffice, layoutOffice, allocateSlots, waitingSpots, shelfSlots, corridorBelow, bottomLane. */
+import { stableHash } from './hash';
 
 export interface Point { x: number; y: number }
 export interface Rect { x: number; y: number; w: number; h: number }
@@ -18,7 +19,9 @@ export interface ZoneLayout {
   key: string; x: number; y: number; w: number; h: number; row: number;
   banner: Point; lead: Seat; pods: Pod[]; seats: Seat[]; routine: Point;
 }
-export interface DecorItem { kind: 'plant' | 'tall-plant' | 'shelf' | 'cooler' | 'printer'; x: number; y: number; variant: number }
+/** `key` names the item's place (the n-th gap of the window wall, the plant beside a team's room, the cooler),
+ * so a floor-plan blend moves each item to its own new place; `variant` is stable per key. */
+export interface DecorItem { key: string; kind: 'plant' | 'tall-plant' | 'shelf' | 'cooler' | 'printer'; x: number; y: number; variant: number }
 export interface OfficeLayout {
   width: number; height: number; wall: number;
   owner: { room: Rect; desk: Rect; chair: Point; door: Point; drop: Point; tray: Rect; whiteboard: Rect; shelf: Rect };
@@ -279,14 +282,16 @@ export function layoutOffice(viewportWidth: number, teams: ReadonlyArray<TeamSha
   const windows = Math.max(3, Math.floor((width - MARGIN * 2) / 300));
   for (let index = 0; index <= windows; index += 1) {
     const at = MARGIN + (index * (width - MARGIN * 2)) / windows;
-    if (at > MARGIN + OFFICE_W + 20 && at < width - MARGIN - 20) decor.push({ kind: 'tall-plant', x: at, y: floorTop - 6, variant: index % 3 });
+    if (at > MARGIN + OFFICE_W + 20 && at < width - MARGIN - 20) decor.push({ key: `wall:${index}`, kind: 'tall-plant', x: at, y: floorTop - 6, variant: index % 3 });
   }
-  decor.push({ kind: 'cooler', x: width - MARGIN - 24, y: bottomTop + 120, variant: 0 });
-  decor.push({ kind: 'printer', x: lounge.x + lounge.w + 70, y: bottomTop + 106, variant: 0 });
-  decor.push({ kind: 'tall-plant', x: MARGIN + 18, y: bottomTop + BOTTOM_H - 20, variant: 1 });
-  decor.push({ kind: 'plant', x: lounge.x + lounge.w - 12, y: lounge.y + 26, variant: 2 });
+  decor.push({ key: 'cooler', kind: 'cooler', x: width - MARGIN - 24, y: bottomTop + 120, variant: 0 });
+  decor.push({ key: 'printer', kind: 'printer', x: lounge.x + lounge.w + 70, y: bottomTop + 106, variant: 0 });
+  decor.push({ key: 'lounge-corner', kind: 'tall-plant', x: MARGIN + 18, y: bottomTop + BOTTOM_H - 20, variant: 1 });
+  decor.push({ key: 'lounge', kind: 'plant', x: lounge.x + lounge.w - 12, y: lounge.y + 26, variant: 2 });
   for (const zone of zones) {
-    if (zone.x + zone.w + ZONE_GAP / 2 < width - MARGIN) decor.push({ kind: 'plant', x: zone.x + zone.w + ZONE_GAP / 2, y: zone.y + zone.h - 8, variant: zone.row % 3 });
+    if (zone.x + zone.w + ZONE_GAP / 2 < width - MARGIN) {
+      decor.push({ key: `beside:${zone.key}`, kind: 'plant', x: zone.x + zone.w + ZONE_GAP / 2, y: zone.y + zone.h - 8, variant: stableHash(zone.key) % 3 });
+    }
   }
   return { width, height, wall: WALL, owner, zones, watchdog, entrance, lounge, bar, spine: MARGIN / 2, corridors, decor };
 }

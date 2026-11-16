@@ -79,8 +79,7 @@
     },
     {
       "path": "02-composer-menus.css",
-      "responsibility": "composer menus",
-      "legacyTokenSha256": "a10184354bd0e0ce3a65f4499af12b69edbece63ab6c702842ee54dbdcd4d79f"
+      "responsibility": "composer menus"
     },
     {
       "path": "02-model-picker-layout.css",

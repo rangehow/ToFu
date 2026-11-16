@@ -21,7 +21,7 @@ UNFORMATTED = ('pub const KINDS: &[&str] = &["adjust_credit", "adjust_debit", "b
                '"native_admission", "redeem", "refund"];\n')
 RUST_GENERATORS = ('gen_tofudb_ir_contract.py', 'gen_storage_v2_contract.py',
                    'gen_conversation_sync_contract.py', 'gen_model_context_projection.py',
-                   'gen_project_dispatch_storage.py')
+                   'gen_project_dispatch_storage.py', 'gen_agent_machine_tokens.py')
 
 
 def _rustfmt_available():

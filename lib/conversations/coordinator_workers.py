@@ -13,6 +13,7 @@ import hashlib
 import json
 import threading
 import time
+from collections import deque
 from copy import deepcopy
 from threading import RLock
 
@@ -511,9 +512,39 @@ def wait_for_workers(task, scope, ids, *, wait_s, mode='any', repository=None, s
     return result
 
 
+def _runs_here(row, owner) -> bool:
+    """Whether the Worker's task runs in this process, so its end fires here (``on_terminal``)."""
+    if not row.get('task_id') or row['status'] in _TERMINAL:
+        return False
+    from lib.tasks_pkg.manager.runtime import chat_task_runtime
+    worker = chat_task_runtime.get_owned(row['task_id'], user_id=owner)
+    return worker is not None and worker.get('status') in ('pending', 'running') and not worker.get('aborted')
+
+
+def _unread_row(identity):
+    """A Worker a wait ended before reading: pending, never news."""
+    return {'assignment_id': identity, 'task_id': None, 'attempt_id': None, 'status': 'unread',
+            'review': None, 'delivery': None, 'canonical_delivery': False, 'publication_requested': False}
+
+
+# Per Coordinator task: the last settlement row of each Worker whose task ran in
+# this process when read, so a later poll reads none that still runs here.
+_WAIT_ROWS_KEY = '_coordinatorWaitRows'
+
+
 def _await_born(task, scope, ids, *, deadline, mode, interruption, repository, service, runtime_context):
+    """Wait on born Workers, reading each again only when it can have changed.
+
+    A Worker whose task runs in this process is read once its end fires here or
+    it no longer runs here; any other is read at each recheck. Input or Stop
+    that arrives during the wait ends a pass between two Worker reads.
+    """
     repository = repository or ProjectDispatchRepository(scope['user_id'], scope['project_path'])
     service = service or ProjectDispatchService(repository)
+    owner = repository.owner
+    # Input already waiting at the start still gets one full read of the Workers,
+    # so settled ones return their evidence; later input ends a pass between reads.
+    waiting_at_start = bool(interruption())
     def read_snapshots(identities):
         rows = []
         # One observation of the coordination binding serves every Worker view.
@@ -548,24 +579,30 @@ def _await_born(task, scope, ids, *, deadline, mode, interruption, repository, s
                                     effect_free=True)
     def read_settlements(identities):
         """Execution status and delivery receipt; no projection, excerpt or dependency reads."""
-        rows = []
-        # One observation of the coordination binding serves every Worker of a poll.
+        rows = {}
+        # One observation of the coordination binding serves every Worker of a pass.
         with one_decision():
             for identity in identities:
+                if rows and not waiting_at_start and interruption():
+                    break
                 view = service.view_for_coordinator(identity, scope=scope, settlement_only=True)
                 execution = view.get('execution') or {}
-                rows.append({'assignment_id': identity, 'task_id': execution.get('taskId'),
-                             'attempt_id': execution.get('attemptId'),
-                             'status': 'cancelled' if view['revoked'] else execution.get('status', 'queued'),
-                             'review': view.get('review'), 'delivery': view.get('delivery'),
-                             'canonical_delivery': view.get('canonicalDelivery', False),
-                             'publication_requested': bool(view.get('publication'))})
+                rows[identity] = {
+                    'assignment_id': identity, 'task_id': execution.get('taskId'),
+                    'attempt_id': execution.get('attemptId'),
+                    'status': 'cancelled' if view['revoked'] else execution.get('status', 'queued'),
+                    'review': view.get('review'), 'delivery': view.get('delivery'),
+                    'canonical_delivery': view.get('canonicalDelivery', False),
+                    'publication_requested': bool(view.get('publication'))}
         # A completed observation proves this waiter is responsive even when
         # Workers have no new output. A blocked read or transport-only ticker
         # must not refresh liveness or exempt a genuinely wedged handler.
         task['_dispatch_heartbeat'] = time.time()
         return rows
     def poll(identities):
+        if not identities:
+            task['_dispatch_heartbeat'] = time.time()
+            return {}
         return reread_on_contention(task, lambda: read_settlements(identities),
                                     label='coordinator worker settlements', effect_free=True)
     # A settlement this Coordinator attempt was not told about is news, whenever
@@ -577,7 +614,7 @@ def _await_born(task, scope, ids, *, deadline, mode, interruption, repository, s
     watched = list(ids) + [identity for identity in _unnamed_pending(task, scope, reports) if identity not in named]
 
     def news(rows):
-        return [row for row in rows if _phase(row) not in _NOT_NEWS
+        return [row for row in rows if row['status'] != 'unread' and _phase(row) not in _NOT_NEWS
                 and reports['reported'].get(row['assignment_id']) != _settlement(row)]
 
     def done(rows):
@@ -590,12 +627,31 @@ def _await_born(task, scope, ids, *, deadline, mode, interruption, repository, s
             # returning nothing at once in a model loop.
             return bool(fresh) or mode == 'all' or not any(_phase(row) in _PENDING for row in rows)
         return mode != 'all' and bool(fresh)
-    rows = poll(watched)
+    known = task.setdefault(_WAIT_ROWS_KEY, {})
+    latest = {identity: known[identity] for identity in watched
+              if identity in known and _runs_here(known[identity], owner)}
+    latest.update(poll([identity for identity in watched if identity not in latest]))
+
+    def current():
+        return [latest.get(identity) or _unread_row(identity) for identity in watched]
+
+    def recheck(ended_here):
+        # Durable attempt/delivery evidence alone declares settlement. A Worker
+        # whose end fired is read until this wait ends: the notification can
+        # precede its durable status.
+        latest.update(poll([identity for identity in watched if identity not in latest
+                            or latest[identity]['task_id'] in ended_here
+                            or not _runs_here(latest[identity], owner)]))
+    rows = current()
     outcome = 'settled'
     if not done(rows):
         from lib.agent_core.admission import on_terminal
         from lib.tasks_pkg import wait_interruption
-        changed, subscriptions = threading.Event(), {}
+        changed, fired, ended_here, subscriptions = threading.Event(), deque(), set(), {}
+
+        def signal(task_id):
+            fired.append(task_id)
+            changed.set()
         if runtime_context is not None:
             runtime_context.register_cancel_callback(changed.set)
         prompt_until = 0.0
@@ -615,9 +671,16 @@ def _await_born(task, scope, ids, *, deadline, mode, interruption, repository, s
                 fresh = [row['task_id'] for row in rows if row['task_id'] and row['status'] not in _TERMINAL
                          and row['task_id'] not in subscriptions]
                 for task_id in fresh:
-                    subscriptions[task_id] = on_terminal(task_id, lambda _task_id: changed.set())
+                    subscriptions[task_id] = on_terminal(task_id, signal)
+                # Close the subscribe-versus-settlement race for Workers whose end cannot
+                # fire here; one that ended meanwhile no longer runs here, so it is read.
+                racing = [row['assignment_id'] for row in rows
+                          if row['task_id'] in fresh and not _runs_here(row, owner)]
+                if racing:
+                    latest.update(poll(racing))
+                    rows = current()
+                    continue
                 if fresh:
-                    rows = poll(watched)  # Close subscribe-versus-settlement race.
                     continue
                 # The wait is interruptible and allocates no thread or model request.
                 # Durable attempt/delivery evidence alone declares settlement.
@@ -631,10 +694,18 @@ def _await_born(task, scope, ids, *, deadline, mode, interruption, repository, s
                 if changed.is_set():
                     changed.clear()
                     prompt_until = time.monotonic() + _PROMPT_RECHECK_WINDOW_SECONDS
-                rows = poll(watched)
+                while fired:
+                    ended_here.add(fired.popleft())
+                recheck(ended_here)
+                rows = current()
         finally:
             for unsubscribe in subscriptions.values():
                 unsubscribe()
+    for identity, row in latest.items():
+        if _runs_here(row, owner):
+            known[identity] = row
+        else:
+            known.pop(identity, None)
     # Parallel polls of one batch share this record: each settlement is claimed by
     # exactly one of them, under the record's lock, before its evidence is read.
     with reports['lock']:

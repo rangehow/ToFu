@@ -310,7 +310,29 @@ Workers, and returns `wait=settled` at once when none is pending, so polling a
 reported Worker never loops a model. Durable attempt/delivery evidence
 alone declares settlement: a terminal notification only starts a prompt recheck
 every 0.5 s for up to 10 s, because it can precede the attempt's durable status;
-otherwise a 5 s recheck covers notification loss and queued admission. Polls
+otherwise a 5 s recheck covers notification loss and queued admission. A recheck
+reads a Worker again only when it can have changed: one whose task runs in this
+process (pending or running, not aborted, in the task runtime) once its terminal
+notification fires here or it no longer runs here, and any other Worker
+(another process, still queued, settled, or delivering) at each recheck. The
+Coordinator task keeps the last row of each Worker still running here
+(`_coordinatorWaitRows`), so a later poll reads none of them either. A Worker
+whose end fired is read at every recheck until the wait ends, since the
+notification can precede its durable status. Problem (old-repo SCALE-COORD-1,
+38c9c6b3a4, ported 2026-11-16): every recheck and every poll call re-read all
+watched Workers, so a lead's wait cost O(Workers) storage reads per 5 s and
+checked input only between full passes. Measured with a 0.15 s settlement read
+(`tests/project_mod/test_coordinator_wait_reads.py` setup, default rechecks):
+at 10/30 Workers running here, reads during a 12 s idle wait 30/49 before, 0
+after; a repeat poll 1.95 s/6.44 s before, 0.01 s after; one Worker's end to the
+poll's return 2.57 s/9.70 s before, 0.39 s/0.48 s after; a project message
+during a 30-Worker wait was not seen before the 30 s deadline before, 4.3 s
+after (the durable input read cadence). Decision: a recheck costs O(changes).
+Alternatives rejected: a shorter recheck interval (a knob, still O(N) per
+recheck); one batched exchange for every view (still O(N) per recheck; the R5
+per-request change index is the storage-side answer). Accepted: a Worker
+revoked or settled by another process while its task still runs here is seen
+when that task ends here, not at the next recheck. Polls
 read only the assignment row itself (no policy rows or prerequisites), attempt
 status, Turn metadata and delivery receipt
 (`view_for_coordinator(settlement_only=True)`), and each poll observes the
@@ -336,8 +358,10 @@ Coordinator conversation's inbox holds a steer (a human chat message, forwarded
 request or channel batch) or another background completion, checked every wait
 slice; or once a steer another server process committed to the live Turn, or an
 incoming project message submitted after the call started, appears at a durable
-read (the first check, then at most every 5 s). It is checked before the first
-wait, so input already waiting ends the call at once. Its instruction
+read (the first check, then at most every 5 s). It is checked when the call
+starts, so input already waiting ends the call after one read of its Workers;
+input that arrives during the wait ends a pass between two Worker reads (a
+Worker not reached is `unread` and named pending). Its instruction
 names the still-pending Worker IDs to wait on next; Workers keep running and the
 input arrives at the round boundary right after the tool result. When nothing
 is pending any more the call returns `wait=settled` with its news instead, and

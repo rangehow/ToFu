@@ -774,3 +774,80 @@ Conflicting files are files changed by both the item and the branch since that m
 
 No. The `recovered/*` refs live in the shared `.git` of this repo, so every worktree and lane can see them, and none were merged.
 Pushing to a remote would drop them unless they are pushed explicitly, so keep the shared checkout's refs as the store of record.
+
+## Dispatch-latency line: decisions (2026-11-16)
+
+Scope: the "project-messages mailbox / dispatch / coordinator latency" topic above (10 branches, 9 worker snapshots) plus
+the experiments and test arms of the same SCALE-COORD-1 / DISPATCH-APPEND-1 line that the first pass marked obsolete or
+duplicate. Judged against `eval/opencode-glm53-tb21` at `695a08b915`, which already has the "start when arguments end" fix
+(`74c6163249`, delivered in `12f8422a64`) and the delegation latency measurement (`d0c7b1b141`). The old checkout was only
+read through the `recovered/*` refs in the shared `.git`.
+
+Evidence columns: `missing` is added lines (≥12 characters) of the commit not found in the same file on
+`695a08b915` / on the small-ports Worker 5060301b's tree (`c61e1a94b3`, unlanded) / on `gate-r4b/v12r`. Commits are listed
+once, under their first branch; the rebased copies on `perf/dispatch-append-rebase-20261114` (`040dcf3112`…`b40191cda0`)
+and the r4a copies have the same subjects and verdicts.
+
+### Refs
+
+| ref | tip | verdict | evidence |
+|---|---|---|---|
+| `perf/mailbox-r4b-canonical-20261114` | `f621b811fc` | unmerged; mailbox part being ported by 5060301b, rest below | 25 commits not on the branch; newest of the mailbox chain |
+| `perf/mailbox-r4b-step4-20261113`, `fix/mailbox-step4-r4b-20261113`, `perf/mailbox-recipient-read-20261113`, `fix/mailbox-roll-forward-20261113`, `fix/mailbox-roll-forward-mrr-20261113` | `6f029bea5e`, `efad684267`, `a63c7a65bb`, `1c7ed6b91f`, `2f4637bd09` | superseded by `perf/mailbox-r4b-canonical-20261114` | each tip is an ancestor of it or carries the same subjects |
+| `perf/scale-coord-1-20261113` | `cfe51776d9` | unmerged; per commit below | 9 commits not on the branch |
+| `integ/scale-coord-1-r4a-20261113` | `3ca8d2255b` | superseded (integration merge of scale-coord-1 + coord-page-reads + recipient-read) | merge commits only beyond the commits below |
+| `perf/coord-page-reads-20261113` | `bec39ba13f` | unmerged (pipelined page reads) | `c40d1571fb` 738/817 missing, `bec39ba13f` 77/97 |
+| `feat/coordinator-cross-request-control-20261113` | `eda5b17497` | unmerged; not a latency change | 8 commits, 1113/1235 missing, none in v12r |
+| `perf/dispatch-append-1-20261113`, `exp/dispatch-append-1-wakefix-20261113` | `959edbed1f` | superseded by `perf/dispatch-append-rebase-20261114` | same 17 subjects, rebased |
+| `perf/dispatch-append-rebase-20261114` | `397ff4ab3e` | unmerged; arrives with the release-candidate line | `merge-base --is-ancestor 397ff4ab3e gate-r4b/v12r` true; 0–90 lines missing on v12r per commit |
+| `perf/storage-v2-pool-lockfree-20261113` | `b2377c6f5d` | unmerged; arrives with the release-candidate line | same change as `a7c5f0f7a9` (2/168 missing on v12r) |
+| `exp/dispatch-append-1-wakefix-cp-20261113` | `89dbb0053b` | experiment, obsolete | "experiment only" cherry-pick of `38c9c6b3a4` onto `959edbed1f` |
+| `test/scale-coord-1-c4b-arm-20261113`, `test/scale-coord-1-pool-proto-20261113`, `scale-coord-1/test-cc786` | `67bbf04a2d`, `d1c65f4907`, `6b5445d0b4` | experiment arms, obsolete | subjects say "TEST ARM / TEST ONLY (not for landing)"; their content is the commits below |
+| `fix/wake-only-r4a-20261113` | `aefc48e509` | superseded by this port of `38c9c6b3a4` | same subject rebased on `gate-r4/22-30-20261113` (only commit beyond that gate) |
+| `fix/positional-append-r4a-20261113`, `test/positional-append-repo-lock-20261113` | `d7e42c74ab` | superseded by 5060301b's mailbox port | `d076928c1e` rebased on the r4a gate, plus `aefc48e509` |
+| `recover/rc-mailbox-eval-20261116{,b}` | `b70c9c08bf` | in-flight current-repo work (5060301b / c3da65d2), not old-repo | cherry-picks of `79d31c7f5f` and `bfbcd96591` |
+
+Worker snapshots (`recovered/workspace-wip/…`): every one has the same tree as its parent (`git diff --shortstat <wip>^ <wip>`
+is empty), so each is a duplicate of its parent commit: 4b32e628 → `bec39ba13f`, 1f6b43d4 → `959edbed1f`, 1a3bf382 → `a63c7a65bb`,
+36f70263 → `f621b811fc`, c111a4a4 → `397ff4ab3e`, dace96ea → `eda5b17497`, 8ff8c80f → `4df1f69042` (the birth-contention
+reproducer `41815617d4` on an earlier base). Three are tagged into this topic by path only and belong elsewhere: 61da8509
+→ `900a7476c5` (router), a815695d → `91e402848a` (storage benchmark), 54b8dadd → `481a83c281` (Tofu-DB load harness).
+`.tofu/worktrees/api-latency-20261029` is a 10-29 scratch profiler of HTTP poll endpoints ("SCRATCH (never commit)"): obsolete.
+
+### Commits
+
+| commit | subject | missing (branch / 5060301b / v12r) | verdict |
+|---|---|---|---|
+| `38c9c6b3a4` | a waiting lead reads only Workers that changed and wakes between two reads | 215/232 / 215/232 / 212/232 | **ported here** (re-derived on today's wait, see below) |
+| `79d31c7f5f` | poll without IDs checks every Worker of the request | 52/70 / 2/70 / 9/70 | being ported by 5060301b |
+| `bfbcd96591` | a history page is never torn by births committing during its build | 27/34 / 0/34 / 0/34 | being ported by 5060301b |
+| `d076928c1e` | a send is a positional append that never touches the head | 523/584 / 19/584 / 523/584 | being ported by 5060301b |
+| `1c7ed6b91f`, `c82f3f3ab5`, `ebb61579bf` | CAS lost to the identical value; converted-back head; rollback conversion | 66/81, 79/80, 144/154 / 0, 22, 42 / — | being ported by 5060301b |
+| `0fc7d5bc8a` | a poll reads its request without the head witness and each settled attempt once | 119/156 / 117/156 / 16/156 | unmerged; in v12r; rewrites `_running_workers` from `79d31c7f5f`, so it follows 5060301b's landing or the RC line |
+| `3bd1271c1e` | a poll reads no attempt of a Worker whose task is live in this process | 39/43 / 39/43 / 3/43 | unmerged; in v12r; same dependency as `0fc7d5bc8a` |
+| `5473a0a418` | a poll result with many starting Workers fits one tool result | 32/36 / 32/36 / 32/36 | unmerged, not in v12r; a fit fix on `79d31c7f5f`'s `_running_workers`: port right after 5060301b lands |
+| `c40d1571fb`, `bec39ba13f`, `26f5896305` | a history page reads each kind of row evidence in one exchange (`query_many`), its streamed-upload fix, the page benchmark | 738/817, 77/97, 62/64 / same / 737, 77, 63 | unmerged, not in v12r; **valuable, not ported here**: page 115 → 7 round trips, but it adds pipelining to both storage clients and `tofu_db/wire.py`; the native lane cannot run on this host (`tests/storage/test_coordinator_workers_authority.py` skips: "inherited native storage engine cannot serve this checkout"). Next port, as its own storage-owned assignment |
+| `20f8b99531`, `67add17c0d`, `7605481a59`, `9f0473a9e3`, `8be516174d`, `e9f32573d3`, `d9abda77a5`, `a63c7a65bb`, `af1a13a9b6`, `675154a26f` | recipient/absorption/seal reads in exchanges, R4b step 3 | 214/230 … 47/56 (≥90% missing everywhere) | unmerged; built on the ticket layout of `d076928c1e` and on `query_many`; port with the mailbox after 5060301b lands |
+| `78fd51be6f`, `6f029bea5e` | both-way rollback rehearsal for the R4b mailbox layout and its keeper | 215/215, 4/4 | unmerged; goes with the mailbox port |
+| `7bb3d08de9`, `f621b811fc` | message-input fake scope; gen_world_art keeper | 0/1, 0/3 | merged (content on the branch) |
+| `6efa6a0e13`…`b40191cda0` (11 commits), `41815617d4`, `b7febe751b`, `a7b01d1294` | R5: births append without the head CAS, lane indexes, O(changes) polls; the birth-contention reproducer; dispatch contract identity | 242/243 … 1/1 on the branch; 0–90 on v12r | unmerged; arrives with the release-candidate line (ancestor of v12r). Not ported here: a storage contract change in both authorities and the native engine |
+| `a7c5f0f7a9`, `397ff4ab3e` | storage.v2 session pool takes no lock; its measurement | 157/168, 6/6 / — / 2/168, 0/6 | unmerged; with the RC line. Its own record says end-to-end latency did not move (it "moves to the engine"), so no standalone port |
+| `2449ac129e`…`eda5b17497` (8) | cross-request Worker control, fair lane admission | 1113/1235 | unmerged; a coordination feature, not latency; left for the coordination owner |
+| `247d8a9a63`, `b5ccc663f2` | workspace admission at scale; settlement takes its checkout's lock | 0/356, 7/276 | merged (content on the branch) |
+| `89dbb0053b`, `d1c65f4907`, `6b5445d0b4`, `67bbf04a2d` | experiment / test arms | — | obsolete (not for landing) |
+
+### What was ported and measured
+
+`38c9c6b3a4` re-derived on today's `_await_born` (which since gained report-once news, unnamed pending Workers and excerpts
+for news only): a recheck reads a Worker whose task runs in this process only once its end fires here or it stops running
+here; a later poll reuses rows of Workers still running here; input that arrives during a pass ends it between two reads.
+Spec `tests/project_mod/test_coordinator_wait_reads.py` (4 cases, all failed before). Decision record and before/after
+numbers: `docs/PROJECT_COORDINATION.md`, "Waiting for Workers". Measured with each settlement read costing 0.15 s, default
+rechecks, 10 / 30 Workers running here: repeat poll 1.95 / 6.44 s → 0.01 s; reads in a 12 s idle wait 30 / 49 → 0; Worker end
+to poll return 2.57 / 9.70 s → 0.39 / 0.48 s; a project message during a 30-Worker wait was missed until the 30 s deadline →
+seen in 4.3 s. One run per arm, both arms concurrently on this host.
+
+Current birth contention, for the R5 decision (SQLite authority, real delegation path, concurrent births of one request
+after its first Worker): 4 births 0.37 s wall, 4 of 8 head commits lost; 8 births 1.39 s, 17 of 25 lost; 16 births 0.90 s,
+92 of 108 lost. Losses grow faster than births but every birth finished in under 1.4 s locally, against the 0.5–0.7 s
+production births measured in `d0c7b1b141`. The fix for that growth is R5, which belongs to the release-candidate line.

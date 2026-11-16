@@ -584,6 +584,22 @@ def prepare_native_engine_artifact(operation: str, *, project: str | None = None
         return f'{exc}\nStorage engine preparation failed; the running service has not been stopped.'
 
 
+def certify_head_engine_before(operation: str) -> str:
+    """Certify HEAD's storage engine when the coming preparation would refuse it; '' when ready.
+
+    Runs in this process before the manager is asked to stop anything, so a
+    refusal leaves the running server untouched.
+    """
+    from serverctl_pkg.native_engine import certify_head_before_start
+    try:
+        certify_head_before_start(Path(PROJECT))
+    except KeyboardInterrupt:
+        return f'Storage engine certification cancelled before {operation}; nothing was stopped.'
+    except (OSError, RuntimeError) as exc:
+        return str(exc)
+    return ''
+
+
 def _repair_source_frontend_artifact(operation: str) -> str:
     """Compatibility wrapper for older callers and focused lifecycle tests."""
     return (prepare_native_engine_artifact(operation)
@@ -1436,7 +1452,8 @@ def managed_start(server_args: list[str] | None = None, *, wait: float = 180.0,
         print(f'Cannot start Tofu: {option_error}', file=sys.stderr)
         print(f'Usage: {sys.executable} server.py --help', file=sys.stderr)
         return 2
-    repair_error = _repair_source_frontend_artifact('Tofu startup')
+    repair_error = (certify_head_engine_before('Tofu startup')
+                    or _repair_source_frontend_artifact('Tofu startup'))
     if repair_error:
         print(f'Cannot start Tofu: {repair_error}', file=sys.stderr)
         return 1
@@ -1683,7 +1700,8 @@ def cmd_restart(args: argparse.Namespace) -> int:
             return 2
     # The manager prepares the storage engine itself: only it can decide to
     # retain the serving storage host when that preparation fails.
-    repair_error = prepare_source_frontend_artifact('Tofu restart')
+    repair_error = ((certify_head_engine_before('Tofu restart') if reason is None else '')
+                    or prepare_source_frontend_artifact('Tofu restart'))
     if repair_error:
         print(f'Cannot restart Tofu: {repair_error}', file=sys.stderr)
         return 1

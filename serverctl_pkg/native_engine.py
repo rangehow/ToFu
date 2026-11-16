@@ -56,9 +56,12 @@ PROGRESS_MAX_LINE_CHARACTERS = 16 * 1024
 DECISION_PREFIX = "TOFU_ENGINE_DECISION "
 STORAGE_CONTRACT_DIGEST_DOMAIN = b'tofu-storage-contract-v1\0'
 # The application<->engine boundary documents the engine does not compile: the
-# storage.v2 wire contract and the native host's connection handoff. Compiled
+# storage.v2 wire contract, the native host's connection handoff and the
+# operation IR (payload fields and result shapes the application relies on; an
+# engine kept across an IR change silently ignores new fields). Compiled
 # contracts are the engine's Cargo external-inputs under contracts/.
-APPLICATION_STORAGE_CONTRACTS = ('contracts/storage_v2.json', 'contracts/native_storage_connection_v2.json')
+APPLICATION_STORAGE_CONTRACTS = ('contracts/storage_v2.json', 'contracts/native_storage_connection_v2.json',
+                                 'contracts/tofudb_ir_v1.json')
 MANAGED_ENGINE_ROOT = 'packages/tofu-db/target'
 _progress_observer: ContextVar[Callable[[str], None] | None] = ContextVar("engine_progress_observer", default=None)
 _progress_phase: ContextVar[str | None] = ContextVar("engine_progress_phase", default=None)
@@ -933,6 +936,132 @@ def _uncertified_head_decision(root: Path, environment: dict, dest: Path, expect
     return decision
 
 
+def certify_head_before_start(root: Path, environment: dict | None = None) -> None:
+    """Certify HEAD's engine with the engine gate when a start would otherwise refuse it.
+
+    Runs before anything is stopped, outside the preparation deadline (the gate
+    takes hours). Afterwards the ordinary preparation deploys the new record.
+    Raises EnginePreparationError with one actionable line when automatic
+    certification is impossible or does not produce HEAD's record.
+    """
+    from tofu_dotenv import read_dotenv_values
+    from runtime_guards import load_deployment_configuration
+    from serverctl_pkg.engine_certification import passing_record
+    root = Path(root).resolve()
+    environment = {**read_dotenv_values(root / '.env'), **(os.environ if environment is None else environment)}
+    if (load_deployment_configuration(environment).storage_backend != 'tofudb'
+            or not (root / 'packages/tofu-db/Cargo.toml').is_file()):
+        return
+    dest = managed_engine_destination(root, environment)
+    expected = source_fingerprint(root)
+    if expected is None or not dest.is_relative_to(root / MANAGED_ENGINE_ROOT):
+        return  # Preparation reports these itself.
+    try:
+        if build_identity(dest)['source_sha256'] == expected:
+            return
+    except (OSError, EnginePreparationError):
+        pass
+    contract = storage_contract_sha256(root)
+    record, problem = passing_record(root, expected, contract)
+    if record is not None or _uncertified_head_decision(
+            root, environment, dest, expected, contract, problem)['decision'] == 'kept':
+        return
+    refused = f"Cannot certify HEAD's storage engine {expected[:12]} automatically, so nothing was stopped: "
+    commit, dirty = _head_engine_inputs(root)
+    if dirty:
+        raise EnginePreparationError(
+            refused + f'engine inputs differ from commit {commit[:12]} ({", ".join(dirty)}); '
+            'commit or revert them, then start again.')
+    fixture = _certification_fixture(root)
+    work_root = root / MANAGED_ENGINE_ROOT / 'engine-certify-work'
+    work_root.mkdir(parents=True, exist_ok=True)
+    if work_root.stat().st_dev != fixture.stat().st_dev:
+        raise EnginePreparationError(
+            refused + f'{work_root} is not on the filesystem of the fixture {fixture}; run '
+            f'scripts/engine_certify.py --fixture {fixture} --work-root <directory on its filesystem>, then start again.')
+    _report_progress(f"Certifying HEAD's storage engine {expected[:12]} (commit {commit[:12]}) with the engine "
+                     f'gate against {fixture} before anything is stopped; this takes hours.')
+    started = time.monotonic()
+    returncode = _run_engine_gate(root, commit, fixture, work_root)
+    record, problem = passing_record(root, expected, storage_contract_sha256(root))
+    if record is None:
+        raise EnginePreparationError(
+            refused + f'the engine gate exited {returncode} and {problem} (evidence: '
+            f'{root / MANAGED_ENGINE_ROOT}/engine-certifications/runs/); fix the failed check and start again, '
+            'or deploy uncertified once: serverctl.py restart --deploy-uncertified-engine "<reason>".')
+    _report_progress(f'Certified {record.summary()} in {time.monotonic() - started:.0f}s.')
+
+
+def _head_engine_inputs(root: Path) -> tuple[str, list[str]]:
+    """HEAD's commit and the engine/contract inputs whose working copy differs from it."""
+    paths = {location.resolve().relative_to(root).as_posix()
+             for location, _relative, _paths, _inherits in source_layout(root)}
+    paths.update(key for key, _path in external_source_inputs(root))
+    paths.update(APPLICATION_STORAGE_CONTRACTS)
+    commit = _run(['git', '-C', str(root), 'rev-parse', '--verify', 'HEAD'], cwd=root,
+                  environment=dict(os.environ), timeout=stage_seconds(30), failure_subject='Reading HEAD')
+    differing = []
+    for listing in (['diff', '--name-only', 'HEAD'], ['ls-files', '--others', '--exclude-standard']):
+        differing += _run(['git', '-C', str(root), *listing, '--', *sorted(paths)], cwd=root,
+                          environment=dict(os.environ), timeout=stage_seconds(30),
+                          failure_subject='Listing uncommitted engine inputs').splitlines()
+    return commit.strip(), differing
+
+
+def _authority_in_use(authority: Path) -> bool:
+    """Whether a storage engine holds the authority's lease (its exclusive flock on LOCK)."""
+    import fcntl
+    try:
+        descriptor = os.open(authority / 'LOCK', os.O_RDONLY)
+    except FileNotFoundError:
+        return False
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(descriptor)
+    return False
+
+
+def _certification_fixture(root: Path) -> Path:
+    """The settled authority the gate loads: this checkout's stopped store, else the last record's fixture."""
+    from serverctl_pkg import store_features
+    from serverctl_pkg.engine_certification import RECORD_FILE, record_directories, sha256_file
+    authority = store_features.data_dir_for(root) / 'tofudb-authority'
+    settled = (authority / 'CONTROL').is_file() and (authority / 'payload-segments').is_dir()
+    in_use = settled and _authority_in_use(authority)
+    if settled and not in_use:
+        return authority
+    recorded = []
+    for directory in record_directories(root):
+        try:
+            document = json.loads((directory / RECORD_FILE).read_text(encoding='utf-8'))
+            fixture = Path(document['fixture']['path'])
+            if sha256_file(fixture / 'CONTROL') == document['fixture']['control_sha256']:
+                recorded.append((document['certified_utc'], fixture))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    if recorded:
+        return max(recorded)[1]
+    refused = "Cannot certify HEAD's storage engine automatically, so nothing was stopped: "
+    if not in_use:
+        raise EnginePreparationError(
+            refused + f'{authority} is no TofuDB store and no earlier certification fixture is intact; run '
+            'scripts/engine_certify.py --fixture <settled TofuDB authority>, then start again.')
+    raise EnginePreparationError(
+        refused + f'{authority} is served by a running storage engine and no earlier certification fixture is '
+        'intact; stop Tofu (serverctl.py stop) and start it again, which certifies against the stopped store.')
+
+
+def _run_engine_gate(root: Path, commit: str, fixture: Path, work_root: Path) -> int:
+    """scripts/engine_certify.py for COMMIT, streaming its progress; the gate owns its own bounds."""
+    return subprocess.run(
+        [sys.executable, str(root / 'scripts/engine_certify.py'), '--fixture', str(fixture), '--commit', commit,
+         '--work-root', str(work_root), '--note', 'automatic certification before start'],
+        cwd=root, stdin=subprocess.DEVNULL, stdout=sys.stderr, check=False).returncode
+
+
 def verify_library(binary: Path) -> None:
     """Require the embedded library to belong to the same deployed pair."""
     try:
@@ -1411,40 +1540,99 @@ CACHEDIR_TAG = ('Signature: 8a477f597d28d172789f06886806bc55\n'
                 '# For information about cache directory tags see https://bford.info/cachedir/\n')
 
 
-def resolve_cargo(environment: Mapping[str, str], *,
-                  root: Path | None = None) -> tuple[str | None, dict[str, str]]:
+@dataclass(frozen=True)
+class CargoResolution:
+    """Which cargo a build uses, the declaration that chose it, and what was skipped."""
+    cargo: str | None
+    environment: dict[str, str]
+    source: str
+    ignored: tuple[str, ...]
+
+
+# Each skipped declaration is reported once per process, not on every build.
+_REPORTED_IGNORED_TOOLCHAIN_ROOTS: set[str] = set()
+
+
+def resolve_cargo_source(environment: Mapping[str, str], *,
+                         root: Path | None = None) -> CargoResolution:
     """Locate Cargo; the single Rust toolchain discovery for Tofu-driven builds.
 
-    Order: an explicit ``CARGO_HOME/bin`` (with its ``RUSTUP_HOME``), then
-    ``cargo`` on ``PATH``, then ``HOME/.cargo/bin``. With ``root``, the
-    checkout's ``.env`` supplies ``CARGO_HOME``/``RUSTUP_HOME`` that the
-    environment does not already set (explicit process settings win). Returns
-    the absolute cargo path (or None) and a copy of the environment carrying
-    those toolchain roots, with the cargo directory prepended to ``PATH``.
-    No host-specific installation path is ever searched (docs/DEFENSIVE_PATTERNS.md,
-    "Artifact preparation resolves tools from the deployment environment").
+    Declared toolchain roots are tried in order: the process environment's
+    ``CARGO_HOME``/``RUSTUP_HOME``, then (with ``root``) the checkout ``.env``'s.
+    A declared root that does not exist is skipped and reported once: a
+    process started before ``.env`` moved the toolchain, or on another host,
+    still carries the old path, and it must not hide the valid declaration.
+    After the ``CARGO_HOME/bin`` candidates come ``cargo`` on ``PATH``, then
+    ``HOME/.cargo/bin``. The returned environment is a copy carrying the
+    selected roots (a nonexistent one is removed), with the cargo directory
+    prepended to ``PATH``. No host-specific installation path is ever searched
+    (docs/DEFENSIVE_PATTERNS.md, "Artifact preparation resolves tools from the
+    deployment environment").
     """
-    resolved = dict(environment)
+    declared: Mapping[str, str] = {}
     if root is not None:
         from tofu_dotenv import read_dotenv_values
         declared = read_dotenv_values(Path(root) / '.env')
-        for name in ('CARGO_HOME', 'RUSTUP_HOME'):
-            if declared.get(name):
-                resolved.setdefault(name, declared[name])
+    resolved = dict(environment)
+    ignored: list[str] = []
+
+    def existing_declarations(name: str) -> list[tuple[str, str]]:
+        found, seen = [], set()
+        for origin, values in (('the process environment', environment), ('the project .env', declared)):
+            value = values.get(name)
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            if Path(value).expanduser().is_dir():
+                found.append((origin, value))
+            else:
+                ignored.append(f'{name}={value} from {origin} does not exist')
+        return found
+
+    rustup_homes = existing_declarations('RUSTUP_HOME')
+    if rustup_homes:
+        resolved['RUSTUP_HOME'] = rustup_homes[0][1]
+    else:
+        resolved.pop('RUSTUP_HOME', None)
+    cargo_homes = existing_declarations('CARGO_HOME')
+    if cargo_homes:
+        resolved['CARGO_HOME'] = cargo_homes[0][1]
+    else:
+        resolved.pop('CARGO_HOME', None)
     search_path = resolved.get('PATH', os.defpath)
     user_home = Path(resolved.get('HOME') or resolved.get('USERPROFILE') or Path.home())
-    cargo = None
-    if resolved.get('CARGO_HOME'):
-        cargo = shutil.which('cargo', path=str(Path(resolved['CARGO_HOME']).expanduser() / 'bin'))
-    cargo = cargo or shutil.which('cargo', path=search_path) or shutil.which(
-        'cargo', path=str(user_home / '.cargo' / 'bin'))
+    cargo, source = None, 'not found'
+    for origin, value in cargo_homes:
+        cargo = shutil.which('cargo', path=str(Path(value).expanduser() / 'bin'))
+        if cargo:
+            resolved['CARGO_HOME'] = value
+            source = f'CARGO_HOME from {origin} ({value})'
+            break
+    if not cargo:
+        cargo = shutil.which('cargo', path=search_path)
+        source = 'cargo on PATH' if cargo else source
+    if not cargo:
+        cargo = shutil.which('cargo', path=str(user_home / '.cargo' / 'bin'))
+        source = 'HOME/.cargo/bin' if cargo else source
     if cargo:
         # Cargo invokes sibling rustc/rustup proxies by name, so a minimal
         # service PATH needs the proxy directory. Keep the proxy path (do not
         # resolve its symlink to rustup).
         cargo = os.path.abspath(cargo)
         resolved['PATH'] = os.pathsep.join((str(Path(cargo).parent), search_path))
-    return cargo, resolved
+    for note in ignored:
+        if note not in _REPORTED_IGNORED_TOOLCHAIN_ROOTS:
+            _REPORTED_IGNORED_TOOLCHAIN_ROOTS.add(note)
+            print(f'Rust toolchain: ignoring {note}; using {cargo or "no cargo"} ({source}).',
+                  file=sys.stderr, flush=True)
+    return CargoResolution(cargo, resolved, source, tuple(ignored))
+
+
+def resolve_cargo(environment: Mapping[str, str], *,
+                  root: Path | None = None) -> tuple[str | None, dict[str, str]]:
+    """``(cargo, environment)`` of :func:`resolve_cargo_source`."""
+    resolution = resolve_cargo_source(environment, root=root)
+    return resolution.cargo, resolution.environment
 
 
 def cargo_target_directory(root: Path, name: str,
@@ -1592,15 +1780,23 @@ def _build(root: Path, staging: Path, environment: dict, *, build_root: Path | N
                 'Using the project-declared native toolchain loader path instead of the '
                 'serving runtime path. Set LD_LIBRARY_PATH in project .env to declare a '
                 'custom linker environment.')
-    cargo, toolchain_environment = resolve_cargo(environment)
+    resolution = resolve_cargo_source(environment, root=root if build_root is None else None)
+    cargo, toolchain_environment = resolution.cargo, resolution.environment
     if not cargo:
         raise EnginePreparationError(
             'No matching engine download was available and Cargo was not found '
             'on the service PATH or in CARGO_HOME/bin (default: HOME/.cargo/bin). '
             'Configure CARGO_HOME and, for a relocated rustup installation, '
             'RUSTUP_HOME in the project .env, or install a matching release. '
-            'The existing server remains running.')
+            + ''.join(f'Ignored {note}. ' for note in resolution.ignored)
+            + 'The existing server remains running.')
+    _report_progress(f'Building with {cargo} ({resolution.source}).')
     build_environment['PATH'] = toolchain_environment['PATH']
+    for name in ('CARGO_HOME', 'RUSTUP_HOME'):
+        if name in toolchain_environment:
+            build_environment[name] = toolchain_environment[name]
+        else:
+            build_environment.pop(name, None)
     # Containers can inherit compiler paths from a vanished host. Repair only
     # stale absolute overrides in the build child; retain usable user choices.
     for key in ('CC', 'CXX', 'HOST_CC', 'HOST_CXX'):

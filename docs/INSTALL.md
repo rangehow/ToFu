@@ -827,6 +827,40 @@ The Dockerfile has two non-root final targets. `api` excludes the browser and
 database-server toolchains. `worker` adds Playwright/Chromium; Compose targets
 it because the personal `all` process combines serving and worker features.
 
+### Container base image
+
+Every stage starts from the digest-pinned multi-platform
+`cgr.dev/chainguard/wolfi-base` index and installs Python 3.12 and its OS
+libraries from Wolfi with `apk add`. The runtime stages add only
+`python-3.12`, `ca-certificates-bundle`, `curl` (health check), `tini` and
+`libgcc` (native kernel). The worker installs the Chromium headless shell's
+shared libraries by soname (its ELF `NEEDED` set), `fontconfig-config` and
+`font-noto-cjk`, then runs `playwright install chromium --only-shell`; CI
+launches Chromium in the built worker image. The dependency stage adds
+`python-3.12-dev`, `py3.12-pip`, `build-base` and the checksum-pinned Rust
+toolchain; none of them reaches a runtime image.
+
+Problem: the container gate scans HIGH/CRITICAL OS and library findings with
+`ignore-unfixed: false`. On `python:3.12-slim` (Debian) it failed with about
+200 Debian findings, most marked `affected`/`will_not_fix` with no fixed
+version; a rebuild cannot clear them, so the gate could never pass.
+Decision: Wolfi, a rolling glibc distribution that ships fixes promptly. On
+2026-11-16 Trivy 0.70.0 (`--severity HIGH,CRITICAL --ignore-unfixed=false`)
+reported 107 findings in the previously pinned Debian 13.6 slim base (47
+without a fix), 49 in `python:3.12-slim-trixie` (47 without a fix), 102 in
+`python:3.12-slim-bookworm`, and 0 in `wolfi-base` and in rootfs builds of the
+runtime and worker package sets. The base digest pins the starting layer while
+`apk add` resolves current Wolfi packages, so a rebuild picks up OS fixes the
+same way `apt-get` did; uv.lock still pins Python dependencies.
+Alternatives considered: a newer Debian slim (trixie) cuts packages but
+keeps dozens of unfixed util-linux, ncurses, systemd and SQLite findings;
+`cgr.dev/chainguard/python:latest` is distroless with no package manager, so
+the worker could not add Chromium's libraries, and its free tag tracks the
+newest Python rather than the 3.12 this project builds and tests; hiding
+findings in a `.trivyignore` would make the gate meaningless. Playwright's
+`--with-deps` only drives apt, which is why the worker names Chromium's
+libraries itself.
+
 ## Installation transaction and shared containers
 
 Installation stages a fresh candidate interpreter and configuration. Required

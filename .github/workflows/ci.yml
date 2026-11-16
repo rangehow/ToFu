@@ -432,6 +432,21 @@ jobs:
           "import importlib.util, os;
           assert importlib.util.find_spec('playwright') is not None;
           assert os.path.isdir('/opt/ms-playwright')"
+      # The worker installs Chromium's shared libraries by soname instead of
+      # Playwright's apt-only --with-deps, so prove the browser really starts.
+      - name: Verify worker launches Chromium
+        if: matrix.target == 'worker'
+        run: >-
+          docker run --rm tofu-worker:ci python -c
+          "from playwright.sync_api import sync_playwright;
+          playwright = sync_playwright().start();
+          browser = playwright.chromium.launch();
+          page = browser.new_page();
+          page.set_content('<title>tofu</title><p>Tofu</p>');
+          assert page.title() == 'tofu';
+          assert len(page.screenshot()) > 0;
+          browser.close();
+          playwright.stop()"
       - name: Generate ${{ matrix.target }} CycloneDX SBOM
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:

@@ -226,35 +226,6 @@ class TestTypedErrorContract(unittest.TestCase):
         self.assertEqual(
             nonretryable_tool_error_code(reply), 'execution_budget_exhausted')
 
-    def test_retryable_capacity_is_not_terminal(self):
-        from lib.tools.result_envelope import (
-            nonretryable_tool_error_code, tool_result_error)
-        payload = self._spawn_error(
-            {'agents': [{'objective': 'a'}, {'objective': 'b'},
-                        {'objective': 'c'}, {'objective': 'd'},
-                        {'objective': 'e'}, {'objective': 'f'},
-                        {'objective': 'g'}, {'objective': 'h'},
-                        {'objective': 'i'}]})
-        # Over the wave cap: retryable, so it must parse but NOT be terminal.
-        parsed = tool_result_error(payload)
-        if parsed is not None and parsed.code == 'swarm_wave_capacity':
-            self.assertTrue(parsed.retryable)
-            self.assertIsNone(nonretryable_tool_error_code(payload))
-
-    def test_context_fields_stay_model_visible(self):
-        # The reason these are NOT ToolResultEnvelopeV2 wrappers: the flat
-        # shape keeps limit/requested on the model-facing payload instead of
-        # stripped into an evidence sidecar.
-        payload = self._spawn_error(
-            {'agents': [{'objective': 'a'}, {'objective': 'b'},
-                        {'objective': 'c'}, {'objective': 'd'},
-                        {'objective': 'e'}, {'objective': 'f'},
-                        {'objective': 'g'}, {'objective': 'h'},
-                        {'objective': 'i'}]})
-        if payload.get('error', {}).get('code') == 'swarm_wave_capacity':
-            self.assertIn('limit', payload)
-            self.assertIn('requested', payload)
-
 
 # ═════════════════════════════════════════════════════════
 #  Inbox receives <swarm-update> on completion

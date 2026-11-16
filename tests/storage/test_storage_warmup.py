@@ -49,12 +49,14 @@ class RunWarmupPassTests(unittest.TestCase):
         client = _FakeClient()
         stats = warmup.run_warmup_pass(
             client, deadline_seconds=180.0, budget_seconds=600.0)
+        # Probes run concurrently, so the client sees them in any order.
         operations = [call[0] for call in client.calls]
         self.assertEqual(
-            operations,
-            ['conversation.count', 'conversation.list',
-             'task_results.recovery_pending', 'timer.active.count',
-             'credential.list'])
+            sorted(operations),
+            sorted(['conversation.count', 'conversation.list',
+                    'task_results.recovery_pending', 'timer.active.count',
+                    'credential.list']))
+        payloads = {call[0]: call[1] for call in client.calls}
         self.assertEqual(stats['failed'], [])
         self.assertEqual(stats['skipped'], [])
         self.assertEqual(len(stats['warmed']), len(operations))
@@ -63,12 +65,12 @@ class RunWarmupPassTests(unittest.TestCase):
             self.assertIsInstance(payload, dict)
         # A generic list's limit does not bound full document hydration on
         # every backend. Warm metadata only through the catalog page contract.
-        conversation_payload = client.calls[1][1]
+        conversation_payload = payloads['conversation.list']
         self.assertTrue(conversation_payload['catalog_page'])
         self.assertEqual(conversation_payload['limit'], 1)
         self.assertFalse(conversation_payload['include_messages'])
         self.assertEqual(conversation_payload['settings_keys'], [])
-        credential_payload = client.calls[4][1]
+        credential_payload = payloads['credential.list']
         self.assertGreater(credential_payload['owner_user_id'], 0)
 
     def test_transient_failure_is_fail_soft_per_operation(self):

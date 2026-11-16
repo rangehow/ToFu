@@ -86,15 +86,21 @@ function refreshStatuses(): void {
   const apply = (platform: MessagingPlatform, read: Promise<PlatformSummary>) => {
     void read.then((summary) => { if (current()) setStatus(platform, summary); }, () => undefined);
   };
+  const api = channelsApi();
   void loadServerConfig(session).then((cfg) => {
     if (!cfg || !current()) return;
     const feishu = (cfg.feishu ?? {}) as { connected?: boolean; enabled?: boolean; app_id?: string };
     setStatus('feishu', feishu.connected ? 'connected' : feishu.enabled ? 'attention'
       : feishu.app_id ? 'disabled' : 'notSetUp');
+    // 大象 is an overlay channel (docs/PUBLIC_CORE.md): without its adapter its account cannot be read.
+    const dxInstalled = (cfg.channel_adapters as string[] | undefined ?? []).includes('dx');
+    const dx = section('dx');
+    if (dx) dx.hidden = !dxInstalled;
+    if (api && dxInstalled) {
+      apply('dx', api.dxAccount(signal).then((account) => summarize(account, !!(account.identity || account.loginMis))));
+    }
   });
-  const api = channelsApi();
   if (!api) return;
-  apply('dx', api.dxAccount(signal).then((account) => summarize(account, !!(account.identity || account.loginMis))));
   apply('github', api.githubAccount(signal).then((account) => summarize(account, !!account.credential)));
   for (const platform of ['wecom', 'qq', 'wechat'] as const) {
     apply(platform, api.botAccount(platform, signal).then(

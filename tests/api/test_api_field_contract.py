@@ -212,6 +212,7 @@ _SERVER_CONFIG_SPEC = {
     }],
     'models': 'any',
     'dropdown_models': 'any',
+    'channel_adapters': [str],
     'mcp_tool_summary': {
         'servers': [{'name': str, 'count': int}],
         'total': int,

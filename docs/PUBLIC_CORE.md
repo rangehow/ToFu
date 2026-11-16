@@ -202,7 +202,9 @@ never as literals in the bundle: the 大象 robot card renders the console links
 the dx adapter returns in `ChannelAccountView.robotSetupConsoles`. The 大象
 settings panels themselves still ship in core, generic over the contract's
 `dx` channel id, and without the adapter the account read answers
-`channel_unavailable`. Moving those panels to a plugin-provided settings
+`channel_unavailable`. The server config lists the installed overlay channels
+(`channel_adapters`), and the 消息平台 tab hides the 大象 section and never reads
+its account when `dx` is absent. Moving those panels to a plugin-provided settings
 surface needs a settings slot in the plugin host (increment 10).
 
 ### D6. Versioning and the update channel for colleagues

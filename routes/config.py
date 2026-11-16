@@ -362,11 +362,18 @@ def get_server_config():
         logger.debug('[ServerConfig] feature flags unavailable: %s', e)
         feature_flags = {}
 
+    # Overlay channels (docs/PUBLIC_CORE.md) whose account commands answer
+    # channel_unavailable without their adapter: Settings hides them instead
+    # of reading an account that cannot exist on this server.
+    from lib.channels.adapters import installed_channel_adapters
+    channel_adapters = sorted(installed_channel_adapters())
+
     return api_ok({
         'providers': providers, 'presets': presets,
         'models': models, 'search': search_info,
         'server_info': server_info,
         'feishu': feishu_info,
+        'channel_adapters': channel_adapters,
         'mcp_tool_summary': mcp_tool_summary,
         'feature_flags': feature_flags,
         'dropdown_models': dropdown_models,

@@ -434,16 +434,6 @@
 }
 [data-theme="tofu"] .upd-retry-btn:hover{transform:translate(1px,1px);box-shadow:var(--clay-md);background:#f2ecda}
 /* Version hero — current → latest */
-[data-theme="tofu"] .upd-hero{
-  background:linear-gradient(135deg,#f2ecda,#f5eedd);
-  border:2px solid #3B2E1E;border-radius:var(--radius);box-shadow:var(--clay-sm);
-}
-[data-theme="tofu"] .upd-ver-label{color:#5A4B36}
-[data-theme="tofu"] .upd-ver-num{color:#3B2E1E}
-[data-theme="tofu"] .upd-ver.latest .upd-ver-num{color:#a87d2e}
-[data-theme="tofu"] .upd-hero.up-to-date .upd-ver.latest .upd-ver-num{color:#3B2E1E}
-[data-theme="tofu"] .upd-arrow{border-radius:var(--radius-sm);border:2px solid #3B2E1E;background:#FFFEFA;color:#3B2E1E}
-[data-theme="tofu"] .upd-hero:not(.up-to-date) .upd-arrow{background:#c9993f;color:#FFFDF8;box-shadow:var(--clay-sm)}
 /* Apply / restart action button — tofu block */
 [data-theme="tofu"] .upd-apply-btn{
   background:#c9993f;color:#3B2E1E;border:2px solid #3B2E1E;border-radius:var(--radius-sm);
@@ -585,10 +575,6 @@
    ══════════════════════════════════════════════════════ */
 
 /* ── Overlay — warm tinted fog ── */
-[data-theme="tofu"] .stg-modal-overlay {
-  background: rgba(74, 63, 47, 0.45);
-  backdrop-filter: blur(2px);
-}
 
 /* ── Modal shell — game cartridge card ── */
 [data-theme="tofu"] .stg-modal {

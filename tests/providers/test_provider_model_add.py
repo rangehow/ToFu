@@ -415,10 +415,11 @@ def test_matrix_always_rendered_and_key_input_usable(tmp_path):
 
 
 def test_key_card_layout_stacks_secret_above_stats():
-    css = (
-        ROOT / "frontend" / "src" / "styles" / "application"
-        / "06-file-changes-settings-shell.css"
-    ).read_text(encoding="utf-8")
+    css = "".join(
+        path.read_text(encoding="utf-8") for path in (
+            ROOT / "frontend" / "src" / "styles" / "application" / "06-file-changes-settings-shell.css",
+            ROOT / "frontend" / "src" / "features" / "settings" / "settings-shell.css",
+        ))
     card = css[css.index(".stg-key-card {") : css.index(".stg-key-card:hover {")]
     assert "flex-direction: column" in card
     stats = css[css.index(".stg-key-card-stats {") : css.index(".stg-key-card--blank")]
@@ -797,7 +798,8 @@ def test_matrix_toolbar_static_contract():
     assert "_renderProviderManagerModelRows" not in source
     assert "_stgMatrixOpen" not in source
     assert "stg-v2-model-identity" not in source
-    css = shipped_source_text("frontend/src/styles/settings/07-access-matrix.css")
+    css = (shipped_source_text("frontend/src/styles/settings/07-access-matrix.css")
+           + shipped_source_text("frontend/src/features/settings/access-matrix.css"))
     for rule in (
         ".stg-mx-manage",
         ".stg-matrix .stg-mx-search",
@@ -810,7 +812,7 @@ def test_matrix_toolbar_static_contract():
         ".stg-mx-empty",
     ):
         assert rule in css
-    shared = shipped_source_text("frontend/src/styles/settings/06-model-routing-v2.css")
+    shared = shipped_source_text("frontend/src/features/settings/access-matrix.css")
     assert ".stg-v2-filter-chip" in shared
     assert ".stg-v2-price-tag" in shared
     # Dead manager chrome must not linger in the shipped stylesheets.

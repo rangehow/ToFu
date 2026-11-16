@@ -1,3 +1,4 @@
+import './paper-reader.css';
 import { invokeFeatureEntry, type FeatureCallable } from '../runtime-bridge';
 import { getRuntimeService } from '../runtime/app-runtime.js';
 import { featureRegistry } from '../feature-registry';

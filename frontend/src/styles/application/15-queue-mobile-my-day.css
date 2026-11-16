@@ -778,17 +778,7 @@
   /* Settings panel — stack tabs on top for mobile */
   .settings-panel{width:100%;max-width:100%;max-height:var(--vh100,100dvh);height:var(--vh100,100dvh);box-shadow:none;border-width:0;padding-bottom:env(safe-area-inset-bottom,0px)}
   .settings-body{flex-direction:column}
-  .settings-tabs{flex-direction:row;width:100%;min-width:0;border-right:none;border-bottom:1px solid var(--s-line);padding:var(--space-2);overflow-x:auto;overflow-y:hidden}
-  .settings-tab-group{display:none}
-  .settings-tab{padding:7px 10px;font-size:var(--font-size-xs)}
-  .settings-tab span{display:none}
-  .settings-tab svg{margin:0}
-  .settings-content{padding:var(--space-4)}
-  .settings-panel .theme-picker{grid-template-columns:repeat(3,1fr)}
-    .stg-field-grid{grid-template-columns:1fr}
   .stg-mcard{flex-wrap:wrap;gap:6px}
-    .stg-provider-badges{flex-wrap:wrap}
-  .stg-provider-body textarea{min-height:60px}
   
   /* Project modal — tabbed single-pane layout (one full-height pane at a time) */
   .project-modal{max-width:100%}
@@ -1148,22 +1138,6 @@
   min-height: 0;
 }
 .myday-progress:empty { display: none; }
-.myday-prog-track {
-  flex: 1;
-  height: 14px;
-  background: var(--tf-skin);
-  border: var(--tf-border-sm);
-  box-shadow: var(--tf-shadow-xs);
-  overflow: hidden;
-  position: relative;
-}
-.myday-prog-fill {
-  height: 100%;
-  width: 0;
-  background: var(--tf-done);
-  border-right: 2px solid var(--tf-ink);
-  transition: width 0.5s ease;
-}
 .myday-prog-label {
   font-size: var(--font-size-md);
   font-weight: 800;
@@ -1185,29 +1159,3 @@
 }
 
 /* ── Section labels — stamped ── */
-.myday-section-label {
-  font-size: var(--font-size-xs);
-  font-weight: 900;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--tf-ink-soft);
-  padding: 0 2px;
-  margin: var(--space-5) 0 var(--space-2);
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-.myday-section-label:first-child { margin-top: 0; }
-.myday-section-count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 6px;
-  font-size: var(--font-size-xs);
-  font-weight: 800;
-  background: var(--tf-ink);
-  color: var(--tf-white);
-  border: none;
-}

@@ -168,7 +168,9 @@ def test_template_item_resets_button_ua_leak_and_grid_may_shrink():
     # the wrong font into the menu (reported 2026-09-04 as 「样式好丑」).
     css = _read(os.path.join(
         PROJECT_ROOT, 'frontend', 'src', 'styles', 'application',
-        '06-file-changes-settings-shell.css'))
+        '06-file-changes-settings-shell.css')) + _read(os.path.join(
+        PROJECT_ROOT, 'frontend', 'src', 'features', 'settings',
+        'settings-shell.css'))
     item_block = css.split('.stg-template-item {', 1)[1].split('}', 1)[0]
     for prop in ('background: transparent', 'text-align: left',
                  'font-family: inherit', 'color: inherit'):

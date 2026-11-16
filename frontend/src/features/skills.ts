@@ -1,3 +1,4 @@
+import './skills/skills.css';
 import { invokeFeatureEntry, type FeatureCallable } from '../runtime-bridge';
 import './skills/panel';
 

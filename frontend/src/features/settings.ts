@@ -1,4 +1,7 @@
+import './settings/settings-shell.css';
 import '../styles/settings/settings.generated.css';
+import './settings/access-matrix.css';
+import './settings/mcp.css';
 import { invokeFeatureEntry, type FeatureCallable } from '../runtime-bridge';
 import './settings/devices.css';
 import './settings/tools-inventory.css';
@@ -43,9 +46,6 @@ import './settings/system-prompt-editor';
 import './settings/visibility-defaults';
 import './settings/save-export';
 import './settings/local-deploy';
-import './settings/dx-channel';
-import './settings/github-channel';
-import './settings/bot-channel';
 import './settings/messaging-platforms';
 import './settings/core-panel';
 import './settings/tools-inventory';

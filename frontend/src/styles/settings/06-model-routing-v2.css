@@ -56,20 +56,6 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
 .stg-provider-card-v2 .stg-provider-foot-actions .stg-toggle{padding-top:6px;padding-bottom:0}
 .stg-provider-card-v2 .stg-models-section{margin-top:14px;padding-top:14px;border-top:1px solid var(--s-line,rgba(26,24,20,.08))}
 /* Capability chips — matrix root-row meta line and picker/catalog rows. */
-.stg-provider-card-v2 .stg-cap,.stg-v2-manager .stg-cap{padding:2px var(--space-2);border:0;border-radius:999px;background:rgba(26,24,20,.06);color:var(--s-ink-soft,#3d362c);font-size:10px;font-weight:700;letter-spacing:.03em;text-transform:uppercase}
-.stg-provider-card-v2 .stg-cap.text,.stg-v2-manager .stg-cap.text{color:#2563eb;background:rgba(96,165,250,.14)}
-.stg-provider-card-v2 .stg-cap.vision,.stg-v2-manager .stg-cap.vision{color:#7c3aed;background:rgba(167,139,250,.14)}
-.stg-provider-card-v2 .stg-cap.cheap,.stg-v2-manager .stg-cap.cheap{color:#15803d;background:rgba(74,222,128,.14)}
-.stg-provider-card-v2 .stg-cap.image_gen,.stg-v2-manager .stg-cap.image_gen{color:#db2777;background:rgba(244,114,182,.14)}
-.stg-provider-card-v2 .stg-cap.embedding,.stg-v2-manager .stg-cap.embedding{color:#0d9488;background:rgba(45,212,191,.14)}
-.stg-provider-card-v2 .stg-cap.thinking,.stg-v2-manager .stg-cap.thinking{color:#c2410c;background:rgba(251,146,60,.15)}
-.stg-provider-card-v2 .stg-cap.video,.stg-v2-manager .stg-cap.video{color:#a16207;background:rgba(250,204,21,.16)}
-.stg-provider-card-v2 .stg-cap.audio_chat,.stg-v2-manager .stg-cap.audio_chat{color:#0369a1;background:rgba(56,189,248,.14)}
-.stg-provider-card-v2 .stg-cap.video_gen,.stg-v2-manager .stg-cap.video_gen{color:#9333ea;background:rgba(192,132,252,.15)}
-.stg-provider-card-v2 .stg-cap.audio_gen,.stg-v2-manager .stg-cap.audio_gen{color:#b45309;background:rgba(251,191,36,.16)}
-.stg-provider-card-v2 .stg-cap.tts,.stg-v2-manager .stg-cap.tts{color:#0e7490;background:rgba(34,211,238,.13)}
-.stg-provider-card-v2 .stg-cap.transcription,.stg-v2-manager .stg-cap.transcription{color:#4338ca;background:rgba(129,140,248,.14)}
-.stg-provider-card-v2 .stg-cap.reranking,.stg-v2-manager .stg-cap.reranking{color:#4d7c0f;background:rgba(163,230,53,.16)}
 
 .stg-v2-close{border:1px solid var(--border,#ddd);background:var(--bg-primary,#fff);color:var(--text-primary,#222);font:600 12px/1.2 inherit;cursor:pointer}
 .stg-v2-close:focus-visible{outline:2px solid var(--accent,#6d5dfc);outline-offset:2px}
@@ -96,18 +82,8 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
 .stg-v2-catalog-icon{display:grid;place-items:center}
 
 /* ── 结构化价格件（矩阵根行 meta / catalog 行共用）── */
-.stg-v2-price-cur{margin-right:5px;font-weight:700}
-.stg-v2-price-io{margin-right:2px;color:var(--s-gold-dim,#a87d2e);font-size:9px;font-weight:800}
-.stg-v2-price-sep{margin:0 var(--space-1);opacity:.45}
-.stg-v2-price-tag{margin-left:6px;padding:0 5px;border-radius:4px;background:rgba(201,153,63,.13);color:var(--s-gold-dim,#a87d2e);font-size:9px;font-weight:800;white-space:nowrap}
 
 /* ── 状态过滤 chips（矩阵 manage row 的全部/已启用/已停用/待确认）── */
-.stg-v2-filter-chip{display:inline-flex;align-items:center;gap:5px;padding:var(--space-1) 11px;border:1px solid var(--s-line-strong,rgba(26,24,20,.15));border-radius:999px;background:var(--s-white,#faf8f3);color:var(--s-ink-soft,#3d362c);font-size:var(--font-size-xs);font-weight:700;cursor:pointer;transition:border-color .14s,background .14s,color .14s}
-.stg-v2-filter-chip em{color:var(--text-muted,#777);font-size:10px;font-style:normal;font-weight:800}
-.stg-v2-filter-chip:hover{border-color:var(--s-gold-dim,#a87d2e);color:var(--s-gold-dim,#a87d2e)}
-.stg-v2-filter-chip.active{border-color:var(--s-gold,#c9993f);background:var(--s-gold-glow,rgba(201,153,63,.14));color:var(--s-ink,#1a1814)}
-.stg-v2-filter-chip.active em{color:var(--s-gold-dim,#a87d2e)}
-.stg-v2-filter-chip:focus-visible{outline:2px solid var(--s-gold,#c9993f);outline-offset:2px}
 
 .stg-tpl-wizard{width:min(720px,94vw)}
 .stg-tpl-wizard .stg-modal-body{display:grid;gap:var(--space-3)}

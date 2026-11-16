@@ -86,72 +86,10 @@
 }
 
 /* ── Add / discover buttons ── */
-.stg-btn-add {
-  background: none;
-  border: 1px dashed rgba(26, 24, 20, 0.3);
-  color: var(--s-ink-soft);
-  font-size: var(--font-size-xs);
-  font-weight: 700;
-  padding: 6px var(--space-3);
-  border-radius: 8px;
-  cursor: pointer;
-  transition: border-color 0.15s, color 0.15s, background 0.15s;
-}
-.stg-btn-add:hover {
-  color: var(--s-gold-dim);
-  border-color: var(--s-gold-dim);
-  background: rgba(201, 153, 63, 0.07);
-}
-.stg-btn-add:disabled { opacity: 0.4; cursor: wait; }
-.stg-btn-ico {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-.stg-btn-ico svg { flex: none; }
 
 /* ══════════════════════════════════════
    Auto Setup Modal
    ══════════════════════════════════════ */
-.stg-modal-overlay {
-  /* ── Design tokens (duplicated from .settings-panel so the modal,
-       which is appended to <body>, inherits them correctly) ── */
-  --s-white:     #faf8f3;
-  --s-cream:     #f2ecda;
-  --s-skin:      #e4d6bf;
-  --s-board:     #35302a;
-  --s-board-lit: #443c32;
-  --s-gold:      #c9993f;
-  --s-gold-dim:  #a87d2e;
-  --s-gold-glow: rgba(201,153,63,0.18);
-  --s-ink:       #1a1814;
-  --s-ink-soft:  #3d362c;
-  --s-done:      #4ade80;
-  --s-blocked:   #f87171;
-  --s-accent:    #6366f1;
-  --s-danger:    #dc2626;
-  --s-line:        rgba(26, 24, 20, 0.08);
-  --s-line-strong: rgba(26, 24, 20, 0.15);
-  --s-shadow:    0 4px 10px rgba(26, 24, 20, 0.06), 0 18px 44px rgba(26, 24, 20, 0.14);
-  --s-shadow-md: 0 2px 4px rgba(26, 24, 20, 0.05), 0 8px 22px rgba(26, 24, 20, 0.10);
-  --s-shadow-sm: 0 1px 2px rgba(26, 24, 20, 0.04), 0 3px 8px rgba(26, 24, 20, 0.06);
-  --s-shadow-xs: 0 1px 2px rgba(26, 24, 20, 0.05);
-  --s-border:    1px solid var(--s-line-strong);
-  --s-border-sm: 1px solid var(--s-line);
-  --s-radius:    9px;
-  --s-radius-sm: 6px;
-  --s-radius-lg: 14px;
-
-  position: fixed;
-  top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
-  z-index: 10000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  animation: stgFadeIn 0.15s ease;
-  font-family: 'Inter', 'SF Pro', -apple-system, system-ui, sans-serif;
-}
 @keyframes stgFadeIn { from { opacity: 0; } to { opacity: 1; } }
 .stg-modal {
   background: var(--s-white);
@@ -382,43 +320,10 @@
    ══════════════════════════════════════ */
 
 /* ── Server Info — tofu info rows ── */
-.stg-info-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: var(--space-2) 0;
-  font-size: var(--font-size-sm);
-  border-bottom: 1px dashed rgba(26, 24, 20, 0.1);
-}
-.stg-info-row:last-child { border-bottom: none; }
-.stg-info-label { color: var(--s-ink-soft); font-weight: 700; }
-.stg-info-value {
-  color: var(--s-ink);
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 11.5px;
-  font-weight: 600;
-}
 
 /* API keys stats */
 
 /* Server info */
-.settings-server-info { display: flex; flex-direction: column; gap: 0; }
-.settings-info-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: var(--space-2) 0;
-  font-size: var(--font-size-sm);
-  border-bottom: 1px dashed rgba(26, 24, 20, 0.1);
-}
-.settings-info-row:last-child { border-bottom: none; }
-.settings-info-label { color: var(--s-ink-soft); font-weight: 700; }
-.settings-info-value {
-  color: var(--s-ink);
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 11.5px;
-  font-weight: 600;
-}
 @keyframes mcp-reconnect-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.55; }
@@ -449,7 +354,6 @@
   white-space: nowrap;
 }
 .settings-footer-actions { display: flex; gap: var(--space-2); flex-shrink: 0; align-items: center; }
-.settings-version { font-size: 10px; color: var(--s-ink-soft); opacity: 0.5; margin-right: var(--space-1); font-family: 'SF Mono', 'Consolas', monospace; letter-spacing: 0.02em; }
 
 .settings-footer-actions .btn { min-width: 88px; box-sizing: border-box; text-align: center; }
 
@@ -572,20 +476,6 @@
   border: 1px solid rgba(26, 24, 20, 0.28);
   box-shadow: 0 1px 3px rgba(26, 24, 20, 0.28);
   cursor: pointer;
-}
-.settings-panel .range-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  margin-bottom: var(--space-3);
-}
-.settings-panel .range-value {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: var(--font-size-md);
-  font-weight: 800;
-  color: var(--s-ink);
-  min-width: 48px;
-  text-align: right;
 }
 .settings-panel h3 {
   color: var(--s-ink);

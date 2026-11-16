@@ -273,7 +273,6 @@ html[data-rail] .folder-quickadd{display:none}
 .conv-summary-badge:hover{opacity:1;color:var(--accent,#6ea8fe)}
 /* Embedded memory list inside the Memory & Preferences settings tab — slightly
  * tighter than the modal, with a soft cap + scroll so it never dominates. */
-.memory-list-embedded{margin-top:var(--space-2);max-height:340px;overflow-y:auto}
 .settings-section-divider{height:1px;background:var(--border,rgba(255,255,255,.08));margin:18px 0 14px}
 /* A foreground tag and the background tag can share the date line: wrap, never overflow a narrow sidebar. */
 .conv-item .conv-date{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-1);margin-top:3px}

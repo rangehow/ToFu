@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "artifacts": {
+    "tofu_search": {
+      "version": "0.12.28",
+      "filename": "tofu_search-0.12.28-py3-none-any.whl",
+      "sha256": "e950b9cfc60678fc825877408c7f522f03e690cd3e79f1c3867760292833c58e"
+    }
+  },
+  "tofu_version": "0.19.2"
+}

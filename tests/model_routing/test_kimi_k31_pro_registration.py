@@ -92,7 +92,7 @@ def test_output_ceiling_is_the_official_k31_pro_limit(model):
     assert _clamp_max_tokens('kimi-k3', 128_000) == 32_768
 
 
-# Live-verified on the example-corp gateway, both faces, 2026-10-27.
+# Live-verified on the sankuai gateway, both faces, 2026-10-27.
 @pytest.mark.parametrize(('depth', 'effort'), [
     ('off', 'low'), ('low', 'low'), ('medium', 'high'), ('high', 'high'),
     ('xhigh', 'max'), ('max', 'max'), ('default', 'max'),

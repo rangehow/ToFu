@@ -105,19 +105,22 @@ function snap(actor: Actor, place: Place) {
   if (place.kind === 'outside') actor.gone = true;
 }
 
-/** Sends the actor on its way to where it should rest now. */
+/** Sends the actor on its way to where it should rest now. A fade happens where the actor is: one fading out
+ * keeps walking while it fades, and one visible somewhere else walks to the place instead of jumping there. */
 function travel(actor: Actor, layout: OfficeLayout, transition: Transition) {
   const place = placeFor(actor, actor.rest);
-  if (transition !== 'walk') {
-    if (actor.rest.kind === 'gone') {
-      if (transition === 'instant') snap(actor, OUTSIDE);
-      else { if (actor.walk) snap(actor, actor.walk.to); actor.fadeTo = 0; }
+  if (transition === 'instant') {
+    snap(actor, place);
+    actor.alpha = actor.fadeTo = actor.rest.kind === 'gone' ? 0 : 1;
+    return;
+  }
+  if (transition === 'fade') {
+    if (actor.rest.kind === 'gone') { actor.fadeTo = 0; return; }
+    if (actor.alpha === 0 || (!actor.walk && actor.at !== null && samePlace(actor.at, place))) {
+      snap(actor, place);
+      actor.fadeTo = 1;
       return;
     }
-    snap(actor, place);
-    actor.fadeTo = 1;
-    if (transition === 'instant') actor.alpha = 1;
-    return;
   }
   actor.fadeTo = 1;
   if (!actor.walk && actor.at && samePlace(actor.at, place)) return;

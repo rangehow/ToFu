@@ -6460,7 +6460,6 @@
   "world.team.board": "작업 {done}/{total}개 완료",
   "world.team.routine": "{count}명 대기",
   "world.team.routineMore": "{count}명 이상 대기",
-  "world.team.routineTitle": "최근 팀원 중 대기 또는 완료: {count}명",
   "world.loading.title": "오피스 준비 중…",
   "world.loading.progress": "{done}/{total}개 준비됨",
   "world.doc.deliverable": "전달",

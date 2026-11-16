@@ -300,9 +300,12 @@ export function createWorldScene(ports: WorldScenePorts) {
       }
       const shelf = shelfSlots(layout.owner.shelf);
       const trophies = office.trophies.length > shelf.length ? office.trophies.slice(0, shelf.length - 1) : office.trophies;
+      // The shelf's last trophy also tells how many more the "+N" stands for.
+      const more = office.trophies.length - trophies.length;
       trophies.forEach((trophy, index) => {
+        const detail = more && index === trophies.length - 1 ? `${text.trophyDetail} · ${text.trophyMore(more)}` : text.trophyDetail;
         next.push({ id: trophy.id, kind: 'extra', x: shelf[index].x, y: shelf[index].y, w: TROPHY_W, h: TROPHY_H,
-          label: text.trophy(trophy.title), detail: text.trophyDetail, data: { extra: trophy.id } });
+          label: `${text.trophy(trophy.title)} · ${detail}`, detail, data: { extra: trophy.id } });
       });
     }
     hits = next;

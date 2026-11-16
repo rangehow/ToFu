@@ -108,6 +108,24 @@ describe('office actors', () => {
     expect(actorPose(actor, layout, 0, false)!.kind).toBe('seated');
   });
 
+  it('fades only where a person is: a walker fades out walking, a visible person walks rather than jump', () => {
+    const walker = createActor(person('w9'), desk(9), { kind: 'seat' }, layout, 'walk');
+    for (let index = 0; index < 120; index += 1) stepActor(walker, STEP, layout);
+    const here = actorPose(walker, layout, 0, false)!;
+    setRest(walker, { kind: 'gone' }, layout, 'fade');
+    stepActor(walker, STEP, layout);
+    const next = actorPose(walker, layout, 0, false)!;
+    expect(Math.hypot(next.x - here.x, next.y - here.y)).toBeLessThanOrEqual((WALK_SPEED * STEP) / 1000 + 1e-6);
+    play(walker);
+    expect(walker.gone).toBe(true);
+    const waiting: Person = { ...person('lead-2'), role: 'lead', emphasis: 'decision' };
+    const lead = createActor(waiting, { kind: 'seat', zone: '/tofu', slot: LEAD_SLOT }, { kind: 'spot', index: 1 }, layout, 'instant');
+    setRest(lead, { kind: 'seat' }, layout, 'fade');
+    expect(lead.walk).not.toBeNull();
+    play(lead);
+    expect(actorPose(lead, layout, 0, false)!.kind).toBe('seated');
+  });
+
   it('settles everything at once under reduced motion', () => {
     const walking = createActor(person('w7'), desk(7), { kind: 'seat' }, layout, 'walk');
     settleActor(walking);

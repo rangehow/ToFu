@@ -6460,7 +6460,6 @@
   "world.team.board": "{done}/{total} Aufgaben erledigt",
   "world.team.routine": "{count} frei",
   "world.team.routineMore": "{count}+ frei",
-  "world.team.routineTitle": "Kürzlich aktive Teammitglieder, die frei oder fertig sind: {count}",
   "world.loading.title": "Büro wird eingerichtet…",
   "world.loading.progress": "{done} von {total} bereit",
   "world.doc.deliverable": "Übergabe",

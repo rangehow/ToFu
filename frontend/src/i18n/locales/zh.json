@@ -6460,7 +6460,6 @@
   "world.team.board": "已完成 {done}/{total} 项任务",
   "world.team.routine": "{count} 人空闲",
   "world.team.routineMore": "{count}+ 人空闲",
-  "world.team.routineTitle": "最近有 {count} 位成员空闲或已完成",
   "world.loading.title": "正在布置办公室…",
   "world.loading.progress": "{done}/{total} 项已就绪",
   "world.doc.deliverable": "交付",

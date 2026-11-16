@@ -5,6 +5,7 @@ failure budget. This owner reconciles execution lifetime and projects readiness;
 task claims remain in storage and the manager retains the one recovery record.
 """
 import json
+import os
 from pathlib import Path
 import tempfile
 import sys
@@ -35,11 +36,24 @@ class ExecutionService(ResidentService):
                 and (environment.get('TOFU_PROCESS_ROLE') or 'all').strip().lower() == 'all'
                 and environment.get('TOFUDB_TRANSPORT', '').strip().lower() != 'embedded')
 
+    def launch_python(self, plan: dict) -> str:
+        # Once prepared, a marker edit cannot change the admitted interpreter.
+        return plan.get('python') or self.python
+
+    def _preparation_python(self) -> str:
+        try:
+            marker = json.loads((self.project / '.tofu_env.json').read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return self.python
+        candidate = marker.get('python') if isinstance(marker, dict) else None
+        return candidate if isinstance(candidate, str) and candidate and os.access(
+            candidate, os.X_OK) else self.python
+
     def prepare(self, environment: dict[str, str]) -> dict:
         from serverctl_pkg.native_engine import _run
         with tempfile.TemporaryDirectory(prefix='tofu-execution-plan-') as directory:
             result = Path(directory) / 'plan.json'
-            _run([self.python, '-m', HOST_MODULE, '--plan', '--plan-output', str(result)],
+            _run([self._preparation_python(), '-m', HOST_MODULE, '--plan', '--plan-output', str(result)],
                  cwd=self.project, environment=self.process_environment(environment),
                  timeout=NATIVE_SERVICE_PREPARATION_SECONDS,
                  failure_subject='Execution service preparation')
@@ -96,7 +110,10 @@ class ExecutionService(ResidentService):
                 and record.get('failureKind') == SOURCE_CHANGED_BEFORE_BOOT
                 and source_only_change(original, plan))
             if original != plan and not unentered_source_change:
-                raise RuntimeError('execution configuration or code changed; explicit restart required')
+                changed = sorted(key for key in original.keys() | plan.keys()
+                                 if key not in original or key not in plan or original[key] != plan[key])
+                raise RuntimeError('execution configuration or code changed; explicit restart required'
+                                   f' (changed fields: {", ".join(changed)})')
             if unentered_source_change:
                 validate_source_refresh()
             self.stop()

@@ -37,10 +37,8 @@ def boot_status():
 
     from lib.api_response import api_ok
 
-    runner = current_app.extensions.get("tofu_boot_runner")
-    if runner is None:
-        return api_ok({"status": "ready", "phases": []})
-    return api_ok(runner.snapshot())
+    from lib.server.server_boot_readiness import application_boot_snapshot
+    return api_ok(application_boot_snapshot(current_app))
 
 
 @api_v4_bp.route("/api/v4/boot/retry", methods=["POST"])

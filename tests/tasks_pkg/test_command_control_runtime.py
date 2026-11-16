@@ -200,3 +200,15 @@ def test_local_activity_lists_only_running_commands(monkeypatch):
         'swarms': [{'swarm_id': 'run'}], 'backgroundCommands': [{'command_id': 'live', 'status': 'running'}]}
     with pytest.raises(ValueError):
         apply_command_control('background_activity', 'task', user_id=41)
+
+
+def test_execution_readiness_uses_verified_owner_without_sending_commands(monkeypatch):
+    from lib.tasks_pkg import command_control_runtime as module
+    monkeypatch.setattr(module, 'call', lambda *a, **k: pytest.fail('readiness sent a command'))
+    assert module.CommandControls().readiness_error() == ''
+    service = _ready_service({'serviceId': 'current'})
+    assert module.CommandControls(service=service).readiness_error() == ''
+    dead = SimpleNamespace(record=service.record, host_matches=lambda record: False)
+    assert 'execution' in module.CommandControls(service=dead).readiness_error().lower()
+    wrong = _ready_service({'serviceId': 'previous'})
+    assert module.CommandControls(service=wrong).readiness_error()

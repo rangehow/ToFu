@@ -85,6 +85,22 @@ class SanitizeTriggerCompletenessTest(unittest.TestCase):
             self.assertIn(replacement, out,
                           f'replacement {replacement!r} not present after scrub of {ident!r}')
 
+    def test_brand_only_file_gets_the_same_rename_as_its_callers(self):
+        """A file naming the provider brand and no other trigger is still
+        opened: otherwise it keeps the brand while renamed callers (its tests)
+        ask for the replacement key."""
+        import tempfile
+        from pathlib import Path
+        from export_pkg._sanitize import (
+            _collect_opensource_candidates, _sanitize_source_opensource)
+        brand = 'mei' + 'tuan'
+        with tempfile.TemporaryDirectory() as root:
+            registry = Path(root) / 'model-group.ts'
+            registry.write_text(f'export const NAMES = {{ {brand}: 1 }};\n')
+            self.assertIn('model-group.ts', _collect_opensource_candidates(Path(root)))
+        renamed = _sanitize_source_opensource(f'{brand}: 1', 'frontend/src/core/model-group.ts')
+        self.assertNotIn(brand, renamed)
+
     def test_scrub_and_trigger_share_one_source(self):
         """Structural: the scrub and trigger paths draw the plain-substring
         identifiers from the SAME tuple, so they cannot drift. Verified by

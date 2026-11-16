@@ -73,6 +73,7 @@ _EXTRA_KEEPERS = {
     'tests/evaluations/test_yourprovider_sandbox_score.py',
     'tests/evaluations/test_owner_memory_benchmark.py',
     'tests/deploy/test_migrate_host.py',
+    'tests/deploy/test_verify_checkout_view.py',
     # Verifies the internal-only bundles/yourprovider/skills source, absent publicly.
     'tests/skills/test_internal_platform_bundle.py',
     # Portable diagnostic dependencies are owned by the public keep-list;
@@ -137,6 +138,7 @@ _EXTRA_KEEPERS = {
     'scripts/benchmark_verification.py',
     'scripts/lane.py',
     'scripts/migrate_host.py',  # names this site's proxy hosts; private with its test
+    'scripts/verify_checkout_view.py',  # host-move FUSE checkout audit; private with its test
     'scripts/inspect_context.py',
     'scripts/gen_command_control.py',
     # It path-loads scripts/lane.py above, a shared-checkout development

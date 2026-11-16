@@ -237,3 +237,11 @@ def test_public_settings_remove_only_the_maintainer_range_helper():
         '  _syncRangeOutput,\n  initSidebarSearch,\n',
         'frontend/src/runtime/sections/_epilogue.js')
     assert epilogue == '  initSidebarSearch,\n'
+
+
+def test_the_export_stamps_the_mascot_token_and_its_static_tags_alike():
+    """index.html's ?v= mascot tags must equal brand_logo.js LOGO_VER after export."""
+    logo = _sanitize('frontend/src/runtime/sections/core/brand_logo.js')
+    html = _sanitize('index.html')
+    assert re.findall(r"var LOGO_VER = '([^']+)';", logo) == ['0.5.0']
+    assert set(re.findall(r'\?v=([^"\'&\s]+)', html)) <= {'0.5.0'}

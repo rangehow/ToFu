@@ -213,3 +213,49 @@ def test_an_accepted_delivery_held_by_an_outage_publishes_on_the_next_tick_witho
     assert delivery.resume_due_workspace_deliveries()
     assert receipt(root)['state'] == 'delivered'
     assert (root / 'allowed/result.txt').read_text() == 'reviewable result\n'
+
+
+@pytest.mark.parametrize('revoked_after_accept', [False, True], ids=['accepted', 'revoked-after-accept'])
+def test_a_hold_decided_before_the_accept_is_never_reported_as_held_after_it(
+        repo, monkeypatch, revoked_after_accept):
+    """2026-11-17: three accepts in a row first polled as held, then delivered by themselves.
+
+    The receiver held each completed delivery as awaiting review seconds before
+    the Coordinator accepted it. ``review_for_coordinator`` commits the pin, then
+    releases that hold in a second write; a poll issued beside the review read
+    the pin with the earlier hold, settled as ``held`` and asked the Coordinator
+    to act on ``project_publication_authority_missing``. A revocation after the
+    accept is a real verdict and still holds.
+    """
+    from lib.project_dispatch.continuation import worker_phase
+    from tests.project_mod.test_project_publication import AssignmentDecidedRepository
+    root, _, _ = repo
+    authority = AssignmentDecidedRepository(root)
+    monkeypatch.setattr(admission, 'repository_for', lambda binding: authority)
+    monkeypatch.setattr(publication, '_ASSIGNMENT_DECIDED', {})
+    monkeypatch.setenv('TOFU_INTEGRATION_WORKSPACE_DIR', str(root.parent / 'managed'))
+    monkeypatch.setattr(ic, '_gate_commands', lambda *a, **k: (True, 'offline gate'))
+    work = workspace(repo, authority)
+    (work / 'allowed').mkdir()
+    (work / 'allowed/result.txt').write_text('reviewable result\n')
+    assert automatic_settle(repo)['reason'] == AUTHORITY_MISSING  # Completed, not reviewed yet.
+    delivery.resume_pending_workspace_deliveries()
+    assert publication.awaits_assignment(state.get_workspace(str(root), 'automatic', user_id=1))
+
+    # The review's first write: the accept and its pin. The hold release has not run.
+    authority.publish()
+    if revoked_after_accept:
+        authority.assignment['grant']['revoked'] = True
+    assert receipt(root)['reason'] == AUTHORITY_MISSING
+    view = publication.delivery_view(authority.assignment, authority.attempt, state.get_workspace)
+    summary = {'status': 'completed', 'review': authority.assignment['review'], 'delivery': view}
+    if revoked_after_accept:
+        assert (view['status'], view['reason']) == ('blocked', AUTHORITY_MISSING)
+        assert worker_phase(summary) == 'held'
+        return
+    assert view['status'] == 'pending'
+    assert worker_phase(summary) == 'delivering'
+    # The receiver, not a release, delivers it: nothing else acts on the assignment.
+    delivery.resume_pending_workspace_deliveries()
+    assert receipt(root)['state'] == 'delivered'
+    assert (root / 'allowed/result.txt').read_text() == 'reviewable result\n'

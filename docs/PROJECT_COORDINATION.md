@@ -5027,6 +5027,23 @@ field and a write per cause change, only to deduplicate a log line). Specs:
 `test_publication_pin_retires_the_stale_hold_without_publishing` and the pin
 and cause cases in `test_coordinator_publication_recovery.py`.
 
+Problem (pin before release): the pin and the release are two writes. A poll
+issued in the same tool batch as the accept (2026-11-17: 8cc1d672, 9b1975d4 and
+0b0efeb3, each polled within 0.4-2.4 s of its review) read the committed pin with
+the receipt the receiver held as awaiting review seconds earlier, settled as
+`held` with `project_publication_authority_missing`, and asked the Coordinator to
+act; the next poll found it delivered. A receiver pass that read the assignment
+before the pin can also rewrite that hold after the release. Decision:
+`delivery_view` reruns the same live fence, ignoring the remembered refusal, for
+a blocked `project_publication_authority_missing` receipt whose assignment read
+holds a pin; a cleared fence projects `pending`, a live refusal (a revocation
+after the accept) stays `blocked`. The fence then forgets the stale refusal, so
+the receiver's next pass delivers even when the release lost the race.
+Alternatives rejected: taking the repository lock in every settlement read (a
+poll would wait behind delivery Git work), and the pin-time comparison above.
+Spec: `test_a_hold_decided_before_the_accept_is_never_reported_as_held_after_it`
+in `test_publication_hold_causes.py`.
+
 Problem (duplicated content): overlapping Worker chains re-carry commits already
 delivered under other SHAs. `git apply --3way` cannot merge a creation patch
 onto an existing path ("does not match index"), so a byte-identical file already

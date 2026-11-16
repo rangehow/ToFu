@@ -115,8 +115,13 @@ def publication_reason(row: Mapping, receipt: Mapping) -> str:
     return reason
 
 
-def _publication_verdict(row: Mapping, receipt: Mapping) -> tuple[str, Exception | None]:
-    """The reason, and the failure behind a fail-closed one that the reason hides."""
+def _publication_verdict(row: Mapping, receipt: Mapping, *,
+                         afresh: bool = False) -> tuple[str, Exception | None]:
+    """The reason, and the failure behind a fail-closed one that the reason hides.
+
+    ``afresh`` ignores a remembered assignment refusal: the caller saw the
+    assignment commit that may lift it.
+    """
     origin = row.get('origin') or {}
     if admission.KEY not in origin:
         return '', None
@@ -126,7 +131,7 @@ def _publication_verdict(row: Mapping, receipt: Mapping) -> tuple[str, Exception
         if _identity_changed(row, binding):
             return 'project_publication_identity_changed', None
         # Only the assignment read is remembered; identity is decided above every time.
-        remembered = _ASSIGNMENT_DECIDED.get(_row_key(row))
+        remembered = None if afresh else _ASSIGNMENT_DECIDED.get(_row_key(row))
         if remembered is not None and remembered[0] == fingerprint:
             return remembered[1], remembered[2]
         _ASSIGNMENT_DECIDED.pop(_row_key(row), None)
@@ -393,6 +398,13 @@ def delivery_view(assignment: Mapping, attempt: Mapping | None, workspace_get) -
         elif status == 'blocked' and reason == CHECK_UNAVAILABLE:
             # The receiver publishes once the read answers; nothing to act on.
             status = 'pending'
+        elif (status == 'blocked' and reason == 'project_publication_authority_missing'
+              and assignment.get('publication')
+              and not _publication_verdict(row, receipt, afresh=True)[0]):
+            # A hold decided before the accept's pin, which this assignment read
+            # already holds: the review releases it in a later write, else the
+            # receiver's next pass delivers. Only a live refusal is held.
+            status, reason = 'pending', ''
         return {'taskId': task_id, 'status': status[:64], 'reason': reason[:1024],
                 'checkpointSha': str(receipt.get('checkpointSha') or row.get('checkpoint_sha') or '')[:256],
                 'targetSha': str(receipt.get('targetSha') or '')[:256]}

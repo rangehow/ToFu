@@ -1,6 +1,7 @@
 """The default development entrypoint verifies frozen changes through one engine."""
 from pathlib import Path
 import os
+import shlex
 import subprocess
 import sys
 
@@ -118,7 +119,10 @@ def test_make_default_and_explicit_scopes_use_the_verification_engine(shared):
     write(shared, 'scripts/verify.py', (ROOT / 'scripts/verify.py').read_text())
     python = shared / '.venv/bin/python3'
     python.parent.mkdir(parents=True)
-    python.symlink_to(sys.executable)
+    # A symlink would start the interpreter outside its virtual environment
+    # (no pyvenv.cfg beside the link), losing pytest when the base has none.
+    python.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
+    python.chmod(0o755)
     commit(shared, 'entrypoints')
     empty = _make(shared, 'test')
     assert empty.returncode == 0 and 'Verification unchanged:' in empty.stdout, empty.stdout + empty.stderr

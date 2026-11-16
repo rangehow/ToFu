@@ -286,10 +286,10 @@ import {
 } from '../conversation/ui/human-guidance-actions';
 import { isBootSendBlocked, setBootSendBlocked, subscribeBootReadiness } from '../boot-readiness';
 import { updateComposerSendControls } from '../conversation/ui/composer-send-controls';
-import {
-  openTurnInlineEditor,
-  reconcileTurnInlineEditors,
-} from '../conversation/ui/turn-inline-editor';
+// The inline turn editor loads on the first edit; until then no editor exists to reconcile.
+let turnInlineEditorModule = null;
+const loadTurnInlineEditor = async () => (
+  turnInlineEditorModule ??= await import('../conversation/ui/turn-inline-editor'));
 
 import { presentConversationActivity } from '../conversation/presentation/conversation-activity';
 import { createConversationReviewTracker, isReviewedReply } from '../conversation-review';
@@ -13833,6 +13833,10 @@ async function _durableEditedImages(images) {
 }
 
 async function _editNativeTurn(conv, turnId) {
+  const inlineEditor = await loadTurnInlineEditor().catch((error) => {
+    console.warn('[TurnEdit] inline editor unavailable:', error);
+    return null;
+  });
   const resolved = _nativeTurnState(conv, turnId);
   if (!resolved) return;
   const projection = resolved.turn.projection || {};
@@ -13843,8 +13847,8 @@ async function _editNativeTurn(conv, turnId) {
     projection.images?.length || projection.videos?.length
       || projection.pdfTexts?.length || projection.attachments?.length,
   );
-  if (typeof openTurnInlineEditor === 'function') {
-    const session = openTurnInlineEditor({
+  if (inlineEditor) {
+    const session = inlineEditor.openTurnInlineEditor({
       conversationId: conv.id,
       turnId,
       text: currentText,
@@ -15094,9 +15098,7 @@ const _conversationSurfaceController = createConversationSurfaceController({
     _updateScrollToBottomBtn();
     if (typeof buildTurnNav === 'function') buildTurnNav(conv);
     if (typeof _cvRefreshContextGauge === 'function') _cvRefreshContextGauge();
-    if (typeof reconcileTurnInlineEditors === 'function') {
-      reconcileTurnInlineEditors();
-    }
+    turnInlineEditorModule?.reconcileTurnInlineEditors();
   },
 });
 

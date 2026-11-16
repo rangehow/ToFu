@@ -1085,7 +1085,13 @@ requesting the application preserves the waterfall. Tests: `main.test.ts`,
   example `features/settings/settings-shell.css`, `features/myday-panel.css`,
   `features/paper/preview-*.css`); `frontend/src/styles/application/` holds
   only startup-composed sections. Rules move with an owner only when every
-  class they name is rendered by that owner alone.
+  class they name is rendered by that owner alone. The Paper podcast/video
+  studio rules ride `features/paper-reader.css` with `paper-media-presenters`.
+- Startup code that only a user action or a later read needs is imported on
+  that demand: the inline turn editor loads on the first Edit
+  (`_editNativeTurn`; reconciliation runs only once it exists), and the Global
+  Router's Worker-model and standing-instruction settings load when a read
+  binds the router, since its header shows only then.
 - Product copy uses the generated `I18nKey`/`Translator` contract. The source
   locales named by `frontend/src/i18n/languages.json` (zh, en) are the only key
   and placeholder authority; feature-local string-key translator interfaces

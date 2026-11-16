@@ -286,10 +286,10 @@ import {
 } from '../conversation/ui/human-guidance-actions';
 import { isBootSendBlocked, setBootSendBlocked, subscribeBootReadiness } from '../boot-readiness';
 import { updateComposerSendControls } from '../conversation/ui/composer-send-controls';
-import {
-  openTurnInlineEditor,
-  reconcileTurnInlineEditors,
-} from '../conversation/ui/turn-inline-editor';
+// The inline turn editor loads on the first edit; until then no editor exists to reconcile.
+let turnInlineEditorModule = null;
+const loadTurnInlineEditor = async () => (
+  turnInlineEditorModule ??= await import('../conversation/ui/turn-inline-editor'));
 
 import { presentConversationActivity } from '../conversation/presentation/conversation-activity';
 import { createConversationReviewTracker, isReviewedReply } from '../conversation-review';

@@ -327,6 +327,34 @@ def patch_server(name: str, changes: dict[str, Any], *, user_id) -> dict[str, MC
     return config
 
 
+def merge_server_env(name: str, values: dict[str, str], *, user_id) -> dict[str, Any] | None:
+    """Atomically set ``values`` in one existing server row's ``env``.
+
+    The row is re-read inside the locked transaction, so a concurrent edit to
+    its other env keys or fields survives (``patch_server`` would replace the
+    whole ``env``). Returns the resulting row, or ``None`` when the row does
+    not exist; an unchanged row is not rewritten.
+    """
+    outcome: dict[str, Any] = {'row': None}
+
+    def _merge(config):
+        current = config.get(name)
+        if not isinstance(current, dict):
+            return None
+        env = current.get('env') if isinstance(current.get('env'), dict) else {}
+        updated = copy.deepcopy(current)
+        updated['env'] = {**env, **values}
+        outcome['row'] = copy.deepcopy(updated)
+        if updated['env'] == env:
+            return None
+        config[name] = updated
+        return config
+
+    if _locked_config_update(_merge, user_id=user_id) is not None:
+        logger.info('[MCP:Config] Set env %s on server %r', sorted(values), name)
+    return outcome['row']
+
+
 def remove_server(name: str, *, user_id) -> dict[str, MCPServerConfig]:
     """Remove a MCP server config.
 

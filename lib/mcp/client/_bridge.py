@@ -921,13 +921,17 @@ class MCPBridge:
 
         return validate_health_probe(raw, server=name)
 
-    def _run_cred_probe(self, name: str) -> dict | None:
+    def _run_cred_probe(self, name: str, *, recover: bool = True) -> dict | None:
         """Run the credential health probe for ``name`` and record the result.
 
         SYNC — safe to call from a worker thread (it drives ``call_tool``,
         which owns its own event-loop indirection). Best-effort: any failure
         classifies as ``'unknown'`` and never raises into the caller (the
         keepalive sweep must not die on a probe error).
+
+        An ``'expired'`` verdict with ``recover`` reconnects with a newer
+        credential when one exists (``_renew_expired_credential``) and returns
+        that connection's record instead.
 
         Returns the recorded health dict, or None when there is no probe to run
         (no spec / server not connected).
@@ -976,7 +980,84 @@ class MCPBridge:
             self._cred_probe_ts[name] = now
         if status == 'expired':
             audit_log('mcp_credential_expired', server=name, tool=tool)
+            if recover:
+                return self._renew_expired_credential(name) or record
         return record
+
+    def _renew_expired_credential(self, name: str) -> dict | None:
+        """Reconnect ``name`` with a newer credential after a probe proved the
+        live one expired; return the new connection's probe record.
+
+        None when nothing newer exists or the reconnect failed (the probe's
+        own best-effort contract: the expired verdict stands).
+        """
+        try:
+            newer = self._newer_credential(name)
+            if newer is None:
+                return None
+            logger.info('[MCP] Reconnecting %s with a renewed credential', name)
+            self._reconnect_server(name, newer)
+        except Exception as e:
+            logger.warning('[MCP] Credential renewal for %s failed: %s',
+                           name, _unwrap_exception_group(e))
+            return None
+        return self._run_cred_probe(name, recover=False)
+
+    def _newer_credential(self, name: str) -> dict | None:
+        """The stored row to reconnect ``name`` with, when its credential is
+        known expired and that row (after copying in a browser-held
+        credential) carries a different ``env`` than the live connection."""
+        with self._lock:
+            if (self._cred_health.get(name) or {}).get('status') != 'expired':
+                return None
+            handle = self._servers.get(name)
+            live = handle.config if handle is not None else self._configs.get(name)
+        stored = self._stored_server_config(name, refresh_browser=True)
+        if (stored is None or not stored.get('enabled', True)
+                or (stored.get('env') or {}) == ((live or {}).get('env') or {})):
+            return None
+        return stored
+
+    def _stored_server_config(self, name: str, *,
+                              refresh_browser: bool) -> dict | None:
+        """The owner's stored row for ``name``.
+
+        None for an unowned bridge, an absent row or an unreadable store.
+        ``refresh_browser`` first saves into the row any credential the
+        catalog backs with a browser cookie the owner's browser holds now
+        (``lib/mcp/browser_credentials.py``). Values are never logged.
+        """
+        if self._owner_user_id is None:
+            return None
+        from lib.json_store import JsonStoreReadError
+        from lib.mcp.browser_credentials import read_browser_env
+        from lib.mcp.config import merge_server_env
+        changed: list[str] = []
+        try:
+            row = load_mcp_config(user_id=self._owner_user_id).get(name)
+            if not isinstance(row, dict):
+                return None
+            if refresh_browser:
+                env = row.get('env') if isinstance(row.get('env'), dict) else {}
+                fresh = read_browser_env(
+                    name, row, owner_user_id=self._owner_user_id)
+                changed = sorted(k for k, v in fresh.items() if env.get(k) != v)
+                if changed:
+                    row = merge_server_env(
+                        name, {k: fresh[k] for k in changed},
+                        user_id=self._owner_user_id)
+        except (JsonStoreReadError, OSError) as e:
+            logger.warning('[MCP] Stored config for %s unavailable (%s); '
+                           'using the last-known config', name, e)
+            return None
+        if row is None:
+            return None
+        if changed:
+            audit_log('mcp_credential_refreshed', server=name,
+                      env_keys=changed, source='browser_cookie')
+            logger.info('[MCP] Saved %s for %s from the owner\'s browser',
+                        ', '.join(changed), name)
+        return dict(row)
 
     def _cred_probe_due(self, name: str) -> bool:
         """True if ``name`` has a health_probe and its re-probe interval elapsed.
@@ -1044,13 +1125,20 @@ class MCPBridge:
             self._breaker[name] = (failures, time.time() + delay)
         return delay
 
-    def _reconnect_server(self, name: str) -> _MCPServerHandle:
+    def _reconnect_server(self, name: str,
+                          stored: dict | None = None) -> _MCPServerHandle:
         """Tear down and re-establish a single server using its stored config.
 
         Used by both recovery paths (reactive call_tool retry + proactive
         keepalive). Serialized per-server via ``_reconnect_locks`` so two
         callers racing on the same dropped server don't spawn duplicate
         subprocesses. Returns the fresh handle.
+
+        The config is the owner's current stored row (``stored`` when the
+        caller already resolved it), so a credential saved by Settings or by
+        another process applies here, and a credential known to be expired is
+        first renewed from the owner's browser. An unowned bridge or a server
+        absent from the store keeps its last-known config.
 
         Raises if the config is unknown or the reconnect itself fails — the
         caller decides how to surface that.
@@ -1062,9 +1150,12 @@ class MCPBridge:
             # still be retried.
             srv_cfg = dict(old.config) if old is not None else self._configs.get(name)
             srv_cfg = dict(srv_cfg) if srv_cfg is not None else None
+            expired = (self._cred_health.get(name) or {}).get('status') == 'expired'
             rlock = self._reconnect_locks.lock_for(name)
         if srv_cfg is None:
             raise ValueError(f'cannot reconnect unknown MCP server: {name}')
+        srv_cfg = (stored or self._stored_server_config(
+            name, refresh_browser=expired) or srv_cfg)
 
         with rlock:
             # Re-check under the per-server lock: a racing caller may have
@@ -2021,9 +2112,18 @@ class MCPBridge:
             if activity is not None:
                 activity[server_name] = time.monotonic()
 
-        if handle is None or parked or handle.session is None:
-            logger.info('[MCP:Call] waking parked server %s', server_name)
-            handle = self._reconnect_server(server_name)
+        asleep = handle is None or parked or handle.session is None
+        # Every call would fail on a credential known to be expired; a newer
+        # one (stored or held by the owner's browser) reconnects first.
+        renewed = None if asleep else self._newer_credential(server_name)
+        if asleep or renewed is not None:
+            if asleep:
+                logger.info('[MCP:Call] waking parked server %s', server_name)
+                handle = self._reconnect_server(server_name)
+            else:
+                logger.info('[MCP:Call] renewing the expired credential of %s',
+                            server_name)
+                handle = self._reconnect_server(server_name, renewed)
             with self._lock:
                 info = self._tool_index.get(namespaced_name)
             if info is None:

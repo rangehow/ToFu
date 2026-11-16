@@ -18,6 +18,22 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # pip / conda / subprocess logic so the rest of bootstrap.py operates
 # inside the right interpreter (so subprocess [sys.executable, 'server.py']
 # correctly inherits the env's python).
+def environment_reexec_argv(python: str) -> list[str]:
+    """Keep a module entry importable when selecting a different interpreter.
+
+    Python replaces argv[0] with the module's file for ``-m``. Replaying that
+    file as a script removes the project root from sys.path. The active main
+    module's spec retains the actual invocation; ordinary script calls retain
+    their current argv, including arguments forwarded by launcher wrappers.
+    """
+    main = sys.modules.get('__main__')
+    spec = getattr(main, '__spec__', None)
+    module = getattr(spec, 'name', None)
+    if module:
+        return [python, '-m', module, *sys.argv[1:]]
+    return [python, *sys.argv]
+
+
 def _tofu_export_env_native_paths(env_prefix, backend, env_name=None):
     """Put the env's lib/ + bin/ on the search paths for CHILD processes.
 
@@ -106,7 +122,7 @@ def _tofu_maybe_reexec_into_env():
     sys.stderr.write(f'[bootstrap.py] Re-exec into Tofu env python: {target_py}\n')
     sys.stderr.flush()
     try:
-        os.execv(target_py, [target_py, *sys.argv])
+        os.execv(target_py, environment_reexec_argv(target_py))
     except OSError as e:
         sys.stderr.write(f'[bootstrap.py] os.execv failed: {e}\n')
         os.environ.pop('_TOFU_ENV_REEXEC', None)

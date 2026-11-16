@@ -655,3 +655,27 @@ def test_agent_guide_checkout_install_keeps_the_checkout_code(installer, tmp_pat
     assert receipt['install_dir'] == os.path.realpath(project)
     calls = Path(env['CALLS_FILE']).read_text()
     assert ' pull ' not in calls and 'UNEXPECTED' not in calls and 'health:18677' in calls
+
+
+@pytest.mark.parametrize('failure', [False, True])
+def test_stale_source_frontend_uses_lifecycle_preparation_without_release_download(installer, failure):
+    project, env = installer
+    (project / 'node_modules/vite').mkdir(parents=True)
+    (project / 'node_modules/vite/package.json').write_text('{}')
+    (project / 'scripts/build_frontend.mjs').write_text('// fixture builder')
+    (project / 'scripts/verify_frontend_dist.py').write_text('raise SystemExit(1)')
+    (project / 'serverctl.py').write_text(
+        'import os, sys; from pathlib import Path\n'
+        'Path(os.environ["CALLS_FILE"]).open("a").write("prepare:" + " ".join(sys.argv[1:]) + "\\n")\n'
+        f'raise SystemExit({int(failure)})\n')
+    old_config = (project / '.env').read_bytes()
+    result = _run(project, env, '--no-launch', '--no-update')
+    calls = Path(env['CALLS_FILE']).read_text()
+    assert 'prepare:prepare-frontend --parts frontend' in calls
+    assert 'UNEXPECTED-NETWORK' not in calls
+    if failure:
+        assert result.returncode != 0
+        assert (project / '.env').read_bytes() == old_config
+        assert not (project / '.tofu_env.json').exists()
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr

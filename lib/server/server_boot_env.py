@@ -21,6 +21,8 @@ import json
 import os
 import sys
 
+from bootstrap_pkg.env_reexec import environment_reexec_argv
+
 # This module lives in lib/server/, so the project root is two levels up.
 _PROJ_DIR = os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
@@ -148,7 +150,7 @@ def _tofu_maybe_reexec_into_env():
         return
     os.environ['_TOFU_ENV_REEXEC'] = '1'
     try:
-        os.execv(target_py, [target_py, *sys.argv])
+        os.execv(target_py, environment_reexec_argv(target_py))
     except OSError:
         os.environ.pop('_TOFU_ENV_REEXEC', None)
 

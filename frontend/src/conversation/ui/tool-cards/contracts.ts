@@ -56,6 +56,8 @@ export interface ToolPresenter {
   summary(view: ToolView, context: ToolPresenterContext): ToolSummary;
   body(view: ToolView, context: ToolPresenterContext): string;
   debug?(view: ToolView, context: ToolPresenterContext): readonly ToolDebugField[];
+  /** A failed call's plain-language reason for a known refusal, else '' (the raw reason stays). */
+  failure?(view: ToolView, context: ToolPresenterContext): string;
 }
 
 export interface ToolPresentationPorts {

@@ -6557,6 +6557,7 @@
   "toolCard.review.explainRework": "结果需要修改，工作者会按审核意见返工。",
   "toolCard.review.explainReject": "结果被拒绝，不会被合并。",
   "toolCard.review.explainPending": "负责人正在逐项对照验收标准检查工作者的结果。",
+  "toolCard.review.refusedResultChanged": "审核期间工作者的结果有了新内容，这次审核没有记录。负责人会读取最新结果后重新审核。",
   "toolCard.check.met": "达标",
   "toolCard.check.unmet": "未达标",
   "toolCard.check.unknown": "未验证",

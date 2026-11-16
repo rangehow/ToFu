@@ -6557,6 +6557,7 @@
   "toolCard.review.explainRework": "Das Ergebnis muss überarbeitet werden. Der Worker überarbeitet es anhand der Prüfanmerkung.",
   "toolCard.review.explainReject": "Das Ergebnis wurde abgelehnt und wird nicht zusammengeführt.",
   "toolCard.review.explainPending": "Der Koordinator prüft das Ergebnis des Workers anhand der einzelnen Abnahmekriterien.",
+  "toolCard.review.refusedResultChanged": "Das Ergebnis des Workers hat sich während der Prüfung geändert, daher wurde diese Prüfung nicht gespeichert. Die Leitung liest das aktuelle Ergebnis und prüft es erneut.",
   "toolCard.check.met": "Erfüllt",
   "toolCard.check.unmet": "Nicht erfüllt",
   "toolCard.check.unknown": "Nicht verifiziert",

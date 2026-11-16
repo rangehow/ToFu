@@ -37,6 +37,8 @@ export type ToolResultHeaderHtml = Readonly<{
   repairedBadgeHtml?: string;
   rightControlsHtml?: string;
   toolDisplayLabel?: string;
+  /** A registered presenter's plain-language reason for this failed round. */
+  failureText?: string;
 }>;
 
 export type ToolResultPresentation = Readonly<{
@@ -1164,6 +1166,7 @@ export function createToolResultPresentation(
     const failure = failed && effectOutcome === 'not_started'
       ? toolFailureText(authoritative.text, translate('tool.notStartedTip'))
       : failed && effectOutcome ? ''
+      : failed && header.failureText ? header.failureText
       : failed ? toolFailureText(authoritative.text, translate(
       renderToolArtifactHeaderHtml(round, translate) ? 'toolArtifact.failureDetails' : 'tool.failedTip',
     )) : '';

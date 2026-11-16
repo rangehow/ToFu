@@ -6557,6 +6557,7 @@
   "toolCard.review.explainRework": "결과를 수정해야 합니다. 워커가 검토 의견에 따라 다시 작업합니다.",
   "toolCard.review.explainReject": "결과가 거부되어 병합되지 않습니다.",
   "toolCard.review.explainPending": "리드가 각 검수 기준에 따라 워커의 결과를 확인하는 중입니다.",
+  "toolCard.review.refusedResultChanged": "검토 중에 워커의 결과가 바뀌어 이번 검토는 기록되지 않았습니다. 리더가 최신 결과를 읽고 다시 검토합니다.",
   "toolCard.check.met": "충족",
   "toolCard.check.unmet": "미충족",
   "toolCard.check.unknown": "검증 안 됨",

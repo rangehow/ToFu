@@ -317,21 +317,23 @@ export function createWorldLive(onChange: () => void, push: PushPort | null): Wo
       }));
     }
     readFacts();
-    const [folderItems, router, watchdog] = await Promise.all([
+    // The Global Router and the Watchdog take their desks (and start their reads) as soon as each answers,
+    // without waiting for the folder list that names the project teams.
+    const seen = new Set<string>();
+    const [folderItems] = await Promise.all([
       folders.list().then(items => items as FolderItem[]).catch(() => [] as FolderItem[]),
-      project.globalRouter(lifetime.signal).catch(() => null),
-      project.routerWatchdog(lifetime.signal).catch(() => null),
+      project.globalRouter(lifetime.signal).catch(() => null).then(router => {
+        if (lifetime.signal.aborted || router?.availability !== 'available' || !router.conversationId || !router.projectPath) return;
+        seen.add(router.projectPath);
+        addTeam('router', router.projectPath, '', ROUTER_COLOR, router.conversationId, -1);
+      }),
+      project.routerWatchdog(lifetime.signal).catch(() => null).then(watchdog => {
+        if (lifetime.signal.aborted || watchdog?.availability !== 'available' || !watchdog.conversationId || !watchdog.projectPath) return;
+        seen.add(watchdog.projectPath);
+        addTeam('watchdog', watchdog.projectPath, '', WATCHDOG_COLOR, watchdog.conversationId, Number.MAX_SAFE_INTEGER);
+      }),
     ]);
     if (lifetime.signal.aborted) return;
-    const seen = new Set<string>();
-    if (router?.availability === 'available' && router.conversationId && router.projectPath) {
-      seen.add(router.projectPath);
-      addTeam('router', router.projectPath, '', ROUTER_COLOR, router.conversationId, -1);
-    }
-    if (watchdog?.availability === 'available' && watchdog.conversationId && watchdog.projectPath) {
-      seen.add(watchdog.projectPath);
-      addTeam('watchdog', watchdog.projectPath, '', WATCHDOG_COLOR, watchdog.conversationId, Number.MAX_SAFE_INTEGER);
-    }
     const candidates: Array<{ path: string; folder: FolderItem }> = [];
     const ordered = [...folderItems].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     for (const preferPrimary of [true, false]) for (const folder of ordered) {

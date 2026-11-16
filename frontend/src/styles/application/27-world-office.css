@@ -24,7 +24,7 @@
 }
 .w-office:focus-visible { outline: none; }
 .w-world { position: relative; margin-inline: auto; opacity: 0; transition: opacity 0.35s ease; }
-.w-world[data-art="ready"] { opacity: 1; }
+.w-world[data-art] { opacity: 1; }
 .w-art { position: absolute; left: 0; top: 0; display: block; }
 .w-layer { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
 
@@ -42,6 +42,9 @@
 /* Contact shadows are baked into the sheets (assets/README.md); typing and waiting swap cells on the beat. */
 .w-world[data-beat="1"] .w-person[data-busy], .w-world[data-beat="1"] .w-person[data-waiting] { background-position: var(--beat); }
 .w-person[data-walking] { visibility: hidden; }
+/* Until its sheet is decoded a person is not drawn at all (no empty box, no emblem without a body). */
+.w-person { transition: opacity 0.3s ease; }
+.w-person[data-loading] { opacity: 0; }
 .w-person:focus-visible, .w-doc:focus-visible { outline: none; box-shadow: var(--world-focus-glow); border-radius: 0.4em; }
 .w-person[aria-current]::after {
   content: '';
@@ -138,23 +141,24 @@
 .w-screen[data-on][data-facing="down"] { background-image: var(--art-screen-glow); }
 
 /* Team signs and plates */
+/* A team's sign: a walnut nameplate with the team colour as its edge, hung on the room's header band. */
 .w-banner {
   --c: var(--studio-brass);
   position: absolute;
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-1) var(--space-3);
-  border-radius: 999px;
-  background: var(--world-glass);
-  border: 1px solid color-mix(in srgb, var(--c) 75%, transparent);
+  padding: var(--space-1) var(--space-3) var(--space-1) var(--space-2);
+  border-radius: 0.45em;
+  background: linear-gradient(180deg, var(--studio-walnut-raised), var(--studio-walnut));
+  border: 1px solid color-mix(in srgb, var(--c) 55%, var(--studio-walnut));
+  border-left: 0.3em solid var(--c);
   color: var(--studio-cream);
   font-size: var(--font-size-sm);
   white-space: nowrap;
-  box-shadow: 0 0.15em 0.4em var(--world-ink-shadow);
+  box-shadow: var(--studio-bevel), 0 0.2em 0.5em var(--world-ink-shadow);
 }
-.w-banner::before { content: ''; width: 0.6em; height: 0.6em; border-radius: 50%; background: var(--c); box-shadow: 0 0 0.5em var(--c); }
-.w-banner-name { font: 700 var(--font-size-md)/1.2 'Pixelify Sans', var(--font-ui); letter-spacing: 0.02em; }
+.w-banner-name { font: 700 var(--font-size-md)/1.2 var(--font-ui); letter-spacing: 0.01em; color: var(--studio-cream); }
 .w-banner-tally { display: inline-flex; align-items: center; gap: var(--space-1); color: var(--studio-cream-muted); }
 .w-banner-tally::after { content: attr(data-label); font-size: var(--font-size-xs); }
 .w-banner-bar {
@@ -267,6 +271,49 @@
   transform: translate(-50%, -50%);
 }
 .w-empty[hidden] { display: none; }
+
+/* Loading card: floats over the painted floor while the first reads answer, with their real progress. */
+.w-loader {
+  position: absolute;
+  left: 50%;
+  bottom: var(--space-8);
+  z-index: 10;
+  display: grid;
+  gap: var(--space-2);
+  min-width: 18em;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--world-hairline);
+  border-radius: 0.8em;
+  background: var(--studio-walnut-glass);
+  box-shadow: var(--studio-shadow), var(--studio-bevel);
+  color: var(--studio-cream);
+  text-align: center;
+  transform: translateX(-50%);
+  pointer-events: none;
+  animation: w-loader-in 0.3s ease-out;
+}
+.w-loader[hidden] { display: none; }
+.w-loader b { font-size: var(--font-size-md); letter-spacing: 0.02em; }
+.w-loader i {
+  position: relative;
+  display: block;
+  height: 0.4em;
+  border-radius: 1em;
+  overflow: hidden;
+  background: var(--world-hairline);
+}
+.w-loader i::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: calc(var(--done, 0) * 100%);
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--studio-brass), var(--studio-brass-bright));
+  box-shadow: 0 0 0.6em var(--studio-brass);
+  transition: width 0.3s ease;
+}
+.w-loader span { color: var(--studio-cream-muted); font-size: var(--font-size-xs); font-variant-numeric: tabular-nums; }
+@keyframes w-loader-in { from { opacity: 0; transform: translate(-50%, 0.6em); } to { opacity: 1; transform: translateX(-50%); } }
 
 .w-tip {
   position: absolute;
@@ -413,8 +460,9 @@
 .w-tasks li[data-status="in_progress"] { font-weight: 700; }
 
 @media (prefers-reduced-motion: reduce) {
-  .w-world { transition: none; }
-  .w-arrive, .w-drop { animation: none; }
+  .w-world, .w-person { transition: none; }
+  .w-arrive, .w-drop, .w-loader { animation: none; }
+  .w-loader i::before { transition: none; }
   /* The decision bubble does not lift; its still stand-in carries a heavier ring instead. */
   .w-person[data-emphasis="decision"] .w-mark { width: 26px; height: 28px; background-image: var(--art-emblem-decision-still); }
   /* Switched on while the beat is up: every person still shows its state's named still cell. */

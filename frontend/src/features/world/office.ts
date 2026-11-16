@@ -48,6 +48,21 @@ function setData(node: HTMLElement, key: string, value: string | null) {
 function setStyle(node: HTMLElement, name: string, value: string) { if (node.style.getPropertyValue(name) !== value) node.style.setProperty(name, value); }
 const px = (value: number) => `${value.toFixed(1)}px`;
 
+/** Character sheets fetched and decoded once per URL: a person stays hidden until its sheet can paint, so no
+ * one appears as an empty box or as a floating emblem without a body while the art is still arriving. */
+const decodedSheets = new Set<string>();
+const decodingSheets = new Map<string, Promise<void>>();
+function decodeSheet(url: string): Promise<void> {
+  let pending = decodingSheets.get(url);
+  if (!pending) {
+    const image = new Image();
+    image.src = url;
+    pending = image.decode().catch(() => {}).then(() => { decodedSheets.add(url); });
+    decodingSheets.set(url, pending);
+  }
+  return pending;
+}
+
 /** `anchor` is where the person shows now: the seat's desk line, or their spot at the owner's door. */
 interface PersonView {
   button: HTMLButtonElement; mark: HTMLElement; screen: HTMLElement; person: Person; seat: Seat | null; anchor: Point | null; key: string;
@@ -139,7 +154,10 @@ export function createOffice(ports: OfficePorts) {
     };
     if (!worker) {
       worker = new ArtWorker();
-      worker.onmessage = (event: MessageEvent<ArtReply>) => { if (event.data.id === artId && event.data.ok) world.dataset.art = 'ready'; };
+      // 'base' shows the procedural floor at once; 'ready' once the furniture is painted too.
+      worker.onmessage = (event: MessageEvent<ArtReply>) => {
+        if (event.data.id === artId && event.data.ok) world.dataset.art = event.data.furnished ? 'ready' : 'base';
+      };
       const offscreen = canvas.transferControlToOffscreen();
       worker.postMessage({ ...request, canvas: offscreen }, [offscreen]);
     } else {
@@ -283,6 +301,12 @@ export function createOffice(ports: OfficePorts) {
     const person = view.person;
     const button = view.button;
     const walkingNow = walking.has(person.id);
+    const sheet = sheetFor(person, theme);
+    if (decodedSheets.has(sheet)) setData(button, 'loading', null);
+    else {
+      setData(button, 'loading', '');
+      void decodeSheet(sheet).then(() => { if (sheetFor(view.person, theme) === sheet) setData(button, 'loading', null); });
+    }
     setData(button, 'busy', busy ? '' : null);
     setData(button, 'role', person.role);
     setData(button, 'assignment', person.assignment?.assignmentId ?? null);

@@ -74,7 +74,16 @@ export function mountWorld(root: HTMLElement, shell: WorldShell, options: WorldO
   empty.className = 'w-empty';
   empty.hidden = true;
   empty.textContent = t('world.empty');
-  stage.append(scene.element, empty);
+  // The office's loading card: what share of its first reads has answered, over the already painted floor.
+  const loader = document.createElement('div');
+  loader.className = 'w-loader';
+  loader.setAttribute('aria-hidden', 'true');
+  const loaderTitle = document.createElement('b');
+  loaderTitle.textContent = t('world.loading.title');
+  const loaderBar = document.createElement('i');
+  const loaderCount = document.createElement('span');
+  loader.append(loaderTitle, loaderBar, loaderCount);
+  stage.append(scene.element, empty, loader);
   root.append(hud.element, stage, panel.head, panel.body);
 
   function schedule() { if (!frame) frame = requestAnimationFrame(render); }
@@ -229,6 +238,19 @@ export function mountWorld(root: HTMLElement, shell: WorldShell, options: WorldO
     }
     stage.dataset.ready = live.state.started ? 'true' : 'false';
     stage.setAttribute('aria-busy', String(loading));
+    loader.hidden = !loading;
+    if (loading) {
+      // One step for discovering the teams and the office facts, then every source each team reads.
+      let total = 1, done = live.state.loading ? 0 : 1;
+      for (const team of live.state.teams) for (const source of sourcesOf(team)) {
+        if (source.status === 'idle') continue;
+        total += 1;
+        if (source.status !== 'loading') done += 1;
+      }
+      loaderBar.style.setProperty('--done', String(done / total));
+      const count = t('world.loading.progress', { done, total });
+      if (loaderCount.textContent !== count) loaderCount.textContent = count;
+    }
     empty.hidden = !live.state.error;
   }
 

@@ -82,12 +82,17 @@ def _lifecycle_from_meta(meta):
                 if item is None or isinstance(item, (str, int, float, bool))}
         else:
             pointers[key] = {}
+    recurrences = _copy_metadata_value(meta.get('recurrences'))
     return {
         'status': status,
         'status_reason': str(_copy_metadata_value(meta.get('status_reason')) or ''),
         'superseded_by': pointers['superseded_by'],
         'provenance': pointers['provenance'],
         'sensitive': meta.get('sensitive') is True,
+        # ``<conversation_id>/<turn_id>`` -> when that Turn recorded the
+        # lesson's mistake again (lib/memory/storage/_crud.py, repeat_memory).
+        'recurrences': ({str(key): str(value) for key, value in recurrences.items()}
+                        if isinstance(recurrences, dict) else {}),
     }
 
 
@@ -451,7 +456,7 @@ def _memory_from_file(filepath, scope='global', package_dir=None,
         mem.update(_lifecycle_from_meta(meta))
     else:
         mem.update(status='active', status_reason='', superseded_by={},
-                   provenance={}, sensitive=False)
+                   provenance={}, sensitive=False, recurrences={})
 
     eligible, reasons = _check_memory_eligible(
         mem, owner_user_id=owner_user_id)
@@ -486,6 +491,8 @@ def _write_memory_file(filepath, mem):
                 meta[key] = mem[key]
     if mem.get('provenance'):
         meta['provenance'] = mem['provenance']
+    if mem.get('recurrences'):
+        meta['recurrences'] = mem['recurrences']
 
     body = mem.get('body', '')
     content = _build_frontmatter(meta) + '\n' + body + '\n'

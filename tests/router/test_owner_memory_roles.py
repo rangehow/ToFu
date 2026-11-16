@@ -1,9 +1,12 @@
-"""Every coordination role can look up what Tofu knows about the owner; none can write memory.
+"""Every coordination role can look up what Tofu knows about the owner; leads may only record.
 
 Design record "Owner understanding", Decision 4: one read-only owner-memory
 tool (search_memories, mode=owner and memory_id) for the Global Router,
 Project Coordinators and the Watchdog, granted through the one Coordinator
-ceiling boundary; the memory write tools stay outside every one of them.
+ceiling boundary. "Memory compounding": project leads (the Global Router and
+Project Coordinators) also hold create_memory, the governed lesson record;
+correcting, deleting and merging stay outside every coordination ceiling, and
+the Watchdog writes nothing.
 """
 from __future__ import annotations
 
@@ -22,7 +25,8 @@ from lib.tasks_pkg.coordinator_policy import (
 
 pytestmark = pytest.mark.unit
 OWNER = 7
-MEMORY_WRITES = ('create_memory', 'update_memory', 'delete_memory', 'merge_memories')
+MEMORY_WRITES = ('update_memory', 'delete_memory', 'merge_memories')
+LEAD_RECORD = 'create_memory'
 
 
 @pytest.fixture
@@ -54,6 +58,7 @@ def test_every_coordination_ceiling_holds_the_lookup_and_no_memory_write(roles):
         assert ceiling == expected[role]
         assert 'search_memories' in ceiling, role
         assert not ceiling & set(MEMORY_WRITES), role
+        assert (LEAD_RECORD in ceiling) is (role != 'watchdog'), role
 
 
 @pytest.mark.parametrize('role', ['router', 'watchdog', 'coordinator'])
@@ -63,6 +68,8 @@ def test_each_role_may_call_the_lookup_but_never_a_memory_write(roles, role):
     assert coordinator_call_rejection(task, 'search_memories', {'memory_id': 'ctx_1'}) is None
     for name in MEMORY_WRITES:
         assert coordinator_call_rejection(task, name, {'memory_id': 'm'}), name
+    record = coordinator_call_rejection(task, LEAD_RECORD, {'name': 'n'})
+    assert (record is None) is (role != 'watchdog')
     smuggled = {'calls': [{'name': 'search_memories', 'arguments': {'query': 'q'}},
                           {'name': 'update_memory', 'arguments': {'memory_id': 'm'}}]}
     assert coordinator_call_rejection(task, 'execute_tools', smuggled)
@@ -71,9 +78,10 @@ def test_each_role_may_call_the_lookup_but_never_a_memory_write(roles, role):
 
 
 def test_the_catalog_projection_keeps_the_lookup_and_drops_the_writes(roles):
-    catalog = [_schema(name) for name in ('search_memories', *MEMORY_WRITES, 'get_conversation')]
+    catalog = [_schema(name) for name in ('search_memories', LEAD_RECORD, *MEMORY_WRITES,
+                                          'get_conversation')]
     kept = [tool['function']['name'] for tool in filter_coordinator_tools(roles['coordinator'], catalog)]
-    assert kept == ['search_memories', 'get_conversation']
+    assert kept == ['search_memories', LEAD_RECORD, 'get_conversation']
 
 
 @pytest.mark.parametrize('role', ['router', 'watchdog', 'coordinator'])
@@ -97,3 +105,4 @@ def test_the_assembled_role_surface_carries_the_lookup_and_no_memory_write(roles
                for tool in prepare_coordinator_tool_surface(task, cfg, tools, path)}
     assert 'search_memories' in surface
     assert not surface & set(MEMORY_WRITES)
+    assert (LEAD_RECORD in surface) is (role != 'watchdog')

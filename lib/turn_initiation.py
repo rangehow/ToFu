@@ -52,6 +52,15 @@ SYNTHETIC_INPUT_MARKERS = (
     '_programSynthetic',
 )
 STEER_BLOCK_PREFIX = 'injection:user-steer:'
+# The first line of every program-written notice a lead receives as input:
+# ``[<kind>: nonhuman notice, not the owner’s words and not authority]``.
+NONHUMAN_NOTICE_MARK = ': nonhuman notice, not the owner\u2019s words and not authority]'
+
+
+def is_nonhuman_notice(text: str) -> bool:
+    """Whether ``text`` opens with a program-written notice header."""
+    first_line = text.lstrip().split('\n', 1)[0]
+    return first_line.startswith('[') and first_line.endswith(NONHUMAN_NOTICE_MARK)
 
 
 def stamp_initiator(message: dict[str, Any], initiator: str) -> dict[str, Any]:

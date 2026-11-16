@@ -7,6 +7,7 @@ from lib.memory.contracts import (
     MEMORY_MERGE_MAX_ITEMS,
     MEMORY_NAME_MAX_CHARS,
     MEMORY_POINTER_MAX_CHARS,
+    MEMORY_RECORD_AS_NEW,
     MEMORY_SEARCH_MODES,
     MEMORY_SEARCH_QUERY_MAX_CHARS,
     MEMORY_SEARCH_TOP_K_DEFAULT,
@@ -16,6 +17,7 @@ from lib.memory.contracts import (
     MEMORY_STATUS_REASONS,
     MEMORY_TAG_MAX_CHARS,
     MEMORY_TAG_MAX_ITEMS,
+    MEMORY_VERDICTS,
 )
 
 __all__ = ['ALL_MEMORY_TOOLS', 'MEMORY_TOOL_NAMES',
@@ -33,7 +35,9 @@ CREATE_MEMORY_TOOL = {
             "reproduced failure/root cause/fix, or documented tool/API quirk. "
             "Never store secrets (refused), personal details about anyone, "
             "identity/preferences (use My Context), one-off "
-            "requests, chat summaries, speculation, reasoning, or transcripts."
+            "requests, chat summaries, speculation, reasoning, or transcripts. "
+            "When existing lessons match, the first call writes nothing and shows them; "
+            "call again with repeat_of."
         ),
         "parameters": {
             "type": "object",
@@ -80,6 +84,17 @@ CREATE_MEMORY_TOOL = {
                         "global applies across projects; project only to the "
                         "current project. Default: project"
                     ),
+                },
+                "repeat_of": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": MEMORY_ID_MAX_CHARS,
+                    "description": (
+                        f"Your decision after the matching lessons were shown: "
+                        f"\"{MEMORY_RECORD_AS_NEW}\" records a new lesson; a shown lesson's "
+                        "id records that this mistake happened again despite it: your "
+                        "complete text becomes its new version and its repeat count rises."
+                    ),
                 }
             },
             "required": ["description", "name", "body"],
@@ -93,11 +108,13 @@ UPDATE_MEMORY_TOOL = {
     "function": {
         "name": "update_memory",
         "description": (
-            "Correct or extend an existing memory's search description, title, "
-            "full body, or tags. When you verified a lesson is wrong or replaced, "
-            "set status=disproved or superseded with status_reason and superseded_by "
-            "instead of deleting it: it stays on disk to explain the change and is "
-            "never injected again."
+            "Correct or extend an existing memory. A new name, description or body "
+            "is saved as a new version that supersedes this one (the old stays as "
+            "history; the result names the new id); tags change in place. When you "
+            "verified a lesson is wrong or replaced, set status=disproved or superseded "
+            "with status_reason and superseded_by instead of deleting it. verdict "
+            "alone records what your run showed about a lesson; it settles when a "
+            "reviewer accepts your result."
         ),
         "parameters": {
             "type": "object",
@@ -162,6 +179,20 @@ UPDATE_MEMORY_TOOL = {
                         "Exactly one of: {item_id} of the replacing memory; the "
                         "owner Turn {conversation_id, turn_id, at}; or {evidence}: "
                         "what you verified, e.g. a command and its result."),
+                },
+                "verdict": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["result", "evidence"],
+                    "properties": {
+                        "result": {"type": "string", "enum": list(MEMORY_VERDICTS)},
+                        "evidence": {"type": "string", "minLength": 1,
+                                     "maxLength": MEMORY_POINTER_MAX_CHARS},
+                    },
+                    "description": (
+                        "Project Workers only, with no other change: your run confirmed "
+                        "or contradicted this lesson; evidence is the command and result. "
+                        "Accepted, it makes the lesson verified or disproved."),
                 }
             },
             "required": ["memory_id"],

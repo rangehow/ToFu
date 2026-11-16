@@ -682,20 +682,27 @@ def create_memory(name, description='', body='', tags=None, scope='global', proj
                 logger.info('Memory "%s" had no description; auto-set to: %s', name, description)
                 break
 
-    memory_id = _make_memory_id(name)
-    now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    return _publish_new_memory(
+        _new_memory_record(name, description, body, tags, scope, provenance),
+        resolve_target_dir(scope, project_path))
 
-    mem = {
-        'id': memory_id, 'name': name, 'description': description,
+
+def _new_memory_record(name, description, body, tags, scope, provenance,
+                       recurrences=None):
+    now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    return {
+        'id': _make_memory_id(name), 'name': name, 'description': description,
         'enabled': True, 'tags': tags,
         'requires_bins': [], 'requires_env': [],
         'created': now, 'updated': now, 'body': body, 'scope': scope,
         'status': 'active', 'status_reason': '', 'superseded_by': {},
         'provenance': provenance, 'sensitive': False,
+        'recurrences': dict(recurrences or {}),
     }
 
-    dirpath = resolve_target_dir(scope, project_path)
 
+def _publish_new_memory(mem, dirpath):
+    """Allocate a free ID in ``dirpath`` and publish ``mem`` there atomically."""
     _ensure_dir(dirpath)
     allocation_lock_path = os.path.join(
         dirpath, _CREATE_MEMORY_ALLOCATION_LOCK)
@@ -703,7 +710,7 @@ def create_memory(name, description='', body='', tags=None, scope='global', proj
     # threads and POSIX processes.  The final markdown file is still published
     # by write_text_atomic, so readers never observe a partially written body.
     with locked_path(allocation_lock_path):
-        mem['id'], filepath = _allocate_memory_path(dirpath, memory_id)
+        mem['id'], filepath = _allocate_memory_path(dirpath, mem['id'])
         mem['updated'] = _write_memory_file(filepath, mem)
         mem['filepath'] = filepath
         mem['is_package'] = False
@@ -745,10 +752,119 @@ def update_memory(memory_id, updates, project_path=None, extra_paths=None,
             if key in updates:
                 target[key] = updates[key]
         if edit and any(key in updates for key in _UPDATABLE_KEYS):
-            target['provenance'] = {
-                **{key: value for key, value in (target.get('provenance') or {}).items()
-                   if not key.startswith('edited_')},
-                **{f'edited_{key}': value for key, value in edit.items()}}
+            target['provenance'] = _edited_provenance(target, edit)
+        if not _revision_is_current(target, revision):
+            raise _revision_conflict(memory_id)
+        target['updated'] = _write_memory_file(target['filepath'], target)
+        _note_memory_written(target)
+        return target
+
+
+def _edited_provenance(target, edit):
+    """The creation provenance plus ``edited_*`` keys naming this change."""
+    return {
+        **{key: value for key, value in (target.get('provenance') or {}).items()
+           if not key.startswith('edited_')},
+        **{f'edited_{key}': value for key, value in edit.items()}}
+
+
+def _recurrence_key(edit):
+    turn = '/'.join(str(edit[key]) for key in ('conversation_id', 'turn_id') if edit.get(key))
+    return turn or str(edit.get('at') or '')
+
+
+def supersede_memory(memory_id, updates, project_path=None, extra_paths=None,
+                     *, provenance, recurrence=False):
+    """Record a corrected lesson as a new version that supersedes this one.
+
+    The successor is written beside the predecessor (same store and scope)
+    with ``provenance.supersedes`` naming it; the predecessor stays on disk as
+    ``superseded`` (reason ``stale``) with ``superseded_by.item_id`` naming the
+    successor, so the chain answers what was believed before and why it
+    changed. ``recurrence=True`` records that the writer's Turn hit the
+    lesson's mistake again; recurrences carry forward along the chain, so the
+    current version's ``recurrences`` is the lesson's repeat count.
+
+    ``updates`` holds content fields only (name, description, body, tags);
+    omitted fields keep the predecessor's value. Returns
+    ``(successor, predecessor)`` or ``None`` when no lesson has this ID.
+    """
+    memory_id = validate_memory_id(memory_id)
+    updates = normalize_memory_updates(updates)
+    extra = sorted(set(updates) - set(_CONTENT_KEYS))
+    if extra:
+        raise BadRequest('A new version changes name, description, body or tags only; '
+                         f'not {", ".join(extra)}', field=extra[0])
+    refuse_secret_shapes(updates)
+    edit = _write_provenance(provenance)
+    if not edit:
+        raise ValueError('A new lesson version needs the write path provenance')
+    with _locked_memory_revisions(
+            [memory_id], project_path, extra_paths=extra_paths) as records:
+        located = records.get(memory_id)
+        if located is None:
+            return None
+        summary, revision = located
+        _guard_not_package(summary, memory_id, 'correct')
+        old = _hydrate_memory_at_revision(summary, revision)
+        _guard_not_package(old, memory_id, 'correct')
+        if not is_active_lesson(old):
+            successor = (old.get('superseded_by') or {}).get('item_id')
+            raise BadRequest(
+                f"Lesson '{memory_id}' is {old.get('status')}"
+                + (f"; its current version is '{successor}'" if successor else '')
+                + '. Correct or repeat the current version instead.', field='memory_id')
+        content = {key: updates.get(key, old.get(key)) for key in _CONTENT_KEYS}
+        if not recurrence and all(content[key] == old.get(key) for key in _CONTENT_KEYS):
+            raise BadRequest('Nothing to correct: the name, description, body and tags are '
+                             'unchanged', field='body')
+        name, description, body, tags, scope = normalize_memory_payload(
+            name=content['name'], description=content['description'] or '',
+            body=content['body'] or '', tags=content['tags'] or [], scope=old['scope'])
+        recurrences = dict(old.get('recurrences') or {})
+        if recurrence:
+            recurrences[_recurrence_key(edit)] = str(edit.get('at') or '')
+        if not _revision_is_current(old, revision):
+            raise _revision_conflict(memory_id)
+        successor = _publish_new_memory(
+            _new_memory_record(name, description, body, tags, scope,
+                               {**edit, 'supersedes': memory_id}, recurrences),
+            os.path.dirname(old['filepath']))
+        old.update(status='superseded', status_reason='stale',
+                   superseded_by={'item_id': successor['id']},
+                   provenance=_edited_provenance(old, edit))
+        if not _revision_is_current(old, revision):
+            os.remove(successor['filepath'])
+            _note_memory_written(successor)
+            raise _revision_conflict(memory_id)
+        old['updated'] = _write_memory_file(old['filepath'], old)
+        _note_memory_written(old)
+        return successor, old
+
+
+def verify_memory(memory_id, verification, project_path=None, extra_paths=None):
+    """Stamp an active lesson ``verified`` from an accepted result's evidence.
+
+    ``verification`` holds scalar pointers (the verifying conversation, Turn,
+    evidence and acceptance) supplied by ``lib.memory.verification``, never by
+    a model. Returns the lesson, or ``None`` when it is absent or no longer
+    active (a later version or disproof already replaced it).
+    """
+    memory_id = validate_memory_id(memory_id)
+    stamp = {f'verified_{key}': value for key, value in verification.items()
+             if value is not None and value != ''}
+    if not all(isinstance(value, (str, int, float, bool)) for value in stamp.values()):
+        raise ValueError('Verification pointers must be scalars')
+    with _locked_memory_revisions(
+            [memory_id], project_path, extra_paths=extra_paths) as records:
+        located = records.get(memory_id)
+        if located is None:
+            return None
+        summary, revision = located
+        target = _hydrate_memory_at_revision(summary, revision)
+        if target.get('is_package') or not is_active_lesson(target):
+            return None
+        target['provenance'] = {**(target.get('provenance') or {}), **stamp}
         if not _revision_is_current(target, revision):
             raise _revision_conflict(memory_id)
         target['updated'] = _write_memory_file(target['filepath'], target)

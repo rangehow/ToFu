@@ -500,7 +500,9 @@ class ProjectDispatchService:
                 wake()
         # A receipt needs the decision, revisions and delivery, never the
         # Worker projection (MBs for a tool-heavy Turn).
-        return self.view_for_coordinator(assignment['id'], scope=scope, settlement_only=True)
+        view = self.view_for_coordinator(assignment['id'], scope=scope, settlement_only=True)
+        _settle_memory_verdicts(view, actor='coordinator', reviewer=scope.get('conversation_id', ''))
+        return view
 
     def _release_publication_hold(self, task_id):
         """Retire the receipt's pre-pin hold under this publication lock.
@@ -770,4 +772,24 @@ class ProjectDispatchService:
             from .recovery import wake_project_dependents
             wake_project_dependents(self.repository.owner, self.repository.project,
                                     assignment_id, repository=self.repository, service=self)
-        return self.view(assignment_id, principal=principal)
+        view = self.view(assignment_id, principal=principal)
+        _settle_memory_verdicts(view, actor='owner', reviewer='')
+        return view
+
+
+def _settle_memory_verdicts(view, *, actor, reviewer):
+    """An accepted Worker result settles the lesson verdicts its Turn recorded.
+
+    lib/memory/verification.py; a failure keeps them pending for a repeat
+    review and never undoes the recorded review.
+    """
+    execution = view.get('execution') or {}
+    if (view.get('review') or {}).get('decision') != 'accept' or not execution.get('turnId'):
+        return
+    try:
+        from lib.memory.verification import settle_accepted_result
+        settle_accepted_result(view['request']['recipientId'], execution['turnId'], accepted_by={
+            'actor': actor, 'conversation_id': reviewer, 'assignment_id': view.get('assignmentId')})
+    except Exception:
+        logger.warning('[ProjectDispatch] lesson verdicts of assignment %s left pending',
+                       view.get('assignmentId'), exc_info=True)

@@ -59,7 +59,8 @@ TRUST_LEGEND = (
 
 
 def _trust(status: str, source_class: str, provenance: Mapping) -> str:
-    return memory_trust_class(status, source_class, provenance.get('edited_source_class'))
+    return memory_trust_class(status, source_class, provenance.get('edited_source_class'),
+                              provenance.get('verified_by'))
 
 
 def _context_record(item: Mapping, *, score: float = 0.0) -> dict:
@@ -106,6 +107,10 @@ def _lesson_record(memory: Mapping, *, score: float = 0.0, body: bool = False) -
         'trust': _trust(status, source_class, provenance),
         'sensitive': bool(memory.get('sensitive')),
         'provenance': provenance,
+        'supersedes': str(provenance.get('supersedes') or ''),
+        'recurrences': [{'turn': key, 'at': value}
+                        for key, value in sorted((memory.get('recurrences') or {}).items(),
+                                                 key=lambda row: (row[1], row[0]))],
         'created': memory.get('created', ''),
         'updated': memory.get('updated', ''),
         'score': round(float(score), 4),
@@ -282,6 +287,18 @@ def explain_memory_item(item_id: str, *, scope: str | None, project_path=None,
         for item in (document or {}).get('inactive_items', [])
         if (item.get('superseded_by') or {}).get('item_id') == item_id
         and (identity or item.get('type') != 'identity')]
+    # A lesson version names its predecessor (``provenance.supersedes``), so
+    # the earlier versions are walked back without a corpus scan.
+    predecessor, seen = record.get('supersedes') if record['kind'] == 'lesson' else '', {item_id}
+    while predecessor and predecessor not in seen:
+        seen.add(predecessor)
+        earlier = resolve(predecessor)
+        if earlier is None or earlier.get('withheld'):
+            break
+        supersedes.append({'kind': 'lesson', 'id': earlier['id'], 'status': earlier['status'],
+                           'status_reason': earlier.get('status_reason', ''),
+                           'summary': _summary(earlier)})
+        predecessor = earlier.get('supersedes')
 
     used_in = None
     if turns is not None:
@@ -396,8 +413,9 @@ def _context_line(record: Mapping) -> str:
 
 def _lesson_line(record: Mapping) -> str:
     description = f' — {record["description"]}' if record.get('description') else ''
+    repeats = f'; mistake repeated {len(record["recurrences"])}x' if record.get('recurrences') else ''
     return (f'- [{record["id"]}] {record["trust"].upper()}: {record["name"]}{description} '
-            f'({record["scope"]}; {_status_text(record)}; {_origin_text(record)})')
+            f'({record["scope"]}; {_status_text(record)}; {_origin_text(record)}{repeats})')
 
 
 def format_owner_search(result: Mapping) -> str:
@@ -452,7 +470,7 @@ def format_explanation(result: Mapping | None, item_id: str) -> str:
                  f'Name: {record["name"]}', f'Description: {record["description"]}']
     lines.append(f'Provenance: {_origin_text(record)}')
     extra = {key: value for key, value in (record.get('provenance') or {}).items()
-             if key not in ('source_class', 'at', 'turn_id', 'conversation_id')
+             if key not in ('source_class', 'at', 'turn_id', 'conversation_id', 'supersedes')
              and not key.startswith('edited_')}
     if extra:
         lines.append('Provenance details: ' + ', '.join(f'{key}={value}' for key, value in extra.items()))
@@ -467,6 +485,10 @@ def format_explanation(result: Mapping | None, item_id: str) -> str:
         lines.append(f'Supersedes: {row["id"]} ({row["status"]}'
                      + (f', {row["status_reason"]}' if row['status_reason'] else '')
                      + f'): {row["summary"]}')
+    if record.get('recurrences'):
+        lines.append(f'Mistake repeated {len(record["recurrences"])} time(s) after it was '
+                     'recorded: ' + ', '.join(f'{row["turn"]} ({row["at"][:10]})'
+                                              for row in record['recurrences']))
     used = result.get('used_in')
     if used is not None:
         if used['turns']:

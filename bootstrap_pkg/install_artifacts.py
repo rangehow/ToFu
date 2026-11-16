@@ -147,7 +147,7 @@ def main() -> None:
 def _compiled_versions(lock: Path) -> dict[str, str]:
     """Require every resolved package, including local first-party wheels."""
     expected = {}
-    for raw in lock.read_text().splitlines():
+    for raw in lock.read_text(encoding='utf-8').splitlines():
         line = raw.strip().rstrip('\\').strip()
         if not line or line.startswith(('#', '--')):
             continue
@@ -213,7 +213,7 @@ def _acquire_python_wheels(python: str, requirements: Path, wheelhouse: Path) ->
             spec = (info['url'] if info['url'].startswith('file:') else
                     record['metadata']['name'] + '==' + record['metadata']['version'])
             lines.append(spec + ' --hash=sha256:' + digest)
-        acquisition.write_text('\n'.join(lines) + '\n')
+        acquisition.write_text('\n'.join(lines) + '\n', encoding='utf-8')
         expected = {record['metadata']['name'].lower().replace('_', '-'):
                     record['metadata']['version'] for record in records}
     subprocess.run([python, '-m', 'pip', 'wheel', '--no-deps', '--require-hashes',
@@ -233,7 +233,7 @@ def _acquire_python_wheels(python: str, requirements: Path, wheelhouse: Path) ->
     if expected is not None and set(admitted) != set(expected):
         raise ValueError('Required Python artifacts are incomplete; no environment commit permitted')
     lock = wheelhouse / 'install.lock'
-    lock.write_text('\n'.join(admitted[key] for key in sorted(admitted)) + '\n')
+    lock.write_text('\n'.join(admitted[key] for key in sorted(admitted)) + '\n', encoding='utf-8')
     return lock
 
 

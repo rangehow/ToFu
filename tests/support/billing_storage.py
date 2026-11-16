@@ -19,8 +19,8 @@ from tests.storage import test_storage_application_contract as storage_contract
 def application_storage(request, tmp_path, monkeypatch, application_storage_owner_id):
     fixture = storage_contract.application_storage.__wrapped__
     if request.param == 'postgres':
-        from tests.support.postgres_isolation import isolated_postgres_dsn
-        source = Path(os.environ['TOFU_STORAGE_TEST_POSTGRES_DSN_FILE'])
+        from tests.support.postgres_isolation import isolated_postgres_dsn, postgres_dsn_source
+        source = postgres_dsn_source(request, tmp_path)
         with isolated_postgres_dsn(source, tmp_path) as dsn:
             monkeypatch.setenv('TOFU_STORAGE_TEST_POSTGRES_DSN_FILE', str(dsn))
             yield from fixture(request, tmp_path, monkeypatch, application_storage_owner_id)

@@ -6665,6 +6665,7 @@
     "toolCard.debug.grantRevision": "924a810cc1b51ca5",
     "toolCard.debug.turn": "da3e313abb8c38f7",
     "toolCard.debug.command": "50e77b6103a42a88",
-    "toolCard.debug.message": "0463ec8cd73d05bc"
+    "toolCard.debug.message": "0463ec8cd73d05bc",
+    "toolCard.review.refusedResultChanged": "468b8af63cf18055"
   }
 }

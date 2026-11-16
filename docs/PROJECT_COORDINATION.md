@@ -3894,7 +3894,8 @@ Revocation uses grant-revision CAS and cancels the bound existing attempt; a
 repeat retries the same cancellation after ACK loss. Human Stop remains the
 existing turn/attempt cancellation authority, not natural-language steering.
 Neither late reports nor read/recovery reactivate stopped or revoked work.
-Review requires the current completed result revision and records immutable
+Review requires the current completed result revision (the Worker Turn's
+`modelContextRevision`, never advanced by display-only enrichment) and records immutable
 `accept/rework/reject` evidence; it does not change task completion or grant
 revision. `reworkOf` links the exact old grant/result and immutable rework review;
 execution requires a fresh human source, command, model and budget, not renewed
@@ -4874,23 +4875,39 @@ failures the reviewer never saw), and requiring a new repair assignment (re-runs
 work whose bytes are already accepted). Spec:
 `tests/project_mod/test_coordinator_publication_recovery.py`.
 
-Problem (stale review revision, 2026-11-15, a85996ab): a Worker's result revision is
-its Turn's `projectionRevision`, and that keeps rising after completion. Auto-translation
-commits `translatedContent`, then segment overlays, as projection writes on the settled
-Turn (`lib/translate/commit.py`), and late background-command output does the same.
-`poll` returned 1465 and then 1466 while those writes were landing. Review saw 1468 and
-refused both values with a bare "exact current completed worker result" and no recovery.
-`poll`, `get_project_assignment` and review all read the same live Turn revision, so
-they agree at the moment they read; the value simply moves between reads. Decision:
-when the attempt and Turn identity match and only the revision differs, review raises a
-typed `ReviewResultChanged`. Its code is `result_revision_changed`, its details carry
-`requested_result_revision`, `current_result_revision` and `checkpoint_sha` (the pinned
-checkpoint, else the registered workspace's), and its recovery names the exact repeat.
-Nothing is recorded. Alternatives rejected: keeping display overlays out of the
-revision (the revision is the projection CAS fence that every writer shares) and
+Problem (stale review revision, 2026-11-15, a85996ab; recurred 2026-11-16 at 2814→2815):
+a Worker's result revision was its Turn's `projectionRevision`, which keeps rising after
+completion. Auto-translation commits `translatedContent`, then segment overlays, as
+projection writes on the settled Turn (`lib/translate/commit.py`); usage, cost and
+timing enrichment do the same. Review, finish, dependency edges, the publication pin
+and the Router's result fact all compared that counter, so every display-only write
+raced the Coordinator: review refused a result whose content had not changed, an
+accepted request could not finish (`Worker review no longer matches its exact
+result`), and the 11-15 fix only made the refusal typed and retryable.
+Decision: the result revision is the Turn's `modelContextRevision`
+(`lib.storage.model_continuation.model_context_revision`), the storage authority's
+semantic revision: `projectionRevision` minus the declared display-only updates
+(`contracts/model_context_v1.schema.json` `displayOnlyProjectionFields`). It is the
+same version the model-context proofs and artifact review (`lib/acceptance/turns.py`)
+already pin. Every reader above derives it with that one function. A genuine change
+(late background-command output, an edit, a new attempt) still advances it, still
+refuses review with the typed `ReviewResultChanged` (code `result_revision_changed`,
+details `requested_result_revision`, `current_result_revision`, `checkpoint_sha`,
+nothing recorded), and still holds publication as `project_publication_result_changed`.
+Durable reviews and pins recorded before this decision hold a projection revision,
+which for a translated Turn is higher than its semantic revision; such a pin reads as
+`project_publication_result_changed` once and the Coordinator re-affirms it at the
+current revision. Re-affirmation is therefore decided by currency (the requested
+revision is verified current) rather than by ordering. Alternatives rejected: keeping
+`projectionRevision` because it is the projection CAS fence (the CAS fence is
+unchanged; a review needs a content identity, which the authority already
+maintains separately), a result-content hash minted by project dispatch (a second
+identity for the same fact, with its own rules for what counts as display), and
 accepting any later revision (late output may report failures the reviewer never saw).
-Specs: `test_coordinator_publication_recovery.py::test_stale_review_names_current_revision_checkpoint_and_recovery`
-and `tests/translate/test_translation_turn_authority.py::test_translation_overlay_advances_a_completed_turns_projection_revision`.
+Specs: `tests/project_mod/test_coordinator_publication_recovery.py`
+(`test_display_only_updates_never_stale_a_result`,
+`test_stale_review_names_current_revision_checkpoint_and_recovery`) and
+`tests/translate/test_translation_turn_authority.py::test_translation_overlay_keeps_a_completed_turns_result_revision`.
 
 Problem (missing pin): an accept recorded without `checkpoint_sha` pins no
 publication, so the receiver holds the delivery as

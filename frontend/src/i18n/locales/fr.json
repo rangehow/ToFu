@@ -6555,6 +6555,7 @@
   "toolCard.review.explainRework": "Le résultat doit être modifié. L’exécutant va le reprendre en tenant compte de la note de revue.",
   "toolCard.review.explainReject": "Le résultat a été rejeté et ne sera pas fusionné.",
   "toolCard.review.explainPending": "Le coordinateur vérifie le résultat de l’exécutant au regard de chaque critère d’acceptation.",
+  "toolCard.review.refusedResultChanged": "Le résultat du Worker a changé pendant la revue, cette revue n'a donc pas été enregistrée. Le responsable lit le résultat actuel et le revoit.",
   "toolCard.check.met": "Rempli",
   "toolCard.check.unmet": "Non rempli",
   "toolCard.check.unknown": "Non vérifié",

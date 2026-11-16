@@ -1,9 +1,10 @@
 """Accepted Worker checkpoints must not become permanently unpublishable.
 
-A completed Worker Turn can gain a later projection revision without new code
+A completed Worker Turn can gain a later result revision without new code
 (for example a background command completion injected after the review). The
 pinned publication then no longer matches the current result and the receiver
-holds it. The hold must name that cause and the source Coordinator must be able
+holds it. Display-only enrichment (translation overlays) advances only the
+Turn's projectionRevision, never its result revision (modelContextRevision). The hold must name that cause and the source Coordinator must be able
 to re-affirm the exact same checkpoint at the current result revision.
 """
 import pytest
@@ -157,3 +158,53 @@ def test_stale_review_names_current_revision_checkpoint_and_recovery(run):
                       note='Verified exact code', checkpoint_sha=refused['details']['checkpoint_sha'])
     assert 'error' not in accepted, accepted
     assert accepted['result_revision'] == 3 and accepted['checkpoint_sha'] == pin['checkpointSha']
+
+
+def _display_only_update(r, turn_id):
+    """What a translation overlay does to a settled Turn: the stores publish an
+    unchanged modelContextRevision beside the advanced projectionRevision."""
+    turn = r.turns[turn_id]
+    turn['modelContextRevision'] = turn.get('modelContextRevision', turn['projectionRevision'])
+    turn['projectionRevision'] += 1
+
+
+def test_display_only_updates_never_stale_a_result(run):
+    """2026-11-16: poll read 2814, a translation overlay moved the Worker Turn to 2815,
+    and review refused an unchanged result as stale."""
+    r = run; first, pin = completed(r)
+    r.service.publication_wake = lambda: None
+    turn_id = first['execution']['turnId']
+    polled = r.call('poll', ids=[first['id']], wait_s=0)
+    [observed] = [row['result_revision'] for row in polled['workers']]
+    _display_only_update(r, turn_id); _display_only_update(r, turn_id)
+    assert r.call('get_project_assignment', assignment_id=first['id'])['execution']['resultRevision'] == observed
+    accepted = r.call('review_project_work', assignment_id=first['id'], result_revision=observed,
+                      decision='accept', note='Verified exact code', checkpoint_sha=pin['checkpointSha'])
+    assert 'error' not in accepted, accepted
+    _display_only_update(r, turn_id)
+    assert r.c.repo.validate_publication(r.c.repo.admission(first['id']), first['execution']['taskId'])
+    # A genuine change still stales the accepted result.
+    r.turns[turn_id]['modelContextRevision'] += 1; r.turns[turn_id]['projectionRevision'] += 1
+    with pytest.raises(ProjectDispatchError, match='result revision changed'):
+        r.c.repo.validate_publication(r.c.repo.admission(first['id']), first['execution']['taskId'])
+
+
+def test_pin_recorded_at_a_projection_revision_is_reaffirmed_at_the_result_revision(run):
+    """A pin recorded before result revisions excluded display-only updates holds the
+    Turn's projectionRevision, above its current modelContextRevision."""
+    r = run; first, pin = completed(r)
+    r.service.publication_wake = lambda: None
+    turn_id = first['execution']['turnId']
+    r.turns[turn_id]['projectionRevision'] = 3
+    assert 'error' not in r.call('review_project_work', assignment_id=first['id'], result_revision=3,
+                                 decision='accept', note='Verified exact code', checkpoint_sha=pin['checkpointSha'])
+    r.turns[turn_id]['modelContextRevision'] = 2
+    binding, task_id = r.c.repo.admission(first['id']), first['execution']['taskId']
+    with pytest.raises(ProjectDispatchError, match='result revision changed'):
+        r.c.repo.validate_publication(binding, task_id)
+    again = r.call('review_project_work', assignment_id=first['id'], result_revision=2,
+                   decision='accept', note='Re-verified', checkpoint_sha=pin['checkpointSha'])
+    assert 'error' not in again, again
+    row = r.c.repo.read(first['id'])
+    assert row['review']['resultRevision'] == row['publication']['resultRevision'] == 2
+    assert r.c.repo.validate_publication(binding, task_id)['id'] == first['id']

@@ -909,6 +909,8 @@ def test_storage_results_follow_the_assignment_association_attempt_and_review(mo
         reads.clear()
         return ports.result(OWNER, placement)
     assert edge() == expected and reads == {'point': 1, 'turn': 1}
+    turn.update(projectionRevision=713, modelContextRevision=711)  # a translation overlay: the same result
+    assert edge() == expected
     assert ports.result(OWNER, {**placement, 'conversationId': 'worker-other'}) is None
     assert newest() == ([expected], [])
     assert reads == {'page': 1, 'turn': 1}, "the Turn's current attempt is the association's: no attempt read"

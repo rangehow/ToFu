@@ -6555,6 +6555,7 @@
   "toolCard.review.explainRework": "結果に修正が必要です。ワーカーがレビューコメントに基づいてやり直します。",
   "toolCard.review.explainReject": "結果は却下されたため、マージされません。",
   "toolCard.review.explainPending": "リーダーがワーカーの結果を各検収基準と照らし合わせて確認しています。",
+  "toolCard.review.refusedResultChanged": "レビュー中にワーカーの結果が変わったため、このレビューは記録されませんでした。リーダーが最新の結果を読み、もう一度レビューします。",
   "toolCard.check.met": "達成",
   "toolCard.check.unmet": "未達成",
   "toolCard.check.unknown": "未検証",

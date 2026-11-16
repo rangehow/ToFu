@@ -17,6 +17,7 @@ from copy import deepcopy
 
 from lib.identity import PrincipalContext
 from lib.log import get_logger
+from lib.storage.model_continuation import model_context_revision
 from lib.turn_initiation import INITIATOR_BRAIN, stamp_initiator
 from .admission import TrustedDispatch
 from .repository import CONTRACT, ProjectDispatchError, RestartContinuationRefused
@@ -483,7 +484,7 @@ class ProjectDispatchService:
                     result = deepcopy(turn.get('projection') or {})
                 execution = {'turnId': association['turnId'], 'attemptId': association['attemptId'],
                     'taskId': attempt.get('taskId') or '', 'status': attempt.get('status') or 'unknown',
-                    'resultRevision': turn.get('projectionRevision'),
+                    'resultRevision': model_context_revision(turn),
                     'result': result}
         delivery = None
         if assignment['request'].get('profile', {}).get('mode') in ('files', 'project'):

@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 
 from lib.log import get_logger
+from lib.storage.model_continuation import model_context_revision
 
 logger = get_logger(__name__)
 
@@ -97,7 +98,7 @@ def _edge(repository, row, reference, evidence):
         return 'invalid', 'dependency_changed'
     if status != 'ready':
         return status, reason
-    if turn['projectionRevision'] != reference['resultRevision']:
+    if model_context_revision(turn) != reference['resultRevision']:
         return 'invalid', 'result_changed'
     review = row['review']
     if review is not None and review['resultRevision'] != reference['resultRevision']:

@@ -308,6 +308,8 @@ const review: ToolPresenter = {
       markdownSection(context, t('toolCard.review.note'), text(view.args.note), true),
     ].join('');
   },
+  failure: (view, { t }) => (text(view.result?.code) === 'result_revision_changed'
+    ? t('toolCard.review.refusedResultChanged') : ''),
   debug: (view, { t }) => [
     [t('toolCard.debug.assignment'), text(view.args.assignment_id) || text(view.result?.assignment_id)],
     [t('toolCard.debug.checkpoint'), text(view.args.checkpoint_sha) || text(view.result?.checkpoint_sha)],

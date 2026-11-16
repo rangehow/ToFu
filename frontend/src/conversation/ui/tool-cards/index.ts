@@ -23,6 +23,7 @@ import { readToolView, record, type ToolView } from './values';
 export type { ToolCardChrome, ToolPresentationPorts } from './contracts';
 
 const SETTLED = new Set(['done', 'completed']);
+const FAILED = new Set(['error', 'failed']);
 
 export interface ToolCardPresentation {
   /** Escaped header markup (title, summary, chips), or '' when no presenter applies. */
@@ -35,6 +36,8 @@ export interface ToolCardPresentation {
   renderGenericCardHtml(round: unknown, chrome: ToolCardChrome & { readonly titleHtml: string }): string;
   /** Registered tool names (sibling-title derivation leaves their rows alone). */
   hasPresenter(round: unknown): boolean;
+  /** A failed round's plain-language reason from its presenter, or '' for the generic one. */
+  failureText(round: unknown): string;
 }
 
 function createWorkDirectory(ports: ToolPresentationPorts): WorkDirectory {
@@ -101,6 +104,11 @@ export function createToolCardPresentation(ports: ToolPresentationPorts): ToolCa
   function header(view: ToolView, found: ToolPresenter): { html: string; text: string } {
     const title = found.title(view, context);
     const summary = found.summary(view, context);
+    // A failed call changed nothing: chips built from its arguments would
+    // present the requested outcome (an accept, a merge) as if it happened.
+    if (FAILED.has(view.status)) {
+      return { html: summaryHtml(title, { text: summary.text }), text: [title, summary.text].filter(Boolean).join(' · ') };
+    }
     const parts = [title, summary.text, ...(summary.chips ?? []).map((chip) => chip.label)].filter(Boolean);
     return { html: summaryHtml(title, summary), text: parts.join(' · ') };
   }
@@ -122,6 +130,11 @@ export function createToolCardPresentation(ports: ToolPresentationPorts): ToolCa
       return found ? header(view, found).text : '';
     },
     hasPresenter: (round) => presenter(readToolView(round)) !== null,
+    failureText(round) {
+      const view = readToolView(round);
+      const found = presenter(view);
+      return found && FAILED.has(view.status) ? found.failure?.(view, context) ?? '' : '';
+    },
     renderCardHtml(round, chrome) {
       const view = readToolView(round);
       const found = presenter(view);

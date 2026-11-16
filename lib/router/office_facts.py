@@ -50,6 +50,7 @@ import uuid
 
 from lib.identity import require_user_id
 from lib.log import get_logger
+from lib.storage.model_continuation import model_context_revision
 
 logger = get_logger(__name__)
 
@@ -263,7 +264,7 @@ class StoragePorts:
         return {'conversationId': request['recipientId'], 'attemptId': attempt_id,
                 'projectPath': request['projectPath'], 'assignmentId': row['id'],
                 'coordinatorId': request['coordinatorId'], 'turnId': association['turnId'],
-                'ordinal': turn['ordinal'], 'revision': turn['projectionRevision']}
+                'ordinal': turn['ordinal'], 'revision': model_context_revision(turn)}
 
     def publish(self, owner: int, frame: dict) -> None:
         from lib.agent_core.push import push_event

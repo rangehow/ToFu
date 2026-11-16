@@ -207,6 +207,23 @@ describe('review_project_work', () => {
     expect([...host.querySelectorAll('summary .ptool-coord-chip')].map((chip) => chip.textContent))
       .toEqual(['Sent back for rework', '1/3 checks met']);
   });
+
+  it('never presents a refused review as accepted, and names a changed result plainly', () => {
+    const refused = { ...round, status: 'error', toolContent: JSON.stringify({
+      error: 'Review requires the exact current completed worker result: result_revision 2814 is stale, the current result_revision is 2815',
+      code: 'result_revision_changed', execution_started: false,
+      details: { requested_result_revision: 2814, current_result_revision: 2815, checkpoint_sha: null } }) };
+    const cards = presentation('en');
+    const header = document.createElement('div');
+    header.innerHTML = cards.headerHtml(refused);
+    expect(header.querySelector('.ptool-coord-summary')!.textContent).toBe(args(delegation).title);
+    expect(header.querySelectorAll('.ptool-coord-chip')).toHaveLength(0);
+    expect(cards.failureText(refused)).toBe("The Worker's result changed while it was being reviewed, so this review was not recorded. "
+      + 'The lead reads the current result and reviews it again.');
+    const other = { ...refused, toolContent: JSON.stringify({ error: 'Worker review is immutable', execution_started: false }) };
+    expect(cards.failureText(other)).toBe('');
+    expect(cards.failureText(round)).toBe('');
+  });
 });
 
 describe('poll', () => {

@@ -22,6 +22,7 @@ import threading
 import time
 
 from lib.log import get_logger
+from lib.storage.model_continuation import model_context_revision
 from .repository import (CONTRACT, DispatchContention, ProjectDispatchError, _validate_schema,
                          transient_dispatch_failure)
 
@@ -723,7 +724,7 @@ def finish_request(repository, task, arguments):
             turn = repository.turn_get(row['request']['recipientId'], current['turnId'], user_id=repository.owner)
             if (not turn or turn.get('turnId') != current['turnId']
                     or turn.get('conversationId') != row['request']['recipientId']
-                    or turn.get('actor') != 'assistant' or turn.get('projectionRevision') != row['review']['resultRevision']):
+                    or turn.get('actor') != 'assistant' or model_context_revision(turn) != row['review']['resultRevision']):
                 raise ProjectDispatchError('Worker review no longer matches its exact result')
             from .accounting import unsettled_tool_effect
             if any(unsettled_tool_effect(item, CONTRACT['terminalToolPhases'])

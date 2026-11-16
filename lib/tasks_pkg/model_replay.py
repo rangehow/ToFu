@@ -12,7 +12,7 @@ import hashlib
 import json
 
 from lib.log import get_logger
-from lib.storage.model_continuation import ModelContinuationStore, settled_witness
+from lib.storage.model_continuation import ModelContinuationStore, model_context_revision, settled_witness
 from lib.tasks_pkg.inbox_delivery import UNVERIFIED_INBOX_DELIVERY
 
 logger = get_logger(__name__)
@@ -477,12 +477,6 @@ def restore_prefix(rows, config, *, conversation_id, user_id, validated_context=
         return [], 0
 
 
-def _model_context_revision(row):
-    if 'modelContextRevision' in row:
-        return row['modelContextRevision']
-    return int(row.get('projectionRevision') or 0) - int(row.get('_modelContextDisplayOffset') or 0)
-
-
 def _history_fingerprint(context, input_turn_id):
     """Digest what a context proof covers, leaving out one input's revision."""
     continuation = context.get('continuation')
@@ -492,7 +486,7 @@ def _history_fingerprint(context, input_turn_id):
                          if isinstance(continuation, dict) else None),
         'turns': [[row.get('turnId'), row.get('parentTurnId'), row.get('status'),
                    row.get('currentAttemptId'),
-                   None if row.get('turnId') == input_turn_id else _model_context_revision(row)]
+                   None if row.get('turnId') == input_turn_id else model_context_revision(row)]
                   for row in (context.get('turns') or [])[:-1]],
     })
 

@@ -719,6 +719,7 @@ function _renderErrorRow(round, ctx) {
     badgeHtml: renderToolHeaderBadgeHtml(round, meta),
     repairedBadgeHtml: ctx.repairedBadge, rightControlsHtml: _rowRightControls(round),
     toolDisplayLabel: td && td.label,
+    failureText: toolCardPresentation.failureText(round),
   });
 }
 

@@ -81,15 +81,23 @@ def model_projections_equal(left, right):
                       model_projection_for_context(right))
 
 
+def model_context_revision(row):
+    """The Turn's semantic revision: its projection revision minus declared display-only updates.
+
+    Stores publish ``modelContextRevision``; a row without it (no display-only
+    update recorded, or a private document) derives the same value.
+    """
+    if 'modelContextRevision' in row:
+        return row['modelContextRevision']
+    return int(row.get('projectionRevision') or 0) - int(row.get('_modelContextDisplayOffset') or 0)
+
+
 def settled_witness(row):
     """Model-visible Turn witness; declared display-only locations are excluded."""
     source = {key: row.get(key) for key in ('actor', 'laneId', 'parentTurnId', 'status', 'currentAttemptId')}
 
-    if 'modelContextRevision' in row:
-        source['modelContextRevision'] = row['modelContextRevision']
-    elif 'projectionRevision' in row:
-        source['modelContextRevision'] = int(row['projectionRevision']) - int(
-            row.get('_modelContextDisplayOffset') or 0)
+    if 'modelContextRevision' in row or 'projectionRevision' in row:
+        source['modelContextRevision'] = model_context_revision(row)
     source['projection'] = model_projection_for_context(row.get('projection') or {})
     digest = hashlib.sha256()
     for part in json.JSONEncoder(ensure_ascii=False, sort_keys=True,

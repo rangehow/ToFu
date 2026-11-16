@@ -257,4 +257,16 @@ describe('command admission and uncertain result summaries', () => {
       expect(JSON.stringify(value)).toBe(before);
     }
   });
+
+  it("puts a registered presenter's plain reason in the header and keeps the raw error in the body", () => {
+    const raw = JSON.stringify({ error: 'result_revision 2814 is stale, the current result_revision is 2815',
+      code: 'result_revision_changed', execution_started: false });
+    const round = { toolName: 'review_project_work', status: 'error', roundNum: 7, toolContent: raw };
+    inspect(presentation.renderGenericResultHtml(round, {}, { ...header, failureText: 'Not recorded: the result changed.' }), document => {
+      const reason = document.querySelector('summary .ptool-error-reason')!;
+      expect(reason.textContent).toBe('Not recorded: the result changed.');
+      expect(document.querySelector('summary')!.textContent).not.toContain('result_revision_changed');
+      expect(document.querySelector('.ptool-result-body')?.textContent).toContain('result_revision 2814');
+    });
+  });
 });

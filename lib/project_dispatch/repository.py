@@ -23,6 +23,7 @@ import uuid
 from lib.conversations.project_identity import normalize_project_path
 from lib.identity import PrincipalContext, require_user_id
 from lib.log import get_logger
+from lib.storage.model_continuation import model_context_revision
 from lib.agent_core.storage_errors import StorageError
 from lib.utils import sha256_holding_gil
 
@@ -1535,12 +1536,12 @@ class ProjectDispatchRepository:
                 or type(turn.get('projectionRevision')) is not int
                 or not all(evidence_owner_matches(item, self.owner) for item in (turn, attempt))):
             raise ProjectDispatchError('Publication execution/result identity changed')
-        if turn['projectionRevision'] != publication['resultRevision']:
+        if model_context_revision(turn) != publication['resultRevision']:
             # Same execution, later projection (e.g. a late background-command
             # completion). The pin stays fail-closed; the reviewer re-affirms.
             raise PublicationResultChanged(
                 f'Publication result revision changed: accepted {publication["resultRevision"]}, '
-                f'current {turn["projectionRevision"]}')
+                f'current {model_context_revision(turn)}')
         return row
 
     def record_review(self, assignment_id, decision, note, result_revision, expected_revision):

@@ -115,11 +115,12 @@ def test_translation_merges_into_turn_projection(turn_store):
     assert assistant["translation"]["status"] == "completed"
 
 
-def test_translation_overlay_advances_a_completed_turns_projection_revision(turn_store):
-    """Why a completed Worker's result_revision keeps rising (assignment a85996ab,
-    2026-11-15): each overlay and segment commit is a projection write on the settled
-    Turn. Coordinator review pins that revision and refuses a stale one naming the
-    current revision (tests/project_mod/test_coordinator_publication_recovery.py)."""
+def test_translation_overlay_keeps_a_completed_turns_result_revision(turn_store):
+    """Each overlay and segment commit is a projection write on the settled Turn, so
+    projectionRevision rises after completion (assignment a85996ab, 2026-11-15).
+    The Turn's modelContextRevision, which project review pins as a Worker's result
+    revision, stays: translation is declared display-only."""
+    from lib.storage.model_continuation import model_context_revision
     from lib.translate.commit import commit_translation_to_turn
     from lib.turn_lifecycle import get_turn
 
@@ -132,6 +133,8 @@ def test_translation_overlay_advances_a_completed_turns_projection_revision(turn
                                segment_translations={1: "我会检查它"})
     enriched = get_turn("translation-conv", turn_id, user_id=1, include_projection=False)
     assert settled["projectionRevision"] < overlaid["projectionRevision"] < enriched["projectionRevision"]
+    assert (model_context_revision(settled) == model_context_revision(overlaid)
+            == model_context_revision(enriched) == enriched["modelContextRevision"])
     assert enriched["status"] == "completed"
 
 

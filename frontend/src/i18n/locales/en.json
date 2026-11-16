@@ -6555,6 +6555,7 @@
   "toolCard.review.explainRework": "The result needs changes. The Worker will redo it based on the review note.",
   "toolCard.review.explainReject": "The result was rejected and will not be merged.",
   "toolCard.review.explainPending": "The lead is checking the Worker's result against each acceptance check.",
+  "toolCard.review.refusedResultChanged": "The Worker's result changed while it was being reviewed, so this review was not recorded. The lead reads the current result and reviews it again.",
   "toolCard.check.met": "Met",
   "toolCard.check.unmet": "Not met",
   "toolCard.check.unknown": "Not verified",

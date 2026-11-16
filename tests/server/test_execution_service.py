@@ -214,6 +214,30 @@ signal.pause()
             service.stop(30)
 
 
+def test_joined_stop_records_the_exit_a_successor_host_reads_as_dead(tmp_path, monkeypatch):
+    import lib.process_owner as owners
+    service = ProbeService(str(tmp_path), sys.executable)
+    env = {**environment(tmp_path), 'TOFU_DATA_DIR': str(tmp_path / 'data')}
+    record = {}
+    try:
+        service.ensure({'application': 'controlled-execution'}, env)
+        record = wait_for(lambda: (value if (value := service.record()).get('state') == 'ready' else None))
+        owner = record['processOwner']
+        assert (owner['pid'], owner['started']) == (record['pid'], str(record['processStartTime']))
+        assert record['exitEvidence'] == str(tmp_path / 'data' / 'process-exits')
+        assert owners.owner_state(owner) == 'alive'
+        _stop_releasing_drain(service, record)
+    finally:
+        remaining = service.record()
+        if service.host_matches(remaining):
+            os.kill(remaining['pid'], signal.SIGUSR1)
+            service.stop(30)
+    here = owners.process_owner()
+    monkeypatch.setattr(owners, 'exit_evidence_dir', lambda: record['exitEvidence'])
+    monkeypatch.setattr(owners, 'process_owner', lambda: {**here, 'host': 'successor-host'})
+    assert owners.owner_state(owner) == 'dead'
+
+
 def test_resident_launch_uses_prepared_interpreter_after_marker_changes(tmp_path):
     import shlex
     service = ProbeService(str(tmp_path), '/unusable-manager/python')

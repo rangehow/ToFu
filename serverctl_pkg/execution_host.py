@@ -93,6 +93,12 @@ async def _run_application(args, record, stopped, shutdown_requested, applicatio
             # invocation failure cannot issue the same no-entry witness.
             record['failureKind'] = SOURCE_CHANGED_BEFORE_BOOT
             raise
+        # Before startup admits work: the manager that joins this process's
+        # exit records it there, so recovery on another host can prove it.
+        from lib.process_owner import exit_evidence_dir, process_owner
+        record['processOwner'] = process_owner()
+        record['exitEvidence'] = exit_evidence_dir()
+        write_record(Path(args.state_file), record)
         await run_execution_lifespan(app, stopped, ready, before_shutdown=close_controls)
     finally:
         loop.remove_reader(owner_fd)

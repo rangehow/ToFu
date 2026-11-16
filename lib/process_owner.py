@@ -1,12 +1,23 @@
-"""Local process-incarnation evidence shared by workflow recovery policies.
+"""Process-incarnation evidence shared by workflow recovery policies.
 
 process_owner stamps host, OS boot, PID namespace, PID and kernel start time.
-owner_state proves alive/dead only within the same observable namespace; missing
-or inaccessible evidence is unknown. This grants no task or external-job authority.
+owner_state proves alive/dead from the kernel within the same observable
+namespace. Outside it (another host, boot or PID namespace, e.g. after a host
+move) only a recorded exit proves death: record_exit stores one fixed-shape
+record per incarnation, written by an observer that proved the exit from the
+kernel in the owner's namespace, in the directory that owner's process family
+reads (exit_evidence_dir). Missing or inaccessible evidence is unknown. This
+grants no task or external-job authority.
 """
 from pathlib import Path
+import hashlib
+import json
 import os
 import socket
+
+EXIT_RECORD_FORMAT = 'tofu.process-exit/v1'
+_OWNER_FIELDS = ('host', 'boot', 'pid_namespace', 'pid', 'started')
+
 
 def _process_stat(pid):
     # comm may contain spaces or parentheses; fields after its final ')' start
@@ -33,13 +44,17 @@ def process_owner():
         return None
 
 
-def owner_state(owner):
+def _well_formed(owner):
+    return (isinstance(owner, dict)
+            and all(isinstance(owner.get(key), str) for key in ('host', 'boot', 'pid_namespace'))
+            and type(owner.get('pid')) is int and owner['pid'] >= 1
+            and isinstance(owner.get('started'), str)
+            and owner['started'].isascii() and owner['started'].isdecimal())
+
+
+def _kernel_state(owner):
     current = process_owner()
-    if (not isinstance(owner, dict) or not current
-            or any(owner.get(key) != current[key] for key in ('host', 'boot', 'pid_namespace'))
-            or type(owner.get('pid')) is not int or owner['pid'] < 1
-            or not isinstance(owner.get('started'), str)
-            or not owner['started'].isascii() or not owner['started'].isdecimal()):
+    if not current or any(owner[key] != current[key] for key in ('host', 'boot', 'pid_namespace')):
         return 'unknown'
     try:
         started, state, threads = _process_stat(owner['pid'])
@@ -53,4 +68,51 @@ def owner_state(owner):
         return 'unknown'
 
 
-__all__ = ["process_owner", "owner_state"]
+def exit_evidence_dir():
+    """Where this process family records and reads exits; on the shared data root."""
+    from lib.runtime.runtime_paths import data_root
+    return os.path.join(data_root(), 'process-exits')
+
+
+def _exit_record_path(owner, directory):
+    identity = {key: owner[key] for key in _OWNER_FIELDS}
+    encoded = json.dumps(identity, sort_keys=True, separators=(',', ':')).encode('utf-8')
+    return Path(directory) / f'{hashlib.sha256(encoded).hexdigest()}.json', identity
+
+
+def _exit_recorded(owner):
+    path, identity = _exit_record_path(owner, exit_evidence_dir())
+    try:
+        record = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return False
+    return (isinstance(record, dict) and record.get('format') == EXIT_RECORD_FORMAT
+            and record.get('owner') == identity)
+
+
+def record_exit(owner, directory):
+    """Record an exit this process proved from the kernel in the owner's namespace.
+
+    A record never re-certifies another record: only kernel evidence observed
+    here admits one, so the evidence cannot be laundered across hosts.
+    """
+    if not _well_formed(owner) or _kernel_state(owner) != 'dead':
+        raise ValueError('process exit is not proved by local kernel evidence')
+    from lib.json_store import write_json_atomic
+    path, identity = _exit_record_path(owner, directory)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    write_json_atomic(str(path), {'format': EXIT_RECORD_FORMAT, 'owner': identity,
+                                  'observer': process_owner()}, mode=0o600)
+    return str(path)
+
+
+def owner_state(owner):
+    if not _well_formed(owner):
+        return 'unknown'
+    state = _kernel_state(owner)
+    if state == 'unknown' and _exit_recorded(owner):
+        return 'dead'
+    return state
+
+
+__all__ = ["EXIT_RECORD_FORMAT", "exit_evidence_dir", "owner_state", "process_owner", "record_exit"]

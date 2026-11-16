@@ -332,6 +332,37 @@ drain hides the failure. Verify
 `test_failed_close_is_preserved_unless_an_explicit_replacement_retires_it`
 (real hosts) and `test_only_an_explicit_replacement_may_retire_a_failed_executor_close`.
 
+A joined stop also records the host's exit where a successor on another host
+can read it. Before startup admits work, the execution host publishes its own
+`process_owner()` identity (`processOwner`) and its family's evidence
+directory (`exitEvidence`, `<data root>/process-exits`) in its record. After
+`ResidentService.stop` proves physical exit, it calls
+`lib.process_owner.record_exit`, which re-proves death from the kernel in that
+namespace and writes one `tofu.process-exit/v1` file named by the SHA-256 of
+the identity. `owner_state` consults the record only when the kernel cannot
+observe the owner (another host, boot or PID namespace), so local evidence
+always wins and a record never certifies another record. A failed write is
+logged and never blocks the stop. Problem (owner report 2026-11-16, host move
+617675780 → 617731514): the old manager stopped its execution host while an
+entered Attempt (coordinator-4950501b…, attempt 5234bf17) was preparing. The
+successor's recovery saw a foreign host in the entry witness, could prove
+neither joined exit nor death, and refused on every claim, so the Turn stayed
+`running` with no executor and the UI showed "Waiting for an execution status
+update" indefinitely. Decision: the observer that already proves the exit,
+the same-host manager, records that proof where the process family reads it.
+Alternatives rejected: treating a storage epoch change or a foreign host as
+death settles Attempts whose process may still run tools; letting Stop settle
+without proof turns an owner click into effect replay risk; a liveness
+heartbeat adds a timeout that cannot prove exit; writing the receipt from the
+exiting process itself precedes its physical exit. Retention: about 300 bytes
+per execution-host incarnation that admitted work (one per restart); it is
+evidence for that incarnation's unsettled Attempts and is not pruned. A host
+that vanished without a joined stop (crash, killed container) still leaves
+its Attempts unknown. Verify
+`test_joined_stop_records_the_exit_a_successor_host_reads_as_dead` (real
+hosts), `tests/test_process_owner.py` and
+`test_a_moved_host_settles_the_attempt_its_retired_host_recorded_as_exited`.
+
 An explicit replacement retires an unconfirmed native storage close the same
 way (owner request 2026-11-06, "a refused restart must never leave Tofu
 down"). Problem: the 22:34 restart stopped the API, then the storage host's

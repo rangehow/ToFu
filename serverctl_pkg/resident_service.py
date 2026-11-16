@@ -7,6 +7,7 @@ Only standard-library dependencies load in the manager.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 import signal
@@ -324,11 +325,35 @@ class ResidentService:
             descriptor = self._acquire_released_lease(deadline if retire_failed_close else None)
             try:
                 if record and self.record().get('serviceId') == record.get('serviceId'):
+                    # The released lease means every thread has exited; record
+                    # before the state that names the incarnation is retired.
+                    self._record_exit(record)
                     close_manager_control(record)
                     self.state_path.unlink(missing_ok=True)
             finally:
                 os.close(descriptor)
         return retired
+
+    def _record_exit(self, record: dict) -> None:
+        """Publish the joined exit of the host's self-reported incarnation.
+
+        Recovery after a host move runs in another namespace and cannot observe
+        this process; only this record lets it settle work the host entered.
+        The kernel check in record_exit is the proof; a failure leaves recovery
+        where it was (unknown) and never blocks the stop.
+        """
+        owner, directory = record.get('processOwner'), record.get('exitEvidence')
+        if (not isinstance(owner, dict) or not isinstance(directory, str) or not directory
+                or owner.get('pid') != record.get('pid')
+                or owner.get('started') != str(record.get('processStartTime'))):
+            return
+        from lib.process_owner import record_exit
+        try:
+            record_exit(owner, directory)
+        except (OSError, ValueError) as error:
+            logging.getLogger(__name__).warning(
+                '%s exit evidence for pid %s was not recorded: %s',
+                self.service_name, record.get('pid'), error)
 
     def _acquire_released_lease(self, deadline: float | None) -> int:
         """The lease of an exited host; an explicit replacement waits out its descriptor close.

@@ -1347,7 +1347,9 @@ an observable kernel process incarnation in the existing `claimOwner`; the
 60-second horizon and 20-second heartbeat schedule recovery checks, never an
 execution deadline. Matching holder/token/current epoch retains authority until
 explicit release or proved process death. Foreign or inaccessible evidence does
-not authorize takeover. Legacy opaque workers still use expiring leases.
+not authorize takeover. Conversation exit recovery also accepts a recorded
+exit that a same-host manager proved after a joined stop, which is how a host
+move settles the old host's entered Attempts (`docs/NATIVE_STORAGE_LIFECYCLE.md`). Legacy opaque workers still use expiring leases.
 Omission never means “claim everything”. Heartbeats, cancellation polls and
 settlement continue to prove the current holder/token and authority epoch.
 Redis may wake claimers but never decides state or correctness.

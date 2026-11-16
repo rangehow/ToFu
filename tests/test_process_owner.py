@@ -92,3 +92,37 @@ def test_thread_count_fences_whole_process_exit(state, threads, expected, monkey
     monkeypatch.setattr(Path, 'read_text', lambda path, *args, **kwargs:
         stat if str(path) == '/proc/31/stat' else original(path, *args, **kwargs))
     assert owners.owner_state(stamp) == expected
+
+
+def test_recorded_exit_proves_death_only_where_the_kernel_cannot_and_is_never_laundered(
+        tmp_path, monkeypatch):
+    if owners.process_owner() is None:
+        pytest.skip('local Linux process incarnation evidence unavailable')
+    code = ('import json,sys; from lib.process_owner import process_owner; '
+            'print(json.dumps(process_owner()),flush=True); sys.stdin.readline()')
+    child = subprocess.Popen([sys.executable, '-c', code], stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    try:
+        stamp = json.loads(child.stdout.readline())
+        with pytest.raises(ValueError, match='not proved'):
+            owners.record_exit(stamp, tmp_path)
+        child.stdin.write('\n'); child.stdin.flush()
+        child.wait(timeout=5)
+    finally:
+        if child.poll() is None:
+            child.kill(); child.wait(timeout=5)
+    here = owners.process_owner()
+    monkeypatch.setattr(owners, 'exit_evidence_dir', lambda: str(tmp_path))
+    recorded = Path(owners.record_exit(stamp, tmp_path))
+    assert json.loads(recorded.read_text())['owner'] == stamp
+    successor = {**here, 'host': 'successor-host'}
+    monkeypatch.setattr(owners, 'process_owner', lambda: successor)
+    # A host move: the kernel cannot see the old incarnation, the record can.
+    assert owners.owner_state(stamp) == 'dead'
+    other = {**stamp, 'started': str(int(stamp['started']) + 1)}
+    assert owners.owner_state(other) == 'unknown'
+    # Only kernel evidence admits a record, so a successor cannot re-certify one.
+    with pytest.raises(ValueError, match='not proved'):
+        owners.record_exit(stamp, tmp_path / 'copy')
+    recorded.write_text(json.dumps({'format': owners.EXIT_RECORD_FORMAT, 'owner': other}))
+    assert owners.owner_state(stamp) == 'unknown'

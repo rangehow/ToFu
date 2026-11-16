@@ -203,7 +203,7 @@
     "binding": "SHA-256 of canonical sorted compact JSON of the immutable execution witness",
     "authority": "existing owner-scoped task_results checkpoint with the current root publication claim",
     "joined": "the common task worker has exited including invocation cleanup; terminal task persistence must be acknowledged",
-    "processDead": "the existing process_owner owner_state proves death from the kernel in the same host, boot and PID namespace, or from a recorded exit (tofu.process-exit/v1) that the lifecycle manager wrote after it joined that exact incarnation's physical exit in its own namespace; a record is admitted only by kernel evidence, never by another record; absence or foreign evidence remains unknown",
+    "processDead": "the existing process_owner owner_state proves death from the kernel in the same host, boot and PID namespace, or from a recorded exit (tofu.process-exit/v1) that the lifecycle manager wrote after it joined that exact incarnation's physical exit in its own namespace; a record is admitted only by kernel evidence, never by another record; or from a host retirement (tofu.host-retired/v1) that the serving process recorded when it acquired the data root's instance lock while that lock named the other host, which never covers the reading host; absence or foreign evidence remains unknown",
     "unknown": "retain output, domain invoice and known usage; mark incomplete usage and disable automatic effect replay; never release an uncertain admission as zero cost",
     "retention": "one fixed-shape exit receipt in the existing result metadata; no process or cost journal",
     "settlements": [

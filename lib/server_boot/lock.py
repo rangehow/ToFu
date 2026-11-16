@@ -303,6 +303,34 @@ def _reclaim_stale_instance_lock(lock_path, hostname, logger):
     return True
 
 
+def _retire_previous_host(fd, lock_path, hostname, logger):
+    """A lock that named another host hands its serving era to this one.
+
+    Recovery here cannot observe that host's processes; without this record
+    every Attempt it entered stays running and Stop cannot settle it. The record
+    is written before this process stamps the lock, so a failed write leaves the
+    old entry for the next boot to retire.
+    """
+    try:
+        fd.seek(0)
+        entry = (fd.readline() or '').strip()
+    except OSError:
+        return
+    pid, _, host = entry.partition('@')
+    host = host.strip()
+    if not host or host == hostname:
+        return
+    from lib.process_owner import record_host_retired
+    try:
+        record_host_retired(host, os.path.join(os.path.dirname(os.path.abspath(lock_path)),
+                                               'process-exits'),
+                            evidence={'lock': entry})
+        logger.warning('[Lock] host %s handed this data root to %s (its server pid %s); '
+                       'recorded its retirement', host, hostname, pid)
+    except (OSError, ValueError) as e:
+        logger.warning('[Lock] could not record retirement of host %s: %s', host, e)
+
+
 def _acquire_instance_lock(lock_path, logger, hostname=None, allow_reclaim=True,
                            *, mark_booting=False):
     """Acquire the exclusive single-instance lock at *lock_path*.
@@ -353,6 +381,7 @@ def _acquire_instance_lock(lock_path, logger, hostname=None, allow_reclaim=True,
                                 'refusing to start. Set TOFU_SKIP_LOCK=1 to override.')
             return ok2, fd2
         return False, None
+    _retire_previous_host(fd, lock_path, hostname, logger)
     try:
         fd.seek(0)
         fd.truncate()

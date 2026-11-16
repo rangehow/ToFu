@@ -3,11 +3,14 @@
 process_owner stamps host, OS boot, PID namespace, PID and kernel start time.
 owner_state proves alive/dead from the kernel within the same observable
 namespace. Outside it (another host, boot or PID namespace, e.g. after a host
-move) only a recorded exit proves death: record_exit stores one fixed-shape
+move) only recorded evidence proves death: record_exit stores one fixed-shape
 record per incarnation, written by an observer that proved the exit from the
-kernel in the owner's namespace, in the directory that owner's process family
-reads (exit_evidence_dir). Missing or inaccessible evidence is unknown. This
-grants no task or external-job authority.
+kernel in the owner's namespace; record_host_retired stores one record per
+host that handed this data root's serving lock to another host, so every
+process on it belongs to a stopped serving era. Both live in the directory the
+process family reads (exit_evidence_dir). A retirement never covers the
+reading host itself. Missing or inaccessible evidence is unknown. This grants
+no task or external-job authority.
 """
 from pathlib import Path
 import hashlib
@@ -16,6 +19,7 @@ import os
 import socket
 
 EXIT_RECORD_FORMAT = 'tofu.process-exit/v1'
+HOST_RETIREMENT_FORMAT = 'tofu.host-retired/v1'
 _OWNER_FIELDS = ('host', 'boot', 'pid_namespace', 'pid', 'started')
 
 
@@ -106,13 +110,48 @@ def record_exit(owner, directory):
     return str(path)
 
 
+def _host_retirement_path(host, directory):
+    digest = hashlib.sha256(host.encode('utf-8')).hexdigest()
+    return Path(directory) / 'hosts' / f'{digest}.json'
+
+
+def record_host_retired(host, directory, *, evidence):
+    """Record that ``host`` no longer serves this data root; called by its successor.
+
+    The successor holds the serving lock the retired host named, so the
+    retired host's manager stopped (joining its execution host), or the
+    operator started this host after it went away.
+    """
+    if not isinstance(host, str) or not host or host == socket.gethostname():
+        raise ValueError('only another host can be retired')
+    from lib.json_store import write_json_atomic
+    path = _host_retirement_path(host, directory)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    write_json_atomic(str(path), {'format': HOST_RETIREMENT_FORMAT, 'host': host,
+                                  'successor': process_owner(), 'evidence': evidence}, mode=0o600)
+    return str(path)
+
+
+def _host_retired(owner):
+    if owner['host'] == socket.gethostname():
+        return False
+    try:
+        record = json.loads(_host_retirement_path(owner['host'], exit_evidence_dir())
+                            .read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return False
+    return (isinstance(record, dict) and record.get('format') == HOST_RETIREMENT_FORMAT
+            and record.get('host') == owner['host'])
+
+
 def owner_state(owner):
     if not _well_formed(owner):
         return 'unknown'
     state = _kernel_state(owner)
-    if state == 'unknown' and _exit_recorded(owner):
+    if state == 'unknown' and (_exit_recorded(owner) or _host_retired(owner)):
         return 'dead'
     return state
 
 
-__all__ = ["EXIT_RECORD_FORMAT", "exit_evidence_dir", "owner_state", "process_owner", "record_exit"]
+__all__ = ["EXIT_RECORD_FORMAT", "HOST_RETIREMENT_FORMAT", "exit_evidence_dir", "owner_state",
+           "process_owner", "record_exit", "record_host_retired"]

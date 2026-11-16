@@ -363,6 +363,29 @@ its Attempts unknown. Verify
 hosts), `tests/test_process_owner.py` and
 `test_a_moved_host_settles_the_attempt_its_retired_host_recorded_as_exited`.
 
+A host that hands over the data root retires itself even without that record.
+Problem (owner report 2026-11-16, after the fix above went live): the stuck
+Attempts belonged to an execution host that exited before the fix, so no exit
+record existed; restart did not help and Stop failed the same way ("Domain
+cancellation settlement is unconfirmed"), leaving the Coordinator unusable.
+Decision: when a serving process acquires `data/.server.lock` while it names
+another host, `lib.server_boot.lock` records `tofu.host-retired/v1` for that
+host (`process-exits/hosts/<sha256(host)>.json`) before stamping its own
+identity, and `owner_state` treats a retired host's processes as dead. The
+successor reaches that lock only after the old manager's stop, which joins its
+execution host (`_stop_resident_services`), or after the operator explicitly
+started here because the old host was gone, so the old serving era has ended.
+A retirement never covers the reading host, whose processes keep kernel
+evidence; a later return to the retired host is harmless because recovery
+then runs there with kernel evidence. Residual risk: an operator who starts a
+second host while the first still runs already has split-brain storage; this
+record would then also settle that host's Attempts. Alternatives rejected:
+treating every foreign-host witness as dead breaks topologies with several
+live execution hosts; a liveness timeout cannot prove exit. Verify
+`test_acquiring_a_lock_another_host_named_records_that_hosts_retirement`,
+`test_host_retirement_covers_only_other_hosts` and
+`test_stop_settles_an_attempt_whose_host_handed_off_the_serving_lock`.
+
 An explicit replacement retires an unconfirmed native storage close the same
 way (owner request 2026-11-06, "a refused restart must never leave Tofu
 down"). Problem: the 22:34 restart stopped the API, then the storage host's

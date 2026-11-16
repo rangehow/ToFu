@@ -2824,8 +2824,10 @@ summary.thinking-header::-webkit-details-marker{display:none}
   line-height:1.25;
   white-space:nowrap;
 }
+/* Dim a check only where .active shows it: on an off row this selector would
+ * outrank the hidden check's opacity:0 and paint a check that was never set. */
 .submenu-item.tool-unavailable .submenu-item-icon,
-.submenu-item.tool-unavailable .submenu-item-check{opacity:.42}/* Native model controls: feature layout only; shared menu/button paint stays in the UI kit. */
+.submenu-item.active.tool-unavailable .submenu-item-check{opacity:.42}/* Native model controls: feature layout only; shared menu/button paint stays in the UI kit. */
 .ps-dd-model-choice{flex:1;min-width:0;display:flex;align-items:center;text-align:start}
 .ps-dd-model-choice .ps-dd-label{min-width:0}
 .ps-dd-provider-menu-label{min-width:0;overflow:hidden;text-overflow:ellipsis}

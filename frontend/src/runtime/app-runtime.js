@@ -17977,6 +17977,8 @@ function toggleSubmenu(id) {
       t.classList.add("open");
       t.setAttribute('aria-expanded', 'true');
     }
+    if (el.querySelector("#localControlToggle")
+        && typeof _lcRefreshReach === "function") _lcRefreshReach();
   }
 }
 // Close sub-menus on outside click
@@ -23236,7 +23238,8 @@ let backgroundConversationActivity = new Map();
 })();
 /* ===== migrated source: local-control-state.js ===== */
 /* Responsibility: retained Local Control badge projection only.
- * Entry: _lcUpdateBadge, called when conversation tool flags change.
+ * Entry: _lcUpdateBadge, called when conversation tool flags change;
+ * _lcRefreshReach, called when the row is about to be seen.
  * Dependencies: the retained desktop wire flag and the optional
  * demand-loaded LocalControlPresentationState reachability port. */
 
@@ -23288,6 +23291,17 @@ function _lcUpdateBadge() {
                      && reach.desktop === false);
       _paintToolExposureState(row, n > 0 && stale < n, available);
     }
+  }
+}
+
+/* Reachability is a past observation: the lazy owner's modal poll stops on
+ * close, so ask that owner to re-confirm it before the row is seen again. An
+ * owner that was never requested has nothing to refresh and is not loaded
+ * for this — unprobed stays unprobed. */
+function _lcRefreshReach() {
+  var presentation = runtimeScope.LocalControlPresentationState;
+  if (presentation && typeof presentation.refresh === 'function') {
+    presentation.refresh();
   }
 }
 /* ===== migrated source: onboarding.js ===== */

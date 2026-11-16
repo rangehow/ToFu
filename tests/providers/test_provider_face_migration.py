@@ -55,7 +55,7 @@ HDRS = {'X-Custom-Header': 'your-header-value'}
 def _legacy_pair():
     """The shape every existing install has today."""
     return [
-        {'id': 'default', 'name': 'Default', 'base_url': OPENAI_URL,
+        {'id': 'example-corp', 'name': 'YourProvider', 'base_url': OPENAI_URL,
          'extra_headers': dict(HDRS), 'api_keys': list(KEYS), 'enabled': True,
          'models': [{'model_id': 'kimi-k3', 'capabilities': ['text']},
                     {'model_id': 'gemini-3.5-flash', 'capabilities': ['text']}]},

@@ -61,7 +61,7 @@ def _make_fake_project(root: Path):
     (root / 'data' / 'config').mkdir(parents=True)
     (root / 'data' / 'config' / 'server_config.json').write_text(json.dumps({
         'providers': [
-            {'id': 'default', 'name': 'Default', 'api_keys': ['shared-key']},
+            {'id': 'example-corp', 'name': 'YourProvider', 'api_keys': ['shared-key']},
             {'id': 'openai', 'name': 'Personal', 'api_keys': ['personal-key']},
         ],
         'proxy_config': {'http_proxy': 'http://proxy.corp:3128'},

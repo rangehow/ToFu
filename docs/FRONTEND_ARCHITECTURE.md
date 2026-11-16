@@ -2959,6 +2959,9 @@ unless the chat is docked, and a turn in the hidden column has no paint opportun
   procedural floor and light (`paint.ts`: long boards, window wall with skies by hour, carpeted team rooms,
   daylight, wall shade, vignette, night lamps at the head desks), furniture stamped from the art atlas with
   each pod pre-painted as one layer, then people, lit screens, documents, emblems, signs and tooltips.
+  Pods and character sheets are kept at the frame's resolution (a power of two, like mip levels), so
+  everything is drawn at about one to one: resampling the full-resolution sheet for every person on every
+  frame cost more than the rest of the frame together and stalled blends on a software-rasterized canvas.
   The floor and the light are device-pixel layers keyed by camera transform and content, rebuilt once a key
   has held for a frame: a settled frame blits two layers and draws the sprites, and the stage sleeps while
   nothing moves (it wakes on the art's beat while people type, else on the hour for the skies). Rooms never
@@ -2966,10 +2969,11 @@ unless the chat is docked, and a turn in the hidden column has no paint opportun
   change blends by identity (`tween.ts`: rooms by team, pods and desks by index, decor by the key of its
   place): rooms slide and resize; something leaving fades out over the first half of the blend and something
   arriving fades in over the second, so neither competes with the motion; a pod or desk that comes or goes
-  inside a room rides with that room and is clipped to it, and its person shows with it. Seats and the spots
-  in the line at the owner's door keep their person. On this host the stage's catch-up bound
-  (`MAX_FRAME_MS`) lets a main-thread stall of over a second skip part of a blend; the audit measured those
-  only while the first reads load.
+  inside a room rides with that room and is cut to it (`paint.ts` `drawInside` crops the sprite's source
+  and destination, no canvas clip state), and its person shows with it. A floor that changes again mid-blend
+  (the first reads land one after another) blends from the blend in flight, which keeps playing underneath
+  (`FloorChange`, a crossfade from a live pose): rooms keep their speed and fades their opacity through any
+  burst. Seats and the spots in the line at the owner's door keep their person.
 - `actors.ts` gives every person a desk, a rest (the desk, a spot at the owner's door, or gone) and the
   walk there along the walkways (`routes.ts`: waypoints that bend with a blending floor). A Worker who
   arrives walks in through the entrance, one who leaves walks out (and turns round where it stands when

@@ -31,7 +31,8 @@ void Promise.all([ready(), fetch(params.get('fixture') || './live.json').then(re
       now: () => (params.has('now') ? Number(params.get('now')) : Date.now()),
     });
     (window as unknown as { __world: unknown }).__world = {
-      report: (team: string) => source?.report(team), office: () => world.office(), inspect: () => world.inspect(),
+      report: (team: string) => source?.report(team), grow: (team: string, count: number) => source?.grow(team, count),
+      office: () => world.office(), inspect: () => world.inspect(),
       replies: () => source?.replies,
     };
   });

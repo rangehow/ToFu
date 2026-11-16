@@ -31,12 +31,12 @@ import {
 import { stableHash } from './hash';
 import { firstLine, type DeskDocument, type Office, type Person, type Team, type Trophy } from './model';
 import {
-  CLUTTER_CHOICES, drawFloor, drawFurniture, drawLighting, drawRug, drawWall, FLOOR_TILE, NOISE_SIZE, PALETTE, paintFloorTile,
+  CLUTTER_CHOICES, drawFloor, drawFurniture, drawInside, drawLighting, drawRug, drawWall, FLOOR_TILE, NOISE_SIZE, PALETTE, paintFloorTile,
   paintNoiseTile, paintPod, paintWindow, POD_BLEED, rr, seeded, windowSlots, type Atlas,
 } from './paint';
 import { LEAD_SLOT, samePlace, seatAt, type Place } from './routes';
 import { FEET, sheetFor } from './sprites';
-import { blendLayout, easeInOut, easeOutBack, type Blend } from './tween';
+import { advanceChange, easeOutBack, settledBlend, showChange, type Blend, type FloorChange } from './tween';
 
 export type OpenTarget = { kind: 'person'; id: string } | { kind: 'document'; id: string };
 export interface WalkPlan { person: string; document: DeskDocument; leaves: boolean }
@@ -70,7 +70,6 @@ const ART_FADE_MS = 400;
 const TIP_MS = 140;
 const DROP_MS = 450;
 const HOUR_MS = 3_600_000;
-const NO_ALPHA: ReadonlyMap<string, number> = new Map();
 
 interface HitBox { id: string; kind: 'person' | 'document' | 'extra'; x: number; y: number; w: number; h: number; label: string; detail: string; data: Record<string, string> }
 /** `room`: the opacity of the room or pod the person sits in while it arrives or leaves in a floor-plan blend,
@@ -80,8 +79,6 @@ const SETTLED_ROOM = { alpha: 1, clip: null };
 /** A full-view layer in device pixels: `key` names what it holds, `pending` the key the previous frame wanted;
  * the counts say how often frames blitted it, rebuilt it or drew the content directly. */
 interface CachedLayer { canvas: HTMLCanvasElement | null; key: string; pending: string; hits: number; builds: number; direct: number }
-
-const settledBlend = (layout: OfficeLayout): Blend => ({ layout, zoneAlpha: NO_ALPHA, podAlpha: NO_ALPHA, decorAlpha: [], watchdogAlpha: 1 });
 
 /** Where a seat's lit screen goes: over a desk-up monitor's face, or as a glow round the back of a desk-down,
  * head-desk or Watchdog monitor (the prop's "screen" slot, relative to its anchor). */
@@ -112,8 +109,8 @@ export function createWorldScene(ports: WorldScenePorts) {
   let theme: WorldTheme = 'dark';
   let viewport = { width: 0, height: 0 };
   let target: OfficeLayout | null = null;
-  let from: OfficeLayout | null = null;
-  let tweenAge = 0;
+  /** The floor-plan change in flight; null while the floor is at rest. */
+  let moving: FloorChange | null = null;
   let shown: Blend | null = null;
   let shapeKey = '';
   const capacity = new Map<string, number>();
@@ -143,6 +140,7 @@ export function createWorldScene(ports: WorldScenePorts) {
   // Caches keyed by everything they depend on.
   const podLayers = new Map<string, HTMLCanvasElement>();
   const windowLayers = new Map<string, HTMLCanvasElement>();
+  const sheetLayers = new Map<string, HTMLCanvasElement>();
   let patterns: { key: string; planks: CanvasPattern | null; pile: CanvasPattern | null } | null = null;
   const floorLayer: CachedLayer = { canvas: null, key: '', pending: '', hits: 0, builds: 0, direct: 0 };
   const lightLayer: CachedLayer = { canvas: null, key: '', pending: '', hits: 0, builds: 0, direct: 0 };
@@ -173,9 +171,9 @@ export function createWorldScene(ports: WorldScenePorts) {
     const next = fitOffice(viewport.width, viewport.height, teamShapes).layout;
     const first = !shown;
     if (first || snap || still) {
-      target = next; from = null; shown = settledBlend(next);
+      target = next; moving = null; shown = settledBlend(next);
     } else {
-      from = shown!.layout; target = next; tweenAge = 0;
+      moving = { from: moving ?? shown!, to: next, age: 0 }; target = next;
     }
     applyWorld(first);
     targetsDirty = true;
@@ -424,9 +422,10 @@ export function createWorldScene(ports: WorldScenePorts) {
     return layer;
   }
 
-  function sprite(ctx: CanvasRenderingContext2D, name: SpriteName, x: number, y: number, w: number, h: number) {
+  /** A sprite at (x, y, w, h), only its part inside `room` when given. */
+  function sprite(ctx: CanvasRenderingContext2D, name: SpriteName, x: number, y: number, w: number, h: number, room: Rect | null = null) {
     const source = art.sprite(name);
-    if (source) ctx.drawImage(source, x, y, w, h);
+    if (source) drawInside(ctx, source, 0, 0, source.width, source.height, x, y, w, h, room);
   }
 
   function drawPerson(ctx: CanvasRenderingContext2D, item: Drawn) {
@@ -436,32 +435,46 @@ export function createWorldScene(ports: WorldScenePorts) {
     const sx = pose.column * CELL.w * scale, sy = STATES[pose.state].row * CELL.h * scale;
     const box = boxOf(pose);
     const alpha = ctx.globalAlpha;
-    ctx.save();
-    if (item.room.clip) clipTo(ctx, item.room.clip);
+    const room = item.room.clip;
     ctx.globalAlpha = alpha * pose.alpha * item.fade * item.room.alpha;
     const carry = pose.carry && pose.hand ? `carry-${pose.carry}` as SpriteName : null;
     const carryArt = carry ? spriteArt(carry) : null;
-    if (carry && carryArt && !pose.front) sprite(ctx, carry, box.x + pose.hand!.x, box.y + pose.hand!.y, carryArt.size[0], carryArt.size[1]);
-    ctx.drawImage(sheet, sx, sy, CELL.w * scale, box.h * scale, box.x, box.y, box.w, box.h);
-    if (carry && carryArt && pose.front) sprite(ctx, carry, box.x + pose.hand!.x, box.y + pose.hand!.y, carryArt.size[0], carryArt.size[1]);
-    ctx.restore();
+    if (carry && carryArt && !pose.front) sprite(ctx, carry, box.x + pose.hand!.x, box.y + pose.hand!.y, carryArt.size[0], carryArt.size[1], room);
+    drawInside(ctx, sheet, sx, sy, CELL.w * scale, box.h * scale, box.x, box.y, box.w, box.h, room);
+    if (carry && carryArt && pose.front) sprite(ctx, carry, box.x + pose.hand!.x, box.y + pose.hand!.y, carryArt.size[0], carryArt.size[1], room);
+    ctx.globalAlpha = alpha;
   }
 
-  function clipTo(ctx: CanvasRenderingContext2D, room: Rect) {
-    rr(ctx, room.x, room.y, room.w, room.h, 12);
-    ctx.clip();
-  }
-
-  /** The actor's sheet for the shown theme, or the one it was drawn with until that decodes; each sheet's people
-   * fade in together the first time it can be drawn. */
-  function sheetOf(actor: Actor): { sheet: CanvasImageSource | null; fade: number } {
+  /** The actor's sheet for the shown theme at the frame's resolution, or the one it was drawn with until that
+   * decodes; each sheet's people fade in together the first time it can be drawn. */
+  function sheetOf(actor: Actor, level: number): { sheet: CanvasImageSource | null; fade: number } {
     const url = sheetFor(actor.person, art.theme() ?? theme);
     if (art.sheet(url)) drawnSheet.set(actor.id, url);
     const used = drawnSheet.get(actor.id);
     const sheet = used ? art.sheet(used) : null;
     if (!used || !sheet) return { sheet: null, fade: 0 };
     if (!sheetFade.has(used)) sheetFade.set(used, still ? 1 : 0);
-    return { sheet, fade: sheetFade.get(used)! };
+    return { sheet: sheetLayer(used, sheet, level), fade: sheetFade.get(used)! };
+  }
+
+  /** A sheet at the pod layers' resolution (`level`), painted once per sheet and level like a mip level, so each
+   * person is drawn from it at about one to one: resampling the full-resolution sheet for every person on every
+   * frame costs more than the rest of the frame together (a software-rasterized canvas stalls for whole frames). */
+  function sheetLayer(url: string, sheet: CanvasImageSource & { width: number; height: number }, level: number): CanvasImageSource {
+    const own = sheet.width / (CELL.w * CELL.columns);
+    if (level >= own) return sheet;
+    const key = `${url}|${level}`;
+    let layer = sheetLayers.get(key);
+    if (layer) return layer;
+    layer = document.createElement('canvas');
+    layer.width = Math.max(1, Math.round(CELL.w * CELL.columns * level));
+    layer.height = Math.max(1, Math.round(sheet.height * level / own));
+    const ctx = layer.getContext('2d');
+    if (!ctx) return sheet;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(sheet, 0, 0, layer.width, layer.height);
+    sheetLayers.set(key, layer);
+    return layer;
   }
 
   function plate(ctx: CanvasRenderingContext2D, label: string, x: number, y: number) {
@@ -631,18 +644,16 @@ export function createWorldScene(ports: WorldScenePorts) {
     if (atlas) {
       ctx.globalAlpha = reveal * furniture;
       const routers = new Set([...teams.values()].filter(team => team.kind === 'router').map(team => team.key));
-      drawFurniture(ctx, atlas, layout, routers, zoneAlpha, index => blend.decorAlpha[index] ?? 1, blend.watchdogAlpha);
+      drawFurniture(ctx, atlas, layout, routers, zoneAlpha, key => blend.decorAlpha.get(key) ?? 1, blend.watchdogAlpha);
       for (const zone of layout.zones) {
         zone.pods.forEach((pod, index) => {
           const layer = podLayer(atlas, look, zone.key, index, level, layout);
           if (!layer) return;
           const fading = blend.podAlpha.get(`${zone.key}:${index}`);
-          ctx.save();
-          // A pod arriving or leaving in a room that is still growing or shrinking stays inside the room.
-          if (fading !== undefined) clipTo(ctx, zone);
           ctx.globalAlpha = reveal * furniture * zoneAlpha(zone.key) * (fading ?? 1);
-          ctx.drawImage(layer, pod.x - POD_BLEED, pod.y - POD_BLEED, pod.w + POD_BLEED * 2, pod.h + POD_BLEED * 2);
-          ctx.restore();
+          // A pod arriving or leaving in a room that is still growing or shrinking stays inside the room.
+          drawInside(ctx, layer, 0, 0, layer.width, layer.height, pod.x - POD_BLEED, pod.y - POD_BLEED, pod.w + POD_BLEED * 2,
+            pod.h + POD_BLEED * 2, fading === undefined ? null : zone);
         });
       }
     }
@@ -672,7 +683,7 @@ export function createWorldScene(ports: WorldScenePorts) {
     ctx.imageSmoothingQuality = 'high';
     const m = ctx.getTransform();
     const view = `${ctx.canvas.width}x${ctx.canvas.height}:${m.a}:${m.d}:${m.e}:${m.f}|${shapeKey}|${look}`;
-    const settled = !from && reveal >= 1 && (!atlas || furniture >= 1);
+    const settled = !moving && reveal >= 1 && (!atlas || furniture >= 1);
     const colors = office.teams.map(team => team.color).join();
     drawCached(ctx, floorLayer, settled ? `${view}|${Boolean(atlas)}|${level}|${hour}|${colors}` : '',
       target => paintFloor(target, layout, blend, atlas, look, level, hour, teams));
@@ -697,7 +708,7 @@ export function createWorldScene(ports: WorldScenePorts) {
     const sceneStill = still || frame.still;
     for (const actor of actors.values()) {
       const pose = actorPose(actor, layout, beat, sceneStill);
-      if (pose) drawn.push({ actor, pose, ...sheetOf(actor), room: roomOf(actor) });
+      if (pose) drawn.push({ actor, pose, ...sheetOf(actor, level), room: roomOf(actor) });
     }
     drawn.sort((a, b) => a.pose.y - b.pose.y);
     if (atlas) {
@@ -705,11 +716,8 @@ export function createWorldScene(ports: WorldScenePorts) {
         const seat = seatAt(layout, item.actor.home);
         if (!seat || item.actor.screen <= 0) continue;
         const box = screenBox(seat, item.actor.home.kind === 'watchdog' ? layout.watchdog?.station ?? null : null);
-        ctx.save();
-        if (item.room.clip) clipTo(ctx, item.room.clip);
         ctx.globalAlpha = reveal * furniture * item.actor.screen * item.room.alpha;
-        sprite(ctx, box.name, box.x, box.y, box.w, box.h);
-        ctx.restore();
+        sprite(ctx, box.name, box.x, box.y, box.w, box.h, item.room.clip);
       }
     }
     const hoverId = frame.hover, focusId = frame.focus;
@@ -793,11 +801,9 @@ export function createWorldScene(ports: WorldScenePorts) {
       if (layoutNow() && reveal < 1) reveal = Math.min(1, reveal + dt / ART_FADE_MS);
       if (ready && furniture < 1) furniture = Math.min(1, furniture + dt / ART_FADE_MS);
       for (const [url, value] of sheetFade) if (value < 1) sheetFade.set(url, Math.min(1, value + dt / ART_FADE_MS));
-      if (from && target) {
-        tweenAge += dt;
-        const k = Math.min(1, tweenAge / TWEEN_MS);
-        shown = k >= 1 ? settledBlend(target) : blendLayout(from, target, easeInOut(k));
-        if (k >= 1) from = null;
+      if (moving) {
+        moving = advanceChange(moving, dt, TWEEN_MS);
+        shown = moving ? showChange(moving, TWEEN_MS) : settledBlend(target!);
         applyWorld(false);
         targetsDirty = true;
       }
@@ -823,7 +829,7 @@ export function createWorldScene(ports: WorldScenePorts) {
       const hour = HOUR_MS - ((performance.timeOrigin + now) % HOUR_MS);
       if (!layoutNow()) return Infinity;
       if (reveal < 1 || (art.theme() !== null && furniture < 1) || [...sheetFade.values()].some(value => value < 1)) return 0;
-      if (from || landed.size || (tip.id && tip.alpha < 1) || (lastHover || lastFocus) !== tip.id) return 0;
+      if (moving || landed.size || (tip.id && tip.alpha < 1) || (lastHover || lastFocus) !== tip.id) return 0;
       let looping = false;
       for (const actor of actors.values()) {
         if (isMoving(actor)) return 0;
@@ -858,7 +864,7 @@ export function createWorldScene(ports: WorldScenePorts) {
     setStill(next) {
       still = next;
       if (!still) return;
-      if (from && target) { from = null; shown = settledBlend(target); applyWorld(false); }
+      if (moving && target) { moving = null; shown = settledBlend(target); applyWorld(false); }
       reveal = layoutNow() ? 1 : reveal;
       furniture = art.theme() ? 1 : furniture;
       for (const url of sheetFade.keys()) sheetFade.set(url, 1);
@@ -934,8 +940,9 @@ export function createWorldScene(ports: WorldScenePorts) {
       const layout = layoutNow();
       const counts = (slot: CachedLayer) => ({ hits: slot.hits, builds: slot.builds, direct: slot.direct });
       return {
-        tweening: Boolean(from), layout: target, shown: layout,
-        fading: { zones: Object.fromEntries(shown?.zoneAlpha ?? []), pods: Object.fromEntries(shown?.podAlpha ?? []) },
+        tweening: Boolean(moving), layout: target, shown: layout,
+        fading: { zones: Object.fromEntries(shown?.zoneAlpha ?? []), pods: Object.fromEntries(shown?.podAlpha ?? []),
+          decor: Object.fromEntries(shown?.decorAlpha ?? []), watchdog: shown?.watchdogAlpha ?? 1 },
         layers: { floor: counts(floorLayer), light: counts(lightLayer) },
         capacity: Object.fromEntries(capacity),
         actors: [...actors.values()].map(actor => ({
@@ -947,7 +954,7 @@ export function createWorldScene(ports: WorldScenePorts) {
     },
     dispose() {
       disposed = true;
-      actors.clear(); podLayers.clear(); windowLayers.clear(); patterns = null; hits = []; targetList = [];
+      actors.clear(); podLayers.clear(); windowLayers.clear(); sheetLayers.clear(); patterns = null; hits = []; targetList = [];
       floorLayer.canvas = lightLayer.canvas = null;
     },
   };

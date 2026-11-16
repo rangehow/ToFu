@@ -1,6 +1,6 @@
 /** Fixture source for the office preview: a recorded live snapshot (preview/record_fixture.py output) served
  * as a static WorldLive, optionally scaled to N running Workers, with one scripted report for checking the
- * walk-in, and answer ports for the leads' recorded questions (the production choice-interaction adapter over
+ * walk-in, scripted growth for checking floor changes, and answer ports for the leads' recorded questions (the production choice-interaction adapter over
  * the fixture's Turns: an answer settles the question in the fixture, as the server would). Preview-only: the
  * application reads live data through live.ts. Entry point: fixtureLive. */
 import { createChoiceInteractionPorts } from '../../../conversation/application/choice-interaction';
@@ -35,6 +35,7 @@ function scaled(teams: LiveTeam[], total: number) {
 
 export function fixtureLive(snapshot: FixtureSnapshot, onChange: () => void, options: { scale?: number } = {}): WorldLive & {
   report(team: string): string | null;
+  grow(team: string, count: number): string[];
   answerPorts(conversationId: string, turnId: string): ChoicePorts | undefined;
   replies: Array<{ conversationId: string; guidanceId: string; quote: string; responseText: string }>;
 } {
@@ -113,6 +114,18 @@ export function fixtureLive(snapshot: FixtureSnapshot, onChange: () => void, opt
         onChange();
       }, 400);
       return busy.conversationId;
+    },
+    /** Script a floor change: `count` running Workers join a team at once, so its room grows. */
+    grow(teamKey: string, count: number) {
+      const team = teams.find(each => each.key === teamKey || each.name === teamKey);
+      if (!team) return [];
+      const page = team.team.value || { conversations: [], nextCursor: null, coverage: 'complete' as const };
+      const joined = Array.from({ length: count }, () => `worker-grow-${++revision}`);
+      team.team = { ...team.team, value: { ...page, conversations: [...page.conversations, ...joined.map(id => ({
+        conversationId: id, title: `[GROW] Synthetic Worker ${id}`, turnCount: 1, coordinatorId: team.leadId, folderId: null, busy: true as const,
+      }))] }, at: team.team.at + 1 };
+      onChange();
+      return joined;
     },
   };
 }

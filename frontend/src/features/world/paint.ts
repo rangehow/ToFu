@@ -7,7 +7,7 @@
  * and chairs are painted once into a layer that moves as one piece. Clutter is seeded by desk identity, so a
  * desk keeps its mug wherever its room moves.
  * Pure drawing, no DOM or state. Entry points: paintFloorTile, paintNoiseTile, drawFloor, drawWall,
- * windowSlots, paintWindow, drawRug, paintPod, drawFurniture, drawLighting, stamp. */
+ * windowSlots, paintWindow, drawRug, paintPod, drawFurniture, drawLighting, stamp, drawInside. */
 import { podDivider, type DecorItem, type OfficeLayout, type Pod, type Rect, type Seat, type ZoneLayout } from './layout';
 
 export type Ctx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
@@ -241,7 +241,7 @@ export const CLUTTER_CHOICES = CLUTTER.length + 1;
  * head desk, the Watchdog's station, the lounge, bar and entrance, and the plants and appliances. `alpha`
  * fades items that are appearing or leaving in a layout transition. */
 export function drawFurniture(ctx: Ctx, atlas: Atlas, layout: OfficeLayout, routerZones: ReadonlySet<string>,
-  zoneAlpha: (key: string) => number, decorAlpha: (index: number) => number, watchdogAlpha: number) {
+  zoneAlpha: (key: string) => number, decorAlpha: (key: string) => number, watchdogAlpha: number) {
   const { room, whiteboard, shelf } = layout.owner;
   stamp(ctx, atlas, 'owner-office', room.x, room.y);
   stamp(ctx, atlas, 'whiteboard', whiteboard.x, whiteboard.y);
@@ -260,8 +260,8 @@ export function drawFurniture(ctx: Ctx, atlas: Atlas, layout: OfficeLayout, rout
   stamp(ctx, atlas, 'meeting-area', layout.lounge.x, layout.lounge.y);
   stamp(ctx, atlas, 'coffee-bar', layout.bar.x, layout.bar.y);
   stamp(ctx, atlas, 'entrance', layout.entrance.x, layout.entrance.y);
-  layout.decor.forEach((item: DecorItem, index) => {
-    ctx.globalAlpha = base * decorAlpha(index);
+  layout.decor.forEach((item: DecorItem) => {
+    ctx.globalAlpha = base * decorAlpha(item.key);
     const variant = (item.variant % 3) + 1;
     if (item.kind === 'plant') stamp(ctx, atlas, `plant-${variant}`, item.x, item.y);
     else if (item.kind === 'tall-plant') stamp(ctx, atlas, `tall-plant-${variant}`, item.x, item.y);
@@ -300,4 +300,17 @@ export function drawLighting(ctx: Ctx, layout: OfficeLayout, palette: Palette, n
     pool.addColorStop(0, rgba(palette.glow, palette.daylight ? 0.16 : 0.12)); pool.addColorStop(1, rgba(palette.glow, 0));
     ctx.fillStyle = pool; ctx.fillRect(x - 190, y - 190, 380, 380);
   }
+}
+
+/** Draws source box (sx, sy, sw, sh) of `image` to destination box (dx, dy, dw, dh), only the part inside `box` when
+ * given: the source is cropped to match, so this clips to a rectangle without canvas clip state (a sprite that
+ * saves, clips and restores the context costs a software-rasterized canvas a mask on every frame). */
+export function drawInside(ctx: Ctx, image: CanvasImageSource, sx: number, sy: number, sw: number, sh: number,
+  dx: number, dy: number, dw: number, dh: number, box: Rect | null) {
+  if (!box) { ctx.drawImage(image, sx, sy, sw, sh, dx, dy, dw, dh); return; }
+  const left = Math.max(dx, box.x), top = Math.max(dy, box.y);
+  const right = Math.min(dx + dw, box.x + box.w), bottom = Math.min(dy + dh, box.y + box.h);
+  if (right <= left || bottom <= top) return;
+  const kx = sw / dw, ky = sh / dh;
+  ctx.drawImage(image, sx + (left - dx) * kx, sy + (top - dy) * ky, (right - left) * kx, (bottom - top) * ky, left, top, right - left, bottom - top);
 }

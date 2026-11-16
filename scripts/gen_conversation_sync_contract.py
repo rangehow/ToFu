@@ -16,6 +16,10 @@ import yaml
 
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), '..'))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+from scripts.generated_rust import format_generated_rust  # noqa: E402
 SOURCE = os.path.join(ROOT, 'contracts', 'conversation_sync_v3.yaml')
 API_RELEASE_SOURCE = os.path.join(ROOT, 'contracts', 'api_v4.yaml')
 PYTHON_OUTPUT = os.path.join(
@@ -1205,7 +1209,8 @@ def main() -> int:
     document = _load_contract()
     expected = {
         PYTHON_OUTPUT: render_python(document),
-        RUST_NOTE_VOCABULARY_OUTPUT: render_rust_note_vocabulary(document),
+        RUST_NOTE_VOCABULARY_OUTPUT: format_generated_rust(
+            render_rust_note_vocabulary(document), RUST_NOTE_VOCABULARY_OUTPUT),
         TYPESCRIPT_OUTPUT: render_typescript(document),
     }
     if args.check:

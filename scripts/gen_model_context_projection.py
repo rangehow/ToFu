@@ -1,13 +1,20 @@
 """Generate model-projection display rules from the model context contract.
 
 Entry point: main (--check or write). Outputs: backend and native constants.
-Dependencies: standard library only; no runtime contract reads or startup I/O.
+Dependencies: standard library and rustfmt (scripts/generated_rust.py); no
+runtime contract reads or startup I/O.
 """
 from pathlib import Path
 import argparse
 import json
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.generated_rust import format_generated_rust  # noqa: E402
+
 SOURCE = ROOT / "contracts/model_context_v1.schema.json"
 RULES = {
     "DISPLAY_ONLY_FIELDS": "displayOnlyProjectionFields",
@@ -29,9 +36,10 @@ def render_outputs():
             raise ValueError(f"Invalid model context rule: {key}")
         python.extend([f"{name} = frozenset((", *[f"    {value!r}," for value in values], "))", ""])
         rust.extend([f"pub(crate) const {name}: &[&str] = &[", *[f"    {json.dumps(value)}," for value in values], "];", ""])
+    rust_output = ROOT / "packages/tofu-db/src/generated_model_context_projection.rs"
     return {
         ROOT / "lib/storage/generated_model_context_projection.py": "\n".join(python).rstrip() + "\n",
-        ROOT / "packages/tofu-db/src/generated_model_context_projection.rs": "\n".join(rust).rstrip() + "\n",
+        rust_output: format_generated_rust("\n".join(rust).rstrip() + "\n", rust_output),
     }
 
 

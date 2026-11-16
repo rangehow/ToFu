@@ -309,8 +309,10 @@ def test_worker_start_failure_is_explicit_and_leaves_no_physical_carrier(monkeyp
         try:
             monkeypatch.setattr(threading.Thread, 'start', failed)
             client.enqueue({'n': 1})
-            monkeypatch.setattr(threading.Thread, 'start', start)
+            # A loop submitter's carriers start later on the resident starter
+            # thread, so the failure stays injected until the frame settles.
             assert await client.drain() is None
+            monkeypatch.setattr(threading.Thread, 'start', start)
             assert not client._connected
             assert not client._frame_store._executor.worker_threads_snapshot()
             assert client._frame_store.snapshot()['event_spool_files'] == 0

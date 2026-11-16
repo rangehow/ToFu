@@ -231,6 +231,7 @@ __pycache__/
 /propaganda/
 /scripts/*
 !/scripts/prepare_project_folder.py
+!/scripts/generated_rust.py
 !/scripts/migrate_host.py
 !/scripts/benchmark_verification.py
 !/scripts/verify.py

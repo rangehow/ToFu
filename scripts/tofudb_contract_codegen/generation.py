@@ -8,6 +8,7 @@ from .native import render_native
 from .paper import render_paper
 from .search import render_search
 from .python_outputs import render_migration, render_receipts, render_worker, render_billing
+from scripts.generated_rust import format_generated_rust
 
 OUTPUT_PATHS = {
     'receipts': 'lib/storage_authority_sql/generated_storage_receipts.py',
@@ -39,4 +40,5 @@ def build_outputs(inputs: ContractInputs) -> dict[str, str]:
         OUTPUT_PATHS['clock']: clock,
         OUTPUT_PATHS['billing']: render_billing(contract),
     }
-    return outputs
+    return {path: format_generated_rust(text, inputs.root / path) if path.endswith('.rs') else text
+            for path, text in outputs.items()}

@@ -114,6 +114,7 @@ def installer(tmp_path):
     scripts.mkdir()
     (project / 'bootstrap_pkg').mkdir()
     shutil.copy(ROOT / 'bootstrap_pkg/process.py', project / 'bootstrap_pkg/process.py')
+    shutil.copy(ROOT / 'bootstrap_pkg/process_roles.py', project / 'bootstrap_pkg/process_roles.py')
     shutil.copy(ROOT / 'bootstrap_pkg/install_transaction.py', project / 'bootstrap_pkg/install_transaction.py')
     shutil.copy(ROOT / 'runtime_guards.py', project / 'runtime_guards.py')
     shutil.copytree(ROOT / 'tofu_workers', project / 'tofu_workers',

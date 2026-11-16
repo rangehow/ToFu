@@ -14,11 +14,15 @@ interface DesktopDownloadPick {
   label?: string;
   filename?: string;
   size?: number;
+  version?: string;
+  older_than_server?: boolean;
 }
 
 interface DesktopStatus {
   download_url?: string;
   downloads?: DesktopDownloadPick[];
+  server_version?: string;
+  installers_refreshing?: boolean;
 }
 
 interface ClientHealth {
@@ -66,7 +70,8 @@ function stgResolveDlUrl(url: string): string {
 /* t() with a readable fallback — the download copy must never surface a
  * raw i18n key when the locale chunk is absent (jsdom harness, stale
  * bundle). */
-function stgDlT(key: 'settings.desktopRecommend' | 'settings.mobileDownload' | 'local.desktopDownloadAll', fallback: string): string {
+function stgDlT(key: 'settings.desktopRecommend' | 'settings.mobileDownload' | 'local.desktopDownloadAll' |
+  'local.desktopOlder' | 'local.desktopOlderRefreshing', fallback: string): string {
   // Resolve through the registry (window.t in product, the harness's locale
   // translator in jsdom) so the download card honours the ACTIVE language;
   // the bundled i18n t is keyed to its own initialised locale only.
@@ -124,11 +129,15 @@ function stgDownloadLinks(d: DesktopStatus | null, arch: string): string {
   const picks = (d && Array.isArray(d.downloads)) ? d.downloads : [];
   const want = stgArchMatch(arch);
   let html = '';
+  let older: DesktopDownloadPick | null = null;
   if (picks.length) {
     html += '<div class="stg-mobile-rows">';
     for (const rawPick of picks) {
       const p = rawPick || {};
       if (!p.url) continue;
+      if (p.older_than_server && !older) older = p;
+      const facts = [p.version ? 'v' + p.version : '', stgFmtDlSize(p.size)]
+        .filter(Boolean).join(' · ');
       // The recommendation matters only when there IS a choice, and is
       // shown only when the browser itself said which chip this is — the
       // label already names the arch, so a quiet badge replaces the old
@@ -142,9 +151,8 @@ function stgDownloadLinks(d: DesktopStatus | null, arch: string): string {
           stgDesktopOsIcon(p.os) + '</span>' +
         '<span class="stg-mobile-name">' +
           escapeHtml(p.label || p.arch || '') + '</span>' +
-        (p.size
-          ? '<span class="stg-mobile-version">' +
-            escapeHtml(stgFmtDlSize(p.size)) + '</span>'
+        (facts
+          ? '<span class="stg-mobile-version">' + escapeHtml(facts) + '</span>'
           : '') +
         (rec
           ? '<span class="stg-desktop-rec">' +
@@ -156,6 +164,16 @@ function stgDownloadLinks(d: DesktopStatus | null, arch: string): string {
           '</span></span></a>';
     }
     html += '</div>';
+  }
+  if (older) {
+    const note = d?.installers_refreshing
+      ? stgDlT('local.desktopOlderRefreshing',
+        '⚠️ 这个安装包是 v{version}，比服务器（v{server}）旧，可能无法启动或连接。服务器正在获取新版，完成后这里会自动换成新链接。')
+      : stgDlT('local.desktopOlder',
+        '⚠️ 这个安装包是 v{version}，比服务器（v{server}）旧，可能无法启动或连接。服务器暂时没取到新版，请稍后再打开这里，或从「查看全部下载」获取。');
+    html += '<p class="stg-desktop-older">' + escapeHtml(note
+      .replace('{version}', older.version || '?')
+      .replace('{server}', d?.server_version || '?')) + '</p>';
   }
   if (page) {
     html += '<a class="stg-desktop-all" href="' +

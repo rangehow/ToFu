@@ -1428,6 +1428,8 @@
   "local.desktopDownloadAll": "See all downloads ↗",
   "local.desktopDownloadFor": "Download",
   "local.desktopHosted": "server-hosted",
+  "local.desktopOlder": "⚠️ This installer is v{version}, older than the server (v{server}), and may fail to start or connect. The server has not fetched the newer one yet — reopen this later, or get it from “See all downloads”.",
+  "local.desktopOlderRefreshing": "⚠️ This installer is v{version}, older than the server (v{server}), and may fail to start or connect. The server is fetching the newer one; this link updates by itself when it is ready.",
   "local.desktopName": "Computers",
   "local.tierRead": "Read files",
   "local.tierWrite": "Write files",

@@ -1428,6 +1428,8 @@
   "local.desktopDownloadAll": "Alle Downloads anzeigen ↗",
   "local.desktopDownloadFor": "Herunterladen",
   "local.desktopHosted": "Serverseitig",
+  "local.desktopOlder": "⚠️ Dieser Installer ist v{version} und damit älter als der Server (v{server}); er startet oder verbindet sich möglicherweise nicht. Der Server konnte die neuere Version noch nicht abrufen – öffne dies später erneut oder hole sie über „Alle Downloads anzeigen“.",
+  "local.desktopOlderRefreshing": "⚠️ Dieser Installer ist v{version} und damit älter als der Server (v{server}); er startet oder verbindet sich möglicherweise nicht. Der Server ruft gerade die neuere Version ab; dieser Link aktualisiert sich automatisch, sobald sie bereit ist.",
   "local.desktopName": "Computer",
   "local.tierRead": "Dateien lesen",
   "local.tierWrite": "Dateien schreiben",

@@ -343,7 +343,8 @@ function _lcEnsureAgentRelay(durationMs) {
 function _lcDesktopSignature(d) {
   function fp(rows) {
     return (Array.isArray(rows) ? rows : []).map(function (p) {
-      return [(p && p.filename) || '', (p && p.size) || 0].join(':');
+      return [(p && p.filename) || '', (p && p.size) || 0,
+              (p && p.version) || '', !!(p && p.older_than_server)].join(':');
     }).join('|');
   }
   var nodes = (Array.isArray(d.nodes) ? d.nodes : []).map(function (n) {
@@ -356,7 +357,8 @@ function _lcDesktopSignature(d) {
   var lang = (typeof _i18nLang !== 'undefined') ? _i18nLang : '';
   return [d.setup_state, !!d.connected, nodes, d.visitor_os || '',
           fp(d.downloads), d.download_url || '', lang,
-          d.server_url_reachability || '', d.server_bind || ''
+          d.server_url_reachability || '', d.server_bind || '',
+          d.server_version || '', !!d.installers_refreshing
          ].join('~');
 }
 
@@ -1416,16 +1418,22 @@ function _lcResolveDlUrl(url) {
  *
  * Always keeps the releases-page link as a secondary "all downloads" escape
  * hatch: it is the only thing that still works for an unrecognised platform, a
- * release missing an asset, or an unreachable GitHub API. */
+ * release missing an asset, or an unreachable GitHub API.
+ *
+ * The version is on the button because the server can only serve what its
+ * mirror holds: an installer older than the server (`older_than_server`) may
+ * not boot or pair, and the user must see that before installing it. */
 function _lcDownloadLinks(d) {
   var page = ((d && d.download_url) || '').trim();
   var picks = (d && Array.isArray(d.downloads)) ? d.downloads : [];
   var html = '';
   if (picks.length) {
+    var older = null;
     html += '<p class="lc-dl-row">';
     for (var i = 0; i < picks.length; i++) {
       var p = picks[i] || {};
       if (!p.url) continue;
+      if (p.older_than_server && !older) older = p;
       // The label names the CHIP, not just the OS — the whole point of the
       // two-DMG case is telling the user which one is theirs. Size goes in
       // the label: a 100+ MB installer with no size shown is a bad surprise.
@@ -1435,6 +1443,7 @@ function _lcDownloadLinks(d) {
         _lcEsc(p.filename || '') + '">' +
         _lcEsc(_lcT('local.desktopDownloadFor', '下载桌面版') + ' · ' +
                (p.label || p.arch || '') +
+               (p.version ? ' · v' + p.version : '') +
                (p.size ? ' · ' + _lcFmtSize(p.size) : '')) + '</a>' +
         // Provenance: an artifact served by THIS server (not the public
         // GitHub network) is the fast/reliable path — say so, or the user
@@ -1445,6 +1454,15 @@ function _lcDownloadLinks(d) {
           : '');
     }
     html += '</p>';
+    if (older) {
+      html += '<p class="lc-substep lc-warn">' + _lcEsc((d.installers_refreshing
+        ? _lcT('local.desktopOlderRefreshing',
+          '⚠️ 这个安装包是 v{version}，比服务器（v{server}）旧，可能无法启动或连接。服务器正在获取新版，完成后这里会自动换成新链接。')
+        : _lcT('local.desktopOlder',
+          '⚠️ 这个安装包是 v{version}，比服务器（v{server}）旧，可能无法启动或连接。服务器暂时没取到新版，请稍后再打开这里，或从「查看全部下载」获取。'))
+        .replace('{version}', older.version || '?')
+        .replace('{server}', d.server_version || '?')) + '</p>';
+    }
     if (picks.length > 1) {
       // Say WHY there are two, or the choice reads as a UI defect.
       html += '<p class="lc-substep">' + _lcEsc(_lcT('local.desktopArchAmbiguous',

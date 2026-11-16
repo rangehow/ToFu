@@ -745,6 +745,33 @@ def test_the_settings_desktop_card_renders_a_direct_link_per_installer():
     assert direct[0]["href"].endswith("Tofu-Setup-0.15.2-win64.exe"), direct
 
 
+@pytest.mark.parametrize("older,refreshing,phrase", [
+    (False, False, None),
+    (True, True, "The server is fetching the newer one"),
+    (True, False, "has not fetched the newer one yet"),
+])
+def test_the_settings_desktop_card_names_versions_against_the_server(
+        older, refreshing, phrase):
+    """Same contract as Local Control: the row shows the installer version,
+    and one older than the server says so instead of passing as current."""
+    version = "0.18.0" if older else "0.19.2"
+    out = _run_settings_desktop_card(json.dumps({
+        "download_url": "https://example.invalid/releases/latest",
+        "server_version": "0.19.2", "installers_refreshing": refreshing,
+        "downloads": [{
+            "os": "windows", "arch": "x86_64", "label": "Windows installer",
+            "filename": f"Tofu-Setup-{version}-win64.exe",
+            "version": version, "older_than_server": older, "size": 136507710,
+            "url": f"https://example.invalid/d/Tofu-Setup-{version}-win64.exe"}],
+    }), language="en")
+    assert f"v{version} · 130 MB" in out["text"], out["text"]
+    if phrase is None:
+        assert "stg-desktop-older" not in out["html"], out["html"]
+    else:
+        assert "stg-desktop-older" in out["html"], out["html"]
+        assert phrase in out["text"] and "v0.19.2" in out["text"], out["text"]
+
+
 def test_both_macos_dmgs_render_cleanly_when_arch_is_unknown():
     """The ambiguous case: two labelled rows, NO wall of text, NO fake badge.
 
@@ -824,6 +851,59 @@ def test_local_control_offers_the_full_desktop_app_for_pairing():
     assert not any('agent-installer' in h or 'TofuRemote' in h for h in hrefs), hrefs
     assert 'lcAgentInstallerBtn' not in out['html']
     assert '受控端' not in out['text']
+
+
+def _lc_windows_payload(version, older, refreshing=False):
+    return json.dumps({
+        'setup_state': 'pair', 'connected': False, 'nodes': [],
+        'visitor_os': 'windows', 'server_version': '0.19.2',
+        'installers_refreshing': refreshing,
+        'download_url': 'https://example.invalid/releases/latest',
+        'downloads': [{
+            'os': 'windows', 'arch': 'x86_64', 'label': 'Windows installer',
+            'filename': f'Tofu-Setup-{version}-win64.exe', 'version': version,
+            'older_than_server': older, 'size': 136507710,
+            'url': f'https://example.invalid/d/Tofu-Setup-{version}-win64.exe'}],
+    })
+
+
+@pytest.mark.parametrize('language', [None, 'en'])
+def test_local_control_names_the_installer_version(language):
+    """The button says which build it hands out; a current one carries no
+    warning."""
+    out = _run_lc_desktop(_lc_windows_payload('0.19.2', False), language)
+    direct = [l for l in out['links'] if 'lc-dl-direct' in (l['cls'] or '')]
+    assert len(direct) == 1 and 'v0.19.2' in direct[0]['text'], direct
+    assert 'lc-warn' not in out['html'], out['html']
+
+
+@pytest.mark.parametrize('refreshing,zh,en', [
+    (True, '服务器正在获取新版', 'The server is fetching the newer one'),
+    (False, '服务器暂时没取到新版', 'has not fetched the newer one yet'),
+])
+def test_local_control_warns_when_the_installer_is_older_than_the_server(
+        refreshing, zh, en):
+    """Incident 2026-11-16: a 0.19.2 server's panel offered the 0.18.0
+    installer with nothing saying so, and that build crashed at boot on
+    Windows. The row now names both versions and whether a newer installer
+    is on its way."""
+    for language, phrase in ((None, zh), ('en', en)):
+        out = _run_lc_desktop(
+            _lc_windows_payload('0.18.0', True, refreshing), language)
+        assert 'lc-warn' in out['html'], out['html']
+        assert 'v0.18.0' in out['text'] and 'v0.19.2' in out['text'], out['text']
+        assert phrase in out['text'], (language, out['text'])
+        assert '{version}' not in out['text'] and '{server}' not in out['text']
+
+
+def test_local_control_repaints_when_the_newer_installer_lands():
+    """The 3 s poll only rewrites the box when its render inputs change; the
+    warning must clear once the mirror swaps in the current installer."""
+    out = _run_lc_desktop(_lc_windows_payload('0.18.0', True, True) + ', ' +
+                          _lc_windows_payload('0.19.2', False))
+    first, last = out['snapshots']
+    assert 'lc-warn' in first['html'] and 'lc-warn' not in last['html']
+    assert 'v0.19.2' in last['text']
 
 
 def test_a_mac_visitor_gets_both_dmgs_and_no_exe():
@@ -1091,13 +1171,13 @@ def test_the_url_version_equals_the_filename_version(ua):
             f"url {url!r} does not end with its own filename {fname!r}")
 
 
-def test_the_asset_url_comes_from_the_api_not_reassembled():
-    """Structural: the URL must be CARRIED with the name, not rebuilt from it.
+def test_the_asset_url_is_never_reassembled_from_latest():
+    """Structural: no executable code pairs a name with ``latest``.
 
-    Rebuilding is what allowed a stale name and a live ``latest`` to be paired
-    in the first place. When the URL travels in the same record as the name,
-    mismatching them stops being expressible — which is a stronger guarantee
-    than any assertion about the string.
+    Rebuilding a URL from ``latest`` is what allowed a stale name and a live
+    release to be paired in the first place. The probe resolves ONE tag and
+    builds every URL from it (see
+    ``test_checksum_rows_pin_the_release_they_were_read_from``).
 
     Docstrings AND comments are stripped before scanning. The module's own
     prose NAMES the rejected construction (``/releases/latest/download/``) in
@@ -1125,43 +1205,30 @@ def test_the_asset_url_comes_from_the_api_not_reassembled():
                      if not ln.lstrip().startswith("#"))
     for d in docs:
         code = code.replace(d, "")
-    assert "browser_download_url" in code, (
-        "the route ignores the API's browser_download_url and builds its own "
-        "URL — that is the reassembly this invariant forbids")
     assert "releases/latest/download" not in code, (
         "the 'latest/download' construction is still present in EXECUTABLE "
         "code; it pairs a probe-time filename with a click-time release")
 
 
-def test_an_asset_without_a_browser_url_still_pins_the_tag():
-    """The fallback must NOT reintroduce the defect.
-
-    If the API ever omits ``browser_download_url``, the replacement must be
-    built from the ``tag_name`` in that SAME payload — never from ``latest``,
-    which is precisely the drift being fixed. Verified by driving the real
-    payload parser with the field removed.
-    """
+def test_checksum_rows_pin_the_release_they_were_read_from():
+    """Every URL names the tag whose ``SHA256SUMS`` listed the file — never
+    ``latest``, which is resolved at click time while the name was resolved
+    at probe time. Verified by driving the real parser."""
     mod = _platform_mod()
-    payload = {
-        "tag_name": "v9.9.9",
-        "assets": [{"name": "Tofu-Setup-9.9.9-win64.exe"}],   # no url field
-    }
-    rows = mod._assets_from_release_payload(payload, "owner/repo")
-    assert rows, "the parser dropped an asset that has a name but no url"
+    rows = mod._assets_from_checksums(
+        "ab" * 32 + "  Tofu-Setup-9.9.9-win64.exe\n", "owner/repo", "v9.9.9")
+    assert [r["name"] for r in rows] == ["Tofu-Setup-9.9.9-win64.exe"]
     url = rows[0]["url"]
-    assert "/releases/download/v9.9.9/" in url, (
-        f"fallback url {url!r} must pin the payload's own tag")
-    assert "latest" not in url, (
-        f"fallback url {url!r} fell back to 'latest' — the same drift again")
+    assert url == ("https://github.com/owner/repo/releases/download/"
+                   "v9.9.9/Tofu-Setup-9.9.9-win64.exe"), url
+    assert "latest" not in url
 
 
-def test_a_payload_with_no_tag_and_no_url_yields_nothing():
-    """Refuse to invent a URL. An asset we cannot address is omitted, and the
-    caller falls back to the releases page — a guessed URL would 404 silently
-    while looking authoritative."""
+def test_checksums_without_a_release_tag_yield_nothing():
+    """Refuse to invent a URL. Without the tag the manifest came from there
+    is no honest address, and the caller falls back to the releases page —
+    a guessed URL would 404 silently while looking authoritative."""
     mod = _platform_mod()
-    rows = mod._assets_from_release_payload(
-        {"assets": [{"name": "Tofu-Setup-9.9.9-win64.exe"}]}, "owner/repo")
-    assert rows == [], (
-        f"with neither browser_download_url nor tag_name there is no honest "
-        f"URL to build, so the asset must be dropped; got {rows!r}")
+    rows = mod._assets_from_checksums(
+        "ab" * 32 + "  Tofu-Setup-9.9.9-win64.exe\n", "owner/repo", "")
+    assert rows == [], rows

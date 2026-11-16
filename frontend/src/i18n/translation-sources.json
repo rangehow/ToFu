@@ -1428,6 +1428,8 @@
     "local.desktopDownloadAll": "0e37f71ced4fc1df",
     "local.desktopDownloadFor": "9c15cf5bc9b5fb99",
     "local.desktopHosted": "603eeb435a665cd1",
+    "local.desktopOlder": "25ee26cc3b6a48e3",
+    "local.desktopOlderRefreshing": "86ac0150b4e995cf",
     "local.desktopName": "5a76ed7f4d6c024c",
     "local.diagDesc": "98e1edc65c100d7e",
     "local.diagDone": "e5ee5bfd46ac107b",

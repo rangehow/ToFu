@@ -85,6 +85,8 @@ global.renderContextProvenanceHtml = () => '';
 global.contextProvenanceFacts = () => [];
 global.escapeHtml = (s) => String(s == null ? '' : s);
 global.t = (k) => k;
+// main_toolbar_ui.js owns the configured fallback route the turn store reads.
+global._registeredFallbackRoute = () => null;
 // The composed graph receives its factories through _prelude.js imports. This
 // harness covers one renderer contract, so every factory not stubbed above
 // returns an inert stand-in instead of breaking whenever the graph gains one.

@@ -31,6 +31,7 @@ from pathlib import Path
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 
 _MODES = frozenset({'100644', '100755', '120000'})
@@ -571,3 +572,16 @@ def publish(top: Path, branch_ref: str, head: str, commit: str,
             if prepared is not None:
                 with contextlib.suppress(FileNotFoundError):
                     prepared.unlink()
+    announce_branch_moved()
+
+
+def announce_branch_moved() -> None:
+    """A branch moved: deliveries held against it are rechecked now, not on a timer.
+
+    A hint to this process's delivery receiver when one is loaded; it grants
+    nothing, imports nothing and runs no Git. A process without a receiver
+    (the git_land CLI) has nothing to tell.
+    """
+    delivery = sys.modules.get('lib.project_mod.delivery')
+    if delivery is not None:
+        delivery.canonical_branch_moved()

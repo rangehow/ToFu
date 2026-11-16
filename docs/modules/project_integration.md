@@ -743,6 +743,42 @@ Worker's worktree would read a mutable checkout rather than the merged index; bu
 `build_outputs` would add `--check` runs and drop the index's removal of stale outputs.
 Specification: `test_generated_rebuild_materializes_only_generator_inputs_without_a_deadline`.
 
+**Publication lands generated-only conflicts by itself (2026-11-16).** Problem: on
+2026-11-15/16 twelve accepted deliveries into Tofu were held at publication and each needed
+a separate repair Worker that merged the checkpoint and ran `npm run generate:i18n`
+(accept-to-canonical 9-65 min). Rebuilt from receipts, the pinned `refs/tofu/delivery-inputs`
+heads and the checkpoints: ten were the stale delta base (fixed in 3b7b4d43d7; diffed from the
+registered baseline their conflicts include authored files the task never changed, e.g.
+`tests/channels/test_messaging_lifecycle.py` as an add/add), three of those also conflict in
+the i18n outputs once the base is right, one (4ea26e1e) was an i18n-only conflict whose
+whole-tree rebuild timed out (fixed in 6263987b75), and one (9d80acaa) was
+`task_delta_entangled` with the owner's uncommitted edit in the shared checkout. The running
+server predated both fixes. Replayed with the current publisher onto the head each hold
+pinned, all eleven conflict holds land without a repair (three of them by regenerating the
+i18n outputs); the entangled one is correctly still held. Decision: (1) the conflict resolver
+also covers the storage contract generators (`CONFLICT_GENERATORS` in
+`generated_integration.py`: `gen_tofudb_ir_contract.py`, `gen_storage_v2_contract.py`), run
+with the project interpreter, the source checkout's declared Rust toolchain
+(`resolve_cargo(root=source)`) and only their declared inputs; they resolve a conflict confined
+to their outputs but are not rebuilt on every source change (`affected_families` and
+`output_family` are unchanged), because that would make every contract landing depend on a
+Rust toolchain in the publisher. (2) A mixed conflict is still held, and its reason names the
+authored sources that hold it (`three-way merge conflicts at: <sources>; N generated outputs
+rebuild from the merged sources once these resolve`); `retry.conflictPaths` keeps every path.
+(3) A held delivery is rechecked when a publication moves a branch:
+`checkout_landing.publish` and `linear_git_checkpoint.publish_commit` call
+`checkout_landing.announce_branch_moved`, which tells this process's delivery receiver
+(`delivery.canonical_branch_moved`: request a pass, wake the worker). Each held row still
+rechecks only when its own `_hold_observation` changed. Moves from another process (the
+`git_land` CLI) keep the worker's existing recovery polling. Alternatives rejected: rebuilding
+every `linguist-generated` file (arbitrary repository commands, see above); hand-merging the
+conflicting outputs; a shorter retry timer (a knob that still polls); a filesystem watch on
+the branch ref (DolphinFS gives no cross-host notification); making the Rust families
+ordinary landing families (every contract change would need rustfmt to land). Specifications:
+`tests/project_mod/test_delivery_generated_conflicts.py` (two i18n deliveries both land; a
+source conflict is held naming it; a held delivery lands when another landing clears it) and
+`tests/project_mod/test_delivery_contract_generated_conflicts.py`.
+
 Problem: branch-conflict recovery alone left uncommitted generated catalogs on the ordinary
 line-merge path. Compact JSON blocked independent source edits; an unchanged catalog could
 instead land successfully while becoming stale relative to dirty sources. Decision: the same

@@ -1472,6 +1472,8 @@ def publish_commit(root: str | Path, *, branch_ref: str, base_sha: str, target_s
                     + (moved.stderr or moved.stdout).strip()[:600])
     except _PublicationDeferred:
         return None
+    from lib.project_mod.checkout_landing import announce_branch_moved
+    announce_branch_moved()
     return {'indexSynchronized': synchronized}
 
 

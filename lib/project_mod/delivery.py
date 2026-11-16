@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from pathlib import Path
+import sys
 import threading
 import time
 from typing import Any
@@ -1153,6 +1154,20 @@ def request_workspace_delivery_scan(*, recovery: bool = False) -> None:
     with _SCAN_LOCK:
         _SCAN_REQUESTED = True
         _RECOVERY_REQUESTED = _RECOVERY_REQUESTED or recovery
+
+
+def canonical_branch_moved() -> None:
+    """A publication moved a branch: recheck held deliveries now and wake the worker.
+
+    The event that lifts a conflict another landing cleared. A hint only: each
+    held row rechecks its own inputs (``task_delta_delivery._hold_observation``)
+    and stays held unless they changed. Moves made outside this process keep
+    the worker's existing recovery polling.
+    """
+    request_workspace_delivery_scan()
+    control = sys.modules.get('lib.integration_control')
+    if control is not None:
+        control._wake_existing_worker()
 
 
 def resume_due_workspace_deliveries(*, lanes: bool = False) -> bool:

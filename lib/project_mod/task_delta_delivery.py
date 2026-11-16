@@ -320,7 +320,7 @@ def _merge_workspace_delta(root, source, patch_path, task_id, index_path, baseli
         conflicts = ic._git(root, ['ls-files', '-u', '-z'], env=environment, check=True).stdout
         paths = conflicted_paths(conflicts)
         from lib.project_mod.generated_integration import (
-            GeneratedOutputError, resolve_generated_conflicts)
+            GeneratedOutputError, conflict_output_family, resolve_generated_conflicts)
         try:
             # The rebuild reads blobs from the shared volume: liveness window, no deadline.
             rebuilt = resolve_generated_conflicts(root, paths, checkpoint,
@@ -334,8 +334,14 @@ def _merge_workspace_delta(root, source, patch_path, task_id, index_path, baseli
             if paths:
                 # Raw `apply --3way` stderr leads with noise for every created
                 # file ("does not exist in index"); the unmerged paths decide.
-                return '', ('three-way merge conflicts at: ' + ', '.join(paths[:20])
-                            + (f' (+{len(paths) - 20} more)' if len(paths) > 20 else '')), paths
+                # Generated outputs rebuild once their sources merge, so the
+                # reason names the source paths that actually hold the delivery.
+                sources = [path for path in paths if not conflict_output_family(path)] or paths
+                regenerable = len(paths) - len(sources)
+                return '', ('three-way merge conflicts at: ' + ', '.join(sources[:20])
+                            + (f' (+{len(sources) - 20} more)' if len(sources) > 20 else '')
+                            + (f'; {regenerable} generated outputs rebuild from the merged '
+                               'sources once these resolve' if regenerable and sources else '')), paths
             return '', applied.stderr or applied.stdout or f'Git merge failed with exit {applied.returncode}', paths
     tree = ic._git(root, ['write-tree'], env=environment, check=True).stdout.strip()
     return _commit(root, tree, source, message or f'Tofu workspace delivery: {task_id}'), '', []

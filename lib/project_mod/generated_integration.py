@@ -13,6 +13,7 @@ import os
 from fnmatch import fnmatchcase
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 
 I18N_OUTPUTS = (
@@ -41,14 +42,65 @@ OUTPUT_PATTERNS = {
     'styles': (*STYLE_OUTPUTS, 'frontend/src/styles/*/*.generated.css'),
 }
 
+# Storage contract generators (Python, rustfmt-formatted Rust). They resolve a
+# conflict confined to their outputs, but are never rebuilt merely because a
+# source changed: that would make every contract landing depend on a Rust
+# toolchain in the publisher, while today the committed outputs land as merged.
+CONFLICT_GENERATORS = {
+    'tofudb_contract': ('scripts/gen_tofudb_ir_contract.py', 'scripts/tofudb_contract_codegen',
+                        'scripts/generated_rust.py'),
+    'storage_v2': ('scripts/gen_storage_v2_contract.py', 'scripts/generated_rust.py'),
+}
+CONFLICT_INPUT_ROOTS = {
+    # Cargo.toml names the edition rustfmt formats the outputs with.
+    'tofudb_contract': ('contracts', 'packages/tofu-db/Cargo.toml'),
+    'storage_v2': ('contracts/storage_v2.json', 'packages/tofu-db/Cargo.toml'),
+}
+CONFLICT_OUTPUT_PATTERNS = {
+    # scripts/tofudb_contract_codegen/generation.py OUTPUT_PATHS.
+    'tofudb_contract': (
+        'lib/storage_authority_sql/generated_storage_receipts.py',
+        'packages/tofu-db/src/generated_paper_build.rs',
+        'packages/tofu-db/src/generated_tofudb_ir.rs',
+        'lib/storage_authority_sql/migration/generated_tofudb_migration.py',
+        'packages/tofu-db/src/generated_conversation_search.rs',
+        'lib/storage/generated_worker_job_contract.py',
+        'lib/storage_authority_sql/native_worker_clock/generated_clock_contract.h',
+        'lib/storage_authority_sql/generated_billing_contract.py',
+    ),
+    'storage_v2': (
+        'packages/tofu-db/src/generated_storage_v2.rs',
+        'lib/storage/generated_v2_semantics.py',
+        'tofu_db/generated_v2.py',
+        'scripts/generated_storage_v2.py',
+    ),
+}
 
-def output_family(path):
-    """Identify a reproducible output; previews have no source reconstruction."""
-    for family, patterns in OUTPUT_PATTERNS.items():
+
+def _match_family(path, registry):
+    for family, patterns in registry.items():
         if any(path.count('/') == pattern.count('/') and fnmatchcase(path, pattern)
                for pattern in patterns):
             return family
     return None
+
+
+def output_family(path):
+    """Identify a reproducible output; previews have no source reconstruction."""
+    return _match_family(path, OUTPUT_PATTERNS)
+
+
+def conflict_output_family(path):
+    """The family that can rebuild PATH to resolve a merge conflict, if any."""
+    return output_family(path) or _match_family(path, CONFLICT_OUTPUT_PATTERNS)
+
+
+def _scripts(family):
+    return GENERATORS.get(family) or CONFLICT_GENERATORS[family]
+
+
+def _patterns(family):
+    return OUTPUT_PATTERNS.get(family) or CONFLICT_OUTPUT_PATTERNS[family]
 
 
 def affected_families(paths):
@@ -74,9 +126,9 @@ def family_roots(families):
     """Literal Git path scopes containing every selected input and output."""
     roots = set()
     for family in families:
-        roots.update(GENERATORS[family])
-        roots.update(INPUT_ROOTS[family])
-        for pattern in OUTPUT_PATTERNS[family]:
+        roots.update(_scripts(family))
+        roots.update(INPUT_ROOTS.get(family) or CONFLICT_INPUT_ROOTS[family])
+        for pattern in _patterns(family):
             roots.add(pattern.split('*', 1)[0].rstrip('/') if '*' in pattern else pattern)
     return sorted(roots)
 
@@ -97,10 +149,9 @@ def build_outputs(source_root, families, files, *, committed):
             target.write_bytes(data)
         try:
             for family in sorted(families):
-                argv = ['node', GENERATORS[family][0]]
-                _generator([*argv, '--write'], root, source_root)
+                _generator(_command(family, check=False), root, source_root)
                 if committed or family != 'i18n':
-                    _generator([*argv, '--check'], root, source_root)
+                    _generator(_command(family, check=True), root, source_root)
         except (OSError, subprocess.SubprocessError, ValueError) as error:
             raise GeneratedOutputError(f'Generated-output rebuild failed: {error}') from error
         outputs = {}
@@ -117,11 +168,19 @@ class GeneratedOutputError(RuntimeError):
     """A generated family could not be rebuilt from its merged sources."""
 
 
+def _command(family, *, check):
+    """The generator's write (or --check) invocation: Node composers, Python contract generators."""
+    script = _scripts(family)[0]
+    if script.endswith('.py'):
+        return [sys.executable, script, *(['--check'] if check else [])]
+    return ['node', script, '--check' if check else '--write']
+
+
 def _families(paths):
     selected = set()
     previews = []
     for path in paths:
-        family = output_family(path)
+        family = conflict_output_family(path)
         if family:
             selected.add(family)
         elif (path.startswith('designs/') and '/previews/' in path
@@ -142,6 +201,15 @@ def _generator(argv, cwd, source_root):
     for name in tuple(environment):
         if name.upper().startswith('GIT_'):
             environment.pop(name)
+    if argv[0] == sys.executable:
+        # Contract generators import their scripts from the private directory
+        # (first on their sys.path); the toolchain lookup they share
+        # (serverctl_pkg.native_engine) and the checkout's declared Rust
+        # toolchain come from the source checkout, read-only.
+        from serverctl_pkg.native_engine import resolve_cargo
+        _cargo, environment = resolve_cargo(environment, root=Path(source_root))
+        environment['PYTHONPATH'] = os.pathsep.join(
+            part for part in (str(source_root), environment.get('PYTHONPATH', '')) if part)
     result = run_activity_supervised(
         argv, cwd=cwd, env=environment,
         stall_seconds=120.0)  # Liveness contract: task_delta_delivery / git_land.
@@ -173,7 +241,7 @@ def resolve_generated_conflicts(root, conflicts, task_revision, git, *, source_r
     # Conflicted paths are listed once per stage until resolved below.
     listed = list(dict.fromkeys(path for path in run(
         ['ls-files', '-z', '--', *roots]).stdout.split('\0') if path))
-    outputs = sorted({path for path in listed if output_family(path) in families})
+    outputs = sorted({path for path in listed if conflict_output_family(path) in families})
     # Selecting the task's output only clears the conflict stage. Known
     # families are overwritten below from the already-merged source bytes.
     entries = run(['ls-tree', '-z', task_revision, '--', *conflicts]).stdout
@@ -201,10 +269,10 @@ def resolve_generated_conflicts(root, conflicts, task_revision, git, *, source_r
                 stdin=''.join(path + '\0' for path in listed))
         try:
             for family in sorted(families):
-                _generator(['node', GENERATORS[family][0], '--write'], merged, source_root)
+                _generator(_command(family, check=False), merged, source_root)
             # Include outputs newly declared by a merged language/bundle manifest.
             for family in families:
-                for pattern in OUTPUT_PATTERNS[family]:
+                for pattern in _patterns(family):
                     outputs.extend(path.relative_to(merged).as_posix() for path in merged.glob(pattern))
         except (OSError, subprocess.SubprocessError) as error:
             raise GeneratedOutputError(f'Generated-output rebuild failed: {error}') from error

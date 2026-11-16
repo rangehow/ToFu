@@ -284,7 +284,6 @@
 .coordination-workspace article,
 .coordination-entry { overflow-wrap: anywhere; min-width: 0; }
 .coordination-entry { border-inline-start: var(--space-1) solid var(--accent); }
-.coordination-work-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr)); }
 @media (max-width: 480px) {
   .coordination-workspace { width: calc(100vw - var(--space-2)); max-width: calc(100vw - var(--space-2)); }
 }

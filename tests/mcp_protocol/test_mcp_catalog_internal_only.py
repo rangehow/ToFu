@@ -19,7 +19,7 @@ import importlib
 
 import pytest
 
-from tests.support.overlay import requires_yourprovider_overlay
+from tests.support.overlay import requires_private_overlay
 
 import lib.mcp.registry as reg
 
@@ -45,7 +45,7 @@ def _reload_with_flag(monkeypatch, value):
     _OPENSOURCE,
     reason='internal MCP launchers are stripped from opensource builds',
 )
-@requires_yourprovider_overlay
+@requires_private_overlay
 def test_internal_entries_present_in_internal_build(monkeypatch):
     r = _reload_with_flag(monkeypatch, None)
     try:
@@ -62,7 +62,7 @@ def test_internal_entries_present_in_internal_build(monkeypatch):
     _OPENSOURCE,
     reason='internal MCP launchers are stripped from opensource builds',
 )
-@requires_yourprovider_overlay
+@requires_private_overlay
 def test_internal_entries_flagged():
     # The three internal servers must carry the explicit flag so filtering
     # never relies on source ordering / the section banner.

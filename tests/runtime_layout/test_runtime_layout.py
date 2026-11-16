@@ -25,6 +25,7 @@ import os
 import sys
 
 import pytest
+from tests.support.export_toolchain import require_export_toolchain
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -164,7 +165,7 @@ def test_export_covers_registry_internal_opensource():
     false expectation and break a real, intended behaviour.
     """
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-    export = pytest.importorskip('export', reason='export.py not shipped in opensource')
+    export = require_export_toolchain()
     # The dir set that internal/opensource _should_exclude keys on. bundle-*
     # is a GLOB (ALWAYS_EXCLUDE_GLOBS), so dir membership is the right check
     # only for the trailing-'/' entries.
@@ -194,7 +195,7 @@ def test_neuter_export_guard_has_teeth():
     """Poison the registry with a fake dir → the export drift-guard must fail,
     proving it actually cross-checks the registry against export (not a
     tautology)."""
-    pytest.importorskip('export', reason='export.py not shipped in opensource')
+    require_export_toolchain()
     import lib.runtime.runtime_layout as rl
     orig = rl.INSTALL_STATE
     try:

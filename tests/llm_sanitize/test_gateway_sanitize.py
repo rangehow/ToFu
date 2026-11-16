@@ -28,7 +28,7 @@ import sys
 
 import pytest
 
-from tests.support.overlay import requires_yourprovider_overlay
+from tests.support.overlay import requires_private_overlay
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -103,7 +103,7 @@ class TestBuildBodyProviderGate:
         k = next(iter(_GATEWAY_BLOCKED_TERMS))
         return k, _GATEWAY_BLOCKED_TERMS[k]
 
-    @requires_yourprovider_overlay
+    @requires_private_overlay
     @_REQUIRES_INTERNAL_GATEWAY
     def test_example_corp_anthropic_provider_gets_sanitized(self):
         from lib.llm.body import build_body
@@ -116,7 +116,7 @@ class TestBuildBodyProviderGate:
             'provider example_corp_anthropic rides the same your-llm-gateway.example.com '
             'gateway — its requests must get the ZWSP sanitizer')
 
-    @requires_yourprovider_overlay
+    @requires_private_overlay
     @_REQUIRES_INTERNAL_GATEWAY
     def test_example_corp_provider_still_sanitized(self):
         from lib.llm.body import build_body

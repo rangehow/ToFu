@@ -5,8 +5,25 @@ objects are untouched; every sidecar connection receives the same private
 search_path through the test-only DSN file.
 """
 from contextlib import contextmanager
+import os
 from pathlib import Path
 from uuid import uuid4
+
+
+
+def postgres_dsn_source(request, directory: Path) -> Path:
+    """The operator's DSN file, else one naming the suite-owned test cluster.
+
+    ``TOFU_STORAGE_TEST_POSTGRES_DSN_FILE`` points at an external server; CI
+    lanes that only install the PostgreSQL binaries use ``postgres_cluster``.
+    """
+    configured = os.environ.get('TOFU_STORAGE_TEST_POSTGRES_DSN_FILE')
+    if configured:
+        return Path(configured)
+    source = directory / 'postgres-cluster-dsn'
+    source.write_text(request.getfixturevalue('postgres_cluster'))
+    source.chmod(0o600)
+    return source
 
 
 @contextmanager

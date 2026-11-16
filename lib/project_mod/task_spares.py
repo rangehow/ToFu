@@ -85,10 +85,13 @@ SCRATCH_PREFIX = '.tmp-'
 def _scratch_path(checkout: Path) -> Path | None:
     checkout = Path(checkout)
     owner = checkout.parent
+    # The layout test runs first: only a pooled checkout needs the server's
+    # placement, which the storage-free agent wheel does not ship.
+    if not owner.name.startswith('u') or not owner.name[1:].isdigit():
+        return None
     from lib import integration_control as ic
     local = ic._placed_local_root()
-    if (local is None or not owner.name.startswith('u') or not owner.name[1:].isdigit()
-            or os.path.realpath(owner.parent.parent) != os.path.realpath(local)):
+    if local is None or os.path.realpath(owner.parent.parent) != os.path.realpath(local):
         return None
     return owner / f'{SCRATCH_PREFIX}{checkout.name}'
 

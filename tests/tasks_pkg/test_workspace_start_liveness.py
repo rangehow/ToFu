@@ -110,7 +110,9 @@ exec "{real}" "$@"
     return marker
 
 
-@pytest.mark.parametrize('needle', ['worktree', '--git-common-dir'])
+# Both identity reads of a standard checkout: rev-parse, then its main
+# checkout's layout config (``worktree list`` is read only for other layouts).
+@pytest.mark.parametrize('needle', ['--git-common-dir', '--get-regexp'])
 def test_slow_binding_identity_read_outlives_the_old_wall_clock_deadline(
         repo, tmp_path, monkeypatch, dilated, needle):
     marker = fake_git(tmp_path, monkeypatch, 'slow', needle, seconds=1.5 * OLD_DEADLINE)
@@ -126,7 +128,7 @@ def test_slow_binding_identity_read_outlives_the_old_wall_clock_deadline(
 def test_stop_retires_a_blocked_binding_read_without_waiting_for_the_window(
         repo, tmp_path, monkeypatch, dilated):
     monkeypatch.setattr(ic, 'GIT_STALL_SECONDS', 20 * WINDOW)
-    marker = fake_git(tmp_path, monkeypatch, 'hung', 'worktree')
+    marker = fake_git(tmp_path, monkeypatch, 'hung', '--get-regexp')
     stop = threading.Event()
 
     def stop_when_blocked():

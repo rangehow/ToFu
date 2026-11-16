@@ -514,7 +514,8 @@ def plan_launch(
     durable_fsync, local_fsync = fsync_probe(authority), fsync_probe(base)
     durable_lookup = chosen.source_latency_us or lookup_probe(str(authority))
     local_lookup = chosen.target_latency_us or lookup_probe(str(base))
-    if None in (durable_fsync, local_fsync, durable_lookup, local_lookup):
+    if (durable_fsync is None or local_fsync is None
+            or durable_lookup is None or local_lookup is None):
         checks.add('speedup', False, 'unmeasured')
         return decline('speedup-unmeasured', 'fsync or lookup latency could not be measured')
     detail = (f'fsync {durable_fsync:.0f}->{local_fsync:.0f}us, '
@@ -627,7 +628,7 @@ def headroom_status(front: Path, front_bytes: int, front_files: int = 0, *,
     pressure = max(MIN_PRESSURE_HEADROOM_BYTES, int(front_bytes * PRESSURE_HEADROOM_RATIO))
     critical = max(MIN_CRITICAL_HEADROOM_BYTES, int(front_bytes * CRITICAL_HEADROOM_RATIO))
     state = 'critical' if headroom < critical else 'pressure' if headroom < pressure else 'ok'
-    status = {'freeBytes': free, 'totalBytes': total, 'headroomBytes': headroom,
+    status: dict[str, object] = {'freeBytes': free, 'totalBytes': total, 'headroomBytes': headroom,
               'frontBytes': front_bytes, 'pressureBelowBytes': pressure,
               'criticalBelowBytes': critical}
     try:

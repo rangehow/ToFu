@@ -19,6 +19,8 @@ from tests.support import billing_storage
 from tests.support.stripe_payments import SECRET, signature
 
 pytestmark = pytest.mark.api
+# The PostgreSQL lane uses the suite-owned cluster when no external DSN file is set.
+pytest_plugins = ('tests.support.postgres_cluster',)
 
 application_storage = billing_storage.application_storage
 application_storage_owner_id = billing_storage.application_storage_owner_id

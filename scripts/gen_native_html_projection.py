@@ -16,6 +16,23 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+# Rust lines whose values come from the running html.parser rather than the owner.
+TOKENIZER_DERIVED_LINES = ('pub const PYTHON_VERSION:', 'pub const TOKENIZER_SHA256:',
+                           'pub const CDATA:', 'pub const RCDATA:')
+
+
+def tokenizer_sha256():
+    return hashlib.sha256(Path(html.parser.__file__).read_bytes()).hexdigest()
+
+
+def owner_sha256():
+    return hashlib.sha256((ROOT/'lib/knowledge/html_text.py').read_bytes()).hexdigest()
+
+
+def profiled_tokenizer():
+    """Whether this interpreter's html.parser is the one PROFILE certifies."""
+    from lib.knowledge.generated_native_html_profile import PROFILE
+    return tokenizer_sha256() == PROFILE['tokenizer_sha256']
 
 
 def rust_string(value):
@@ -93,8 +110,8 @@ def oracle(seed=20261015, count=2048):
         rows.append(row)
     return dict(format='tofu.python-html-projection-oracle/v1',
         python_version=sys.version.split()[0],
-        tokenizer_sha256=hashlib.sha256(Path(html.parser.__file__).read_bytes()).hexdigest(),
-        owner_sha256=hashlib.sha256((ROOT/'lib/knowledge/html_text.py').read_bytes()).hexdigest(),
+        tokenizer_sha256=tokenizer_sha256(),
+        owner_sha256=owner_sha256(),
         seed=seed, cases=rows)
 
 
@@ -104,8 +121,8 @@ def outputs():
              '//! Entity data originates in Python html.entities (PSF license).']
     lines.extend('pub const '+name+': &str = '+rust_string(value)+';' for name,value in [
         ('PYTHON_VERSION',sys.version.split()[0]),
-        ('TOKENIZER_SHA256',hashlib.sha256(Path(html.parser.__file__).read_bytes()).hexdigest()),
-        ('OWNER_SHA256',hashlib.sha256((ROOT/'lib/knowledge/html_text.py').read_bytes()).hexdigest())])
+        ('TOKENIZER_SHA256',tokenizer_sha256()),
+        ('OWNER_SHA256',owner_sha256())])
     for name, values in [('VOID', sorted(_VOID)), ('HIDDEN', sorted(_HIDDEN)),
             ('CDATA', html.parser.HTMLParser.CDATA_CONTENT_ELEMENTS),
             ('RCDATA', html.parser.HTMLParser.RCDATA_CONTENT_ELEMENTS)]:
@@ -149,6 +166,11 @@ def main():
     if args.output_oracle:
         args.output_oracle.write_text(json.dumps(oracle(args.seed,args.count),ensure_ascii=True)+'\n')
         return
+    if args.check and not profiled_tokenizer():
+        from lib.knowledge.generated_native_html_profile import PROFILE
+        raise SystemExit('native HTML projection is profiled for Python '+PROFILE['python_version']+
+                         "'s html.parser; this interpreter's tokenizer differs, so --check cannot "
+                         'certify the outputs here')
     for path, text in outputs().items():
         if args.check:
             if not path.exists() or path.read_text() != text:

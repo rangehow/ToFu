@@ -30,6 +30,7 @@ import subprocess
 import sys
 
 import pytest
+from tests.support.export_toolchain import require_export_toolchain
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -76,7 +77,7 @@ def _make_repo(tmp_path):
 
 
 def test_stray_root_dirs_excluded_source_kept(tmp_path):
-    export = pytest.importorskip('export', reason='export.py not shipped')
+    export = require_export_toolchain()
     repo = _make_repo(tmp_path)
     excludes = export._untracked_root_excludes(repo)
 
@@ -94,7 +95,7 @@ def test_stray_root_dirs_excluded_source_kept(tmp_path):
 
 def test_pure_scan_returns_names_only(tmp_path):
     """The pure query both paths share: names only, no ./ prefix / trailing /."""
-    export = pytest.importorskip('export', reason='export.py not shipped')
+    export = require_export_toolchain()
     repo = _make_repo(tmp_path)
     strays = export._untracked_root_dirs(repo)
     assert strays == {'module1', 'scratchpad'}
@@ -105,7 +106,7 @@ def test_pure_scan_returns_names_only(tmp_path):
 def test_dry_run_preview_matches_real_run(tmp_path, monkeypatch, capsys):
     """--dry-run preview must report stray root dirs as EXCLUDED, not "will
     copy" — otherwise the pre-flight lies about what the real tar copy drops."""
-    export = pytest.importorskip('export', reason='export.py not shipped')
+    export = require_export_toolchain()
     repo = _make_repo(tmp_path)
     # The dry-run walk enumerates the orchestration module's ROOT; point it at
     # our repo.
@@ -129,7 +130,7 @@ def test_dry_run_preview_matches_real_run(tmp_path, monkeypatch, capsys):
 def test_neuter_guard_has_teeth(tmp_path):
     """If the stray dirs weren't created, the function must return nothing for
     them — proving the assertion tracks real git state, not a constant."""
-    export = pytest.importorskip('export', reason='export.py not shipped')
+    export = require_export_toolchain()
     if not subprocess.run(['git', '--version'],
                           capture_output=True).returncode == 0:
         pytest.skip('git not available')
@@ -149,7 +150,7 @@ def test_neuter_guard_has_teeth(tmp_path):
 
 
 def test_non_git_dir_is_best_effort_empty(tmp_path):
-    export = pytest.importorskip('export', reason='export.py not shipped')
+    export = require_export_toolchain()
     plain = tmp_path / 'not_a_repo'
     plain.mkdir()
     (plain / 'stray').mkdir()

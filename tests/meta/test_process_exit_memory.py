@@ -152,7 +152,7 @@ memory.observe([sys.argv[1], sys.argv[3]], allow_threaded_children=sys.argv[3]==
 """
 ready = Path(sys.argv[2])
 child = subprocess.Popen([sys.argv[3], '-c', inner, sys.argv[1], str(ready), sys.argv[4]])
-reaped = []
+reaped = []; killed_any = False
 try:
     deadline = time.monotonic()+10
     while not ready.exists():
@@ -166,11 +166,13 @@ try:
         except ChildProcessError: break
         assert time.monotonic()<deadline, 'tracee survived observer death'
         if pid:
-            reaped.append(pid)
-            assert os.WIFSIGNALED(status) and os.WTERMSIG(status)==signal.SIGKILL
+            # Linux >=6.0 lets a tracee already in its exit stop keep its own exit code.
+            killed = os.WIFSIGNALED(status) and os.WTERMSIG(status)==signal.SIGKILL
+            assert killed or os.WIFEXITED(status) and os.WEXITSTATUS(status)==7, status
+            reaped.append(pid); killed_any = killed_any or killed
         else: time.sleep(.01)
     observed = json.loads(ready.read_text())
-    assert observed['tgid'] in reaped and len(reaped)>=2
+    assert observed['tgid'] in reaped and len(reaped)>=2 and killed_any
     try: os.kill(observed['tid'], 0)
     except ProcessLookupError: pass
     else: raise AssertionError('observed thread survived observer death')

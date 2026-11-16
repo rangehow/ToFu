@@ -22,7 +22,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, TypeGuard
 
 from lib.storage.errors import StorageError
 from lib.storage_authority_sql.adapters.base import Session
@@ -193,11 +193,14 @@ def _archive_usage(session: Session, conv_id: str, user_id: int, start: int,
     return len(messages), fallback, rows
 
 
+def _is_signed_64(value: object) -> TypeGuard[int]:
+    return (isinstance(value, int) and not isinstance(value, bool)
+            and -(2 ** 63) <= value < 2 ** 63)
+
+
 def _window(payload: Mapping[str, Any]) -> tuple[int, int, int]:
     start, end = payload.get("timestamp_gte"), payload.get("timestamp_lt")
-    if any(isinstance(value, bool) or not isinstance(value, int)
-           or not -(2 ** 63) <= value < 2 ** 63 for value in (start, end)) \
-            or start >= end:
+    if not _is_signed_64(start) or not _is_signed_64(end) or start >= end:
         raise StorageError(
             "database_protocol_error", "Invalid conversation usage window")
     characters = _integer(payload, "title_fallback_characters", default=0,

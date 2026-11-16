@@ -70,8 +70,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--artifacts-manifest", type=Path)
     run.add_argument("--endpoint", help="sandboxGateway endpoint .../system/<cluster>")
     run.add_argument("--image", help="sandbox VM image, e.g. rootfs://harbor-pipeline-dind-v5")
-    run.add_argument("--branch", default=INGRESS_BRANCH or None, required=not INGRESS_BRANCH,
-                     help="ingress branch with the native exec channel (default: TOFU_TB_INGRESS_BRANCH)")
+    run.add_argument("--branch", default=INGRESS_BRANCH or None,
+                     help="ingress branch with the native exec channel (default: TOFU_TB_INGRESS_BRANCH); "
+                          "a new run needs one, a resumed run keeps its frozen branch")
     run.add_argument("--proxy", help="upstream egress proxy for the VM and the trial egress filter")
     run.add_argument("--max-alive-min", type=int, default=540)
     run.add_argument("--context-tokens", type=int,
@@ -90,8 +91,9 @@ def frozen_config(args) -> dict:
         config["max_attempts"] = args.max_attempts
         return config
     if not args.tasks_dir or not args.relay_url or not args.artifacts_manifest or not args.endpoint \
-            or not args.image or not args.proxy:
-        raise SystemExit("a new run needs --tasks-dir --relay-url --artifacts-manifest --endpoint --image --proxy")
+            or not args.image or not args.proxy or not args.branch:
+        raise SystemExit("a new run needs --tasks-dir --relay-url --artifacts-manifest --endpoint --image --proxy "
+                         "--branch")
     if "claude-code" in args.arms.split(",") and not args.anthropic_url:
         raise SystemExit("the claude-code arm needs --anthropic-url (python -m evaluations.terminal_bench.anthropic_bridge)")
     tasks_dir = args.tasks_dir.resolve()

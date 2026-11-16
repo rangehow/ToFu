@@ -54,6 +54,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from tests.support.export_toolchain import require_export_toolchain
 
 from tests._browser_extension_probe import run_extension_probe
 from tests.support.browser_extension_bundle import build_extension_bundle
@@ -311,8 +312,7 @@ def test_the_store_build_tool_survives_git_and_export():
         f'build the shipped checklist prescribes. Add a `!` exception to '
         f'.gitignore next to the four sibling scripts.')
 
-    export = pytest.importorskip(
-        'export', reason='export.py is itself stripped from public trees')
+    export = require_export_toolchain()
     assert rel in export._OPENSOURCE_KEEP_FILES, (
         f'{rel} lives under the opensource-excluded scripts/ dir and is NOT in '
         f'export._OPENSOURCE_KEEP_FILES, so the public tree ships a checklist '

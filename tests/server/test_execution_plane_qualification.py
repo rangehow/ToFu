@@ -266,6 +266,7 @@ def run_workload(directory, *, split):
                 turns = [wait_turn(client, path, {'completed', 'failed', 'interrupted'}) for path in paths]
                 lost = admit(client, project, 99, goal=False)
                 assert provider.crash_entered.wait(45)
+                lost_attempt = client.get(lost).json()['turn']['currentAttemptId']
                 os.kill(execution_pid, signal.SIGKILL)
 
                 def released():
@@ -281,11 +282,18 @@ def run_workload(directory, *, split):
                                     seconds=NATIVE_SERVICE_PREPARATION_SECONDS)
                 assert record['state'] == 'ready', record
                 assert record['pid'] != execution_pid
-                interrupted = wait_turn(client, lost, {'interrupted', 'failed'})
-                assert interrupted['status'] == 'interrupted', interrupted
-                assert interrupted['settlement']['error']['code'] == 'worker_effect_outcome_unknown'
-                assert provider.counts[99] == 1
+                # A model call the kill cut off has no unknown side effect: the
+                # Attempt settles like the graceful quiesce and the restart
+                # resume pass continues the Turn in place, exactly once, in a
+                # new Attempt (docs/contracts/TURN_SETTLEMENT.md, durable
+                # worker recovery; docs/RUN_CONTINUITY.md).
+                eventually(lambda: provider.counts[99], lambda count: count == 2,
+                           seconds=NATIVE_SERVICE_PREPARATION_SECONDS)
                 provider.crash_release.set()
+                resumed = wait_turn(client, lost, {'completed', 'failed', 'interrupted'})
+                assert resumed['status'] == 'completed', resumed
+                assert resumed['currentAttemptId'] != lost_attempt
+                assert provider.counts[99] == 2
                 storage.stop()
                 storage.ensure(storage_plan, environment)
 
@@ -312,7 +320,7 @@ def run_workload(directory, *, split):
         assert not provider.errors, provider.errors
         assert all(turn['status'] == 'completed' for turn in turns), turns
         assert provider.counts == {**{item: 3 for item in range(WORK_ITEMS)},
-                                   **({99: 1, 100: 1} if split else {})}
+                                   **({99: 2, 100: 1} if split else {})}
         assert [path.read_text() for path in sorted(project.glob('item-*.txt'))] == ['once\n'] * WORK_ITEMS
         fees = [row for turn in turns for row in goal_fees(storage, turn)]
         assert sum(row['usage']['total_tokens'] for row in fees) == WORK_ITEMS * 3 * 5

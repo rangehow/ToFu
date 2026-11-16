@@ -351,8 +351,9 @@ def test_chatui_site_provider_binds_the_explicit_owners_browser(monkeypatch):
         provider = _ChatuiSiteSearchProvider().bind()
     assert provider.client_id == 'alice-browser'
     assert provider.profile == 'Alice Work'
-    assert provider.list_sources()
-    assert provider.search('modelplaza', 'embedding') == []
+    sources = provider.list_sources()
+    assert sources
+    assert provider.search(sources[0]['id'], 'embedding') == []
     assert captured['owner_user_id'] == ALICE
     assert captured['client_id'] == 'alice-browser'
 

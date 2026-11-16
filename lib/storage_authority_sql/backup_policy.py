@@ -19,7 +19,7 @@ from typing import Any
 
 from lib.storage.errors import StorageError
 from lib.storage_authority_sql.durability import fsync_directory, write_json_durable
-from runtime_guards import resolve_resource_budget
+from runtime_guards import pid_is_alive, resolve_resource_budget
 
 
 _ARTIFACT_PREFIX = 'storage-sqlite-'
@@ -415,15 +415,7 @@ def _pid_is_alive(value: Any) -> bool:
         return False
     if pid == os.getpid():
         return True
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
+    return pid_is_alive(pid)
 
 
 def job_manifest_path(temporary: Path) -> Path:

@@ -86,7 +86,8 @@ def test_bundles_survive_checkout_relocation_and_install_without_network(tmp_pat
     local.parent.mkdir()
     local.write_bytes(artifact.read_bytes())
     new_requirements = target / 'requirements.txt'
-    new_requirements.write_text(str(local) + '\n')
+    # pip reads requirements files as UTF-8 whatever the locale (Windows: cp1252).
+    new_requirements.write_text(str(local) + '\n', encoding='utf-8')
     assert wheels.requirements_digest(requirements) == wheels.requirements_digest(new_requirements)
     monkeypatch.setenv('TOFU_PYTHON_BUNDLE', str(archive))
     monkeypatch.setattr(wheels, 'identity', lambda python: RUNTIME)

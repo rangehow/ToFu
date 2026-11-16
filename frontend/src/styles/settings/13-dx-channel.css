@@ -1,7 +1,7 @@
 /* Channel Settings panels: 大象 (settings-panels/dx.html, features/settings/
    dx-channel.ts) and GitHub (settings-panels/github.html, github-channel.ts)
    share one presentation through features/settings/channel-settings-view.ts,
-   in the Database panel's card language (11-database.css). Controls come
+   in the Database panel's card language (features/settings/database.css). Controls come
    from the UI kit; feature classes own layout, rhythm and status tone. */
 
 :is(#settingsTab_dx, #settingsTab_github) .channel-page-heading {

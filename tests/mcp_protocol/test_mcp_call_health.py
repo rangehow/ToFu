@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.support.overlay import requires_yourprovider_overlay
+from tests.support.overlay import requires_private_overlay
 
 import lib.mcp.client as mc
 from lib.mcp.client import MCPBridge, _is_call_timeout_error
@@ -126,7 +126,7 @@ def test_internal_diagnostic_timeout_overrides_server_wait(monkeypatch):
     is_opensource_build(),
     reason='hope is a YourProvider-internal MCP server, stripped from opensource builds',
 )
-@requires_yourprovider_overlay
+@requires_private_overlay
 def test_hope_card_ships_360s_default():
     from lib.mcp.registry import build_server_config
     cfg = build_server_config('hope', {'HOPE_USERNAME': 'x'})

@@ -113,12 +113,15 @@ def _deny_restore(monkeypatch, file_turn):
 def _tear_journal(monkeypatch, file_turn):
     from lib.project_mod import modifications as mods
 
-    index = Path(mods._get_session_dir(str(file_turn['root']))) / 'modifications.json'
-    committed = index.read_bytes()
-    index.write_text('{"modifications": [')
-    return (['Expecting', 'line 1 column'],
-            "Could not undo the turn's file changes: internal error (JSONDecodeError)",
-            lambda: index.write_bytes(committed))
+    # An uncontended commit appends its row to the single-appender log
+    # (docs/PROJECT_FILE_UNDO.md, "Per-file journal locks"). A complete line
+    # that does not parse is corrupt committed evidence, unlike a torn suffix.
+    log = Path(mods._get_session_dir(str(file_turn['root']))) / 'modifications.journal'
+    committed = log.read_bytes()
+    log.write_bytes(b'{"modifications": [\n')
+    return (['Invalid modification journal tail record'],
+            "Could not undo the turn's file changes: internal error (ValueError)",
+            lambda: log.write_bytes(committed))
 
 
 @pytest.mark.parametrize('inject', [_deny_restore, _tear_journal],

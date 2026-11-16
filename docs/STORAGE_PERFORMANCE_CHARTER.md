@@ -49,7 +49,14 @@ The existing `storage_performance_charter_v1.json` and
 `tofudb_charter_assess.py` own numerical acceptance. Their history-scaling,
 distracted-host and reader/writer-scaling gaps remain visible until matching
 evidence exists. The nightly `check_perf_regression.py` job measures task replay;
-it is not the native-versus-SQLite certification. Focused comparison-harness
+it is not the native-versus-SQLite certification. Its baseline
+(`benchmarks/perf_baseline.json`) was re-recorded 2026-11-15 in the locked
+`uv sync --extra test` environment CI uses: the previous file did not
+reproduce at its own commit (91b4c7e205 measured the same 800/203/363 KiB
+peaks as HEAD, on this host and on GitHub), so it gated every run red. The
+same change stopped the per-task abort watcher from copying the whole process
+environment (`task_abort_signal._distributed_mode` reads only the mode),
+which halved `short_conversation`'s peak (95.6 → 28.7 KiB). Focused comparison-harness
 tests run in the ordinary unit suite. Full native/SQLite, actual-volume and
 process-crash receipts remain explicit verification work; no new background
 benchmark service or automatic production restart is introduced.

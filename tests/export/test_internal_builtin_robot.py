@@ -23,10 +23,11 @@ from pathlib import Path
 _AUDIT_SYNTHETIC_REPO_PATHS = {'docs/x.md', 'lib/x.py'}
 
 import pytest
+from tests.support.export_toolchain import require_export_toolchain
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-export = pytest.importorskip('export', reason='export.py is not shipped in opensource builds')
+export = require_export_toolchain()
 
 import export_pkg._history as history  # noqa: E402
 import export_pkg._internal as internal  # noqa: E402

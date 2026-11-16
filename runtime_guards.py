@@ -1085,14 +1085,42 @@ def proc_stat_fields(pid: int) -> list[str] | None:
     return fields if len(fields) > 19 else None
 
 
+def _windows_pid_is_alive(pid: int) -> bool:
+    import ctypes
+    from ctypes import wintypes
+
+    process_query_limited_information = 0x1000
+    error_access_denied = 5
+    still_active = 259
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    try:
+        handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+    except OverflowError:
+        return False
+    if not handle:
+        return ctypes.get_last_error() == error_access_denied
+    try:
+        exit_code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return True
+        return exit_code.value == still_active
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def pid_is_alive(pid: int) -> bool:
     """Whether *pid* names a process that has not finished exiting.
 
     Signal 0 still reaches an exited child that its parent has not reaped, so
     a zombie whose last thread is gone is dead. A zombie leader whose other
     threads still run keeps its descriptors and locks and is alive, as is a
-    process that exists but refuses our signal. POSIX only: on Windows
-    ``os.kill`` with signal 0 is not a probe.
+    process that exists but refuses our signal. On Windows ``os.kill`` with
+    signal 0 is not a probe: 0 is ``CTRL_C_EVENT``, which interrupts every
+    process on the console, the caller included; query the process instead.
     """
     try:
         pid = int(pid)
@@ -1100,6 +1128,8 @@ def pid_is_alive(pid: int) -> bool:
         return False
     if pid <= 0:
         return False
+    if os.name == 'nt':  # pragma: no cover - exercised on Windows CI
+        return _windows_pid_is_alive(pid)
     try:
         os.kill(pid, 0)
     except PermissionError:

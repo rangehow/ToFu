@@ -742,13 +742,17 @@ def test_cross_process_steer_missing_the_last_boundary_becomes_the_next_turn(
 
 
 def test_steer_committed_while_another_tool_runs_reaches_the_next_boundary_with_one_read(
-    flask_client, conversation_command_db, monkeypatch,
+    flask_client, conversation_command_db, worker_attempts, monkeypatch,
 ):
     from lib import turn_lifecycle
     from lib.turn_lifecycle import record_task_event
 
     first, _ = _start_first_turn(flask_client, monkeypatch, executor_here=False)
     executor = _executor(first)
+    # The other process's worker publishes the durable attempt under its claim.
+    context = worker_attempts.enter(first['attempt']['attemptId'])
+    executor.update(_principalContext=context.principal.to_payload(),
+                    _conversationWorkerContext=context)
     # The executor writes its live Turn (a tool starts); its written view is current.
     assert record_task_event(executor, {'type': 'phase', 'phase': 'tool'})
     reads, real_get = [], turn_lifecycle.get_turn

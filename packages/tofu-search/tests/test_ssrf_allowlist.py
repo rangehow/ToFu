@@ -3,7 +3,7 @@
 ``allow_private_hosts`` is the EXPLICIT way for a host application to say "I do
 mean to fetch this internal host". The design constraint that shapes every test
 here: the judgement is anchored on the HOSTNAME, never on the resolved IP. An
-internal load balancer rotates its address between lookups (your-llm-gateway.example.com was
+internal load balancer rotates its address between lookups (llm-gateway.corp.test was
 observed as both 10.176.18.71 and 10.192.19.176 within one session), so an
 IP-based allowlist silently rots — while the hostname stays stable.
 """
@@ -40,7 +40,7 @@ def _resolving_to(addr):
 @pytest.mark.unit
 def test_default_allowlist_is_empty_so_private_host_stays_blocked():
     with _resolving_to(PRIVATE_A):
-        assert _host_is_safe('your-llm-gateway.example.com') is False
+        assert _host_is_safe('llm-gateway.corp.test') is False
 
 
 @pytest.mark.unit
@@ -53,16 +53,16 @@ def test_public_address_unaffected_by_the_feature():
 
 @pytest.mark.unit
 def test_exact_hostname_entry_admits_that_host():
-    tofu_search.configure(allow_private_hosts={'your-llm-gateway.example.com'})
+    tofu_search.configure(allow_private_hosts={'llm-gateway.corp.test'})
     with _resolving_to(PRIVATE_A):
-        assert _host_is_safe('your-llm-gateway.example.com') is True
+        assert _host_is_safe('llm-gateway.corp.test') is True
 
 
 @pytest.mark.unit
 def test_parent_suffix_entry_admits_subdomain():
-    tofu_search.configure(allow_private_hosts={'internal.example.com'})
+    tofu_search.configure(allow_private_hosts={'corp.test'})
     with _resolving_to(PRIVATE_A):
-        assert _host_is_safe('your-llm-gateway.example.com') is True
+        assert _host_is_safe('llm-gateway.corp.test') is True
 
 
 @pytest.mark.unit
@@ -71,38 +71,38 @@ def test_allowlist_is_ip_independent_across_lb_rotation():
 
     An IP allowlist would have admitted only one of these two addresses.
     """
-    tofu_search.configure(allow_private_hosts={'internal.example.com'})
+    tofu_search.configure(allow_private_hosts={'corp.test'})
     for addr in (PRIVATE_A, PRIVATE_B):
         with _resolving_to(addr):
-            assert _host_is_safe('your-llm-gateway.example.com') is True, addr
+            assert _host_is_safe('llm-gateway.corp.test') is True, addr
 
 
 # ── The allowlist refuses what it does NOT name ──
 
 @pytest.mark.unit
 def test_non_allowlisted_private_host_still_blocked():
-    tofu_search.configure(allow_private_hosts={'internal.example.com'})
+    tofu_search.configure(allow_private_hosts={'corp.test'})
     with _resolving_to(PRIVATE_A):
         assert _host_is_safe('internal.evil.io') is False
 
 
 @pytest.mark.unit
 @pytest.mark.parametrize('host', [
-    'evil-example-corp.com',        # dash prefix, not a dot boundary
-    'notexample_corp.com',
-    'internal.example.com.evil.io',     # allowlisted name as a LEFT label
-    'xexample_corp.com',
+    'evil-corp.test',        # dash prefix, not a dot boundary
+    'notcorp.test',
+    'corp.test.evil.io',     # allowlisted name as a LEFT label
+    'xcorp.test',
 ])
 def test_suffix_spoofing_is_rejected(host):
     """Suffix matching is anchored on a dot boundary, so these must not match."""
-    tofu_search.configure(allow_private_hosts={'internal.example.com'})
+    tofu_search.configure(allow_private_hosts={'corp.test'})
     assert _host_is_allowlisted(host) is False
 
 
 @pytest.mark.unit
 def test_literal_private_ip_cannot_launder_through_a_named_host():
     """A bare-IP URL is judged numerically BEFORE the allowlist is consulted."""
-    tofu_search.configure(allow_private_hosts={'internal.example.com', PRIVATE_A})
+    tofu_search.configure(allow_private_hosts={'corp.test', PRIVATE_A})
     assert _host_is_safe(PRIVATE_A) is False
     assert _host_is_safe('127.0.0.1') is False
     assert _host_is_safe('169.254.169.254') is False   # cloud metadata
@@ -110,7 +110,7 @@ def test_literal_private_ip_cannot_launder_through_a_named_host():
 
 @pytest.mark.unit
 def test_loopback_and_metadata_never_admitted_by_a_domain_entry():
-    tofu_search.configure(allow_private_hosts={'internal.example.com'})
+    tofu_search.configure(allow_private_hosts={'corp.test'})
     with _resolving_to('169.254.169.254'):
         assert _host_is_safe('metadata.google.internal') is False
 
@@ -118,25 +118,25 @@ def test_loopback_and_metadata_never_admitted_by_a_domain_entry():
 # ── Entry normalization ──
 
 @pytest.mark.unit
-@pytest.mark.parametrize('entry', ['internal.example.com', '.internal.example.com', 'internal.example.com', ' internal.example.com '])
+@pytest.mark.parametrize('entry', ['corp.test', '.corp.test', 'CoRp.TeST', ' corp.test '])
 def test_entry_forms_are_normalized(entry):
     tofu_search.configure(allow_private_hosts={entry})
-    assert _host_is_allowlisted('your-llm-gateway.example.com') is True
+    assert _host_is_allowlisted('llm-gateway.corp.test') is True
 
 
 @pytest.mark.unit
 def test_trailing_dot_host_is_normalized():
-    tofu_search.configure(allow_private_hosts={'internal.example.com'})
-    assert _host_is_allowlisted('your-llm-gateway.example.com.') is True
+    tofu_search.configure(allow_private_hosts={'corp.test'})
+    assert _host_is_allowlisted('llm-gateway.corp.test.') is True
 
 
 @pytest.mark.unit
 def test_blank_entries_do_not_admit_everything():
     """A stray '' entry must not degrade into an allow-all."""
     tofu_search.configure(allow_private_hosts={'', '  '})
-    assert _host_is_allowlisted('your-llm-gateway.example.com') is False
+    assert _host_is_allowlisted('llm-gateway.corp.test') is False
     with _resolving_to(PRIVATE_A):
-        assert _host_is_safe('your-llm-gateway.example.com') is False
+        assert _host_is_safe('llm-gateway.corp.test') is False
 
 
 # ── The full gate honours the allowlist ──
@@ -144,8 +144,8 @@ def test_blank_entries_do_not_admit_everything():
 @pytest.mark.unit
 def test_should_fetch_gate_reflects_the_allowlist():
     from tofu_search.fetch.utils import _should_fetch
-    url = 'https://api.openai.com/ml/modelPlaza/modelInfo'
+    url = 'https://llm-gateway.corp.test/models/info'
     with _resolving_to(PRIVATE_A):
         assert _should_fetch(url) is False
-        tofu_search.configure(allow_private_hosts={'internal.example.com'})
+        tofu_search.configure(allow_private_hosts={'corp.test'})
         assert _should_fetch(url) is True

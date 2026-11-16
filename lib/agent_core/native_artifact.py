@@ -42,12 +42,23 @@ def _write_all(fd,chunk):
 
 class _BoundedTarInfo(tarfile.TarInfo):
     @classmethod
-    def frombuf(cls,buf,encoding,errors):
-        entry=super().frombuf(buf,encoding,errors)
+    def _bounded_header(cls,entry):
         if entry.type==tarfile.GNUTYPE_SPARSE:raise _refuse('sparse member invalid')
         if entry.size>SPEC['maximum_unpacked_bytes'] or (entry.type in (tarfile.XHDTYPE,tarfile.XGLTYPE,tarfile.GNUTYPE_LONGNAME,tarfile.GNUTYPE_LONGLINK) and entry.size>SPEC['maximum_metadata_bytes']):
             raise _refuse('metadata/member byte bound exceeded')
         return entry
+
+    # Every header block must pass the bounds before tarfile reads the data it
+    # announces. CPython 3.12.14+ parses headers through the private _frombuf
+    # and no longer calls frombuf while reading, so hook whichever one parses.
+    if hasattr(tarfile.TarInfo,'_frombuf'):
+        @classmethod
+        def _frombuf(cls,buf,encoding,errors,**options):
+            return cls._bounded_header(super()._frombuf(buf,encoding,errors,**options))  # pyright: ignore[reportAttributeAccessIssue]  # private, absent from typeshed
+    else:
+        @classmethod
+        def frombuf(cls,buf,encoding,errors):
+            return cls._bounded_header(super().frombuf(buf,encoding,errors))
 
 
 _ARCHIVE_CHUNK_BYTES = 65536
@@ -175,8 +186,8 @@ def inspect_archive(path:Path,*,archive_sha256=None,application_version=None,bin
                 headers=0
                 metadata_bytes=0
                 @classmethod
-                def frombuf(cls,buf,encoding,errors):
-                    entry=super().frombuf(buf,encoding,errors)
+                def _bounded_header(cls,entry):
+                    entry=super()._bounded_header(entry)
                     cls.headers+=1
                     if entry.type in (tarfile.XHDTYPE,tarfile.XGLTYPE,tarfile.GNUTYPE_LONGNAME,tarfile.GNUTYPE_LONGLINK):
                         cls.metadata_bytes+=entry.size

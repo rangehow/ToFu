@@ -43,7 +43,6 @@ import './settings/system-prompt-editor';
 import './settings/visibility-defaults';
 import './settings/save-export';
 import './settings/local-deploy';
-import './settings/database';
 import './settings/dx-channel';
 import './settings/github-channel';
 import './settings/bot-channel';

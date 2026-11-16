@@ -51,7 +51,7 @@ print(json.dumps({'python': sys.implementation.cache_tag,
 def requirements_digest(requirements: Path) -> str:
     """Local first-party wheel hashes, rather than builder-specific paths."""
     normalized = []
-    for line in requirements.read_text().splitlines():
+    for line in requirements.read_text(encoding='utf-8').splitlines():
         value = line.strip()
         if not value or value.startswith('#'):
             continue
@@ -101,7 +101,7 @@ def reuse(house: Path, requirements: Path, runtime: dict) -> Path | None:
         return None
     if manifest.is_symlink() or manifest.stat().st_size > MAX_MANIFEST_BYTES:
         raise ValueError('Invalid Python artifact manifest')
-    record = json.loads(manifest.read_text())
+    record = json.loads(manifest.read_text(encoding='utf-8'))
     if record.get('schema') != 1:
         raise ValueError('Unsupported Python artifact manifest')
     if (record['requirements_sha256'] != requirements_digest(requirements)
@@ -161,7 +161,7 @@ def import_bundle(archive: Path, checksum: Path, house: Path,
                   requirements: Path, runtime: dict) -> Path | None:
     if archive.stat().st_size > MAX_ARCHIVE_BYTES or checksum.stat().st_size > 4096:
         raise ValueError('Python bundle exceeds download budget')
-    match = re.fullmatch(r'([0-9a-f]{64})\s+\*?([^\r\n]+)', checksum.read_text().strip())
+    match = re.fullmatch(r'([0-9a-f]{64})\s+\*?([^\r\n]+)', checksum.read_text(encoding='utf-8').strip())
     if not match or match[2] != archive.name or digest(archive) != match[1]:
         raise ValueError('Python bundle checksum mismatch')
     house.parent.mkdir(parents=True, exist_ok=True)
@@ -202,7 +202,7 @@ def package(house: Path, requirements: Path, runtime: dict,
     archive = out / asset_name(version, runtime)
     with tempfile.TemporaryDirectory(prefix='.package-wheels-', dir=out) as temporary:
         pending = Path(temporary) / archive.name
-        record = json.loads((house / 'manifest.json').read_text())
+        record = json.loads((house / 'manifest.json').read_text(encoding='utf-8'))
         with tarfile.open(pending, 'w:gz') as bundle:
             for filename in sorted([*record['wheels'], 'manifest.json', 'install.lock']):
                 info = bundle.gettarinfo(str(house / filename), arcname=filename)

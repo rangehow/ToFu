@@ -13,6 +13,8 @@ from lib.storage.manifest import ManifestError, validate_manifest
 
 
 pytestmark = pytest.mark.unit
+# The PostgreSQL lane uses the suite-owned cluster when no external DSN file is set.
+pytest_plugins = ('tests.support.postgres_cluster',)
 _BACKENDS = ["sqlite"]
 if os.environ.get("TOFU_STORAGE_TEST_POSTGRES") == "1":
     _BACKENDS.append("postgres")
@@ -21,14 +23,14 @@ if os.environ.get("TOFU_STORAGE_TEST_POSTGRES") == "1":
 @pytest.fixture(params=_BACKENDS)
 def storage(request, tmp_path: Path, monkeypatch):
     from contextlib import ExitStack
-    from tests.support.postgres_isolation import isolated_postgres_dsn
+    from tests.support.postgres_isolation import isolated_postgres_dsn, postgres_dsn_source
 
     monkeypatch.setenv("TOFU_STORAGE_SQLITE_READ_POOL", "2")
     monkeypatch.setenv("TOFU_STORAGE_PG_READ_POOL", "2")
     monkeypatch.setenv("TOFU_STORAGE_PG_WRITE_POOL", "1")
     with ExitStack() as resources:
         if request.param == 'postgres':
-            source = Path(os.environ['TOFU_STORAGE_TEST_POSTGRES_DSN_FILE'])
+            source = postgres_dsn_source(request, tmp_path)
             isolated = resources.enter_context(isolated_postgres_dsn(source, tmp_path))
             monkeypatch.setenv('TOFU_STORAGE_TEST_POSTGRES_DSN_FILE', str(isolated))
         supervisor = StorageSupervisor(

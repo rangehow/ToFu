@@ -35,6 +35,7 @@ import subprocess
 import sys
 
 import pytest
+from tests.support.export_toolchain import require_export_toolchain
 
 pytestmark = pytest.mark.unit
 
@@ -43,7 +44,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # export.py is the maintainer's release tool; not shipped in opensource builds.
-pytest.importorskip('export', reason='export.py is not shipped in opensource builds')
+require_export_toolchain()
 
 _NODE = shutil.which('node')
 

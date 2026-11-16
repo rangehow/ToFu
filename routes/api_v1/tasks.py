@@ -287,7 +287,7 @@ def start_task():
     task_id = res.get('task_id') or ''
     audit_log('api_task_start', kind=kind, task_id=task_id,
               deduped=bool(res.get('deduped')),
-              key_id=(current_auth().key_id if current_auth() else ''))
+              key_id=(auth.key_id if (auth := current_auth()) else ''))
     logger.info('[api_v1.tasks] started %s task=%s deduped=%s',
                 kind, task_id, bool(res.get('deduped')))
     return api_ok(taskId=task_id, kind=kind, deduped=bool(res.get('deduped')))
@@ -896,7 +896,7 @@ def task_abort(task_id):
                 return api_ok(taskId=task_id, status=remote['status'],
                               note='already finished')
             audit_log('api_task_abort', task_id=task_id, kind='',
-                      key_id=(current_auth().key_id if current_auth() else ''))
+                      key_id=(auth.key_id if (auth := current_auth()) else ''))
             return api_ok(taskId=task_id, status='aborting')
         # A registry miss is not "no such task": the worker can be LIVE while
         # its registry row is gone (the 2026-08-01 evaporation family), and
@@ -931,7 +931,7 @@ def task_abort(task_id):
     if 'aborted' in task:
         task['aborted'] = True
     audit_log('api_task_abort', task_id=task_id, kind=task.get('kind'),
-              key_id=(current_auth().key_id if current_auth() else ''))
+              key_id=(auth.key_id if (auth := current_auth()) else ''))
     return api_ok(taskId=task_id, status='aborting')
 
 
@@ -987,7 +987,7 @@ def task_tool_result(task_id):
             'resolved, or unknown).')
     audit_log('api_task_tool_result', task_id=task_id, call_id=call_id,
               is_error=is_error,
-              key_id=(current_auth().key_id if current_auth() else ''))
+              key_id=(auth.key_id if (auth := current_auth()) else ''))
     return api_ok(taskId=task_id, callId=call_id, resolved=True)
 
 
@@ -1019,7 +1019,7 @@ def task_delete(task_id):
     if not rt.remove_owned(task_id, user_id=owner_user_id):
         return api_not_found('Task not found')
     audit_log('api_task_delete', task_id=task_id,
-              key_id=(current_auth().key_id if current_auth() else ''))
+              key_id=(auth.key_id if (auth := current_auth()) else ''))
     return api_ok(taskId=task_id, status='deleted')
 
 

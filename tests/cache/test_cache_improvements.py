@@ -68,8 +68,12 @@ class TestConcurrentConvStateIsolation:
         conv = 'shared-conv'
         # Each thread walks its OWN growing message list under the SAME conv.
         results = {}
+        # Keep both loops alive together: a thread that has already exited
+        # frees its ident, and a later thread may reuse it.
+        both_alive = threading.Barrier(2)
 
         def _worker(name, n_msgs):
+            both_alive.wait()
             msgs = [{'role': 'system', 'content': 'sys'}]
             for i in range(n_msgs):
                 msgs.append({'role': 'user', 'content': f'{name} u{i}'})

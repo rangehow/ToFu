@@ -95,7 +95,7 @@ def test_typed_brand_owners_replace_retained_boot_breaker():
     assert 'settings/branding.js' not in bundle
     prelude = PRELUDE.read_text()
     assert "from '../core/model-brand-detection'" in prelude
-    assert "from '../core/model-brand-badge'" in prelude
+    assert "from '../core/model-brand-icons'" in prelude
     assert "from '../core/model-display-names'" in prelude
 
 

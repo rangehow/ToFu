@@ -16,7 +16,7 @@ import { createRouterInstructions, type RouterInstructionPorts } from './router-
 import { createRouterWorkerModel, type RouterWorkerModelControl, type RouterWorkerModelPorts } from './router-worker-model';
 import { createCoordinatorConversationId } from './coordinator-conversation-id';
 import { setStableAttribute, setStableHidden } from '../conversation/ui/renderers/stable-dom';
-import './project-coordination.css';
+import '../styles/application/33-project-coordination.css';
 
 export interface GlobalRouterPorts {
   /** GET /api/v4/router: passive, never creates the router. */

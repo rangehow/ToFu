@@ -5,7 +5,6 @@ import { createCoordinationWorkList, type CoordinationConversation } from './pro
 import { projectCoordinationGraph,
   type CoordinationGraphEdge, type CoordinationGraphNode, type CoordinationGraphOptions, type CoordinationGraphStatus } from './project-coordination-graph';
 import { t } from '../i18n';
-import { coordinationText } from './project-coordination-text';
 import { createCoordinationCanvas, type CoordinationCanvasState } from './project-coordination-canvas';
 import type { CoordinationWork } from './project-coordination';
 
@@ -25,6 +24,9 @@ export interface CoordinationRenderHooks {
   filter?: 'all' | 'active' | 'attention' | 'completed';
 }
 
+export const coordinationText = (content: string, tag = 'p'): HTMLElement => {
+  const node = document.createElement(tag); node.textContent = content; return node;
+};
 
 export function projectCoordinationWorkGroups(active: readonly CoordinationWork[], recent: readonly CoordinationWork[]) {
   return {

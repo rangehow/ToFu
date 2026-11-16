@@ -5,7 +5,7 @@ import '../../../styles/fonts.css';
 import '../../../styles/application/00-design-tokens.css';
 import '../../../styles/application/30-ui-kit.css';
 import '../../../styles/application/01-workspace-dock.css';
-import '../world-office.css';
+import '../../../styles/application/27-world-office.css';
 import { ready, t } from '../../../i18n';
 import { mountWorld, type ConversationDock } from '../app';
 import { fixtureLive, type FixtureSnapshot } from './fixture';

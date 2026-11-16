@@ -17,9 +17,7 @@ _AUDIT_SYNTHETIC_REPO_PATHS = (
 
 import pytest
 
-from tests.support.export_toolchain import require_export_toolchain
-
-require_export_toolchain()
+pytest.importorskip('export', reason='export.py is not shipped in opensource builds')
 
 pytestmark = pytest.mark.unit
 
@@ -465,132 +463,6 @@ def test_path_loads_that_cannot_name_a_dropped_repository_file_pass(tmp_path, lo
               "HERE = Path(__file__).resolve().parent\nNAME = 'helper.py'\n" + load)
     _make_dest(dest, {'test_local.py': source})
     _verify_exported_test_surface(dest, src)
-
-
-def test_toolchain_gate_suppresses_later_first_party_dependencies(tmp_path):
-    from export import _verify_exported_test_surface
-
-    src = tmp_path / 'src'
-    src.mkdir()
-    _make_path_loading_src(src)
-    (src / 'export.py').write_text('', encoding='utf-8')
-    dest = tmp_path / 'dest'
-    _make_dest(dest, {'test_gated.py': (
-        'from pathlib import Path\n'
-        'from tests.support.export_toolchain import require_export_toolchain\n'
-        'export = require_export_toolchain()\n'
-        'import tofu_db\n'
-        "ROOT = Path(__file__).resolve().parents[1]\n"
-        "HELPER = ROOT / 'benchmarks' / 'helper.py'\n"
-    )})
-    _verify_exported_test_surface(dest, src)
-
-
-def test_dependency_before_or_beside_a_test_level_toolchain_gate_is_flagged(tmp_path):
-    from export import ExportTestSurfaceError, _verify_exported_test_surface
-
-    src = tmp_path / 'src'
-    src.mkdir()
-    _make_src(src)
-    (src / 'export.py').write_text('', encoding='utf-8')
-    dest = tmp_path / 'dest'
-    _make_dest(dest, {'test_partial.py': (
-        'from tests.support.export_toolchain import require_export_toolchain\n'
-        'import tofu_db\n'
-        'def test_x():\n'
-        '    require_export_toolchain()\n'
-    )})
-    with pytest.raises(ExportTestSurfaceError, match=r'test_partial\.py -> tofu_db'):
-        _verify_exported_test_surface(dest, src)
-
-
-@pytest.mark.parametrize('reference', (
-    "HELPER = ROOT / 'benchmarks' / 'helper.py'\n",
-    "HELPER = ROOT / 'benchmarks/helper.py'\n",
-    "def test_run():\n    subprocess.run([sys.executable, 'benchmarks/helper.py'])\n",
-    "import os\nHELPER = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),"
-    " 'benchmarks', 'helper.py')\n",
-    "SUITE = Path(__file__).parent.parent / 'benchmarks'\nHELPER = SUITE / 'helper.py'\n",
-))
-def test_literal_repository_path_dropped_by_the_export_is_blocked(tmp_path, reference):
-    from export import ExportTestSurfaceError, _verify_exported_test_surface
-
-    src = tmp_path / 'src'
-    src.mkdir()
-    _make_path_loading_src(src)
-    dest = tmp_path / 'dest'
-    source = ('import subprocess, sys\nfrom pathlib import Path\n'
-              'ROOT = Path(__file__).resolve().parents[1]\n' + reference)
-    _make_dest(dest, {'test_measure.py': source})
-    with pytest.raises(ExportTestSurfaceError,
-                       match=r'test_measure\.py -> benchmarks/helper\.py'):
-        _verify_exported_test_surface(dest, src)
-
-    (dest / 'benchmarks').mkdir()
-    (dest / 'benchmarks' / 'helper.py').write_text('VALUE = 1\n', encoding='utf-8')
-    _verify_exported_test_surface(dest, src)
-
-
-@pytest.mark.parametrize('reference', (
-    # Module-relative files, absent source files, docstrings and directories.
-    "HELPER = HERE / 'benchmarks' / 'local.py'\n",
-    "HELPER = ROOT / 'benchmarks' / 'never_existed.py'\n",
-    "'''See benchmarks/helper.py for the measurement.'''\n",
-    "def test_doc():\n    '''benchmarks/helper.py'''\n",
-    "HELPERS = ROOT / 'benchmarks' / 'nested'\n",
-    "NOTE = 'run benchmarks/helper.py by hand'\n",
-    "def test_msg():\n    assert 'benchmarks/helper.py' in str(ROOT)\n",
-    # A synthetic repository is not this repository.
-    "def test_copy(tmp_path):\n    (tmp_path / 'benchmarks' / 'helper.py').write_text('')\n",
-    # An existence probe is the skip guard for an optional file.
-    "def test_probe():\n    helper = ROOT / 'benchmarks' / 'helper.py'\n"
-    "    if not helper.is_file():\n        return\n",
-    "OPTIONAL = (ROOT / 'benchmarks' / 'helper.py').exists()\n",
-    # A file read only when an optional overlay is installed.
-    "def test_overlay():\n    paths = []\n    if overlay_installed():\n"
-    "        paths.append(ROOT / 'benchmarks' / 'helper.py')\n",
-    "def test_overlay_run():\n    if overlay_installed():\n"
-    "        run([sys.executable, '-m', 'benchmarks.helper'])\n",
-    # The module's own availability probe skips everything after it.
-    "import pytest\ntry:\n    probe()\nexcept LookupError:\n"
-    "    pytest.skip('absent', allow_module_level=True)\n"
-    "def test_after():\n    (ROOT / 'benchmarks' / 'helper.py').read_text()\n",
-))
-def test_literal_paths_that_cannot_name_a_dropped_repository_file_pass(tmp_path, reference):
-    from export import _verify_exported_test_surface
-
-    src = tmp_path / 'src'
-    src.mkdir()
-    _make_path_loading_src(src)
-    (src / 'benchmarks' / 'nested').mkdir()
-    (src / 'benchmarks' / 'nested' / 'x.py').write_text('', encoding='utf-8')
-    dest = tmp_path / 'dest'
-    source = ('from pathlib import Path\n'
-              'ROOT = Path(__file__).resolve().parents[1]\n'
-              'HERE = Path(__file__).resolve().parent\n' + reference)
-    _make_dest(dest, {'test_local.py': source})
-    _verify_exported_test_surface(dest, src)
-
-
-def test_module_invocation_dropped_by_the_export_is_blocked(tmp_path):
-    from export import _test_surface_findings
-
-    src = tmp_path / 'src'
-    src.mkdir()
-    _make_path_loading_src(src)
-    dest = tmp_path / 'dest'
-    _make_dest(dest, {'test_run.py': (
-        'import subprocess, sys\n'
-        'def test_run():\n'
-        "    subprocess.run([sys.executable, '-m', 'benchmarks.helper', '--quick'])\n"
-        "    subprocess.run([sys.executable, '-m', 'pytest', '-q'])\n"
-        "    subprocess.run([sys.executable, '-m', 'scripts.gen_x'])\n"
-    )})
-    t = 'tests'
-    assert _test_surface_findings(dest, src) == [(t + '/test_run.py', 'benchmarks.helper')]
-    (dest / 'benchmarks').mkdir()
-    (dest / 'benchmarks' / 'helper.py').write_text('VALUE = 1\n', encoding='utf-8')
-    assert _test_surface_findings(dest, src) == []
 
 
 def test_public_installer_contract_does_not_require_private_export_toolchain(tmp_path):

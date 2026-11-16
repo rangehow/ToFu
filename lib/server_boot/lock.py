@@ -314,15 +314,11 @@ def _retire_previous_host(fd, lock_path, hostname, logger):
     try:
         fd.seek(0)
         entry = (fd.readline() or '').strip()
-        era_line = (fd.readline() or '').strip()
     except OSError:
         return
     pid, _, host = entry.partition('@')
     host = host.strip()
-    if host and host == hostname:
-        _retire_previous_era(entry, era_line, lock_path, host, logger)
-        return
-    if not host:
+    if not host or host == hostname:
         return
     from lib.process_owner import record_host_retired
     try:
@@ -333,44 +329,6 @@ def _retire_previous_host(fd, lock_path, hostname, logger):
                        'recorded its retirement', host, hostname, pid)
     except (OSError, ValueError) as e:
         logger.warning('[Lock] could not record retirement of host %s: %s', host, e)
-
-
-def _retire_previous_era(entry, era_line, lock_path, host, logger):
-    """A same-host lock stamped by another boot or PID namespace hands over that era.
-
-    A container restarted under the same hostname cannot observe its previous
-    PID namespace, and a host retirement never covers the reading host. A stamp
-    without an era line predates era stamps and proves nothing.
-    """
-    import json
-    from lib.process_owner import process_owner, record_era_retired
-    try:
-        era = json.loads(era_line) if era_line else None
-    except ValueError:
-        return
-    current = process_owner()
-    if (not isinstance(era, dict) or current is None
-            or (era.get('boot'), era.get('pid_namespace'))
-            == (current['boot'], current['pid_namespace'])):
-        return
-    try:
-        record_era_retired({**era, 'host': host}, os.path.join(
-            os.path.dirname(os.path.abspath(lock_path)), 'process-exits'),
-            evidence={'lock': entry, 'era': era})
-        logger.warning('[Lock] serving era %s of host %s ended (its server %s); recorded its '
-                       'retirement', era, host, entry)
-    except (OSError, ValueError) as e:
-        logger.warning('[Lock] could not record retirement of era %s: %s', era, e)
-
-
-def _lock_stamp(hostname):
-    """``<pid>@<host>`` first line (every reader's format), then this process's era."""
-    import json
-    from lib.process_owner import process_owner
-    current = process_owner()
-    era = ('' if current is None else json.dumps(
-        {'boot': current['boot'], 'pid_namespace': current['pid_namespace']}) + '\n')
-    return '%d@%s\n%s' % (os.getpid(), hostname, era)
 
 
 def _acquire_instance_lock(lock_path, logger, hostname=None, allow_reclaim=True,
@@ -427,7 +385,7 @@ def _acquire_instance_lock(lock_path, logger, hostname=None, allow_reclaim=True,
     try:
         fd.seek(0)
         fd.truncate()
-        fd.write(_lock_stamp(hostname))
+        fd.write('%d@%s\n' % (os.getpid(), hostname))
         fd.flush()
     except OSError as e:
         logger.debug('[Lock] could not stamp lock identity: %s', e)

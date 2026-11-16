@@ -1,5 +1,4 @@
 /** Demand-loaded owner for update, timer, and optimizer utility panels. */
-import './utility-panels.css';
 import '../runtime/utility-panels-runtime.generated.js';
 import {
   announceFeatureDomainLoaded,

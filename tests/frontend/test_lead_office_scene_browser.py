@@ -70,7 +70,7 @@ MOUNT = """async ({stagePath, scenePath, width, clock}) => {
   window.requestAnimationFrame = fn => { counts.raf++; return raf(fn); };
   window.setTimeout = (fn, ms, ...rest) => { counts.timers++; return timeout(fn, ms, ...rest); };
   document.body.style.cssText = 'margin:0;background:#efe6d6';
-  // The stage rules the application loads with the office (features/lead-office/office.css).
+  // The stage rules the application loads with the office (styles/application/36-lead-office.css).
   const style = document.createElement('style');
   style.textContent = `.evo-stage{outline:none}.evo-stage-canvas{position:absolute;inset:0;display:block;width:100%;height:100%}
     .evo-stage-targets{position:absolute;inset:0;pointer-events:none}.evo-target{position:absolute;padding:0;border:0;background:transparent;opacity:0;pointer-events:none}`;

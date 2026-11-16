@@ -1495,7 +1495,7 @@ did; they now show read-only, and their removal is an owner decision.
   visible rows, loads the next page when the list end comes into view and,
   while open, re-reads in place on a newer board revision, rewriting only the
   rows whose content changed. The drawer and its stylesheet
-  (`frontend/src/features/coordinator-task-history.css`, imported beside it) load on its first
+  (`34-coordinator-task-history.css`, a deferred section) load on its first
   open; its rows use the board's glyphs and status inks.
 
 Alternatives rejected: keeping every board revision and deriving the history

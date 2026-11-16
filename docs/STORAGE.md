@@ -1093,10 +1093,6 @@ reimplement the fence, restart and validation rules.
   on demand. Configured sizes retain idle handles, never cap active borrowers;
   startup records server max_connections without deriving a local 80% permit
   budget. Real server refusal and connection errors keep SQLSTATE classification.
-  A refused connect while sibling leases of the same owner are live (the
-  server's own `max_connections`) waits within the caller's deadline for a
-  sibling release and reuses its connection. With no live sibling, the
-  refusal is raised at once.
   Close fences both owners, joins borrowers/preparers and releases caches after
   connection retirement. SQLite and PostgreSQL share one lease lifecycle owner.
 - Pooled JSON/JSONB loaders mark decoded strings so shared codecs never parse them twice; `"true"`, `"null"` and JSON-shaped strings retain their type. Other structured results keep their existing representation and projection byte-evidence checks. Loader configuration is connection-local and covers text/binary results.
@@ -1776,17 +1772,7 @@ owned startup control channel. Its existing parent watcher also owns one
 close-on-exec pipe from the application process; EOF releases the Sidecar and
 project lease on parent death or in-place image replacement, including when the
 numeric PID is unchanged. The pipe is bounded to one per child and adds no
-watcher thread. On POSIX the watcher also compares the PPID with the
-supervisor PID, because a `fork()` without `exec` can inherit the pipe's write
-end. On Windows the pipe EOF alone identifies the owner. A venv `python.exe`
-launcher runs the real interpreter as its own child, so there the PPID is the
-launcher and never the supervisor. Windows has no fork that could leak the
-non-inheritable write handle. Process liveness probes go through
-`runtime_guards.pid_is_alive`, which queries the process on Windows: there
-`os.kill(pid, 0)` sends `CTRL_C_EVENT` to the whole console. A refused child
-startup appends the child's exit code and its last stderr lines to the raised
-diagnostic, for example `... [exit_code=2; stderr: ...]`. The error code and
-prefix stay unchanged, so remote logs show the cause. Distributed Pods exchange startup metadata in a mode-0600
+watcher thread. Distributed Pods exchange startup metadata in a mode-0600
 Pod-local memory file and remain independently managed. DSN/Redis credentials
 come from mounted secret files and never appear in argv, repr, logs, or RPC
 payloads.

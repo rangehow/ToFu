@@ -140,20 +140,3 @@ def test_host_retirement_covers_only_other_hosts(tmp_path, monkeypatch):
     # This host's own processes keep kernel evidence; a retirement never reaches them.
     assert owners.owner_state(here) == 'alive'
     assert owners.owner_state({**here, 'boot': 'other-boot'}) == 'unknown'
-
-
-def test_era_retirement_covers_only_that_era_never_the_readers(tmp_path, monkeypatch):
-    # A container restarted under the same hostname gets a new PID namespace;
-    # a host retirement never reaches it, so only an era record can.
-    here = owners.process_owner()
-    if here is None:
-        pytest.skip('local Linux process incarnation evidence unavailable')
-    monkeypatch.setattr(owners, 'exit_evidence_dir', lambda: str(tmp_path))
-    with pytest.raises(ValueError, match='another serving era'):
-        owners.record_era_retired(here, tmp_path, evidence={})
-    old = {**here, 'pid_namespace': '4026530001'}
-    owners.record_era_retired(old, tmp_path, evidence={'lock': 'old era'})
-    assert owners.owner_state({**old, 'pid': 7, 'started': '1'}) == 'dead'
-    assert owners.owner_state({**here, 'pid_namespace': '4026530002'}) == 'unknown'
-    assert owners.owner_state({**here, 'boot': 'other-boot'}) == 'unknown'
-    assert owners.owner_state(here) == 'alive'

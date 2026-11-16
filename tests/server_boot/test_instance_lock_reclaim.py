@@ -316,35 +316,3 @@ def test_acquiring_a_lock_another_host_named_records_that_hosts_retirement(srv, 
     fd.close()
     assert [path.name for path in (tmp_path / 'process-exits' / 'hosts').iterdir()] == [
         owners._host_retirement_path('retired-host', tmp_path).name]
-
-
-def test_acquiring_a_lock_an_earlier_era_of_this_host_named_retires_that_era(srv, tmp_path, monkeypatch):
-    """A container restarted under the same hostname cannot observe its previous
-    PID namespace, and a host retirement never covers the reading host."""
-    import json
-    import lib.process_owner as owners
-    monkeypatch.setattr(owners, 'exit_evidence_dir', lambda: str(tmp_path / 'process-exits'))
-    here = owners.process_owner()
-    if here is None:
-        pytest.skip('local Linux process incarnation evidence unavailable')
-    lock = str(tmp_path / '.server.lock')
-    # A stamp from before eras were recorded proves nothing about the namespace.
-    _write_lock(lock, 41, here['host'])
-    ok, fd = srv._acquire_instance_lock(lock, _Log(), hostname=here['host'])
-    fd.close()
-    assert ok and not (tmp_path / 'process-exits').exists()
-    with open(lock) as f:
-        assert f.readline() == '%d@%s\n' % (os.getpid(), here['host'])
-        assert json.loads(f.readline()) == {'boot': here['boot'], 'pid_namespace': here['pid_namespace']}
-    # Re-acquiring this era's own stamp retires nothing.
-    ok, fd = srv._acquire_instance_lock(lock, _Log(), hostname=here['host'])
-    fd.close()
-    assert not (tmp_path / 'process-exits').exists()
-    old = {'boot': here['boot'], 'pid_namespace': '4026530001'}
-    with open(lock, 'w') as f:
-        f.write('41@%s\n%s\n' % (here['host'], json.dumps(old)))
-    ok, fd = srv._acquire_instance_lock(lock, _Log(), hostname=here['host'])
-    fd.close()
-    assert ok
-    assert owners.owner_state({**here, **old, 'pid': 41, 'started': '1'}) == 'dead'
-    assert owners.owner_state({**here, 'pid_namespace': '4026530002'}) == 'unknown'

@@ -29,7 +29,7 @@ import {
   type OfficeProject, type OfficeProjectFacts, type OfficeView,
 } from './projection';
 import { createLeadOfficeScene, type LeadOfficeScene, type LeadOfficeSceneText, type OfficeActivation } from './scene';
-import './office.css';
+import '../../styles/application/36-lead-office.css';
 
 export interface LeadOfficeContext {
   altitude: OfficeAltitude;

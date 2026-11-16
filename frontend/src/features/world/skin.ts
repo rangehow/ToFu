@@ -28,7 +28,7 @@ export function watchTheme(onChange: (theme: WorldTheme) => void): () => void {
 
 const url = (value: string) => `url("${value}")`;
 
-/** Custom properties for the world element (world-office.css reads them). */
+/** Custom properties for the world element (27-world-office.css reads them). */
 export function skinStyle(theme: WorldTheme): Record<string, string> {
   return {
     '--art-doc-report': url(DOCS.report.desk.url[theme]),

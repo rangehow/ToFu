@@ -492,15 +492,9 @@
 }
 .ctx-live-dot{width:7px;height:7px;flex:none;border-radius:50%;background:var(--s-gold)}
 
-/* ── Toolbar: ledger capacity meter + tofu buttons ── */
-.ctx-toolbar{display:flex;align-items:center;justify-content:space-between;gap:var(--space-4);margin-bottom:10px;padding:0 2px}
-.ctx-toolbar-actions,.ctx-capacity{display:flex;align-items:center;gap:9px}
-.ctx-capacity{font-size:var(--font-size-xs);font-weight:600;color:var(--s-ink-soft)}
-.ctx-capacity-count{font-family:'JetBrains Mono',monospace;font-weight:700;font-variant-numeric:tabular-nums;color:var(--s-ink)}
-.ctx-capacity-count.is-over{color:#b3261e}
-.ctx-capacity-track{width:92px;height:9px;border:1.5px solid var(--s-ink);background:var(--s-white);overflow:hidden}
-.ctx-capacity-track span{display:block;width:0;height:100%;background:var(--s-gold);transition:width .2s ease}
-.ctx-capacity-track span.is-over{background:#b3261e}
+/* ── Toolbar: tofu buttons. My Context has no capacity meter: the owner profile is sized by its content. ── */
+.ctx-toolbar{display:flex;align-items:center;justify-content:flex-end;gap:var(--space-4);margin-bottom:10px;padding:0 2px}
+.ctx-toolbar-actions{display:flex;align-items:center;gap:9px}
 .ctx-dirty-state{min-height:16px;font-family:'JetBrains Mono',monospace;font-size:10.5px;font-weight:700;color:var(--s-gold-dim)}
 .ctx-status{min-height:20px;margin:var(--space-1) 2px var(--space-3);font-size:11.5px;font-weight:600;color:var(--s-ink-soft)}
 .ctx-status.is-error{color:#b3261e}

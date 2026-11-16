@@ -185,10 +185,30 @@ def _profile_absence_reason(status: str | None, request: ComposeRequest) -> str:
         return "preferences_disabled"
     if _profile_scope(request) is None:
         return "profile_scope_missing"
+    if _outside_profile_roles(request):
+        return "not_applicable"
     return "profile_empty"
 
 
+def _outside_profile_roles(request: ComposeRequest) -> bool:
+    """The Watchdog and its Workers never receive the owner profile.
+
+    Owner profile (Phase 1): the roles it reaches are the ones experiment 1c
+    and FM-2x2 measured; the Watchdog answers system signals, not an owner
+    request the directives could fit (docs/modules/context_engineering.md).
+    """
+    from lib.tasks_pkg.coordinator_policy import runs_on_watchdog_path
+    return runs_on_watchdog_path(request.task or {}, request.user_id, request.project_path)
+
+
 def _profile_block(request: ComposeRequest) -> str:
+    """The owner profile: My Context in its 1c directive form, for this role.
+
+    A disabled block reads nothing and records no applied preferences, so the
+    Turn's ``preferencesApplied`` names exactly what the role was shown.
+    """
+    if 'user_context' in request.disabled_blocks:
+        return ""
     cfg = (request.task or {}).get("config") or {}
     from lib.agent_core.personal_scope import resolve_preferences_enabled
 
@@ -198,26 +218,29 @@ def _profile_block(request: ComposeRequest) -> str:
     if not preferences_enabled:
         return ""
     scope = _profile_scope(request)
-    if scope is None:
+    if scope is None or _outside_profile_roles(request):
         return ""
     try:
         from lib.memory.user_profile import (
             context_ids_for_event,
             context_items_for_event,
-            context_markdown,
             load_context,
+            profile_body,
+            profile_items,
             render_profile_block,
         )
+        from lib.tasks_pkg.coordinator_policy import receives_owner_identity
 
         context = load_context(scope)
-        body = context_markdown(context["items"])
+        shown = profile_items(context["items"],
+                              identity=receives_owner_identity(request.task or {}))
+        body = profile_body(shown)
         block = render_profile_block(body, scope)
-        if context["items"] and request.task is not None:
-            items = context_items_for_event(context_items=context["items"])
+        if shown and request.task is not None:
             request.task["_appliedPreferences"] = {
                 "chars": len(body),
-                "items": items,
-                "ids": context_ids_for_event(context["items"]),
+                "items": context_items_for_event(context_items=shown),
+                "ids": context_ids_for_event(shown),
             }
         return block or ""
     except Exception as exc:

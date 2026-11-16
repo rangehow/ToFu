@@ -63,13 +63,16 @@ def context_transaction(scope: str = ''):
 
 
 CONTEXT_VERSION = 1
-CONTEXT_TYPES = ('identity', 'work_rule', 'response_preference')
+# ``delegation_grant``: authority the owner grants in his own words. It renders
+# only inside the profile's bounded section (``_render.DELEGATION_BOUND``);
+# shown as an ordinary directive, a grant suppresses necessary questions
+# (owner-profile experiment 1, K5).
+CONTEXT_TYPES = ('identity', 'work_rule', 'response_preference', 'delegation_grant')
 CONTEXT_SOURCES = ('manual', 'assistant', 'legacy_migration')
 CONTEXT_STATUSES = ('active', 'superseded', 'needs_confirmation')
 # One reason vocabulary for My Context and lessons (lib/memory/contracts.py).
 CONTEXT_STATUS_REASONS = MEMORY_STATUS_REASONS
 _LIFECYCLE_KEYS = ('status', 'status_reason', 'superseded_by', 'provenance')
-CONTEXT_CHAR_CAP = 2500
 CONTEXT_CHANGE_LIMIT = 50
 
 
@@ -115,7 +118,7 @@ def _lifecycle_fields(raw: dict) -> dict:
 
 
 def is_active_context_item(item: dict) -> bool:
-    """Only active items are injected, mirrored or counted against the cap."""
+    """Only active items are injected, mirrored or counted."""
     return (item or {}).get('status', 'active') == 'active'
 
 
@@ -170,11 +173,12 @@ def _normalize_item(raw: dict, *, source_default: str = 'manual',
 
 
 def context_markdown(items: list[dict]) -> str:
-    """Stable, human-readable content used for the cap and prompt body."""
+    """Stable, human-readable content of the active items (their ``chars``)."""
     groups = {
         'work_rule': [],
         'response_preference': [],
         'identity': [],
+        'delegation_grant': [],
     }
     for item in items or []:
         if not is_active_context_item(item):
@@ -191,6 +195,7 @@ def context_markdown(items: list[dict]) -> str:
         ('work_rule', 'Work rules'),
         ('response_preference', 'Response preferences'),
         ('identity', 'About the user'),
+        ('delegation_grant', 'Delegation grants'),
     )
     for key, label in labels:
         if groups[key]:
@@ -203,7 +208,11 @@ def context_char_count(items: list[dict]) -> int:
 
 
 def _legacy_markdown(items: list[dict]) -> str:
-    """Project structured items onto the old ``## Header`` wire shape."""
+    """Project structured items onto the old ``## Header`` wire shape.
+
+    Grants are left out: the legacy shape parses every unknown header back as
+    identity, which would turn a grant into an unbounded "About the user" fact.
+    """
     items = [item for item in items if is_active_context_item(item)]
     sections: list[str] = []
     prefs = [i for i in items if i.get('type') == 'response_preference']
@@ -469,21 +478,22 @@ def load_context(scope: str = '') -> dict:
 
 def context_status(scope: str = '') -> dict:
     doc = load_context(scope)
-    chars = context_char_count(doc['items'])
     return {
         'version': CONTEXT_VERSION,
         'items': deepcopy(doc['items']),
         'inactive_items': deepcopy(doc['inactive_items']),
-        'chars': chars,
-        'cap': CONTEXT_CHAR_CAP,
-        'over_cap': chars > CONTEXT_CHAR_CAP,
+        'chars': context_char_count(doc['items']),
     }
 
 
 def save_context_items(items: list[dict], scope: str = '', *,
-                       enforce_cap: bool = True,
                        source_default: str = 'manual') -> dict:
-    """Replace all active context items after validation and cap enforcement.
+    """Replace all active context items after validation.
+
+    There is no size cap: the always-present profile is exactly the owner's
+    active statements, rendered whole (docs/modules/context_engineering.md,
+    "Owner profile (Phase 1)"); the provider's context window, through
+    ``ContextPlanV2``, is its only limit.
 
     Every item that disappears in the replacement leaves a ``delete`` record
     in the bounded changes log, so the consolidation learner can tell
@@ -519,9 +529,6 @@ def save_context_items(items: list[dict], scope: str = '', *,
         if findings:
             raise ContextValidationError(refusal_message(findings))
         chars = context_char_count(normalized)
-        if enforce_cap and chars > CONTEXT_CHAR_CAP:
-            raise ContextValidationError(
-                f'Context exceeds {CONTEXT_CHAR_CAP} character limit')
         inactive = [item for item in current['inactive_items']
                     if item['id'] not in seen]
         doc = {'version': CONTEXT_VERSION, 'items': normalized,
@@ -544,8 +551,7 @@ def save_context_items(items: list[dict], scope: str = '', *,
             if old.get('id') and old['id'] not in seen:
                 _append_change(scope, 'delete', old, None)
         audit_log('user_context_saved', items=len(normalized), chars=chars)
-        return {'saved': True, 'items': deepcopy(normalized), 'chars': chars,
-                'cap': CONTEXT_CHAR_CAP, 'over_cap': chars > CONTEXT_CHAR_CAP}
+        return {'saved': True, 'items': deepcopy(normalized), 'chars': chars}
 
 
 def _item_text(item: dict | None) -> str:
@@ -714,7 +720,7 @@ def legacy_items_to_context(items: list[dict]) -> list[dict]:
 
 
 __all__ = [
-    'CONTEXT_VERSION', 'CONTEXT_TYPES', 'CONTEXT_CHAR_CAP',
+    'CONTEXT_VERSION', 'CONTEXT_TYPES',
     'CONTEXT_STATUSES', 'CONTEXT_STATUS_REASONS', 'is_active_context_item',
     'undo_legacy_context_inheritance',
     'ContextValidationError', 'ContextConflictError', 'load_context',

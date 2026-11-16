@@ -19,9 +19,10 @@ def test_profile_uses_one_owned_snapshot(monkeypatch, scope, empty):
     from lib.memory.user_profile import _context
 
     items = [] if empty else [
-        {'id': 'ctx_identity', 'type': 'identity', 'text': f'Identity {scope}'},
-        {'id': 'ctx_rule', 'type': 'work_rule', 'condition': 'editing', 'action': 'test\nthen report'},
-        {'id': 'ctx_concise', 'type': 'response_preference', 'text': 'Concise'},
+        {'id': 'ctx_identity', 'type': 'identity', 'text': f'Identity {scope}', 'source': 'manual'},
+        {'id': 'ctx_rule', 'type': 'work_rule', 'condition': 'editing', 'action': 'test\nthen report',
+         'source': 'manual'},
+        {'id': 'ctx_concise', 'type': 'response_preference', 'text': 'Concise', 'source': 'manual'},
     ]
     reads = []
 
@@ -34,7 +35,7 @@ def test_profile_uses_one_owned_snapshot(monkeypatch, scope, empty):
     monkeypatch.setattr(_context, 'load_context', load)
     task = {'_profileScope': scope}
     block = _providers._profile_block(ComposeRequest(task=task))
-    body = profile.context_markdown(items)
+    body = profile.profile_body(profile.profile_items(items))
     assert reads == [scope]
     assert block == (profile.render_profile_block(body) or '')
     if empty:

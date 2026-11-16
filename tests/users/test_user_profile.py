@@ -49,7 +49,7 @@ def test_save_load_roundtrip(tmp_data_dir):
     import lib.memory.user_profile as up
     assert up.load_profile() == ''  # none yet
     res = up.save_profile('## Style\n- Replies in Chinese\n- Concise')
-    assert res['saved'] and res['chars'] > 0 and not res['over_cap']
+    assert res['saved'] and res['chars'] > 0
     assert os.path.isfile(up.profile_path())
     body = up.load_profile()
     assert 'Replies in Chinese' in body
@@ -64,12 +64,12 @@ def test_empty_save_clears_file(tmp_data_dir):
     assert up.load_profile() == ''
 
 
-def test_over_cap_write_is_rejected_without_partial_save(tmp_data_dir):
+def test_large_write_is_saved_whole(tmp_data_dir):
     import lib.memory.user_profile as up
-    big = '- ' + ('x' * (up.USER_PROFILE_CHAR_CAP + 500))
-    res = up.save_profile(big)
-    assert not res['saved'] and res['over_cap']
-    assert up.load_profile() == ''
+    text = 'x' * 10_000
+    res = up.save_profile('- ' + text)
+    assert res['saved']
+    assert text in up.load_profile()
 
 
 def test_render_block_and_summary(tmp_data_dir):

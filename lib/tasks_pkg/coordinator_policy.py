@@ -298,3 +298,40 @@ def prepare_coordinator_tool_surface(task: dict, cfg: dict, tools: list[dict] | 
     cfg['_toolSearchCatalogSize'] = len(admitted)
     cfg['_toolSearchableCount'] = 0
     return list(admitted)
+
+
+def receives_owner_identity(task: dict) -> bool:
+    """Whether this role may see the owner's My Context ``identity`` items.
+
+    Delegated Workers and sub-agents never receive them (design record
+    "Owner understanding", Decision 3): neither in the always-present profile
+    nor through the owner-memory lookup. A failed role lookup withholds them.
+    """
+    from lib.tasks_pkg.invocation import is_child_invocation
+    if is_child_invocation(task) or task.get('_parentTaskId'):
+        return False
+    try:
+        from lib.project_dispatch.admission import is_dispatch_task
+        if not is_dispatch_task(task):
+            return True
+        return bool(coordinator_scope(task))
+    except Exception:
+        logger.warning('[Coordinator] role lookup failed; identity items withheld', exc_info=True)
+        return False
+
+
+def runs_on_watchdog_path(task: dict, user_id: int | None,
+                          project_path: str | None = None) -> bool:
+    """Whether ``task`` works in the owner's Watchdog project: the Watchdog or its Workers.
+
+    Pure: compares the task's project paths with the owner's watchdog path
+    (``lib.router.watchdog.binding.is_watchdog_location``), no storage read.
+    """
+    owner = user_id or task.get('_userId')
+    if not isinstance(owner, int) or isinstance(owner, bool) or owner <= 0:
+        return False
+    from lib.router.watchdog.binding import is_watchdog_location
+    config = task.get('config') or {}
+    return any(isinstance(path, str) and path and is_watchdog_location(owner, path)
+               for path in (config.get('canonicalProjectPath'), config.get('projectPath'),
+                            project_path))

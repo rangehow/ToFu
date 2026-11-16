@@ -194,6 +194,8 @@ const sample = [
     action: 'use hope MCP', source: 'assistant' },
   { id: 'ctx_c', type: 'response_preference', text: 'Reply in Chinese',
     source: 'legacy_migration' },
+  { id: 'ctx_d', type: 'delegation_grant', text: 'Decide reversible steps yourself',
+    source: 'manual' },
 ];
 const { document, check, report } = setup({
   root,
@@ -202,10 +204,10 @@ const { document, check, report } = setup({
   globals: {
     Api: {
       userContext: {
-        get: async () => ({ items: sample, cap: 2500, chars: 152 }),
+        get: async () => ({ items: sample, chars: 184 }),
         replace: async (items) => {
           saved.push(items);
-          return { saved: true, items, cap: 2500 };
+          return { saved: true, items };
         },
       },
       memory: {
@@ -223,12 +225,15 @@ const { document, check, report } = setup({
 (async () => {
   try {
     await refreshPreferences();
-    check('three_category_cards', document.querySelectorAll('.ctx-group').length === 3);
+    check('four_category_cards', document.querySelectorAll('.ctx-group').length === 4);
+    check('grant_in_its_own_card', document.querySelector('.ctx-group-delegation_grant')
+      .textContent.includes('Decide reversible steps yourself'));
+    check('no_capacity_meter', !document.getElementById('prefsCharCount'));
     check('identity_rendered', document.body.textContent.includes('Works at YourProvider'));
     check('rule_condition_rendered', document.body.textContent.includes('submitting cluster jobs'));
     check('rule_action_rendered', document.body.textContent.includes('use hope MCP'));
     check('response_preference_rendered', document.body.textContent.includes('Reply in Chinese'));
-    check('category_icons_visible', document.querySelectorAll('.ctx-group-icon svg').length === 3);
+    check('category_icons_visible', document.querySelectorAll('.ctx-group-icon svg').length === 4);
     check('initially_clean', document.getElementById('ctxSaveBtn').disabled === true);
 
     _contextUpdateField(0, 'text', 'Works at YourProvider as an engineer');
@@ -252,6 +257,6 @@ def test_real_editor_renders_edits_saves_and_clears_under_jsdom():
     run_harness(
         target_js=PREFERENCES_JS,
         body_js=_JSDOM_BODY,
-        expect_pass=11,
+        expect_pass=13,
         label='My Context editor',
     )

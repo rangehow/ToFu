@@ -468,8 +468,7 @@ def run_profile_consolidation(messages: list, task: dict | None = None) -> list[
     context = up.context_status(scope)
 
     user_block = (
-        f'## Current context ({context["chars"]} chars, '
-        f'cap {context["cap"]})\n\n'
+        f'## Current context ({context["chars"]} chars)\n\n'
         f'{json.dumps(context["items"], ensure_ascii=False)}\n\n'
         f'## Recent conversation\n\n{surface}'
     )

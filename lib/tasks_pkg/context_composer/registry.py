@@ -94,11 +94,14 @@ _SPECS = (
                   presentation=NotePresentation('systemNote.reasonProjectScopedRules', 'info', 'Folder rules', 'folder'),
                   authority='project', stability='conversation', lifecycle='conversation',
                   priority=1, layer='objective_constraints', required=True),
+    # The owner profile is the owner's whole active My Context: never clipped;
+    # a Turn whose budget cannot hold it omits it whole, with a reported reason
+    # (docs/modules/context_engineering.md, "Owner profile (Phase 1)").
     InjectionSpec('user_context', 'memory.user_context', 'user_preference',
                   'Preferences enabled and nonempty', authority='preference',
                   presentation=NotePresentation('systemNote.reasonUserContext', 'info', 'My Context', 'user'),
                   stability='conversation', lifecycle='conversation', priority=20,
-                  max_tokens=1000, layer='objective_constraints',
+                  layer='objective_constraints', global_budget_policy='omit',
                   provenance_field='preferencesApplied'),
     InjectionSpec('memory_guidance', 'memory', 'capability_guidance',
                   'Memory enabled and real tools available', authority='ambient',

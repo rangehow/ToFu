@@ -402,7 +402,7 @@ def put_user_context_v1():
     try:
         result = up.save_context_items(data.get('items'), _context_scope())
     except up.ContextValidationError as exc:
-        return api_bad_request(str(exc), cap=up.CONTEXT_CHAR_CAP)
+        return api_bad_request(str(exc))
     return api_ok(result)
 
 
@@ -415,7 +415,7 @@ def create_user_context_v1():
     try:
         result = up.create_context_item(data, _context_scope(), source='manual')
     except up.ContextValidationError as exc:
-        return api_bad_request(str(exc), cap=up.CONTEXT_CHAR_CAP)
+        return api_bad_request(str(exc))
     return api_created(result)
 
 
@@ -427,7 +427,7 @@ def update_user_context_v1(item_id):
     try:
         result = up.update_context_item(item_id, parse_body(exact=('id', 'type', 'source', 'created_at', 'updated_at', 'condition', 'action', 'text')), _context_scope())
     except up.ContextValidationError as exc:
-        return api_bad_request(str(exc), cap=up.CONTEXT_CHAR_CAP)
+        return api_bad_request(str(exc))
     if result is None:
         return api_not_found('Context item not found')
     return api_ok(result)
@@ -464,7 +464,7 @@ def undo_user_context_change_v1(change_id):
 @require_auth
 @api_meta(
     summary='Get the legacy profile projection',
-    description=('Returns ``{body, items, chars, cap, over_cap, pending}`` — '
+    description=('Returns ``{body, items, chars, pending}`` — '
                  'a compatibility projection of structured My Context. '
                  '``items`` is the structured per-preference view '
                  '(``[{header, text}]``) the settings UI edits; ``body`` is '
@@ -481,8 +481,6 @@ def get_user_profile_v1():
         'body': body,
         'items': up.parse_items(body),
         'chars': len(body),
-        'cap': up.USER_PROFILE_CHAR_CAP,
-        'over_cap': up.profile_over_cap(body, scope),
         'pending': up.load_pending(scope),
     })
 

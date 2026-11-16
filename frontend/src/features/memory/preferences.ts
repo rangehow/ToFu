@@ -4,7 +4,7 @@ import { escapeHtmlText as escape } from '../../html-safety';
 import { createLifecycleScope, type LifecycleScope } from '../../lifecycle';
 import type { I18nKey } from '../../i18n';
 
-type ContextType = 'identity' | 'work_rule' | 'response_preference';
+type ContextType = 'identity' | 'work_rule' | 'response_preference' | 'delegation_grant';
 
 interface ContextItem {
   id?: string;
@@ -21,11 +21,10 @@ interface ContextItem {
 interface CleanContextItem extends Omit<ContextItem, '_editing'> {}
 
 interface UserContextApi {
-  get(): Promise<{ items?: ContextItem[]; cap?: number } | null>;
+  get(): Promise<{ items?: ContextItem[] } | null>;
   replace(items: CleanContextItem[]): Promise<{
     saved?: boolean;
     items?: ContextItem[];
-    cap?: number;
   } | null>;
   remove(id: string): Promise<unknown>;
 }
@@ -68,9 +67,10 @@ const SECTIONS: readonly ContextSection[] = [
   { type: 'identity', titleKey: 'context.identityTitle', descKey: 'context.identityDesc', addKey: 'context.identityAdd', emptyKey: 'context.identityEmpty', icon: 'user' },
   { type: 'work_rule', titleKey: 'context.ruleTitle', descKey: 'context.ruleDesc', addKey: 'context.ruleAdd', emptyKey: 'context.ruleEmpty', icon: 'workflow' },
   { type: 'response_preference', titleKey: 'context.preferenceTitle', descKey: 'context.preferenceDesc', addKey: 'context.preferenceAdd', emptyKey: 'context.preferenceEmpty', icon: 'message' },
+  // A grant is shown to leads only inside its bound (docs/modules/context_engineering.md, "Owner profile (Phase 1)").
+  { type: 'delegation_grant', titleKey: 'context.grantTitle', descKey: 'context.grantDesc', addKey: 'context.grantAdd', emptyKey: 'context.grantEmpty', icon: 'shield' },
 ];
 
-let capacity = 2500;
 let items: ContextItem[] = [];
 let savedCleanItems: CleanContextItem[] = [];
 let savedFingerprint = '[]';
@@ -145,23 +145,6 @@ function fingerprint(): string {
   return JSON.stringify(cleanItems());
 }
 
-export function estimateChars(): number {
-  const labels: Record<ContextType, string> = {
-    work_rule: 'Work rules',
-    response_preference: 'Response preferences',
-    identity: 'About the user',
-  };
-  const order: ContextType[] = ['work_rule', 'response_preference', 'identity'];
-  return order.map((type) => {
-    const lines = cleanItems().filter((item) => item.type === type).map((item) => (
-      type === 'work_rule'
-        ? `- WHEN: ${item.condition}\n  DO: ${item.action}`
-        : `- ${item.text}`
-    ));
-    return lines.length ? `## ${labels[type]}\n${lines.join('\n')}` : '';
-  }).filter(Boolean).join('\n\n').length;
-}
-
 function validationError(): string {
   for (const item of items) {
     if (item.type === 'work_rule'
@@ -172,22 +155,7 @@ function validationError(): string {
       return translate('context.textRequired', '请填写内容或删除空条目');
     }
   }
-  return estimateChars() > capacity
-    ? translate('context.overCap', '已超出上下文容量，请精简后再保存') : '';
-}
-
-function updateCharCount(): void {
-  const count = estimateChars();
-  const badge = document.getElementById('prefsCharCount');
-  const fill = document.getElementById('ctxCapacityFill');
-  if (badge) {
-    badge.textContent = `${count} / ${capacity}`;
-    badge.classList.toggle('is-over', count > capacity);
-  }
-  if (fill instanceof HTMLElement) {
-    fill.style.width = `${Math.min(100, Math.round(count / capacity * 100))}%`;
-    fill.classList.toggle('is-over', count > capacity);
-  }
+  return '';
 }
 
 function markDirty(): void {
@@ -206,11 +174,11 @@ function markDirty(): void {
     status.textContent = '';
     status.className = 'ctx-status';
   }
-  updateCharCount();
 }
 
 function contextIcon(name: string): string {
-  const mapped = name === 'workflow' ? 'wrench' : name === 'message' ? 'messageCircle' : 'brain';
+  const mapped = name === 'workflow' ? 'wrench' : name === 'message' ? 'messageCircle'
+    : name === 'shield' ? 'shield' : 'brain';
   try {
     const rendered = globals().Icon?.(mapped, 18);
     if (rendered) return rendered;
@@ -219,6 +187,7 @@ function contextIcon(name: string): string {
   }
   if (name === 'workflow') return '<svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M8 6h4a4 4 0 0 1 4 4v6"/></svg>';
   if (name === 'message') return '<svg viewBox="0 0 24 24"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg>';
+  if (name === 'shield') return '<svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>';
   return '<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>';
 }
 
@@ -374,7 +343,6 @@ export async function refreshPreferences(): Promise<void> {
     const data = await contextApi().get();
     if (owner.signal.aborted || generation !== requestGeneration) return;
     if (!Array.isArray(data?.items)) throw new Error('empty response');
-    capacity = data.cap || capacity;
     items = data.items.map((item) => ({ ...item, _editing: false }));
     savedCleanItems = cleanItems();
     savedFingerprint = JSON.stringify(savedCleanItems);

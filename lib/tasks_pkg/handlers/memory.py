@@ -255,27 +255,6 @@ def _owner_lookup_scope(task) -> tuple[str | None, str]:
     return (str(scope), '') if scope else (None, 'profile_scope_missing')
 
 
-def _identity_audience(task) -> bool:
-    """Whether this role may see My Context identity items.
-
-    Delegated Workers and sub-agents never receive them (design record,
-    Decision 3). A failed role lookup withholds them.
-    """
-    task = task or {}
-    from lib.tasks_pkg.invocation import is_child_invocation
-    if is_child_invocation(task) or task.get('_parentTaskId'):
-        return False
-    try:
-        from lib.project_dispatch.admission import is_dispatch_task
-        if not is_dispatch_task(task):
-            return True
-        from lib.tasks_pkg.coordinator_policy import coordinator_scope
-        return bool(coordinator_scope(task))
-    except Exception:
-        logger.warning('[Memory] role lookup failed; identity items withheld', exc_info=True)
-        return False
-
-
 def _conversation_turns(task):
     """This conversation's Turns, newest first, for the usage half of a lookup."""
     task = task or {}
@@ -303,7 +282,8 @@ def _memory_search(fn_args, project_path, extra_paths=None, *, task=None):
                              'third-party text')
         from lib.memory import owner_memory
         scope, reason = _owner_lookup_scope(task)
-        identity = _identity_audience(task)
+        from lib.tasks_pkg.coordinator_policy import receives_owner_identity
+        identity = receives_owner_identity(task or {})
         if memory_id:
             try:
                 turns = _conversation_turns(task)

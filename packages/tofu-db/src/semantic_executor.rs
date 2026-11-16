@@ -2808,11 +2808,25 @@ fn compile_turn(
                 Some(Value::Bool(value)) => *value,
                 _ => return Err(SemanticExecutionError::InvalidPayload),
             };
+            // A content preview replaces the projection, so it is only
+            // valid on a metadata read.
+            let content_preview_chars = match payload.get("content_preview_chars") {
+                None => None,
+                Some(value) if !include_projection => Some(
+                    value
+                        .as_u64()
+                        .and_then(|value| usize::try_from(value).ok())
+                        .filter(|value| *value > 0)
+                        .ok_or(SemanticExecutionError::InvalidPayload)?,
+                ),
+                Some(_) => return Err(SemanticExecutionError::InvalidPayload),
+            };
             (
                 vec![TransactionIrStep::TurnGet {
                     conversation_id,
                     turn_id,
                     include_projection,
+                    content_preview_chars,
                     slot: 0,
                 }],
                 TransactionIrResult::SlotOrLiteral {

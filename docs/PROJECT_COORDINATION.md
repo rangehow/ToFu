@@ -3147,9 +3147,13 @@ tenant filtering, delivery receipts and dependency evidence stay live on every
 build, and exact lookups still return complete evidence. The route passes the
 process `HistoryPreviews`. Each build replaces its owner/project slot with the
 previews it displayed, so retention is one contract page per slot, with no size,
-age or TTL knob. Alternatives rejected: a content-only Turn read flag would add
-semantics to both SQL and native authorities, and the measured remainder does not
-need it. Caching whole views or validated rows would hide live execution or
+age or TTL knob. A Turn read for its preview asks the authority for
+`content_preview_chars` (2,000) on a metadata read and receives `contentPreview`
+instead of the projection: running Workers change revision every round, and on
+2026-11-15 concurrent builds that decoded their multi-MB projections drove the
+API host to 1.8 GiB (`docs/RESOURCE_CONTROL.md`, "Assignment history
+previews"). An earlier version of this decision rejected that read flag because
+warm builds of settled Turns did not need it. Caching whole views or validated rows would hide live execution or
 authority changes (see the validation decision below). Keying on the revision alone
 misses the native execution-epoch normalization, which can change public status
 without a new revision. The duplicate canvas and sidebar reads are joined in the

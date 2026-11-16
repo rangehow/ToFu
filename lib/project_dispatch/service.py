@@ -25,6 +25,8 @@ logger = get_logger(__name__)
 
 # The list projection of a request: exact lookups keep every request field.
 HISTORY_REQUEST_FIELDS = tuple(CONTRACT['$defs']['historyRequest']['properties'])
+# A history row shows this prefix of its execution content (docs/PROJECT_COORDINATION.md).
+HISTORY_PREVIEW_CHARACTERS = 2000
 
 
 def _attach(projection, records, *, owner):
@@ -438,6 +440,11 @@ class ProjectDispatchService:
             remembered = previews[0][identity]
             if isinstance(turn, Mapping) and _preview_version(turn) == remembered[0]:
                 return turn, remembered
+        if previews is not None:
+            # The authority cuts the preview; this host never decodes the projection.
+            turn = self.turn_get(conversation_id, turn_id, user_id=owner, include_projection=False,
+                                 content_preview_chars=HISTORY_PREVIEW_CHARACTERS)
+            return turn, (_preview_version(turn), turn['contentPreview'])
         return self.turn_get(conversation_id, turn_id, user_id=owner), None
 
     def _view(self, assignment, *, settlement_only=False, previews=None, snapshot=None):
@@ -469,10 +476,6 @@ class ProjectDispatchService:
                     raise ValueError('Bound project execution association changed')
                 result = {}
                 if previews is not None:
-                    if remembered is None:
-                        content = (turn.get('projection') or {}).get('content')
-                        remembered = (_preview_version(turn),
-                                      content[:2000] if isinstance(content, str) else None)
                     if type(remembered[0][0]) is int:
                         previews[1][identity] = remembered
                     result = {} if remembered[1] is None else {'content': remembered[1]}

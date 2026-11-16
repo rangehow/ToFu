@@ -6160,7 +6160,8 @@
     "authorization": "existing owner/conversation/Turn and execution-epoch fences apply before metadata is returned",
     "delivery": "internal lifecycle port; public endpoints retain the default full projection",
     "metadata": "false omits projection and private projection-head locators; SQL selects metadata columns only, native reads the physical Turn header without reconstructing checkpoint/patch/text bodies; legacy monolithic JSON retains existing bounded whole-byte validation and its Serde-marker compatibility fallback, while the metadata selector skips projection/private-head values",
-    "failure": "non-boolean flags and malformed owned metadata fail closed; absent or foreign Turns return null"
+    "failure": "non-boolean flags and malformed owned metadata fail closed; absent or foreign Turns return null",
+    "contentPreview": "content_preview_chars (positive integer, only with include_projection false) returns the metadata record plus contentPreview: the first that many Unicode scalar values of the public projection's string content, else null. The authority reconstructs the projection; the caller decodes only the prefix (assignment history previews). Any other value fails closed."
   },
   "attemptExecutionConfig": {
     "operation": "turn.attempt.get",

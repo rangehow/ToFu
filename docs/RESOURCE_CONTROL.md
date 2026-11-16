@@ -287,7 +287,7 @@ walks referrers to owners. The live server was not restarted.
 | `/dev/shm` load-test roots (31 directories, last written 6 h earlier) | 15 GiB shmem |
 | Execution host (`serverctl_pkg.execution_host`, 17.5 h uptime) | 2.73 GiB, grew 0.3 → 2.5 GiB from 16:00 to 01:00 (`logs/cgroup_pressure.log` `self_rss_gib`) |
 | TofuDB engine | 2.52 GiB (evict-only caches: block headroom/16, pages /32, segment indexes /64, overlay /128) |
-| API host (`server.py`) | 0.85 GiB; 1.8 GiB high-water, about 150 MiB of live Python objects, the rest freed arena pages |
+| API host (`server.py`) | 0.85 GiB; 1.8 GiB high-water, about 150 MiB of live Python objects, the rest freed arena pages (see "Assignment history previews") |
 | Playwright driver and headless shells | 0.31 GiB, separate processes |
 | Storage host | 0.05 GiB |
 | Worker commands (descendants of the execution host: pytest, builds, a `gc-census`) | 3.3 GiB, transient |
@@ -361,6 +361,108 @@ Specifications: `tests/tasks_pkg/test_task_event_delivery.py`
 (`test_root_on_a_memory_filesystem_is_refused`). Each one asserts on retained
 objects (weak-reference probes, registry membership), never on an RSS
 threshold.
+
+**The remaining settled tasks: cycles outliving the registry.** A second
+read-only heap walk of the same execution host (`/proc/<pid>/mem` with
+pymalloc-pool liveness; per settled task its referrers, followed to module
+globals; 195 settled tasks at that moment) classified 125 as held by
+definitive-failure lanes and 49 by terminal subscribers (fixes 1 and 2). Of
+the other 21, 11 were `translate` registry entries (fix 3). The last 10 chat
+tasks had left the chat registry hours earlier, and no path from them reached a
+module global: they were held only by their own cycles. The task dict points
+at its execution account and the account's `_active` map points back; observer
+closures stored on the task or the account capture it; a progress sink keeps
+`_task`; a refused progress frame keeps the `copy_context()` taken at append
+time, whose `_CALL_ADMISSION` value is a `DispatchAdmission` whose `root` is the
+task (3 of the 10); stored `WorkerLeaseLost`/`EventAttemptStaleError`
+tracebacks keep frames whose locals hold it. CPython frees such cycles only in
+a full collection, and a full collection waits until the objects created since
+the last one exceed a quarter of all long-lived objects. A heap of millions of
+replay-window objects therefore holds cyclic garbage for hours.
+*Decision:* registry eviction (TTL sweep or capacity) ends the carrier's
+in-process life, so `TaskRuntime` drops every non-scalar value of the evicted
+dict and keeps scalar identity (`id`, `status`, timestamps) for any late
+holder. Reference counting then frees the graph at once. A dict still
+registered in another runtime, or still owing event delivery
+(`_eventDeliveryPending`, a transient head the coordinator retries), is left
+intact. *Alternatives rejected:* breaking each known cycle edge separately,
+which misses the next closure or stored exception; weak references from the
+account or sink to the task, which would drop a task still running; calling
+`gc.collect()` on a timer, which is an interval knob and pauses the host in
+proportion to its heap.
+
+Replay (`benchmarks/settled_turn_retention.py --turns 100 --waves 5`, now
+also giving each task its execution account, an observer closure and a stored
+refusal; waves run with the cyclic collector disabled, as on a large heap;
+shared-checkout tree vs this tree, alternating fresh processes, two runs each):
+
+| | before | after |
+|---|---|---|
+| Settled graphs reachable without a cyclic collection | 500 / 500 | 0 / 500 |
+| Settled graphs reachable after `gc.collect()` | 0 / 500 | 0 / 500 |
+| Retained Python heap | 273.5 MiB | 7.7 MiB |
+| RSS growth after waves 1–5 (MiB) | 126, 252, 394, 504, 615 | 122, 140–141, 141–143, 143–144, 151–152 |
+| Settle p50 / p90 | 0.36–0.40 / 0.72–0.73 ms | 0.36–0.39 / 0.72–0.76 ms |
+
+Specification: `tests/agent_core/test_evicted_task_release.py` runs with the
+cyclic collector disabled and asserts on weak-reference probes.
+
+## Assignment history previews
+
+**Measured 2026-11-15.** The API host reached a 1.8 GiB high-water mark and
+kept about 0.85 GiB. Read-only page classification of its anonymous memory
+(847 MiB resident): 410 MiB in glibc per-thread 64 MiB arenas (the
+`tofu-sync`/`context-provider` worker threads), 219 MiB in pymalloc arenas and
+small mappings, 75 MiB in the main heap. The arena pages held freed buffers:
+8,347 stale SSE `attempt.event` frames, 570 `messages_snapshot` bodies and
+24,957 tool-schema objects, i.e. Worker Turn content that had passed through.
+The one request family that decodes whole Worker Turns in this host is
+`GET /api/v4/project/coordination/assignments` (642 calls that day, polled by
+the Project page, and a burst of 110 at 02:06). Each history build read every
+bound Worker Turn with its complete projection to show a 2,000-character
+preview; `HistoryPreviews` reuses a preview only while the Turn's revision is
+unchanged, so every running Worker and every first, cursor or other-tab build
+read the body again.
+
+Replay (`/tmp`-local script over the live engine, read-only, the route's
+`ProjectDispatchService.history_page` on the real project, fresh previews per
+build, tracemalloc and `VmHWM`): one build read 31 Worker Turns, 57.4 MiB of
+projection (largest 6.5 MiB), for a 355 KiB response. Concurrent builds in
+threads, as the route runs them:
+
+| concurrent builds | 1 | 8 | 24 |
+|---|---|---|---|
+| before: VmHWM growth / tracemalloc peak | 76 / 110 MiB | 382 / 214 MiB | 867 / 414 MiB |
+| after: VmHWM growth / tracemalloc peak | 43 / 22 MiB | 133 / 58 MiB | 325 / 136 MiB |
+
+The after arm emulates the authority's cut in a separate process, because the
+live engine predates it; its clocks are not comparable. Twenty-four builds
+add 867 MiB to a host idling at about 0.9 GiB, matching the 1.8 GiB mark.
+
+*Decision:* `turn.get` accepts `content_preview_chars` with
+`include_projection: false` and returns the metadata record plus
+`contentPreview`, the first that many code points of the public content
+(`contracts/tofudb_ir_v1.json` `turnProjectionRead.contentPreview`). Native
+TofuDB and the SQL authority cut it where the projection already lives; the
+history build asks for exactly the contract's 2,000-character preview and never
+receives a projection. Exact assignment/command lookups still read complete
+evidence. *Alternatives rejected:* a larger or longer-lived preview cache,
+which needs a size or age knob and still reads every running Worker;
+streaming the projection JSON to extract its content, which still moves and
+scans megabytes per row; `malloc_trim` on an interval, a knob that returns
+pages only after the peak (the cgroup relief path already trims under
+pressure and the arenas stayed resident).
+
+`benchmarks/project_assignment_page_reads.py` (disposable SQLite authority,
+32 rows with 2.1 MB projections, alternating fresh processes) measured bytes
+returned to the host per build: cold 134,918,688 → 152,788; a changed Turn
+4,302,327 → 90,830; warm 88,148 both. Cold build 255/922 ms before and
+254/404 ms after, warm median 20.8/28.4 → 19.1/19.4 ms (host noise).
+Specifications: `tests/turn_lifecycle/test_turn_metadata_read.py` (preview
+shape, Unicode prefix, refusals; SQL and native lanes),
+`tests/project_mod/test_project_dispatch_history_projection.py` and
+`tests/storage/test_project_dispatch_history.py` (no history build reads a
+body), plus `packages/tofu-db/src/turn/metadata_read_tests.rs`.
 
 **Idle footprint of optional capabilities.** After 17 h, neither host maps
 torch, transformers, onnxruntime, faiss, numpy, pandas or Playwright. Native

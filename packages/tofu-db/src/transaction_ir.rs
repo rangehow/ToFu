@@ -839,6 +839,7 @@ pub enum TransactionIrStep {
         conversation_id: String,
         turn_id: String,
         include_projection: bool,
+        content_preview_chars: Option<usize>,
         slot: usize,
     },
     TurnImageGet {
@@ -7680,6 +7681,7 @@ fn prepare_transaction_ir_mode(
                 conversation_id,
                 turn_id,
                 include_projection,
+                content_preview_chars,
                 slot,
             } => {
                 slots[*slot] = Some(crate::turn::get_with_projection(
@@ -7688,6 +7690,7 @@ fn prepare_transaction_ir_mode(
                     conversation_id,
                     turn_id,
                     *include_projection,
+                    *content_preview_chars,
                 )?);
             }
             TransactionIrStep::TurnImageGet {

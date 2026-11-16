@@ -3760,15 +3760,26 @@ def _stored_turns_newest_first(conversation_id: str, *,
 
 
 def get_turn(conversation_id: str, turn_id: str, *, user_id: Any,
-             include_projection: bool = True) -> dict[str, Any]:
-    """Read an owned Turn; context identity consumers can omit its body."""
+             include_projection: bool = True,
+             content_preview_chars: int | None = None) -> dict[str, Any]:
+    """Read an owned Turn; context identity consumers can omit its body.
+
+    ``content_preview_chars`` returns metadata plus ``contentPreview``: the
+    first that many code points of the public projection's string content, or
+    None. The authority reads the projection; the caller never decodes it.
+    """
     user_id = require_user_id(user_id, context='get conversation turn')
     if type(include_projection) is not bool:
         raise TypeError('Invalid Turn projection flag')
+    if content_preview_chars is not None and (
+            include_projection or type(content_preview_chars) is not int or content_preview_chars < 1):
+        raise TypeError('A content preview is a positive count on a metadata read')
     payload = {'conversation_id': conversation_id,
                'turn_id': turn_id, 'user_id': user_id}
     if not include_projection:
         payload['include_projection'] = False
+    if content_preview_chars is not None:
+        payload['content_preview_chars'] = content_preview_chars
     row = _turn_client().query('turn.get', payload)
     if row is None:
         raise LifecycleNotFound('Turn not found')
@@ -3776,6 +3787,12 @@ def get_turn(conversation_id: str, turn_id: str, *, user_id: Any,
         from lib.conversation_sync.validation import ContractViolation, decode
         if not isinstance(row, Mapping) or 'projection' in row:
             raise StorageError('database_protocol_error', 'Turn metadata read returned an invalid result')
+        if content_preview_chars is not None:
+            preview = row.get('contentPreview', False)
+            if not (preview is None or (isinstance(preview, str) and len(preview) <= content_preview_chars)):
+                raise StorageError('database_protocol_error', 'Turn content preview read returned an invalid result')
+            row = dict(row)
+            del row['contentPreview']
         try:
             # The empty body exists only in this small validation carrier. Reuse
             # TurnRecord's canonical metadata constraints without duplicating a
@@ -3786,6 +3803,8 @@ def get_turn(conversation_id: str, turn_id: str, *, user_id: Any,
                                'Turn metadata read returned malformed public metadata') from exc
         if row['turnId'] != turn_id or row['conversationId'] != conversation_id:
             raise StorageError('database_protocol_error', 'Turn metadata identity differs')
+        if content_preview_chars is not None:
+            row['contentPreview'] = preview
         return row
     return public_turn_with_stable_segments(row)
 

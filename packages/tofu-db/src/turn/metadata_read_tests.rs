@@ -169,6 +169,102 @@ fn non_boolean_projection_flags_refuse_before_absent_turn_reads() {
     }
 }
 
+fn preview_query(owner: u64, include_projection: Option<Value>, chars: Value) -> Request {
+    let mut payload = json!({
+        "conversation_id": "metadata", "turn_id": "turn", "user_id": owner,
+        "content_preview_chars": chars,
+    });
+    if let Some(flag) = include_projection {
+        payload["include_projection"] = flag;
+    }
+    request("turn.get", owner, payload, None)
+}
+
+#[test]
+fn content_preview_is_metadata_plus_a_unicode_prefix_of_the_public_content() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+    seed(&mut database);
+    let metadata = execute(&mut database, &query(11, Some(json!(false)))).unwrap();
+
+    let preview = execute(
+        &mut database,
+        &preview_query(11, Some(json!(false)), json!(8)),
+    )
+    .unwrap();
+
+    let mut expected = metadata.clone();
+    expected["contentPreview"] = json!("must not");
+    assert_eq!(preview, expected);
+    let whole = execute(
+        &mut database,
+        &preview_query(11, Some(json!(false)), json!(4096)),
+    )
+    .unwrap();
+    assert_eq!(whole["contentPreview"], "must not be read as metadata");
+    let other = execute(
+        &mut database,
+        &request(
+            "turn.get",
+            12,
+            json!({
+                "conversation_id": "metadata", "turn_id": "turn", "user_id": 12,
+                "include_projection": false, "content_preview_chars": 8,
+            }),
+            None,
+        ),
+    )
+    .unwrap();
+    assert_eq!(other, Value::Null);
+}
+
+#[test]
+fn content_preview_counts_unicode_scalar_values() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+    execute(&mut database, &request("turn.append_settled", 11, json!({
+        "conversation_id": "metadata", "user_id": 11, "command_id": "seed",
+        "actor": "assistant", "kind": "reply", "status": "completed",
+        "projection": {"content": "结果：\u{1F600}完成"}, "settlement": {},
+        "turn_id": "turn", "conversation_defaults": {"allowCreate": true, "title": "Metadata"}
+    }), Some("metadata-seed"))).unwrap();
+
+    let preview = execute(
+        &mut database,
+        &preview_query(11, Some(json!(false)), json!(4)),
+    )
+    .unwrap();
+
+    assert_eq!(preview["contentPreview"], "结果：\u{1F600}");
+    assert!(preview.get("projection").is_none());
+}
+
+#[test]
+fn content_preview_requires_a_metadata_read_and_a_positive_count() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+    seed(&mut database);
+    for (flag, chars) in [
+        (None, json!(8)),
+        (Some(json!(true)), json!(8)),
+        (Some(json!(false)), json!(0)),
+        (Some(json!(false)), json!(-1)),
+        (Some(json!(false)), json!("8")),
+        (Some(json!(false)), Value::Null),
+    ] {
+        let error = execute(
+            &mut database,
+            &preview_query(11, flag.clone(), chars.clone()),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            SemanticExecutionError::InvalidPayload,
+            "{flag:?} {chars}"
+        );
+    }
+}
+
 fn physical(database: &AuthorityDatabase) -> Map<String, Value> {
     let mut transaction = database.begin(7, 11).unwrap();
     let key = turn_key(&transaction, "metadata", "turn").unwrap();
@@ -255,8 +351,9 @@ fn malformed_owned_metadata_fails_closed_and_private_unknown_fields_never_escape
             &document,
             "metadata\u{1f}turn",
         );
-        let error = get_with_projection(&database, &mut transaction, "metadata", "turn", false)
-            .unwrap_err();
+        let error =
+            get_with_projection(&database, &mut transaction, "metadata", "turn", false, None)
+                .unwrap_err();
         assert_eq!(
             error.kind(),
             io::ErrorKind::InvalidData,
@@ -282,7 +379,7 @@ fn malformed_owned_metadata_fails_closed_and_private_unknown_fields_never_escape
             "metadata\u{1f}turn",
         );
         assert_eq!(
-            get_with_projection(&database, &mut transaction, "metadata", "turn", false)
+            get_with_projection(&database, &mut transaction, "metadata", "turn", false, None)
                 .unwrap_err()
                 .kind(),
             io::ErrorKind::InvalidData,
@@ -297,7 +394,7 @@ fn malformed_owned_metadata_fails_closed_and_private_unknown_fields_never_escape
         "metadata\u{1f}wrong",
     );
     assert_eq!(
-        get_with_projection(&database, &mut transaction, "metadata", "turn", false)
+        get_with_projection(&database, &mut transaction, "metadata", "turn", false, None)
             .unwrap_err()
             .kind(),
         io::ErrorKind::InvalidData
@@ -338,7 +435,7 @@ fn malformed_owned_metadata_fails_closed_and_private_unknown_fields_never_escape
     let mut transaction = database.begin(7, 11).unwrap();
     replace_in_private_transaction(&database, &mut transaction, &document, "metadata\u{1f}turn");
     let actual: Value = serde_json::from_slice(
-        &get_with_projection(&database, &mut transaction, "metadata", "turn", false)
+        &get_with_projection(&database, &mut transaction, "metadata", "turn", false, None)
             .unwrap()
             .unwrap(),
     )
@@ -400,8 +497,9 @@ fn malformed_legacy_projection_json_is_validated_even_when_the_body_is_skipped()
         database
             .entity_put(&mut transaction, key, corrupt_inline_envelope(&bytes))
             .unwrap();
-        let error = get_with_projection(&database, &mut transaction, "metadata", "turn", false)
-            .unwrap_err();
+        let error =
+            get_with_projection(&database, &mut transaction, "metadata", "turn", false, None)
+                .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
     for bytes in [b"null".as_slice(), b"[]".as_slice()] {
@@ -411,7 +509,7 @@ fn malformed_legacy_projection_json_is_validated_even_when_the_body_is_skipped()
             .entity_put(&mut transaction, key, corrupt_inline_envelope(bytes))
             .unwrap();
         assert_eq!(
-            get_with_projection(&database, &mut transaction, "metadata", "turn", false)
+            get_with_projection(&database, &mut transaction, "metadata", "turn", false, None)
                 .unwrap_err()
                 .kind(),
             io::ErrorKind::InvalidData
@@ -436,7 +534,7 @@ fn malformed_legacy_projection_json_is_validated_even_when_the_body_is_skipped()
         .entity_put(&mut transaction, key, corrupt_inline_envelope(&bytes))
         .unwrap();
     let actual: Value = serde_json::from_slice(
-        &get_with_projection(&database, &mut transaction, "metadata", "turn", false)
+        &get_with_projection(&database, &mut transaction, "metadata", "turn", false, None)
             .unwrap()
             .unwrap(),
     )
@@ -571,7 +669,7 @@ fn live_head_metadata_does_not_read_checkpoint_patch_or_text_sources_after_reope
         let mut fault = database.begin(7, 11).unwrap();
         database.entity_delete(&mut fault, key).unwrap();
         let actual: Value = serde_json::from_slice(
-            &get_with_projection(&database, &mut fault, "metadata", "turn", false)
+            &get_with_projection(&database, &mut fault, "metadata", "turn", false, None)
                 .unwrap()
                 .unwrap(),
         )
@@ -649,9 +747,16 @@ fn restored_execution_epoch_fences_metadata_and_pinned_old_readers_independently
     assert!(restored.get("_projectionHead").is_none());
     let mut old_transaction = old_reader.begin(7, 11).unwrap();
     let old: Value = serde_json::from_slice(
-        &get_with_projection(&old_reader, &mut old_transaction, "metadata", "turn", false)
-            .unwrap()
-            .unwrap(),
+        &get_with_projection(
+            &old_reader,
+            &mut old_transaction,
+            "metadata",
+            "turn",
+            false,
+            None,
+        )
+        .unwrap()
+        .unwrap(),
     )
     .unwrap();
     assert_eq!(old, original);
@@ -688,7 +793,7 @@ fn context_revision_offsets_and_nullable_pointers_use_shared_public_normalizatio
     )
     .unwrap();
     let metadata: Value = serde_json::from_slice(
-        &get_with_projection(&database, &mut transaction, "metadata", "turn", false)
+        &get_with_projection(&database, &mut transaction, "metadata", "turn", false, None)
             .unwrap()
             .unwrap(),
     )
@@ -1093,7 +1198,7 @@ mod summary {
         database: &AuthorityDatabase,
         transaction: &mut AuthorityTransaction,
     ) -> Result<Vec<u8>, String> {
-        get_with_projection(database, transaction, "metadata", "turn", false)
+        get_with_projection(database, transaction, "metadata", "turn", false, None)
             .map(Option::unwrap)
             .map_err(|error| format!("{:?}: {error}", error.kind()))
     }

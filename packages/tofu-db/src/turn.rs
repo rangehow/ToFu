@@ -9676,12 +9676,48 @@ pub(crate) fn get_with_projection(
     conversation_id: &str,
     turn_id: &str,
     include_projection: bool,
+    content_preview_chars: Option<usize>,
 ) -> io::Result<Option<Vec<u8>>> {
-    if include_projection {
+    if let Some(chars) = content_preview_chars {
+        content_preview(database, transaction, conversation_id, turn_id, chars)
+    } else if include_projection {
         get(database, transaction, conversation_id, turn_id)
     } else {
         metadata_read::get(database, transaction, conversation_id, turn_id)
     }
+}
+
+/// Metadata plus `contentPreview`: the first `chars` Unicode scalar values of
+/// the public projection's string `content` (null otherwise). A history page
+/// shows only this prefix of a multi-MB Worker projection; reading it here
+/// keeps the projection in the authority instead of every client decoding it.
+fn content_preview(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    conversation_id: &str,
+    turn_id: &str,
+    chars: usize,
+) -> io::Result<Option<Vec<u8>>> {
+    let Some(metadata) = metadata_read::get(database, transaction, conversation_id, turn_id)?
+    else {
+        return Ok(None);
+    };
+    let Some(turn) = get_public_value(database, transaction, conversation_id, turn_id)? else {
+        return Ok(None);
+    };
+    let preview = turn
+        .get("projection")
+        .and_then(|projection| projection.get("content"))
+        .and_then(Value::as_str)
+        .map(|content| Value::String(content.chars().take(chars).collect()))
+        .unwrap_or(Value::Null);
+    let mut value: Value = serde_json::from_slice(&metadata)
+        .map_err(|_| invalid_data("turn metadata response is malformed"))?;
+    value
+        .as_object_mut()
+        .ok_or_else(|| invalid_data("turn metadata response is malformed"))?
+        .insert("contentPreview".to_owned(), preview);
+    encode_response(&value).map(Some)
 }
 
 /// The caller owns this freshly materialized public projection. Byte-oriented

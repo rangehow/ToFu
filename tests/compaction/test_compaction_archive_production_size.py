@@ -47,6 +47,11 @@ def test_an_incident_size_snapshot_is_archived_adopted_and_read_back_after_a_res
         if engine is None:
             pytest.skip('explicit native test engine unavailable')
         monkeypatch.setenv('TOFUDB_BIN', str(engine))
+    # The suite's engine is an unoptimized debug build: decoding and encoding a
+    # 70 MB command alone outlasts the 5 s product RPC default there, which
+    # would turn the authority's verdict into a client timeout. Use the
+    # deadline's documented ceiling so the answer, not the clock, decides.
+    monkeypatch.setenv('TOFU_STORAGE_RPC_DEADLINE_S', '120')
     supervisor = StorageSupervisor(project_root=tmp_path, backend=backend, startup_timeout=60)
     supervisor.start()
     try:

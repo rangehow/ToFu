@@ -68,6 +68,40 @@ def test_same_file_compatible_changes_three_way_merge_preserves_staged_index(rep
     assert git(root, 'status', '--porcelain') != ''
 
 
+def test_merge_computation_reads_outlast_a_wall_clock_deadline(repo, monkeypatch):
+    """Delta-sized merge reads on a loaded volume are slow, not stuck: only a stall ends them."""
+    import os
+    import subprocess
+    root, _, _ = repo
+    original = ''.join(f'line {n}\n' for n in range(20))
+    (root / 'base.txt').write_text(original)
+    git(root, 'add', 'base.txt')
+    git(root, 'commit', '-m', 'multiline baseline')
+    work = automatic_workspace(repo, monkeypatch)
+    (work / 'base.txt').write_text(original.replace('line 2\n', 'task line\n'))
+    concurrent = original.replace('line 14\n', 'concurrent line\n')
+    (root / 'base.txt').write_text(concurrent)
+    git(root, 'add', 'base.txt')
+    git(root, 'commit', '-m', 'concurrent canonical edit')
+    run = subprocess.run
+    # Reads and private-index steps only; writes to refs, objects and the
+    # checkout keep their fixed deadlines.
+    merge_reads = {'read-tree', 'write-tree', 'ls-tree', 'ls-files', 'diff', 'merge-base'}
+
+    def deadline_expires(argv, *args, **kwargs):
+        words = set(argv or ())
+        if (argv and os.path.basename(str(argv[0])).startswith('git')
+                and kwargs.get('timeout') is not None
+                and (merge_reads & words or {'apply', '--cached'} <= words)):
+            raise subprocess.TimeoutExpired(argv, kwargs['timeout'])
+        return run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, 'run', deadline_expires)
+    outcome = automatic_settle(repo)
+    assert outcome['state'] == 'delivered', repr(outcome)
+    assert (root / 'base.txt').read_text() == concurrent.replace('line 2\n', 'task line\n')
+
+
 def test_unrelated_commit_during_capture_does_not_invalidate_delivery(repo, monkeypatch):
     from lib.project_mod import task_delta_delivery
     root, _, owner = repo
@@ -313,6 +347,48 @@ def test_blocked_landed_checkpoint_settles_through_recovery(repo, monkeypatch):
     assert result['retry'] is None
     assert merges == []
     assert (root / 'base.txt').read_text() == 'later overlapping lane\n'
+
+
+@pytest.mark.parametrize('case,path,kind', [
+    ('modify-delete', 'base.txt', 'modify/delete'),
+    ('binary-modify-delete', 'preview.png', 'binary modify/delete'),
+])
+def test_patch_failure_without_stages_names_conflict_and_preserves_canonical(
+        repo, monkeypatch, case, path, kind):
+    """`apply --3way` leaves no unmerged stages for these; delivery still names them."""
+    root, _, owner = repo
+    if case == 'binary-modify-delete':
+        (root / path).write_bytes(b'\x00baseline\xff')
+        git(root, 'add', path)
+        git(root, 'commit', '-m', 'binary later deleted by canonical')
+    work = automatic_workspace(repo, monkeypatch)
+    (root / path).unlink()
+    if case == 'binary-modify-delete':
+        (work / path).write_bytes(b'\x00task\xfe')
+    else:
+        (work / path).write_text('task version\n')
+    (work / 'must-not-publish.txt').write_text('atomic sibling\n')
+    from lib.project_mod import generated_integration
+    monkeypatch.setattr(generated_integration, 'resolve_generated_conflicts',
+                        lambda *args, **kwargs: pytest.fail('empty conflict paths reached generated resolver'))
+    before_bytes = {item.name: item.read_bytes() for item in root.iterdir() if item.is_file()}
+    before_head = git(root, 'rev-parse', 'HEAD')
+    before_index = git(root, 'write-tree')
+
+    result = automatic_settle(repo)
+
+    assert result['state'] == 'blocked', result
+    assert result['reason'].startswith('task_delta_conflict:'), result
+    assert f'{kind}: {path}' in result['reason'], result
+    assert result['retry']['conflictPaths'] == [path]
+    assert result['retry']['conflictPathCount'] == 1
+    assert {item.name: item.read_bytes() for item in root.iterdir() if item.is_file()} == before_bytes
+    assert not (root / 'must-not-publish.txt').exists()
+    assert git(root, 'rev-parse', 'HEAD') == before_head
+    assert git(root, 'write-tree') == before_index
+    row = state.get_workspace(str(root), 'automatic', user_id=owner)
+    assert git(root, 'rev-parse', row['origin']['delivery']['checkpointSha']) == row['checkpoint_sha']
+
 
 def test_gate_failure_does_not_delay_workspace_delivery(repo, monkeypatch):
     root, _, _ = repo

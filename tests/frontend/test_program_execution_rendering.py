@@ -14,10 +14,11 @@ def test_program_handoff_rendering_and_legacy_measurement_absence():
         target_js=str(Path(JS_DIR) / 'ui/tool_rounds.js'),
         body_js=r'''
 const { setup } = require(process.env.JSDOM_HARNESS);
+const flags = { debug_mode: true };
 const { document, check, report } = setup({
   root: process.argv[3], targets: [process.argv[2]],
   html: '<!doctype html><body><div id="chatInner"></div></body>',
-  globals: { _convRenderFingerprint: () => 0, conversations: [], activeConvId: null,
+  globals: { _convRenderFingerprint: () => 0, conversations: [], activeConvId: null, _featureFlags: flags,
     t: (key, values) => values ? key + ' ' + JSON.stringify(values) : key },
 });
 function render(round) {
@@ -47,6 +48,9 @@ check('evidence_without_protocol_wrapper', JSON.parse(card.querySelector('.ptc-r
 const measured = card.querySelector('.ptc-measurements').textContent;
 check('actual_measurements', measured.includes('"bytes":"0"') && measured.includes('"bytes":"250"'));
 check('no_savings_claim', !/saved|saving|%/i.test(card.querySelector('.ptc-measurements').textContent));
+flags.debug_mode = false;
+check('measurements_debug_only', !render(round).querySelector('.ptc-technical,.ptc-measurements'));
+flags.debug_mode = true;
 check('projection_immutable', JSON.stringify(round) === before);
 const legacy = render({...round, programStats:undefined, programResult:{answer:'done'}});
 check('legacy_no_fake_measurements', !legacy.querySelector('.ptc-measurements'));
@@ -57,5 +61,5 @@ const named = render({...round, programResult:{kind:'observation',reason:'constr
 check('reason_cannot_select_inherited_property', named.querySelector('.ptc-observation').textContent === 'constructor');
 report();
 ''',
-        min_pass=14,
+        min_pass=15,
     )

@@ -36,9 +36,7 @@ describe.each(Object.entries(surfaces))('%s program surface', (_name, render) =>
     expect(code.querySelector('code')?.className).toBe('language-javascript');
     expect(node.textContent).not.toContain('local_javascript');
     expect(node.querySelector('script,img')).toBeNull();
-    expect(node.querySelector('.ptc-measurements')?.textContent).toContain('Tool output delivered to program: 0 B (0 bytes)');
-    expect(node.querySelector('.ptc-measurements')?.textContent).toContain('Program return value: 250 B (250 bytes)');
-    expect(node.querySelector<HTMLDetailsElement>('.ptc-technical')?.open).toBe(false);
+    expect(node.querySelector('.ptc-technical,.ptc-measurements')).toBeNull();
     expect(JSON.stringify(value)).toBe(before);
   });
 
@@ -219,17 +217,52 @@ describe('program call outcome counts', () => {
   it('shows zero successful calls alongside the rejected attempt', () => {
     const html = programExecutionCardHtml({ programStatus: 'completed',
       programStats: { outcome: 'needs_model', tool_calls: 1, successful_tool_calls: 0 },
-      programResult: { kind: 'observation', reason: 'tool_not_done', data: { error: { code: 'tool_not_enabled' } } } });
+      programResult: { kind: 'observation', reason: 'tool_not_done', data: { error: { code: 'tool_not_enabled' } } } }, undefined, false, true);
     expect(html).toContain('0 successful tool calls · 1 attempts');
     expect(html).toContain('check its full name and availability');
   });
   it('does not invent success for old or contradictory records', () => {
     for (const stats of [{ tool_calls: 1 }, { tool_calls: 1, successful_tool_calls: 2 }]) {
-      expect(programExecutionCardHtml({ programStatus: 'completed', programStats: stats })).not.toContain('successful tool calls');
+      expect(programExecutionCardHtml({ programStatus: 'completed', programStats: stats }, undefined, false, true)).not.toContain('successful tool calls');
     }
   });
 });
 
+
+const reuseRound = { programStatus: 'completed', programResult: { answer: 42 },
+  childToolNames: ['read'], programStats: { tool_calls: 0, successful_tool_calls: 0,
+    result_reads: 2, result_bytes: 2048, result_delivery: { outputBytes: 1048576 }, extra_counter: 7 } };
+
+describe('program technical details follow debug mode', () => {
+  function expectCounters(node: HTMLElement): void {
+    expect(node.querySelector<HTMLDetailsElement>('.ptc-technical')?.open).toBe(false);
+    expect(node.querySelector('.ptc-measurements')?.textContent).toContain('1 MiB (1,048,576 bytes)');
+    expect(node.querySelector('.ptc-measurements')?.textContent).toContain('2 KiB (2,048 bytes)');
+    expect(node.querySelector('[data-rich-key="counters"] pre')?.textContent).toContain('extra_counter');
+  }
+
+  it('renders execution counters only when debug is requested', () => {
+    const node = document.createElement('div');
+    node.innerHTML = programExecutionCardHtml(reuseRound);
+    expect(node.querySelector('.ptc-technical')).toBeNull();
+    node.innerHTML = programExecutionCardHtml(reuseRound, undefined, false, true);
+    expectCounters(node);
+  });
+
+  it('repaints a mounted program card when debug mode toggles', () => {
+    let debug = false; const listeners = new Set<() => void>();
+    const ports = { debugEnabled: () => debug, subscribeToolCards: (listener: () => void) => {
+      listeners.add(listener); return () => { listeners.delete(listener); }; } } as Parameters<typeof renderProgramBlock>[3];
+    const node = document.createElement('div'); const turn = { status: 'completed' } as ConversationTurnViewModel;
+    renderProgramBlock(node, { ...block(), round: reuseRound }, turn, ports);
+    expect(node.querySelector('.ptc-technical')).toBeNull();
+    debug = true; [...listeners].forEach(listener => listener());
+    expect(listeners.size).toBe(1);
+    expectCounters(node);
+    debug = false; [...listeners].forEach(listener => listener());
+    expect(node.querySelector('.ptc-technical')).toBeNull();
+  });
+});
 
 describe.each(Object.entries(surfaces))('%s compact program disclosure', (_name, render) => {
   it('keeps arbitrary results out of the header and shows them first when expanded', () => {
@@ -246,19 +279,14 @@ describe.each(Object.entries(surfaces))('%s compact program disclosure', (_name,
     expect(node.querySelector<HTMLDetailsElement>('.ptc-card')?.open).toBe(false);
   });
 
-  it('keeps zero-new-call reuse quiet with all counters and results inspectable', () => {
+  it('keeps zero-new-call reuse quiet with results inspectable and counters debug-only', () => {
     const node = document.createElement('div');
-    render(node, { ...block(), round: { programStatus: 'completed', programResult: { answer: 42 },
-      childToolNames: ['read'], programStats: { tool_calls: 0, successful_tool_calls: 0,
-        result_reads: 2, result_bytes: 2048, result_delivery: { outputBytes: 1048576 }, extra_counter: 7 } } });
+    render(node, { ...block(), round: reuseRound });
     expect(node.querySelector('.ptc-head')?.textContent).toContain('Saved results read 2 times');
     expect(node.querySelector('.ptc-head')?.textContent).not.toMatch(/successful|bytes|child tool|No source tools/);
     expect(node.querySelector<HTMLDetailsElement>('.ptc-card')?.open).toBe(false);
     expect(node.querySelector<HTMLDetailsElement>('.ptc-result')?.open).toBe(true);
-    expect(node.querySelector<HTMLDetailsElement>('.ptc-technical')?.open).toBe(false);
-    expect(node.querySelector('.ptc-measurements')?.textContent).toContain('1 MiB (1,048,576 bytes)');
-    expect(node.querySelector('.ptc-measurements')?.textContent).toContain('2 KiB (2,048 bytes)');
-    expect(node.querySelector('[data-rich-key="counters"] pre')?.textContent).toContain('extra_counter');
+    expect(node.querySelector('.ptc-technical,.ptc-measurements,[data-rich-key="counters"]')).toBeNull();
   });
 
   it('does not confuse unique tool names with calls in older records', () => {

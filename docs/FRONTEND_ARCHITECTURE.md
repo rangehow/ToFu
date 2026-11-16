@@ -281,7 +281,10 @@ focus; newly actionable transitions open the existing shell without replacing
 source nodes. New attempts, unsuccessful attempts and retained-result reuse are
 separate facts; missing counters never become inferred successes or call counts
 from distinct tool names. Human-formatted binary sizes, exact byte counts and all
-raw programStats remain under collapsed Technical details. EN/ZH copy is sourced
+raw programStats remain under collapsed Technical details, which render only in
+debug mode like every tool card's (`programExecutionCardHtml(..., debug)` from
+the `debugEnabled` renderer/tool-group port; a mounted card repaints through
+`subscribeToolCards` when the mode toggles). EN/ZH copy is sourced
 from locales. Execution counters and backend semantics are unchanged.
 
 **Problem:** with programs on by default, a real-app probe showed the

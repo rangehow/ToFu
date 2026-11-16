@@ -1074,7 +1074,8 @@
   --error-bg:color-mix(in srgb, var(--error-text) 8%, transparent);
   --error-border:color-mix(in srgb, var(--error-text) 30%, transparent);
   --success-text:var(--text-secondary);
-  --success-bg:transparent;
+  /* Success ink stays quiet; its pill keeps a visible fill like the other themes. */
+  --success-bg:color-mix(in srgb, var(--success-text) 12%, transparent);
   --success-border:var(--border);
   --warning-text:#e2c18b;
   --warning-bg:color-mix(in srgb, var(--warning-text) 8%, transparent);

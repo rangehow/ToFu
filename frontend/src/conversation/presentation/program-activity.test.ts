@@ -12,11 +12,13 @@ describe('program lexical activity', () => {
     expect(programActivityMembers('tools.invoke();'.repeat(20_000))).toEqual(['invoke']);
   });
   it('shows prior-result lookup and the honest empty result at a glance', () => {
-    const html = programExecutionCardHtml({programStatus:'completed',
+    const round = {programStatus:'completed',
       programCode:'return await tools.inputs({name:"mcp__llm__experiment_get"});',
-      programStats:{tool_calls:0,successful_tool_calls:0},programResult:[]});
+      programStats:{tool_calls:0,successful_tool_calls:0},programResult:[]};
+    const html = programExecutionCardHtml(round);
     expect(html).toContain('Script: look up prior results');
-    expect(html).toContain('No source tools called again');
+    expect(html).not.toContain('No source tools called again');
+    expect(programExecutionCardHtml(round, undefined, false, true)).toContain('No source tools called again');
     expect(html).toMatch(/class="ptc-detail ptc-result" open><summary>Program result<\/summary><div class="ptool-result-body"><pre>\[\]<\/pre>/);
     expect(html).not.toContain('intent');
   });

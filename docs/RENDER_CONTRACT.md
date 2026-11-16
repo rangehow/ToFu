@@ -1934,7 +1934,7 @@ The demand-loaded slide editor now has one TypeScript session authority under `f
   keeper receipt JSON exposed private references in the glanceable header.
   Decision: plain-language script labels describe lexical activity; measured
   retained reads say how many reads occurred, not how many distinct values.
-  Zero source-call counts remain in technical details. Exact SDK keeper
+  Zero source-call counts remain in technical details (debug mode only). Exact SDK keeper
   receipts show only a saved-result size preview; raw results and source stay
   inspectable. Rejected: hiding reads, inferring intent from scripts, and
   expanding internal references in the header.

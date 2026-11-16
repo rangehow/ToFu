@@ -964,6 +964,9 @@ const _nativeTurnRenderers = createClassicConversationRenderers({
       { signal, timeout: 30_000 },
     );
   },
+  subscribeToolCards(listener) {
+    return toolCardPresentation.subscribe(listener);
+  },
   loadToolResult(reference, signal) {
     return conversationSyncApi.turnToolResult(
       reference.conversationId, reference.turnId, reference.roundIndex,

@@ -441,8 +441,37 @@ const toolResultPresentation = createToolResultPresentation({
 const toolCardPresentation = createToolCardPresentation({
   translate: t,
   markdown: source => renderMarkdown(source),
-  conversationTitle: conversationId => convTitleById(conversationId),
+  // '' (not the untitled label) when the catalog does not name it, so the card can look further.
+  conversationTitle: conversationId => queryConversationTitleById(conversations, conversationId, ''),
+  debugEnabled: () => typeof _featureFlags !== 'undefined' && !!_featureFlags.debug_mode,
+  /* A review/cancel receipt older than its conversation_id field names only the
+   * assignment; its durable record names the Worker conversation. */
+  async assignmentConversation(assignmentId) {
+    const conv = conversations.find(item => item?.id === activeConvId);
+    const projectPath = String(conv?.projectPath || '').trim();
+    if (!projectPath) return '';
+    const page = await Api.project.coordinationAssignments(projectPath, undefined, { assignmentId });
+    const row = (page?.assignments || []).find(item => item?.assignmentId === assignmentId);
+    return String(row?.request?.recipientId || '');
+  },
+  // The catalog holds only loaded pages of Worker conversations.
+  async lookupConversationTitle(conversationId) {
+    const preview = await Api.conversations.preview(conversationId);
+    return String(preview?.title || '');
+  },
+  // Model-authored card text follows the conversation's translation setting, like its messages.
+  translationTarget: () => {
+    const conv = conversations.find(item => item?.id === activeConvId);
+    return conv && convAutoTranslate(conv) && typeof _uiTranslateTarget === 'function'
+      ? _uiTranslateTarget() : '';
+  },
+  async translateText(source, target) {
+    if (await _isAlreadyInTarget(source, target)) return source;
+    return _callTranslateAPI(source, target);
+  },
 });
+// Settings (a lazy bundle) repaints tool cards when debug mode changes.
+runtimeScope.refreshToolCards = () => toolCardPresentation.refresh();
 const {
   renderCompactionLabelHtml: renderToolResultCompactionLabelHtml,
   renderWriteResultHtml: renderWriteToolResultHtml,
@@ -14291,6 +14320,9 @@ const _nativeTurnRenderers = createClassicConversationRenderers({
       { signal, timeout: 30_000 },
     );
   },
+  subscribeToolCards(listener) {
+    return toolCardPresentation.subscribe(listener);
+  },
   loadToolResult(reference, signal) {
     return conversationSyncApi.turnToolResult(
       reference.conversationId, reference.turnId, reference.roundIndex,
@@ -17929,6 +17961,8 @@ function toggleAutoTranslate() {
   if (btn) btn.classList.toggle("active", autoTranslate);
   if (badge) badge.style.display = autoTranslate ? "" : "none";
   captureActiveConversationSettings();
+  // Tool cards show model-authored text translated under the same setting.
+  toolCardPresentation.refresh();
   debugLog(`Auto-Translate: ${autoTranslate ? "ON" : "OFF"}`, "success");
 
   // One-time hint about <notranslate> when first enabling

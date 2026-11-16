@@ -4405,7 +4405,8 @@ result." when the JSON stayed under 1 MB. Each call also materialized the
 projection and persisted it as a multi-megabyte artifact.
 
 Decision: both tools return a compact effect receipt: `assignment_id`,
-`decision` (`accept`/`reject`/`rework`, or `cancelled`), `grant_revision`,
+`conversation_id` (the Worker conversation; its title names the task in the
+Coordinator's tool cards), `decision` (`accept`/`reject`/`rework`, or `cancelled`), `grant_revision`,
 `revoked`, `result_revision`, `execution_status`, `checkpoint_sha`, `delivery`,
 `canonical_delivery` and `next_step`, plus `acceptance_counts` for work with
 acceptance checks (above). The service answers from the

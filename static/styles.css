@@ -11813,6 +11813,7 @@ html[data-tofu-planned-interruption="true"] .net-latency-badge{visibility:hidden
   min-width: 0;
 }
 .ptool-coord-title { font-weight: var(--weight-medium); color: var(--text-primary); }
+.ptool-coord-sep { color: var(--text-tertiary); }
 .ptool-coord-summary {
   min-width: 0;
   color: var(--text-secondary);
@@ -11843,6 +11844,7 @@ html[data-tofu-planned-interruption="true"] .net-latency-badge{visibility:hidden
   color: var(--text-primary);
 }
 .ptool-coord-lead { margin: 0; color: var(--text-primary); }
+.ptool-coord-verdict strong { font-weight: var(--weight-semibold); }
 .ptool-coord-field { display: flex; gap: var(--space-2); align-items: baseline; min-width: 0; }
 .ptool-coord-label { flex: 0 0 auto; min-width: 6em; color: var(--text-tertiary); }
 .ptool-coord-value { min-width: 0; overflow-wrap: anywhere; display: inline-flex; flex-wrap: wrap; gap: var(--space-1); align-items: center; }
@@ -11879,13 +11881,21 @@ html[data-tofu-planned-interruption="true"] .net-latency-badge{visibility:hidden
 .ptool-coord-worker > .ptool-coord-more { flex-basis: 100%; }
 .ptool-coord-worker-title { font-weight: var(--weight-medium); overflow-wrap: anywhere; }
 .ptool-coord-quotes li { padding-left: var(--space-2); border-left: 2px solid var(--border); color: var(--text-secondary); }
-.ptool-coord-steps { display: inline-flex; gap: var(--space-1); align-items: center; color: var(--text-tertiary); }
 .ptool-coord-more > summary, .ptool-coord-debug > summary, .ptool-coord-raw > summary {
   cursor: pointer;
   color: var(--text-secondary);
 }
 .ptool-coord-prose { min-width: 0; overflow-wrap: anywhere; }
 .ptool-coord-more > .ptool-coord-prose { padding: var(--space-1) 0 0 var(--space-3); }
+/* A translated text's authored original, one click away. */
+.ptool-coord-original > summary {
+  cursor: pointer;
+  color: var(--text-tertiary);
+  font-size: var(--conversation-font-size-caption);
+}
+.ptool-coord-more > .ptool-coord-original { padding-left: var(--space-3); }
+.ptool-coord-original > .ptool-coord-prose { color: var(--text-secondary); }
+.ptool-coord-translating { color: var(--text-tertiary); font-size: var(--conversation-font-size-caption); }
 .ptool-coord-open {
   align-self: flex-start;
   display: inline-flex;

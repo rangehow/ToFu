@@ -9,7 +9,7 @@
   "results": [{"toolName": "finish_project_request", "source": "Coordinator"}]},
  {"roundNum": 103, "toolCallId": "call_cancel", "toolName": "cancel_project_work", "query": "Cancel project work", "status": "done",
   "toolArgs": "{\"assignment_id\": \"c9825ced-1111-5222-8333-944455556666\"}",
-  "toolContent": "{\"assignment_id\": \"c9825ced-1111-5222-8333-944455556666\", \"decision\": \"cancelled\", \"grant_revision\": 2, \"revoked\": true, \"result_revision\": 12, \"execution_status\": \"running\", \"checkpoint_sha\": null, \"delivery\": null, \"canonical_delivery\": false, \"next_step\": \"Grant withdrawn and live Worker attempts stopped; results and receipts are preserved. Cancel other unwanted work before finish_project_request.\"}",
+  "toolContent": "{\"assignment_id\": \"c9825ced-1111-5222-8333-944455556666\", \"conversation_id\": \"worker-c7dcc90702009950156f9570\", \"decision\": \"cancelled\", \"grant_revision\": 2, \"revoked\": true, \"result_revision\": 12, \"execution_status\": \"running\", \"checkpoint_sha\": null, \"delivery\": null, \"canonical_delivery\": false, \"next_step\": \"Grant withdrawn and live Worker attempts stopped; results and receipts are preserved. Cancel other unwanted work before finish_project_request.\"}",
   "results": [{"toolName": "cancel_project_work", "source": "Coordinator"}]},
  {"roundNum": 104, "toolCallId": "call_control", "toolName": "control_conversation", "query": "Continue, retry or stop a conversation", "status": "done",
   "toolArgs": "{\"conversation_id\": \"worker-c7dcc90702009950156f9570\", \"action\": \"follow_up\", \"instruction\": \"Also measure the cold-start case.\", \"reason\": \"The owner asked for cold-start numbers.\", \"idempotency_key\": \"follow-cold\"}",

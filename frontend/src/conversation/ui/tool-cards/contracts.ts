@@ -6,6 +6,7 @@
  */
 import type { Translator } from '../../../i18n';
 
+import type { ToolCardEnrichmentPorts } from './enrichment';
 import type { ToolView } from './values';
 
 export type ToolChipTone = 'ok' | 'warn' | 'err' | 'info' | 'muted';
@@ -38,15 +39,28 @@ export interface WorkDirectory {
   remember(assignmentId: string, work: Partial<WorkRecord>): void;
   /** The assignment was named by a delegation this page has presented. */
   knows(assignmentId: string): boolean;
+  /** '' while the assignment's conversation is still being looked up. */
   taskTitle(assignmentId: string, conversationId?: string): string;
   acceptance(assignmentId: string): readonly string[];
   conversationTitle(conversationId: string): string;
+}
+
+/**
+ * Model-authored free text as the conversation's translation setting shows it:
+ * `shown` is the translation when one exists, `original` the authored text
+ * then (else ''), `pending` while the translation is still being made.
+ */
+export interface FreeText {
+  readonly shown: string;
+  readonly original: string;
+  readonly pending: boolean;
 }
 
 export interface ToolPresenterContext {
   readonly t: Translator;
   readonly markdown: (source: string) => string;
   readonly work: WorkDirectory;
+  readonly freeText: (source: string) => FreeText;
 }
 
 export interface ToolPresenter {
@@ -60,10 +74,13 @@ export interface ToolPresenter {
   failure?(view: ToolView, context: ToolPresenterContext): string;
 }
 
-export interface ToolPresentationPorts {
+export interface ToolPresentationPorts extends ToolCardEnrichmentPorts {
   readonly translate: Translator;
   readonly markdown: (source: string) => string;
+  /** The catalog title, '' or undefined when the catalog does not name it. */
   readonly conversationTitle: (conversationId: string) => string | undefined;
+  /** Technical details (IDs, raw result) render only in debug mode. */
+  readonly debugEnabled?: () => boolean;
 }
 
 /** Row chrome owned by the retained dispatcher (icon, pills, badges, controls). */

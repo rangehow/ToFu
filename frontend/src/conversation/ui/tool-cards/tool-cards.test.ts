@@ -13,6 +13,7 @@ import zh from '../../../i18n/locales/zh.json';
 
 import contractsSource from './contracts.ts?raw';
 import coordinationSource from './coordination.ts?raw';
+import enrichmentSource from './enrichment.ts?raw';
 import genericSource from './generic.ts?raw';
 import indexSource from './index.ts?raw';
 import markupSource from './markup.ts?raw';
@@ -22,6 +23,7 @@ import schemaShapedFixture from './fixtures/schema-shaped.json';
 
 import { readableKey } from './generic';
 import { createToolCardPresentation, handleToolCardClick } from './index';
+import type { ToolPresentationPorts } from './contracts';
 
 type Round = Record<string, unknown> & { toolName: string; toolArgs: string; toolContent: string; roundNum: number };
 
@@ -31,7 +33,8 @@ const allRounds = [...transcript, ...schemaShaped];
 const locales = { zh: zh as Record<string, string>, en: en as Record<string, string> };
 /** Every renderer module of this owner; a new module joins the copy scan here. */
 const RENDERER_SOURCES: Readonly<Record<string, string>> = {
-  'contracts.ts': contractsSource, 'coordination.ts': coordinationSource, 'generic.ts': genericSource,
+  'contracts.ts': contractsSource, 'coordination.ts': coordinationSource, 'enrichment.ts': enrichmentSource,
+  'generic.ts': genericSource,
   'index.ts': indexSource, 'markup.ts': markupSource, 'values.ts': valuesSource,
 };
 
@@ -47,11 +50,15 @@ const markerTranslator = ((key: string, params?: Record<string, unknown>) =>
 const escapeText = (value: string): string => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 const markdown = (source: string): string => `<p>${escapeText(source)}</p>`;
 
-function presentation(language: 'zh' | 'en' | 'marker' = 'zh', titles: Record<string, string> = {}) {
+type ExtraPorts = Partial<Omit<ToolPresentationPorts, 'translate' | 'markdown' | 'conversationTitle'>>;
+
+function presentation(language: 'zh' | 'en' | 'marker' = 'zh', titles: Record<string, string> = {}, extra: ExtraPorts = {}) {
   const cards = createToolCardPresentation({
     translate: language === 'marker' ? markerTranslator : localeTranslator(language),
     markdown,
     conversationTitle: (id) => titles[id],
+    debugEnabled: () => true,
+    ...extra,
   });
   // A page renders a transcript top-down: delegations name their assignments first.
   for (const round of transcript.filter((item) => item.toolName === 'delegate_project_work')) cards.headerText(round);
@@ -169,15 +176,29 @@ describe('update_task_progress', () => {
 describe('review_project_work', () => {
   const round = first('review_project_work');
   const reviewArgs = args(round);
+  const content = JSON.parse(round.toolContent) as Record<string, unknown>;
   const delegation = transcript.find((item) => item.toolName === 'delegate_project_work'
     && JSON.parse(item.toolContent).assignment_id === reviewArgs.assignment_id)!;
 
-  it('names the verdict, every check with evidence, the merge status and a plain explanation', () => {
+  /** The same review with another decision and delivery state (the receipt's own fields). */
+  function reviewed(decision: string, receipt: Record<string, unknown>, extraArgs: Record<string, unknown> = {}): Round {
+    return { ...round,
+      toolArgs: JSON.stringify({ ...reviewArgs, decision, ...extraArgs }),
+      toolContent: JSON.stringify({ ...content, decision, ...receipt }) };
+  }
+
+  const verdict = (host: HTMLElement): string => host.querySelector('.ptool-coord-verdict')!.textContent ?? '';
+  const headerChips = (host: HTMLElement): (string | null)[] =>
+    [...host.querySelectorAll('summary .ptool-coord-chip')].map((chip) => chip.textContent);
+
+  it('names the decision and task in a natural header, every check with evidence and a plain explanation', () => {
     const host = render(round);
-    expect(host.querySelector('.ptool-coord-title')!.textContent).toBe('审核并合并工作者结果');
-    expect(host.querySelector('summary .ptool-coord-summary')!.textContent).toBe(args(delegation).title);
-    const chips = [...host.querySelectorAll('summary .ptool-coord-chip')].map((chip) => chip.textContent);
-    expect(chips).toEqual(['接受', '5/5 项达标', '等待合并']);
+    const header = host.querySelector('summary .ptool-coord-header')!;
+    expect(header.querySelector('.ptool-coord-title')!.textContent).toBe('审核结果：采纳');
+    expect(header.querySelector('.ptool-coord-summary')!.textContent).toBe(args(delegation).title);
+    // Title and task never run together: the header reads "审核结果：采纳 · <task>".
+    expect(header.textContent).toContain(`审核结果：采纳 · ${args(delegation).title as string}`);
+    expect(headerChips(host)).toEqual(['5/5 项达标', '合并中']);
     const checks = host.querySelectorAll('.ptool-coord-check');
     expect(checks).toHaveLength(5);
     expect(checks[0].classList.contains('ptool-coord-check--met')).toBe(true);
@@ -185,27 +206,55 @@ describe('review_project_work', () => {
     expect(checks[0].textContent).toContain((args(delegation).acceptance as string[])[0]);
     expect(checks[0].querySelector('.ptool-coord-check-detail')!.textContent)
       .toBe((reviewArgs.acceptance_results as { evidence: string }[])[0].evidence);
-    expect(host.querySelector('.ptool-coord-lead')!.textContent).toBe('结果已通过审核，正在合并到主分支；合并完成后才算交付。');
+    expect(verdict(host)).toBe('合并中');
+    expect(host.querySelector('.ptool-coord-verdict + .ptool-coord-lead')!.textContent)
+      .toBe('结果已通过审核，正在合并到主分支；合并完成后才算交付。');
     expect(primaryText(host)).not.toContain('canonical_delivery');
     expect(primaryText(host)).not.toContain(String(reviewArgs.checkpoint_sha));
     expect(host.querySelector('.ptool-coord-debug')!.textContent).toContain(String(reviewArgs.checkpoint_sha));
   });
 
-  it('reports merged, unmet/unknown checks and rework in plain language', () => {
-    const content = JSON.parse(round.toolContent) as Record<string, unknown>;
-    const merged = { ...round, toolContent: JSON.stringify({ ...content, canonical_delivery: true, delivery: { status: 'delivered' } }) };
-    expect(render(merged, 'en').querySelector('.ptool-coord-lead')!.textContent)
-      .toBe('The result passed review and is merged into the main branch.');
-    const mixed = { ...round, toolArgs: JSON.stringify({ ...reviewArgs, decision: 'rework', checkpoint_sha: '', acceptance_results: [
+  it.each([
+    ['accept', { canonical_delivery: true, delivery: { status: 'delivered' } }, {},
+      '审核结果：采纳', '已合并', ['已合并'], '结果已通过审核，并已合并到主分支。'],
+    ['accept', { canonical_delivery: false, delivery: { status: 'pending', reason: '' } }, {},
+      '审核结果：采纳', '合并中', ['合并中'], '结果已通过审核，正在合并到主分支；合并完成后才算交付。'],
+    ['accept', { canonical_delivery: false, delivery: { status: 'held', reason: 'conflicts with main in lib/x.py' } }, {},
+      '审核结果：采纳', '合并被挡住：conflicts with main in lib/x.py', ['合并被挡住'],
+      '结果已通过审核，但合并没有完成；解决上面的原因后才会合并。'],
+    ['accept', { canonical_delivery: false, delivery: null, checkpoint_sha: null }, { checkpoint_sha: '' },
+      '审核结果：采纳', '已采纳 · 未指定版本，不合并代码', [], '结果已通过负责人审核，但没有指定要合并的版本，所以暂不合并代码。'],
+    ['reject', { canonical_delivery: true, delivery: { status: 'delivered' } }, {},
+      '审核结果：不采纳', '已合并（此前）· 本次审核记为不采纳', ['已合并（此前）'],
+      '这个结果此前已经合并到主分支；本次审核只记录负责人的判断，不会撤销已合并的内容。'],
+    ['rework', { canonical_delivery: true, delivery: { status: 'delivered' } }, {},
+      '审核结果：返工', '已合并（此前）· 本次审核记为返工', ['已合并（此前）'],
+      '这个结果此前已经合并到主分支；本次审核只记录负责人的判断，不会撤销已合并的内容。'],
+    ['reject', { canonical_delivery: false, delivery: null }, {},
+      '审核结果：不采纳', '不采纳 · 不会合并', [], '结果被拒绝，不会被合并。'],
+    ['rework', { canonical_delivery: false, delivery: null }, {},
+      '审核结果：返工', '返工 · 当前结果不会合并', [], '结果需要修改，工作者会按审核意见返工。'],
+  ] as const)('%s with %j reads as its delivery state', (decision, receipt, extraArgs, title, line, mergeChips, explanation) => {
+    const host = render(reviewed(decision, receipt, extraArgs));
+    expect(host.querySelector('.ptool-coord-title')!.textContent).toBe(title);
+    expect(verdict(host)).toBe(line);
+    expect(headerChips(host)).toEqual(['5/5 项达标', ...mergeChips]);
+    expect(host.querySelector('.ptool-coord-verdict + .ptool-coord-lead')!.textContent).toBe(explanation);
+    // A result that is already merged is never described as one that will not be merged.
+    if (receipt.canonical_delivery) expect(primaryText(host)).not.toContain('不会被合并');
+  });
+
+  it('reports unmet/unknown checks and rework in plain language', () => {
+    const mixed = reviewed('rework', { acceptance_counts: { met: 1, unmet: 1, unknown: 1 } }, { checkpoint_sha: '', acceptance_results: [
       { check: 1, verdict: 'met', evidence: 'ok' }, { check: 2, verdict: 'unmet', evidence: 'missing test' },
       { check: 3, verdict: 'unknown', evidence: '' },
-    ] }), toolContent: JSON.stringify({ ...content, decision: 'rework', acceptance_counts: { met: 1, unmet: 1, unknown: 1 } }) };
+    ] });
     const host = render(mixed, 'en');
     expect([...host.querySelectorAll('.ptool-coord-check')].map((row) => row.className.split('--')[1]))
       .toEqual(['met', 'unmet', 'unknown']);
-    expect(host.querySelector('.ptool-coord-lead')!.textContent).toBe('The result needs changes. The Worker will redo it based on the review note.');
-    expect([...host.querySelectorAll('summary .ptool-coord-chip')].map((chip) => chip.textContent))
-      .toEqual(['Sent back for rework', '1/3 checks met']);
+    expect(host.querySelector('.ptool-coord-title')!.textContent).toBe('Review: needs rework');
+    expect(verdict(host)).toBe('Needs rework · this result will not be merged');
+    expect(headerChips(host)).toEqual(['1/3 checks met']);
   });
 
   it('never presents a refused review as accepted, and names a changed result plainly', () => {
@@ -223,6 +272,145 @@ describe('review_project_work', () => {
     const other = { ...refused, toolContent: JSON.stringify({ error: 'Worker review is immutable', execution_started: false }) };
     expect(cards.failureText(other)).toBe('');
     expect(cards.failureText(round)).toBe('');
+  });
+});
+
+/* Rounds of a Coordinator whose delegations this page never rendered (older Turns, another conversation). */
+describe('task titles of assignments this page never delegated', () => {
+  const round = first('review_project_work');
+  const content = JSON.parse(round.toolContent) as Record<string, unknown>;
+  const assignment = 'eec5f732-878b-5f78-abef-e3fd62d8bc48';
+  const worker = 'worker-0a1b2c3d4e5f60718293a4b5';
+  const title = 'Back up repositories to the private remote';
+  const unseen = (receipt: Record<string, unknown>): Round => ({ ...round,
+    toolArgs: JSON.stringify({ assignment_id: assignment, result_revision: 490, decision: 'reject', note: 'Superseded.' }),
+    toolContent: JSON.stringify({ ...content, assignment_id: assignment, decision: 'reject', grant_revision: 1,
+      result_revision: 490, canonical_delivery: true, delivery: { status: 'delivered' }, acceptance_counts: undefined,
+      ...receipt }) });
+
+  it('looks up an older receipt\'s assignment once and repaints with its conversation title', async () => {
+    const lookup = vi.fn(async () => worker);
+    const cards = presentation('zh', { [worker]: title }, { assignmentConversation: lookup });
+    const repaint = vi.fn();
+    cards.subscribe(repaint);
+    const host = document.createElement('div');
+    host.innerHTML = cards.renderCardHtml(unseen({}), chrome);
+    // While the lookup runs the header names the decision only, never a placeholder title.
+    expect(host.querySelector('summary .ptool-coord-summary')).toBeNull();
+    expect(host.textContent).not.toContain('未命名任务');
+    await vi.waitFor(() => expect(repaint).toHaveBeenCalled());
+    host.innerHTML = cards.renderCardHtml(unseen({}), chrome);
+    expect(host.querySelector('summary .ptool-coord-summary')!.textContent).toBe(title);
+    expect(host.querySelector('.ptool-coord-field .ptool-coord-value')!.textContent).toBe(title);
+    expect(host.textContent).not.toContain('未命名任务');
+    expect(lookup).toHaveBeenCalledTimes(1);
+    expect(lookup).toHaveBeenCalledWith(assignment);
+  });
+
+  it('titles an assignment whose Worker conversation the loaded catalog does not hold, never painting a placeholder', async () => {
+    const assignmentConversation = vi.fn(async () => worker);
+    const lookupConversationTitle = vi.fn(async () => title);
+    // No catalog titles: the Worker conversation sits on a Worker page the sidebar never loaded.
+    const cards = presentation('zh', {}, { assignmentConversation, lookupConversationTitle });
+    const host = document.createElement('div');
+    const paints: string[] = [];
+    const paint = (): void => {
+      host.innerHTML = cards.renderCardHtml(unseen({}), chrome);
+      paints.push(host.textContent ?? '');
+    };
+    cards.subscribe(paint);
+    paint();
+    await vi.waitFor(() => expect(host.querySelector('summary .ptool-coord-summary')?.textContent).toBe(title));
+    for (const painted of paints) expect(painted).not.toContain('未命名任务');
+    expect(lookupConversationTitle).toHaveBeenCalledTimes(1);
+    expect(lookupConversationTitle).toHaveBeenCalledWith(worker);
+  });
+
+  it('names a follow-up assignment by the Worker conversation it continues, without a lookup', () => {
+    const lookup = vi.fn(async () => '');
+    // A follow-up is a successor assignment in the same Worker conversation; its receipt names that conversation.
+    const host = render(unseen({ conversation_id: worker }), 'zh', { [worker]: title });
+    expect(host.querySelector('summary .ptool-coord-summary')!.textContent).toBe(title);
+    const cards = presentation('zh', { [worker]: title }, { assignmentConversation: lookup });
+    cards.headerText(unseen({ conversation_id: worker }));
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it('learns the conversation from Worker rows, so a later card of the same assignment is titled at once', () => {
+    const lookup = vi.fn(async () => '');
+    const cards = presentation('zh', { [worker]: title }, { assignmentConversation: lookup });
+    cards.headerText({ ...first('get_project_workers'), toolContent: JSON.stringify({ workers: [
+      { assignment_id: assignment, conversation_id: worker, status: 'completed' }] }) });
+    const host = document.createElement('div');
+    host.innerHTML = cards.renderCardHtml(unseen({}), chrome);
+    expect(host.querySelector('summary .ptool-coord-summary')!.textContent).toBe(title);
+    expect(lookup).not.toHaveBeenCalled();
+  });
+});
+
+describe('free text follows the conversation translation setting', () => {
+  const round = first('review_project_work');
+  const reviewArgs = args(round);
+  const evidence = (reviewArgs.acceptance_results as { evidence: string }[])[0].evidence;
+
+  it('shows translations with the original behind a toggle once they settle', async () => {
+    const translateText = vi.fn(async (source: string) => `译：${source}`);
+    const cards = presentation('zh', {}, { translationTarget: () => 'Chinese', translateText });
+    const repaint = vi.fn();
+    cards.subscribe(repaint);
+    const host = document.createElement('div');
+    host.innerHTML = cards.renderCardHtml(round, chrome);
+    const note = host.querySelector('details.ptool-coord-more[open]')!;
+    expect(note.querySelector('.ptool-coord-prose')!.textContent).toBe(reviewArgs.note);
+    expect(note.querySelector('.ptool-coord-translating')!.textContent).toBe('正在翻译…');
+    await vi.waitFor(() => expect(repaint).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    host.innerHTML = cards.renderCardHtml(round, chrome);
+    const translated = host.querySelector('details.ptool-coord-more[open]')!;
+    expect(translated.querySelector(':scope > .ptool-coord-prose')!.textContent).toBe(`译：${reviewArgs.note as string}`);
+    const original = translated.querySelector<HTMLDetailsElement>('details.ptool-coord-original')!;
+    expect(original.open).toBe(false);
+    expect(original.querySelector('summary')!.textContent).toBe('原文');
+    expect(original.querySelector('.ptool-coord-prose')!.textContent).toBe(reviewArgs.note);
+    const detail = host.querySelector('.ptool-coord-check-detail')!;
+    expect(detail.textContent).toContain(`译：${evidence}`);
+    expect(detail.querySelector('details.ptool-coord-original')!.textContent).toContain(evidence);
+    expect(translateText).toHaveBeenCalledWith(reviewArgs.note, 'Chinese');
+    expect(host.querySelector('.ptool-coord-translating')).toBeNull();
+  });
+
+  it('shows the authored text alone when translation is off or the text needs none', async () => {
+    const translateText = vi.fn(async (source: string) => source);
+    const off = document.createElement('div');
+    off.innerHTML = presentation('zh', {}, { translationTarget: () => '', translateText }).renderCardHtml(round, chrome);
+    expect(translateText).not.toHaveBeenCalled();
+    expect(off.querySelector('.ptool-coord-original, .ptool-coord-translating')).toBeNull();
+    const cards = presentation('zh', {}, { translationTarget: () => 'English', translateText });
+    cards.renderCardHtml(round, chrome);
+    await vi.waitFor(() => expect(translateText).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const same = document.createElement('div');
+    same.innerHTML = cards.renderCardHtml(round, chrome);
+    expect(same.querySelector('.ptool-coord-original, .ptool-coord-translating')).toBeNull();
+  });
+});
+
+describe('technical details', () => {
+  it('appear only in debug mode', () => {
+    const round = first('review_project_work');
+    let debug = false;
+    const cards = presentation('zh', {}, { debugEnabled: () => debug });
+    const host = document.createElement('div');
+    host.innerHTML = cards.renderCardHtml(round, chrome);
+    expect(host.querySelector('.ptool-coord-debug')).toBeNull();
+    expect(host.textContent).not.toMatch(UUID);
+    expect(host.textContent).not.toContain('结果版本');
+    debug = true;
+    host.innerHTML = cards.renderCardHtml(round, chrome);
+    const details = host.querySelector<HTMLDetailsElement>('.ptool-coord-debug')!;
+    expect(details.open).toBe(false);
+    expect(details.textContent).toContain(String(args(round).assignment_id));
+    expect(details.textContent).toContain('结果版本');
   });
 });
 
@@ -270,7 +458,7 @@ describe('reports, finish, cancel, control and project messages', () => {
   it.each([
     ['report_to_user', '向你汇报', 'Extension URL fix merged'],
     ['finish_project_request', '结束本次请求', '工作已全部完成'],
-    ['cancel_project_work', '取消任务', '未命名任务'],
+    ['cancel_project_work', '取消任务', 'SQLite sidecar'],
     ['control_conversation', '控制对话', '追加指令 · SQLite'],
     ['send_project_message', '发送项目消息', '发给 Browser extension'],
     ['get_project_messages', '读取项目消息', '收到的消息 · 共 1 条'],
@@ -282,6 +470,43 @@ describe('reports, finish, cancel, control and project messages', () => {
     });
     expect(host.querySelector('.ptool-coord-title')!.textContent).toBe(title);
     expect(host.querySelector('summary .ptool-coord-header')!.textContent).toContain(summary);
+  });
+
+  it('says a cancelled assignment whose result was already merged keeps that merge', () => {
+    const round = first('cancel_project_work');
+    const merged = { ...round, toolContent: JSON.stringify({ ...JSON.parse(round.toolContent), canonical_delivery: true,
+      delivery: { status: 'delivered' }, execution_status: 'completed' }) };
+    const host = render(merged);
+    expect(host.querySelector('.ptool-coord-lead')!.textContent)
+      .toBe('这项工作此前已合并。取消只会停止后续工作并撤回授权，不会撤回已合并的改动。');
+    expect([...host.querySelectorAll('summary .ptool-coord-chip')].map((chip) => chip.textContent))
+      .toEqual(['已取消', '已合并（此前）']);
+    expect(render(round).querySelector('summary .ptool-coord-header')!.textContent).not.toContain('已合并');
+  });
+
+  it('titles a follow-up instruction to a Worker conversation the catalog does not hold', async () => {
+    const round = first('control_conversation');
+    const lookupConversationTitle = vi.fn(async () => 'SQLite sidecar: fair configuration');
+    const cards = presentation('zh', {}, { lookupConversationTitle });
+    expect(cards.headerText(round)).not.toContain('未命名对话');
+    await vi.waitFor(() => expect(cards.headerText(round)).toContain('追加指令 · SQLite sidecar: fair configuration'));
+  });
+
+  it('keeps identifiers and revisions of plain result fields in technical details', () => {
+    const round = { ...first('cancel_project_work'), toolName: 'dispatch_project_assignment' };
+    let debug = false;
+    const cards = presentation('zh', {}, { debugEnabled: () => debug });
+    const host = document.createElement('div');
+    host.innerHTML = cards.renderCardHtml(round, chrome);
+    const content = JSON.parse(round.toolContent) as Record<string, unknown>;
+    expect(host.textContent).not.toContain(String(content.assignment_id));
+    expect(host.textContent).not.toContain(String(content.conversation_id));
+    expect(host.textContent).not.toMatch(/Grant revision|Result revision/);
+    expect(host.textContent).toContain('Execution status');
+    debug = true;
+    host.innerHTML = cards.renderCardHtml(round, chrome);
+    expect(host.querySelector('.ptool-coord-debug')!.textContent).toContain(String(content.assignment_id));
+    expect(host.querySelector('.ptool-coord-debug')!.textContent).toContain('Grant revision');
   });
 
   it('renders the report body as Markdown and the cancellation in plain language', () => {
@@ -315,7 +540,7 @@ describe('every registered tool', () => {
     const lazy = { ...round, toolContent: undefined, _snapshotToolResult: { preview: '{"decision": "acc', chars: 712 } };
     const html = cards.renderCardHtml(lazy, chrome);
     expect(html).toContain('data-lazy-tool-result=""');
-    expect(html).toContain('接受');
+    expect(html).toContain('审核结果：采纳');
   });
 
   it('leaves running and failed rounds to the shared row states while localizing their header', () => {

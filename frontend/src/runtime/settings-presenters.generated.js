@@ -6283,6 +6283,8 @@ function _applyDebugModeVisibility() {
     const element = document.getElementById(id);
     if (element) element.style.display = visible ? '' : 'none';
   }
+  // Tool cards keep their technical details (IDs, raw result) for debug mode.
+  runtimeScope.refreshToolCards?.();
   /* A hidden experimental workflow must never keep owning future turns. The
    * already-accepted turn has an immutable config, so this paint/persist reset
    * only affects the next message when Debug Mode is switched off. */

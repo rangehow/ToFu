@@ -41,7 +41,11 @@ import { renderToolEffectNotice } from './tool-effect-notice';
 import { toolEffectNotice } from '../../presentation/tool-effect-presentation';
 
 
-interface ToolBodyState { materialized: boolean; detach?: () => void; rich?: HTMLElement; choices?: ChoicePorts; choiceScope?: string }
+interface ToolBodyState {
+  materialized: boolean; detach?: () => void; rich?: HTMLElement; choices?: ChoicePorts; choiceScope?: string;
+  /** Unsubscribes this block from tool-card facts that settle after paint (titles, translations). */
+  unsubscribeCard?: () => void;
+}
 const toolBodies = new WeakMap<HTMLElement, ToolBodyState>();
 
 /** Retired by Surface unmount; no listeners or result bodies outlive the block. */
@@ -50,6 +54,7 @@ export function disposeToolBody(node: HTMLElement): void {
   const rich = toolBodies.get(node)?.rich;
   if (rich) disposeRichResponse(rich);
   toolBodies.get(node)?.detach?.();
+  toolBodies.get(node)?.unsubscribeCard?.();
   toolBodies.delete(node);
 }
 
@@ -95,6 +100,8 @@ function renderToolBlockContent(
   const loaded = loadedToolResult(node, reference);
   const bodyState = toolBodies.get(node) ?? { materialized: false };
   toolBodies.set(node, bodyState);
+  bodyState.unsubscribeCard?.();
+  bodyState.unsubscribeCard = undefined;
 
   const choiceConversationId = turn.source?.conversationId;
   const choiceScope = JSON.stringify([choiceConversationId, turn.turnId]);
@@ -164,6 +171,9 @@ function renderToolBlockContent(
 
     mountRich();
     bodyState.detach = undefined;
+    if (node.querySelector('[data-tool-card]')) {
+      bodyState.unsubscribeCard = ports.subscribeToolCards?.(() => renderToolBlock(node, block, turn, ports));
+    }
     const details = node.querySelector<HTMLDetailsElement>('.ptool-result-block');
     if (details?.querySelector('[data-deferred-tool-body]')) {
       const reveal = (): void => {

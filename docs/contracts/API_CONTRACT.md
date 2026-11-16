@@ -1669,6 +1669,9 @@ form-answer write path; read-only resource data grants no write authority.
 
 `GET /api/v4/boot` and `/api/health`'s `boot` projection share the
 application's boot verdict, including the verified resident execution dependency.
+While a verified live executor is still starting, the snapshot reports
+`status=running`, `currentPhase.key=execution_service`, and no error or failed
+phase; mutating requests receive `503 server_booting` until it becomes ready.
 When the API boot is ready but its executor is unavailable, the existing boot
 snapshot reports `status=failed` with `failedPhase.key=execution_service`.
 Mutating API requests receive the existing `503 server_boot_failed` envelope

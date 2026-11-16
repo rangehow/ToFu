@@ -313,8 +313,8 @@ def test_boot_endpoints_project_runner_state():
 class _ExecutorAvailability:
     error = 'Execution service unavailable; inspect serverctl status'
 
-    def readiness_error(self):
-        return self.error
+    def readiness(self):
+        return {'state': 'unavailable' if self.error else 'ready', 'error': self.error}
 
 
 def test_executor_outage_blocks_new_writes_but_preserves_reads_and_recovery():
@@ -375,5 +375,47 @@ def test_boot_and_health_never_report_ready_with_a_departed_executor():
                 availability.error = ''
                 recovered = await client.get('/api/v4/boot')
                 assert (await recovered.get_json())['status'] == 'ready'
+
+    asyncio.run(call())
+
+
+def test_live_execution_startup_is_running_then_ready_in_probes_and_gate():
+    from lib.tasks_pkg.command_control_runtime import CommandControls
+    from routes.api_v4.bootstrap import api_v4_bp
+    from routes.common import _boot_projection
+    from types import SimpleNamespace
+    app = _gated_app(_StubRunner('ready'))
+    record = {'state': 'starting', 'serviceId': 'current'}
+    app.extensions['tofu_command_controls'] = CommandControls(service=SimpleNamespace(
+        record=lambda: dict(record), host_matches=lambda record: True))
+    app.register_blueprint(api_v4_bp)
+    admitted = []
+
+    @app.post('/api/some-command')
+    async def command():
+        admitted.append(True)
+        return {'ok': True}
+
+    async def call():
+        async with app.test_app():
+            async with app.test_client() as client:
+                response = await client.get('/api/v4/boot')
+                body = await response.get_json()
+                assert body['status'] == 'running'
+                assert body['currentPhase']['key'] == 'execution_service'
+                assert body['currentPhase']['status'] == 'running'
+                assert body['failedPhase'] is None
+                assert body['error'] is None
+                async with app.app_context():
+                    assert _boot_projection()['status'] == 'running'
+                blocked = await client.post('/api/some-command')
+                assert blocked.status_code == 503
+                assert 'server_booting' in str(await blocked.get_json())
+                assert admitted == []
+                record.update(state='ready', commandControl={'serviceId': 'current'})
+                ready = await client.get('/api/v4/boot')
+                assert (await ready.get_json())['status'] == 'ready'
+                assert (await client.post('/api/some-command')).status_code == 200
+                assert admitted == [True]
 
     asyncio.run(call())

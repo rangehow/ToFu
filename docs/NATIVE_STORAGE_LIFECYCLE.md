@@ -253,9 +253,18 @@ Browser and admission truth: the shared application boot projection also
 consults the existing command-control owner's verified resident incarnation.
 A ready API boot cannot report the whole application ready while that executor
 is absent, departed, still starting, or has a mismatched control endpoint.
-The full boot endpoint and health's compact boot block share this projection;
-its existing failed phase identifies `execution_service` and points to
-`serverctl status`, preserving the manager's recovery/restart authority. The
+The full boot endpoint and health's compact boot block share this projection.
+A verified live resident record in `starting` projects a running
+`execution_service` phase, with no failure or restart advice; the existing
+boot poll follows it to ready. An absent/departed/failed owner or mismatched
+control endpoint projects a failed phase and points to `serverctl status`,
+preserving the manager's recovery/restart authority. Problem: treating every
+not-ready executor as failed misreported a successful restart during its
+38-second recovery on 2026-11-16. Decision: the command-control owner derives
+starting, ready and unavailable from one verified resident snapshot; probes
+and commands share that verdict. Alternatives rejected: treating any starting
+record as live hides a dead host; waiting a fixed grace interval guesses at
+progress instead of checking process identity. The
 existing boot gate refuses new mutating API requests before their handlers
 while this dependency is unavailable. Read-only APIs, probes, lifecycle approval,
 restart and shutdown remain available, and no accepted Turn is rewritten or

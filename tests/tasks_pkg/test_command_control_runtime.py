@@ -205,10 +205,23 @@ def test_local_activity_lists_only_running_commands(monkeypatch):
 def test_execution_readiness_uses_verified_owner_without_sending_commands(monkeypatch):
     from lib.tasks_pkg import command_control_runtime as module
     monkeypatch.setattr(module, 'call', lambda *a, **k: pytest.fail('readiness sent a command'))
-    assert module.CommandControls().readiness_error() == ''
+    assert module.CommandControls().readiness()['state'] == 'ready'
     service = _ready_service({'serviceId': 'current'})
-    assert module.CommandControls(service=service).readiness_error() == ''
+    assert module.CommandControls(service=service).readiness()['state'] == 'ready'
     dead = SimpleNamespace(record=service.record, host_matches=lambda record: False)
-    assert 'execution' in module.CommandControls(service=dead).readiness_error().lower()
+    assert 'execution' in module.CommandControls(service=dead).readiness()['error'].lower()
     wrong = _ready_service({'serviceId': 'previous'})
-    assert module.CommandControls(service=wrong).readiness_error()
+    assert module.CommandControls(service=wrong).readiness()['error']
+
+
+@pytest.mark.parametrize('live,state,expected', [
+    (True, 'starting', 'starting'), (False, 'starting', 'unavailable'),
+    (True, 'failed', 'unavailable'),
+])
+def test_execution_readiness_distinguishes_live_boot_from_departed_owner(live, state, expected):
+    from lib.tasks_pkg import command_control_runtime as module
+    service = SimpleNamespace(record=lambda: {'state': state, 'serviceId': 'current'},
+                              host_matches=lambda record: live)
+    readiness = module.CommandControls(service=service).readiness()
+    assert readiness['state'] == expected
+    assert bool(readiness['error']) is (expected == 'unavailable')

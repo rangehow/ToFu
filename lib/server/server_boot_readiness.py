@@ -12,13 +12,17 @@ def application_boot_snapshot(app) -> dict:
     if snapshot['status'] != 'ready':
         return snapshot
     controls = app.extensions.get('tofu_command_controls')
-    error = controls.readiness_error() if controls is not None else ''
-    if not error:
+    readiness = controls.readiness() if controls is not None else {'state': 'ready'}
+    if readiness['state'] == 'ready':
         return snapshot
+    starting = readiness['state'] == 'starting'
+    error = None if starting else (
+        f"{readiness['error']}; inspect serverctl status for recovery or restart instructions")
     total = max(snapshot.get('phaseTotal', 0), len(snapshot.get('phases', []))) + 1
     phase = {'index': total, 'key': 'execution_service', 'label': 'Execution service',
-             'status': 'failed', 'duration_s': None, 'error': error}
-    return {**snapshot, 'status': 'failed', 'phaseTotal': total,
+             'status': 'running' if starting else 'failed', 'duration_s': None, 'error': error}
+    return {**snapshot, 'status': 'running' if starting else 'failed', 'phaseTotal': total,
             'phases': [*snapshot.get('phases', []), phase],
-            'currentPhase': None, 'failedPhase': phase, 'error': error,
+            'currentPhase': phase if starting else None,
+            'failedPhase': None if starting else phase, 'error': error,
             'retryCount': snapshot.get('retryCount', 0), 'readyAt': None}

@@ -33,6 +33,9 @@ def _stored_snapshot(marker: str = "authority") -> dict:
         "turns": [],
         "attempts": [],
         "queueItems": [],
+        # The replay lineage every authority reports beside its snapshot.
+        "authorityEpoch": "00000000000000e7",
+        "headDigest": "000000000000000b",
     }
 
 

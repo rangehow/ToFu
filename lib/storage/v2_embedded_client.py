@@ -68,6 +68,9 @@ class _EmbeddedSessionAdapter:
     def probe_liveness(self) -> bool:
         return not self._runtime.closed
 
+    def interrupt(self) -> None:
+        """An in-process execute cannot be woken; its owner stops retrying."""
+
     def request(
         self,
         operation: str,

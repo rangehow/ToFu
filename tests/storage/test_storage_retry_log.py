@@ -109,7 +109,7 @@ def test_v1_retry_burst_emits_one_warning_per_operation(
 
     class _TimeoutClient(v1_client_mod.StorageClient):
         def _attempt(self, kind, operation, payload, *, timeout,
-                     command_id, priority):
+                     command_id, priority, cancellation=None):
             attempts.append(operation)
             raise StorageError(
                 'database_timeout', 'request timed out', True, 1)

@@ -237,8 +237,9 @@ impl ReplicaBlockIo {
             .restart_required
             .load(std::sync::atomic::Ordering::Relaxed)
         {
-            return Err(io::Error::other(
-                "tofu-db authority outcome is uncertain; close and reopen the engine",
+            return Err(crate::engine::reopen_required(
+                io::ErrorKind::Other,
+                "tofu-db authority outcome is uncertain; close and reopen the engine".to_owned(),
             ));
         }
         Ok(())
@@ -820,6 +821,25 @@ pub struct EntityTransaction {
 
 const OVERLAY_ENVELOPE_RESERVE_BYTES: usize = 64 * 1024;
 
+/// Content-free shape of one transaction's entity mutation, printed on slow
+/// authority hold lines (`authority_watch::hold_message`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EntityCommitShape {
+    pub(crate) writes: usize,
+    pub(crate) delta_bytes: usize,
+    pub(crate) retired_ranges: bool,
+    pub(crate) mounted_ranges: bool,
+    pub(crate) fits_overlay_envelope: bool,
+}
+
+/// The EntityOverlay delta must fit the 256 KiB family inline bound
+/// alongside the envelope's other records. `overlay_delta_bytes` matches
+/// encode_overlay_delta byte for byte; the reserve leaves 64 KiB for
+/// receipt (≤7 KiB inline), outbox and stream records.
+fn delta_fits_overlay_envelope(delta_bytes: usize) -> bool {
+    delta_bytes + OVERLAY_ENVELOPE_RESERVE_BYTES <= crate::transaction::MAX_INLINE_BYTES
+}
+
 /// Bytes one write adds to an EntityOverlay delta (`encode_overlay_delta`);
 /// `None` is a delete.
 pub(crate) fn overlay_write_bytes(key_bytes: usize, value_bytes: Option<usize>) -> usize {
@@ -839,13 +859,8 @@ impl EntityTransaction {
             && self.mounted_ranges.is_empty()
     }
 
-    /// The EntityOverlay delta must fit the 256 KiB family inline bound
-    /// alongside the envelope's other records. The estimate matches
-    /// encode_overlay_delta byte for byte; the reserve leaves 64 KiB for
-    /// receipt (≤7 KiB inline), outbox and stream records.
     fn overlay_delta_fits_envelope(&self) -> bool {
-        self.overlay_delta_bytes() + OVERLAY_ENVELOPE_RESERVE_BYTES
-            <= crate::transaction::MAX_INLINE_BYTES
+        delta_fits_overlay_envelope(self.overlay_delta_bytes())
     }
 
     fn overlay_delta_bytes(&self) -> usize {
@@ -861,6 +876,19 @@ impl EntityTransaction {
     pub(crate) fn overlay_delta_room(&self) -> usize {
         crate::transaction::MAX_INLINE_BYTES
             .saturating_sub(OVERLAY_ENVELOPE_RESERVE_BYTES + self.overlay_delta_bytes())
+    }
+
+    /// Read-only: the facts `prepare_commit` decides this commit's path from,
+    /// from one pass over the write set.
+    pub(crate) fn commit_shape(&self) -> EntityCommitShape {
+        let delta_bytes = self.overlay_delta_bytes();
+        EntityCommitShape {
+            writes: self.writes.len(),
+            delta_bytes,
+            retired_ranges: !self.retired_ranges.is_empty(),
+            mounted_ranges: !self.mounted_ranges.is_empty(),
+            fits_overlay_envelope: delta_fits_overlay_envelope(delta_bytes),
+        }
     }
 
     /// Account ownership without evicting values at an artificial quota.
@@ -1191,6 +1219,12 @@ impl PreparedEntityCommit {
 
     pub(crate) const fn authority_state_root(&self) -> Option<BlockId> {
         self.next_root
+    }
+
+    /// Whether this commit defers its writes to the overlay instead of
+    /// publishing a new tree root; read-only, encodes nothing.
+    pub(crate) fn defers_to_overlay(&self) -> bool {
+        self.overlay_delta.is_some()
     }
 
     /// The envelope record carrying the deferred delta, when this commit
@@ -1946,10 +1980,20 @@ impl PinCatalogTally {
 /// root still checks its declared pin count against every pin record it
 /// reaches. Bounded by the distinct pages walked; a failed walk leaves it
 /// unusable.
+#[derive(Clone, Copy)]
+struct PageVisit {
+    /// Walked with persistent-root discovery.
+    discovered: bool,
+    /// The walk that last walked the page ([`EntityPageVisits::walks`]).
+    walk: u32,
+}
+
 #[derive(Default)]
 struct EntityPageVisits {
-    /// Walked pages; `true` once walked with persistent-root discovery.
-    pages: HashMap<BlockId, bool>,
+    /// Walked pages: whether with persistent-root discovery, and by which walk.
+    pages: HashMap<BlockId, PageVisit>,
+    /// Walks started so far: the current walk's number.
+    walks: u32,
     /// Nonzero tallies of pages walked with discovery.
     pin_catalog_tallies: HashMap<BlockId, PinCatalogTally>,
     /// Pages walked with discovery whose subtrees are still on the frontier:
@@ -1972,7 +2016,7 @@ impl EntityPageVisits {
         node: &ReachabilityNode,
         tally: &mut PinCatalogTally,
     ) -> io::Result<Option<bool>> {
-        match self.pages.get(&node.block_id).copied() {
+        match self.pages.get(&node.block_id).map(|visit| visit.discovered) {
             None => Ok(Some(true)),
             Some(discovered) if discovered || !node.discover_persistent_roots => {
                 if node.discover_persistent_roots {
@@ -1988,14 +2032,55 @@ impl EntityPageVisits {
     }
 
     fn walked(&mut self, node: &ReachabilityNode, frontier_below: usize, before: PinCatalogTally) {
-        *self.pages.entry(node.block_id).or_insert(false) |= node.discover_persistent_roots;
+        self.note_walk(node);
         if node.discover_persistent_roots {
             self.open.push((node.block_id, frontier_below, before));
         }
     }
 
-    /// Keeps the tally of every page whose subtree has left the frontier.
-    fn close_finished(&mut self, frontier: usize, tally: PinCatalogTally) {
+    fn note_walk(&mut self, node: &ReachabilityNode) {
+        let walk = self.walks;
+        let visit = self.pages.entry(node.block_id).or_insert(PageVisit {
+            discovered: false,
+            walk,
+        });
+        visit.discovered |= node.discover_persistent_roots;
+        visit.walk = walk;
+    }
+
+    fn walked_by_current_walk(&self, page: BlockId) -> bool {
+        self.pages
+            .get(&page)
+            .is_some_and(|visit| visit.walk == self.walks)
+    }
+
+    /// Keeps a deferred leaf's tally, and adds it to the kept tally of every
+    /// page on its path (`path`, nearest first), as if the leaf had been
+    /// walked inside their subtrees.
+    fn note_deferred_leaf_tally(
+        &mut self,
+        leaf: BlockId,
+        subtree: PinCatalogTally,
+        path: impl Iterator<Item = BlockId>,
+    ) -> io::Result<()> {
+        if subtree.is_empty() {
+            return Ok(());
+        }
+        self.pin_catalog_tallies.insert(leaf, subtree);
+        for page in path {
+            self.pin_catalog_tallies
+                .entry(page)
+                .or_default()
+                .join(subtree)?;
+        }
+        Ok(())
+    }
+
+    /// Keeps the tally of every page whose subtree has left the frontier. It
+    /// joins what the tally of a batched walk's deferred leaves below the page
+    /// already brought (`note_deferred_leaf_tally`); a per-page walk walks a
+    /// page with discovery once, so its page has no kept tally yet.
+    fn close_finished(&mut self, frontier: usize, tally: PinCatalogTally) -> io::Result<()> {
         while let Some(&(page, below, before)) = self.open.last() {
             if frontier > below {
                 break;
@@ -2003,9 +2088,13 @@ impl EntityPageVisits {
             self.open.pop();
             let subtree = tally.since(before);
             if !subtree.is_empty() {
-                self.pin_catalog_tallies.insert(page, subtree);
+                self.pin_catalog_tallies
+                    .entry(page)
+                    .or_default()
+                    .join(subtree)?;
             }
         }
+        Ok(())
     }
 }
 
@@ -2140,6 +2229,7 @@ where
     walk_entity_page_graph(
         reachability_root(root, true),
         None,
+        None,
         read_block,
         visit_page,
         visit_value,
@@ -2165,8 +2255,61 @@ pub(crate) struct EntityPageGraphsWalk {
 /// still checks its declared pin count against all of its pin records.
 /// Levels and key ranges are checked on the path that reaches a page first;
 /// offline `verify` checks every path.
+#[cfg(test)]
 pub(crate) fn visit_entity_page_graphs_once<ReadBlock, VisitPage, VisitValue>(
     roots: &[Option<BlockId>],
+    read_block: ReadBlock,
+    visit_page: VisitPage,
+    visit_value: VisitValue,
+) -> io::Result<EntityPageGraphsWalk>
+where
+    ReadBlock: FnMut(BlockId) -> io::Result<Vec<u8>>,
+    VisitPage: FnMut(BlockId, &[u8]) -> io::Result<()>,
+    VisitValue: FnMut(&EntityKey, &[u8]) -> io::Result<()>,
+{
+    visit_graphs_once(roots, None, read_block, visit_page, visit_value)
+}
+
+/// How [`visit_entity_page_graphs_once_batched`] reads deferred leaves.
+#[allow(clippy::type_complexity)]
+pub(crate) struct LeafBatching<'a> {
+    /// Reads every listed block once, verified, in any order.
+    pub read: &'a mut dyn FnMut(
+        &[BlockId],
+        &mut dyn FnMut(BlockId, Vec<u8>) -> io::Result<()>,
+    ) -> io::Result<()>,
+    /// Runs after each batch of leaves has been expanded.
+    pub expanded: &'a mut dyn FnMut() -> io::Result<()>,
+}
+
+/// [`visit_entity_page_graphs_once`] reading each walk's leaves in one batch
+/// (docs/TOFUDB_ONLINE_GC.md, "Leaves read in one batch"). A walk reads its
+/// other pages as it reaches them and defers every page reached at level 0;
+/// once its other pages are done, `batching.read` reads all of them at once,
+/// in whatever order is cheapest. It visits the same pages and values,
+/// walks and skips the same counts, checks every root's pin count against
+/// the same records and fails when the per-page walk fails; only the order
+/// of leaf visits changes. A leaf's pin records join its walk's tally and
+/// the kept tally of every page on its path, as if it had been read in its
+/// place.
+pub(crate) fn visit_entity_page_graphs_once_batched<ReadBlock, VisitPage, VisitValue>(
+    roots: &[Option<BlockId>],
+    batching: LeafBatching<'_>,
+    read_block: ReadBlock,
+    visit_page: VisitPage,
+    visit_value: VisitValue,
+) -> io::Result<EntityPageGraphsWalk>
+where
+    ReadBlock: FnMut(BlockId) -> io::Result<Vec<u8>>,
+    VisitPage: FnMut(BlockId, &[u8]) -> io::Result<()>,
+    VisitValue: FnMut(&EntityKey, &[u8]) -> io::Result<()>,
+{
+    visit_graphs_once(roots, Some(batching), read_block, visit_page, visit_value)
+}
+
+fn visit_graphs_once<ReadBlock, VisitPage, VisitValue>(
+    roots: &[Option<BlockId>],
+    mut batching: Option<LeafBatching<'_>>,
     mut read_block: ReadBlock,
     mut visit_page: VisitPage,
     mut visit_value: VisitValue,
@@ -2181,6 +2324,7 @@ where
         walk_entity_page_graph(
             reachability_root(*root, true),
             Some(&mut visits),
+            batching.as_mut(),
             &mut read_block,
             &mut visit_page,
             &mut visit_value,
@@ -2190,6 +2334,7 @@ where
         walk_entity_page_graph(
             reachability_root(block_id, false),
             Some(&mut visits),
+            batching.as_mut(),
             &mut read_block,
             &mut visit_page,
             &mut visit_value,
@@ -2221,9 +2366,70 @@ fn note_reachability_page(
     Ok(())
 }
 
+/// A leaf a batched walk deferred: its id and level-0 key-range witnesses
+/// (indexes into the walk's [`LeafKeys`]), the page it was reached from (an
+/// index into the walk's `path`), whether its walk discovers persistent roots
+/// and whether this is its first walk.
+struct DeferredLeaf {
+    block_id: BlockId,
+    lower_bound: Option<u32>,
+    upper_bound: Option<u32>,
+    parent: Option<u32>,
+    discover_persistent_roots: bool,
+    first_walk: bool,
+}
+
+/// The key bounds of a batched walk's deferred leaves. A leaf's upper bound is
+/// its next sibling's lower bound, and siblings are deferred one after
+/// another, so `push` returns the key it stored last when the new one equals
+/// it: each bound is stored once, without a copy per leaf.
+#[derive(Default)]
+struct LeafKeys {
+    bytes: Vec<u8>,
+    ends: Vec<usize>,
+}
+
+impl LeafKeys {
+    fn push(&mut self, key: Option<Vec<u8>>) -> io::Result<Option<u32>> {
+        let Some(key) = key else {
+            return Ok(None);
+        };
+        if let Some(last) = self.ends.len().checked_sub(1) {
+            let last = u32::try_from(last)
+                .map_err(|_| invalid_data("entity reachability key count overflow"))?;
+            if self.get(last) == key.as_slice() {
+                return Ok(Some(last));
+            }
+        }
+        let index = u32::try_from(self.ends.len())
+            .map_err(|_| invalid_data("entity reachability key count overflow"))?;
+        self.bytes.extend_from_slice(&key);
+        self.ends.push(self.bytes.len());
+        Ok(Some(index))
+    }
+
+    fn get(&self, index: u32) -> &[u8] {
+        let index = index as usize;
+        let start = index
+            .checked_sub(1)
+            .map_or(0, |previous| self.ends[previous]);
+        &self.bytes[start..self.ends[index]]
+    }
+
+    fn owned(&self, index: Option<u32>) -> Option<Vec<u8>> {
+        index.map(|index| self.get(index).to_vec())
+    }
+
+    fn clear(&mut self) {
+        self.bytes.clear();
+        self.ends.clear();
+    }
+}
+
 fn walk_entity_page_graph<ReadBlock, VisitPage, VisitValue>(
     start: ReachabilityNode,
     mut visits: Option<&mut EntityPageVisits>,
+    mut batching: Option<&mut LeafBatching<'_>>,
     mut read_block: ReadBlock,
     mut visit_page: VisitPage,
     mut visit_value: VisitValue,
@@ -2233,19 +2439,71 @@ where
     VisitPage: FnMut(BlockId, &[u8]) -> io::Result<()>,
     VisitValue: FnMut(&EntityKey, &[u8]) -> io::Result<()>,
 {
-    let mut pending = vec![start];
+    // Deferred leaves need the walk-once visit set: their admits and kept
+    // tallies live there.
+    if visits.is_none() {
+        batching = None;
+    }
+    if let Some(visits) = visits.as_deref_mut() {
+        visits.walks += 1;
+    }
+    let mut pending = vec![(start, None)];
     let mut tally = PinCatalogTally::default();
     let mut metrics = EntityPageReachabilityMetrics {
         maximum_frontier: 1,
         ..EntityPageReachabilityMetrics::default()
     };
+    // Batched walks only: every page read so far with the page it was reached
+    // from, the deferred leaves, and their pin records, which join `tally`
+    // only when the walk ends. Joined earlier, they would count toward pages
+    // still on the frontier whose subtrees do not hold them.
+    let mut path: Vec<(BlockId, Option<u32>)> = Vec::new();
+    let mut deferred: Vec<DeferredLeaf> = Vec::new();
+    let mut leaf_keys = LeafKeys::default();
+    let mut deferred_tally = PinCatalogTally::default();
     loop {
         if let Some(visits) = visits.as_deref_mut() {
-            visits.close_finished(pending.len(), tally);
+            visits.close_finished(pending.len(), tally)?;
         }
-        let Some(node) = pending.pop() else {
-            break;
+        let Some((node, parent)) = pending.pop() else {
+            match (batching.as_deref_mut(), visits.as_deref_mut()) {
+                (Some(batching), Some(visits)) if !deferred.is_empty() => {
+                    expand_deferred_leaves(
+                        &mut deferred,
+                        &mut leaf_keys,
+                        &path,
+                        batching,
+                        visits,
+                        &mut deferred_tally,
+                        &mut metrics,
+                        &mut pending,
+                        &mut visit_page,
+                        &mut visit_value,
+                    )?;
+                    continue;
+                }
+                _ => break,
+            }
         };
+        // Reaching a page this walk already walked joins its subtree's kept
+        // tally, which is complete only once the leaves deferred below it
+        // are read. A walk with discovery walks one tree and never gets here.
+        if let (Some(batching), Some(visits)) = (batching.as_deref_mut(), visits.as_deref_mut()) {
+            if !deferred.is_empty() && visits.walked_by_current_walk(node.block_id) {
+                expand_deferred_leaves(
+                    &mut deferred,
+                    &mut leaf_keys,
+                    &path,
+                    batching,
+                    visits,
+                    &mut deferred_tally,
+                    &mut metrics,
+                    &mut pending,
+                    &mut visit_page,
+                    &mut visit_value,
+                )?;
+            }
+        }
         let first_walk = match visits.as_deref_mut() {
             Some(visits) => match visits.admit(&node, &mut tally)? {
                 Some(first_walk) => first_walk,
@@ -2258,8 +2516,41 @@ where
         if metrics.page_count == MAX_ENTITY_REACHABILITY_PAGES as u64 {
             return Err(invalid_input("entity reachability page bound exceeded"));
         }
+        if batching.is_some() && node.expected_level == Some(0) {
+            if let Some(visits) = visits.as_deref_mut() {
+                visits.note_walk(&node);
+                metrics.page_count = metrics
+                    .page_count
+                    .checked_add(1)
+                    .ok_or_else(|| invalid_data("entity reachability page count overflow"))?;
+                let ReachabilityNode {
+                    block_id,
+                    lower_bound,
+                    upper_bound,
+                    discover_persistent_roots,
+                    ..
+                } = node;
+                deferred.push(DeferredLeaf {
+                    block_id,
+                    lower_bound: leaf_keys.push(lower_bound)?,
+                    upper_bound: leaf_keys.push(upper_bound)?,
+                    parent,
+                    discover_persistent_roots,
+                    first_walk,
+                });
+                continue;
+            }
+        }
         let encoded = read_block(node.block_id)?;
         let discover = node.discover_persistent_roots;
+        let reached_from = if batching.is_some() {
+            let index = u32::try_from(path.len())
+                .map_err(|_| invalid_data("entity reachability page count overflow"))?;
+            path.push((node.block_id, parent));
+            Some(index)
+        } else {
+            None
+        };
         expand_entity_graph_node(
             &node,
             &encoded,
@@ -2273,10 +2564,10 @@ where
             },
             |reference| {
                 match reference {
-                    EntityGraphReference::Page(child) => pending.push(child),
+                    EntityGraphReference::Page(child) => pending.push((child, reached_from)),
                     EntityGraphReference::Root(root) => match visits.as_deref_mut() {
                         Some(visits) if discover => visits.deferred.push(root),
-                        _ => pending.push(reachability_root(root, false)),
+                        _ => pending.push((reachability_root(root, false), None)),
                     },
                 }
                 Ok(())
@@ -2293,8 +2584,96 @@ where
         }
         note_reachability_page(&mut metrics, pending.len(), encoded.len())?;
     }
+    tally.join(deferred_tally)?;
     tally.check_catalog()?;
     Ok(metrics)
+}
+
+/// Reads a walk's deferred leaves in one batch and expands each one as the
+/// walk would have in its place: values and the page are visited on a first
+/// walk, pin roots found with discovery are deferred, and its pin records go
+/// to `deferred_tally`, to its own kept tally and to the kept tally of every
+/// page on its path. The reader must return each listed leaf exactly once.
+#[allow(clippy::too_many_arguments)]
+fn expand_deferred_leaves<VisitPage, VisitValue>(
+    deferred: &mut Vec<DeferredLeaf>,
+    leaf_keys: &mut LeafKeys,
+    path: &[(BlockId, Option<u32>)],
+    batching: &mut LeafBatching<'_>,
+    visits: &mut EntityPageVisits,
+    deferred_tally: &mut PinCatalogTally,
+    metrics: &mut EntityPageReachabilityMetrics,
+    pending: &mut Vec<(ReachabilityNode, Option<u32>)>,
+    visit_page: &mut VisitPage,
+    visit_value: &mut VisitValue,
+) -> io::Result<()>
+where
+    VisitPage: FnMut(BlockId, &[u8]) -> io::Result<()>,
+    VisitValue: FnMut(&EntityKey, &[u8]) -> io::Result<()>,
+{
+    let mut leaves = std::mem::take(deferred);
+    leaves.sort_unstable_by_key(|leaf| leaf.block_id);
+    let ids: Vec<BlockId> = leaves.iter().map(|leaf| leaf.block_id).collect();
+    let mut expanded = vec![false; ids.len()];
+    let keys: &LeafKeys = &*leaf_keys;
+    (batching.read)(&ids, &mut |id, encoded| {
+        let position = ids
+            .binary_search(&id)
+            .map_err(|_| invalid_data("entity leaf batch returned a block it did not ask for"))?;
+        if std::mem::replace(&mut expanded[position], true) {
+            return Err(invalid_data("entity leaf batch returned a block twice"));
+        }
+        let leaf = &leaves[position];
+        let discover = leaf.discover_persistent_roots;
+        let first_walk = leaf.first_walk;
+        let node = ReachabilityNode {
+            block_id: leaf.block_id,
+            expected_level: Some(0),
+            lower_bound: keys.owned(leaf.lower_bound),
+            upper_bound: keys.owned(leaf.upper_bound),
+            discover_persistent_roots: discover,
+        };
+        let mut leaf_tally = PinCatalogTally::default();
+        expand_entity_graph_node(
+            &node,
+            &encoded,
+            &mut leaf_tally,
+            |key, value| {
+                if first_walk {
+                    visit_value(key, value)
+                } else {
+                    Ok(())
+                }
+            },
+            |reference| {
+                match reference {
+                    EntityGraphReference::Page(child) => pending.push((child, leaf.parent)),
+                    EntityGraphReference::Root(root) if discover => visits.deferred.push(root),
+                    EntityGraphReference::Root(root) => {
+                        pending.push((reachability_root(root, false), None))
+                    }
+                }
+                Ok(())
+            },
+        )?;
+        if first_walk {
+            visit_page(id, &encoded)?;
+        }
+        deferred_tally.join(leaf_tally)?;
+        let leaf_path = std::iter::successors(leaf.parent, |&index| path[index as usize].1)
+            .map(|index| path[index as usize].0);
+        visits.note_deferred_leaf_tally(id, leaf_tally, leaf_path)?;
+        metrics.payload_bytes = metrics
+            .payload_bytes
+            .checked_add(encoded.len() as u64)
+            .ok_or_else(|| invalid_data("entity reachability byte count overflow"))?;
+        Ok(())
+    })?;
+    if expanded.contains(&false) {
+        return Err(invalid_data("entity leaf batch skipped a block"));
+    }
+    leaf_keys.clear();
+    (batching.expanded)()
 }
 
 #[cfg(test)]

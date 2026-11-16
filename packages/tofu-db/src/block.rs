@@ -246,16 +246,25 @@ pub(crate) mod packed_filter_counters {
     }
 }
 
-/// Per-open exact locations for a bounded subset of active-WAL block IDs.
-/// Dropped after replay; never a durable index or a cross-open authority.
+/// Per-open exact locations (segment, verified index position) for the
+/// active-WAL block IDs. Dropped after replay; never a durable index or a
+/// cross-open authority. `complete` means every catalogued index was read
+/// and verified, so an unlocated ID is in no catalogued segment.
 #[derive(Default)]
 pub(crate) struct CarriedRecoveryLookup {
-    locations: BTreeMap<BlockId, (Option<PayloadSegmentReference>, bool)>,
+    locations: BTreeMap<BlockId, (Option<(PayloadSegmentReference, u32)>, bool)>,
     complete: bool,
     history: Option<(
         Arc<crate::history_payload::Catalog>,
         crate::history_payload::RecoveryLookup,
     )>,
+}
+
+#[cfg(test)]
+impl CarriedRecoveryLookup {
+    pub(crate) fn is_complete_for_test(&self) -> bool {
+        self.complete
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1069,14 +1078,38 @@ struct PublicationWindows {
 pub(crate) struct TraversalReader<'a> {
     blocks: &'a BlockStore,
     locations: Option<(&'a PayloadSegmentStore, Arc<CatalogLocationTable>)>,
+    /// History routing pages this pass has validated (`get_batch`).
+    checked_routing_pages: crate::history_payload::CheckedRoutingPages,
+}
+
+impl<'a> TraversalReader<'a> {
+    fn new(
+        blocks: &'a BlockStore,
+        locations: Option<(&'a PayloadSegmentStore, Arc<CatalogLocationTable>)>,
+    ) -> Self {
+        Self {
+            blocks,
+            locations,
+            checked_routing_pages: Default::default(),
+        }
+    }
 }
 
 impl TraversalReader<'_> {
     pub(crate) fn get(&self, id: BlockId) -> io::Result<Vec<u8>> {
-        let blocks = self.blocks;
         let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_BLOCK_GET);
+        if let Some(payload) = self.get_staged_cached_or_located(id)? {
+            return Ok(payload);
+        }
+        self.get_after_location_table(id)
+    }
+
+    /// A staged or cached payload, or a verified copy the location table
+    /// locates.
+    fn get_staged_cached_or_located(&self, id: BlockId) -> io::Result<Option<Vec<u8>>> {
+        let blocks = self.blocks;
         if let Some(payload) = blocks.pending_payload(id)? {
-            return Ok((*payload).clone());
+            return Ok(Some((*payload).clone()));
         }
         let cached = blocks
             .cache
@@ -1084,17 +1117,27 @@ impl TraversalReader<'_> {
             .map_err(|_| io::Error::other("block cache lock was poisoned"))?
             .peek_shared(id);
         if let Some(payload) = cached {
-            return Ok((*payload).clone());
+            return Ok(Some((*payload).clone()));
         }
         let Some((store, locations)) = self.locations.as_ref() else {
-            return blocks.get_uncached_recorded(id);
+            return Ok(None);
         };
         for (_, reference, position) in locations.candidates(id) {
             // Any verified copy is the block; a failed located read only
             // loses this fast path.
             if let Ok(Some(payload)) = store.read_located(reference, position, id) {
-                return Ok(payload);
+                return Ok(Some(payload));
             }
+        }
+        Ok(None)
+    }
+
+    /// `get` for a block the location table did not serve: its loose file,
+    /// then the exact path, which alone may report it missing.
+    fn get_after_location_table(&self, id: BlockId) -> io::Result<Vec<u8>> {
+        let blocks = self.blocks;
+        if self.locations.is_none() {
+            return blocks.get_uncached_recorded(id);
         }
         // Blocks written since the catalog was captured are mostly loose;
         // reading them directly skips the catalog-wide candidate walk.
@@ -1104,6 +1147,80 @@ impl TraversalReader<'_> {
             }
         }
         blocks.get_uncached_recorded(id)
+    }
+
+    /// [`TraversalReader::get`] for a batch of one pass, each listed block
+    /// once, in whatever order is cheapest (docs/TOFUDB_ONLINE_GC.md, "Leaves
+    /// read in one batch"). Blocks the location table does not serve resolve
+    /// through one merge-join over the history routing: each routing page that
+    /// holds one of them is read once ([`RoutingRoot::prepare_traversal_lookup`]),
+    /// not once per block and level. Those answers are hints, read by source
+    /// and offset: a hinted copy must verify and lie in a source the current
+    /// history catalog retains, and anything else (a block that moved, a
+    /// retired source, a failed read) takes `get`'s own path. `check` runs
+    /// before every routing page and every block read; its error aborts.
+    ///
+    /// [`RoutingRoot::prepare_traversal_lookup`]: crate::history_payload::RoutingRoot::prepare_traversal_lookup
+    pub(crate) fn get_batch(
+        &self,
+        ids: &[BlockId],
+        check: &dyn Fn() -> io::Result<()>,
+        visit: &mut dyn FnMut(BlockId, Vec<u8>) -> io::Result<()>,
+    ) -> io::Result<()> {
+        let blocks = self.blocks;
+        let mut rest = Vec::new();
+        for &id in ids {
+            check()?;
+            let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_BLOCK_GET);
+            match self.get_staged_cached_or_located(id)? {
+                Some(payload) => visit(id, payload)?,
+                None => rest.push(id),
+            }
+        }
+        if rest.is_empty() {
+            return Ok(());
+        }
+        let catalog = blocks
+            .history_payloads
+            .read()
+            .map_err(|_| io::Error::other("history payload catalog lock poisoned"))?
+            .clone();
+        let hints = match catalog {
+            Some(catalog) => {
+                let stopped = || check().is_err();
+                match catalog.prepare_traversal_lookup(
+                    blocks,
+                    rest.iter().copied(),
+                    &stopped,
+                    &self.checked_routing_pages,
+                ) {
+                    Ok(hints) => Some(hints),
+                    Err(error) => {
+                        check()?;
+                        return Err(error);
+                    }
+                }
+            }
+            None => None,
+        };
+        if let Some(hints) = &hints {
+            rest.sort_by_key(|id| match hints.first_location(*id) {
+                Some(location) => (false, location.source, location.offset, *id),
+                None => (true, *id, 0, *id),
+            });
+        }
+        for id in rest {
+            check()?;
+            let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_BLOCK_GET);
+            if let Some(hints) = &hints {
+                if let Some(payload) = blocks.read_hinted_history_copy(id, hints)? {
+                    visit(id, payload)?;
+                    continue;
+                }
+            }
+            visit(id, self.get_after_location_table(id)?)?;
+        }
+        Ok(())
     }
 
     /// (blocks the location table holds, catalogued segments it left out,
@@ -1233,6 +1350,19 @@ fn encoded_block(id: BlockId, payload: &[u8]) -> io::Result<Vec<u8>> {
 /// Staged-payload snapshot for checkpoint materialization: every staged
 /// payload paired with its block ID, plus the fsync-only recovery marks.
 type PendingCheckpointSnapshot = (Vec<(BlockId, Arc<Vec<u8>>)>, Vec<BlockId>);
+
+/// Where a block's payload bytes can be read again at an offset
+/// (`BlockStore::locate_for_range_reads`).
+#[derive(Clone, Debug)]
+pub(crate) enum PayloadByteSource {
+    /// A loose block file; the payload follows its header.
+    Loose(PathBuf),
+    /// A payload segment entry at `payload_offset` of its segment file.
+    Segment {
+        segment_id: Uuid,
+        payload_offset: u64,
+    },
+}
 /// Outcome of one bounded dedupe probe.
 enum DedupeProbe {
     /// Payload bytes resolved through the candidate segments or the loose
@@ -2107,52 +2237,51 @@ impl BlockStore {
             complete: true,
             history: None,
         };
+        // One pass over every catalogued index builds the catalog location
+        // table and locates the WAL's references. The table is published, so
+        // every recovery read (history manifest, routing pages, references)
+        // resolves by position and a fully indexed table proves absence. The
+        // packed filter, routes and membership witnesses are not built here:
+        // the online GC driver builds them after readiness, as after a clean
+        // open (docs/TOFUDB_RECOVERY_ATTRIBUTION.md, "Recovery builds the
+        // catalog location table").
         let (manifest, publication) = self.payload_catalog_snapshot()?;
-        if let Some(manifest) = manifest {
-            let mut verified_routes = crate::payload_routing::PayloadRouting::default();
-            let mut filter = self.scan_packed_filter_until(
-                &manifest,
-                Some(&mut lookup),
-                Some(&mut verified_routes),
-                should_stop,
-            );
-            if should_stop() {
-                return Err(io::Error::new(
-                    io::ErrorKind::Interrupted,
-                    "recovery catalog scan cancelled",
-                ));
+        let catalog = manifest
+            .as_ref()
+            .map_or(&[][..], |manifest| manifest.segments.as_slice());
+        if let (Some(store), false) = (self.payload_segments.as_ref(), catalog.is_empty()) {
+            let started = std::time::Instant::now();
+            let selected: Vec<BlockId> = lookup.locations.keys().copied().collect();
+            let (table, located, unverified) =
+                store.build_location_table_selecting(catalog, &selected, || {
+                    if should_stop() {
+                        Err(io::Error::new(
+                            io::ErrorKind::Interrupted,
+                            "recovery catalog scan cancelled",
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                })?;
+            lookup.complete = table.unindexed_segments() == 0;
+            // The segment stays catalogued: its blocks answer missing or
+            // invalid, never absent, and `verify` reports it too.
+            for (segment_id, error) in &unverified {
+                crate::engine_log::warn(
+                    "recovery",
+                    &format!(
+                        "step=catalog_index_unverified segment={} error={error}",
+                        segment_id.simple()
+                    ),
+                );
             }
-            filter.covered_catalog_publication = publication;
-            let store = self.payload_segments.as_ref();
-            let routing = crate::payload_routing::PayloadRouting::build(
-                &manifest,
-                store,
-                &verified_routes,
-                &Default::default(),
-                store.map_or(0, |store| store.routing_budget_bytes()),
-                false,
-            );
-            let current = self
-                .payload_manifest
-                .read()
-                .map_err(|_| io::Error::other("payload manifest lock was poisoned"))?;
-            if current.as_ref() == Some(&manifest)
-                && self
-                    .installed_payload_catalog_publication
-                    .load(Ordering::Acquire)
-                    == publication
-            {
-                *self
-                    .payload_routing
-                    .write()
-                    .map_err(|_| io::Error::other("payload routing lock was poisoned"))? = routing;
+            crate::fsync_stats::note_recovery_unindexed_segments(unverified.len() as u64);
+            for location in located {
+                if let Some((held, _)) = lookup.locations.get_mut(&location.block_id) {
+                    *held = Some((location.reference, location.position));
+                }
             }
-            drop(current);
-            lookup.complete = filter.built;
-            *self
-                .packed_filter
-                .write()
-                .map_err(|_| io::Error::other("packed block filter lock was poisoned"))? = filter;
+            self.publish_catalog_locations(publication, &Arc::new(table), "recovery", started);
         }
         self.prepare_history_recovery_until(&mut lookup, should_stop)?;
         Ok(lookup)
@@ -2216,11 +2345,11 @@ impl BlockStore {
                 ) => {}
             Err(error) => return Err(error),
         }
-        let Some((reference, verified)) = lookup.locations.get_mut(&id) else {
+        let Some((location, verified)) = lookup.locations.get_mut(&id) else {
             return self.restore_carried(payload);
         };
-        if let Some(reference) = reference {
-            match self.get_from_payload_segment_references(id, std::slice::from_ref(reference)) {
+        if let Some((reference, position)) = *location {
+            match self.read_recovery_location(id, &reference, position) {
                 Ok(Some(existing)) => {
                     if existing != payload {
                         return Err(invalid_data("carried and catalogued block differ"));
@@ -2246,6 +2375,35 @@ impl BlockStore {
         Ok(restored)
     }
 
+    /// The located copy of a WAL reference: one positioned read of the entry
+    /// and payload the recovery pass found in a verified index, checked by
+    /// CRC32C and content hash. Errors keep the kinds the whole-index read of
+    /// that segment reported (a missing segment file is invalid data), so
+    /// replay repairs from a carried copy, propagates other I/O errors,
+    /// truncates or fails closed exactly as before, never retrying a failed
+    /// read. Only a position naming another block, which a verified index
+    /// never gives, falls back to that whole-index read.
+    fn read_recovery_location(
+        &self,
+        id: BlockId,
+        reference: &PayloadSegmentReference,
+        position: u32,
+    ) -> io::Result<Option<Vec<u8>>> {
+        let store = self.payload_segments.as_ref().ok_or_else(|| {
+            invalid_data("CONTROL payload manifest has no payload segment directory")
+        })?;
+        match store.read_located(reference, position, id) {
+            Ok(Some(payload)) => Ok(Some(payload)),
+            Ok(None) => {
+                self.get_from_payload_segment_references(id, std::slice::from_ref(reference))
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Err(invalid_data(
+                "CONTROL payload manifest references a missing segment",
+            )),
+            Err(error) => Err(error),
+        }
+    }
+
     /// The exclusive startup pass already located these WAL references in
     /// verified segment indexes. Reuse that exact location even when the
     /// bounded process-wide routing cache cannot retain the entire catalog.
@@ -2257,10 +2415,8 @@ impl BlockStore {
         if let Some(payload) = self.pending_payload(id)? {
             return Ok((*payload).clone());
         }
-        if let Some((Some(reference), _)) = lookup.locations.get(&id) {
-            if let Some(payload) =
-                self.get_from_payload_segment_references(id, std::slice::from_ref(reference))?
-            {
+        if let Some((Some((reference, position)), _)) = lookup.locations.get(&id) {
+            if let Some(payload) = self.read_recovery_location(id, reference, *position)? {
                 self.cache
                     .write()
                     .map_err(|_| io::Error::other("block cache lock was poisoned"))?
@@ -2788,10 +2944,13 @@ impl BlockStore {
     /// Signals new history work or shutdown. The revision changes under the
     /// wait mutex, so a notification between reservation and sleep is retained.
     pub(crate) fn wake_background_packer(&self) -> io::Result<()> {
-        let background = self
-            .background_pack
-            .lock()
-            .map_err(|_| io::Error::other("background pack state poisoned"))?;
+        let background = {
+            let _wake =
+                crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_BACKGROUND_PACK_WAKE);
+            self.background_pack
+                .lock()
+                .map_err(|_| io::Error::other("background pack state poisoned"))?
+        };
         self.background_pack_revision
             .fetch_add(1, Ordering::Release);
         drop(background);
@@ -2925,6 +3084,40 @@ impl BlockStore {
         self.flush_pending_selection(references, false, None)
     }
 
+    /// Makes the staged payloads among `references` durable as loose files,
+    /// as `flush_pending_references` does, then admits them to the block
+    /// cache: blob writes skip the loose probe, so the request replay that
+    /// writes them again finds them there, records the relink and neither
+    /// stages, carries nor reads them (docs/TOFUDB_PUBLICATION_LATENCY.md,
+    /// "Spills leave the authority"). Runs without the authority.
+    pub(crate) fn publish_deferred_spill(&self, references: &BTreeSet<BlockId>) -> io::Result<()> {
+        let payloads = {
+            let pending = self
+                .pending
+                .lock()
+                .map_err(|_| io::Error::other("pending block set poisoned"))?;
+            references
+                .iter()
+                .filter_map(|id| {
+                    pending
+                        .payloads
+                        .get(id)
+                        .or_else(|| pending.rotation_draining.get(id))
+                        .map(|payload| (*id, Arc::clone(payload)))
+                })
+                .collect::<Vec<_>>()
+        };
+        self.flush_pending_selection(references, false, None)?;
+        let mut cache = self
+            .cache
+            .write()
+            .map_err(|_| io::Error::other("block cache lock was poisoned"))?;
+        for (id, payload) in payloads {
+            cache.insert_shared(id, payload);
+        }
+        Ok(())
+    }
+
     fn flush_pending_selection(
         &self,
         materialize: &BTreeSet<BlockId>,
@@ -3024,9 +3217,14 @@ impl BlockStore {
             let mut outcome = self.publish_loose_shard(first_directory, first_batch, stop);
             for worker in workers {
                 let result = match worker {
-                    Ok(handle) => handle
-                        .join()
-                        .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+                    Ok(handle) => {
+                        let _join = crate::fsync_stats::StageTimer::new(
+                            crate::fsync_stats::STAGE_LOOSE_SHARD_JOIN,
+                        );
+                        handle
+                            .join()
+                            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+                    }
                     Err((directory, batch)) => self.publish_loose_shard(directory, batch, stop),
                 };
                 if outcome.is_ok() {
@@ -3330,6 +3528,58 @@ impl BlockStore {
         self.get_uncached_materialized(id).map(Arc::new)
     }
 
+    /// [`BlockStore::get_materialized_shared`] for one pass over more blocks
+    /// than the cache holds: a staged or cached payload is reused (a cache
+    /// hit does not refresh recency) and a disk read is never admitted.
+    pub(crate) fn get_materialized_traversal(&self, id: BlockId) -> io::Result<Arc<Vec<u8>>> {
+        if let Some(payload) = self.pending_payload(id)? {
+            return Ok(payload);
+        }
+        let cached = self
+            .cache
+            .read()
+            .map_err(|_| io::Error::other("block cache lock was poisoned"))?
+            .peek_shared(id);
+        if let Some(payload) = cached {
+            return Ok(payload);
+        }
+        self.get_uncached_materialized(id).map(Arc::new)
+    }
+
+    /// A copy of `id` at a location a traversal batch prepared
+    /// (`TraversalReader::get_batch`), read only from a source the current
+    /// history catalog retains, so it answers exactly when the exact path's
+    /// history lookup would. `None` when no such copy verifies.
+    fn read_hinted_history_copy(
+        &self,
+        id: BlockId,
+        hints: &crate::history_payload::RecoveryLookup,
+    ) -> io::Result<Option<Vec<u8>>> {
+        let catalog = self
+            .history_payloads
+            .read()
+            .map_err(|_| io::Error::other("history payload catalog lock poisoned"))?
+            .clone();
+        let Some(catalog) = catalog else {
+            return Ok(None);
+        };
+        let mut found = None;
+        // A routing page error or a failed copy only loses the hint.
+        let _ = hints.visit_locations(id, &mut |location| {
+            if !catalog.sources.contains(&location.source) {
+                return Ok(false);
+            }
+            match self.read_history_location(id, location) {
+                Ok(payload) => {
+                    found = Some(payload);
+                    Ok(true)
+                }
+                Err(_) => Ok(false),
+            }
+        });
+        Ok(found)
+    }
+
     pub(crate) fn install_history_payload_catalog(
         &self,
         manifest: &crate::history::HistoryManifest,
@@ -3337,6 +3587,16 @@ impl BlockStore {
     ) -> io::Result<()> {
         if manifest.payload_index_root_id.is_some() != root.is_some() {
             return Err(invalid_data("history routing root presence mismatch"));
+        }
+        // Publishers decode the root they extend, so the installed root's
+        // slice directories reach the new one only here.
+        let installed = self
+            .history_payloads
+            .read()
+            .map_err(|_| io::Error::other("history payload catalog lock poisoned"))?
+            .clone();
+        if let (Some(root), Some(installed)) = (root.as_ref(), installed.as_ref()) {
+            root.adopt_directories(&installed.root);
         }
         *self
             .history_payloads
@@ -3656,6 +3916,16 @@ impl BlockStore {
         self.cache.read().unwrap().peek_shared(id).is_some()
     }
 
+    /// The pages of the installed history routing.
+    #[cfg(test)]
+    pub(crate) fn history_routing_page_ids_for_test(&self) -> Vec<BlockId> {
+        self.history_payloads
+            .read()
+            .unwrap()
+            .as_ref()
+            .map_or_else(Vec::new, |catalog| catalog.root.page_ids().collect())
+    }
+
     /// See [`TraversalReader`]. `check` runs before each catalogued segment
     /// index is streamed and between table sort steps; its error aborts.
     /// A stale published table is first derived to the installed catalog (one
@@ -3668,28 +3938,20 @@ impl BlockStore {
     ) -> io::Result<TraversalReader<'_>> {
         let store = match self.payload_segments.as_ref() {
             Some(store) if !catalog_locations_disabled() => store,
-            _ => {
-                return Ok(TraversalReader {
-                    blocks: self,
-                    locations: None,
-                })
-            }
+            _ => return Ok(TraversalReader::new(self, None)),
         };
         // A failed derivation leaves the build below to answer.
         let _ = self.advance_catalog_locations();
         if let Some(table) = self.current_catalog_locations() {
             if table.unindexed_segments() == 0 {
-                return Ok(TraversalReader {
-                    blocks: self,
-                    locations: Some((store, table)),
-                });
+                return Ok(TraversalReader::new(self, Some((store, table))));
             }
         }
         let table = self.build_and_publish_catalog_locations(store, check, "traversal")?;
-        Ok(TraversalReader {
-            blocks: self,
-            locations: table.map(|table| (store, table)),
-        })
+        Ok(TraversalReader::new(
+            self,
+            table.map(|table| (store, table)),
+        ))
     }
 
     /// Builds and publishes the store's first catalog location table, unless
@@ -3735,6 +3997,13 @@ impl BlockStore {
         let table = Arc::new(store.build_location_table(&catalog.segments, check)?);
         self.publish_catalog_locations(publication, &table, source, started);
         Ok(Some(table))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn history_payload_catalog_for_test(
+        &self,
+    ) -> Option<Arc<crate::history_payload::Catalog>> {
+        self.history_payloads.read().unwrap().clone()
     }
 
     #[cfg(test)]
@@ -4293,6 +4562,72 @@ impl BlockStore {
         Ok(())
     }
 
+    /// The staged or cached payload of `id`, without I/O; a cache hit counts
+    /// as a use, as it does for an ordinary read.
+    pub(crate) fn cached_payload(&self, id: BlockId) -> io::Result<Option<Arc<Vec<u8>>>> {
+        if let Some(payload) = self.pending_payload(id)? {
+            return Ok(Some(payload));
+        }
+        Ok(self
+            .cache
+            .write()
+            .map_err(|_| io::Error::other("block cache lock was poisoned"))?
+            .get(id))
+    }
+
+    /// Where `id`'s payload bytes can be read again at an offset, in the order
+    /// a materialized read resolves them: the segment entry the published
+    /// catalog location table names, else the block's loose file. Nothing is
+    /// read or verified here; whoever reads a range compares it with bytes it
+    /// verified. `None` for a staged block and when neither answers.
+    pub(crate) fn locate_for_range_reads(
+        &self,
+        id: BlockId,
+    ) -> io::Result<Option<PayloadByteSource>> {
+        if self.pending_payload(id)?.is_some() {
+            return Ok(None);
+        }
+        let located = self.resolve_in_published_catalog(id, |store, reference, position| {
+            Ok(store
+                .located_payload_offset(reference, position, id)?
+                .map(|payload_offset| PayloadByteSource::Segment {
+                    segment_id: reference.segment_id,
+                    payload_offset,
+                }))
+        });
+        if let PublishedCatalogAnswer::Held(source) = located {
+            return Ok(Some(source));
+        }
+        Ok(match self.loose_metadata(id)? {
+            Some((path, FileKind::File)) => Some(PayloadByteSource::Loose(path)),
+            _ => None,
+        })
+    }
+
+    /// Fills `bytes` from offset `offset` of the payload `source` names. The
+    /// bytes are not verified: the caller compares them with bytes it did.
+    pub(crate) fn read_payload_range(
+        &self,
+        source: &PayloadByteSource,
+        offset: u64,
+        bytes: &mut [u8],
+    ) -> io::Result<()> {
+        match source {
+            PayloadByteSource::Loose(path) => {
+                crate::vfs::SharedReadFile::open(self.vfs.as_ref(), path)?
+                    .read_exact_at(HEADER_BYTES as u64 + offset, bytes)
+            }
+            PayloadByteSource::Segment {
+                segment_id,
+                payload_offset,
+            } => self.payload_segment_store()?.read_range(
+                *segment_id,
+                payload_offset + offset,
+                bytes,
+            ),
+        }
+    }
+
     fn read_loose_block(&self, id: BlockId, path: &Path) -> io::Result<Vec<u8>> {
         let _read =
             crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_BLOCK_LOOSE_READ);
@@ -4607,18 +4942,7 @@ impl BlockStore {
     fn scan_packed_filter(
         &self,
         manifest: &PayloadManifest,
-        recovery: Option<&mut CarriedRecoveryLookup>,
-        routes: Option<&mut crate::payload_routing::PayloadRouting>,
-    ) -> PackedBlockFilter {
-        self.scan_packed_filter_until(manifest, recovery, routes, &|| false)
-    }
-
-    fn scan_packed_filter_until(
-        &self,
-        manifest: &PayloadManifest,
-        mut recovery: Option<&mut CarriedRecoveryLookup>,
         mut routes: Option<&mut crate::payload_routing::PayloadRouting>,
-        should_stop: &dyn Fn() -> bool,
     ) -> PackedBlockFilter {
         let total_blocks = manifest
             .segments
@@ -4629,9 +4953,6 @@ impl BlockStore {
         if let Some(store) = self.payload_segments.as_ref() {
             let mut remaining_route_bytes = store.routing_budget_bytes();
             for reference in &manifest.segments {
-                if should_stop() {
-                    return PackedBlockFilter::empty();
-                }
                 match store.open_segment(reference.segment_id) {
                     Ok(segment) => {
                         if validate_open_segment(&segment, reference).is_err()
@@ -4648,11 +4969,6 @@ impl BlockStore {
                         }
                         for id in segment.block_ids() {
                             filter.insert(id);
-                            if let Some(lookup) = recovery.as_deref_mut() {
-                                if let Some(location) = lookup.locations.get_mut(&id) {
-                                    *location = (Some(*reference), false);
-                                }
-                            }
                         }
                         filter
                             .covered_segments
@@ -4695,7 +5011,7 @@ impl BlockStore {
             if !nothing_catalogued {
                 return Ok(false);
             }
-            let mut scanned = self.scan_packed_filter(manifest, None, Some(&mut *routes));
+            let mut scanned = self.scan_packed_filter(manifest, Some(&mut *routes));
             let mut filter = self.packed_filter.write().map_err(|_| poisoned())?;
             if !filter.built {
                 scanned.covered_catalog_publication = publication;
@@ -9171,7 +9487,10 @@ mod tests {
                 .prepare_carried_recovery(BTreeSet::from([id]))
                 .unwrap();
             assert!(lookup.complete);
-            assert_eq!(lookup.locations[&id].0, Some(reference));
+            assert_eq!(
+                lookup.locations[&id].0.map(|(located, _)| located),
+                Some(reference)
+            );
             vfs.arm_fault(Some(FaultRule {
                 operation_number: 1,
                 action: FaultAction::ErrorBefore(kind),

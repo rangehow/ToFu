@@ -844,3 +844,165 @@ fn large_embedded_query_payload_has_no_private_byte_quota() {
     assert!(response["payload"].is_null());
     unsafe { tofudb_embed_close(handle) };
 }
+
+fn watch(
+    token: *mut super::commit_watch::WatchToken,
+    request: &serde_json::Value,
+) -> serde_json::Value {
+    let request = serde_json::to_vec(request).unwrap();
+    let mut out = vec![0_u8; OUT_CAP];
+    let written = unsafe {
+        super::commit_watch::tofudb_embed_watch_execute(
+            token,
+            request.as_ptr(),
+            request.len(),
+            out.as_mut_ptr(),
+            out.len(),
+        )
+    };
+    assert!(written > 0, "watch execute returned {written}");
+    out.truncate(written as usize);
+    serde_json::from_slice(&out).unwrap()
+}
+
+fn watch_request(
+    operation: &str,
+    payload: serde_json::Value,
+    deadline_unix_ms: u64,
+) -> serde_json::Value {
+    serde_json::json!({"operation": operation, "payload": payload, "deadline_unix_ms": deadline_unix_ms})
+}
+
+fn watch_answer(envelope: &serde_json::Value) -> (i64, Option<&str>, bool) {
+    (
+        envelope["status"].as_i64().unwrap(),
+        envelope["error_code"].as_str(),
+        envelope["retryable"].as_bool().unwrap(),
+    )
+}
+
+/// The C ABI answers what the daemon answers for the same commit control. The
+/// Python runtime's close cancels its tokens' waits, then the native close
+/// closes the control they borrow (`EmbeddedRuntime::stop`). Both are a
+/// component stopping, so both answer the retryable `database_unavailable`,
+/// never a refusal of the request.
+#[test]
+fn a_closed_commit_control_answers_embedded_watches_retryable_unavailable() {
+    use crate::worker_control::{CONVERSATION_WATCH_OPERATION, WATCH_OPERATION};
+    let seed = seed_authority();
+    let handle = open_handle(&seed);
+    let (cancelled, closed) = unsafe {
+        (
+            super::commit_watch::tofudb_embed_watch_open(handle),
+            super::commit_watch::tofudb_embed_watch_open(handle),
+        )
+    };
+    assert!(!cancelled.is_null() && !closed.is_null());
+    let first = watch(
+        cancelled,
+        &watch_request(
+            WATCH_OPERATION,
+            serde_json::json!({"cursor": null}),
+            deadline(60_000),
+        ),
+    );
+    assert_eq!(first["status"], 0, "{first}");
+    let pending = watch_request(
+        WATCH_OPERATION,
+        serde_json::json!({"cursor": first["payload"]["cursor"]}),
+        deadline(60_000),
+    );
+    let address = cancelled as usize;
+    let waiting = std::thread::spawn(move || {
+        watch(address as *mut super::commit_watch::WatchToken, &pending)
+    });
+    unsafe { super::commit_watch::tofudb_embed_watch_cancel(cancelled) };
+    let woken = waiting.join().unwrap();
+    assert_eq!(
+        watch_answer(&woken),
+        (1, Some("database_unavailable"), true),
+        "{woken}"
+    );
+    unsafe { tofudb_embed_close(handle) };
+    for operation in [WATCH_OPERATION, CONVERSATION_WATCH_OPERATION] {
+        let later = watch(
+            closed,
+            &watch_request(
+                operation,
+                serde_json::json!({"cursor": null}),
+                deadline(60_000),
+            ),
+        );
+        assert_eq!(
+            watch_answer(&later),
+            (1, Some("database_unavailable"), true),
+            "{operation}: {later}"
+        );
+    }
+    unsafe {
+        super::commit_watch::tofudb_embed_watch_free(cancelled);
+        super::commit_watch::tofudb_embed_watch_free(closed);
+    }
+}
+
+/// An elapsed deadline and a request the caller must correct answer the C ABI
+/// exactly as they answer the daemon: `deadline_elapsed` and
+/// `worker_control_refused`, both non-retryable. The token's scope and the
+/// engine's schema build every request here, so no binding can differ on this
+/// path; its invalid requests are the payload and the operation.
+#[test]
+fn elapsed_and_invalid_watches_answer_the_watch_abi_non_retryable() {
+    use crate::worker_control::{CONVERSATION_WATCH_OPERATION, WATCH_OPERATION};
+    let seed = seed_authority();
+    let handle = open_handle(&seed);
+    let token = unsafe { super::commit_watch::tofudb_embed_watch_open(handle) };
+    assert!(!token.is_null());
+    for operation in [WATCH_OPERATION, CONVERSATION_WATCH_OPERATION] {
+        let elapsed = watch(
+            token,
+            &watch_request(operation, serde_json::json!({"cursor": null}), 1),
+        );
+        assert_eq!(
+            watch_answer(&elapsed),
+            (1, Some("deadline_elapsed"), false),
+            "{operation}: {elapsed}"
+        );
+        for (case, payload) in [
+            ("payload of another type", serde_json::json!(7)),
+            ("missing cursor", serde_json::json!({})),
+            (
+                "extra field",
+                serde_json::json!({"cursor": null, "since": 1}),
+            ),
+            ("cursor of another type", serde_json::json!({"cursor": 7})),
+            (
+                "cursor of another channel",
+                serde_json::json!({"cursor": {"epoch": "e", "other": 0}}),
+            ),
+        ] {
+            let refused = watch(token, &watch_request(operation, payload, deadline(60_000)));
+            assert_eq!(
+                watch_answer(&refused),
+                (1, Some("worker_control_refused"), false),
+                "{operation}, {case}: {refused}"
+            );
+        }
+    }
+    let unknown = watch(
+        token,
+        &watch_request(
+            "worker_control.replay",
+            serde_json::json!({"cursor": null}),
+            deadline(60_000),
+        ),
+    );
+    assert_eq!(
+        watch_answer(&unknown),
+        (1, Some("worker_control_refused"), false),
+        "{unknown}"
+    );
+    unsafe {
+        super::commit_watch::tofudb_embed_watch_free(token);
+        tofudb_embed_close(handle);
+    }
+}

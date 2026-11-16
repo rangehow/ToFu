@@ -16,8 +16,9 @@ use crate::authority_gc::AuthorityGarbageCollectionBudget;
 use crate::generated_storage_operations::{StorageOperationKind, STORAGE_SCHEMA_VERSION};
 use crate::generated_storage_v2::{
     DEFAULT_FRAME_MEMORY_BYTES, MAX_FRAME_BODY_BYTES, STATUS_BAD_REQUEST, STATUS_CONFLICT,
-    STATUS_DEADLINE_ELAPSED, STATUS_FORBIDDEN, STATUS_INTEGRITY_FAILURE, STATUS_NOT_IMPLEMENTED,
-    STATUS_RESOURCE_EXHAUSTED, STATUS_UNAVAILABLE, STREAMED_RESPONSE_CHUNK_BYTES,
+    STATUS_DEADLINE_ELAPSED, STATUS_FORBIDDEN, STATUS_INTEGRITY_FAILURE, STATUS_INTERNAL,
+    STATUS_NOT_IMPLEMENTED, STATUS_RESOURCE_EXHAUSTED, STATUS_UNAVAILABLE,
+    STREAMED_RESPONSE_CHUNK_BYTES,
 };
 use crate::protocol::{
     read_frame_or_eof_with_buffer_plan, read_frame_or_idle_with_buffer_plan,
@@ -1318,6 +1319,8 @@ pub(crate) fn dispatch_one_request_inner_mode(
                 let is_command = admitted.request.command_id.is_some();
                 rehearse_exclusive_execution(stores, admitted, now_unix_ms());
                 let mut parks = 0_u8;
+                // Open from a deferred spill until its replay has committed.
+                let mut spill_window: Option<DeferredSpillWindow> = None;
                 let response = loop {
                     let mut rotation_since = None;
                     let attempt = match acquire_authority_until(
@@ -1328,20 +1331,50 @@ pub(crate) fn dispatch_one_request_inner_mode(
                     )? {
                         AuthorityAcquisition::Acquired(mut authority) => {
                             let is_command = admitted.request.command_id.is_some();
-                            let response = {
+                            let (response, deferred_spill) = {
                                 let _hold = crate::authority_watch::AuthorityHoldTimer::start(
                                     &request.operation,
                                 );
                                 let _stage = crate::fsync_stats::StageTimer::new(
                                     crate::fsync_stats::STAGE_COMMAND_EXECUTE,
                                 );
-                                session.dispatch_admitted(
+                                // One deferral per request: its replay spills inline.
+                                let spill = spill_window
+                                    .is_none()
+                                    .then(crate::engine::SpillDeferralScope::allow);
+                                let response = session.dispatch_admitted(
                                     &mut authority,
                                     admitted,
                                     now_unix_ms(),
                                     stores.authority_gc_budget,
-                                )
+                                );
+                                (response, spill.and_then(|spill| spill.take_deferred()))
                             };
+                            if let Some(references) = deferred_spill {
+                                // The commit wrote and applied nothing. Its
+                                // referenced blocks become durable without the
+                                // authority, inside an online-GC publication
+                                // window (rule S9) opened before they leave the
+                                // staged set, and the request replays once.
+                                let window = DeferredSpillWindow::open(
+                                    authority.block_store_shared(),
+                                    &references,
+                                );
+                                drop(authority);
+                                drop(response);
+                                if let Err(error) =
+                                    window.blocks.publish_deferred_spill(&references)
+                                {
+                                    crate::engine_log::warn("spill_deferral", &format!(
+                                        "off-lock publication failed; the replay spills inline: {error}"));
+                                }
+                                spill_window = Some(window);
+                                admitted = match session.admit(request, now_unix_ms()) {
+                                    Ok(admitted) => admitted,
+                                    Err(response) => break response.into(),
+                                };
+                                continue;
+                            }
                             if is_command
                                 && response.error_code.as_deref() == Some("database_busy")
                                 && authority.rotation_blocks_appends()
@@ -1699,6 +1732,10 @@ pub(crate) fn finish_parallel_command_with_permit(
         let _commit = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_IR_COMMIT);
         let _parallel_commit =
             crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_PARALLEL_COMMIT);
+        // A commit past the carried bound refuses like a conflict and falls
+        // back to the exclusive lane, which publishes its blocks off the
+        // writer and replays it.
+        let _spill = crate::engine::SpillDeferralScope::allow();
         match authority.commit(transaction) {
             Ok(commit) => notices = commit.conversation_notices,
             Err(error)
@@ -1735,6 +1772,30 @@ pub(crate) fn finish_parallel_command_with_permit(
         barrier.wait_acknowledged(&witness, Instant::now() + crate::wal::MAX_BARRIER_WAIT)?;
     }
     Ok(Some(RequestDispatch::Responded(response)))
+}
+
+/// Online-GC publication window (rule S9) over the blocks a deferred spill
+/// makes durable without the authority: opened under it before they leave the
+/// staged set, closed once the request's replay has committed them or failed.
+struct DeferredSpillWindow {
+    blocks: Arc<crate::block::BlockStore>,
+    window: u64,
+}
+
+impl DeferredSpillWindow {
+    fn open(
+        blocks: Arc<crate::block::BlockStore>,
+        references: &std::collections::BTreeSet<crate::block::BlockId>,
+    ) -> Self {
+        let window = blocks.open_publication_window(references.iter().copied());
+        Self { blocks, window }
+    }
+}
+
+impl Drop for DeferredSpillWindow {
+    fn drop(&mut self) {
+        self.blocks.close_publication_window(self.window);
+    }
 }
 
 /// Rehearses `prepared`'s commit validation on the newest published head
@@ -1893,6 +1954,7 @@ fn error_response(
                 | SemanticExecutionError::TurnLaterTurnsUnacknowledged
                 | SemanticExecutionError::TurnLaterTurnsChanged => STATUS_CONFLICT,
                 SemanticExecutionError::Integrity(_) => STATUS_INTEGRITY_FAILURE,
+                SemanticExecutionError::Internal(_) => STATUS_INTERNAL,
                 SemanticExecutionError::StorageUnavailable
                 | SemanticExecutionError::StorageFull => STATUS_UNAVAILABLE,
                 SemanticExecutionError::PayloadTooLarge
@@ -1901,12 +1963,13 @@ fn error_response(
                 | SemanticExecutionError::CapacityBusy => STATUS_RESOURCE_EXHAUSTED,
             };
             let code = execution.code();
-            // Integrity, literal validation and conflict fences and
-            // deterministic resource bounds carry their exact diagnostic, and
-            // a full volume its fixed cause; every other code keeps echoing
-            // the code as the message.
+            // Integrity and internal failures, literal validation and
+            // conflict fences and deterministic resource bounds carry their
+            // exact diagnostic, and a full volume its fixed cause; every other
+            // code keeps echoing the code as the message.
             let error_message = match &execution {
-                SemanticExecutionError::Integrity(message) => message.clone(),
+                SemanticExecutionError::Integrity(message)
+                | SemanticExecutionError::Internal(message) => message.clone(),
                 SemanticExecutionError::InvalidPayloadFence(reason)
                 | SemanticExecutionError::ConflictFence(reason) => (*reason).to_owned(),
                 SemanticExecutionError::SearchCursorInvalidPayload => {
@@ -3237,14 +3300,12 @@ mod tests {
             TurnSearchProjection::initialize(projection_directory.path(), 128 * 1024 * 1024)
                 .unwrap();
         projection
-            .begin_conversation_rebuild(7, 11, "conversation-1", "generation-1", 5_000)
-            .unwrap();
-        projection
-            .append_conversation_page(
+            .replace_conversation(
                 7,
                 11,
                 "conversation-1",
-                "generation-1",
+                5_000,
+                "",
                 &[TurnSearchDocument {
                     turn_id: "turn-1".to_owned(),
                     ordinal: 1,
@@ -3254,9 +3315,6 @@ mod tests {
                     match_field: "content".into(),
                 }],
             )
-            .unwrap();
-        projection
-            .finalize_conversation_rebuild(7, 11, "conversation-1", "generation-1")
             .unwrap();
         let projection = Mutex::new(projection);
         let authority_guard = database.lock().unwrap();
@@ -3517,7 +3575,11 @@ mod tests {
                 "storage_full",
             ),
             (
-                io::Error::other("authority outcome is uncertain"),
+                crate::engine::reopen_required(
+                    io::ErrorKind::Other,
+                    "tofu-db authority outcome is uncertain; close and reopen the engine"
+                        .to_owned(),
+                ),
                 "database_unavailable",
             ),
         ] {
@@ -3531,6 +3593,29 @@ mod tests {
             assert_eq!(response.error_message.as_deref(), Some(message));
             assert!(response.retryable);
         }
+    }
+
+    #[test]
+    fn an_unclassified_engine_error_answers_a_non_retryable_internal_error_naming_its_cause() {
+        let request = request(
+            "conversation.get",
+            11,
+            json!({"conv_id": "c", "user_id": 11}),
+        );
+        let response = error_response(
+            &request,
+            STORAGE_SCHEMA_VERSION,
+            SessionDispatchError::Execution(crate::semantic_executor::map_storage_error(
+                io::Error::other("entity overlay lock is poisoned"),
+            )),
+        );
+        assert_eq!(response.status, STATUS_INTERNAL);
+        assert_eq!(response.error_code.as_deref(), Some("database_internal"));
+        assert_eq!(
+            response.error_message.as_deref(),
+            Some("entity overlay lock is poisoned")
+        );
+        assert!(!response.retryable);
     }
 
     #[test]
@@ -4108,9 +4193,14 @@ mod tests {
                 json!({"namespace": "retention-foreground", "prefix": "", "limit": 100}),
             ),
         ] {
+            let value = dispatched(database, session, &request(operation, 11, payload), 9_000);
             state.insert(
                 name.to_owned(),
-                dispatched(database, session, &request(operation, 11, payload), 9_000),
+                if name == "sync" {
+                    crate::turn::without_sync_lineage(value)
+                } else {
+                    value
+                },
             );
         }
         Value::Object(state)
@@ -4769,6 +4859,8 @@ mod tests {
     include!("server_liveness_tests.rs");
     include!("server_worker_job_preparation_tests.rs");
     include!("server_cold_io_tests.rs");
+    include!("server_spill_tests.rs");
+    include!("server_commit_watch_tests.rs");
 }
 
 #[cfg(test)]

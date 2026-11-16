@@ -248,6 +248,7 @@ class StorageClient:
         deadline: float | None,
         command_id: str | None = None,
         priority: str = 'user',
+        cancellation=None,
     ) -> Any:
         operation = validate_operation(operation)
         timeout = self._timeout if deadline is None else max(0.001, float(deadline))
@@ -274,11 +275,16 @@ class StorageClient:
                 result = self._attempt(
                     kind, operation, payload, timeout=timeout,
                     command_id=command_id, priority=priority,
+                    cancellation=cancellation,
                 )
                 _record_rpc(kind, operation, started_at, 'success')
                 observe_storage_service(kind, operation, time.monotonic() - started_at)
                 return result
             except StorageError as exc:
+                if cancellation is not None and cancellation.cancelled:
+                    # The owner left: no replay of its interrupted read.
+                    _record_rpc(kind, operation, started_at, 'cancelled')
+                    raise
                 retry_classified = (
                     exc.retryable and exc.code in _RETRYABLE_CODES)
                 command_replay_safe = (
@@ -437,8 +443,11 @@ class StorageClient:
         operation: str,
         payload: Mapping[str, Any] | None = None,
         deadline: float | None = None,
+        *,
+        cancellation=None,
     ) -> Any:
-        return self._call('query', operation, payload, deadline=deadline)
+        return self._call('query', operation, payload, deadline=deadline,
+                          cancellation=cancellation)
 
     def query_many(
         self,

@@ -142,9 +142,7 @@ impl Registry {
                     "embedded phase scheduler closed",
                 ))
             } else if let Err(error) = state.tasks.try_reserve(1) {
-                Err(io::Error::other(format!(
-                    "embedded phase registration allocation failed: {error}"
-                )))
+                Err(crate::resource_exhaustion::reservation_error(error))
             } else {
                 state
                     .tasks

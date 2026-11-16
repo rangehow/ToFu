@@ -11,7 +11,11 @@ import json
 
 import pytest
 
-from tests.support.conversation_replay import ScriptedConversationRepository
+from tests.support.conversation_replay import (
+    SCRIPTED_EPOCH,
+    ScriptedConversationRepository,
+    scripted_digest,
+)
 
 
 pytestmark = [pytest.mark.api, pytest.mark.auth_mode("open")]
@@ -77,9 +81,13 @@ def stream(flask_client, monkeypatch):
 
 
 def _cursor(sequence: int) -> str:
-    from lib.conversation_sync.cursor import encode_cursor
+    from lib.conversation_sync.cursor import (
+        ReplayPosition, encode_cursor, stream_start_cursor)
 
-    return encode_cursor(CONVERSATION, 1, sequence)
+    if not sequence:
+        return stream_start_cursor(CONVERSATION, 1)
+    return encode_cursor(CONVERSATION, 1, ReplayPosition(
+        sequence, SCRIPTED_EPOCH, scripted_digest(sequence)))
 
 
 def _large_backlog() -> list[dict]:

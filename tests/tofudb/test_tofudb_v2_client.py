@@ -556,7 +556,7 @@ def test_v2_client_retries_a_busy_command_with_the_same_command_id(monkeypatch):
     client = _histogram_client()
     attempts = []
 
-    def busy_once(operation, payload, *, timeout, command_id, deadline_unix_ms):
+    def busy_once(operation, payload, *, timeout, command_id, deadline_unix_ms, cancellation=None):
         attempts.append(command_id)
         if len(attempts) == 1:
             raise StorageError('database_busy', 'rotation in flight', True, 1)
@@ -576,7 +576,7 @@ def test_v2_client_retries_ambiguous_command_failures_with_same_receipt(monkeypa
     client = _histogram_client()
     attempts = []
 
-    def unavailable(operation, payload, *, timeout, command_id, deadline_unix_ms):
+    def unavailable(operation, payload, *, timeout, command_id, deadline_unix_ms, cancellation=None):
         attempts.append(command_id)
         raise StorageError('database_unavailable', 'lost ack', True, 1)
 
@@ -593,7 +593,8 @@ def test_v2_client_busy_command_budget_absorbs_sustained_backpressure(monkeypatc
     client = _histogram_client()
     attempts = []
 
-    def busy_five_times(operation, payload, *, timeout, command_id, deadline_unix_ms):
+    def busy_five_times(operation, payload, *, timeout, command_id, deadline_unix_ms,
+                        cancellation=None):
         attempts.append(command_id)
         if len(attempts) <= 5:
             raise StorageError('database_busy', 'rotation in flight', True, 1)
@@ -622,7 +623,7 @@ def test_v2_client_unsupervised_busy_command_keeps_its_attempt_bound(monkeypatch
     attempts = []
     clock = [1000.0]
 
-    def busy_forever(operation, payload, *, timeout, command_id, deadline_unix_ms):
+    def busy_forever(operation, payload, *, timeout, command_id, deadline_unix_ms, cancellation=None):
         attempts.append(command_id)
         assert timeout == 20.0
         clock[0] += timeout
@@ -739,7 +740,7 @@ def test_v2_client_replays_a_closed_connection_command_with_same_command_id(monk
     client = _histogram_client()
     attempts = []
 
-    def closed_once(operation, payload, *, timeout, command_id, deadline_unix_ms):
+    def closed_once(operation, payload, *, timeout, command_id, deadline_unix_ms, cancellation=None):
         attempts.append(command_id)
         if len(attempts) == 1:
             raise _ConnectionClosedError(

@@ -5,6 +5,9 @@ import asyncio
 
 import pytest
 
+from lib.conversation_sync.cursor import STREAM_START
+from tests.support.conversation_replay import stream_page
+
 pytestmark = pytest.mark.unit
 
 
@@ -19,18 +22,13 @@ def test_conversation_observers_survive_saturated_generation_stream_capacity(mon
         heartbeat_interval_ms = 15_000
 
         @staticmethod
-        def sequence_from_cursor(*_args):
-            return 0
+        def position_from_cursor(*_args):
+            return STREAM_START
 
         @staticmethod
-        def cursor_for_sequence(*_args):
-            return 'cursor-1'
-
-        @staticmethod
-        def changes(cid, _owner, **_kwargs):
-            return {'events': [{'type': 'turn.upsert', 'syncSeq': 1,
-                                'conversationId': cid, 'payload': {}}],
-                    'reset': None, 'hasMore': False}
+        def changes(cid, _owner, *, after, **_kwargs):
+            return stream_page([{'type': 'turn.upsert', 'syncSeq': 1,
+                                 'conversationId': cid, 'payload': {}}], after=after)
 
     broker = ConversationWakeBroker(owner_history_capacity=16)
     monkeypatch.setattr(routes, 'broker', broker)
@@ -76,14 +74,14 @@ def test_setup_failure_releases_subscription(monkeypatch, phase, failure_type):
 
     class Service:
         @staticmethod
-        def sequence_from_cursor(*_args):
-            return 0
+        def position_from_cursor(*_args):
+            return STREAM_START
 
         @staticmethod
-        def changes(*_args, **_kwargs):
+        def changes(*_args, after, **_kwargs):
             if phase == 'probe':
                 fail()
-            return {'events': [], 'reset': None, 'hasMore': False}
+            return stream_page(after=after)
 
     broker = ConversationWakeBroker(owner_history_capacity=16)
     monkeypatch.setattr(routes, 'broker', broker)
@@ -123,14 +121,14 @@ def test_request_cancellation_during_ownership_probe_releases_resources(monkeypa
 
     class Service:
         @staticmethod
-        def sequence_from_cursor(*_args):
-            return 0
+        def position_from_cursor(*_args):
+            return STREAM_START
 
         @staticmethod
-        def changes(*_args, **_kwargs):
+        def changes(*_args, after, **_kwargs):
             entered.set()
             assert release_read.wait(5), 'test must release its read worker'
-            return {'events': [], 'reset': None, 'hasMore': False}
+            return stream_page(after=after)
 
     broker = ConversationWakeBroker(owner_history_capacity=16)
     monkeypatch.setattr(routes, 'broker', broker)

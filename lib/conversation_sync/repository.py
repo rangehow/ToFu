@@ -34,6 +34,8 @@ class ConversationSyncRepository(Protocol):
         *,
         after_sequence: int,
         limit: int,
+        max_bytes: int | None = None,
+        cancellation=None,
     ) -> Mapping[str, Any] | None:
         ...
 
@@ -53,6 +55,7 @@ class ConversationSyncRepository(Protocol):
         before_ordinal: int | None,
         limit: int,
         max_projection_bytes: int = 0,
+        anchor_sequence: int = 0,
     ) -> Mapping[str, Any] | None:
         ...
 
@@ -69,6 +72,9 @@ class ConversationSyncRepository(Protocol):
         image_index: int,
     ) -> Mapping[str, Any] | None:
         ...
+
+
+_UNBOUNDED_PAGES_REPORTED = False
 
 
 def _storage_client(*, write: bool = False) -> StorageClient:
@@ -154,20 +160,36 @@ class SidecarConversationSyncRepository:
         *,
         after_sequence: int,
         limit: int = 500,
+        max_bytes: int | None = None,
+        cancellation=None,
     ) -> Mapping[str, Any] | None:
-        result = self._client().query(
-            "turn.sync.changes",
-            {
-                "conversation_id": conversation_id,
-                "user_id": user_id,
-                "after": int(after_sequence),
-                "limit": int(limit),
-            },
-        )
+        payload = {
+            "conversation_id": conversation_id,
+            "user_id": user_id,
+            "after": int(after_sequence),
+            "limit": int(limit),
+        }
+        if max_bytes is not None:
+            payload["max_bytes"] = int(max_bytes)
+        options = {} if cancellation is None else {"cancellation": cancellation}
+        result = self._client().query("turn.sync.changes", payload, **options)
         if result is not None and not isinstance(result, Mapping):
             raise StorageError(
                 "database_protocol_error", "Invalid conversation sync change result"
             )
+        global _UNBOUNDED_PAGES_REPORTED
+        if (max_bytes is not None and result is not None
+                and result.get("maxBytesApplied") is not True
+                and not result.get("resetRequired")
+                and not _UNBOUNDED_PAGES_REPORTED):
+            # An authority built before the byte bound ignores max_bytes and
+            # serves the whole row-limited page: correct, only unbounded. One
+            # report per process; every page would otherwise repeat it.
+            _UNBOUNDED_PAGES_REPORTED = True
+            logger.warning(
+                "turn.sync.changes ignored max_bytes=%d; the storage authority "
+                "predates byte-bounded change pages conversation=%s",
+                int(max_bytes), conversation_id)
         return result
 
     def round_directory(
@@ -191,6 +213,7 @@ class SidecarConversationSyncRepository:
         before_ordinal: int | None,
         limit: int = 64,
         max_projection_bytes: int = 0,
+        anchor_sequence: int = 0,
     ) -> Mapping[str, Any] | None:
         payload: dict[str, Any] = {
             "conversation_id": conversation_id,
@@ -203,6 +226,8 @@ class SidecarConversationSyncRepository:
             payload["before_ordinal"] = int(before_ordinal)
         if max_projection_bytes:
             payload["max_projection_bytes"] = int(max_projection_bytes)
+        if anchor_sequence:
+            payload["anchor_sequence"] = int(anchor_sequence)
         result = self._query_window("turn.sync.page", payload, "limit")
         if result is not None and not isinstance(result, Mapping):
             raise StorageError(

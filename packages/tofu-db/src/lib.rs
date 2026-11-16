@@ -72,6 +72,7 @@ pub mod fastpath;
 mod frozen_transcript;
 #[doc(hidden)]
 pub mod fsync_stats;
+mod generated_conversation_change_page;
 mod generated_conversation_search;
 mod generated_model_context_projection;
 mod generated_paper_build;
@@ -224,6 +225,69 @@ mod build_info_tests {
             "{info}"
         );
         assert_eq!(crate::block::OVERFLOW_DIRECTORY, "blocks-overflow");
+    }
+
+    /// Every reported feature is read by this engine: a store using
+    /// `loose-overflow-v1` serves a block from the feature's marker layout.
+    /// Only the generated marker and generic store APIs appear here, so an
+    /// engine whose reader was removed while the contract still claims the
+    /// feature fails this specification instead of passing a deploy preflight.
+    #[test]
+    fn every_reported_store_feature_is_read() {
+        use crate::block::BlockStore;
+        use crate::generated_storage_v2::{LOOSE_OVERFLOW_DIRECTORY, STORE_FEATURES};
+        use crate::vfs::{DeterministicVfs, OpenRequest, Vfs};
+        use std::{path::Path, sync::Arc};
+        assert_eq!(
+            STORE_FEATURES,
+            ["loose-overflow-v1"],
+            "each feature needs its reading specification"
+        );
+        let vfs = DeterministicVfs::new(None);
+        let root = Path::new("/data");
+        vfs.create_dir(root).unwrap();
+        let payload = b"a block served from the overflow layout".to_vec();
+        let id = BlockStore::initialize_with_vfs(root, Arc::new(vfs.clone()))
+            .unwrap()
+            .put(&payload)
+            .unwrap();
+        let hex = id.to_hex();
+        let primary = root
+            .join("blocks")
+            .join(&hex[..2])
+            .join(format!("{hex}.blk"));
+        let bytes = vfs
+            .open(
+                &primary,
+                OpenRequest {
+                    read: true,
+                    ..OpenRequest::default()
+                },
+            )
+            .unwrap()
+            .read_all(1 << 20)
+            .unwrap();
+        let marker = root.join(LOOSE_OVERFLOW_DIRECTORY);
+        let leaf = marker.join(&hex[..2]).join(&hex[2..4]);
+        for directory in [marker.clone(), marker.join(&hex[..2]), leaf.clone()] {
+            vfs.create_dir(&directory).unwrap();
+        }
+        let mut moved = vfs
+            .open(
+                &leaf.join(format!("{hex}.blk")),
+                OpenRequest {
+                    write: true,
+                    create_new: true,
+                    ..OpenRequest::default()
+                },
+            )
+            .unwrap();
+        moved.write_all_at(0, &bytes).unwrap();
+        drop(moved);
+        vfs.remove_file(&primary).unwrap();
+        let reopened = BlockStore::open_with_vfs(root, Arc::new(vfs.clone())).unwrap();
+        reopened.set_cache_capacity_bytes(0).unwrap();
+        assert_eq!(reopened.get(id).unwrap(), payload);
     }
 }
 mod authority_admission;

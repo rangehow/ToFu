@@ -158,8 +158,13 @@ impl<H: Clone + Ord + Serialize> CommitWatch<H> {
         }) {
             observed = Some(Vec::new());
         }
+        // A closed component, like the sequencer or the WAL barrier: the restarted
+        // authority serves the retry.
         if state.closed {
-            return Err(io::Error::other("commit control closed"));
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "commit control closed",
+            ));
         }
         if cancelled() {
             return Err(io::Error::new(
@@ -275,8 +280,8 @@ impl WorkerControl {
                     "commit watch deadline elapsed",
                 ));
             }
-            let payload: serde_json::Value =
-                serde_json::from_slice(&request.payload).map_err(io::Error::other)?;
+            let payload: serde_json::Value = serde_json::from_slice(&request.payload)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
             if payload
                 .as_object()
                 .is_none_or(|v| v.len() != 1 || !v.contains_key("cursor"))
@@ -286,7 +291,8 @@ impl WorkerControl {
                     "commit watch requires cursor",
                 ));
             }
-            let watch = serde_json::from_value(payload).map_err(io::Error::other)?;
+            let watch = serde_json::from_value(payload)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
             let timeout = Duration::from_millis(request.deadline_unix_ms - now);
             match request.operation.as_str() {
                 WATCH_OPERATION => self.workers.watch_cancelled(watch, timeout, cancellation),
@@ -300,14 +306,35 @@ impl WorkerControl {
                 )),
             }
         })();
-        let (status, payload, error_code, error_message) = match result {
-            Ok(value) => (0, value, None, None),
-            Err(error) => (
-                1,
-                Vec::new(),
-                Some("worker_control_refused".into()),
-                Some(error.to_string()),
-            ),
+        let (status, payload, error_code, error_message, retryable) = match result {
+            Ok(value) => (0, value, None, None, false),
+            // A binding (the permission check) or payload the caller must correct.
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::PermissionDenied | io::ErrorKind::InvalidInput
+                ) =>
+            {
+                (
+                    1,
+                    Vec::new(),
+                    Some("worker_control_refused".into()),
+                    Some(error.to_string()),
+                    false,
+                )
+            }
+            // A closed or cancelled control, an elapsed deadline, an engine fault.
+            Err(error) => {
+                let message = error.to_string();
+                let failure = crate::semantic_executor::map_storage_error(error);
+                (
+                    1,
+                    Vec::new(),
+                    Some(failure.code().into()),
+                    Some(message),
+                    failure.retryable(),
+                )
+            }
         };
         Response {
             correlation_id: request.correlation_id,
@@ -316,7 +343,7 @@ impl WorkerControl {
             status,
             error_code,
             error_message,
-            retryable: false,
+            retryable,
         }
     }
 }
@@ -445,6 +472,28 @@ mod tests {
         assert_eq!(next["cursor"]["queue"], 1);
         assert!(next["cancelTasks"].is_null());
         assert!(control.workers.state.lock().unwrap().waiters.is_empty());
+    }
+    /// A closed commit control is a component closed for a stop or restart,
+    /// like the sequencer, the logical outbox and the WAL barrier: BrokenPipe,
+    /// which the storage mapping keeps retryable, never an unclassified error
+    /// (DB-6, R4b B10 condition C1).
+    #[test]
+    fn a_closed_commit_control_fails_its_watches_as_a_closed_component() {
+        let control = WorkerControl::new();
+        control.close();
+        for error in [
+            control
+                .workers
+                .watch(WatchRequest { cursor: None }, Duration::ZERO)
+                .unwrap_err(),
+            control
+                .conversations
+                .watch(WatchRequest { cursor: None }, Duration::ZERO)
+                .unwrap_err(),
+        ] {
+            assert_eq!(error.kind(), io::ErrorKind::BrokenPipe, "{error}");
+            assert!(crate::semantic_executor::map_storage_error(error).retryable());
+        }
     }
     #[test]
     fn shutdown_releases_wait_without_authority_lock() {

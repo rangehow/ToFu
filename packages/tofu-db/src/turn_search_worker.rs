@@ -1,23 +1,27 @@
 //! Bounded authority-to-search projection maintenance round.
-//! Source pages are read from a batch-scoped pinned read replica, never
+//! Source rows are read from a batch-scoped pinned read replica, never
 //! under the foreground authority mutex. Activation/backfill commits and the
 //! exact-token acknowledge use the writer (2026-09-22 FUSE: one cold source page had
 //! serialized swarm writers for ~0.5 s).
 //!
-//! The worker holds an immutable MVCC source transaction across pages on the
-//! replica and never re-acquires the foreground authority for reads. A
-//! changed dirty epoch survives exact-token ACK and schedules another complete
-//! generation, while an interrupted build remains invisible in the target.
+//! A dirty conversation costs what changed (R5-SP): its live Turns' projection
+//! revisions (index rows only) and retained archive IDs are diffed against the
+//! scope's item records, and only new, changed, removed or interrupted items
+//! are read and written. A settled Turn is indexed once; pending and running
+//! Turns cost a metadata read and write nothing. A changed dirty epoch
+//! survives exact-token ACK and schedules another diff.
 
 use std::io;
 use std::sync::{Arc, Mutex, TryLockError};
 
-use blake3::Hasher;
-
 use crate::authority::{AuthorityDatabase, AuthorityTransaction};
+use crate::compaction_archive::search_source::SearchSourceArchive;
+use crate::generated_conversation_search::SOURCE_PAGE_ROWS;
 use crate::search_dirty::{self, DirtyConversation};
-use crate::turn;
-use crate::turn_search_projection::TurnSearchProjection;
+use crate::turn::{self, SearchSourceTurn};
+use crate::turn_search_projection::{
+    ScopeItem, ScopeItemContent, ScopeItemKey, TurnSearchDocument, TurnSearchProjection,
+};
 
 const MAX_SOURCE_PAGES: usize = crate::generated_tofudb_ir::SEARCH_PROJECTION_MAXIMUM_SOURCE_PAGES;
 
@@ -33,27 +37,15 @@ pub struct TurnSearchWorkerMetrics {
     pub source_bytes: u64,
     pub foreground_deferrals: u64,
     pub page_budget_exhaustions: u64,
+    /// Recorded items retracted because their source changed or vanished.
+    pub retracted_items: u64,
+    /// Logical (owner-budget) bytes of the projection rows those retractions
+    /// deleted; physical reclamation is reported by the projection's store.
+    pub retracted_logical_bytes: u64,
 }
 
 fn poisoned(name: &str) -> io::Error {
     io::Error::other(format!("{name} mutex is poisoned"))
-}
-
-fn generation(dirty: &DirtyConversation, source: uuid::Uuid) -> String {
-    let mut tokens = dirty.tokens.clone();
-    tokens.sort_by(|left, right| left.key.cmp(&right.key));
-    let mut hasher = Hasher::new();
-    hasher.update(b"tofu-db:turn-search:worker-generation:v2\0");
-    hasher.update(source.as_bytes());
-    hasher.update(&(dirty.conversation_id.len() as u64).to_be_bytes());
-    hasher.update(dirty.conversation_id.as_bytes());
-    for token in tokens {
-        hasher.update(&(token.key.encoded().len() as u64).to_be_bytes());
-        hasher.update(token.key.encoded());
-        hasher.update(&(token.value.len() as u64).to_be_bytes());
-        hasher.update(&token.value);
-    }
-    hasher.finalize().to_hex().to_string()
 }
 
 fn try_authority<'a>(
@@ -115,134 +107,250 @@ fn process_conversation(
     // serialize a foreground writer behind it (2026-09-22 FUSE bench:
     // one cold 8-row source page ≈ the observed ~0.5 s swarm write p99).
     // Anything the replica snapshot misses stays dirty through the
-    // exact-token acknowledge below and is rebuilt by a later round.
-    let updated_at_ms = crate::conversation_header::search_projection_header(
-        replica,
-        &mut source,
-        &dirty.conversation_id,
-    )?;
-    let generation = generation(dirty, replica.authority_uuid());
-    let Some((updated_at_ms, title)) = updated_at_ms else {
+    // exact-token acknowledge below and is diffed again by a later round.
+    let conversation = dirty.conversation_id.as_str();
+    let header =
+        crate::conversation_header::search_projection_header(replica, &mut source, conversation)?;
+    let Some((updated_at_ms, title)) = header else {
         projection_lock(projection)?.remove_conversation(
             scope.tenant_id,
             scope.owner_user_id,
-            &dirty.conversation_id,
+            conversation,
         )?;
         metrics.removed_conversations = metrics.removed_conversations.saturating_add(1);
         return acknowledge(authority, scope, dirty, metrics);
     };
-
-    if projection_lock(projection)?.is_published(
+    let turns = turn::search_projection_revisions(replica, &mut source, conversation)?;
+    let archives =
+        crate::compaction_archive::search_source::archive_ids(replica, &mut source, conversation)?;
+    let diff = projection_lock(projection)?.diff_scope(
         scope.tenant_id,
         scope.owner_user_id,
-        &dirty.conversation_id,
-        &generation,
-    )? {
-        return acknowledge(authority, scope, dirty, metrics);
-    }
-    projection_lock(projection)?.begin_conversation_rebuild(
-        scope.tenant_id,
-        scope.owner_user_id,
-        &dirty.conversation_id,
-        &generation,
-        updated_at_ms,
+        conversation,
+        &turns,
+        &archives,
     )?;
-    projection_lock(projection)?.set_conversation_title(
-        scope.tenant_id,
-        scope.owner_user_id,
-        &dirty.conversation_id,
-        &generation,
-        &title,
-    )?;
-    let mut cursor = Vec::new();
-    let mut archives = false;
-    let mut source_complete = false;
-    for _ in 0..MAX_SOURCE_PAGES {
-        // Only stop between complete storage operations. The unpublished
-        // generation and its exact dirty tokens remain retryable; never ACK
-        // or publish a truncated source as complete during shutdown.
-        if should_stop() {
-            return Ok(false);
-        }
-        let page = if archives {
-            crate::compaction_archive::search_source::page(
-                replica,
-                &mut source,
-                &dirty.conversation_id,
-                &cursor,
-            )?
-        } else {
-            turn::search_projection_page(replica, &mut source, &dirty.conversation_id, &cursor)?
-        };
-        if !page.complete && page.next_cursor == cursor {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "turn-search source cursor stalled",
-            ));
-        }
-        if page.skipped_oversized > 0 {
-            projection_lock(projection)?.mark_rebuild_incomplete(
-                scope.tenant_id,
-                scope.owner_user_id,
-                &dirty.conversation_id,
-                &generation,
-            )?;
-        }
-        let documents = page.turns;
-        for batch in documents.chunks(crate::generated_conversation_search::SOURCE_PAGE_ROWS) {
-            if should_stop() {
-                return Ok(false);
-            }
-            projection_lock(projection)?.append_conversation_page(
-                scope.tenant_id,
-                scope.owner_user_id,
-                &dirty.conversation_id,
-                &generation,
-                batch,
-            )?;
-        }
-        metrics.source_pages = metrics.source_pages.saturating_add(1);
-        metrics.indexed_turns = metrics
-            .indexed_turns
-            .saturating_add(page.source_turns as u64);
-        metrics.skipped_oversized_turns = metrics
-            .skipped_oversized_turns
-            .saturating_add(page.skipped_oversized as u64);
-        metrics.source_bytes = metrics.source_bytes.saturating_add(page.source_bytes);
-        cursor = page.next_cursor;
-        if page.complete && !archives {
-            archives = true;
-            cursor.clear();
-            continue;
-        }
-        if page.complete {
-            source_complete = true;
-            break;
-        }
-    }
+    // Only stop between complete storage operations: a retraction, an index
+    // page and the publish each commit whole, and the diff of a later round
+    // resumes from the item records; dirty tokens stay until the final ACK.
     if should_stop() {
         return Ok(false);
     }
-    if !source_complete {
-        // The page budget spans both sources, including the final archive
-        // probe. Publish explicitly partial coverage rather than retrying an
-        // unchanged oversized conversation forever and starving later work.
-        projection_lock(projection)?.mark_rebuild_incomplete(
-            scope.tenant_id,
-            scope.owner_user_id,
-            &dirty.conversation_id,
-            &generation,
-        )?;
-        metrics.page_budget_exhaustions = metrics.page_budget_exhaustions.saturating_add(1);
-    }
-    projection_lock(projection)?.finalize_conversation_rebuild(
+    let retracted = projection_lock(projection)?.retract_scope_items(
         scope.tenant_id,
         scope.owner_user_id,
-        &dirty.conversation_id,
-        &generation,
+        conversation,
+        &diff.retract,
+        &title,
+        diff.rebuild,
     )?;
-    metrics.rebuilt_conversations = metrics.rebuilt_conversations.saturating_add(1);
+    metrics.retracted_items = metrics
+        .retracted_items
+        .saturating_add(diff.retract.len() as u64);
+    metrics.retracted_logical_bytes = metrics.retracted_logical_bytes.saturating_add(retracted);
+    let mut pages = ScopePages {
+        projection,
+        scope,
+        conversation,
+        title: &title,
+        pending: Vec::new(),
+        pending_documents: 0,
+        flushed: 0,
+    };
+    for (turn_id, revision) in &diff.turns {
+        if should_stop() {
+            return Ok(stopped(metrics, &pages));
+        }
+        let key = ScopeItemKey::turn(turn_id);
+        match turn::search_projection_turn(replica, &mut source, conversation, turn_id)? {
+            SearchSourceTurn::Transient => continue,
+            SearchSourceTurn::Hidden => pages.push(key, *revision, PendingContent::Hidden)?,
+            SearchSourceTurn::Oversized => {
+                metrics.skipped_oversized_turns = metrics.skipped_oversized_turns.saturating_add(1);
+                pages.push(key, *revision, PendingContent::Oversized)?;
+            }
+            SearchSourceTurn::Documents {
+                documents,
+                source_bytes,
+            } => {
+                metrics.indexed_turns = metrics.indexed_turns.saturating_add(1);
+                metrics.source_bytes = metrics.source_bytes.saturating_add(source_bytes);
+                pages.push_documents(key, *revision, documents)?;
+            }
+        }
+        if pages.flushed >= MAX_SOURCE_PAGES {
+            return Ok(page_budget_exhausted(metrics, pages.flushed));
+        }
+    }
+    for archive in &diff.archives {
+        if should_stop() {
+            return Ok(stopped(metrics, &pages));
+        }
+        let key = ScopeItemKey::archive(archive);
+        match crate::compaction_archive::search_source::archive_documents(
+            replica,
+            &mut source,
+            archive,
+        )? {
+            SearchSourceArchive::Oversized => {
+                metrics.skipped_oversized_turns = metrics.skipped_oversized_turns.saturating_add(1);
+                pages.push(key, 0, PendingContent::Oversized)?;
+            }
+            SearchSourceArchive::Documents {
+                documents,
+                source_bytes,
+                ..
+            } => {
+                let mut messages = documents
+                    .iter()
+                    .map(|document| document.ordinal)
+                    .collect::<Vec<_>>();
+                messages.dedup();
+                metrics.indexed_turns = metrics.indexed_turns.saturating_add(messages.len() as u64);
+                metrics.source_bytes = metrics.source_bytes.saturating_add(source_bytes);
+                pages.push_documents(key, 0, documents)?;
+            }
+        }
+        if pages.flushed >= MAX_SOURCE_PAGES {
+            return Ok(page_budget_exhausted(metrics, pages.flushed));
+        }
+    }
+    pages.flush()?;
+    if should_stop() {
+        return Ok(stopped(metrics, &pages));
+    }
+    metrics.source_pages = metrics.source_pages.saturating_add(pages.flushed as u64);
+    let first_publish = projection_lock(projection)?.publish_scope(
+        scope.tenant_id,
+        scope.owner_user_id,
+        conversation,
+        updated_at_ms,
+        &title,
+    )?;
+    // A scope whose content changed; a header re-key alone is not counted.
+    if first_publish || diff.rebuild || pages.flushed != 0 || !diff.retract.is_empty() {
+        metrics.rebuilt_conversations = metrics.rebuilt_conversations.saturating_add(1);
+    }
     acknowledge(authority, scope, dirty, metrics)
+}
+
+fn stopped(metrics: &mut TurnSearchWorkerMetrics, pages: &ScopePages<'_>) -> bool {
+    metrics.source_pages = metrics.source_pages.saturating_add(pages.flushed as u64);
+    false
+}
+
+/// A conversation whose changed items need more than one round's page budget
+/// keeps its dirty tokens: later rounds resume from its item records, and the
+/// owner's coverage reports indexing until the scope matches its source.
+fn page_budget_exhausted(metrics: &mut TurnSearchWorkerMetrics, pages: usize) -> bool {
+    metrics.source_pages = metrics.source_pages.saturating_add(pages as u64);
+    metrics.page_budget_exhaustions = metrics.page_budget_exhaustions.saturating_add(1);
+    true
+}
+
+enum PendingContent {
+    Hidden,
+    Oversized,
+    Documents {
+        documents: Vec<TurnSearchDocument>,
+        last: bool,
+    },
+}
+
+struct PendingItem {
+    key: ScopeItemKey,
+    revision: u64,
+    content: PendingContent,
+}
+
+/// Items read for one scope, written in transactions of at most
+/// SOURCE_PAGE_ROWS documents (the projection's write bound); an item with
+/// more documents spans consecutive pages.
+struct ScopePages<'a> {
+    projection: &'a Arc<Mutex<TurnSearchProjection>>,
+    scope: crate::maintenance::MaintenanceScope,
+    conversation: &'a str,
+    title: &'a str,
+    pending: Vec<PendingItem>,
+    pending_documents: usize,
+    flushed: usize,
+}
+
+impl ScopePages<'_> {
+    fn push(
+        &mut self,
+        key: ScopeItemKey,
+        revision: u64,
+        content: PendingContent,
+    ) -> io::Result<()> {
+        self.pending.push(PendingItem {
+            key,
+            revision,
+            content,
+        });
+        Ok(())
+    }
+
+    /// Queue an item's documents, writing every page they fill. A page is
+    /// one complete storage operation, so stops are checked between items.
+    fn push_documents(
+        &mut self,
+        key: ScopeItemKey,
+        revision: u64,
+        mut documents: Vec<TurnSearchDocument>,
+    ) -> io::Result<()> {
+        loop {
+            let room = SOURCE_PAGE_ROWS - self.pending_documents;
+            let rest = documents.split_off(room.min(documents.len()));
+            self.pending_documents += documents.len();
+            let last = rest.is_empty();
+            self.pending.push(PendingItem {
+                key: key.clone(),
+                revision,
+                content: PendingContent::Documents { documents, last },
+            });
+            if self.pending_documents == SOURCE_PAGE_ROWS {
+                self.flush()?;
+            }
+            if last {
+                return Ok(());
+            }
+            documents = rest;
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        let items: Vec<ScopeItem<'_>> = self
+            .pending
+            .iter()
+            .map(|item| ScopeItem {
+                key: &item.key,
+                revision: item.revision,
+                content: match &item.content {
+                    PendingContent::Hidden => ScopeItemContent::Hidden,
+                    PendingContent::Oversized => ScopeItemContent::Oversized,
+                    PendingContent::Documents { documents, last } => ScopeItemContent::Documents {
+                        documents,
+                        last: *last,
+                    },
+                },
+            })
+            .collect();
+        projection_lock(self.projection)?.index_scope_items(
+            self.scope.tenant_id,
+            self.scope.owner_user_id,
+            self.conversation,
+            self.title,
+            &items,
+        )?;
+        self.pending.clear();
+        self.pending_documents = 0;
+        self.flushed += 1;
+        Ok(())
+    }
 }
 
 /// Internal/operator entry point: schedule exactly this explicit owner scope.
@@ -428,6 +536,7 @@ fn process_turn_search_batch_with_control(
     // is uninterrupted and dirty-list is read-only, so another checkpoint
     // transaction adds no validation; the WAL publication fence stays below.
     let indexed = dirty.is_empty() && checkpoint.as_ref().is_some_and(|state| state.complete);
+    let backfill_generation = checkpoint.as_ref().map(|state| state.generation);
     if let Some(checkpoint) = checkpoint.filter(|state| !state.complete) {
         dirty.retain(|item| item.conversation_id.as_bytes() <= checkpoint.cursor.as_slice());
     }
@@ -467,6 +576,13 @@ fn process_turn_search_batch_with_control(
     wait(witness)?;
     // No authority/projection mutex spans the wait. On failure the pending
     // marker stays fenced, and durable checkpoint/dirty state permits retry.
+    if let Some(generation) = backfill_generation {
+        projection_lock(projection)?.observe_backfill_generation(
+            scope.tenant_id,
+            scope.owner_user_id,
+            generation,
+        )?;
+    }
     if needs_acknowledgement {
         projection_lock(projection)?.acknowledge_owner_backfill(
             scope.tenant_id,
@@ -515,6 +631,10 @@ fn process_turn_search_batch_with_control(
 #[cfg(test)]
 #[path = "turn_search_worker_activation_tests.rs"]
 mod activation_tests;
+
+#[cfg(test)]
+#[path = "turn_search_worker_footprint_tests.rs"]
+mod footprint_tests;
 
 #[cfg(test)]
 mod tests {

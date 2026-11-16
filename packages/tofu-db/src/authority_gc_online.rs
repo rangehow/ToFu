@@ -23,13 +23,14 @@ use crate::authority_gc::{
     AuthorityGarbageCollectionBudget, MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED,
     MIN_AUTHORITY_GC_PAYLOAD_COMPACTION_BLOCKS,
 };
-use crate::backup::visit_semantic_value_references;
+use crate::backup::visit_semantic_value_references_deferring_blob;
 use crate::backup_gc::{is_spill_entry_name, SpillMarkSet};
+use crate::blob::BlobReference;
 use crate::block::{
     BlockId, BlockRemovalMetrics, BlockStore, BlockTemporaryFileCandidate, LooseRemoval,
 };
 use crate::engine::OnlineGcMarkSnapshot;
-use crate::entity::visit_entity_page_graphs_once;
+use crate::entity::{visit_entity_page_graphs_once_batched, LeafBatching};
 use crate::history::decode_segment;
 use crate::payload_manifest::{PayloadSegmentReference, MAX_PAYLOAD_SEGMENTS};
 use crate::payload_segment::{
@@ -83,6 +84,95 @@ fn ensure_directory(path: &Path, parent: &Path, vfs: &dyn Vfs) -> io::Result<()>
         }
         Err(error) => Err(error),
     }
+}
+
+/// Marks what the entity graphs of `roots` reach: every page, the blocks
+/// their values name, and blob manifests with their chunks. Roots share
+/// almost every page, so each page is read and marked once, by the first root
+/// or pin walk that reaches it. Each walk reads its leaves, then the blob
+/// manifests their values name, in one batch (docs/TOFUDB_ONLINE_GC.md,
+/// "Leaves read in one batch"): a history-resident block read alone costs
+/// one routing page per level. `stopped` runs before every read and every
+/// insert: a read may be a network-volume round trip and an insert may flush
+/// a mark run.
+fn mark_entity_graphs(
+    roots: &[Option<BlockId>],
+    reader: &crate::block::TraversalReader<'_>,
+    stopped: &dyn Fn() -> io::Result<()>,
+    insert: &dyn Fn(BlockId) -> io::Result<()>,
+) -> io::Result<crate::entity::EntityPageGraphsWalk> {
+    let manifests = RefCell::new(Vec::<(BlockId, u64, u64, BlobReference)>::new());
+    let resolve_manifests = || -> io::Result<()> {
+        let mut pending = std::mem::take(&mut *manifests.borrow_mut());
+        if pending.is_empty() {
+            return Ok(());
+        }
+        pending.sort_unstable_by_key(|(manifest, ..)| *manifest);
+        let mut ids: Vec<BlockId> = pending.iter().map(|(manifest, ..)| *manifest).collect();
+        ids.dedup();
+        reader.get_batch(&ids, stopped, &mut |id, bytes| {
+            let first = pending.partition_point(|(manifest, ..)| *manifest < id);
+            for (_, tenant_id, owner_user_id, reference) in pending[first..]
+                .iter()
+                .take_while(|(manifest, ..)| *manifest == id)
+            {
+                crate::blob::visit_read_blob_references(
+                    *tenant_id,
+                    *owner_user_id,
+                    reference,
+                    &bytes,
+                    |block_id| {
+                        stopped()?;
+                        insert(block_id)
+                    },
+                )?;
+            }
+            Ok(())
+        })
+    };
+    let mut read_leaves =
+        |ids: &[BlockId], visit: &mut dyn FnMut(BlockId, Vec<u8>) -> io::Result<()>| {
+            reader.get_batch(ids, stopped, visit)
+        };
+    let mut expanded = || resolve_manifests();
+    let graphs = visit_entity_page_graphs_once_batched(
+        roots,
+        LeafBatching {
+            read: &mut read_leaves,
+            expanded: &mut expanded,
+        },
+        |block_id| {
+            stopped()?;
+            reader.get(block_id)
+        },
+        |block_id, _| {
+            stopped()?;
+            insert(block_id)
+        },
+        |key, value| {
+            visit_semantic_value_references_deferring_blob(
+                key,
+                value,
+                |block_id| {
+                    stopped()?;
+                    insert(block_id)
+                },
+                |reference| {
+                    manifests.borrow_mut().push((
+                        reference.manifest_block_id,
+                        key.tenant_id(),
+                        key.owner_user_id(),
+                        reference,
+                    ));
+                    Ok(())
+                },
+            )
+        },
+    )?;
+    // Values of pages read in place (a root that is a leaf) whose walk
+    // deferred no leaf.
+    resolve_manifests()?;
+    Ok(graphs)
 }
 
 /// Cumulative online-collector state surfaced through `system.metrics` and
@@ -1049,6 +1139,9 @@ impl OnlineGarbageCollector {
     }
 
     fn build_marks(&self, epoch: &mut Epoch, stop: &AtomicBool) -> io::Result<MarkShape> {
+        // The entity graphs are marked by `mark_entity_graphs`; everything
+        // else a mark holds (history, manifests, committed and pinned
+        // blocks) is marked below.
         let build_started = Instant::now();
         let selected_history_metadata = epoch.capture.snapshot.selected_history_metadata.take();
         let snapshot: &OnlineGcMarkSnapshot = &epoch.capture.snapshot;
@@ -1096,33 +1189,9 @@ impl OnlineGarbageCollector {
             // both observe the stop flag first.
             let mut roots = vec![snapshot.authority_state_root];
             roots.extend(snapshot.pinned_roots.iter().map(|root| Some(*root)));
-            // Roots share almost every page: each page is read and marked
-            // once, by the first root or pin walk that reaches it.
-            let graphs = visit_entity_page_graphs_once(
-                &roots,
-                |block_id| {
-                    stopped()?;
-                    reader.get(block_id)
-                },
-                |block_id, _| {
-                    stopped()?;
-                    live_cell.borrow_mut().insert(block_id)
-                },
-                |key, value| {
-                    visit_semantic_value_references(
-                        key,
-                        value,
-                        |block_id| {
-                            stopped()?;
-                            reader.get(block_id)
-                        },
-                        |block_id| {
-                            stopped()?;
-                            live_cell.borrow_mut().insert(block_id)
-                        },
-                    )
-                },
-            )?;
+            let graphs = mark_entity_graphs(&roots, &reader, &stopped, &|block_id| {
+                live_cell.borrow_mut().insert(block_id)
+            })?;
             if let Some(manifest_id) = snapshot.history_manifest_block_id {
                 live_cell.borrow_mut().insert(manifest_id)?;
             }
@@ -2125,6 +2194,33 @@ fn catalog_location_store<D: OnlineGcDatabase>(
     *cached = Some(Arc::downgrade(&blocks));
     Some(blocks)
 }
+
+/// Builds the store's first catalog location table and its packed filter
+/// (unbuilt after a clean open, or saturated) off the authority mutex. Both
+/// are read-path structures that reclaim nothing: cold packed reads, writer
+/// dedupe probes and membership probes resolve through them
+/// (docs/TOFUDB_BLOCK_READ_PATH.md). So they are built whether or not the
+/// owner's storage-reclaim task holds epochs, and only the driver's own stop
+/// ends a build, checked before every segment index it reads. A failed or
+/// stopped build is retried at the next due check.
+fn build_read_path<D: OnlineGcDatabase>(
+    cached: &mut Option<std::sync::Weak<crate::block::BlockStore>>,
+    database: &Mutex<D>,
+    stop: &AtomicBool,
+    pause_packed_filter_build: bool,
+) {
+    let Some(blocks) = catalog_location_store(cached, database) else {
+        return;
+    };
+    let running = || {
+        if stop.load(Ordering::Acquire) {
+            return Err(would_block("online GC driver stopped"));
+        }
+        Ok(())
+    };
+    let _ = blocks.publish_first_catalog_locations(running);
+    let _ = blocks.build_packed_filter_pausing(running, pause_packed_filter_build);
+}
 const DRIVER_STACK_BYTES: usize = 1024 * 1024;
 pub(crate) const DRIVER_STOP_JOIN_BUDGET: Duration = Duration::from_secs(5);
 
@@ -2194,6 +2290,11 @@ impl<D: OnlineGcDatabase> OnlineGarbageCollectionDriver<D> {
                     );
                     let pause_packed_filter_build = crate::block::packed_filter_build_pause_armed();
                     let mut reported_held = false;
+                    // While epochs are held, the read-path builds keep the
+                    // epoch timer's floors on a clock of their own: a held
+                    // driver neither consumes a doorbell nor moves the
+                    // cadence its epochs resume on.
+                    let mut held_builds_due = collector.next_epoch_not_before;
                     loop {
                         if stop.load(Ordering::Acquire) {
                             break;
@@ -2209,36 +2310,37 @@ impl<D: OnlineGcDatabase> OnlineGarbageCollectionDriver<D> {
                             collector.note_held(held);
                             reported_held = held;
                         }
-                        // A disable published once the epoch has begun stops
-                        // it at its next stop check, like the driver's stop.
-                        if !held
-                            && collector.should_run_now(volume_pressure)
+                        if held {
+                            let started = Instant::now();
+                            if started >= held_builds_due {
+                                build_read_path(
+                                    &mut catalog_blocks,
+                                    &database,
+                                    &stop,
+                                    pause_packed_filter_build,
+                                );
+                                let ended = Instant::now();
+                                held_builds_due = (started + collector.min_epoch_interval)
+                                    .max(ended + ended.saturating_duration_since(started));
+                            }
+                        } else if collector.should_run_now(volume_pressure)
                             && !watch.as_ref().is_some_and(|watch| watch.begin_epoch(&stop))
                         {
+                            // A disable published once the epoch has begun
+                            // stops it at its next stop check, like the
+                            // driver's stop.
                             let epoch_stop: &AtomicBool = watch
                                 .as_deref()
                                 .map_or(&*stop, crate::scheduler::SystemTaskWatch::interrupt);
-                            // The store's first catalog location table and its
-                            // packed filter (unbuilt after a clean open, or
-                            // saturated) are built here, off the authority
-                            // mutex, even when this epoch's capture then defers
-                            // under foreground contention. A failed or stopped
-                            // build is retried next epoch.
-                            if let Some(blocks) =
-                                catalog_location_store(&mut catalog_blocks, &database)
-                            {
-                                let running = || {
-                                    if epoch_stop.load(Ordering::Acquire) {
-                                        return Err(would_block("online GC driver stopped"));
-                                    }
-                                    Ok(())
-                                };
-                                let _ = blocks.publish_first_catalog_locations(running);
-                                let _ = blocks.build_packed_filter_pausing(
-                                    running,
-                                    pause_packed_filter_build,
-                                );
-                            }
+                            // Built before the capture, so even an epoch whose
+                            // capture then defers under foreground contention
+                            // leaves the read path built.
+                            build_read_path(
+                                &mut catalog_blocks,
+                                &database,
+                                &stop,
+                                pause_packed_filter_build,
+                            );
                             // Epoch errors are already accounted as deferred;
                             // the driver stays alive and retries on cadence.
                             let outcome = collector.run_epoch(&database, epoch_stop);

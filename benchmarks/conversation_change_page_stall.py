@@ -216,8 +216,29 @@ def build_turn_rows(log: list[bytes]) -> list[bytes]:
 
 # --------------------------------------------------------------------------- worker
 
+#: The one authority open the encoded log is served from.
+_EPOCH = '00000000000be7c4'
+
+
+def _row_digest(row: bytes) -> str:
+    """The lineage digest of one stored row: SHA-256 of its stored bytes."""
+    return hashlib.sha256(row).hexdigest()[:16]
+
+
+def _lineage_start(after_sequence: int, encoded: list[bytes]):
+    """The replay position of a tree whose cursors name their change's lineage."""
+    from lib.conversation_sync.cursor import ReplayPosition
+
+    return ReplayPosition(after_sequence, _EPOCH,
+                          _row_digest(encoded[after_sequence - 1]) if after_sequence else '')
+
+
 class _Repository:
-    """Serves the encoded log like the storage wire: decoded per read."""
+    """Serves the encoded log like the storage wire: decoded per read.
+
+    Pages carry the replay lineage facts trees with lineage cursors require;
+    earlier trees ignore them.
+    """
 
     def __init__(self, encoded: list[bytes]) -> None:
         import orjson
@@ -225,13 +246,32 @@ class _Repository:
         self.encoded = encoded
         self.decode_cpu_ns = 0
 
-    def changes(self, conversation_id, user_id, *, after_sequence, limit):
+    def changes(self, conversation_id, user_id, *, after_sequence, limit, max_bytes=None,
+                cancellation=None):
+        rows = self.encoded[after_sequence:after_sequence + limit]
+        if max_bytes is not None:
+            # The authority's page bound: stored lines are each change's
+            # compact encoding, the contract's measure.
+            used, count = 0, 0
+            for row in rows:
+                if count and used + len(row) > max_bytes:
+                    break
+                used, count = used + len(row), count + 1
+            rows = rows[:count]
         started = time.thread_time_ns()
-        page = [self._loads(item) for item in self.encoded[after_sequence:after_sequence + limit]]
+        page = [self._loads(item) for item in rows]
         self.decode_cpu_ns += time.thread_time_ns() - started
         head = len(self.encoded)
-        return {'head': head, 'events': page,
-                'hasMore': after_sequence + len(page) < head}
+        result = {'head': head, 'events': page,
+                  'hasMore': after_sequence + len(page) < head,
+                  'authorityEpoch': _EPOCH,
+                  'headDigest': _row_digest(self.encoded[head - 1]) if head else None,
+                  'changeDigests': [_row_digest(row) for row in rows]}
+        if after_sequence:
+            result['anchorDigest'] = _row_digest(self.encoded[after_sequence - 1])
+        if max_bytes is not None:
+            result['maxBytesApplied'] = True
+        return result
 
 
 def _quantiles(values, scale=1.0):
@@ -253,15 +293,20 @@ def _page_work(encoded: list[bytes], page_size: int) -> dict:
 
     def replay(repository):
         service = ConversationSyncService(repository)
+        # Trees whose cursors name their change's lineage replay from a position.
+        lineage = hasattr(service, 'position_from_cursor')
         after, per_page = 0, []
+        position = _lineage_start(0, encoded) if lineage else None
         while after < len(encoded):
             decode_before = repository.decode_cpu_ns
             started = time.thread_time_ns()
-            page = service.changes(CONVERSATION, USER, after_sequence=after,
-                                   limit=page_size, diagnostic_payload='none')
+            start = {'after': position} if lineage else {'after_sequence': after}
+            page = service.changes(CONVERSATION, USER, limit=page_size,
+                                   diagnostic_payload='none', **start)
             elapsed = time.thread_time_ns() - started
             per_page.append(elapsed - (repository.decode_cpu_ns - decode_before))
             after = int(page['events'][-1]['syncSeq'])
+            position = page.get('position')
         return per_page
 
     collections_before = [stats['collections'] for stats in gc.get_stats()]
@@ -364,18 +409,29 @@ def _loop_replay(encoded: list[bytes], streams: int, busy: int, replay_events: i
             self.closed = False
             self.close_reason = ''
 
+        def add_close_callback(self, callback):
+            pass
+
         async def wait(self, timeout):
             self.closed = True
             return False
+
+    if hasattr(sync_routes._service, 'position_from_cursor'):
+        from lib.conversation_sync.cursor import encode_cursor
+        position = _lineage_start(after_sequence, encoded)
+        start = {'after': position,
+                 'delivered_cursor': encode_cursor(CONVERSATION, USER, position)}
+    else:
+        start = {'after_sequence': after_sequence}
 
     async def run_stream(index):
         digest, frames = hashlib.sha256(), 0
         frame = partial(sync_routes._multiplexed_sse_frame, index)
         started = time.perf_counter()
         async for encoded_frame in sync_routes._conversation_change_frames(
-                CONVERSATION, USER, Subscription(), after_sequence=after_sequence,
+                CONVERSATION, USER, Subscription(),
                 catch_up_budget=None, diagnostic_options={'diagnostic_payload': 'none'},
-                frame=frame):
+                frame=frame, **start):
             frames += 1
             for line in encoded_frame.split('\n'):
                 if line.startswith('data: ') and line != f'data: {index}':

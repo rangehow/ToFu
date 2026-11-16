@@ -901,7 +901,67 @@ pub(crate) fn acknowledge_background_receipts(
     acknowledgement: &Value,
     projection: &Map<String, Value>,
 ) -> io::Result<Vec<String>> {
-    let ack = acknowledgement
+    let (_receipt, matched) = validated_background_deliveries(
+        database,
+        tx,
+        conversation_id,
+        acknowledgement,
+        projection,
+    )?;
+    remove_background_deliveries(database, tx, conversation_id, matched)
+}
+
+/// The one non-consumption disposition: a closed Turn holds the receipt as
+/// round-0 late evidence, so its queue rows no longer stand for a pending wake.
+const SETTLED_AS_EVIDENCE: &str = "settled_as_evidence";
+
+/// Retire a closed Turn's late receipts in the same transaction as the
+/// `turn.projection.update` that attaches them as round-0 evidence. Without it
+/// the rows stayed queued and were listed for every later Turn (incident
+/// receipt b15df8be). Validation is the ACK's; the block must be round 0.
+pub(crate) fn retire_background_receipts(
+    database: &AuthorityDatabase,
+    tx: &mut AuthorityTransaction,
+    conversation_id: &str,
+    retirement: &Value,
+    projection: &Map<String, Value>,
+) -> io::Result<Vec<String>> {
+    let member = retirement
+        .as_object()
+        .ok_or_else(|| invalid_input("invalid background receipt retirement"))?;
+    if member.get("disposition").and_then(Value::as_str) != Some(SETTLED_AS_EVIDENCE) {
+        return Err(invalid_input("unknown background retirement disposition"));
+    }
+    if !member
+        .get("deliveries")
+        .and_then(Value::as_array)
+        .is_some_and(|deliveries| !deliveries.is_empty())
+    {
+        return Err(invalid_input("background retirement names no receipt"));
+    }
+    let (receipt, matched) =
+        validated_background_deliveries(database, tx, conversation_id, retirement, projection)?;
+    if receipt.get("round").and_then(Value::as_u64) != Some(0) {
+        return Err(invalid_input(
+            "background retirement requires round-0 evidence",
+        ));
+    }
+    remove_background_deliveries(database, tx, conversation_id, matched)
+}
+
+/// The queue rows a Turn-bound background receipt names, checked with point
+/// reads of each listed ID's claim, state and core. Shared byte for byte by the
+/// ACK and the retirement, so neither accepts what the other refuses: the next
+/// projection holds exactly one block naming exactly these deliveries; missing
+/// rows are replay-safe; a present mismatched or protected row is a conflict.
+fn validated_background_deliveries<'a>(
+    database: &AuthorityDatabase,
+    tx: &mut AuthorityTransaction,
+    conversation_id: &str,
+    member: &Value,
+    projection: &'a Map<String, Value>,
+) -> io::Result<(&'a Value, Vec<IndexIdentity>)> {
+    let ack = member
         .as_object()
         .ok_or_else(|| invalid_input("invalid background acknowledgement"))?;
     let block_id = ack
@@ -967,10 +1027,6 @@ pub(crate) fn acknowledge_background_receipts(
     if expected != observed {
         return Err(invalid_input("background receipt identities disagree"));
     }
-    if expected.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut items = rows(database, tx, conversation_id)?;
     let mut matched = Vec::new();
     for (queue_id, command_id) in &expected {
         let Some(identity) = read_identity(database, tx, queue_id, tx.owner_user_id())? else {
@@ -1003,9 +1059,24 @@ pub(crate) fn acknowledge_background_receipts(
         }
         matched.push(identity);
     }
+    Ok((receipt, matched))
+}
+
+/// Remove validated rows, then renumber the conversation's queue and rebuild
+/// its summaries. Positions stay contiguous and the summaries are per-kind
+/// oldest, so this reads the conversation's whole order range: O(queue) reads
+/// plus O(renumbered rows) writes, as plain writes on the overlay path while
+/// they fit its room (docs/STORAGE_OPERATIONS.md, background receipt removal).
+fn remove_background_deliveries(
+    database: &AuthorityDatabase,
+    tx: &mut AuthorityTransaction,
+    conversation_id: &str,
+    mut matched: Vec<IndexIdentity>,
+) -> io::Result<Vec<String>> {
     if matched.is_empty() {
         return Ok(Vec::new());
     }
+    let mut items = rows(database, tx, conversation_id)?;
     matched.sort_by(|left, right| {
         left.position
             .cmp(&right.position)

@@ -370,9 +370,10 @@ impl<S: LogicalOutboxSink + 'static> LogicalOutboxWorker<S> {
         if !guard.accepting {
             return Err(closed_error(&guard));
         }
-        guard.requests.try_reserve(1).map_err(|error| {
-            io::Error::other(format!("logical outbox queue allocation failed: {error}"))
-        })?;
+        guard
+            .requests
+            .try_reserve(1)
+            .map_err(crate::resource_exhaustion::reservation_error)?;
         guard.queued_bytes = guard
             .queued_bytes
             .checked_add(resident_bytes)

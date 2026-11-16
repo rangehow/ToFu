@@ -217,6 +217,10 @@ pub struct MaintenanceMetrics {
     pub search_history_retirement_failures: u64,
     /// The longest single hold of the index mutex any retirement slice took.
     pub search_history_retirement_max_hold_us: u64,
+    /// Search items retracted because their source changed or vanished, and
+    /// the logical (owner-budget) bytes of the projection rows they held.
+    pub search_retracted_items: u64,
+    pub search_retracted_logical_bytes: u64,
     pub tool_result_artifacts_pruned: u64,
     pub tool_result_prune_backlog_rounds: u64,
     pub attempt_events_pruned: u64,
@@ -1036,6 +1040,12 @@ fn run_worker(
                                 metrics.search_page_budget_exhaustions = metrics
                                     .search_page_budget_exhaustions
                                     .saturating_add(search.page_budget_exhaustions);
+                                metrics.search_retracted_items = metrics
+                                    .search_retracted_items
+                                    .saturating_add(search.retracted_items);
+                                metrics.search_retracted_logical_bytes = metrics
+                                    .search_retracted_logical_bytes
+                                    .saturating_add(search.retracted_logical_bytes);
                             },
                             Backoff::Keep,
                         )
@@ -2233,6 +2243,7 @@ mod tests {
 
     fn authority_with_expired_attempt_events(
         event_count: usize,
+        publish_conversation_sync: bool,
     ) -> (tempfile::TempDir, Arc<Mutex<AuthorityDatabase>>) {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
@@ -2266,6 +2277,10 @@ mod tests {
         )
         .unwrap();
         for index in 0..event_count {
+            if index > 0 && index % 200 == 0 {
+                database.commit(seed).unwrap();
+                seed = database.begin_with_identity_claim_scopes(7, 11).unwrap();
+            }
             crate::turn::append_attempt_event(
                 &database,
                 &mut seed,
@@ -2277,7 +2292,7 @@ mod tests {
                     event_type: "text-delta",
                     payload: serde_json::Value::String(format!("chunk-{index}")),
                     occurred_at_ms: old_ms,
-                    publish_conversation_sync: false,
+                    publish_conversation_sync,
                 },
             )
             .unwrap();
@@ -2288,7 +2303,7 @@ mod tests {
 
     #[test]
     fn scheduler_prunes_expired_attempt_events_on_idle_rounds() {
-        let (_directory, database) = authority_with_expired_attempt_events(3);
+        let (_directory, database) = authority_with_expired_attempt_events(3, false);
         let scheduler = MaintenanceScheduler::start(
             Arc::clone(&database),
             vec![MaintenanceScope::new(7, 11).unwrap()],
@@ -2304,7 +2319,7 @@ mod tests {
 
     #[test]
     fn idle_round_commits_event_retirement_without_payload_rows() {
-        let (directory, database) = authority_with_expired_attempt_events(0);
+        let (directory, database) = authority_with_expired_attempt_events(0, false);
         let namespace = crate::generated_tofudb_ir::CONVERSATION_EVENT_RETIREMENT_NAMESPACE;
         let (first, end) = EntityKey::prefix_range(7, 11, namespace, b"j").unwrap();
         {
@@ -2338,6 +2353,52 @@ mod tests {
             db.entity_scan(&mut tx, &first, &end, 1).unwrap().is_empty(),
             "maintenance discarded metadata-only retirement progress"
         );
+    }
+
+    #[test]
+    fn idle_rounds_commit_sync_marker_release_after_conversation_delete() {
+        // Deleting a conversation retires its replay range, while each expired
+        // entry's age marker and Attempt reference remain until retention
+        // releases them. Such a batch deletes no replay row, yet it must commit,
+        // or every later round rescans and discards the same page. More markers
+        // than one prune page also take more than one round.
+        let (directory, database) = authority_with_expired_attempt_events(1_200, true);
+        let present = |db: &AuthorityDatabase, namespace: &str| {
+            let mut tx = db.begin(7, 11).unwrap();
+            let (start, end) = EntityKey::prefix_range(7, 11, namespace, &[]).unwrap();
+            !db.entity_scan(&mut tx, &start, &end, 1).unwrap().is_empty()
+        };
+        let markers = crate::generated_tofudb_ir::CONVERSATION_SYNC_AGE_INDEX_NAMESPACE;
+        let references = crate::generated_tofudb_ir::ATTEMPT_EVENT_SYNC_REFERENCE_NAMESPACE;
+        {
+            let mut db = database.lock().unwrap();
+            assert!(present(&db, markers) && present(&db, references));
+            let mut tx = db.begin_with_identity_claim_scopes(7, 11).unwrap();
+            crate::conversation_header::delete(
+                &mut db,
+                &mut tx,
+                &crate::conversation_header::DeleteRequest {
+                    conversation_id: "maintenance-conversation".into(),
+                    deleted_at_ms: 2_000_000_000_000,
+                },
+            )
+            .unwrap();
+            db.commit(tx).unwrap();
+        }
+        for round in 0.. {
+            match run_round(&database, MaintenanceScope::new(7, 11).unwrap(), 64, false) {
+                RoundOutcome::NoWork => break,
+                RoundOutcome::Terminal(error) => panic!("round {round} failed: {error}"),
+                _ => assert!(round < 200, "maintenance never settled"),
+            }
+        }
+        drop(database);
+        let db = AuthorityDatabase::open(directory.path()).unwrap();
+        assert!(
+            !present(&db, markers),
+            "maintenance discarded the release of a deleted conversation's sync markers"
+        );
+        assert!(!present(&db, references));
     }
 
     fn authority_with_mount() -> (tempfile::TempDir, Arc<Mutex<AuthorityDatabase>>) {
@@ -2442,13 +2503,9 @@ mod tests {
         ));
         let mut index =
             TurnSearchProjection::initialize(projection_directory.path(), 1 << 24).unwrap();
-        for generation in 0..6 {
-            let generation = format!("generation-{generation}");
+        for generation in 1..=6 {
             index
-                .begin_conversation_rebuild(7, 11, "conversation", &generation, 1)
-                .unwrap();
-            index
-                .finalize_conversation_rebuild(7, 11, "conversation", &generation)
+                .publish_scope(7, 11, "conversation", generation, "")
                 .unwrap();
             index.checkpoint_wal_window_for_shutdown().unwrap();
         }

@@ -284,6 +284,7 @@ fn metrics_payload(observers: &ControlObservers) -> Value {
         "durability": fsync_stats::counters(),
         "commitStages": commit_stage_snapshot(),
         "historyPromotion": fsync_stats::history_promotion_snapshot(),
+        "historyRouting": crate::history_payload::routing_metrics_snapshot(),
         "requestProfile": crate::request_profile::snapshot(),
         "resourceExhaustionReasons": crate::resource_exhaustion::resource_exhaustion_snapshot(),
     });
@@ -409,6 +410,11 @@ mod tests {
             json!("tofudb.history-promotion/v1")
         );
         assert_eq!(payload["historyPromotion"]["fixedCounterBytes"], json!(32));
+        assert_eq!(
+            payload["historyRouting"]["contract"],
+            json!("tofudb.history-routing/v1")
+        );
+        assert!(payload["historyRouting"]["sliceReads"].is_u64());
         assert!(payload["commitStages"].is_array());
         assert_eq!(
             payload["resourceExhaustionReasons"]["contract"],

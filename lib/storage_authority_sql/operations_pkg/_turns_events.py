@@ -34,6 +34,9 @@ from lib.turn_projection_patch import (
 )
 from lib.turn_projection_segments import projection_with_stable_segments
 import time
+from lib.storage_authority_sql.migration.generated_tofudb_migration import (
+    MAX_ATTEMPT_EVENT_DOCUMENT_BYTES,
+)
 from lib.storage_authority_sql.operations_pkg._turns_core import _ATTEMPT_EVENT_MAX_NONTERMINAL_BYTES, _attempt_public, _observe_attempt_event_payload, _observe_projection_blob_write_deferral, _observe_projection_blob_write_skip, _observe_projection_checkpoint_materialization, _upsert_turn_search_row
 
 
@@ -53,6 +56,15 @@ def _insert_attempt_event(
     """Insert one measured attempt event and enforce the transport budget."""
     encoded_envelope = _dump(envelope)
     payload_bytes = len(encoded_envelope)
+    if payload_bytes > MAX_ATTEMPT_EVENT_DOCUMENT_BYTES:
+        # The native authority reads, and the SQL-to-native import admits, at
+        # most this many bytes per event document. Refuse at write what could
+        # not be read back there, for every event type and bootstrap alike.
+        _observe_attempt_event_payload(event_type, payload_bytes, accepted=False)
+        raise StorageError(
+            "storage_payload_too_large",
+            "Attempt event exceeds the attempt-event document bound",
+        )
     if (
         not allow_oversize
         and event_type != "terminal_settlement"

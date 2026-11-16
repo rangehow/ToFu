@@ -403,6 +403,7 @@ class StorageV2Client:
         *,
         deadline: float | None,
         command_id: str | None = None,
+        cancellation=None,
     ) -> Any:
         operation = validate_operation(operation)
         timeout = self._timeout if deadline is None else max(0.001, float(deadline))
@@ -427,6 +428,7 @@ class StorageV2Client:
                     timeout=timeout,
                     command_id=wire_command_id,
                     deadline_unix_ms=int((time.time() + timeout) * 1000),
+                    cancellation=cancellation,
                 )
                 _record_rpc(kind, operation, started_at, 'success')
                 elapsed = time.monotonic() - started_at
@@ -434,6 +436,10 @@ class StorageV2Client:
                 _warn_slow_rpc(kind, operation, elapsed, attempt + 1, wire_command_id)
                 return result
             except StorageError as exc:
+                if cancellation is not None and cancellation.cancelled:
+                    # The owner left: no replay and no wait for the authority.
+                    _record_rpc(kind, operation, started_at, 'cancelled')
+                    raise
                 # ``deadline_elapsed`` arrives with retryable=False because
                 # that single wire flag also gates command replay, but both
                 # server variants are replay-safe here: admission rejects
@@ -580,10 +586,12 @@ class StorageV2Client:
         timeout: float,
         command_id: str | None,
         deadline_unix_ms: int,
+        cancellation=None,
     ) -> Any:
         body = request_payload(operation, payload, owner_id=self._owner_id)
         return self._request_once(operation, body, timeout=timeout,
-                                  command_id=command_id, deadline_unix_ms=deadline_unix_ms)
+                                  command_id=command_id, deadline_unix_ms=deadline_unix_ms,
+                                  cancellation=cancellation)
 
     def _request_once(self, operation, body, *, timeout, command_id, deadline_unix_ms,
                       cancellation=None):
@@ -742,9 +750,12 @@ class StorageV2Client:
         operation: str,
         payload: Mapping[str, Any] | None = None,
         deadline: float | None = None,
+        *,
+        cancellation=None,
     ) -> Any:
         return application_result(
-            operation, self._call('query', operation, payload, deadline=deadline)
+            operation, self._call('query', operation, payload, deadline=deadline,
+                                  cancellation=cancellation)
         )
 
     def query_many(

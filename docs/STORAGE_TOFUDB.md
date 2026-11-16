@@ -492,18 +492,43 @@ and delivered only degraded heartbeats, freezing every lagging browser
 projection at its last applied state (2026-09-28 incident: Turns pinned at
 the pre-start queue placeholder while the bound tasks ran normally).
 
-Decision: replay has no private expanded-envelope or aggregate page byte quota.
-The existing `storage.v2` transport chunks the complete response, including an
-individual event above 8 MiB. Row and deadline pagination keep
-`hasMore = last < head` honest, and callers resume from the last delivered
-sequence. An expired deadline before the first event still fails explicitly.
-Canonical source references preserve exact events and retention protection;
-reopen and commit-fault tests cover full large-event replay and cursor continuity.
+Decision: replay has no private expanded-envelope or aggregate page byte quota
+and never refuses a page for its size. The existing `storage.v2` transport
+chunks the complete response, including an individual event above 8 MiB. Row
+and deadline pagination keep `hasMore = last < head` honest, and callers resume
+from the last delivered sequence. An expired deadline before the first event
+still fails explicitly. Canonical source references preserve exact events and
+retention protection; reopen and commit-fault tests cover full large-event
+replay and cursor continuity.
 
-Alternatives considered: byte-based pagination still cannot deliver one large
-event; a smaller fixed row limit wastes round trips without resolving that case;
+The reader may bound a page by bytes. Problem (2026-11-13): every settled
+`turn.upsert` carries its whole TurnRecord, so a row-limited catch-up page was
+~17 MB on the wire, and an API host decoding pages for several streams at once
+held 184 MB of decoded changes in flight. RSS grew 372 MB -> 2.97 GB in ten
+minutes, and full collections over that graph stalled every thread for seconds.
+Decision: `turn.sync.changes` accepts `max_bytes` within the conversation-sync
+contract's subscription `windowBytes` range (65,536..16,777,216, generated for
+the engine by `scripts/gen_conversation_sync_contract.py`). Changes stay in
+order while the sum of their compact JSON encodings, each exactly as the
+response carries it, is at most `max_bytes`. The first change is always
+admitted, so one larger change is a page alone and replay still progresses.
+The measure holds by construction: native counts the serde encoding of each
+parsed change (`response_json::normalize_value_with_size`, the bytes
+`encode_response` writes), never its stored spelling, and SQL measures the
+bytes it returns. Deadline and row truncation are unchanged, and both
+authorities cut a page at the same change. A bounded response says `maxBytesApplied: true`; the API host
+logs once when an older engine ignores the bound and serves a whole page.
+Streams pass their `windowBytes`, or the contract maximum when they have none.
+Specs: `src/turn_sync_changes_bytes_tests.rs` (including
+`the_page_measure_is_the_response_encoding_not_the_stored_spelling`),
+`tests/conversation/test_conversation_change_page_bytes.py`.
+
+Alternatives considered: a hard aggregate quota cannot deliver one large event
+(the 2026-09-28 failure); a smaller fixed row limit wastes round trips and stays
+unbounded in bytes; bounding only in the API host leaves the authority encoding
+and the client decoding the whole page; truncating events changes payloads;
 client-side recovery on degraded heartbeats duplicates snapshot work during
-genuine storage wedges; raising the byte quota merely moves the failure.
+genuine storage wedges.
 
 ## Continuation document budget
 
@@ -539,7 +564,7 @@ Two engine caches decide whether a read is a heap hit or a volume round trip: th
 
 ## WAL durability modes
 
-`tofu-db serve` tiers WAL durability automatically from the launch probe: when the authority volume classifies as network/fuse (`/proc/mounts` fstype, longest-prefix match; unobservable platforms report `Unknown` and fall back safe), the daemon selects `--durability normal` so mount fsync latency never taxes every command; on local or unobservable volumes it keeps `--durability strict`, the per-commit `fdatasync` barrier identical to the legacy SQLite authority. An explicit `--durability` (or `TOFU_DB_DURABILITY` through `native_launch`, whose validation converts it to serve arguments) always wins over the automatic tier. `--durability normal [--wal-flush-interval-ms 1..1000]` remains the bounded-RPO mode: a commit queues its WAL frame in the daemon's write buffer and releases the authority, a `tofu-db-wal-writer` thread performs the physical write, the daemon acknowledges after that write, a background barrier thread (`tofu-db-wal-barrier`) fdatasyncs the written prefix through an independent descriptor, so neither a slow write nor a slow fsync is ever performed while holding the authority ([decision and measurements](TOFUDB_PUBLICATION_LATENCY.md#normal-tier-wal-writes-off-the-authority)), and every CONTROL publication, checkpoint, and clean shutdown still performs the deferred barrier first (`Engine::publish_control` syncs pending WAL bytes before any slot write). A crash therefore loses at most one flush interval of acknowledged commits; recovery truncates the unsynced tail exactly like a torn record, and command receipts resolve acknowledged-but-lost operations through ordinary idempotent replay. A background barrier failure fails the authority closed (restart-required). The mode is launch-level (like PostgreSQL `synchronous_commit`) and is echoed in readiness as `walDurability`/`walFlushIntervalMilliseconds`, so the automatic tier is always observable. The embedded in-process transport serves strict durability only and refuses `TOFU_DB_DURABILITY=normal` at start. Measured effect and certification evidence live in [STORAGE_PERFORMANCE_CHARTER.md](STORAGE_PERFORMANCE_CHARTER.md).
+`tofu-db serve` tiers WAL durability automatically from the launch probe: when the authority volume classifies as network/fuse (`/proc/mounts` fstype, longest-prefix match; unobservable platforms report `Unknown` and fall back safe), the daemon selects `--durability normal` so mount fsync latency never taxes every command; on local or unobservable volumes it keeps `--durability strict`, the per-commit `fdatasync` barrier identical to the legacy SQLite authority. An explicit `--durability` (or `TOFU_DB_DURABILITY` through `native_launch`, whose validation converts it to serve arguments) always wins over the automatic tier. `--durability normal [--wal-flush-interval-ms 1..1000]` remains the bounded-RPO mode: a commit queues its WAL frame in the daemon's write buffer and releases the authority, a `tofu-db-wal-writer` thread performs the physical write, the daemon acknowledges after that write, a background barrier thread (`tofu-db-wal-barrier`) fdatasyncs the written prefix through an independent descriptor, so neither a slow write nor a slow fsync is ever performed while holding the authority ([decision and measurements](TOFUDB_PUBLICATION_LATENCY.md#normal-tier-wal-writes-off-the-authority)), and every CONTROL publication, checkpoint, and clean shutdown still performs the deferred barrier first (`Engine::publish_control` syncs pending WAL bytes before any slot write). A process crash loses no acknowledged commit (the frame reached the kernel). Power loss loses at most the acknowledged-but-unsynced suffix: about one flush interval while the barrier keeps pace, and longer while an fdatasync stalls and frame writes still complete (on FUSE under Linux 4.18 a write waits for the stalled fdatasync's inode lock, so acknowledgements stall with it); recovery truncates the unsynced tail exactly like a torn record, and command receipts resolve acknowledged-but-lost operations through ordinary idempotent replay. A background barrier failure fails the authority closed (restart-required). The mode is launch-level (like PostgreSQL `synchronous_commit`) and is echoed in readiness as `walDurability`/`walFlushIntervalMilliseconds`, so the automatic tier is always observable. The embedded in-process transport serves strict durability only and refuses `TOFU_DB_DURABILITY=normal` at start. Measured effect and certification evidence live in [STORAGE_PERFORMANCE_CHARTER.md](STORAGE_PERFORMANCE_CHARTER.md).
 
 ## Deferred-application write overlay (default write path since 2026-09-21)
 
@@ -933,7 +958,7 @@ depend on whether maintenance or the adoption driver publishes a pack.
 
 **Startup recovery — Problem:** a missing whole WAL suffix can end at a valid record boundary while CONTROL still acknowledges later records. The previous open discovered this only after expensive payload replay, and application boot retried the deterministic failure six times. Identifier-only WAL references also repeatedly searched segment indexes outside the carried-block lookup. **Decision:** scan the acknowledged WAL prefix before opening payload catalogs; clean EOF below CONTROL is an integrity failure just like a corrupt record. Keep failed-open evidence intact and report checkpoint/durable/recovered sequences. Native `storage.error` startup envelopes carry a bounded diagnostic, code and Boolean `retryable`; the supervisor preserves this verdict, and boot does not retry explicitly terminal failures. Lease contention remains retryable. Search-index open errors identify the projection separately from the authority.
 
-Recovery's transient lookup covers every distinct carried and identifier-only WAL reference, the history manifest and authority root. One verified catalog traversal builds membership, exact recovery locations and the existing budgeted routing cache; one history-routing pass resolves those same IDs and is reused for sync staging. Incomplete catalog scans retain verified fallback; every payload read still validates its bytes. The lookup scales with the selected WAL reference set and is released after replay; it has no arbitrary ID cutoff (see TOFUDB_RECOVERY_ATTRIBUTION.md). No durable format, cache budget, acknowledgement rule or selected authority changes. On the affected FUSE volume, a read-only-source/write-overlay benchmark of the same authority reduced engine open from 30.3–30.9 s to 9.6 s, segment opens from 30,517 to 4,106 and index bytes read from 7.42 GB to 0.97 GB. This measures engine recovery, not complete application readiness or a cold-cache guarantee. The missing-suffix projection failed in 0.057 s before any payload reads. **Alternatives considered:** increasing caches hides repeated I/O and costs resident memory; retrying unchanged corrupt files cannot repair them; lowering CONTROL loses acknowledged state. A damaged reconstructible search projection can instead be retained and a new directory explicitly selected through the existing projection-settings authority, leaving user data untouched.
+Recovery's transient lookup covers every distinct carried and identifier-only WAL reference, the history manifest and authority root. One verified catalog traversal builds the catalog location table, published for the process, and records the exact index position of each of those IDs; one history-routing pass resolves those same IDs and is reused for sync staging. Recovery builds no packed filter, routes or membership witnesses: the online GC driver builds them after readiness, as after a clean open, and finds the first location table already published (TOFUDB_RECOVERY_ATTRIBUTION.md, "Recovery builds the catalog location table"). Recovery serves any verified copy of a block, as reads do once the first location table is published: a catalogued segment whose index fails verification stays catalogued, never proves absence (blocks only it holds answer missing or invalid) and is logged by name, counted (`system.metrics` `durability.recoveryUnindexedSegments`) and reported by `verify`. This is a deliberate change (2026-11-13): before, such a segment earlier in catalog order could fail the open, or truncate a record, whose block had a verified copy in another segment. Incomplete catalog scans retain verified fallback; every payload read still validates its bytes. The lookup scales with the selected WAL reference set and is released after replay; it has no arbitrary ID cutoff (see TOFUDB_RECOVERY_ATTRIBUTION.md). No durable format, cache budget, acknowledgement rule or selected authority changes. On the affected FUSE volume, a read-only-source/write-overlay benchmark of the same authority reduced engine open from 30.3–30.9 s to 9.6 s, segment opens from 30,517 to 4,106 and index bytes read from 7.42 GB to 0.97 GB. This measures engine recovery, not complete application readiness or a cold-cache guarantee. The missing-suffix projection failed in 0.057 s before any payload reads. **Alternatives considered:** increasing caches hides repeated I/O and costs resident memory; retrying unchanged corrupt files cannot repair them; lowering CONTROL loses acknowledged state. A damaged reconstructible search projection can instead be retained and a new directory explicitly selected through the existing projection-settings authority, leaving user data untouched.
 
 **Checkpointed opens — Problem:** even an empty active WAL paid the full
 payload-catalog recovery scan. Deferring that scan alone also moves its cost
@@ -1455,7 +1480,7 @@ title-heavy query ~650 µs, while raw SQLite FTS5 answers in ~60 µs. The
 per-chunk bloom filters were already exact; the missing structure was an
 owner-level way to resolve *which* conversations can match at all.
 
-Decision: a new projection namespace `search_gram_postings_v1` maps each width-1/2/3 gram digest to one packed, sorted posting list of the conversation-generation digests whose lowercased title, id, or chunk text emitted that gram (title/id publish at finalize; documents page by page). Lists inline at most 255 entries (the 8 KiB inline-value bound) and promote to a universal marker beyond it, which the reader treats as unfilterable for that gram. Every update rides inside the same transactions that build, publish, replace, or remove the generation's meta/text rows, so postings and content move atomically; retirement recomputes the exact gram set from the reassembled texts and retracts it. Query-time, a per-owner durable state byte (absent → legacy walk, BUILDING → walk, READY → serve, DEGRADED → walk) gates the index. Once a query goes barren (two consecutive non-matching conversations in the current phase), the walk intersects the rarest gram lists first (up to 8 lookups per phase, entry-budgeted) and then skips the per-conversation meta scan for every conversation outside the candidate set, with identical state effects, so result pages stay byte-identical; budgets (CANDIDATE/CHUNK scan pages) charge exactly as before except skipped chunk scans, which can only shift page boundaries for owners whose single-query scan would cross those budgets — never the items. The index is a candidate filter only: every candidate still runs the exact legacy title/id/contains/ phrase verification. A versioned wipe (same marker machinery as the format version, checked by `prepare_owner`) rebuilds legacy projections on the first maintenance round; the worker publishes the index when the first complete backfill drains. Emission is bounded opportunistically: an update that would push the owner past `maximum_logical_bytes_per_owner` durably marks the index DEGRADED (sticky until the next wipe, usage accounting stays exact under retraction), and a conversation-generation whose emission overflows the engine's per-transaction write/witness ceilings is recorded in `search_gram_excluded_v1` as an unconditional candidate while the rest of the owner keeps the index. Measured on the 64-document probe (internal search time): match-none ~190 µs → ~47 µs, match-title ~625 µs → ~154 µs, match-heavy unchanged by design (the walk is already optimal when every conversation matches; the harness's match-all shape stays at p50 0.19 ms).
+Decision: a new projection namespace `search_gram_postings_v1` maps each width-1/2/3 gram digest to one packed, sorted posting list of the conversation-scope IDs whose lowercased title, id, or chunk text emitted that gram (title/id when the scope is created or retitled; documents with the item that holds them). Lists inline at most 255 entries (the 8 KiB inline-value bound) and promote to a universal marker beyond it, which the reader treats as unfilterable for that gram. Every update rides inside the same transactions that add, retract, or remove the scope's meta/text rows, so postings and content move atomically; a retraction removes exactly the grams no remaining text, title or ID of the scope still emits ([per-Turn search maintenance](#per-turn-search-maintenance-2026-11-13)). Query-time, a per-owner durable state byte (absent → legacy walk, BUILDING → walk, READY → serve, DEGRADED → walk) gates the index. Once a query goes barren (two consecutive non-matching conversations in the current phase), the walk intersects the rarest gram lists first (up to 8 lookups per phase, entry-budgeted) and then skips the per-conversation meta scan for every conversation outside the candidate set, with identical state effects, so result pages stay byte-identical; budgets (CANDIDATE/CHUNK scan pages) charge exactly as before except skipped chunk scans, which can only shift page boundaries for owners whose single-query scan would cross those budgets — never the items. The index is a candidate filter only: every candidate still runs the exact legacy title/id/contains/ phrase verification. A versioned wipe (same marker machinery as the format version, checked by `prepare_owner`) rebuilds legacy projections on the first maintenance round; the worker publishes the index when the first complete backfill drains. Emission is bounded opportunistically: an update that would push the owner past `maximum_logical_bytes_per_owner` durably marks the index DEGRADED (sticky until the next wipe, usage accounting stays exact under retraction), and a conversation scope whose emission overflows the engine's per-transaction write/witness ceilings is recorded in `search_gram_excluded_v1` as an unconditional candidate while the rest of the owner keeps the index; a retraction that leaves grams fitting one emission posts them all and clears the exclusion. Measured on the 64-document probe (internal search time): match-none ~190 µs → ~47 µs, match-title ~625 µs → ~154 µs, match-heavy unchanged by design (the walk is already optimal when every conversation matches; the harness's match-all shape stays at p50 0.19 ms).
 
 ### Conversation-level candidate Bloom and batched event-type scans
 
@@ -1491,6 +1516,78 @@ universal gram and filtered events, title/ID and multiword recall, complete
 walk/index page parity, and native search/event neighbors.
 
 Alternatives rejected: per-(gram, conversation) rows (12x more tree rows; +25% walk cost from tree growth and no point-lookup path); packed lists with no write/witness caps (single 4,096-character documents can emit more distinct grams than a transaction can witness); skipping retraction for a degraded index (usage accounting would leak); and filtering eagerly on every query (a common-word query would pay set construction for no benefit, so activation waits for two barren conversations). Verification: posting lifecycle/retraction tests, byte-identical page batteries walk-vs-indexed across a query battery and past the header page budget, budget-trip degradation with exact reclamation, universal-list promotion, exclusion fallback, worker publish-after-drain, plus the differential and conversation-search suites.
+
+## Per-Turn search maintenance (2026-11-13)
+
+Problem: the search worker rebuilt a dirty conversation's complete generation
+for every dirty epoch, re-reading all of its Turns and archives and leaving
+the old generation as garbage. Every Turn event dirties its conversation (the
+header's `updated_at` moves), so a live conversation was re-indexed about
+every two events: O(conversation size) work per event. In TOFUDB-VS-SQLITE-2's
+C10 production mix the projection grew 12.11 → 33.05 GB in 31 minutes (11,411
+rebuilds, 745,700 projection bytes per dirty event, 34.45 GB of source reads)
+and filled the 48 GB volume at 1,869 s; production's `tofudb-search` payload
+segments grew about 8 GB/h.
+
+Decision (projection format 7, designed with the engine owner as R5-SP):
+
+- Each conversation has one stable scope ID that keys its rows, its posting
+  dictionary entry and its exclusion marker. A new scope stays invisible (the
+  build header) until its first publish; afterwards every scope write bumps the
+  header revision that query continuations bind to, so a pending conversation
+  restarts exactly as it did on a generation switch.
+- Per dirty conversation the worker reads, from its pinned source replica, the
+  conversation's `turns_by_updated` rows (Turn ID → projection revision) and
+  retained archive IDs, and diffs them against per-item state rows
+  (`search_items_v1`: the revision an item was read at, the rows it wrote, its
+  charge, and whether its last page committed). Only new, changed, removed or
+  interrupted items are read, written or retracted. A pending or running Turn
+  costs one header-bound metadata-summary read and writes nothing; a settled
+  Turn is indexed once. Every Turn-document writer moves its updated-index row
+  in the same transaction and every writer that changes what search reads
+  advances the revision (`turn::search_projection_revision_tests`).
+- Retraction recomputes the scope's postings and header bloom from its
+  remaining text, so postings stay exact without a rebuild threshold; an
+  excluded scope whose remaining grams fit one emission is posted again. It
+  deletes the retracted rows by key in one transaction (a transaction retires
+  at most 64 key ranges, two per item, which a compaction of a long
+  conversation exceeds).
+- An explicit backfill keeps its contract of rebuilding every conversation:
+  the worker records the source's newest backfill generation (one row per
+  owner, read once per launch), and a scope built before it is retracted to
+  nothing once (recorded at that retraction) and indexed again.
+- A change set larger than one round's page budget keeps its dirty tokens and
+  resumes from the item records; coverage reports `indexing` until the scope
+  matches its source, and nothing is published as partial except oversized
+  items, as before.
+- Counters in `maintenance`: `searchRetractedItems` and
+  `searchRetractedLogicalBytes` (logical owner-budget bytes); a pure header
+  re-key is not counted in `searchRebuiltConversations`.
+
+Alternatives rejected: a per-conversation live entry for the running Turn
+(running Turns are not searchable under this contract, so streaming events
+never reached gram leaves once the full rebuild was gone); superset postings
+until a later rebuild (false candidates and a rebuild trigger); per-(gram,
+scope) reference counts (doubles posting writes); a timestamp watermark instead
+of the revision diff (needs an overlap window, a tuned constant); repairing
+every scope after an unclean close (the projection WAL stays strict and dirty
+tokens are acknowledged only after the projection commit, so an unclean close
+leaves nothing behind; that repair belongs with any future relaxation of the
+projection's durability).
+
+Measurement: with 64 settled Turns in the owner's index, the projection bytes
+written per dirty event were 404,500 (dirty conversation of 4 Turns) and
+1,800,532 (64 Turns) before the change, and are 196,383 and 97,000 after it
+(`turn_search_worker::footprint_tests`): they no longer grow with the
+conversation, they shrink as its grams are already posted.
+
+Verification: `turn_search_worker::footprint_tests` (bytes per dirty event
+independent of conversation size; a settled Turn indexed once across running
+events, a new settled Turn and a retitle), `turn::search_projection_revision_tests`,
+the projection, query, runtime and worker suites, the page-budget resume
+specification in `turn::tests`, and a cross-engine search differential
+(the full-rebuild engine versus this one on the same operation script,
+every query paged to the end).
 
 ### Live continuation segment repair
 

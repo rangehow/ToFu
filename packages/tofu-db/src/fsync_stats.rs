@@ -62,6 +62,7 @@ static ROTATION_WINDOW_TRANSACTIONS: AtomicU64 = AtomicU64::new(0);
 static ROTATION_WINDOW_BYTES: AtomicU64 = AtomicU64::new(0);
 static MAX_ROTATION_WINDOW_BYTES: AtomicU64 = AtomicU64::new(0);
 static DROP_FLUSH_FAILURES: AtomicU64 = AtomicU64::new(0);
+static RECOVERY_UNINDEXED_SEGMENTS: AtomicU64 = AtomicU64::new(0);
 static HISTORY_DECODE_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
 static HISTORY_DECODE_SOURCE_BYTES: AtomicU64 = AtomicU64::new(0);
 static HISTORY_DECODED_TRANSACTIONS: AtomicU64 = AtomicU64::new(0);
@@ -156,6 +157,13 @@ pub fn note_publish_control() {
 /// failure is counted here (and logged at the call site) instead of retried.
 pub fn note_drop_flush_failure() {
     DROP_FLUSH_FAILURES.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Catalogued payload segments whose index failed verification during a
+/// recovery pass; each is also logged by name (`recovery`
+/// `step=catalog_index_unverified`).
+pub fn note_recovery_unindexed_segments(segments: u64) {
+    RECOVERY_UNINDEXED_SEGMENTS.fetch_add(segments, Ordering::Relaxed);
 }
 
 pub fn note_wal_append() {
@@ -424,7 +432,19 @@ pub const STAGE_EXCLUSIVE_REHEARSAL: usize = 220;
 /// Commit validations answered by pending overlay writes alone, reading no
 /// page; the other validations time `overlay_validate_head_versions`.
 pub const STAGE_OVERLAY_VALIDATE_PENDING_ONLY: usize = 221;
-const STAGE_COUNT: usize = 222;
+/// `Engine::require_write_admission`, including the background packer wake.
+pub const STAGE_WRITE_ADMISSION: usize = 222;
+/// Waiting for the `background_pack` lock to wake the background packer.
+pub const STAGE_BACKGROUND_PACK_WAKE: usize = 223;
+/// A commit whose pending referenced blocks exceed the WAL-carried bound makes
+/// them durable before its append (`Engine::spill_referenced_blocks`).
+pub const STAGE_SPILL_REFERENCED_BLOCKS: usize = 224;
+/// A loose batch's caller waiting for the per-shard publication workers.
+pub const STAGE_LOOSE_SHARD_JOIN: usize = 225;
+/// A WAL append written on the appending thread because no barrier worker
+/// buffer took the frame (none attached, or its byte budget is full).
+pub const STAGE_WAL_INLINE_WRITE: usize = 226;
+const STAGE_COUNT: usize = 227;
 pub const STAGE_NAMES: [&str; STAGE_COUNT] = [
     "semantic",
     "prepare",
@@ -648,6 +668,11 @@ pub const STAGE_NAMES: [&str; STAGE_COUNT] = [
     "parallel_commit_refused_off_lock",
     "exclusive_rehearsal",
     "overlay_validate_pending_only",
+    "write_admission",
+    "background_pack_wake",
+    "spill_referenced_blocks",
+    "loose_shard_join",
+    "wal_inline_write",
 ];
 
 #[derive(Clone, Copy)]
@@ -877,6 +902,9 @@ pub struct DurabilityCounters {
     pub rotation_window_bytes: u64,
     pub max_rotation_window_bytes: u64,
     pub drop_flush_failures: u64,
+    /// Catalogued segments whose index failed verification during recovery,
+    /// summed over this process's opens.
+    pub recovery_unindexed_segments: u64,
     pub wal_encoded_bytes: u64,
     pub projection_checkpoint_bytes: u64,
     pub projection_patch_bytes: u64,
@@ -916,6 +944,7 @@ pub fn counters() -> DurabilityCounters {
         max_checkpoint_history_tail_bytes: MAX_CHECKPOINT_HISTORY_TAIL_BYTES
             .load(Ordering::Relaxed),
         drop_flush_failures: DROP_FLUSH_FAILURES.load(Ordering::Relaxed),
+        recovery_unindexed_segments: RECOVERY_UNINDEXED_SEGMENTS.load(Ordering::Relaxed),
         wal_encoded_bytes: WAL_ENCODED_BYTES.load(Ordering::Relaxed),
         projection_checkpoint_bytes: PROJECTION_CHECKPOINT_BYTES.load(Ordering::Relaxed),
         projection_patch_bytes: PROJECTION_PATCH_BYTES.load(Ordering::Relaxed),

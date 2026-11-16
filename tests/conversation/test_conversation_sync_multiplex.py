@@ -14,7 +14,11 @@ from urllib.parse import quote
 
 import pytest
 
-from tests.support.conversation_replay import ScriptedConversationRepository
+from tests.support.conversation_replay import (
+    SCRIPTED_EPOCH,
+    ScriptedConversationRepository,
+    scripted_digest,
+)
 
 
 pytestmark = [pytest.mark.api, pytest.mark.auth_mode("open")]
@@ -68,9 +72,13 @@ def _frames(body: bytes) -> list[dict]:
 
 
 def _cursor(conversation_id: str, sequence: int) -> str:
-    from lib.conversation_sync.cursor import encode_cursor
+    from lib.conversation_sync.cursor import (
+        ReplayPosition, encode_cursor, stream_start_cursor)
 
-    return encode_cursor(conversation_id, 1, sequence)
+    if not sequence:
+        return stream_start_cursor(conversation_id, 1)
+    return encode_cursor(conversation_id, 1, ReplayPosition(
+        sequence, SCRIPTED_EPOCH, scripted_digest(sequence)))
 
 
 def _closed(conversation_id: str, status: int, code: str) -> dict:
@@ -287,17 +295,20 @@ def test_a_disconnected_client_releases_every_live_subscription(monkeypatch):
         heartbeat_interval_ms = 1
 
         @staticmethod
-        def sequence_from_cursor(*_args):
-            return 0
+        def position_from_cursor(*_args):
+            from lib.conversation_sync.cursor import STREAM_START
+            return STREAM_START
 
         @staticmethod
-        def changes(_conversation_id, _owner, *, after_sequence, limit, **_options):
-            return {"head": after_sequence, "events": [], "reset": None, "hasMore": False}
+        def changes(_conversation_id, _owner, *, after, limit, **_options):
+            return {"head": after.sequence, "events": [], "cursors": [], "position": after,
+                    "cursor": f"cursor-{after.sequence}", "headCursor": "cursor-head",
+                    "reset": None, "hasMore": False}
 
         @staticmethod
-        def heartbeat(conversation_id, _owner, sequence, *, degraded, push_withheld=False):
+        def heartbeat(conversation_id, _owner, cursor, *, degraded, push_withheld=False):
             return {"type": "sync.heartbeat", "conversationId": conversation_id,
-                    "cursor": f"cursor-{sequence}", "degraded": degraded,
+                    "cursor": cursor, "degraded": degraded,
                     "pushWithheld": push_withheld}
 
     broker = ConversationWakeBroker(owner_history_capacity=16)

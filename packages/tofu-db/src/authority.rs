@@ -292,6 +292,7 @@ pub struct AuthorityDatabase {
     decoded_chunk_cache: Arc<crate::blob::decode_cache::DecodedChunkCache>,
     canonical_json_cache: Arc<crate::canonical_json_bytes::cache::CanonicalProofCache>,
     event_read_epoch: Uuid,
+    sync_lineage_epoch: u64,
     worker_lease_clock: Arc<crate::worker_lease_clock::WorkerLeaseClock>,
     pub(crate) worker_control: Arc<crate::worker_control::WorkerControl>,
     preparation: Option<Arc<preparation::PreparedBlobStore>>,
@@ -327,6 +328,14 @@ fn outbox_record_key(tenant_id: u64, owner_user_id: u64, sequence: u64) -> io::R
     key.extend_from_slice(OUTBOX_RECORD_PREFIX);
     key.extend_from_slice(&sequence.to_be_bytes());
     outbox_entity_key(tenant_id, owner_user_id, &key)
+}
+
+/// One replay-lineage epoch per authority open (contracts/storage_v2.json
+/// `conversationSyncLineage`), drawn from OS randomness, the v4 UUIDs'
+/// source, after recovery completed. A published commit is lost only with a
+/// reopen, so no conversation-sync sequence repeats within one epoch.
+fn new_sync_lineage_epoch() -> u64 {
+    rand_core::RngCore::next_u64(&mut rand_core::OsRng)
 }
 
 fn decode_counter(value: Option<Vec<u8>>, name: &str) -> io::Result<u64> {
@@ -365,6 +374,7 @@ impl AuthorityDatabase {
         Ok(Self {
             entities,
             event_read_epoch: Uuid::new_v4(),
+            sync_lineage_epoch: new_sync_lineage_epoch(),
             worker_lease_clock: Arc::new(crate::worker_lease_clock::WorkerLeaseClock::new()?),
             worker_control: crate::worker_control::WorkerControl::new(),
             foreground_admissions: Default::default(),
@@ -388,6 +398,7 @@ impl AuthorityDatabase {
         Ok(Self {
             entities,
             event_read_epoch: Uuid::new_v4(),
+            sync_lineage_epoch: new_sync_lineage_epoch(),
             worker_lease_clock: Arc::new(crate::worker_lease_clock::WorkerLeaseClock::new()?),
             worker_control: crate::worker_control::WorkerControl::new(),
             foreground_admissions: Default::default(),
@@ -422,6 +433,7 @@ impl AuthorityDatabase {
         Ok(Self {
             entities,
             event_read_epoch: Uuid::new_v4(),
+            sync_lineage_epoch: new_sync_lineage_epoch(),
             worker_lease_clock: Arc::new(crate::worker_lease_clock::WorkerLeaseClock::new()?),
             worker_control: crate::worker_control::WorkerControl::new(),
             foreground_admissions: Default::default(),
@@ -450,6 +462,7 @@ impl AuthorityDatabase {
         Ok(Self {
             entities,
             event_read_epoch: Uuid::new_v4(),
+            sync_lineage_epoch: new_sync_lineage_epoch(),
             worker_lease_clock: Arc::new(crate::worker_lease_clock::WorkerLeaseClock::new()?),
             worker_control: crate::worker_control::WorkerControl::new(),
             foreground_admissions: Default::default(),
@@ -473,6 +486,7 @@ impl AuthorityDatabase {
         Ok(Self {
             entities,
             event_read_epoch: Uuid::new_v4(),
+            sync_lineage_epoch: new_sync_lineage_epoch(),
             worker_lease_clock: Arc::new(crate::worker_lease_clock::WorkerLeaseClock::new()?),
             worker_control: crate::worker_control::WorkerControl::new(),
             foreground_admissions: Default::default(),
@@ -505,6 +519,7 @@ impl AuthorityDatabase {
         Ok(Self {
             entities,
             event_read_epoch: Uuid::new_v4(),
+            sync_lineage_epoch: new_sync_lineage_epoch(),
             worker_lease_clock: Arc::new(crate::worker_lease_clock::WorkerLeaseClock::new()?),
             worker_control: crate::worker_control::WorkerControl::new(),
             foreground_admissions: Default::default(),
@@ -526,6 +541,11 @@ impl AuthorityDatabase {
     /// Volatile source-read lease identity, shared by this authority's replicas.
     pub(crate) fn event_read_epoch(&self) -> Uuid {
         self.event_read_epoch
+    }
+
+    /// This open's conversation-sync lineage epoch, shared by its replicas.
+    pub(crate) fn sync_lineage_epoch(&self) -> u64 {
+        self.sync_lineage_epoch
     }
 
     /// Worker leases share this backend lifetime with source-read leases.
@@ -565,6 +585,7 @@ impl AuthorityDatabase {
         Ok(AuthorityDatabase {
             entities: self.entities.build_read_replica()?,
             event_read_epoch: self.event_read_epoch,
+            sync_lineage_epoch: self.sync_lineage_epoch,
             worker_lease_clock: Arc::clone(&self.worker_lease_clock),
             worker_control: Arc::clone(&self.worker_control),
             foreground_admissions: std::sync::Arc::clone(&self.foreground_admissions),
@@ -3114,10 +3135,14 @@ impl AuthorityDatabase {
             prepared_streams.push(prepared);
         }
         drop(stream_timer);
+        let commit_shape = crate::request_profile::hold_active().then(|| entity.commit_shape());
         let prepared_entity = {
             let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_PREPARE);
             self.entities.prepare_commit(entity)?
         };
+        if let Some(shape) = commit_shape {
+            crate::request_profile::note_entity_commit(shape, prepared_entity.defers_to_overlay());
+        }
 
         if !private_blobs_published {
             if let Some(blobs) = prepared_blobs {
@@ -3227,6 +3252,79 @@ impl AuthorityDatabase {
 
 #[cfg(test)]
 mod tests {
+    /// Opt-in observer-cost check (docs/STORAGE_PERFORMANCE_CHARTER.md, same
+    /// binary off/on/on/off): every foreground commit runs inside an
+    /// attributed hold, so it pays the commit-shape observation. This times
+    /// that observation directly on an OCR-sized write set (1,600 posting-
+    /// shaped puts, just inside the overlay envelope), then whole commits
+    /// outside (off) and inside (on) an attributed hold. Run with
+    /// `cargo test --lib -- --ignored --nocapture commit_shape_observer_cost`.
+    #[test]
+    #[ignore = "opt-in observer-cost measurement"]
+    fn commit_shape_observer_cost() {
+        const WRITES: usize = 1_600;
+        const ROUNDS: usize = 40;
+        const SHAPES: usize = 2_000;
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        database.set_write_overlay_for_test(true);
+        let build = |database: &AuthorityDatabase, round: usize| {
+            let mut transaction = database.begin(7, 11).unwrap();
+            for index in 0..WRITES {
+                let key = crate::entity::EntityKey::new(
+                    7,
+                    11,
+                    "knowledge_terms",
+                    format!("t{index:05}d{round:032}").as_bytes(),
+                )
+                .unwrap();
+                database
+                    .entity_put(&mut transaction, key, vec![7; 38])
+                    .unwrap();
+            }
+            transaction
+        };
+        let transaction = build(&database, 0);
+        let shape = transaction.entity.commit_shape();
+        assert!(
+            shape.fits_overlay_envelope && shape.writes == WRITES,
+            "{shape:?}"
+        );
+        let token = crate::request_profile::begin_hold().unwrap();
+        let started = std::time::Instant::now();
+        for _ in 0..SHAPES {
+            let shape = std::hint::black_box(&transaction).entity.commit_shape();
+            crate::request_profile::note_entity_commit(shape, true);
+        }
+        let shape_nanos = started.elapsed().as_nanos() as f64 / SHAPES as f64;
+        crate::request_profile::finish_hold(token, 1, false);
+        drop(transaction);
+        let mut blocks = Vec::new();
+        for (block, attributed) in [false, true, true, false].into_iter().enumerate() {
+            let mut nanos = Vec::with_capacity(ROUNDS);
+            for round in 0..ROUNDS {
+                let transaction = build(&database, 1 + block * ROUNDS + round);
+                let token = attributed.then(|| crate::request_profile::begin_hold().unwrap());
+                let started = std::time::Instant::now();
+                database.commit(transaction).unwrap();
+                nanos.push(started.elapsed().as_nanos() as u64);
+                if let Some(token) = token {
+                    crate::request_profile::finish_hold(token, 1, true);
+                }
+                database.merge_entity_overlay_fully().unwrap();
+            }
+            nanos.sort_unstable();
+            blocks.push(format!(
+                "{}:median_us={:.0},mean_us={:.0}",
+                if attributed { "on" } else { "off" },
+                nanos[ROUNDS / 2] as f64 / 1e3,
+                nanos.iter().sum::<u64>() as f64 / ROUNDS as f64 / 1e3
+            ));
+        }
+        eprintln!("commit_shape_observer_cost writes={WRITES} delta_bytes={} shape_and_note_ns={shape_nanos:.0} commits {}",
+                shape.delta_bytes, blocks.join(" "));
+    }
+
     #[test]
     fn authority_gc_defers_while_a_read_replica_pin_is_active() {
         let directory = tempfile::tempdir().unwrap();

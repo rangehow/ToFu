@@ -1,6 +1,8 @@
 //! Reconstructible framed WAL writes owned by the existing barrier worker.
-//! The byte budget retains queued/inflight copies; overflow uses ordinary
-//! synchronous writes, never admission/rejection. No durability credit here.
+//! An enabled buffer queues every frame, also past its byte budget, so no
+//! authority holder writes a frame itself; only a disabled buffer or a failed
+//! allocation uses the original synchronous write. Never admission/rejection.
+//! No durability credit here.
 use crate::vfs::VfsFile;
 use std::collections::VecDeque;
 use std::io::{self, IoSlice};
@@ -17,6 +19,9 @@ pub(super) struct WriteBuffer {
     pub written_bytes: u64,
     pub write_nanos: u64,
     pub synchronous_fallbacks: u64,
+    /// Specifications refuse the next frame as an allocation failure would.
+    #[cfg(test)]
+    pub refuse_next_for_test: bool,
 }
 pub(super) struct WriteFrame {
     pub offset: u64,
@@ -40,7 +45,16 @@ impl WriteBuffer {
                     "WAL write buffer accounting overflow",
                 )
             })?;
-        if self.capacity == 0 || bytes > self.capacity.saturating_sub(self.retained_bytes) {
+        #[cfg(test)]
+        if std::mem::take(&mut self.refuse_next_for_test) {
+            self.synchronous_fallbacks += 1;
+            return Ok(false);
+        }
+        // A nonzero budget enables copying and sizes nothing else: a frame
+        // past it still queues. The synchronous fallback would be a physical
+        // write by the authority holder, and on FUSE that write waits for the
+        // inode lock behind the worker's fdatasync (2026-11-13 06:04:53).
+        if self.capacity == 0 {
             self.synchronous_fallbacks += 1;
             return Ok(false);
         }
@@ -86,8 +100,9 @@ impl WriteBuffer {
     }
 }
 
-/// Synchronous budget fallbacks can leave gaps between queued frames. Only
-/// contiguous runs are vectored together; every byte keeps its original offset.
+/// A synchronous fallback (a failed allocation) can leave gaps between queued
+/// frames. Only contiguous runs are vectored together; every byte keeps its
+/// original offset.
 pub(super) fn write_frames(
     file: &mut dyn VfsFile,
     frames: &VecDeque<WriteFrame>,

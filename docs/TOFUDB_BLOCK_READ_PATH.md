@@ -422,8 +422,14 @@ lock. Whole-store passes already avoided all this with their own location table
 dedupe probes and the online GC's per-loose-block membership probes did not.
 
 *Decision:* `BlockStore` publishes one catalog location table per installed
-catalog publication and shares it. The online GC driver builds the first table
-off the authority mutex as soon as an epoch is due, before that epoch's capture,
+catalog publication and shares it. A crashed open (a nonempty WAL that names
+a payload) builds and publishes the first table during recovery, in the same
+verified pass that locates the WAL's references
+([recovery attribution](TOFUDB_RECOVERY_ATTRIBUTION.md#recovery-builds-the-catalog-location-table)).
+Otherwise the online GC driver builds the first table
+off the authority mutex as soon as an epoch is due, before that epoch's capture
+(and on the epoch timer's floors while the owner's `storage-reclaim` task holds
+epochs, so a paused collector never leaves the read path unbuilt),
 which defers while foreground holds contend for the mutex (after the 2026-11-07
 restart two deferred captures delayed the authority's first table by four
 minutes; after the next restart this rule published it 59 s after engine start,
@@ -939,3 +945,124 @@ acknowledged commit), `engine::tests::full_catalog_merge_inserts_only_its_chunk_
 `authority_gc_online::tests::driver_builds_the_packed_filter_off_the_mutex_while_the_capture_waits`
 and `packed_filter_rebuild_before_batch_publication_cannot_hide_durable_blocks`
 (`note_packed` never rescans).
+
+## Traversal batches over history routing (2026-11-13)
+
+Online marks read each walk's leaves, then the blob manifests their values
+name, in one batch (`TraversalReader::get_batch`). The blocks the location
+table does not serve resolve through one merge-join over the history routing
+(`RoutingRoot::prepare_traversal_lookup`): each routing page that holds one of
+them is read once, never admitted to the block cache, its content hash
+verified on every read and its structure validated once per pass. The
+answers are hints, answered only from sources the current history catalog
+retains; everything else takes `TraversalReader::get`'s path. Ordinary reads
+(foreground, maintenance) look each block up through the routing slice
+directories below. Rationale and specifications:
+[TOFUDB_ONLINE_GC.md, "Leaves read in one batch"](TOFUDB_ONLINE_GC.md#leaves-read-in-one-batch-2026-11-13).
+
+## History routing slices (2026-11-13)
+
+Problem. A history-resident block is located by
+`RoutingRoot::visit_locations`, which reads one routing page per level. A page
+is a 4 MiB block of 55,188 sorted locations. On 11-13 production's routing
+held 6,614 pages on five levels (27.7 GB), more than any cache, so a lookup
+read about 21 MB of whole pages and hashed each one it missed. At 14:19 the
+foreground read 675 MB/s of routing pages.
+
+Decision.
+
+- A page the block cache holds answers with no I/O, as before
+  (`BlockStore::cached_payload`). A routing table the cache holds, which is
+  the common case for small stores, therefore costs nothing per lookup.
+- Otherwise each page reference gets a resident slice directory
+  (`PageDirectory` in `history_payload.rs`) when a lookup first reaches it.
+  That lookup reads the page whole through the ordinary page read
+  (`read_verified_page`). Its verification (content hash, then
+  `validate_page`), error meaning and cache admission are unchanged, so a
+  real read error still reaches the caller. The directory then records where
+  those bytes can be read again (`BlockStore::locate_for_range_reads`): the
+  segment entry the published catalog location table names, else the loose
+  file.
+- Slice `k` holds the entries that start in `[k * P, (k + 1) * P)` of the page,
+  where `P` is the OS page size (`sysconf`, an external constant). The
+  directory keeps 16 bytes per slice, about 16 KiB per 4 MiB page: the first
+  eight bytes of the slice's first ID, its first entry, and the CRC32C of its
+  bytes, computed from the verified page.
+- A lookup searches the directory, reads one slice of fewer than
+  `P + 76` bytes (`BlockStore::read_payload_range`), and trusts it only when
+  its CRC32C equals the directory's. When `id` shares its first eight bytes
+  with a slice boundary, the lookup steps back one slice at a time. A found
+  location still passes the payload's own content-hash check.
+- If a slice is gone, short or different (`NotFound`, `UnexpectedEof`,
+  `InvalidData`: the block was packed, unlinked, replaced or corrupted), the
+  directory is dropped and the lookup answers through the whole verified
+  page, which fails closed on a bad page. The next uncached lookup builds the
+  directory again from wherever the page lives by then. Any other read error
+  is returned, as a whole-page read returns it, and keeps the directory.
+- Concurrent first lookups of a page wait for one build: the page's slot is
+  held while it builds.
+- Directories belong to a root's page references. `append` and
+  `retain_sources` carry over the directories of every reference the new root
+  still names. `BlockStore::install_history_payload_catalog` hands the
+  installed root's directories to the root that replaces it, because
+  publishers decode the root they extend. A rewritten page's directory leaves
+  with the last root that names it. There is no cap, eviction or setting, and
+  nothing new on disk.
+- Encrypted stores read slices too. At-rest encryption authenticates each
+  4 KiB region a read touches (AES-GCM), and the directory CRC still checks the
+  plaintext.
+- Where the OS page size is not observed (non-Unix), lookups read whole pages.
+- Residual risk: a corrupted slice whose CRC32C still matches (2^-32 per
+  corrupted read). It can give a false "not on this level", after which the
+  lookup goes on to the other levels, the loose copy and the exact path, so a
+  read fails rather than returning wrong data. Or it can give a location, whose
+  payload then fails its content hash.
+
+Observability: `system.metrics.historyRouting` (`tofudb.history-routing/v1`,
+process lifetime) reports `directoryBuilds`, `directoryPages` and
+`directorySliceBytes` (both resident), `sliceReads`, `sliceFallbacks`,
+`wholePageReads` and `cachedPageLookups`.
+
+Alternatives rejected.
+
+- Smaller routing pages: an on-disk format change, which needs a version-1
+  rewrite path and a rollback rehearsal.
+- Keeping verified whole pages resident: a 27.7 GB working set.
+- Mapping page blocks into memory: FUSE page faults at the memcg limit stall
+  the whole engine.
+- A resident fence index without per-slice checksums: its negative answers
+  would come from unverified bytes.
+- Building directories from a read of its own that skips the block cache:
+  a routing table the cache holds would cost an open and a read per level per
+  lookup instead of nothing, and the whole-page retry after a failed build
+  would hide a real read error from the caller.
+
+Verification (`history_payload::tests`):
+
+- `a_history_resident_lookup_reads_one_verified_slice_per_level` (failing
+  first: production-shaped routing, each page read whole at most once, then at
+  most two OS pages per level per lookup).
+- `a_lookup_never_answers_from_routing_bytes_changed_after_their_page_was_verified`.
+- Directory lifetime: `directories_survive_an_append_for_pages_the_new_root_still_references`,
+  `an_installed_root_adopts_the_directories_of_the_root_it_replaces` and
+  `a_merge_drops_the_directories_of_pages_it_rewrote`.
+- `a_page_moved_after_its_directory_was_built_answers_through_the_whole_page_and_rebuilds`.
+- Encrypted stores: `an_encrypted_store_reads_slices_through_authenticated_regions`
+  and `an_authenticated_but_altered_slice_is_caught_by_the_directory_crc`.
+- `concurrent_first_lookups_build_a_page_directory_once`.
+- `slice_lookups_answer_as_the_whole_page_where_prefixes_tie_across_slices`.
+- The gate, since a false negative from a slice would turn into a read error
+  for existing data: `slice_lookups_equal_whole_page_lookups_on_1000_random_pages`
+  (10,000 in the ignored `..._on_10000_random_pages`). Seeded pages, full ones
+  and ones whose last slice holds one entry among them, hold groups of IDs
+  that share their first eight bytes across slice boundaries. They are probed
+  with every slice's first entry and its predecessor, IDs with a boundary's
+  prefix on both sides (least, greatest, random), neighbours of boundary
+  entries, the page's first and last entries, and random present and absent
+  IDs. Every answer equals the whole page's, absent included, and no lookup
+  falls back to the whole page.
+- `a_cached_routing_page_answers_with_no_read`, with
+  `engine::tests::indexed_history_source_handles_reuse_evict_and_disable_with_cache_budget`
+  (a cached page costs no open) and
+  `engine::write_staging_tests::cold_history_blob_publication_carries_exact_bytes_while_generic_source_errors_survive`
+  (a real read error on the first, whole-page read still reaches the caller).

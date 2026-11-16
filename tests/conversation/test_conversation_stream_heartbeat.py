@@ -6,6 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from lib.conversation_sync.cursor import STREAM_START, stream_start_cursor
+from tests.support.conversation_replay import stream_page
+
 pytestmark = pytest.mark.unit
 
 
@@ -26,10 +29,19 @@ def test_quiet_stream_confirms_its_cursor_and_noop_wakes_keep_heartbeat_deadline
     class Subscription:
         closed = False
         close_reason = ''
+        callbacks = ()
 
         def close(self, reason):
             self.closed = True
             self.close_reason = reason
+            for callback in self.callbacks:
+                callback()
+
+        def add_close_callback(self, callback):
+            if self.closed:
+                callback()
+            else:
+                self.callbacks = (*self.callbacks, callback)
 
         def arm_body_start_deadline(self, _deadline):
             pass
@@ -52,25 +64,21 @@ def test_quiet_stream_confirms_its_cursor_and_noop_wakes_keep_heartbeat_deadline
         heartbeat_interval_ms = 15_000
 
         @staticmethod
-        def sequence_from_cursor(*_args):
-            return 0
+        def position_from_cursor(*_args):
+            return STREAM_START
 
         @staticmethod
-        def cursor_for_sequence(_cid, _owner, sequence):
-            return f'cursor-{sequence}'
-
-        @staticmethod
-        def changes(cid, _owner, *, after_sequence, **_kwargs):
-            reads.append(after_sequence)
+        def changes(cid, _owner, *, after, **_kwargs):
+            reads.append(after.sequence)
             assert _kwargs.get('diagnostic_payload', 'full') == ('none' if diagnostic_query else 'full')
             events = ([{'type': 'turn.upsert', 'syncSeq': 1,
                         'conversationId': cid, 'payload': {}}]
-                      if initial_change and after_sequence == 0 else [])
-            return {'events': events, 'reset': None, 'hasMore': False}
+                      if initial_change and after.sequence == 0 else [])
+            return stream_page(events, after=after)
 
         @staticmethod
-        def heartbeat(_cid, _owner, sequence, **_kwargs):
-            return {'type': 'sync.heartbeat', 'cursor': f'cursor-{sequence}'}
+        def heartbeat(_cid, _owner, cursor, **_kwargs):
+            return {'type': 'sync.heartbeat', 'cursor': cursor}
 
     async def encode(function, *args, **kwargs):
         return function(*args, **kwargs)
@@ -96,7 +104,10 @@ def test_quiet_stream_confirms_its_cursor_and_noop_wakes_keep_heartbeat_deadline
                 initial_reads = len(reads)
                 heartbeat = await anext(stream)
                 assert 'event: sync.heartbeat' in heartbeat
-                assert f'cursor-{int(initial_change)}' in heartbeat
+                # A stream opened without a cursor confirms the start until it
+                # delivers a change; then it repeats that change's cursor.
+                assert ('cursor-1' if initial_change else
+                        stream_start_cursor('conv', routes._request_user_id())) in heartbeat
                 assert waits == ([15, 10, 5] if wake_hint else [15])
                 assert len(reads) - initial_reads == (3 if wake_hint else 0)
                 assert clock[0] == 115
@@ -124,10 +135,19 @@ def test_stream_change_read_declines_in_call_storage_waits(monkeypatch):
     class Subscription:
         closed = False
         close_reason = ''
+        callbacks = ()
 
         def close(self, reason):
             self.closed = True
             self.close_reason = reason
+            for callback in self.callbacks:
+                callback()
+
+        def add_close_callback(self, callback):
+            if self.closed:
+                callback()
+            else:
+                self.callbacks = (*self.callbacks, callback)
 
         def arm_body_start_deadline(self, _deadline):
             pass
@@ -144,23 +164,19 @@ def test_stream_change_read_declines_in_call_storage_waits(monkeypatch):
         heartbeat_interval_ms = 15_000
 
         @staticmethod
-        def sequence_from_cursor(*_args):
-            return 0
+        def position_from_cursor(*_args):
+            return STREAM_START
 
         @staticmethod
-        def cursor_for_sequence(_cid, _owner, sequence):
-            return f'cursor-{sequence}'
-
-        @staticmethod
-        def changes(_cid, _owner, *, after_sequence, limit, **_kwargs):
+        def changes(_cid, _owner, *, after, limit, **_kwargs):
             if limit != 1:  # the steady-state page, not the ownership probe
                 observe_storage_wait(StorageError('database_timeout', 'deadline_elapsed', False))
-            return {'events': [], 'reset': None, 'hasMore': False}
+            return stream_page(after=after)
 
         @staticmethod
-        def heartbeat(_cid, _owner, sequence, *, degraded, **_kwargs):
+        def heartbeat(_cid, _owner, cursor, *, degraded, **_kwargs):
             heartbeats.append(degraded)
-            return {'type': 'sync.heartbeat', 'cursor': f'cursor-{sequence}'}
+            return {'type': 'sync.heartbeat', 'cursor': cursor}
 
     async def encode(function, *args, **kwargs):
         return function(*args, **kwargs)

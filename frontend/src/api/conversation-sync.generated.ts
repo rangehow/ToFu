@@ -7,6 +7,18 @@ import { request, resolvePath, type RequestOptions } from './transport';
 export const CONVERSATION_SYNC_CONTRACT_ID = "tofu.conversation-sync/v3" as const;
 export const CONVERSATION_SYNC_STREAM_POLICY = {
   "cursor": "opaque",
+  "cursorLineage": {
+    "names": [
+      "authorityEpoch",
+      "syncSeq",
+      "changeDigest"
+    ],
+    "resetReasons": {
+      "changeReplaced": "cursor_invalid",
+      "lineageUnproven": "cursor_expired",
+      "withoutLineage": "protocol_mismatch"
+    }
+  },
   "ordering": "conversation-scoped-monotonic",
   "heartbeatIntervalMs": 15000,
   "reconnectGraceMs": 37500,
@@ -526,6 +538,7 @@ export const CONVERSATION_SYNC_SCHEMAS = {
     "additionalProperties": false,
     "properties": {
       "after": {
+        "description": "The single-conversation stream's replay cursor, with the same lineage resets.",
         "type": "string"
       },
       "conversationId": {
@@ -545,6 +558,7 @@ export const CONVERSATION_SYNC_SCHEMAS = {
         "type": "integer"
       },
       "windowBytes": {
+        "description": "The single-conversation stream's windowBytes: catch-up budget and change-page bound, with the same page measure.",
         "maximum": 16777216,
         "minimum": 65536,
         "type": "integer"
@@ -576,6 +590,7 @@ export const CONVERSATION_SYNC_SCHEMAS = {
         "type": "string"
       },
       "cursorHint": {
+        "description": "Ordering hint naming the committed sequence only. It carries no lineage and never resumes replay; a stream reads canonical changes from its own cursor.",
         "type": "string"
       },
       "taskId": {
@@ -852,6 +867,7 @@ export const CONVERSATION_SYNC_SCHEMAS = {
         "type": "integer"
       },
       "cursor": {
+        "description": "Lineage cursor at syncSeq, captured in the snapshot's read transaction.",
         "type": "string"
       },
       "hasArtifacts": {
@@ -987,6 +1003,7 @@ export const CONVERSATION_SYNC_SCHEMAS = {
         "type": "integer"
       },
       "cursor": {
+        "description": "Lineage cursor at the head this page is exact for.",
         "type": "string"
       },
       "hasMore": {
@@ -2512,6 +2529,7 @@ export const CONVERSATION_SYNC_SCHEMAS = {
         "type": "string"
       },
       "cursor": {
+        "description": "The stream's last delivered cursor, verbatim: the cursor it resumed from until it delivers a change.",
         "type": "string"
       },
       "degraded": {
@@ -2547,9 +2565,11 @@ export const CONVERSATION_SYNC_SCHEMAS = {
         "type": "string"
       },
       "cursor": {
+        "description": "Lineage cursor at the authority head the reset was decided at. The client re-anchors with one snapshot; this cursor never acknowledges the changes it skipped.",
         "type": "string"
       },
       "reason": {
+        "description": "cursor_expired: the cursor's change, or one after it, left replay retention and its lineage cannot be proven in this authority open. cursor_invalid: this authority does not hold the cursor's change at its sequence, either beyond the head or because crash recovery or a restore gave the sequence to another change. protocol_mismatch: the cursor was issued before cursors carried lineage. replay_exceeds_window: the missed suffix outgrew the catch-up budget. server_restarted is reserved.",
         "enum": [
           "cursor_expired",
           "cursor_invalid",
@@ -8436,6 +8456,8 @@ export const conversationSyncApi = Object.freeze<ConversationSyncApi>({
         ? `limit=${encodeURIComponent(String(limit))}` : '',
       selectors?.windowBytes === undefined ? ""
         : `windowBytes=${encodeURIComponent(String(selectors.windowBytes))}`,
+      selectors?.cursor === undefined ? ""
+        : `cursor=${encodeURIComponent(String(selectors.cursor))}`,
     ].filter(Boolean).join('&');
     const value = await request<unknown>(
       `${base}&${query}`,

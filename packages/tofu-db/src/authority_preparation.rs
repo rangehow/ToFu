@@ -28,8 +28,9 @@ struct PreparedBlobState {
 impl PreparedBlobStore {
     fn check_live(&self) -> io::Result<()> {
         if self.restart_required.load(Ordering::Acquire) {
-            return Err(io::Error::other(
-                "prepared authority requires close and reopen",
+            return Err(crate::engine::reopen_required(
+                io::ErrorKind::Other,
+                "prepared authority requires close and reopen".to_owned(),
             ));
         }
         Ok(())
@@ -736,5 +737,26 @@ mod tests {
             assert_eq!(released.active_handles, 0);
             assert_eq!(released.retained_transaction_bytes, 0);
         }
+    }
+
+    /// The authority's latch, as the prepared lane sees it, is the retryable
+    /// `database_unavailable` the writer's own latch answers: the recycle
+    /// reopens the authority and a retry succeeds. Raised as an unclassified
+    /// error it reached the storage mapping's default arm and answered a
+    /// non-retryable `database_internal` (DB-6, R4b B10 condition C1).
+    #[test]
+    fn a_latched_authority_answers_prepared_lane_commands_with_the_retryable_unavailable() {
+        let (_vfs, db) = authority();
+        let replica = db.build_preparation_replica().unwrap();
+        let preparation = replica
+            .preparation
+            .clone()
+            .expect("a preparation replica stages privately");
+        preparation.restart_required.store(true, Ordering::Release);
+        let error = preparation.check_live().unwrap_err();
+        assert!(crate::engine::requires_reopen(&error), "{error}");
+        let mapped = crate::semantic_executor::map_storage_error(error);
+        assert_eq!(mapped.code(), "database_unavailable");
+        assert!(mapped.retryable());
     }
 }

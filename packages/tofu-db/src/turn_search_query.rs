@@ -449,11 +449,12 @@ impl OpenTurnSearchProjection {
             // (again with every gram emitted) somewhere across them. The
             // namespace is never opened. Its exact chunk count is already in
             // the header, preserving scan-page budgets without metadata reads.
+            let binding = header.generation();
             if gram_index_ready
                 && state
                     .pending
                     .as_ref()
-                    .is_none_or(|pending| pending.generation != header.generation)
+                    .is_none_or(|pending| pending.generation != binding)
             {
                 let phase = usize::from(state.phase);
                 if !bloom_might_contain(&header.bloom, &conversation_blooms[phase]) {
@@ -482,21 +483,15 @@ impl OpenTurnSearchProjection {
                     let skip = if candidates.is_empty() && gram_excluded.is_empty() {
                         true
                     } else {
-                        let fingerprint = u64::from_be_bytes(
-                            generation_digest(&header.conversation_id, &header.generation)[..8]
-                                .try_into()
-                                .unwrap(),
-                        );
-                        let generation_id = generation_dictionary::lookup(
+                        let digest = scope_digest(&header.conversation_id, &header.scope);
+                        let fingerprint = u64::from_be_bytes(digest[..8].try_into().unwrap());
+                        let scope_id = generation_dictionary::lookup(
                             &self.database,
                             &mut transaction,
-                            &generation_digest(&header.conversation_id, &header.generation),
+                            &digest,
                         )?
-                        .ok_or_else(|| {
-                            invalid_data("published search generation has no stable ID")
-                        })?;
-                        !gram_excluded.contains(&fingerprint)
-                            && !candidates.contains(&generation_id)
+                        .ok_or_else(|| invalid_data("published search scope has no stable ID"))?;
+                        !gram_excluded.contains(&fingerprint) && !candidates.contains(&scope_id)
                     };
                     if skip {
                         chunks_read = chunks_read.saturating_add(
@@ -514,9 +509,9 @@ impl OpenTurnSearchProjection {
             let mut pending = state
                 .pending
                 .take()
-                .filter(|p| p.generation == header.generation)
+                .filter(|p| p.generation == binding)
                 .unwrap_or_else(|| Pending {
-                    generation: header.generation.clone(),
+                    generation: binding.clone(),
                     mask: words.iter().enumerate().fold(0, |bits, (i, word)| {
                         bits | (u32::from(title.contains(word)) << i)
                     }),
@@ -528,7 +523,7 @@ impl OpenTurnSearchProjection {
                 best =
                     Some(self.cursor_chunk(request, &header, &pending.best, &query, words[0])?);
             }
-            let mut complete = title_hit || id_hit || !header.has_chunks;
+            let mut complete = title_hit || id_hit || !header.has_chunks();
             pending.phrase |= title_hit || id_hit;
             while !complete {
                 deadline(&mut deadline_elapsed)?;
@@ -539,18 +534,18 @@ impl OpenTurnSearchProjection {
                     record_generation_scans(&generation_meta_scans);
                     return page(items, &state, true);
                 }
-                let (mut start, end) = generation_range(
+                let (mut start, end) = scope_range(
                     &transaction,
                     TURN_META_NAMESPACE,
                     &header.conversation_id,
-                    &header.generation,
+                    &header.scope,
                 )?;
                 if !pending.after.is_empty() {
-                    if !pending.after.starts_with(&generation_prefix(
-                        &header.conversation_id,
-                        &header.generation,
-                    )) {
-                        return Err(invalid_input("search cursor escaped generation"));
+                    if !pending
+                        .after
+                        .starts_with(&scope_prefix(&header.conversation_id, &header.scope))
+                    {
+                        return Err(invalid_input("search cursor escaped its scope"));
                     }
                     let mut next = pending.after.clone();
                     next.push(0);
@@ -567,10 +562,9 @@ impl OpenTurnSearchProjection {
                 for (stored_key, raw) in &rows {
                     deadline(&mut deadline_elapsed)?;
                     let meta = decode_meta(raw)?;
-                    if meta.conversation_id != header.conversation_id
-                        || meta.generation != header.generation
+                    if meta.conversation_id != header.conversation_id || meta.scope != header.scope
                     {
-                        return Err(invalid_data("search generation digest collision"));
+                        return Err(invalid_data("search scope digest collision"));
                     }
                     pending.after = stored_key.key_bytes().to_vec();
                     if !word_blooms
@@ -665,11 +659,8 @@ impl OpenTurnSearchProjection {
         query: &str,
         first: &str,
     ) -> io::Result<(TurnMeta, String, bool)> {
-        if !raw_key.starts_with(&generation_prefix(
-            &header.conversation_id,
-            &header.generation,
-        )) {
-            return Err(invalid_input("search cursor escaped generation"));
+        if !raw_key.starts_with(&scope_prefix(&header.conversation_id, &header.scope)) {
+            return Err(invalid_input("search cursor escaped its scope"));
         }
         let mut transaction = self
             .database
@@ -683,7 +674,7 @@ impl OpenTurnSearchProjection {
         let text = self.load_text(&mut transaction, &meta)?;
         let lower = text.to_lowercase();
         if meta.conversation_id != header.conversation_id
-            || meta.generation != header.generation
+            || meta.scope != header.scope
             || !lower.contains(first)
         {
             return Err(invalid_input("search cursor chunk does not match"));
@@ -740,24 +731,12 @@ mod tests {
     fn replace(
         projection: &mut OpenTurnSearchProjection,
         id: &str,
-        generation: &str,
         time: u64,
         title: &str,
         rows: &[TurnSearchDocument],
     ) {
         projection
-            .begin_conversation_rebuild(7, 11, id, generation, time)
-            .unwrap();
-        projection
-            .set_conversation_title(7, 11, id, generation, title)
-            .unwrap();
-        for batch in rows.chunks(SOURCE_PAGE_ROWS) {
-            projection
-                .append_conversation_page(7, 11, id, generation, batch)
-                .unwrap();
-        }
-        projection
-            .finalize_conversation_rebuild(7, 11, id, generation)
+            .replace_conversation(7, 11, id, time, title, rows)
             .unwrap();
     }
 
@@ -812,7 +791,6 @@ mod tests {
         replace(
             &mut projection,
             "id-needle-83742",
-            "g",
             200,
             "title-needle-91823",
             &[document(0, "unrelated body")],
@@ -839,14 +817,7 @@ mod tests {
         let rows = (0..=CHUNK_SCAN_PAGE)
             .map(|index| document(index as u32, "needle"))
             .collect::<Vec<_>>();
-        replace(
-            &mut projection,
-            "conversation",
-            "before",
-            100,
-            "unrelated",
-            &rows,
-        );
+        replace(&mut projection, "conversation", 100, "unrelated", &rows);
         let mut request = request("needle absent");
         request.limit = 1;
         let first = projection
@@ -857,7 +828,6 @@ mod tests {
         replace(
             &mut projection,
             "conversation",
-            "after",
             200,
             "needle absent title",
             &rows,
@@ -878,14 +848,7 @@ mod tests {
         let rows = (0..=CHUNK_SCAN_PAGE)
             .map(|index| document(index as u32, "needle"))
             .collect::<Vec<_>>();
-        replace(
-            &mut projection,
-            "conversation",
-            "before",
-            100,
-            "unrelated",
-            &rows,
-        );
+        replace(&mut projection, "conversation", 100, "unrelated", &rows);
         let mut request = request("needle absent");
         request.limit = 1;
         let first = projection
@@ -896,14 +859,7 @@ mod tests {
         let rows = (0..=CHUNK_SCAN_PAGE)
             .map(|index| document(index as u32, "needle absent"))
             .collect::<Vec<_>>();
-        replace(
-            &mut projection,
-            "conversation",
-            "after",
-            200,
-            "unrelated",
-            &rows,
-        );
+        replace(&mut projection, "conversation", 200, "unrelated", &rows);
         let hits = collect_pages(&projection, "needle absent", 1)
             .into_iter()
             .flat_map(|(items, _, _)| items)
@@ -936,27 +892,6 @@ mod tests {
                 let line = line.unwrap();
                 let conversation: serde_json::Value = serde_json::from_str(&line).unwrap();
                 let id = conversation["id"].as_str().unwrap();
-                let generation = "real-source-v1";
-                projection
-                    .begin_conversation_rebuild(
-                        7,
-                        11,
-                        id,
-                        generation,
-                        conversation["updated_at"]
-                            .as_u64()
-                            .unwrap_or(index as u64 + 1),
-                    )
-                    .unwrap();
-                projection
-                    .set_conversation_title(
-                        7,
-                        11,
-                        id,
-                        generation,
-                        conversation["title"].as_str().unwrap_or(""),
-                    )
-                    .unwrap();
                 let mut documents = Vec::new();
                 for turn in conversation["turns"].as_array().unwrap() {
                     if turn["laneId"].as_str() != Some("main")
@@ -972,13 +907,17 @@ mod tests {
                         &mut documents,
                     );
                 }
-                for page in documents.chunks(SOURCE_PAGE_ROWS.min(documents.len().max(1))) {
-                    projection
-                        .append_conversation_page(7, 11, id, generation, page)
-                        .unwrap();
-                }
                 projection
-                    .finalize_conversation_rebuild(7, 11, id, generation)
+                    .replace_conversation(
+                        7,
+                        11,
+                        id,
+                        conversation["updated_at"]
+                            .as_u64()
+                            .unwrap_or(index as u64 + 1),
+                        conversation["title"].as_str().unwrap_or(""),
+                        &documents,
+                    )
                     .unwrap();
             }
             publish_gram_index(&mut projection);
@@ -1072,7 +1011,6 @@ mod tests {
         replace(
             &mut projection,
             "alpha",
-            "g",
             500,
             "gamma alpha",
             &[document(0, "needle"), document(1, "other text")],
@@ -1080,7 +1018,6 @@ mod tests {
         replace(
             &mut projection,
             "phrase",
-            "g",
             100,
             "",
             &[
@@ -1088,11 +1025,10 @@ mod tests {
                 document(1, "second unrelated"),
             ],
         );
-        replace(&mut projection, "title", "g", 200, "alpha gamma", &[]);
+        replace(&mut projection, "title", 200, "alpha gamma", &[]);
         replace(
             &mut projection,
             "cross",
-            "g",
             300,
             "alpha",
             &[document(0, "gamma")],
@@ -1100,16 +1036,14 @@ mod tests {
         replace(
             &mut projection,
             "unicode",
-            "g",
             400,
             "压缩包",
             &[document(0, "拖拽 压缩 test 界")],
         );
-        replace(&mut projection, "empty", "g", 600, "", &[]);
+        replace(&mut projection, "empty", 600, "", &[]);
         replace(
             &mut projection,
             "roles",
-            "g",
             700,
             "",
             &[
@@ -1154,26 +1088,17 @@ mod tests {
         replace(
             &mut projection,
             "newest",
-            "g",
             200,
             "plain",
             &(0..4)
                 .map(|index| document(index, "padding"))
                 .collect::<Vec<_>>(),
         );
-        replace(
-            &mut projection,
-            "match",
-            "g",
-            100,
-            "plain",
-            &[document(0, "to")],
-        );
+        replace(&mut projection, "match", 100, "plain", &[document(0, "to")]);
         for index in 0..5 {
             replace(
                 &mut projection,
                 &format!("older-{index}"),
-                "g",
                 50 - index,
                 "plain",
                 &(0..4)
@@ -1202,7 +1127,6 @@ mod tests {
             replace(
                 &mut projection,
                 &format!("conversation-{index:04}"),
-                "g",
                 index as u64,
                 if index % 3 == 0 {
                     "commonword title"
@@ -1256,7 +1180,6 @@ mod tests {
             replace(
                 &mut projection,
                 &format!("conversation-{index:04}"),
-                "g",
                 index as u64,
                 "plain",
                 &documents,
@@ -1313,14 +1236,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut projection =
             OpenTurnSearchProjection::initialize(dir.path(), 64 * 1024 * 1024).unwrap();
-        replace(
-            &mut projection,
-            "conversation",
-            "empty",
-            1,
-            "gamma alpha",
-            &[],
-        );
+        replace(&mut projection, "conversation", 1, "gamma alpha", &[]);
         let mut query = request("alpha gamma");
         let hits = projection.search(&query).unwrap();
         assert_eq!(hits.len(), 1);
@@ -1330,20 +1246,12 @@ mod tests {
         replace(
             &mut projection,
             "conversation",
-            "text",
             2,
             "gamma",
             &[document(0, "needle")],
         );
         assert_eq!(projection.search(&query).unwrap()[0].match_field, "content");
-        replace(
-            &mut projection,
-            "conversation",
-            "empty-again",
-            3,
-            "alpha",
-            &[],
-        );
+        replace(&mut projection, "conversation", 3, "alpha", &[]);
         assert!(projection.search(&query).unwrap().is_empty());
         query.query = "alpha".into();
         assert_eq!(projection.search(&query).unwrap()[0].match_field, "title");
@@ -1358,7 +1266,6 @@ mod tests {
             replace(
                 &mut projection,
                 &format!("conversation-{i:04}"),
-                "g",
                 i as u64,
                 if i < 2 { "needle" } else { "unrelated" },
                 &[],
@@ -1420,7 +1327,6 @@ mod tests {
         replace(
             &mut projection,
             "cross",
-            "g",
             500,
             "alpha",
             &[document(0, "gamma")],
@@ -1428,12 +1334,11 @@ mod tests {
         replace(
             &mut projection,
             "phrase",
-            "g",
             100,
             "",
             &[document(0, "alpha gamma")],
         );
-        replace(&mut projection, "title", "g", 200, "alpha gamma", &[]);
+        replace(&mut projection, "title", 200, "alpha gamma", &[]);
         let request = request("alpha gamma");
         let mut cursor = None;
         let mut hits = Vec::new();
@@ -1472,7 +1377,7 @@ mod tests {
             .collect();
         documents[0].search_text = "alpha".into();
         documents[599].search_text = "gamma".into();
-        replace(&mut projection, "long", "g1", 200, "", &documents);
+        replace(&mut projection, "long", 200, "", &documents);
         let mut request = request("alpha gamma");
         let first = projection
             .search_page_until(&request, None, || false)
@@ -1511,14 +1416,7 @@ mod tests {
         let first = projection
             .search_page_until(&request, None, || false)
             .unwrap();
-        replace(
-            &mut projection,
-            "long",
-            "g2",
-            200,
-            "",
-            &[document(0, "gamma")],
-        );
+        replace(&mut projection, "long", 200, "", &[document(0, "gamma")]);
         let page = projection
             .search_page_until(&request, first.next_cursor.as_deref(), || false)
             .unwrap();
@@ -1534,14 +1432,13 @@ mod tests {
         live[0].turn_id = "turn-a".into();
         live[1].turn_id = "turn-b".into();
         live[1].ordinal = 7;
-        replace(&mut projection, "live", "g", 300, "", &live);
+        replace(&mut projection, "live", 300, "", &live);
         let mut archived = document(0, "an archived needle");
         archived.turn_id = format!("{ARCHIVED_SOURCE_PREFIX}[\"archive\",3]");
-        replace(&mut projection, "archived", "g", 200, "", &[archived]);
+        replace(&mut projection, "archived", 200, "", &[archived]);
         replace(
             &mut projection,
             "titled",
-            "g",
             100,
             "needle title",
             &[document(0, "needle")],
@@ -1584,7 +1481,7 @@ mod tests {
         ];
         documents[0].role = "assistant".into();
         documents[1].match_field = "originalContent".into();
-        replace(&mut projection, "c", "g", 1, "", &documents);
+        replace(&mut projection, "c", 1, "", &documents);
         let hit = projection.search(&request("phrase")).unwrap().remove(0);
         assert_eq!(hit.match_field, "originalContent");
         assert_eq!(hit.role.as_deref(), Some("user"));

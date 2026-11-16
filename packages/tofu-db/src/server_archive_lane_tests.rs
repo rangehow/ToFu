@@ -437,8 +437,17 @@ mod archive_lane {
             let prepared = prepare_on_lane(&stores, &session, command);
             vfs.arm_fault(fault).unwrap();
             let admitted = session.admit(command, NOW).unwrap();
-            let acknowledged = matches!(finish_parallel_command(&stores, &session, admitted, prepared,
-                &mut || NOW, &mut || true), Ok(Some(RequestDispatch::Responded(ref response))) if response.status == 0);
+            let acknowledged = match finish_parallel_command(&stores, &session, admitted, prepared,
+                &mut || NOW, &mut || true) {
+                Ok(Some(RequestDispatch::Responded(response))) => response.status == 0,
+                // Past the carried bound the prepared commit falls back to the
+                // exclusive lane, as every dispatcher does: it publishes the
+                // blocks off the writer and replays the command.
+                Ok(None) => matches!(dispatch_one_request_inner_mode(&stores, &session, command, false,
+                    NOW, &mut || NOW, &mut || true, false),
+                    Ok(RequestDispatch::Responded(ref response)) if response.status == 0),
+                _ => false,
+            };
             (acknowledged, vfs.trace().unwrap(), vfs.fork_durable().unwrap())
         };
         let mut cells = 0;
@@ -447,7 +456,8 @@ mod archive_lane {
         for (command, tail_offset, spills) in [
             // The archive document is a private blob carried in the commit's WAL frame.
             (seed.reclaiming_put_with_response("put-fresh", carried.clone()), carried.len() as u64 - 64, false),
-            // Beyond the carried bound the commit publishes the blob's blocks before the frame.
+            // Beyond the carried bound the blob's blocks are published, off the
+            // writer, before the frame.
             (seed.reclaiming_put_with_response("put-fresh", spilled.clone()), spilled.len() as u64 - 64, true),
             (sweeping_flush(), 0, false),
         ] {

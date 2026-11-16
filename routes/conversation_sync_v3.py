@@ -15,9 +15,10 @@ import time
 
 import orjson
 from quart import Response, request
+from tofu_db._request_cancellation import RequestCancellation
 
 from lib.api_v4 import NativeContractBlueprint
-from lib.conversation_sync.generated_contract import CONTRACT_ID
+from lib.conversation_sync.generated_contract import CONTRACT_ID, OPENAPI_SCHEMAS
 from lib.agent_core.principal import principal_key
 from lib.api_response import (
     api_bad_request,
@@ -29,6 +30,7 @@ from lib.api_response import (
     sse_response,
 )
 from lib.conversation_sync.broker import broker
+from lib.conversation_sync.cursor import ReplayPosition, stream_start_cursor
 from lib.conversation_sync.command_service import AttemptStartFailure, CommandOutcome
 from lib.conversation_sync.repository import SidecarConversationSyncRepository
 from lib.conversation_sync.runtime import conversation_turn_commands
@@ -224,6 +226,29 @@ def _turn_history_page_request() -> tuple[str, int, int | None, int, str]:
         limit,
         _snapshot_segment_payload(),
     )
+
+
+def _turn_history_position(
+    conversation_id: str, user_id: int, sync_sequence: int,
+) -> ReplayPosition | None:
+    """The reader's replay position at its applied head, from its cursor.
+
+    Omitted by browsers loaded before history pages carried lineage; those
+    keep the sequence-only fence.
+    """
+    cursor_values = request.args.getlist("cursor")
+    if not cursor_values:
+        return None
+    if len(cursor_values) != 1:
+        raise BadRequest("Invalid conversation history cursor", field="cursor")
+    try:
+        position = _service.position_from_cursor(conversation_id, user_id, cursor_values[0])
+    except ConversationCursorError as exc:
+        raise BadRequest("Invalid conversation history cursor", field="cursor") from exc
+    if position.sequence != sync_sequence:
+        raise BadRequest(
+            "The conversation history cursor must name syncSeq", field="cursor")
+    return position
 
 
 def _turn_projection_fence(
@@ -621,6 +646,7 @@ async def conversation_turn_history_page(conversation_id: str):
         lane_id, sync_sequence, before_ordinal, limit, segment_payload = (
             _turn_history_page_request()
         )
+        position = _turn_history_position(conversation_id, user_id, sync_sequence)
 
         max_projection_bytes = _window_integer("windowBytes", 65536, 16777216)
         tool_payload = _snapshot_tool_payload(segment_payload)
@@ -634,6 +660,7 @@ async def conversation_turn_history_page(conversation_id: str):
             user_id,
             lane_id=lane_id,
             expected_sync_sequence=sync_sequence,
+            position=position,
 
             **({"max_projection_bytes": max_projection_bytes} if max_projection_bytes else {}),
             before_ordinal=before_ordinal,
@@ -652,7 +679,8 @@ async def conversation_turn_history_page(conversation_id: str):
         return api_error(
             "history_page_stale",
             status=409,
-            currentSyncSeq=exc.current_sync_sequence,
+            **({"currentSyncSeq": exc.current_sync_sequence}
+               if exc.current_sync_sequence is not None else {"reason": exc.reason}),
         )
     except StorageError as exc:
         return storage_failure_response(
@@ -815,6 +843,20 @@ def _diagnostic_options() -> dict[str, str]:
     return options
 
 
+_CHANGE_PAGE_MAX_BYTES = OPENAPI_SCHEMAS["ConversationEventSubscription"][
+    "properties"]["windowBytes"]["maximum"]
+
+
+def _change_page_bytes(window_bytes: int | None) -> int:
+    """A stream reads change pages of at most its window bytes.
+
+    Every settled ``turn.upsert`` carries a whole TurnRecord, so a row-limited
+    page could decode hundreds of megabytes per stream (2026-11-13). Without a
+    window the contract's ceiling bounds the page.
+    """
+    return window_bytes or _CHANGE_PAGE_MAX_BYTES
+
+
 def _stream_changes_page(*args, **kwargs):
     """One steady-state change page for a stream that rides pressure itself.
 
@@ -830,8 +872,10 @@ async def _conversation_change_frames(
     user_id,
     subscription,
     *,
-    after_sequence: int,
+    after: ReplayPosition,
+    delivered_cursor: str,
     catch_up_budget: int | None,
+    page_bytes: int = _CHANGE_PAGE_MAX_BYTES,
     diagnostic_options: dict[str, str],
     frame: Callable[..., str],
 ):
@@ -840,10 +884,16 @@ async def _conversation_change_frames(
     ``frame(event, cursor=...)`` encodes one event for the owning response.
     The caller owns the subscription and releases it after this generator
     ends; a storage failure that cannot degrade to heartbeats propagates.
+    Every page read passes the stream's position, so a sequence that an
+    authority restart under this live stream gave to another change resets
+    the stream instead of being skipped. ``delivered_cursor`` is the cursor
+    the client holds; heartbeats repeat it verbatim.
     """
-    # ``sequence`` is the newest change read; ``delivered`` is the
-    # newest change written to the client, which heartbeats report.
-    sequence = delivered = after_sequence
+    # ``position`` names the newest change read and ``sequence`` its number;
+    # ``delivered`` is the cursor of the newest change written to the client.
+    position = after
+    sequence = after.sequence
+    delivered = delivered_cursor
     heartbeat_interval = _service.heartbeat_interval_ms / 1000.0
     # Confirm an idle subscription immediately. Wake hints are not
     # delivered frames and cannot renew this liveness deadline.
@@ -854,6 +904,13 @@ async def _conversation_change_frames(
     catch_up: list[str] | None = [] if catch_up_budget else None
     catch_up_bytes = 0
     catch_up_head: int | None = None
+    catch_up_head_cursor = ""
+    held_cursor = ""
+    # Closing the subscription (client gone, superseded, shutdown) interrupts
+    # an in-flight page read and refuses every later one, so no page read
+    # outlives its client. Page reads are sequential: one exchange at a time.
+    page_cancellation = RequestCancellation()
+    subscription.add_close_callback(page_cancellation.cancel)
     needs_read = True
     while not subscription.closed:
         try:
@@ -862,8 +919,10 @@ async def _conversation_change_frames(
                     _stream_changes_page,
                     conversation_id,
                     user_id,
-                    after_sequence=sequence,
+                    after=position,
                     limit=500,
+                    max_bytes=page_bytes,
+                    cancellation=page_cancellation,
                     **diagnostic_options,
                 )
             else:
@@ -906,15 +965,15 @@ async def _conversation_change_frames(
             yield encoded
             return
 
+        position = page.get("position", position)
         if catch_up_head is None:
             catch_up_head = int(page.get("head") or 0)
+            catch_up_head_cursor = str(page.get("headCursor") or "")
         events = page.get("events") or []
-        for event in events:
+        for event, cursor in zip(events, page.get("cursors") or [], strict=True):
             if subscription.closed:
                 return
             sequence = int(event["syncSeq"])
-            cursor = _service.cursor_for_sequence(
-                conversation_id, user_id, sequence)
             if catch_up is None:
                 encoded = await _encode_transport(
                     frame, event, cursor=cursor,
@@ -924,7 +983,7 @@ async def _conversation_change_frames(
                 if subscription.closed:
                     return
                 yield encoded
-                delivered = sequence
+                delivered = cursor
                 heartbeat_at = time.monotonic() + heartbeat_interval
                 continue
             encoded, encoded_bytes = await _encode_transport(
@@ -937,7 +996,7 @@ async def _conversation_change_frames(
                 # The suffix costs more than the caller's snapshot
                 # window; its intermediate states are superseded.
                 reset = _service.reset_required(
-                    conversation_id, user_id, catch_up_head,
+                    conversation_id, user_id, catch_up_head_cursor,
                     reason="replay_exceeds_window",
                 )
                 encoded = await _encode_transport(
@@ -948,6 +1007,7 @@ async def _conversation_change_frames(
                 yield encoded
                 return
             catch_up.append(encoded)
+            held_cursor = cursor
         if catch_up is not None and (
                 sequence >= catch_up_head or not page.get("hasMore")):
             held, catch_up = catch_up, None
@@ -956,7 +1016,7 @@ async def _conversation_change_frames(
                     return
                 yield held_frame
             if held:
-                delivered = sequence
+                delivered = held_cursor
                 heartbeat_at = time.monotonic() + heartbeat_interval
         if events:
             if page.get("hasMore"):
@@ -996,6 +1056,7 @@ async def conversation_sync_events(conversation_id: str):
         stream_client_id, stream_generation = _stream_identity()
         diagnostic_options = _diagnostic_options()
         catch_up_budget = _window_integer("windowBytes", 65536, 16777216) or None
+        page_bytes = _change_page_bytes(catch_up_budget)
         cursor_sources = request.args.getlist("cursorSource")
         if len(cursor_sources) > 1 or (cursor_sources and cursor_sources[0] != "snapshot"):
             raise BadRequest("Invalid conversation cursor source", field="cursorSource")
@@ -1012,7 +1073,7 @@ async def conversation_sync_events(conversation_id: str):
         # round trip; another snapshot would only restart the same race.
         catch_up_budget = None
     try:
-        after_sequence = _service.sequence_from_cursor(
+        after = _service.position_from_cursor(
             conversation_id, user_id, supplied_cursor
         )
     except ConversationCursorError:
@@ -1046,7 +1107,7 @@ async def conversation_sync_events(conversation_id: str):
                 _service.changes,
                 conversation_id,
                 user_id,
-                after_sequence=after_sequence,
+                after=after,
                 limit=1,
                 **diagnostic_options,
             )
@@ -1067,8 +1128,11 @@ async def conversation_sync_events(conversation_id: str):
                 conversation_id,
                 user_id,
                 subscription,
-                after_sequence=after_sequence,
+                after=after,
+                delivered_cursor=(
+                    supplied_cursor or stream_start_cursor(conversation_id, user_id)),
                 catch_up_budget=catch_up_budget,
+                page_bytes=page_bytes,
                 diagnostic_options=diagnostic_options,
                 frame=_sse_frame,
             )
@@ -1160,8 +1224,9 @@ async def _multiplexed_stream_frames(
     # stream that has received nothing since its snapshot repeats
     # cursorSource=snapshot, exactly as a native reconnect without the header.
     catch_up_budget = None if stream.get("cursorSource") else stream.get("windowBytes")
+    page_bytes = _change_page_bytes(stream.get("windowBytes"))
     try:
-        after_sequence = _service.sequence_from_cursor(
+        after = _service.position_from_cursor(
             conversation_id, user_id, stream.get("after"))
     except ConversationCursorError:
         yield await closed(400, "invalid_cursor")
@@ -1185,7 +1250,7 @@ async def _multiplexed_stream_frames(
                 _service.changes,
                 conversation_id,
                 user_id,
-                after_sequence=after_sequence,
+                after=after,
                 limit=1,
                 **diagnostic_options,
             )
@@ -1196,8 +1261,11 @@ async def _multiplexed_stream_frames(
             conversation_id,
             user_id,
             subscription,
-            after_sequence=after_sequence,
+            after=after,
+            delivered_cursor=(
+                stream.get("after") or stream_start_cursor(conversation_id, user_id)),
             catch_up_budget=catch_up_budget,
+            page_bytes=page_bytes,
             diagnostic_options=diagnostic_options,
             frame=frame,
         )

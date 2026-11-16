@@ -44,6 +44,31 @@ fn sequence(event: &Value) -> io::Result<u64> {
         .ok_or_else(|| invalid_data("attempt sync reference sequence is malformed"))
 }
 
+/// The stored value bytes of the attempt event a compact reference names, for
+/// the reference's replay-lineage digest: `None` for an inline change and
+/// `Some(None)` when the referenced event is absent.
+pub(super) fn referenced_event(
+    database: &AuthorityDatabase,
+    tx: &mut AuthorityTransaction,
+    stored: &[u8],
+) -> io::Result<Option<Option<Vec<u8>>>> {
+    if crate::versioned_document::stored_document_namespace(stored)? != DOCUMENT_IDENTITY {
+        return Ok(None);
+    }
+    let (_, raw) = crate::versioned_document::materialize_stored_document_bounded(
+        database,
+        tx.tenant_id(),
+        tx.owner_user_id(),
+        stored,
+        DOCUMENT_IDENTITY,
+        usize::MAX,
+    )?;
+    let envelope: Value = serde_json::from_slice(&raw)
+        .map_err(|_| invalid_data("attempt sync reference is malformed"))?;
+    let source_key = attempt_event_key(tx, text(&envelope, "attemptId")?, sequence(&envelope)?)?;
+    database.entity_get(tx, &source_key).map(Some)
+}
+
 pub(super) fn encode(envelope: &Value) -> io::Result<Vec<u8>> {
     sequence(envelope)?;
     // Live replay uses storage.v2 response chunks. Its complete canonical

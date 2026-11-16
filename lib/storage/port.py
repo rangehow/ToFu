@@ -25,7 +25,12 @@ class StoragePort(Protocol):
     def endpoint(self) -> tuple[str, int]: ...
 
     def query(self, operation: str, payload: Mapping[str, Any] | None = None,
-              deadline: float | None = None) -> Any: ...
+              deadline: float | None = None, *, cancellation=None) -> Any:
+        """``cancellation`` (a ``RequestCancellation``) ends the read early.
+
+        Cancelling interrupts the in-flight exchange where the transport can,
+        and the call raises instead of replaying it.
+        """
 
     def command(self, operation: str, payload: Mapping[str, Any] | None,
                 command_id: str | None, priority: str = 'user',

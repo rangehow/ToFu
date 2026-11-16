@@ -74,7 +74,11 @@ def test_active_text_backup_restores_replay_and_remains_appendable(tmp_path, mon
             assert after['projection'] == before['projection']
             sync_after = restored_engine._client.query('turn.sync.changes', {
                 'conversation_id': conv, 'user_id': _OWNER_ID, 'after': 0, 'limit': 1000})
-            assert sync_after == sync_before
+            # A restore is a new authority open, so it draws a new epoch; the
+            # change digests carry the lineage, so a restored cursor still resumes.
+            assert sync_after['authorityEpoch'] != sync_before['authorityEpoch']
+            assert ({**sync_after, 'authorityEpoch': None}
+                    == {**sync_before, 'authorityEpoch': None})
             rows = restored_engine._client.query('event.list', {
                 'task_id': task_id, 'after_sequence': 0, 'limit': 100})
             assert [row['sequence'] for row in rows] == list(range(1, 81))

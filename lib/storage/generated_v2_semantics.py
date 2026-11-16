@@ -3,6 +3,7 @@ MAX_FRAME_PAYLOAD_BYTES = 8384512
 OWNER_OMITTED_OPERATIONS = ('worker_job.active.list', 'system.schema_version', 'worker_job.defer')
 BOUNDED_PROGRESS_OPERATIONS = {'turn.cleanup': {'requestLimitField': 'limit', 'defaultLimit': 64, 'maximumLimit': 5000, 'resultCountField': 'deletedAttempts', 'nativeMaximumLimit': 64}}
 NOTIFICATION_TOPICS = {'conversation': {'contract': 'storage.conversation-commit/v1', 'keyField': 'conversationId', 'sequenceField': 'syncSeq'}}
+CONVERSATION_SYNC_LINEAGE = {'operations': ['turn.sync.changes', 'turn.sync.page', 'turn.sync.snapshot'], 'epochField': 'authorityEpoch', 'headDigestField': 'headDigest', 'changeDigestsField': 'changeDigests', 'anchorDigestField': 'anchorDigest', 'hexDigits': 16}
 MIN_NATIVE_FASTPATH_SYNC_INTERVAL_MS = 1000
 MAX_NATIVE_FASTPATH_SYNC_INTERVAL_MS = 3600000
 MIN_NATIVE_FASTPATH_FSYNC_SPEEDUP = 3

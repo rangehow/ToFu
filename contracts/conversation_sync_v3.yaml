@@ -12,6 +12,17 @@ info:
 x-tofu-contract: tofu.conversation-sync/v3
 x-tofu-stream:
   cursor: opaque
+  # A cursor names the lineage of the change it follows: the storage
+  # authority open that minted it, its sequence, and the digest of the stored
+  # change at that sequence. Storage reports the facts
+  # (contracts/storage_v2.json applicationSemantics.conversationSyncLineage);
+  # the conversation-sync service selects these reasons from them.
+  cursorLineage:
+    names: [authorityEpoch, syncSeq, changeDigest]
+    resetReasons:
+      changeReplaced: cursor_invalid
+      lineageUnproven: cursor_expired
+      withoutLineage: protocol_mismatch
   ordering: conversation-scoped-monotonic
   heartbeatIntervalMs: 15000
   reconnectGraceMs: 37500
@@ -46,6 +57,8 @@ x-tofu-invariants:
   - Idempotent retries reuse one validated request snapshot and commandId.
   - A newer stream generation supersedes older connections from the same page and conversation on the receiving replica; the shared lease cap bounds cross-replica overlap.
   - Plan execution names one terminal source turn and projection revision; lane-tail CAS prevents executing a superseded plan.
+  - A replay cursor names its change's lineage (authority open, sequence, digest of the stored change). A sequence that crash recovery or a restore gave to another change never replays as already seen; its cursor answers sync.reset_required, and every stream page read re-verifies the stream's position, so an authority restart under a live stream is fenced too.
+  - A heartbeat repeats the stream's last delivered cursor verbatim; a reconnect in the same lineage, across a clean authority restart too, resumes without a reset.
 paths:
   /api/v4/conversations/{conversationId}/sync:
     get:
@@ -146,6 +159,12 @@ paths:
         - name: after
           in: query
           required: false
+          description: >-
+            Opaque replay cursor; Last-Event-ID takes precedence. A cursor
+            whose change this authority no longer holds at its sequence, or
+            one issued before cursors carried lineage, answers
+            sync.reset_required (x-tofu-stream.cursorLineage) instead of a
+            replay. Omission starts at the first change.
           schema:
             type: string
         - name: streamClientId
@@ -183,7 +202,13 @@ paths:
             exceed it, the stream sends sync.reset_required with reason
             replay_exceeds_window instead of replaying them, and the caller
             re-anchors with one snapshot. Changes committed later always
-            stream. Omission replays every retained change.
+            stream. Omission replays every retained change. windowBytes also
+            bounds every change page the stream reads, the schema maximum when
+            omitted: a page holds the longest prefix of changes whose sizes sum
+            to at most the bound, and always at least one change. A change's
+            size is the byte length of its compact UTF-8 JSON exactly as the
+            storage page read returns it, before the stream omits diagnostic
+            bodies; both storage authorities apply this one measure.
           schema: {type: integer, minimum: 65536, maximum: 16777216}
         - name: cursorSource
           in: query
@@ -359,6 +384,19 @@ paths:
             or one that keeps moving through bounded re-reads, is
             history_page_stale.
           schema: {type: integer, minimum: 0, maximum: 9223372036854775807}
+        - name: cursor
+          in: query
+          required: false
+          description: >-
+            The replay cursor the caller holds at syncSeq. The page then
+            answers only in that cursor's lineage (x-tofu-stream.cursorLineage),
+            decided as for a change page: when the change at syncSeq is no
+            longer the one the cursor names, cannot be proven by another
+            authority open, or lies beyond the head, the read is
+            history_page_stale without currentSyncSeq and the caller repairs
+            from one snapshot. Omitted by callers loaded before history pages
+            carried lineage, which keep the sequence-only fence.
+          schema: {type: string, minLength: 1, maxLength: 128}
         - name: beforeOrdinal
           in: query
           required: false
@@ -2886,7 +2924,11 @@ components:
         contract: {const: tofu.conversation-sync.event/v1}
         type: {const: sync.heartbeat}
         conversationId: {type: string}
-        cursor: {type: string}
+        cursor:
+          type: string
+          description: >-
+            The stream's last delivered cursor, verbatim: the cursor it
+            resumed from until it delivers a change.
         serverBootId: {type: string}
         degraded: {type: boolean}
         # True while the conversation's live task has authoritative frames
@@ -2901,9 +2943,23 @@ components:
         contract: {const: tofu.conversation-sync.event/v1}
         type: {const: sync.reset_required}
         conversationId: {type: string}
-        cursor: {type: string}
+        cursor:
+          type: string
+          description: >-
+            Lineage cursor at the authority head the reset was decided at. The
+            client re-anchors with one snapshot; this cursor never
+            acknowledges the changes it skipped.
         reason:
           type: string
+          description: >-
+            cursor_expired: the cursor's change, or one after it, left replay
+            retention and its lineage cannot be proven in this authority open.
+            cursor_invalid: this authority does not hold the cursor's change
+            at its sequence, either beyond the head or because crash recovery
+            or a restore gave the sequence to another change.
+            protocol_mismatch: the cursor was issued before cursors carried
+            lineage. replay_exceeds_window: the missed suffix outgrew the
+            catch-up budget. server_restarted is reserved.
           enum: [cursor_expired, cursor_invalid, server_restarted, protocol_mismatch, replay_exceeds_window]
     ConversationSyncEvent:
       oneOf:
@@ -2916,9 +2972,19 @@ components:
       required: [conversationId, streamGeneration]
       properties:
         conversationId: {type: string, minLength: 1, maxLength: 256}
-        after: {type: string}
+        after:
+          type: string
+          description: >-
+            The single-conversation stream's replay cursor, with the same
+            lineage resets.
         streamGeneration: {type: integer, minimum: 1, maximum: 2147483647}
-        windowBytes: {type: integer, minimum: 65536, maximum: 16777216}
+        windowBytes:
+          type: integer
+          minimum: 65536
+          maximum: 16777216
+          description: >-
+            The single-conversation stream's windowBytes: catch-up budget and
+            change-page bound, with the same page measure.
         cursorSource: {type: string, enum: [snapshot]}
     ConversationEventSubscriptions:
       type: array
@@ -2980,7 +3046,11 @@ components:
         conversationId: {type: string}
         conversationRevision: {type: integer, minimum: 0}
         syncSeq: {type: integer, minimum: 0}
-        cursor: {type: string}
+        cursor:
+          type: string
+          description: >-
+            Lineage cursor at syncSeq, captured in the snapshot's read
+            transaction.
         serverBootId: {type: string}
         heartbeatIntervalMs: {type: integer, minimum: 1000}
         activeAttemptPhase:
@@ -3087,7 +3157,9 @@ components:
         conversationId: {type: string}
         conversationRevision: {type: integer, minimum: 0}
         syncSeq: {type: integer, minimum: 0}
-        cursor: {type: string}
+        cursor:
+          type: string
+          description: Lineage cursor at the head this page is exact for.
         laneId: {type: string, minLength: 1, maxLength: 128}
         beforeOrdinal: {type: integer, minimum: 0, maximum: 9223372036854775807}
         nextBeforeOrdinal:
@@ -3118,7 +3190,12 @@ components:
         contract: {const: tofu.conversation-sync.invalidation/v1}
         type: {const: conversation.invalidated}
         conversationId: {type: string}
-        cursorHint: {type: string}
+        cursorHint:
+          type: string
+          description: >-
+            Ordering hint naming the committed sequence only. It carries no
+            lineage and never resumes replay; a stream reads canonical changes
+            from its own cursor.
         userId:
           oneOf: [{type: string}, {type: integer}]
     ConnectionHealthState:

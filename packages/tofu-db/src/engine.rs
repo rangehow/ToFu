@@ -1356,6 +1356,8 @@ impl Engine {
     const EARLY_DRAIN_WAL_DIVISOR: u64 = 2;
 
     pub(crate) fn require_write_admission(&self) -> io::Result<()> {
+        let _admission =
+            crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_WRITE_ADMISSION);
         self.require_usable_authority()?;
         if !self.rotation_in_flight
             && self.wal.len() >= self.rotation_threshold_bytes / Self::EARLY_DRAIN_WAL_DIVISOR
@@ -1729,6 +1731,8 @@ impl Engine {
         block_ids: &[BlockId],
         authority_root: Option<BlockId>,
     ) -> io::Result<()> {
+        let _spill =
+            crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_SPILL_REFERENCED_BLOCKS);
         let references: BTreeSet<BlockId> =
             block_ids.iter().copied().chain(authority_root).collect();
         if !self.rotation_in_flight
@@ -4656,6 +4660,7 @@ impl Engine {
         block_ids: &[BlockId],
         authority_state_update: Option<Option<BlockId>>,
     ) -> io::Result<CommitResult> {
+        let may_defer_spill = take_spill_deferral_permission();
         self.require_write_admission()?;
         // Referenced blocks may still be pending (staged without fsync by
         // write_block/put_deferred). Carrying their payloads in the WAL
@@ -4712,7 +4717,26 @@ impl Engine {
             inline_payload: inline_payload.to_vec(),
             authority_state_update,
         };
-        if carried_bytes > MAX_CARRIED_PAYLOAD_BYTES {
+        let spills = carried_bytes > MAX_CARRIED_PAYLOAD_BYTES;
+        if spills && may_defer_spill {
+            // Nothing is written or applied yet: the request dispatcher
+            // makes these durable without the authority and replays.
+            return Err(defer_spill(
+                block_ids
+                    .iter()
+                    .copied()
+                    .chain(authority_state_update.flatten())
+                    .collect(),
+            ));
+        }
+        crate::request_profile::note_engine_commit(
+            carried_bytes,
+            spills.then(|| {
+                carried.iter().filter(|slot| slot.is_some()).count()
+                    + usize::from(authority_state_carried.is_some())
+            }),
+        );
+        if spills {
             // Oversized references spill: make the pending blocks durable now
             // and log identifier-only references instead of growing an
             // unbounded WAL record. A large copy-on-write write set (search
@@ -5203,6 +5227,87 @@ impl Drop for ExpiredPackAdoptionCovers {
     }
 }
 
+/// What this thread's next foreground commit does with a carried set past
+/// `MAX_CARRIED_PAYLOAD_BYTES` (docs/TOFUDB_PUBLICATION_LATENCY.md, "Spills
+/// leave the authority").
+#[derive(Default)]
+enum SpillDeferral {
+    /// Spill under the authority, as every caller outside the request
+    /// dispatcher does.
+    #[default]
+    Inline,
+    /// Refuse the commit before any effect and leave its references here.
+    Allowed,
+    /// A commit was refused; these references must become durable first.
+    Deferred(BTreeSet<BlockId>),
+}
+
+thread_local! {
+    static SPILL_DEFERRAL: std::cell::RefCell<SpillDeferral> =
+        const { std::cell::RefCell::new(SpillDeferral::Inline) };
+}
+
+/// A commit refused because its referenced pending blocks must become
+/// durable before an identifier-only WAL record names them.
+#[derive(Debug)]
+struct SpillDeferred;
+
+impl std::fmt::Display for SpillDeferred {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(
+            "commit deferred until its referenced blocks are durable outside the authority",
+        )
+    }
+}
+
+impl std::error::Error for SpillDeferred {}
+
+/// While alive, the first engine commit on this thread whose carried payloads
+/// pass the WAL record bound writes and applies nothing and returns
+/// `WouldBlock` instead of publishing its referenced pending blocks under the
+/// authority. Its references wait in [`SpillDeferralScope::take_deferred`];
+/// later commits on the thread spill inline.
+pub(crate) struct SpillDeferralScope(());
+
+impl SpillDeferralScope {
+    pub(crate) fn allow() -> Self {
+        SPILL_DEFERRAL.with(|state| *state.borrow_mut() = SpillDeferral::Allowed);
+        Self(())
+    }
+
+    /// The references of the commit this scope deferred, if one did.
+    pub(crate) fn take_deferred(&self) -> Option<BTreeSet<BlockId>> {
+        SPILL_DEFERRAL.with(|state| match std::mem::take(&mut *state.borrow_mut()) {
+            SpillDeferral::Deferred(references) => Some(references),
+            _ => None,
+        })
+    }
+}
+
+impl Drop for SpillDeferralScope {
+    fn drop(&mut self) {
+        SPILL_DEFERRAL.with(|state| *state.borrow_mut() = SpillDeferral::Inline);
+    }
+}
+
+/// Consumes this thread's permission: only the first commit in a scope may
+/// defer, so a request that already committed never replays.
+fn take_spill_deferral_permission() -> bool {
+    SPILL_DEFERRAL.with(|state| {
+        let mut state = state.borrow_mut();
+        let allowed = matches!(*state, SpillDeferral::Allowed);
+        if allowed {
+            *state = SpillDeferral::Inline;
+        }
+        allowed
+    })
+}
+
+fn defer_spill(references: BTreeSet<BlockId>) -> io::Error {
+    SPILL_DEFERRAL.with(|state| *state.borrow_mut() = SpillDeferral::Deferred(references));
+    io::Error::new(io::ErrorKind::WouldBlock, SpillDeferred)
+}
+
 /// Phase 2, the whole fsync chain of a catalog adoption, driven WITHOUT the
 /// authority mutex: Normal-mode WAL cover, durable manifest block, then the
 /// CONTROL chain (optional dirty catch-up, manifest reference, slot
@@ -5324,5 +5429,21 @@ mod tests {
 }
 
 #[cfg(test)]
+#[path = "engine_restart_open_tests.rs"]
+mod restart_open_tests;
+
+#[cfg(test)]
+#[path = "engine_recovery_witness_tests.rs"]
+mod recovery_witness_tests;
+
+#[cfg(test)]
+#[path = "engine_recovery_lookup_tests.rs"]
+mod recovery_lookup_tests;
+
+#[cfg(test)]
 #[path = "engine_write_staging_tests.rs"]
 mod write_staging_tests;
+
+#[cfg(test)]
+#[path = "engine_window_liveness_tests.rs"]
+mod window_liveness_tests;

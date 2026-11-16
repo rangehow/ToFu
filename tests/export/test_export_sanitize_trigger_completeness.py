@@ -101,6 +101,28 @@ class SanitizeTriggerCompletenessTest(unittest.TestCase):
         renamed = _sanitize_source_opensource(f'{brand}: 1', 'frontend/src/core/model-group.ts')
         self.assertNotIn(brand, renamed)
 
+    def test_a_fixture_provider_id_and_its_assertion_get_one_rename(self):
+        """A test that builds a slot with the corp provider ID and asserts it
+        back must still agree after export: every quoted occurrence gets the
+        same replacement, whatever syntax surrounds it."""
+        from export import _sanitize_source_opensource
+        corp, brand = 'san' + 'kuai', 'Mei' + 'tuan'
+        path = 'tests/providers/test_x.py'
+        corp_token = _sanitize_source_opensource(f"'{corp}'", path)
+        brand_token = _sanitize_source_opensource(f"'{brand}'", path)
+        source = (f"# the {brand}-keyed operator slot\n"
+                  f"slot = Slot(provider_id='{corp}', routing_provider_id='{corp}')\n"
+                  f"def f(provider_id: str = '{corp}'): pass\n"
+                  f"face = {{'id': '{corp}', 'name': '{brand}'}}\n"
+                  f"pid = provider.get('id', '{corp}') or m.get('provider_id', '{corp}')\n"
+                  f"assert slot.provider_id == '{corp}' and face['name'] == '{brand}'\n")
+        expected = (source.replace(f"'{corp}'", corp_token)
+                    .replace(f"'{brand}'", brand_token))
+        out = _sanitize_source_opensource(source, path)
+        self.assertEqual(out.split('\n', 1)[1], expected.split('\n', 1)[1])
+        self.assertNotIn(corp, out)
+        self.assertNotIn(brand, out)
+
     def test_scrub_and_trigger_share_one_source(self):
         """Structural: the scrub and trigger paths draw the plain-substring
         identifiers from the SAME tuple, so they cannot drift. Verified by

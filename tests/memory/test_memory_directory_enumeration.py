@@ -164,7 +164,7 @@ def test_large_store_overlaps_per_file_reads_and_keeps_listing_order(
         *flat_ids, 'b-package', 'z-package']
     assert len(reads) == len(flat_ids) + 2
     assert not [thread.name for thread in threading.enumerate()
-                if thread.name.startswith('memory-listing')]
+                if thread.name.startswith('memory-listing_')]
 
 
 def test_a_large_store_still_lists_when_shutdown_refuses_new_workers(

@@ -18,7 +18,7 @@ from copy import deepcopy
 
 from lib.identity import PrincipalContext
 from lib.log import get_logger
-from lib.storage.model_continuation import model_context_revision
+from lib.agent_core.model_context_revision import model_context_revision
 from lib.turn_initiation import INITIATOR_BRAIN, stamp_initiator
 from .admission import TrustedDispatch
 from .repository import CONTRACT, ProjectDispatchError, RestartContinuationRefused

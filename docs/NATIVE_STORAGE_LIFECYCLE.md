@@ -806,6 +806,28 @@ every acknowledged row and verifies offline with `verdict=ok` and
 stops storage with the production host's `NATIVE_DAEMON_STOP_SECONDS`;
 `load_run.py` gives older harnesses the same budget.
 
+Problem (2026-11-16): the crash probe slept a fixed 5 s after the first
+catalog location table and assumed the packed-filter build was still running.
+On a compact production store (386 segments, restored from the closed backup)
+the build takes about 0.4 s, so every engine, the certified f3102951
+included, failed the drill, and a start's automatic gate against the stopped
+production store would have refused. Decision: the probe launches the
+candidate with the engine's fault-injection point
+`TOFU_DB_FAILPOINT=packed_filter_build_pause`
+(`BlockStore::build_packed_filter_pausing`): after its first index read the
+online GC driver's build logs `packed_filter step=paused` with the authority's
+root and holds the build open, installing nothing, until a stop. The probe
+makes its two build commits after that marker and SIGKILLs, so the kill lands
+inside the build on any catalog size; an engine without the failpoint builds
+through, makes no build commits and fails the unchanged verdict. No other
+launch sets the variable. Alternatives rejected: a longer or adaptive sleep (a
+timing knob that still races a fast build); killing on a build-start marker
+without a pause (two strict commits can outlast a 0.4 s build); a large-catalog
+fixture only (the start-path gate uses whatever store the host has). Verify
+`the_build_pause_failpoint_holds_every_catalog_size_inside_the_build`
+(386 and 4,096 segments) and, opt-in against a real engine and drill source,
+`tests/deploy/test_engine_certify_crash_probe.py`.
+
 Operating it: `.venv/bin/python3 scripts/engine_certify.py --fixture <authority>
 [--commit REV] [--work-root DIR]`. The fixture is required (no hidden default):
 a settled TofuDB authority directory (`CONTROL`, `payload-segments/`,

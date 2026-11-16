@@ -60,6 +60,21 @@ const PACKED_FILTER_MIN_BITS: usize = 1 << 20;
 const PACKED_FILTER_BITS_PER_BLOCK: usize = 16;
 const PACKED_FILTER_ROUNDS: u64 = 11;
 
+/// Fault injection for the engine-certification rollback drill
+/// (docs/NATIVE_STORAGE_LIFECYCLE.md, "Engine certification gate"): a
+/// daemon launched with `TOFU_DB_FAILPOINT=packed_filter_build_pause` holds
+/// its online GC driver's packed-filter build open after the first index
+/// (`BlockStore::build_packed_filter_pausing`). Unset in every other launch.
+pub(crate) const FAILPOINT_ENVIRONMENT: &str = "TOFU_DB_FAILPOINT";
+pub(crate) const PACKED_FILTER_BUILD_PAUSE_FAILPOINT: &str = "packed_filter_build_pause";
+/// How soon a paused build notices that its `check` fails (a driver stop).
+const PACKED_FILTER_PAUSE_STOP_POLL: Duration = Duration::from_millis(10);
+
+pub(crate) fn packed_filter_build_pause_armed() -> bool {
+    std::env::var_os(FAILPOINT_ENVIRONMENT)
+        .is_some_and(|value| value == PACKED_FILTER_BUILD_PAUSE_FAILPOINT)
+}
+
 struct PackedBlockFilter {
     words: Vec<u64>,
     mask: usize,
@@ -4402,10 +4417,26 @@ impl BlockStore {
     /// coverage of unpublished segments, which their install reads again.
     /// Nothing persists, so a crash or stop anywhere leaves a reopened store
     /// as a clean open leaves it.
+    #[cfg(test)]
     pub(crate) fn build_packed_filter(
         &self,
-        mut check: impl FnMut() -> io::Result<()>,
+        check: impl FnMut() -> io::Result<()>,
     ) -> io::Result<bool> {
+        self.build_packed_filter_pausing(check, false)
+    }
+
+    /// `build_packed_filter`, with the `packed_filter_build_pause` failpoint
+    /// (`PACKED_FILTER_BUILD_PAUSE_FAILPOINT`) armed when `pause_inside`: once
+    /// the first segment index is read the build logs `step=paused` and waits,
+    /// installing nothing, until `check` fails. The engine-certification crash
+    /// probe SIGKILLs the engine there, so its kill lands inside the build
+    /// however fast the store's build would otherwise finish.
+    pub(crate) fn build_packed_filter_pausing(
+        &self,
+        mut check: impl FnMut() -> io::Result<()>,
+        pause_inside: bool,
+    ) -> io::Result<bool> {
+        let mut pause_pending = pause_inside;
         let poisoned = || io::Error::other("packed block filter lock was poisoned");
         let Some(store) = self.payload_segments.as_ref() else {
             return Ok(false);
@@ -4428,6 +4459,7 @@ impl BlockStore {
         let mut routes = crate::payload_routing::PayloadRouting::default();
         let mut remaining_route_bytes = store.routing_budget_bytes();
         let mut unreadable: HashSet<Uuid> = HashSet::new();
+        let catalog_segment_count = catalog.segments.len();
         let mut unread = catalog.segments;
         loop {
             for reference in &unread {
@@ -4440,6 +4472,21 @@ impl BlockStore {
                     &mut remaining_route_bytes,
                 ) {
                     unreadable.insert(reference.segment_id);
+                }
+                if std::mem::take(&mut pause_pending) {
+                    crate::engine_log::info(
+                        "packed_filter",
+                        &format!(
+                            "step=paused failpoint={PACKED_FILTER_BUILD_PAUSE_FAILPOINT} \
+                             root={} segments={} indexes_read=1",
+                            self.root.display(),
+                            catalog_segment_count,
+                        ),
+                    );
+                    loop {
+                        check()?;
+                        std::thread::sleep(PACKED_FILTER_PAUSE_STOP_POLL);
+                    }
                 }
             }
             check()?;

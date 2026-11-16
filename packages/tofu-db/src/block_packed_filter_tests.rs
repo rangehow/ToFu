@@ -435,3 +435,49 @@ fn a_stopped_failing_or_crashed_build_never_installs_unverified_coverage() {
         assert_exact(&reopened, &catalogued);
     }
 }
+
+/// The certification drill's crash probe kills the engine while the
+/// `packed_filter_build_pause` failpoint holds the build open. On the compact
+/// production store (386 segments) the build finished in about 0.4 s, before
+/// a fixed sleep elapsed; the pause holds it after its first index read
+/// whatever the catalog size, up to the 4,096-segment ceiling, installs
+/// nothing, and a crash there reopens as a clean open.
+#[test]
+fn the_build_pause_failpoint_holds_every_catalog_size_inside_the_build() {
+    for segments in [386, 4_096] {
+        let (vfs, store, manifest, catalogued) = reopened_catalog(segments);
+        read_path_counters::take_index_work();
+        let mut calls = 0;
+        let stopped = store.build_packed_filter_pausing(
+            || {
+                calls += 1;
+                // Unpaused, `check` runs once before each index read: its
+                // third call would follow the second read.
+                if calls == 3 {
+                    assert_eq!(
+                        read_path_counters::take_index_work().0,
+                        1,
+                        "{segments} segments: the build paused after its first index read"
+                    );
+                    assert!(
+                        !store.packed_filter.read().unwrap().built,
+                        "{segments} segments: the paused build installed its filter"
+                    );
+                    return Err(io::Error::new(io::ErrorKind::WouldBlock, "killed"));
+                }
+                Ok(())
+            },
+            true,
+        );
+        assert_eq!(stopped.unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        assert!(!store.packed_filter.read().unwrap().built);
+        drop(store);
+        vfs.crash().unwrap();
+        let reopened = reopen(&vfs, &manifest);
+        assert!(reopened.build_packed_filter(|| Ok(())).unwrap());
+        assert!(reopened.filter_covers_installed_catalog(&reopened.packed_filter.read().unwrap()));
+        if segments == 386 {
+            assert_exact(&reopened, &catalogued);
+        }
+    }
+}

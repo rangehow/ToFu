@@ -2192,6 +2192,7 @@ impl<D: OnlineGcDatabase> OnlineGarbageCollectionDriver<D> {
                     crate::fsync_stats::set_current_component(
                         crate::fsync_stats::COMPONENT_ONLINE_GC,
                     );
+                    let pause_packed_filter_build = crate::block::packed_filter_build_pause_armed();
                     let mut reported_held = false;
                     loop {
                         if stop.load(Ordering::Acquire) {
@@ -2233,7 +2234,10 @@ impl<D: OnlineGcDatabase> OnlineGarbageCollectionDriver<D> {
                                     Ok(())
                                 };
                                 let _ = blocks.publish_first_catalog_locations(running);
-                                let _ = blocks.build_packed_filter(running);
+                                let _ = blocks.build_packed_filter_pausing(
+                                    running,
+                                    pause_packed_filter_build,
+                                );
                             }
                             // Epoch errors are already accounted as deferred;
                             // the driver stays alive and retries on cadence.

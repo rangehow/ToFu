@@ -16,26 +16,28 @@ class CommandControls:
     def __init__(self, *, service=None):
         self._service = service
 
-    def _endpoint(self):
+    def readiness(self) -> dict:
+        """One verified snapshot distinguishes live startup from an unavailable owner."""
+        if self._service is None:
+            return {'state': 'ready', 'error': '', 'endpoint': None}
         record = self._service.record()
-        if (not record or record.get('state') != 'ready'
-                or not self._service.host_matches(record)):
-            raise CommandControlUnavailable('The execution owner is unavailable')
+        if not record or not self._service.host_matches(record):
+            return {'state': 'unavailable', 'error': 'The execution owner is unavailable'}
+        if record.get('state') == 'starting':
+            return {'state': 'starting', 'error': ''}
+        if record.get('state') != 'ready':
+            return {'state': 'unavailable', 'error': 'The execution owner is unavailable'}
         endpoint = record.get('commandControl')
         if (not isinstance(endpoint, dict)
                 or endpoint.get('serviceId') != record.get('serviceId')):
-            raise CommandControlUnavailable('The execution control incarnation differs')
-        return endpoint
+            return {'state': 'unavailable', 'error': 'The execution control incarnation differs'}
+        return {'state': 'ready', 'error': '', 'endpoint': endpoint}
 
-    def readiness_error(self):
-        """Read verified process evidence; never send work or trigger recovery."""
-        if self._service is None:
-            return ''
-        try:
-            self._endpoint()
-        except CommandControlUnavailable as error:
-            return f'{error}; inspect serverctl status for recovery or restart instructions'
-        return ''
+    def _endpoint(self):
+        readiness = self.readiness()
+        if readiness['state'] != 'ready':
+            raise CommandControlUnavailable(readiness['error'] or 'The execution owner is starting')
+        return readiness['endpoint']
 
     def execute(self, method, task_id, *, user_id, **params):
         result = apply_command_control(method, task_id, user_id=user_id, **params)

@@ -9,7 +9,6 @@ export type TranslationWait = {
   elapsedMs?: number; model?: string;
 } & SendReceiptPresentation;
 export interface SendReceiptPresentation {
-  phase?: 'preparing' | 'translating';
   /** Optional original insertion text; never a translated or durable Turn. */
   message?: string;
 }
@@ -55,26 +54,32 @@ export function createComposerTranslationStatus(ports: TranslationStatusPorts) {
       row = ports.document.createElement('div');
       row.className = 'composer-translation-status';
       row.setAttribute('role', 'status');
-      // Announce phase changes, not a new live-region utterance each second.
-      const phase = ports.document.createElement('span');
-      phase.className = 'composer-translation-phase';
+      // The ticking wait is not a new live-region utterance each second.
       const detail = ports.document.createElement('span');
       detail.className = 'composer-translation-detail';
       detail.setAttribute('aria-live', 'off');
-      row.append(phase, detail);
+      row.append(detail);
       host.append(row);
     }
     row.dataset.state = item.status;
-    const key = item.status === 'pending' ? item.kind : item.status;
-    const phase = ports.label(item.status === 'pending' && item.phase === 'preparing'
-      ? 'send.preparing' : item.status === 'cancelled'
-        ? 'preview.cancelled' : 'translationWait.' + key);
-    if (row.children[0].textContent !== phase) row.children[0].textContent = phase;
+    // Pending work needs no phase label; only an unresolved outcome is named.
+    const outcomeText = item.status === 'failed' ? ports.label('translationWait.failed')
+      : item.status === 'cancelled' ? ports.label('preview.cancelled') : '';
+    let outcome = row.querySelector<HTMLElement>('.composer-translation-outcome');
+    if (outcomeText) {
+      if (!outcome) {
+        outcome = ports.document.createElement('span');
+        outcome.className = 'composer-translation-outcome';
+        row.prepend(outcome);
+      }
+      if (outcome.textContent !== outcomeText) outcome.textContent = outcomeText;
+    } else outcome?.remove();
+    const detail = row.querySelector<HTMLElement>('.composer-translation-detail')!;
     const seconds = Math.max(0, (item.elapsedMs ?? ports.now() - item.startedAt) / 1000);
     const model = item.model || ports.label(item.status === 'pending'
       ? 'translationWait.modelPending' : 'translationWait.modelUnknown');
     const insertion = item.message !== undefined;
-    row.children[1].textContent = (insertion && !item.model ? '' : model + ' · ')
+    detail.textContent = (insertion && !item.model ? '' : model + ' · ')
       + ports.label('translationWait.waited') + ' ' + seconds.toFixed(1) + 's';
     row.classList.toggle('has-message', insertion);
     let message = row.querySelector<HTMLElement>('.composer-translation-message');

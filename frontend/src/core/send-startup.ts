@@ -78,6 +78,11 @@ export interface SendStartupRetryOptions<T> {
   signal: AbortSignal;
   run(attemptSignal: AbortSignal): Promise<T>;
   onRetry?(retry: SendStartupRetry): void;
+  /** `abort` (reads) releases the running attempt at the user's cancel.
+   * `settle` (writes) lets an attempt already sent finish: cancel only ends
+   * retrying, so a commit that crossed the Stop reaches the caller instead
+   * of landing on the server behind a discarded response. */
+  inFlightOnCancel?: 'abort' | 'settle';
   /** One attempt's deadline; an expired attempt is aborted and repeated. */
   attemptTimeoutMs?: number;
   retryDelayMs?(retryIndex: number): number;
@@ -105,7 +110,9 @@ export async function retryTransientSendStartup<T>(
     const attempt = new AbortController();
     let expired = false;
     const forwardCancel = () => attempt.abort(signal.reason);
-    signal.addEventListener('abort', forwardCancel, { once: true });
+    if (options.inFlightOnCancel !== 'settle') {
+      signal.addEventListener('abort', forwardCancel, { once: true });
+    }
     const timer = globalThis.setTimeout(() => {
       expired = true;
       attempt.abort(new DOMException('Send attempt deadline expired', 'TimeoutError'));

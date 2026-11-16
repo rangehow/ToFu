@@ -755,6 +755,50 @@ check(composerConv._genStartCtrl === null && composerConv._genStartStop === null
 """)
 
 
+def test_user_stop_never_aborts_a_sent_submission_and_adopts_its_commit():
+    """A slow network: Stop lands while the command request is in flight.
+
+    Aborting that request discarded a commit the server still made, so the
+    draft came back while the Turn also appeared. The request must settle.
+    """
+    _run_pipeline(r"""
+let authorityAbortCount = 0;
+let acknowledge;
+let requestSignal;
+runtimeScope.ConversationTurnStore.abortConversation = async () => {
+  authorityAbortCount += 1;
+};
+runtimeScope.ConversationTurnStore.submitConversation = (conv, payload, config, extra) => {
+  requestSignal = extra.requestOptions.signal;
+  return new Promise((resolve, reject) => {
+    acknowledge = resolve;
+    requestSignal.addEventListener('abort', () => reject(
+      new DOMException('request aborted', 'AbortError')), { once: true });
+  });
+};
+
+composerInput.value = 'stopped on a slow network';
+const sending = _submitComposerDraft();
+while (!acknowledge) await new Promise((resolve) => setTimeout(resolve, 0));
+const controller = composerConv._genStartCtrl;
+composerConv._genStartStop = controller;
+composerConv._genStartCtrl = null;
+controller.abort();
+await new Promise((resolve) => setTimeout(resolve, 0));
+check(!requestSignal.aborted, 'Stop aborted the command request already sent');
+check(optimisticTurnRemovals.length === 0,
+  'the echo vanished before the submission answered');
+activeAttempt = true;
+acknowledge({ submittedTurn: { id: 'turn-committed-after-stop' } });
+await sending;
+
+check(authorityAbortCount === 1, 'the committed attempt was not stopped');
+check(composerInput.value === '', 'a committed message also returned to the draft');
+check(composerConv._genStartCtrl === null && composerConv._genStartStop === null,
+  'stopped submission left startup markers behind');
+""")
+
+
 def test_send_clears_composer_and_echoes_user_turn_before_ack():
     _run_pipeline(r"""
 const observed = {};
@@ -1059,8 +1103,7 @@ runtimeScope.ConversationTurnStore.submitConversation = async () => {
   const began = receiptCalls.filter(c => c.action === 'begin');
   check(began.length === 1 && began[0].wait.message === '补充一条约束',
     'the outgoing instruction lost its stable composer receipt');
-  check(began[0].wait.phase === (translating ? 'translating' : 'preparing'),
-    'the receipt phase did not follow send preparation');
+  check(!('phase' in began[0].wait), 'the receipt regained a phase label');
   check(optimisticTurnUpserts.length === 0 && statusBubbleCalls.length === 0,
     'active send manufactured an assistant while waiting for acknowledgement');
   return mode === 'steer' ? { steered: true } : { queued: true, position: 1 };

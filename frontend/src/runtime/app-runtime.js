@@ -10592,9 +10592,10 @@ function updateSendButton() {
   const translating = Boolean(conv?._translating);
   const startupConnecting = Boolean(conv?._genStartCtrl);
   const turnBusy = Boolean(conv && convIsBusy(conv));
-  const stopping = Boolean(conv?._finishingStream);
+  // A stopped startup still awaits its submission's answer; show it stopping.
+  const stopping = Boolean(conv?._finishingStream || conv?._genStartStop);
   const stop = () => {
-    if (!conv || conv._finishingStream) return;
+    if (!conv || conv._finishingStream || conv._genStartStop) return;
     if (translating) {
       _stopTranslation(conv);
       return;
@@ -16750,10 +16751,7 @@ async function _submitComposerDraft() {
       optimisticTurnIds = [];
       optimisticEchoCleared = true;
       _removeTranslatingBubble(convId);
-      const presentation = {
-        message: draftProjection.content,
-        phase: willTranslate ? 'translating' : 'preparing',
-      };
+      const presentation = { message: draftProjection.content };
       if (translationWait) composerTranslationStatus.update(translationWait, presentation);
       else translationWait = composerTranslationStatus.begin(convId, 'send', presentation);
       return;
@@ -16844,8 +16842,7 @@ async function _submitComposerDraft() {
     if (willTranslate) {
       conv._translating = true;
 
-      if (translationWait) composerTranslationStatus.update(translationWait, { phase: 'translating' });
-      else translationWait = composerTranslationStatus.begin(convId, 'send');
+      if (!translationWait) translationWait = composerTranslationStatus.begin(convId, 'send');
       conv._translateAborted = false;
       conv._translateAbortCtrl = sendStart.controller;
       showSendPreparation('translating', t('sidebar.translating'));
@@ -16865,9 +16862,14 @@ async function _submitComposerDraft() {
     for (let submissionAttempt = 0; submissionAttempt < 2; submissionAttempt += 1) {
       try {
         /* Every repeat sends the same frozen request and command identity,
-         * so a commit whose ACK was lost replays instead of duplicating. */
+         * so a commit whose ACK was lost replays instead of duplicating.
+         * A Stop never aborts the request already sent: its answer (aborted
+         * by the Stop fence, or committed and then stopped) is the only
+         * authority on whether the Turn exists; an immediate re-read can
+         * race the commit and restore a draft the server also kept. */
         acknowledgement = await retryTransientSendStartup({
           signal: sendStart.signal,
+          inFlightOnCancel: 'settle',
           run: (signal) => runtimeScope.ConversationTurnStore.submitConversation(
             conv, msgPayload, sendConfig, buildTurnSubmissionExtra({
               commandId: draft.commandId,

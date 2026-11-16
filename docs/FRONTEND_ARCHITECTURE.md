@@ -1762,6 +1762,18 @@ recovery leaves every other lost-ACK hydration exposed; resuming paused
 coordinators on catalog invalidation would add a second owner of connection
 demand.
 
+Stop never aborts a command request already sent. Problem: on a slow network
+the aborted request still committed on the server, while the pipeline removed
+the echo and its immediate authority read raced the commit, so the draft came
+back to the composer and the same message then appeared as a stopped Turn.
+Decision: the Turn command runs with `inFlightOnCancel: 'settle'`; Stop ends
+retrying and the preparation reads, but the sent request's answer decides:
+`aborted` (the server Stop fence came first) restores the draft, a commit is
+adopted and its attempt stopped. Until then the control shows Stopping.
+Alternatives considered: re-reading authority after a delay is a tuned wait
+that still races a slow commit; keeping the abort and reconciling a late Turn
+against a restored draft makes the browser a second owner of the outcome.
+
 Settings restore is paint-only. It normalizes mutually exclusive interaction
 modes at the boundary but does not persist merely because a conversation was
 opened. Turn hydration, catalog merge, and settings persistence therefore have

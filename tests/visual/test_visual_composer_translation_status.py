@@ -52,10 +52,8 @@ def test_composer_translation_receipt(translation_receipt_server, browser, tmp_p
           window.receiptActive = 'visual-conv';
           window.receipt = TranslationReceipt.createComposerTranslationStatus({document,
             now: () => receiptClock, activeConversationId: () => receiptActive,
-            label: key => ({'translationWait.send':'翻译 / 提交中…',
-              'translationWait.completed':'处理完成', 'translationWait.failed':'翻译失败', 'translationWait.waited':'等待',
-              'translationWait.modelPending':'模型以返回结果为准',
-              'send.preparing':'正在发送补充消息…'})[key] || key});
+            label: key => ({'translationWait.failed':'翻译失败', 'translationWait.waited':'等待',
+              'translationWait.modelPending':'模型以返回结果为准'})[key] || key});
           window.receiptWait = receipt.begin('visual-conv','send');
         }''')
         page.wait_for_selector('.composer-translation-status')
@@ -68,15 +66,15 @@ def test_composer_translation_receipt(translation_receipt_server, browser, tmp_p
         # work and unresolved failure/cancellation stay in the composer.
         assert page.locator('.composer-translation-status').count() == 0
         # Insertion progress stays next to the composer. The original text and
-        # receipt node survive phase updates while the next draft stays usable.
+        # receipt node survive refreshes while the next draft stays usable.
         page.evaluate("""()=>{
-          receiptWait=receipt.begin('visual-conv','send', {phase:'preparing',
+          receiptWait=receipt.begin('visual-conv','send', {
             message:'补充一下：保留浅灰白底色，只用少量柔和的橙色点缀。'.repeat(6)});
           window.pendingReceipt=document.querySelector('.composer-translation-status');
         }""")
         page.locator('textarea').fill('继续补充的草稿')
         page.locator('textarea').focus()
-        page.evaluate("receipt.update(receiptWait,{phase:'translating'})")
+        page.evaluate("receipt.refresh()")
         assert page.locator('.composer-translation-status').count() == 1
         assert page.locator('.composer-translation-status').evaluate('n=>n===pendingReceipt')
         assert page.locator('.composer-translation-message').inner_text().startswith('补充一下：')
@@ -93,7 +91,7 @@ def test_composer_translation_receipt(translation_receipt_server, browser, tmp_p
         page.evaluate("receiptWait=receipt.begin('visual-conv','send');receiptClock=4600;"
                       "receipt.finish(receiptWait,'failed','deepseek-v4-flash-yourprovider')")
         text = page.locator('.composer-translation-status').inner_text()
-        assert 'deepseek-v4-flash-yourprovider' in text and '2.3s' in text
+        assert 'deepseek-v4-flash-yourprovider' in text and '2.3s' in text and '翻译失败' in text
         box = page.locator('.composer-translation-status').bounding_box()
         assert box and box['x'] >= 0 and box['x'] + box['width'] <= width + 1
         page.screenshot(path=str(tmp_path / f'composer-translation-{width}.png'), full_page=True)

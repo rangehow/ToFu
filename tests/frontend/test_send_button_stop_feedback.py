@@ -416,7 +416,8 @@ def test_stop_click_feedback_and_idempotency():
         'controllerAborts': 1,
         'serverAborts': 1,
         'released': True,
-        'buttonClass': 'send-btn',
+        # The stopped startup still awaits its submission's answer.
+        'buttonClass': 'send-btn stop-btn is-stopping',
     }
     assert result['translating'] == {
         'projection': 'send-btn stop-btn',
@@ -425,7 +426,7 @@ def test_stop_click_feedback_and_idempotency():
         'released': True,
         'stoppedByUser': True,
         'translateAborted': True,
-        'buttonClass': 'send-btn',
+        'buttonClass': 'send-btn stop-btn is-stopping',
     }
     assert result['unknown'] == {'hydrated': True}
     assert result['keyboard'] == {'calls': 1, 'prevented': True}

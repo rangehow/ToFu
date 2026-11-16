@@ -50,6 +50,7 @@ import uuid
 
 from lib.json_store import read_json, write_json_atomic
 from lib.log import get_logger
+from lib.storage_authority_sql.durability import fsync_directory
 from lib.storage.generated_v2_semantics import (
     MAX_NATIVE_FASTPATH_FSYNC_REGRESSION,
     MIN_NATIVE_FASTPATH_FSYNC_SPEEDUP,
@@ -1191,14 +1192,6 @@ def _exit_reason(state: Mapping[str, object], authority: Path,
     return None
 
 
-def _sync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
 def complete_planned_exit(data_dir: Path, binary: str, environ: Mapping[str, str], *,
                           timeout: float, now: float | None = None,
                           run: Callable[..., subprocess.CompletedProcess] = subprocess.run
@@ -1273,10 +1266,10 @@ def complete_planned_exit(data_dir: Path, binary: str, environ: Mapping[str, str
             if os.path.lexists(retired_seed):
                 raise RuntimeError(f'native fastpath exit cannot retire the seed: {retired_seed} exists')
             authority.rename(retired_seed)
-            _sync_directory(data_dir)
+            fsync_directory(data_dir)
         if os.path.lexists(target) and not os.path.lexists(authority):
             target.rename(authority)
-            _sync_directory(data_dir)
+            fsync_directory(data_dir)
         if not authority.is_dir() or os.path.lexists(authority / FASTPATH_MARKER):
             raise RuntimeError('native fastpath exit could not install the exported authority')
         stamp = journal['stamp']

@@ -24,7 +24,9 @@ def _check_deadline(deadline_at: float) -> None:
 
 
 def fsync_file(path: Path) -> None:
-    with path.open('rb') as stream:
+    # Windows os.fsync is FlushFileBuffers, which refuses a read-only handle
+    # (EBADF); POSIX fsync accepts one and keeps working on read-only files.
+    with path.open('r+b' if os.name == 'nt' else 'rb') as stream:
         os.fsync(stream.fileno())
 
 

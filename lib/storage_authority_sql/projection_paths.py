@@ -21,6 +21,7 @@ from typing import Any
 from lib.error_envelope import BadRequest
 from lib.json_store import locked_path, read_json
 from lib.log import get_logger
+from lib.storage_authority_sql.durability import fsync_directory
 from lib.storage_authority_sql.migration.generated_tofudb_migration import NATIVE_SEARCH_VOLUME_GUARD
 
 logger = get_logger(__name__)
@@ -320,21 +321,13 @@ def prepare_search_projection_directory(directory: Path, authority: Path) -> Pat
     return target
 
 
-def _fsync_directory(directory: Path) -> None:
-    fd = os.open(directory, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-
-
 def _prepare_settings_directory(directory: Path) -> None:
     if not directory.is_dir():
         # Publish parents durably before creating children, including a new data root.
         _prepare_settings_directory(directory.parent)
         directory.mkdir(mode=0o700, exist_ok=True)
     # Also cover an existing entry left by a concurrent or failed creator.
-    _fsync_directory(directory.parent)
+    fsync_directory(directory.parent)
 
 
 def _save_projection_setting(path: Path, directory: str) -> None:
@@ -358,7 +351,7 @@ def _save_projection_setting(path: Path, directory: str) -> None:
             os.replace(temporary_path, path)
             temporary_path = None
             # Failure here is an uncertain durable commit, not permission to roll back.
-            _fsync_directory(path.parent)
+            fsync_directory(path.parent)
         finally:
             if temporary_path is not None:
                 # Best-effort staging cleanup must not hide the original write failure.

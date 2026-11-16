@@ -406,7 +406,7 @@ def strict_inventory(project_root: Path) -> dict[str, object]:
             for directory, names, files in os.walk(base):
                 names[:] = [n for n in names if not n.startswith('.')]
                 indexed.extend(
-                    str((Path(directory) / name).relative_to(root))
+                    (Path(directory) / name).relative_to(root).as_posix()
                     for name in files if name.endswith('.py'))
     per_file: dict[str, list[dict[str, object]]] = {}
     for relative in sorted(set(indexed)):

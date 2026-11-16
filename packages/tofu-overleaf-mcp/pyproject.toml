@@ -9,7 +9,7 @@ description = "Bounded immutable paper artifact export for Overleaf MCP"
 requires-python = ">=3.12"
 license = "MIT"
 dependencies = [
-  "overleaf-mcp-plus[compile]==0.3.1",
+  "overleaf-mcp-plus[compile]==0.3.2",
   "mcp>=2,<3",
   "httpx>=0.28,<1",
   "jsonschema>=4.18,<5",

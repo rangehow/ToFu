@@ -53,8 +53,8 @@ def test_default_overleaf_uses_the_owned_source_and_shared_isolated_runner():
     catalog = get_catalog_entry('overleaf')
     assert catalog['command'] == 'tofu-overleaf-mcp' and catalog['args'] == []
     argv = mc.vendored_launch_argv(catalog['command'])
-    assert argv[:4] == ['uv', 'run', '--no-project', '--with-editable']
-    source = Path(argv[4])
+    assert argv[:3] == ['uv', 'run', '--no-project'] and argv[-1] == catalog['command']
+    source = Path(argv[argv.index('--with-editable') + 1])
     assert (source/'pyproject.toml').is_file()
     assert source.parent.name == 'packages' and source.name == 'tofu-overleaf-mcp'
     before = (source/'pyproject.toml').read_bytes()

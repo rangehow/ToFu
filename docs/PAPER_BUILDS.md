@@ -258,7 +258,7 @@ Unverified builds remain readable with source following disabled.
 ## Overleaf artifact producer
 
 `packages/tofu-overleaf-mcp/` is an independently installable MCP extension of
-`overleaf-mcp-plus[compile]==0.3.1`. Its `tofu-overleaf-mcp` stdio entry point
+`overleaf-mcp-plus[compile]==0.3.2`. Its `tofu-overleaf-mcp` stdio entry point
 preserves upstream project tools and adds schema-described build/read/release
 tools from the paper-build contract. The default application launcher uses this
 repository-owned source through the existing isolated uv runner and preparation

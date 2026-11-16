@@ -19,10 +19,13 @@ Facade-routing: every access to a monkeypatchable name (state dicts,
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import sys
 import time
+import tomllib
 from urllib.parse import urlsplit
 
 from lib.log import get_logger
@@ -38,10 +41,12 @@ logger = get_logger(__name__)
 #: DELIBERATELY (a dated, reviewed bump) to adopt newer server releases —
 #: that is the whole point: upgrades become an explicit edit with a diff,
 #: instead of something that happens to whoever resolves next.
-# The 2026-08-14 ceiling is a reviewed bump which includes
-# ``overleaf-mcp-plus==0.3.1`` and MCP SDK v2.0.0 used by the adopted
-# hope/llm/xuecheng snapshots. Keep the cutoff, but move it only alongside an
-# explicit, tested dependency upgrade.
+# The 2026-08-14 ceiling is a reviewed bump which includes MCP SDK v2.0.0
+# used by the adopted hope/llm/xuecheng snapshots. Keep the cutoff, but move
+# it only alongside an explicit, tested dependency upgrade. Exact ``==`` pins
+# in a vendored source's own ``pyproject.toml`` are exempt per package (see
+# ``_exact_pin_exemptions``): a reviewed exact pin is already reproducible,
+# and upgrading one server must not float every launcher's transitive tree.
 _SUPPLY_CUTOFF_DEFAULT = '2026-08-14T00:00:00Z'
 
 #: Marker file written into each npm ``_npx/<hash>/`` slot recording the
@@ -411,6 +416,27 @@ def _prewarm_warm_marker_path(command: str) -> str:
     return os.path.join(tool_cache_root(), f'{command}{_PREWARM_WARM_MARKER}')
 
 
+def _launch_fingerprint(command: str) -> str:
+    """Digest of what a warm env was resolved FOR: launch argv + source manifests.
+
+    A dependency bump in a vendored ``pyproject.toml`` makes uv re-resolve on
+    the next launch, so a warm marker recorded for the previous manifest must
+    not grant the narrow (warm) handshake budget.
+    """
+    argv = _pkg().vendored_launch_argv(command)
+    if argv is None:
+        return ''
+    digest = hashlib.sha256(json.dumps(argv).encode())
+    for at, arg in enumerate(argv):
+        if arg == '--with-editable' and at + 1 < len(argv):
+            try:
+                with open(os.path.join(argv[at + 1], 'pyproject.toml'), 'rb') as f:
+                    digest.update(f.read())
+            except OSError:
+                digest.update(b'\0missing')
+    return digest.hexdigest()
+
+
 def vendored_needs_cold_budget(command: str) -> bool:
     """True when a vendored launcher's next isolated launch must re-resolve deps.
 
@@ -422,7 +448,12 @@ def vendored_needs_cold_budget(command: str) -> bool:
     """
     if not _pkg()._find_vendored_source(command):
         return False
-    return not os.path.isfile(_prewarm_warm_marker_path(command))
+    try:
+        with open(_prewarm_warm_marker_path(command), encoding='utf-8') as f:
+            recorded = json.load(f).get('launch')
+    except (OSError, ValueError, AttributeError):
+        return True
+    return recorded != _launch_fingerprint(command)
 
 
 def _prewarm_note_warm(command: str) -> None:
@@ -431,7 +462,8 @@ def _prewarm_note_warm(command: str) -> None:
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, 'w', encoding='utf-8') as f:
-            json.dump({'ts': time.time(), 'command': command}, f)
+            json.dump({'ts': time.time(), 'command': command,
+                       'launch': _launch_fingerprint(command)}, f)
     except OSError as e:
         logger.debug('[MCP] could not persist pre-warm marker: %s', e)
 
@@ -804,6 +836,7 @@ def vendored_launch_argv(command: str) -> list[str] | None:
     """Resolve a vendored bare command to its ISOLATED launch argv.
 
     Returns ``['uv', 'run', '--no-project', '--with-editable', <src>, command]``
+    (plus one ``--exclude-newer-package <pin>=false`` per exact source pin)
     when ``command`` names a registered vendored server whose source exists,
     else ``None``. This is THE decoupling mechanism: the spawned process gets
     its own resolved environment, so the server's ``mcp`` and Tofu's ``mcp``
@@ -825,14 +858,49 @@ def vendored_launch_argv(command: str) -> list[str] | None:
     if not found:
         return None
     src, _editable = found
-    argv = ['uv', 'run', '--no-project', '--with-editable', src]
+    sources = [src]
     from lib.mcp.vendored import VENDORED_LAUNCHERS
     for relative in VENDORED_LAUNCHERS.get(command, {}).get('extra_sources', []):
         extra = os.path.join(_pkg()._repo_root(), relative)
         if not os.path.isfile(os.path.join(extra, 'pyproject.toml')):
             raise ValueError(f'MCP shared dependency source missing: {relative}')
-        argv.extend(['--with-editable', extra])
+        sources.append(extra)
+    argv = ['uv', 'run', '--no-project']
+    for package in _exact_pin_exemptions(sources):
+        argv.extend(['--exclude-newer-package', f'{package}=false'])
+    for source in sources:
+        argv.extend(['--with-editable', source])
     return [*argv, command]
+
+
+_EXACT_PIN = re.compile(
+    r'^\s*([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)\s*(?:\[[^\]]*\])?\s*'
+    r'===?\s*[^\s,*]+\s*$')
+
+
+def _exact_pin_exemptions(sources: list[str]) -> list[str]:
+    """Normalized names of the exact ``==`` dependency pins of vendored sources.
+
+    ``UV_EXCLUDE_NEWER`` makes FLOATING launcher resolution reproducible. An
+    exact pin in a repository-reviewed manifest already is, so the cutoff
+    must not make it unsatisfiable (measured 2026-11-16: uv refused
+    ``overleaf-mcp-plus==0.3.2``, uploaded 2026-11-15, under the 2026-08-14
+    cutoff). uv 0.12 has no environment form of ``--exclude-newer-package``,
+    so the exemption travels in argv. Transitive dependencies stay capped.
+    """
+    names: set[str] = set()
+    for source in sources:
+        try:
+            with open(os.path.join(source, 'pyproject.toml'), 'rb') as f:
+                dependencies = tomllib.load(f).get('project', {}).get('dependencies', [])
+        except (OSError, tomllib.TOMLDecodeError) as e:
+            logger.warning('[MCP] cannot read dependency pins of %s: %s', source, e)
+            continue
+        for requirement in dependencies:
+            match = _EXACT_PIN.match(str(requirement).split(';', 1)[0])
+            if match:
+                names.add(re.sub(r'[-_.]+', '-', match.group(1)).lower())
+    return sorted(names)
 
 
 def prewarm_vendored_launcher(command: str) -> tuple[bool, str]:

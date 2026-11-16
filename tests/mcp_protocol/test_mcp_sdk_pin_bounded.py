@@ -373,14 +373,64 @@ def test_launcher_resolution_is_reproducible():
     )
 
 
-def test_default_cutoff_includes_current_adopted_mcp_releases():
-    """The reproducibility ceiling must not exclude an adopted dependency."""
-    from lib.mcp.client._vendor import _SUPPLY_CUTOFF_DEFAULT
+def test_overleaf_launcher_pins_root_doc_fix_and_exempts_it_from_cutoff():
+    """The shipped Overleaf launcher resolves overleaf-mcp-plus>=0.3.2.
 
-    assert _SUPPLY_CUTOFF_DEFAULT >= '2026-08-14T00:00:00Z', (
-        'overleaf-mcp-plus==0.3.1 is the adopted exact launcher pin; an '
-        'earlier cutoff makes that release unsatisfiable'
-    )
+    0.3.2 (rootDocId fix) was uploaded 2026-11-15, after the supply cutoff;
+    without the per-package exemption uv reports the pin unsatisfiable.
+    """
+    import tomllib
+
+    from lib.mcp.client import vendored_launch_argv
+    from lib.mcp.vendored import repo_root
+
+    manifest = os.path.join(repo_root(), 'packages', 'tofu-overleaf-mcp', 'pyproject.toml')
+    with open(manifest, 'rb') as f:
+        pins = [d for d in tomllib.load(f)['project']['dependencies']
+                if d.startswith('overleaf-mcp-plus')]
+    assert len(pins) == 1 and '==' in pins[0]
+    version = tuple(int(part) for part in pins[0].split('==', 1)[1].split('.'))
+    assert version >= (0, 3, 2), pins
+
+    argv = vendored_launch_argv('tofu-overleaf-mcp')
+    exemptions = [argv[i + 1] for i, a in enumerate(argv) if a == '--exclude-newer-package']
+    assert 'overleaf-mcp-plus=false' in exemptions
+    assert argv[-1] == 'tofu-overleaf-mcp'
+
+
+def test_only_exact_source_pins_are_exempt_from_cutoff(tmp_path, monkeypatch):
+    import lib.mcp.client as mc
+
+    src = tmp_path / 'pin-mcp'
+    src.mkdir()
+    (src / 'pyproject.toml').write_text(
+        '[project]\nname = "pin-mcp"\nversion = "0"\ndependencies = [\n'
+        '  "Exact_Pkg[extra]==1.2.3",\n  "marked==2.0; python_version >= \'3\'",\n'
+        '  "floating>=1",\n  "wild==1.*",\n  "ranged==1.0,<2",\n]\n')
+    monkeypatch.setitem(mc._VENDORED_LAUNCHERS, 'pin-mcp', {'sources': [str(src)]})
+    argv = mc.vendored_launch_argv('pin-mcp')
+    assert argv == ['uv', 'run', '--no-project',
+                    '--exclude-newer-package', 'exact-pkg=false',
+                    '--exclude-newer-package', 'marked=false',
+                    '--with-editable', str(src), 'pin-mcp']
+
+
+def test_manifest_change_invalidates_warm_marker(tmp_path, monkeypatch):
+    """A dependency bump re-resolves on next launch, so it gets the cold budget."""
+    import lib.mcp.client as mc
+    from lib.mcp.client import _vendor
+
+    src = tmp_path / 'bump-mcp'
+    src.mkdir()
+    manifest = src / 'pyproject.toml'
+    manifest.write_text('[project]\nname = "bump-mcp"\nversion = "0"\ndependencies = ["x==1"]\n')
+    monkeypatch.setitem(mc._VENDORED_LAUNCHERS, 'bump-mcp', {'sources': [str(src)]})
+    monkeypatch.setattr(_vendor, 'tool_cache_root', lambda: str(tmp_path / 'cache'))
+    assert mc.vendored_needs_cold_budget('bump-mcp')
+    _vendor._prewarm_note_warm('bump-mcp')
+    assert not mc.vendored_needs_cold_budget('bump-mcp')
+    manifest.write_text(manifest.read_text().replace('x==1', 'x==2'))
+    assert mc.vendored_needs_cold_budget('bump-mcp')
 
 
 def test_supply_cutoff_is_operator_overridable_and_optional():

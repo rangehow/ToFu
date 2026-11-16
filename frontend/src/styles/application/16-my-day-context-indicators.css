@@ -68,16 +68,6 @@
   margin-top: var(--space-1);
   line-height: 1.5;
 }
-.myday-stream-convs {
-  font-size: var(--font-size-xs);
-  font-weight: 700;
-  color: var(--tf-ink-soft);
-  margin-top: var(--space-1);
-  padding: 2px var(--space-2);
-  background: var(--tf-cream);
-  border: 1px solid var(--tf-ink);
-  display: inline-block;
-}
 /* Done stream — muted */
 .myday-stream.s-done {
   opacity: 0.6;
@@ -91,7 +81,6 @@
 /* ══════════════════════════════════════
    Tomorrow TODO items
    ══════════════════════════════════════ */
-.myday-tomorrow { margin-bottom: var(--space-1); }
 .myday-todo-item {
   display: flex;
   align-items: center;
@@ -167,33 +156,6 @@
   box-shadow: 0 0 0 var(--tf-ink);
 }
 /* Launch conversation button */
-.myday-todo-launch {
-  width: 22px;
-  height: 22px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--tf-white);
-  border: var(--tf-border-sm);
-  cursor: pointer;
-  padding: 0;
-  color: var(--tf-accent, #6366f1);
-  opacity: 0;
-  transition: opacity 0.15s, background 0.15s, transform 0.1s, box-shadow 0.1s, color 0.15s;
-}
-.myday-todo-item:hover .myday-todo-launch { opacity: 0.7; }
-.myday-todo-launch:hover {
-  opacity: 1 !important;
-  background: #eef2ff;
-  color: #4f46e5;
-  transform: translate(-1px, -1px);
-  box-shadow: 2px 2px 0 var(--tf-ink);
-}
-.myday-todo-launch:active {
-  transform: translate(1px, 1px);
-  box-shadow: 0 0 0 var(--tf-ink);
-}
 
 /* ══════════════════════════════════════
    Add TODO — dashed slot with tofu-block ＋ button
@@ -260,36 +222,8 @@
 /* ══════════════════════════════════════
    Today TODOs (inherited) + accountability bar
    ══════════════════════════════════════ */
-.myday-today-todos { margin-bottom: var(--space-1); }
 .myday-todo-item.inherited {
   border-left: 3px solid var(--tf-gold);
-}
-.myday-inherited-badge {
-  font-size: 10px;
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--tf-gold);
-  border: 1px solid var(--tf-gold);
-  padding: 1px 5px;
-  flex-shrink: 0;
-  opacity: 0.7;
-}
-.myday-accountability-bar {
-  display: inline-block;
-  width: 48px;
-  height: 6px;
-  background: var(--tf-cream);
-  border: 1px solid var(--tf-ink);
-  vertical-align: middle;
-  margin-left: 6px;
-  overflow: hidden;
-}
-.myday-accountability-fill {
-  display: block;
-  height: 100%;
-  background: var(--tf-done);
-  transition: width 0.3s ease;
 }
 
 /* ══════════════════════════════════════
@@ -394,24 +328,6 @@
 }
 
 /* Inherited-only prompt — nudge to generate report */
-.myday-inherited-prompt {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin: 10px 0 6px;
-  padding: 10px 14px;
-  border: 2px dashed var(--tf-mid);
-  background: var(--tf-cream);
-  font-size: var(--font-size-md);
-  font-weight: 700;
-  color: var(--tf-ink);
-}
-.myday-inherited-prompt .myday-generate-btn {
-  margin-top: 0;
-  padding: 6px var(--space-4);
-  font-size: var(--font-size-sm);
-}
 
 /* ══════════════════════════════════════
    Empty state
@@ -447,26 +363,8 @@
 /* ══════════════════════════════════════
    Progress UI — generation in progress
    ══════════════════════════════════════ */
-.myday-generating {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 36px var(--space-5) var(--space-6);
-  text-align: center;
-  min-height: 200px;
-}
 
 /* Spinning tofu block */
-.myday-gen-spinner {
-  width: 36px;
-  height: 36px;
-  border: var(--tf-border);
-  background: var(--tf-gold);
-  box-shadow: var(--tf-shadow-xs);
-  animation: tofuSpin 1.2s cubic-bezier(0.5, 0, 0.5, 1) infinite;
-  margin-bottom: 18px;
-}
 @keyframes tofuSpin {
   0%   { transform: rotate(0deg); }
   25%  { transform: rotate(90deg)  scale(0.9); }
@@ -497,13 +395,6 @@
 }
 
 /* Steps — horizontal tofu blocks */
-.myday-gen-steps {
-  display: flex;
-  gap: 6px;
-  margin-top: var(--space-5);
-  flex-wrap: wrap;
-  justify-content: center;
-}
 .myday-gen-step {
   display: flex;
   align-items: center;
@@ -882,7 +773,6 @@
   font-family:'JetBrains Mono','SF Mono',Menlo,monospace;
 }
 /* Status accents on the expanded detail rows (left accent bar). */
-.turn-prov .tp-detail-row.mp-done{border-left-color:#34d399}
 .turn-prov .tp-detail-row.mp-running{border-left-color:#f59e0b}
 .turn-prov .tp-detail-prefs{border-left-color:rgba(45,212,191,0.85)}
 /* Learned/updated-preferences segment — shares the teal preference accent so
@@ -899,7 +789,6 @@
 [data-theme="tofu"] .turn-prov .tp-detail-prefs-learned{border-left-color:#5E8A50}
 [data-theme="tofu"] .turn-prov .tp-detail-prefs-learned .pl-seg-lead{color:#4A3F2F}
 [data-theme="light"] .turn-prov .tp-detail-prefs-learned .pl-seg-lead{color:#1f2937}
-.turn-prov .tp-detail-login.mp-done{border-left-color:#34d399}
 /* Related-conversations segment — a calm indigo so it reads as a sibling of
    the memory (amber) / prefs (teal) segments but stays distinct. */
 .turn-prov .tp-seg.tp-seg-convs{color:rgba(129,140,248,0.9)}
@@ -1000,16 +889,6 @@
 /* Preferences-applied chip — same shape as the prefetch chip but a calmer
    teal accent so the two read as siblings yet stay distinguishable. The
    "preferences applied" chip is intentionally quiet (collapsed by default). */
-.mem-prefetch-chip.pa-chip{
-  background:rgba(45,212,191,0.05);
-  border-color:rgba(45,212,191,0.22);
-}
-.mem-prefetch-chip.pa-chip .mp-icon{color:rgba(45,212,191,0.8)}
-.mem-prefetch-chip.pa-chip .mp-mem-list.pa-list li{
-  background:rgba(45,212,191,0.06);
-  border-color:rgba(45,212,191,0.22);
-  color:var(--text-primary,#e4e4e7);
-}
 
 /* Icon + text column */
 .mem-prefetch-chip .mp-icon{
@@ -1074,11 +953,6 @@
   border-color:rgba(245,158,11,0.32);background:rgba(245,158,11,0.05);
 }
 .mem-prefetch-chip.mp-running .mp-icon{color:#f59e0b}
-.mem-prefetch-chip.mp-done{
-  border-color:rgba(52,211,153,0.3);background:rgba(52,211,153,0.05);
-}
-.mem-prefetch-chip.mp-done .mp-icon{color:#34d399}
-.mem-prefetch-chip.mp-done .mp-mem-name{color:#86efac}
 
 /* ── MCP login-hint sub-variant ──────────────────────────────────
    Same chassis as mem-prefetch-chip but needs to accommodate:
@@ -1129,15 +1003,10 @@
 [data-theme="light"] .mem-prefetch-chip.mp-running{
   background:rgba(245,158,11,0.06);border-color:rgba(245,158,11,0.35);
 }
-[data-theme="light"] .mem-prefetch-chip.mp-done{
-  background:rgba(34,197,94,0.06);border-color:rgba(34,197,94,0.32);
-}
-[data-theme="light"] .mem-prefetch-chip.mp-done .mp-icon{color:#059669}
 [data-theme="light"] .mem-prefetch-chip .mp-mem-list li{
   background:rgba(245,158,11,0.08);border-color:rgba(245,158,11,0.28);
 }
 [data-theme="light"] .mem-prefetch-chip .mp-mem-name{color:#b45309}
-[data-theme="light"] .mem-prefetch-chip.mp-done .mp-mem-name{color:#047857}
 [data-theme="light"] .mem-prefetch-chip .mp-mem-scope{
   background:rgba(245,158,11,0.18);color:#92400e;
 }
@@ -1174,10 +1043,6 @@
   background:rgba(196,149,106,0.08);border-color:rgba(196,149,106,0.35);
 }
 [data-theme="tofu"] .mem-prefetch-chip.mp-running .mp-icon{color:#C4956A}
-[data-theme="tofu"] .mem-prefetch-chip.mp-done{
-  background:rgba(106,138,94,0.07);border-color:rgba(106,138,94,0.32);
-}
-[data-theme="tofu"] .mem-prefetch-chip.mp-done .mp-icon{color:#5E8A50}
 
 /* ── Memory list items (expanded details) ── */
 [data-theme="tofu"] .mem-prefetch-chip .mp-mem-list li{
@@ -1192,9 +1057,6 @@
 [data-theme="tofu"] .mem-prefetch-chip .mp-mem-name{
   color:#7A5A3A;            /* dark kinako — readable on ivory */
   font-weight:700;
-}
-[data-theme="tofu"] .mem-prefetch-chip.mp-done .mp-mem-name{
-  color:#4E7242;            /* dark matcha */
 }
 [data-theme="tofu"] .mem-prefetch-chip .mp-mem-scope{
   background:rgba(196,149,106,0.18);

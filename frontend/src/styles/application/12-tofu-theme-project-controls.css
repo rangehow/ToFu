@@ -764,21 +764,6 @@
     inset 0 2px 4px rgba(74, 63, 47, 0.06),
     0 0 0 3px rgba(196, 149, 106, 0.15);
 }
-[data-theme="tofu"] .stg-modal .stg-field .stg-tag-editor .stg-tag-input,
-[data-theme="tofu"] .stg-modal .stg-field .stg-tag-editor .stg-tag-input:focus {
-  background: transparent;
-  border: none;
-  box-shadow: none;
-  padding: var(--space-1) 2px;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: var(--font-size-sm);
-}
-[data-theme="tofu"] .stg-modal .stg-tag-chip {
-  border-color: #B8AD94;
-  border-radius: 6px;
-  background: #FFFEF8;
-  box-shadow: none;
-}
 
 /* ── Hint text ── */
 [data-theme="tofu"] .stg-modal .stg-hint {
@@ -1016,7 +1001,6 @@
   color:#7A441F !important;
   font-weight:700 !important
 }
-[data-theme="tofu"] .cost-tag .cost-breakdown{color:#B8A080}
 [data-theme="tofu"] #browserToggle.active{background:rgba(143,81,38,0.08);color:#7A441F;border-bottom-color:rgba(143,81,38,0.5)}
 [data-theme="tofu"] #desktopToggle.active{background:rgba(138,120,176,0.08);color:#8A78B0;border-bottom-color:rgba(138,120,176,0.5)}
 

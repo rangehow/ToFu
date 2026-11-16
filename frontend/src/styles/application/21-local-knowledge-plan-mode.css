@@ -78,28 +78,10 @@
 .kb-switch[aria-checked="true"] { background: var(--accent); border-color: var(--accent); }
 .kb-switch[aria-checked="true"] span { transform: translateX(18px); background: white; }
 .kb-switch:disabled { opacity: .42; cursor: not-allowed; }
-.kb-switch:focus-visible, .kb-icon-btn:focus-visible, .kb-primary-btn:focus-visible,
-.kb-dropzone:focus-visible, .kb-search-row input:focus-visible, .kb-search-row button:focus-visible,
-.kb-doc-delete:focus-visible, .kb-doc-reindex:focus-visible, .kb-doc-view:focus-visible,
-.kb-preview-head button:focus-visible, .kb-preview-status button:focus-visible,
-.kb-category-tabs button:focus-visible, .kb-pagination button:focus-visible,
-.kb-catalog-clear:focus-visible, .kb-preview-more:focus-visible {
+.kb-switch:focus-visible, .kb-primary-btn:focus-visible, .kb-dropzone:focus-visible, .kb-search-row input:focus-visible, .kb-search-row button:focus-visible, .kb-doc-delete:focus-visible, .kb-doc-reindex:focus-visible, .kb-doc-view:focus-visible, .kb-preview-head button:focus-visible, .kb-preview-status button:focus-visible, .kb-category-tabs button:focus-visible, .kb-pagination button:focus-visible, .kb-catalog-clear:focus-visible, .kb-preview-more:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-.kb-icon-btn {
-  width: 34px;
-  height: 34px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  color: var(--text-secondary);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 9px;
-  cursor: pointer;
-}
-.kb-icon-btn:hover { color: var(--text-primary); background: var(--bg-hover); border-color: var(--border); }
 .kb-stats {
   padding: 0 var(--space-6);
   background: var(--bg-primary);

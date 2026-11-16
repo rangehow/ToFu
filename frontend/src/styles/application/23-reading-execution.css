@@ -135,15 +135,6 @@
   text-overflow: clip;
 }
 
-.ptool-cmd-block .ptool-cmd-root-pill {
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  font-size: var(--conversation-font-size-caption);
-  font-weight: var(--weight-regular);
-}
-
 .ptool-cmd-block .ptool-cmd-right {
   flex: 0 1 auto;
   display: flex;

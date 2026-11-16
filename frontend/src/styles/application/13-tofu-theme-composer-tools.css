@@ -908,8 +908,6 @@
 /* Two-axis chips: the group owns the right-push in this theme too, and the
  * neutral finish chip mirrors the pill shape without inheriting a verdict
  * color (it states completion, not success). */
-[data-theme="tofu"] .ptool-cmd-chips{ margin-left: auto; }
-[data-theme="tofu"] .ptool-cmd-chips .ptool-cmd-status{ margin-left: 0; }
 [data-theme="tofu"] .ptool-cmd-finish{
   font-family:var(--sans-body);
   font-size: 10px;
@@ -1082,23 +1080,6 @@
   border-top: 1px dashed rgba(178,163,140,0.3);
   z-index: 1;
   position: relative;
-}
-[data-theme="tofu"] .ptool-cmd-toggle{
-  color: #A07D5A;
-  opacity: 0.55;
-  font-family:var(--sans-body);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  padding: 5px var(--space-4);
-  transition: opacity 0.2s, background 0.2s, color 0.2s;
-  cursor: pointer;
-  user-select: none;
-}
-[data-theme="tofu"] .ptool-cmd-toggle:hover{
-  opacity: 1;
-  color: #8A7458;
-  background: rgba(187,149,114,0.04);
 }
 [data-theme="tofu"] .ptool-cmd-output{
   background: rgba(187,149,114,0.018);

@@ -46,15 +46,6 @@
  * code verdict chip instead of one fused "✓ done" label. The group takes
  * over the right-push; the finish chip is neutral gray in every theme — it
  * states completion, not success. */
-.ptool-cmd-chips {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: calc(var(--space-1) * 1.5);
-}
-.ptool-cmd-chips .ptool-cmd-status {
-  margin-left: 0;
-}
 .ptool-cmd-finish {
   font-size: 10.5px;
   font-weight: 600;

@@ -6272,6 +6272,13 @@ input.settings-mono {
   opacity: 1;
   text-decoration: underline;
 }
+/* An installer older than this server: still offered, but named as such. */
+.stg-desktop-older {
+  margin: var(--space-2) 0 0;
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  color: var(--warning-text);
+}
 
 /* ══════════════════════════════════════
    Toggle Switch — recessed track + floating thumb. The track is carved

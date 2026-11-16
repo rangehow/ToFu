@@ -14,15 +14,26 @@ What lives here:
   * ``_detect_os`` / ``_detect_arch`` — UA / client-hint → platform keys.
   * ``_platform_rows_for`` — the narrowing rule (arch ambiguity fallback),
     shared by ``_match_platform_assets`` and ``store.find_for_platform``.
-  * ``_assets_from_release_payload`` / ``_latest_release_assets`` — the
+  * ``_assets_from_checksums`` / ``_latest_release_assets`` — the
     pinned-tag release parser + its TTL-cached probe (kept for callers that
     legitimately want the GitHub URL list; NOT used in the status request
     path anymore — that path reads the local artifact store).
-  * ``fetch_latest_release`` — the mirror's probe: tag + assets + sizes in
-    one payload, no cache (the mirror owns refresh cadence).
+  * ``fetch_latest_release`` — the mirror's probe: tag + assets + digests
+    in one payload, no cache (the mirror owns refresh cadence).
+
+── Why the probe never touches the REST API ──
+``api.github.com`` serves an unauthenticated caller 60 requests/hour per
+egress IP, a quota a shared egress exhausts for everyone (HTTP 403), which
+left the mirror serving a superseded installer. The probe reads the two
+release facts it needs from github.com instead: the tag behind
+``/releases/latest`` (a redirect) and that release's ``SHA256SUMS`` (every
+published asset with its digest; the release job refuses to publish
+without it). Neither is metered by the API quota.
 """
 
 from __future__ import annotations
+
+import re
 
 from lib.log import get_logger
 from lib.ttl_cache import TTLCache
@@ -161,52 +172,64 @@ def _platform_rows_for(os_key: str, arch: str = '') -> list:
     return rows
 
 
-def _assets_from_release_payload(doc, repo: str) -> list[dict]:
-    """Turn a GitHub release payload into ``[{name, url, size}, …]``.
+_CHECKSUM_LINE = re.compile(r'([0-9a-fA-F]{64}) [ *](\S.*)')
 
-    ── The URL travels WITH the name, and that is the whole point ──
-    Both facts are read out of ONE payload, so they describe one release by
-    construction. Rebuilding a URL as ``/releases/latest/download/<name>``
-    glues a probe-time filename to a click-time release and 404s the moment a
-    new release publishes; that construction is banned here (pinned by
-    tests/server/test_devices_panel_and_platform_download.py).
 
-    Preference order:
-      1. ``browser_download_url`` — GitHub's own pinned-tag URL.
-      2. ``/releases/download/<tag_name>/<name>`` built from the SAME payload.
-      3. Nothing: the asset is dropped (no honest link exists).
+def _assets_from_checksums(text: str, repo: str, tag: str) -> list[dict]:
+    """Turn one release's ``SHA256SUMS`` into ``[{name, url, digest}, …]``.
+
+    ── The URL is pinned to the release the name came from ──
+    ``tag`` is the release this manifest was downloaded from, resolved by the
+    SAME probe, so every URL names the release its file belongs to.
+    Rebuilding a URL as ``/releases/latest/download/<name>`` would glue a
+    probe-time filename to a click-time release and 404 the moment a new
+    release publishes; that construction is banned here (pinned by
+    tests/server/test_devices_panel_and_platform_download.py). Without a tag
+    there is no honest URL, so nothing is returned.
+
+    Lines use the ``shasum -a 256`` format (``<hex>  <name>``, ``*`` marking
+    binary mode). Names are remote input: the mirror validates each with
+    ``store.artifact_path`` before touching the filesystem.
     """
-    if not isinstance(doc, dict):
+    from urllib.parse import quote
+
+    if not tag or not repo:
         return []
-    tag = doc.get('tag_name')
-    tag = tag.strip() if isinstance(tag, str) else ''
     out: list[dict] = []
-    for a in doc.get('assets') or []:
-        if not isinstance(a, dict):
+    for line in (text or '').splitlines():
+        m = _CHECKSUM_LINE.fullmatch(line.strip())
+        if not m:
             continue
-        name = a.get('name')
-        if not isinstance(name, str) or not name:
-            continue
-        url = a.get('browser_download_url')
-        url = url.strip() if isinstance(url, str) else ''
-        if not url and tag and repo:
-            url = (f'https://github.com/{repo}/releases/download/'
-                   f'{tag}/{name}')
-        if not url:
-            logger.warning('[DesktopDist] asset %s has no browser_download_url '
-                           'and the payload carries no tag_name — dropping it '
-                           'rather than guessing a URL', name)
-            continue
-        row = {'name': name, 'url': url}
-        size = a.get('size')
-        if size is not None:
-            row['size'] = size
-        # Preserve the release service's digest, including malformed values:
-        # the acquisition boundary must reject them, not downgrade silently.
-        if a.get('digest') is not None:
-            row['digest'] = a['digest']
-        out.append(row)
+        name = m.group(2)
+        out.append({
+            'name': name,
+            'url': (f'https://github.com/{repo}/releases/download/'
+                    f'{quote(tag, safe="")}/{quote(name, safe="")}'),
+            'digest': 'sha256:' + m.group(1).lower(),
+        })
     return out
+
+
+def _release_from_tag_url(url: str) -> tuple[str, str]:
+    """``(owner/repo, tag)`` from a ``…/<owner>/<repo>/releases/tag/<tag>`` URL.
+
+    The repository comes from the URL GitHub redirected to, not from the
+    configured slug: a renamed repository or a differently-cased slug
+    redirects to its canonical address, where the release assets live.
+    Anything else is ``('', '')`` — the repository has no published release.
+    """
+    from urllib.parse import unquote, urlsplit
+
+    parts = urlsplit(url or '')
+    segments = parts.path.split('/')
+    if (parts.netloc.lower() != 'github.com' or len(segments) != 6
+            or segments[0] or segments[3:5] != ['releases', 'tag']
+            or not segments[1] or not segments[2]):
+        return '', ''
+    tag = unquote(segments[5])
+    if not tag or any(ch in '/\\' or ord(ch) < 33 for ch in tag):
+        return '', ''
+    return f'{segments[1]}/{segments[2]}', tag
 
 
 def _latest_release_assets() -> list[dict]:
@@ -234,28 +257,38 @@ def fetch_latest_release(timeout: float = 8.0) -> dict | None:
     The mirror's probe. No cache — the mirror owns refresh cadence and
     freshness semantics; a cache here would let two consumers disagree about
     what "latest" is within the same minute. ``assets`` entries are
-    ``{name, url, size}`` — size is what lets the mirror skip re-downloading
-    an unchanged 115 MB installer every refresh.
+    ``{name, url, digest}``; the digest is what lets the mirror verify a
+    download and skip re-fetching an unchanged installer every refresh.
+
+    Two github.com requests and no REST API (see the module docstring): the
+    ``/releases/latest`` redirect names the tag, then that release's
+    ``SHA256SUMS`` lists its assets.
     """
     repo = _update_repo()
     if not repo:
         return None
+    from urllib.parse import quote
+
+    from lib.http_transport.client import http_get, http_request
     try:
-        from lib.http_transport.client import http_get
-        resp = http_get(
-            f'https://api.github.com/repos/{repo}/releases/latest',
-            timeout=timeout,
-            headers={'Accept': 'application/vnd.github+json',
-                     'X-GitHub-Api-Version': '2022-11-28'})
-        if resp.status_code != 200:
-            logger.warning('[DesktopDist] latest-release probe returned HTTP '
-                           '%s for %s', resp.status_code, repo)
+        latest = http_request(
+            'HEAD', f'https://github.com/{repo}/releases/latest',
+            timeout=timeout)
+        canonical, tag = _release_from_tag_url(latest.url)
+        if latest.status_code != 200 or not tag:
+            logger.warning('[DesktopDist] latest-release probe for %s ended '
+                           'at HTTP %s %s, not a release tag page',
+                           repo, latest.status_code, latest.url)
             return None
-        doc = resp.json()
-        tag = doc.get('tag_name') if isinstance(doc, dict) else None
-        assets = _assets_from_release_payload(doc, repo)
-        return {'tag': (tag.strip() if isinstance(tag, str) else ''),
-                'assets': assets}
+        sums = http_get(
+            f'https://github.com/{canonical}/releases/download/'
+            f'{quote(tag, safe="")}/SHA256SUMS', timeout=timeout)
+        if sums.status_code != 200:
+            logger.warning('[DesktopDist] SHA256SUMS of %s %s returned HTTP '
+                           '%s', canonical, tag, sums.status_code)
+            return None
+        return {'tag': tag,
+                'assets': _assets_from_checksums(sums.text, canonical, tag)}
     except Exception as e:
         logger.warning('[DesktopDist] latest-release probe failed: %s', e)
         return None
@@ -307,6 +340,6 @@ __all__ = [
     '_update_repo', '_desktop_download_url', '_platform_assets',
     '_PLATFORM_ASSETS_CACHE', '_RELEASE_ASSET_CACHE',
     '_detect_os', '_detect_arch', '_platform_rows_for',
-    '_assets_from_release_payload', '_latest_release_assets',
+    '_assets_from_checksums', '_latest_release_assets',
     'fetch_latest_release', '_match_platform_assets',
 ]

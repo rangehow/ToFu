@@ -92,7 +92,7 @@ def _setup_state(connected: bool) -> str:
 from lib.desktop_dist.platforms import (  # noqa: F401
     _PLATFORM_ASSETS_CACHE,
     _RELEASE_ASSET_CACHE,
-    _assets_from_release_payload,
+    _assets_from_checksums,
     _desktop_download_url,
     _detect_arch,
     _detect_os,
@@ -148,11 +148,12 @@ def _request_platform_downloads(arch_override: str = '',
     os_key = _detect_os(ua)
     if not os_key:
         return []
-    rows = _dist_store.find_for_platform(os_key, _detect_arch(ua, hint),
-                                         kind=kind)
+    arch = _detect_arch(ua, hint)
+    rows = _dist_store.find_for_platform(os_key, arch, kind=kind)
     # Kick the mirror whether or not the store served: an empty store needs
-    # filling, a stale one needs refreshing. Non-blocking and single-flight.
-    _dist_mirror.ensure_fresh()
+    # filling, a stale one needs refreshing. Non-blocking and single-flight;
+    # a refresh this visitor starts fetches their installer first.
+    _dist_mirror.ensure_fresh(prefer=(os_key, arch))
     import os as _os
     # Opt-in autobuild: a Linux visitor with no locally-BUILT artifact can
     # kick a native build (this server's own platform is the only one it can
@@ -194,6 +195,9 @@ def _request_platform_downloads(arch_override: str = '',
             'filename': name,
             'url': base + api_prefix + '/desktop/download/' + quote(name),
             'hosted': 'server',
+            'version': e.get('version') or '',
+            'older_than_server': _dist_store.older_than_server(
+                e.get('version')),
             'size': e.get('size') or 0,
             'source': e.get('source') or 'mirrored',
             'kind': e.get('kind') or 'full',
@@ -375,11 +379,14 @@ def _visitor_os() -> str:
     summary='Node presence and setup status for the Local Control panel',
     description=(
         'Returns ``{connected, last_poll, pending_commands, setup_state, '
-        'visitor_os, download_url, downloads, server_url, '
-        'server_url_reachability, bridge_tokens_issued, server_bind, '
-        'agents, nodes}``. ``connected`` is true when one of the CALLER\'s '
-        'nodes polled within the last 15 s. ``setup_state`` is '
-        '``connected`` or ``pair`` (show the pairing link).'
+        'visitor_os, download_url, downloads, server_version, '
+        'installers_refreshing, server_url, server_url_reachability, '
+        'bridge_tokens_issued, server_bind, agents, nodes}``. '
+        '``connected`` is true when one of the CALLER\'s nodes polled within '
+        'the last 15 s. ``setup_state`` is ``connected`` or ``pair`` (show '
+        'the pairing link). Each ``downloads`` row names its ``version`` and '
+        'whether it is ``older_than_server``; ``installers_refreshing`` is '
+        'true while the server is fetching published installers.'
     ),
     tags=['capabilities'],
 )
@@ -394,6 +401,8 @@ def desktop_status():
     connected = any(a.get('online') for a in agents)
     _last = last_poll_time()
     _arch = (request.args.get('arch') or '').strip()[:16]
+    # Computed first: it kicks the mirror that installers_refreshing reports.
+    downloads = _request_platform_downloads(_arch)
     return api_ok({
         'connected': connected,
         'last_poll': _last,
@@ -404,7 +413,9 @@ def desktop_status():
         'nodes': _node_listing(owner_user_id, principal.tenant_id, agents),
         'setup_state': _setup_state(connected),
         'download_url': _desktop_download_url(),
-        'downloads': _request_platform_downloads(_arch),
+        'downloads': downloads,
+        'server_version': _dist_store.server_version(),
+        'installers_refreshing': _dist_mirror.is_running(),
         'server_url': _agent_server_url(),
         'server_url_reachability': _host_reachability(request.host),
         'bridge_tokens_issued': _caller_bridge_token_count(

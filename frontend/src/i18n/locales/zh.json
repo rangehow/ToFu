@@ -1428,6 +1428,8 @@
   "local.desktopDownloadAll": "查看全部下载 ↗",
   "local.desktopDownloadFor": "下载桌面版",
   "local.desktopHosted": "服务器直连",
+  "local.desktopOlder": "⚠️ 这个安装包是 v{version}，比服务器（v{server}）旧，可能无法启动或连接。服务器暂时没取到新版，请稍后再打开这里，或从「查看全部下载」获取。",
+  "local.desktopOlderRefreshing": "⚠️ 这个安装包是 v{version}，比服务器（v{server}）旧，可能无法启动或连接。服务器正在获取新版，完成后这里会自动换成新链接。",
   "local.desktopName": "电脑",
   "local.tierRead": "读文件",
   "local.tierWrite": "写文件",

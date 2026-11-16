@@ -318,6 +318,154 @@ def test_refresh_skips_assets_that_have_not_changed(tmp_store, fake_net):
     assert mirror.refresh_now() is True
     assert fake_net['downloads'] == before, (
         'an unchanged asset was re-downloaded')
+    # The due full sync (past the max age) re-verifies and still keeps them.
+    m = store.load_manifest()
+    m['refreshed_at'] -= mirror._DEFAULT_MAX_AGE_S + 1
+    store.save_manifest(m)
+    assert mirror.refresh_now() is True
+    assert fake_net['downloads'] == before, (
+        'the due full sync re-downloaded an unchanged asset')
+
+
+@pytest.mark.unit
+def test_a_recheck_that_finds_the_same_release_stops_at_the_probe(
+        tmp_store, fake_net, monkeypatch):
+    """A re-check inside the max age that finds the release the store
+    already holds must not re-hash every installer (~1.4 GB) — that is
+    what keeps the behind-the-server cadence affordable."""
+    fake_net['probe'] = _release()
+    assert mirror.refresh_now() is True
+
+    def _no_rehash(path):
+        raise AssertionError(f'{path} re-hashed on a no-change re-check')
+
+    monkeypatch.setattr(mirror, '_file_sha256', _no_rehash)
+    before = list(fake_net['downloads'])
+    assert mirror.refresh_now() is True
+    assert fake_net['downloads'] == before
+    m = store.load_manifest()
+    assert m['checked_at'] >= m['refreshed_at']
+
+
+@pytest.mark.unit
+def test_refresh_fetches_the_visitors_platform_first(tmp_store, fake_net):
+    """A release lands one asset at a time (~2 min each); the visitor whose
+    poll started the refresh is waiting for THEIR installer, so it goes
+    first and the other platforms follow in table order."""
+    fake_net['probe'] = _release()
+    assert mirror.refresh_now(prefer=('windows', 'x86_64')) is True
+    assert fake_net['downloads'][0] == 'Tofu-Setup-0.14.2-win64.exe'
+    assert len(fake_net['downloads']) == 4
+
+    fake_net['downloads'].clear()
+    fake_net['probe'] = _release(tag='v0.15.0', ver='0.15.0')
+    assert mirror.refresh_now(prefer=('macos', '')) is True
+    assert set(fake_net['downloads'][:2]) == {
+        'Tofu-0.15.0-macos-arm64.dmg', 'Tofu-0.15.0-macos-x86_64.dmg'}, (
+        'an unknown Mac chip prefers both DMGs')
+
+
+@pytest.mark.unit
+def test_a_store_behind_this_server_rechecks_on_the_short_cadence(
+        tmp_store, fake_net, monkeypatch):
+    """The server knows its own version without any network: a store whose
+    release is older is known to be behind, so it re-checks after
+    ``_ERROR_RETRY_S`` instead of serving the old installer for up to the
+    max age. A store at the server's release keeps the max-age cadence."""
+    monkeypatch.setattr(store, 'server_version', lambda: '0.15.0')
+    fake_net['probe'] = _release()
+    assert mirror.refresh_now() is True
+    assert store.behind_server() is True
+    assert mirror.stale() is False, 'a check that just ran is not due again'
+
+    m = store.load_manifest()
+    m['refreshed_at'] -= mirror._ERROR_RETRY_S + 1
+    store.save_manifest(m)
+    assert mirror.stale() is True
+
+    assert mirror.refresh_now() is True  # still v0.14.2: a probe-only check
+    assert mirror.stale() is False, 'the check resets the short cadence'
+
+    monkeypatch.setattr(store, 'server_version', lambda: '0.14.2')
+    m = store.load_manifest()
+    m['refreshed_at'] -= mirror._ERROR_RETRY_S + 1
+    m['checked_at'] -= mirror._ERROR_RETRY_S + 1
+    store.save_manifest(m)
+    assert store.behind_server() is False
+    assert mirror.stale() is False
+
+
+@pytest.mark.unit
+def test_the_probe_reads_the_release_without_the_rate_limited_api(
+        monkeypatch):
+    """Incident 2026-11-16: the unauthenticated REST API quota (60/h per
+    egress IP) was exhausted, the probe got HTTP 403, and a 0.19.2 server
+    kept serving the 0.18.0 installer. The probe resolves the tag from the
+    ``/releases/latest`` redirect and the assets from that release's
+    ``SHA256SUMS`` — never ``api.github.com``."""
+    import types
+
+    sums = ('ab' * 32 + '  Tofu-Setup-0.19.2-win64.exe\n'
+            + 'CD' * 32 + ' *Tofu-0.19.2-macos-arm64.dmg\n')
+    calls = []
+
+    def _request(method, url, **kw):
+        calls.append((method, url))
+        return types.SimpleNamespace(
+            status_code=200,
+            url='https://github.com/rangehow/ToFu/releases/tag/v0.19.2')
+
+    def _get(url, **kw):
+        calls.append(('GET', url))
+        return types.SimpleNamespace(status_code=200, text=sums)
+
+    monkeypatch.setattr(platforms, '_update_repo', lambda: 'rangehow/tofu')
+    monkeypatch.setattr('lib.http_transport.client.http_request', _request)
+    monkeypatch.setattr('lib.http_transport.client.http_get', _get)
+    rel = platforms.fetch_latest_release()
+
+    assert not any('api.github.com' in url for _m, url in calls), calls
+    assert calls == [
+        ('HEAD', 'https://github.com/rangehow/tofu/releases/latest'),
+        ('GET', 'https://github.com/rangehow/ToFu/releases/download/'
+                'v0.19.2/SHA256SUMS'),
+    ], 'assets are read from the canonical repo GitHub redirected to'
+    assert rel['tag'] == 'v0.19.2'
+    assert rel['assets'] == [
+        {'name': 'Tofu-Setup-0.19.2-win64.exe',
+         'url': 'https://github.com/rangehow/ToFu/releases/download/'
+                'v0.19.2/Tofu-Setup-0.19.2-win64.exe',
+         'digest': 'sha256:' + 'ab' * 32},
+        {'name': 'Tofu-0.19.2-macos-arm64.dmg',
+         'url': 'https://github.com/rangehow/ToFu/releases/download/'
+                'v0.19.2/Tofu-0.19.2-macos-arm64.dmg',
+         'digest': 'sha256:' + 'cd' * 32},
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('final_url,status', [
+    ('https://github.com/rangehow/ToFu/releases', 200),
+    ('https://github.com/rangehow/ToFu/releases/tag/v0.19.2', 429),
+    ('https://github.com/login', 200),
+    ('https://example.test/rangehow/ToFu/releases/tag/v0.19.2', 200),
+])
+def test_a_probe_that_does_not_land_on_a_release_tag_fails_closed(
+        monkeypatch, final_url, status):
+    """No published release, a refusal, or an unexpected redirect is a
+    failed probe (stale-while-revalidate), never a guessed tag."""
+    import types
+
+    def _get(url, **kw):
+        raise AssertionError('no checksum fetch without a release tag')
+
+    monkeypatch.setattr(platforms, '_update_repo', lambda: 'rangehow/ToFu')
+    monkeypatch.setattr(
+        'lib.http_transport.client.http_request',
+        lambda method, url, **kw: types.SimpleNamespace(
+            status_code=status, url=final_url))
+    monkeypatch.setattr('lib.http_transport.client.http_get', _get)
+    assert platforms.fetch_latest_release() is None
 
 
 @pytest.mark.unit
@@ -379,7 +527,7 @@ def test_ensure_fresh_is_single_flight_and_nonblocking(tmp_store,
     release = threading.Event()
     calls = []
 
-    def _slow_refresh():
+    def _slow_refresh(**_kw):
         calls.append(1)
         entered.set()
         release.wait(10)
@@ -711,7 +859,47 @@ def test_the_status_endpoint_serves_store_backed_absolute_urls(
     assert e['url'].startswith(('http://', 'https://')), e['url']
     assert e['hosted'] == 'server'
     assert e['size'] == 1024
+    assert e['version'] == '0.14.2'
     assert kicks, 'the mirror must be kicked so an empty/stale store fills'
+    assert kicks[-1][1].get('prefer') == ('windows', 'x86_64'), (
+        'a refresh this visitor starts must fetch their installer first')
+
+
+@pytest.mark.api
+def test_the_status_payload_names_installers_older_than_the_server(
+        tmp_store, flask_client, monkeypatch):
+    """Incident 2026-11-16: a 0.19.2 server offered the 0.18.0 installer with
+    nothing saying so. Each row carries its version and whether it is older
+    than the server; the payload names the server version and whether a
+    newer installer is being fetched."""
+    from lib.version import __version__ as sv
+    monkeypatch.setattr(mirror, 'ensure_fresh', lambda *a, **k: False)
+    _seed(tmp_store, 'Tofu-Setup-0.0.1-win64.exe', version='0.0.1')
+    r = flask_client.get('/api/v4/desktop/status',
+                         headers={**_bearer(), 'User-Agent': _UA_WIN})
+    body = r.get_json()
+    assert body['server_version'] == sv.strip()
+    assert body['installers_refreshing'] is False
+    assert [(d['version'], d['older_than_server'])
+            for d in body['downloads']] == [('0.0.1', True)]
+
+    _seed(tmp_store, f'Tofu-Setup-{sv.strip()}-win64.exe',
+          version=sv.strip())
+    r = flask_client.get('/api/v4/desktop/status',
+                         headers={**_bearer(), 'User-Agent': _UA_WIN})
+    assert [(d['version'], d['older_than_server'])
+            for d in r.get_json()['downloads']] == [(sv.strip(), False)]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('version,expect', [
+    ('0.18.0', True), ('v0.18.0', True), ('0.19.2', False),
+    ('0.20.0', False), ('', False), ('nightly', False), (None, False),
+])
+def test_older_than_server_flags_only_known_older_versions(
+        monkeypatch, version, expect):
+    monkeypatch.setattr(store, 'server_version', lambda: '0.19.2')
+    assert store.older_than_server(version) is expect
 
 
 @pytest.mark.api
@@ -884,7 +1072,7 @@ def test_the_route_keeps_the_extracted_names_importable():
     """The helpers moved to lib/desktop_dist/platforms; the route re-exports
     them so the guard lattice that imports from the route sees no drift."""
     import routes.api_v1.desktop as dmod
-    for name in ('_match_platform_assets', '_assets_from_release_payload',
+    for name in ('_match_platform_assets', '_assets_from_checksums',
                  '_detect_os', '_detect_arch', '_platform_assets',
                  '_latest_release_assets', '_update_repo',
                  '_desktop_download_url'):

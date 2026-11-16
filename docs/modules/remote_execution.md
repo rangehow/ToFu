@@ -219,14 +219,34 @@ and checks source freshness before building. Login startup uses per-user HKCU
 Run, XDG autostart or macOS LaunchAgents via `desktop/autostart.py` and starts
 the desktop app; failed publication preserves the prior entry.
 
-Mirrored downloads are checked against the advertised byte count and, when
-present, the release API's `sha256:` digest before atomic publication; invalid or
+Release discovery reads github.com, never the REST API: the
+`/releases/latest` redirect names the tag, and that release's `SHA256SUMS`
+lists every asset with its digest (`lib/desktop_dist/platforms.py`). Problem:
+the unauthenticated API allows 60 requests/hour per egress IP; a shared egress
+exhausted it (HTTP 403) and the mirror kept serving a superseded installer.
+Decision: two unmetered github.com reads per probe. Alternatives: an
+authenticated API probe (an operator credential for a public read), or the API
+with a web fallback (two discovery paths that still spend the shared quota).
+
+Mirrored downloads are checked against that digest, and against an advertised
+byte count when a probe supplies one, before atomic publication; invalid or
 mismatched metadata keeps the previous installer, and a changed digest
-invalidates same-name/same-size reuse. Releases lacking digest metadata are
+invalidates same-name/same-size reuse. Assets without digest metadata are
 legacy downloads, not signature-verified updates (a local checksum is not
 publisher authentication); this cache is not an installed-client automatic
-updater. It records `integrity_source` (`github-api-digest`/`computed-only`),
-keeps `release_sha256` separate, and acquires sequentially (2 GiB/file, 30 min).
+updater. It records `integrity_source` (`release-sha256sums`/`computed-only`),
+keeps `release_sha256` separate, and acquires sequentially (2 GiB/file, 30 min),
+the platform of the visitor whose poll started the refresh first.
+
+Freshness is judged against this server's own version: a store whose release
+is older (`store.behind_server`) re-checks on the short `_ERROR_RETRY_S`
+cadence instead of waiting out the max age. A check that finds the release the
+store already holds stops at the probe (`checked_at`); the verifying sync,
+which re-hashes every installer, keeps the max-age cadence. Each `downloads`
+row carries `version` and `older_than_server`, the status payload adds
+`server_version` and `installers_refreshing`, and both download surfaces
+(Local Control, Settings) label an older installer as such instead of
+presenting it as current.
 
 ## Failure semantics
 

@@ -1428,6 +1428,8 @@
   "local.desktopDownloadAll": "전체 다운로드 보기 ↗",
   "local.desktopDownloadFor": "다운로드",
   "local.desktopHosted": "서버 호스팅",
+  "local.desktopOlder": "⚠️ 이 설치 파일(v{version})은 서버(v{server})보다 오래된 버전이라 실행되지 않거나 연결되지 않을 수 있습니다. 서버가 아직 새 버전을 가져오지 못했으니 잠시 후 이 창을 다시 열거나 「전체 다운로드 보기」에서 받으세요.",
+  "local.desktopOlderRefreshing": "⚠️ 이 설치 파일(v{version})은 서버(v{server})보다 오래된 버전이라 실행되지 않거나 연결되지 않을 수 있습니다. 서버가 새 버전을 가져오는 중이며, 완료되면 이 링크가 자동으로 바뀝니다.",
   "local.desktopName": "컴퓨터",
   "local.tierRead": "파일 읽기",
   "local.tierWrite": "파일 쓰기",

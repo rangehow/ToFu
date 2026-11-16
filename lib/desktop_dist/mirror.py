@@ -12,10 +12,17 @@ Refresh policy
   cheap (a manifest-age check) and non-blocking: when the store is missing
   or older than ``_DEFAULT_MAX_AGE_S`` it spawns ONE worker thread (single
   flight — a second call while the worker runs changes nothing).
-* A refresh downloads only what changed: an asset whose filename AND size
-  match the local entry is kept (a 115 MB installer is not re-fetched every
-  6 h). A new release tag brings new filenames, which simply miss and get
-  fetched.
+* A store whose release is older than THIS server is known to be behind:
+  it re-checks for a newer release on the short ``_ERROR_RETRY_S`` cadence
+  instead of waiting out the max age. Such a check that finds the release
+  the store already holds stops at the probe (``store.mark_checked``); the
+  full verifying sync keeps its own cadence.
+* The visitor whose poll started a refresh gets their platform's installer
+  first (``prefer``); the other platforms follow.
+* A refresh downloads only what changed: an asset whose filename, size and
+  digest match the local entry is kept (a 115 MB installer is not
+  re-fetched every 6 h). A new release tag brings new filenames, which
+  simply miss and get fetched.
 * Failure is stale-while-revalidate: a failed probe or download keeps the
   old artifacts servable and records ``last_error``; the next kick retries
   after a short backoff (``_ERROR_RETRY_S``) rather than every poll.
@@ -46,6 +53,11 @@ _ERROR_RETRY_S = 60.0
 _DOWNLOAD_MAX_BYTES = 2 * 1024 * 1024 * 1024
 _DOWNLOAD_MAX_SECONDS = 30 * 60
 
+# Where an expected digest comes from: the release's own SHA256SUMS, read by
+# ``platforms.fetch_latest_release`` over HTTPS (integrity, not a publisher
+# signature).
+_RELEASE_DIGEST_SOURCE = 'release-sha256sums'
+
 _worker_lock = threading.Lock()
 _worker: threading.Thread | None = None
 
@@ -56,21 +68,30 @@ def is_running() -> bool:
 
 
 def stale(max_age_s: float = _DEFAULT_MAX_AGE_S) -> bool:
-    """True when a refresh is due (or a recent failure cleared for retry)."""
+    """True when a refresh is due, a recent failure cleared for retry, or
+    the store is behind this server and was not checked in the last
+    ``_ERROR_RETRY_S``."""
     age = store.manifest_age_s()
     if age is None:
         return True
     if age > max_age_s:
         return True
     err_age = store.last_error_age_s()
-    return err_age is not None and err_age > _ERROR_RETRY_S
+    if err_age is not None:
+        return err_age > _ERROR_RETRY_S
+    checked_age = store.last_check_age_s()
+    return (store.behind_server() and checked_age is not None
+            and checked_age > _ERROR_RETRY_S)
 
 
 def ensure_fresh(max_age_s: float = _DEFAULT_MAX_AGE_S, *,
-                 force: bool = False) -> bool:
+                 force: bool = False,
+                 prefer: tuple[str, str] | None = None) -> bool:
     """Kick a background refresh if due. Returns True iff a worker is running.
 
     Never blocks the caller; never spawns a second worker while one runs.
+    ``prefer`` is the ``(os, arch)`` of the visitor whose poll asked; a
+    refresh this call starts downloads that platform first.
     """
     if not force and not stale(max_age_s):
         return is_running()
@@ -79,14 +100,16 @@ def ensure_fresh(max_age_s: float = _DEFAULT_MAX_AGE_S, *,
         if _worker and _worker.is_alive():
             return True
         _worker = threading.Thread(target=_refresh_safe,
+                                   args=(prefer, max_age_s),
                                    name='desktop-dist-mirror', daemon=True)
         _worker.start()
     return True
 
 
-def _refresh_safe() -> None:
+def _refresh_safe(prefer: tuple[str, str] | None = None,
+                  max_age_s: float = _DEFAULT_MAX_AGE_S) -> None:
     try:
-        refresh_now()
+        refresh_now(prefer=prefer, max_age_s=max_age_s)
     except Exception as e:
         logger.error('[DesktopDist] mirror refresh crashed: %s', e,
                      exc_info=True)
@@ -114,13 +137,19 @@ def _release_sha256(asset: dict) -> str:
     return digest.split(':', 1)[1].lower()
 
 
-def refresh_now() -> bool:
+def refresh_now(prefer: tuple[str, str] | None = None,
+                max_age_s: float = _DEFAULT_MAX_AGE_S) -> bool:
     """One synchronous refresh. Returns True on full success.
 
     Synchronous on purpose: the worker thread wraps it, and tests drive it
     directly. Per-asset failures degrade that asset only — the others still
     land, the old file stays servable for the failed one, and the manifest
     records the error so ``stale`` retries it.
+
+    When the probe finds the release the store already holds and its last
+    full sync is clean and younger than ``max_age_s``, nothing was published
+    since: the check is recorded and the verifying sync (which re-hashes
+    every installer) waits for its own cadence.
     """
     rel = platforms.fetch_latest_release()
     if not rel:
@@ -128,6 +157,12 @@ def refresh_now() -> bool:
         return False
     tag = rel.get('tag') or ''
     assets = rel.get('assets') or []
+    manifest = store.load_manifest()
+    synced_age = store.manifest_age_s()
+    if (tag and tag == manifest.get('tag') and not manifest.get('last_error')
+            and synced_age is not None and synced_age <= max_age_s):
+        store.mark_checked()
+        return True
 
     wanted: dict = {}
     for row in platforms._platform_assets():
@@ -141,9 +176,14 @@ def refresh_now() -> bool:
         store.mark_refresh(tag, error='release carried no matching assets')
         return False
 
+    order = list(wanted.items())
+    if prefer:
+        first = platforms._platform_rows_for(*prefer)
+        order.sort(key=lambda item: item[1][0] not in first)
+
     existing = store.artifacts()
     ok = True
-    for name, (row, asset) in wanted.items():
+    for name, (row, asset) in order:
         _os, _arch, label, _pattern, _min = row
         dest = store.artifact_path(name)
         if dest is None:  # Defensive: wanted is already filtered above.
@@ -167,7 +207,7 @@ def refresh_now() -> bool:
                         and _file_sha256(dest) == expected_sha))):
                 if expected_sha:
                     store.record_artifact(dict(cur, release_sha256=expected_sha,
-                                               integrity_source='github-api-digest'))
+                                               integrity_source=_RELEASE_DIGEST_SOURCE))
                 continue
             size, sha = _download(asset['url'], dest + '.part')
             if expected_size is not None and size != expected_size:
@@ -189,7 +229,8 @@ def refresh_now() -> bool:
             'os': _os, 'arch': _arch, 'label': label, 'filename': name,
             'size': size, 'sha256': sha, 'source': 'mirrored',
             'release_sha256': expected_sha,
-            'integrity_source': 'github-api-digest' if expected_sha else 'computed-only',
+            'integrity_source': (_RELEASE_DIGEST_SOURCE if expected_sha
+                                 else 'computed-only'),
             'version': tag.lstrip('v'), 'kind': 'full',
             'fetched_at': time.time(),
         })

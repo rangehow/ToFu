@@ -1428,6 +1428,8 @@
   "local.desktopDownloadAll": "すべてのダウンロードを表示 ↗",
   "local.desktopDownloadFor": "デスクトップ版をダウンロード",
   "local.desktopHosted": "サーバー直結",
+  "local.desktopOlder": "⚠️ このインストーラー（v{version}）はサーバー（v{server}）より古いため、起動や接続ができない可能性があります。サーバーはまだ新しい版を取得できていません。しばらくしてからここを開き直すか、「すべてのダウンロードを表示」から入手してください。",
+  "local.desktopOlderRefreshing": "⚠️ このインストーラー（v{version}）はサーバー（v{server}）より古いため、起動や接続ができない可能性があります。サーバーが新しい版を取得中です。完了すると、このリンクは自動で新しいものに切り替わります。",
   "local.desktopName": "コンピューター",
   "local.tierRead": "ファイル読み取り",
   "local.tierWrite": "ファイル書き込み",

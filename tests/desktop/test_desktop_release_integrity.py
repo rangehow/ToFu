@@ -15,11 +15,9 @@ def test_malformed_release_digest_is_not_optional(bad_digest):
 
 
 def test_release_parser_keeps_integrity_metadata():
-    digest = 'sha256:' + 'a' * 64
-    rows = platforms._assets_from_release_payload({'tag_name': 'v1', 'assets': [
-        {'name': 'installer.exe', 'browser_download_url': 'https://example.test/a',
-         'size': 4, 'digest': digest}]}, 'owner/repo')
-    assert rows[0]['digest'] == digest
+    rows = platforms._assets_from_checksums(
+        'A' * 64 + '  installer.exe\n', 'owner/repo', 'v1')
+    assert rows[0]['digest'] == 'sha256:' + 'a' * 64
     assert mirror._release_sha256(rows[0]) == 'a' * 64
 
 
@@ -125,13 +123,18 @@ def test_cached_local_corruption_is_repaired(tmp_path, monkeypatch):
     monkeypatch.setattr(mirror, '_download', download)
     assert mirror.refresh_now()
     assert (tmp_path / name).read_bytes() == b'new'
-    assert store.artifacts()[name]['integrity_source'] == 'github-api-digest'
+    assert store.artifacts()[name]['integrity_source'] == 'release-sha256sums'
     assert store.artifacts()[name]['release_sha256'] == sha
 
 
-@pytest.mark.parametrize('size', [-1, '12', True])
-def test_parser_does_not_erase_invalid_size(size):
-    rows = platforms._assets_from_release_payload({'tag_name': 'v1', 'assets': [
-        {'name': 'installer.exe', 'browser_download_url': 'https://example.test/a',
-         'size': size}]}, 'owner/repo')
-    assert rows[0]['size'] == size
+@pytest.mark.parametrize('line', [
+    'a' * 63 + '  installer.exe',      # short digest
+    'g' * 64 + '  installer.exe',      # not hex
+    'a' * 64 + '  ',                   # no name
+    'a' * 64 + 'installer.exe',        # no separator
+    'sha256:' + 'a' * 64 + '  installer.exe',
+])
+def test_checksum_parser_drops_malformed_lines(line):
+    """A line that is not ``<64 hex> <space|*><name>`` names no verifiable
+    asset, so it yields nothing rather than a guessed digest or name."""
+    assert platforms._assets_from_checksums(line, 'owner/repo', 'v1') == []

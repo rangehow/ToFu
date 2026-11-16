@@ -1428,6 +1428,8 @@
   "local.desktopDownloadAll": "Voir tous les téléchargements ↗",
   "local.desktopDownloadFor": "Télécharger",
   "local.desktopHosted": "hébergé par le serveur",
+  "local.desktopOlder": "⚠️ Cet installateur est en v{version}, plus ancien que le serveur (v{server}) : il risque de ne pas démarrer ou de ne pas se connecter. Le serveur n’a pas encore pu récupérer la nouvelle version — rouvrez ce panneau plus tard ou obtenez-la via « Voir tous les téléchargements ».",
+  "local.desktopOlderRefreshing": "⚠️ Cet installateur est en v{version}, plus ancien que le serveur (v{server}) : il risque de ne pas démarrer ou de ne pas se connecter. Le serveur récupère la nouvelle version ; ce lien se mettra à jour automatiquement dès qu’elle sera prête.",
   "local.desktopName": "Ordinateurs",
   "local.tierRead": "Lire les fichiers",
   "local.tierWrite": "Écrire des fichiers",

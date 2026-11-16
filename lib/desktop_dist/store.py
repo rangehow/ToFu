@@ -17,6 +17,8 @@ Manifest shape::
     {
       "tag": "v0.14.2",                    # newest mirrored release tag
       "refreshed_at": 1785000000.0,        # last SUCCESSFUL mirror refresh
+      "checked_at": 1785000060.0,          # last probe that found ``tag``
+                                           # still current (no sync needed)
       "last_error": null,                  # or {"at": ts, "error": "…"}
       "artifacts": {
         "Tofu-Setup-0.14.2-win64.exe": {
@@ -330,6 +332,28 @@ def _version_key(version) -> tuple:
     return (0,)
 
 
+def server_version() -> str:
+    """The version of the server process serving this store."""
+    from lib.version import __version__
+    return (__version__ or '').strip()
+
+
+def older_than_server(version) -> bool:
+    """True when ``version`` is a known release older than this server.
+
+    The desktop protocol evolves with the server, so an older desktop app is
+    a known mismatch. An unknown version on either side is not flagged.
+    """
+    mine = _version_key(server_version())
+    theirs = _version_key(version)
+    return mine != (0,) and theirs != (0,) and theirs < mine
+
+
+def behind_server() -> bool:
+    """True when the newest release the store knows is older than this server."""
+    return older_than_server(load_manifest().get('tag'))
+
+
 def mark_refresh(tag: str, *, error: str | None = None) -> None:
     """Record a mirror outcome. ``error=None`` means full success."""
     now = time.time()
@@ -369,8 +393,35 @@ def last_error_age_s() -> float | None:
     return max(0.0, time.time() - float(err['at']))
 
 
+def mark_checked() -> None:
+    """Record a probe that found the stored release still current."""
+    now = time.time()
+
+    def _mutate(manifest):
+        if not isinstance(manifest, dict):
+            manifest = {}
+        if not isinstance(manifest.get('artifacts'), dict):
+            manifest['artifacts'] = {}
+        manifest['checked_at'] = now
+        return manifest
+
+    update_json_atomic(_manifest_path(), _mutate,
+                       default={'artifacts': {}})
+
+
+def last_check_age_s() -> float | None:
+    """Seconds since the newest successful probe (a full sync or a check)."""
+    m = load_manifest()
+    ts = max(float(m.get('refreshed_at') or 0.0),
+             float(m.get('checked_at') or 0.0))
+    if not ts:
+        return None
+    return max(0.0, time.time() - ts)
+
+
 __all__ = [
     '_store_dir', 'artifact_path', 'load_manifest', 'save_manifest', 'artifacts',
     'resolve_file', 'record_artifact', 'remove_not_in', 'find_for_platform',
-    'mark_refresh', 'manifest_age_s', 'last_error_age_s',
+    'mark_refresh', 'manifest_age_s', 'last_error_age_s', 'server_version',
+    'older_than_server', 'behind_server', 'mark_checked', 'last_check_age_s',
 ]

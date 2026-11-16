@@ -45,7 +45,7 @@ def test_open_dest_is_under_the_main_checkout_data_root_from_a_worktree(linked_w
     assert (default_export_dest('opensource', 'cli_switch', 'main')
             == main / 'data' / 'export' / 'tofu-open--cli_switch')
     # Internal/personal destinations hold no resumable release state.
-    assert default_export_dest('internal', None, 'master') == worktree.parent / 'tofu-yourprovider'
+    assert default_export_dest('internal', None, 'master') == worktree.parent / 'tofu-meituan'
     assert default_export_dest('personal', None, None) == worktree.parent / 'tofu-personal'
 
 

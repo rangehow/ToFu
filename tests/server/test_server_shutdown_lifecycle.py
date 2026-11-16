@@ -732,7 +732,7 @@ def test_a_late_owner_is_recorded_with_its_storage_ownership(monkeypatch):
             ('lib.knowledge.image_ocr_jobs', 'stop_attachment_image_ocr'),
             ('lib.oauth.codex_catalog', 'stop_codex_catalog_refresher'),
             ('lib.scheduler.manager', 'stop_scheduler_worker'),
-            ('tofu_yourprovider.dx.supervisor', 'stop_channel_bridges'),
+            ('tofu_meituan.dx.supervisor', 'stop_channel_bridges'),
             ('lib.channels.github.supervisor', 'stop_github_sessions'),
             ('lib.channels.bots.supervisor', 'stop_bot_sessions'),
             ('lib.database_panel.maintenance', 'stop_maintenance')):
@@ -789,14 +789,14 @@ def test_bot_sessions_are_asked_to_stop_when_the_drain_begins(monkeypatch):
             ('lib.knowledge.image_ocr_jobs', 'stop_attachment_image_ocr'),
             ('lib.oauth.codex_catalog', 'stop_codex_catalog_refresher'),
             ('lib.scheduler.manager', 'stop_scheduler_worker'),
-            ('tofu_yourprovider.dx.supervisor', 'stop_channel_bridges'),
+            ('tofu_meituan.dx.supervisor', 'stop_channel_bridges'),
             ('lib.channels.github.supervisor', 'stop_github_sessions'),
             ('lib.database_panel.maintenance', 'stop_maintenance')):
         monkeypatch.setattr(importlib.import_module(module_name), stop_name, lambda timeout: True)
     monkeypatch.setattr(bridge_relay, 'stop_bridge_owner', lambda timeout: True)
     monkeypatch.setitem(sys.modules, 'lib.app.plugin_registry',
                         SimpleNamespace(run_shutdown_hooks=lambda app: 0))
-    for module_name, registry in (('tofu_yourprovider.dx.supervisor', '_ADAPTERS'),
+    for module_name, registry in (('tofu_meituan.dx.supervisor', '_ADAPTERS'),
                                   ('lib.channels.github.supervisor', '_ADAPTERS'),
                                   ('lib.channels.bots.supervisor', '_SESSIONS')):
         module = importlib.import_module(module_name)

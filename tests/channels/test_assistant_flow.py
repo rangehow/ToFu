@@ -241,7 +241,7 @@ def test_settings_set_notes_and_read_the_audit_over_http(channel, monkeypatch):
     from lib.identity import PrincipalContext
     from routes.api_v1.channels import api_v1_channels_bp
     if DX_INSTALLED:
-        monkeypatch.setattr('tofu_yourprovider.dx.supervisor.notify_account_changed', lambda owner: None)
+        monkeypatch.setattr('tofu_meituan.dx.supervisor.notify_account_changed', lambda owner: None)
     application = Quart(__name__)
     register_http_error_handlers(application)
     application.register_blueprint(attach_v4_envelope(copy_blueprint_to_v4(api_v1_channels_bp, name='channels_v4')))

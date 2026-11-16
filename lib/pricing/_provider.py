@@ -74,7 +74,7 @@ def _install_gateway_claude_cache_pricing():
     """Install declared gateway Claude cache billing per exact provider id.
 
     A gateway profile's ``claude_cache_multipliers`` trait (for example
-    FRIDAY's, bundles/yourprovider/gateway_profiles/friday.json) names how that
+    FRIDAY's, bundles/meituan/gateway_profiles/friday.json) names how that
     gateway bills Claude prompt-cache tokens. Its exact ``provider_ids`` get
     the adjusted rows; every other provider, such as a direct Anthropic key,
     keeps the creator's official row. A core with no profile installs none.

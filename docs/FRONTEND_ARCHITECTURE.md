@@ -1244,10 +1244,10 @@ requesting the application preserves the waterfall. Tests: `main.test.ts`,
   `_brandSvg`, and model-sort names are module-private prelude aliases only.
   The finish badge resolves the route snapshot's `actual_model` Creator and
   model ID independently of the displayed `wire_model_id`. Legacy receipts
-  without that identity strip only a terminal `-yourprovider` hosting suffix before
+  without that identity strip only a terminal `-meituan` hosting suffix before
   family-pattern detection; explicit Creators and relay-first rules still win.
   Passing the whole request name to brand detection was rejected because it
-  mislabels `deepseek-…-yourprovider` as a YourProvider model.
+  mislabels `deepseek-…-meituan` as a Meituan model.
   Conversation role image snippets are a fourth independent asset owner in
   `frontend/src/core/role-avatar-icons.ts`, composed lazily by the retained
   turn adapter after the application base path exists.

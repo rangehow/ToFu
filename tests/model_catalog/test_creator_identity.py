@@ -79,7 +79,7 @@ AGREEING_NAMESPACES = [
     ('inclusionai/ling-3.1-flash', 'ling-3.1-flash', 'bailing'),
     ('xiaomi/mimo-v2.6-pro', 'mimo-v2.6-pro', 'xiaomi'),
     ('bytedance-seed/seed-2.0-lite', 'seed-2.0-lite', 'bytedance'),
-    ('yourprovider/longcat-2.0', 'longcat-2.0', 'yourprovider'),
+    ('meituan/longcat-2.0', 'longcat-2.0', 'meituan'),
     ('perplexity/sonar-pro-search', 'sonar-pro-search', 'perplexity'),
     ('meta-llama/llama-3.1-8b-instruct', 'llama-3.1-8b-instruct', 'meta'),
 ]

@@ -44,7 +44,7 @@ together with the in-repo packages it needs, for example the Hope provider:
 
 ```sh
 python -m pip install ./packages/tofu-environments ./packages/tofu-mtsso-auth \
-  './bundles/yourprovider/environment-provider[official-auth]'
+  './bundles/meituan/environment-provider[official-auth]'
 ```
 
 **Problem:** `pip install` copies a distribution into the interpreter
@@ -52,14 +52,14 @@ environment, and nothing on the restart path refreshed the copy. Providers
 import application modules (`lib.*`) lazily, so a fix that reached the checkout
 never reached a deployment running from it. On 2026-11-12
 `compute_catalog(provider=hope)` failed with `ModuleNotFoundError: No module
-named 'lib.runtime_paths'` from a tofu-yourprovider-environments 0.1.0 copy
+named 'lib.runtime_paths'` from a tofu-meituan-environments 0.1.0 copy
 installed on 2026-10-11, beside a tofu-environments 0.1.0 copy without
 `capacity` or `configured_compute_providers`.
 
 **Decision:** installation stays the opt-in; the checkout that boots Tofu
 supplies the code. `lib/runtime/checkout_distributions.py` declares the
 first-party distributions that import application modules
-(`CHECKOUT_DISTRIBUTIONS`: tofu-environments, tofu-yourprovider-environments). For
+(`CHECKOUT_DISTRIBUTIONS`: tofu-environments, tofu-meituan-environments). For
 each one installed in the interpreter, `server.py` puts its member directory
 ahead of the installed copy on `sys.path` and describes it with the name,
 version and entry points of the tracked `pyproject.toml`. The directory joins
@@ -107,7 +107,7 @@ Without configured services or trusted `environment_provider_ids` /
 `compute_provider_ids` in `configure_provider_context`, only the native provider
 discovery tool is offered. Installing a provider is not proof of usable actor
 credentials. Native collection requires an attached project. No deployment-wide opt-in is added.
-The SDK package and existing private YourProvider providers remain optional and
+The SDK package and existing private Meituan providers remain optional and
 release-separated. A deployment still owns live platform acceptance.
 
 | Tool | Behavior |
@@ -269,7 +269,7 @@ at the provider and adds no persistent polling worker. `read_job_output` adapter
 remain responsible for exact owned-job binding, deadlines and remote transport. Declared cost bounds must be enforced by each real adapter; schema
 validation alone does not enforce remote cost or seal a source file.
 
-The private `bundles/yourprovider/environment-provider` distribution now declares a
+The private `bundles/meituan/environment-provider` distribution now declares a
 `hope` compute entry point. Its adapter uses explicit actor-bound host ports for
 MCP calls, sealed job preparation, exact-operation/exit evidence and output
 reads. It disables transport replay and quota retries on submission, preserves
@@ -442,7 +442,7 @@ have kept its cards with nothing able to consume its result.
   `compute_status` would stop jobs without approval.
 - Counting from `startTime` with a startup allowance: an invented constant.
 
-Verify with `bundles/yourprovider/environment-provider/tests/test_hope_attempts.py`,
+Verify with `bundles/meituan/environment-provider/tests/test_hope_attempts.py`,
 `test_hope_evidence.py` and `packages/tofu-environments/tests/test_jobs.py`.
 
 ### Queues that force a per-worker GPU count

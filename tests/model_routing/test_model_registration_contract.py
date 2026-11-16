@@ -194,8 +194,8 @@ def test_glm53_uses_the_complete_registration_shape():
 
     paths = [ROOT / 'static' / 'provider_templates' / 'glm.json']
     if private_overlay_installed():
-        # The yourprovider template retired into its release-tier bundle.
-        paths.append(ROOT / 'bundles' / 'yourprovider' / 'provider_templates' / 'yourprovider.json')
+        # The meituan template retired into its release-tier bundle.
+        paths.append(ROOT / 'bundles' / 'meituan' / 'provider_templates' / 'meituan.json')
     for path in paths:
         template = json.loads(path.read_text(encoding='utf-8'))
         filename = path.name

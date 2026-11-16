@@ -227,8 +227,8 @@ class ReferenceStdioDriver(ReferenceDriver):
 def _drivers() -> dict[str, type[Driver]]:
     from tests.channels.conformance.driver_bots import QQDriver, WeChatDriver, WeComDriver
     from tests.channels.conformance.driver_github import GitHubDriver
-    # The 大象 driver and baseline moved with the adapter to the YourProvider overlay
-    # (bundles/yourprovider/tests/channels/test_dx_conformance.py).
+    # The 大象 driver and baseline moved with the adapter to the Meituan overlay
+    # (bundles/meituan/tests/channels/test_dx_conformance.py).
     return {'reference': ReferenceDriver, 'reference-stdio': ReferenceStdioDriver,
             'github': GitHubDriver, 'wecom': WeComDriver, 'qq': QQDriver, 'wechat': WeChatDriver}
 

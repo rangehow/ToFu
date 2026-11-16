@@ -38,7 +38,7 @@ CORE_ROOTS = ('lib/', 'routes/', 'serverctl_pkg/', 'bootstrap_pkg/', 'tofu/', 't
 #: Trees that belong to the private overlay or to the private publication toolchain.
 OVERLAY_PATHS = ('bundles/', 'packages/tofu-mtsso-auth/', 'export_pkg/', 'export.py')
 #: Importable names that exist only in the overlay (or private toolchain).
-OVERLAY_MODULES = ('bundles', 'export_pkg', 'hope_mcp', 'llm_mcp', 'tofu_yourprovider', 'tofu_yourprovider_environments',
+OVERLAY_MODULES = ('bundles', 'export_pkg', 'hope_mcp', 'llm_mcp', 'tofu_meituan', 'tofu_meituan_environments',
                    'tofu_mtsso_auth', 'xuecheng_mcp')
 #: Company modules that used to live in core and moved behind the plugin
 #: interface (docs/PUBLIC_CORE.md increments 2-3); re-creating one fails.
@@ -48,7 +48,7 @@ RETIRED_INTERNAL_MODULES = ('lib.catpaw_local_import', 'lib.channels.dx', 'lib.l
 #: an increment that removes it.
 INTERNAL_MODULES_IN_CORE: dict[str, str] = {}
 INTERNAL_IMPORT_DEBT: frozenset[tuple[str, str]] = frozenset()
-HOST_PATTERN = re.compile(r'example-corp\.com|yourprovider\.com|' + '/mnt/' + 'dolphinfs', re.IGNORECASE)
+HOST_PATTERN = re.compile(r'sankuai\.com|meituan\.com|' + '/mnt/' + 'dolphinfs', re.IGNORECASE)
 HOST_LITERAL_DEBT: dict[str, int] = {
     # The off-host repair relay forwards to the project gateway while Tofu
     # itself may be down, so no routing document is readable then; the

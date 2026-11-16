@@ -350,7 +350,7 @@ def test_disabling_is_the_settings_channel_update_and_is_audited(channel):
 
 
 def _login_session(mis):
-    from tofu_yourprovider.dx.login import LoginSession
+    from tofu_meituan.dx.login import LoginSession
     return LoginSession(mis, {})
 
 
@@ -359,10 +359,10 @@ def test_dx_preconditions_ask_the_supervisors_own_login_question(s, monkeypatch)
     asked = []
     monkeypatch.setattr(owner_settings, '_channel_view', lambda owner, name: {
         'enabled': False, 'loginMis': 'owner01', 'status': {'state': 'needs_login', 'detail': 'expired'}})
-    monkeypatch.setattr('tofu_yourprovider.dx.adapter.launcher_session',
+    monkeypatch.setattr('tofu_meituan.dx.adapter.launcher_session',
                         lambda owner, mis: asked.append((owner, mis)) or _login_session('owner01'))
-    monkeypatch.setattr('tofu_yourprovider.dx.login.approval_required', lambda owner, session: True)
-    monkeypatch.setattr('tofu_yourprovider.dx.supervisor.running_adapter', lambda owner: None)
+    monkeypatch.setattr('tofu_meituan.dx.login.approval_required', lambda owner, session: True)
+    monkeypatch.setattr('tofu_meituan.dx.supervisor.running_adapter', lambda owner: None)
     result = owner_settings.channel_preconditions(OWNER, 'dx')
     assert asked == [(OWNER, 'owner01')]
     assert result['sso_login_state'] == 'approval_required'

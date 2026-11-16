@@ -38,7 +38,7 @@ def test_first_party_requirements_admit_the_checkout_versions():
     # The overlay's provider is the sibling that pins tofu-environments; the
     # public core ships tofu-environments alone.
     expected = {'tofu-environments'} | (
-        {'tofu-yourprovider-environments'} if private_overlay_installed() else set())
+        {'tofu-meituan-environments'} if private_overlay_installed() else set())
     assert expected <= distributions.keys()
     excluded = []
     for path, project in distributions.values():

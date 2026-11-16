@@ -122,5 +122,5 @@
   and the real `test_speech_settings_browser.py` journeys.
 - For Catpaw lifecycle, start with
   `tests/providers/test_catpaw_connection_lifecycle.py` and the Provider mutation
-  contracts, then `bundles/yourprovider/tests/test_catpaw_local_import.py` and
+  contracts, then `bundles/meituan/tests/test_catpaw_local_import.py` and
   `tests/providers/test_catpaw_settings_browser.py`.

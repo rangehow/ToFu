@@ -60,17 +60,17 @@ def test_shipped_tokrouter_claude_route_prepares_a_responses_request(monkeypatch
     from lib.model_routing import compile_candidates
     from lib.model_routing.domain import NativeModelSelection, ProviderOfferingRef
     from lib.model_routing.inference import candidate_inference_metadata
-    from bundles.yourprovider.tests.test_yourprovider_tokrouter_request_names import _yourprovider_document
+    from bundles.meituan.tests.test_meituan_tokrouter_request_names import _meituan_document
 
     monkeypatch.setattr('lib.token_counter.count_tokens', lambda *a, **kw: {'tokens': 20})
     monkeypatch.setattr('lib.tasks_pkg.compaction._tokens.resolve_model_context_limit',
                         lambda *a, **kw: 200000)
     monkeypatch.setattr('lib.desktop.egress.route_request', lambda *a, **kw: 'direct')
-    document = _yourprovider_document('claude-opus-5.5')
+    document = _meituan_document('claude-opus-5.5')
     offering = document['offerings'][0]
     candidate = next(
         row for row in compile_candidates(document, NativeModelSelection(
-            None, ProviderOfferingRef('yourprovider', offering['offering_id']), ''))
+            None, ProviderOfferingRef('meituan', offering['offering_id']), ''))
         if row.deployment['wire_model_id'] == 'tokrouter.claude-opus-5.5')
     assert candidate.connection['protocol'] == 'openai_responses'
     profile = candidate_inference_metadata(candidate)['inference_profile']

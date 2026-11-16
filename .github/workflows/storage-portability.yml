@@ -61,7 +61,9 @@ jobs:
         if: matrix.backend == 'postgres'
         # Debian packages keep initdb/postgres off PATH; without them every
         # [postgres] case would skip and the lane would pass untested.
+        shell: bash
         run: |
+          set -euo pipefail
           sudo apt-get update && sudo apt-get install -y postgresql
           bindir="$(ls -d /usr/lib/postgresql/*/bin | sort -V | tail -n 1)"
           test -x "$bindir/initdb" && test -x "$bindir/postgres"

@@ -345,19 +345,18 @@ def _ensure_canary_browser(build_environment: dict[str, str]) -> str:
     """
     python = (build_environment.get('TOFU_PYTHON')
               or build_environment.get('PYTHON') or sys.executable)
+    from serverctl_pkg.native_engine import _run
     try:
-        completed = subprocess.run(
+        _run(
             [python, str(Path(PROJECT) / 'chromium_env.py'), '--ensure-headless-shell'],
-            cwd=PROJECT, env=build_environment, stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
-            timeout=_FRONTEND_REPAIR_TIMEOUT_SECONDS, check=False)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+            cwd=Path(PROJECT), environment=build_environment,
+            timeout=_FRONTEND_REPAIR_TIMEOUT_SECONDS,
+            progress='Preparing frontend canary Chromium',
+            failure_subject='Headless Chromium preparation')
+    except (OSError, RuntimeError) as exc:
         return f'the frontend bundle canary needs a headless Chromium: {exc}'
-    if completed.returncode == 0:
-        return ''
-    lines = (completed.stderr or '').strip().splitlines()
-    return ('the frontend bundle canary needs a headless Chromium: '
-            + (lines[-1] if lines else f'browser check exited {completed.returncode}'))
+    return ''
+
 
 
 def _captured_build_output_tail(output: object) -> str:
@@ -1356,6 +1355,11 @@ def _print_status(status: dict, *, manager_online: bool = True) -> None:
         print(f'Storage : {holder}')
     if status.get('lastError'):
         print(f"Problem : {status['lastError']}")
+    failure = status.get('lastFailureReason')
+    if (failure and not _status_ready(status)
+            and failure != status.get('lastError')
+            and status.get('lastWorkerExitKind') == 'planned'):
+        print(f'Failure : {failure}')
     if status.get('workerLog'):
         print(f"Log     : {status['workerLog']}")
 

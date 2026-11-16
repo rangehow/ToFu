@@ -475,6 +475,13 @@ def require_exclusive_sidecar_boundary(project_root: Path) -> None:
     report = boundary_report(project_root)
     if report['ready']:
         return
+    unscannable = sorted({str(item['path']) for item in report['violations']
+                          if item['capability'] == 'unscannable_python'})
+    if unscannable:
+        preview = ', '.join(unscannable[:8])
+        raise RuntimeError(
+            'storage cutover refused: cannot read or parse Python source: '
+            f'{preview}; verify the checkout files on this host before retrying')
     files = report['files']
     preview = ', '.join(files[:8])
     suffix = '' if len(files) <= 8 else f', +{len(files) - 8} more'

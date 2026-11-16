@@ -524,6 +524,7 @@ def test_doctor_reports_manager_and_live_worker_budget_drift():
 
 def test_stale_source_frontend_is_rebuilt_once_before_lifecycle_action(
         tmp_path, monkeypatch):
+    monkeypatch.setattr(serverctl, '_ensure_canary_browser', lambda _: '')
     validations = iter([
         RuntimeError('stale i18n'), RuntimeError('stale i18n'), None])
     builds = []
@@ -721,6 +722,7 @@ def test_non_frontend_role_skips_source_artifact_repair(monkeypatch):
 
 def test_frontend_repair_capture_output_surfaces_the_build_log(
         tmp_path, monkeypatch):
+    monkeypatch.setattr(serverctl, '_ensure_canary_browser', lambda _: '')
     validations = iter([RuntimeError('stale i18n'), RuntimeError('stale i18n')])
 
     def validate():
@@ -750,6 +752,7 @@ def test_frontend_repair_capture_output_surfaces_the_build_log(
 
 def test_frontend_repair_without_capture_keeps_the_cli_contract(
         tmp_path, monkeypatch):
+    monkeypatch.setattr(serverctl, '_ensure_canary_browser', lambda _: '')
     validations = iter([RuntimeError('stale'), RuntimeError('stale')])
 
     def validate():
@@ -900,7 +903,7 @@ def test_restart_aborts_before_manager_post_when_frontend_repair_fails(
     monkeypatch.setattr(
         serverctl, 'read_lock_status', lambda _project: {'running': False})
     monkeypatch.setattr(
-        serverctl, '_repair_source_frontend_artifact',
+        serverctl, 'prepare_source_frontend_artifact',
         lambda _operation: 'frontend build failed')
     monkeypatch.setattr(
         serverctl, '_post',
@@ -1677,7 +1680,7 @@ def test_restart_wait_expiry_reports_running_recovery_without_claiming_failure(
     monkeypatch.setattr(serverctl, '_remote_status', lambda: {'running': False})
     monkeypatch.setattr(serverctl, 'read_lock_status', lambda _: {'running': False})
     monkeypatch.setattr(serverctl, '_forwarded_server_env', lambda: {})
-    monkeypatch.setattr(serverctl, '_repair_source_frontend_artifact', lambda _: '')
+    monkeypatch.setattr(serverctl, 'prepare_source_frontend_artifact', lambda _: '')
     monkeypatch.setattr(serverctl, '_post', lambda *a, **k: {'ok': True})
     monkeypatch.setattr(serverctl, '_wait_ready', lambda *a, **k: {
         'running': True, 'observed': 'degraded', 'liveness': True,

@@ -11,6 +11,8 @@ import json
 import os
 import sys
 
+from bootstrap_pkg.env_reexec import environment_reexec_argv
+
 _PROJ_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -61,7 +63,7 @@ def delegate_server_start(server_args: list[str]) -> None:
         if target and os.access(target, os.X_OK) and not in_target \
                 and os.environ.get('_TOFU_ENV_REEXEC') != '1':
             os.environ['_TOFU_ENV_REEXEC'] = '1'
-            os.execv(target, [target, *sys.argv])
+            os.execv(target, environment_reexec_argv(target))
     except (OSError, ValueError, TypeError):
         pass  # An absent/invalid optional env marker leaves manager startup available.
 

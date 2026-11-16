@@ -779,3 +779,34 @@ file, namespace and reserve knobs were removed. Verification:
 ## HTTP source ownership
 
 Problem: inbound and outbound HTTP policy accumulated as unrelated top-level modules. Decision: `lib/http_transport/` owns these modules, with explicit assembly entry points and no eager imports. Alternatives rejected: increasing the top-level module allowance hides ownership drift; compatibility facades preserve two import paths. Existing transport, cancellation and shutdown tests retain behavior. <!-- Evidence note: former docs/evidence/ artifact snapshots cited here were retired from the tree; cited JSON artifacts remain recoverable from git history. -->
+
+
+Frontend canary browser preparation uses the same bounded subprocess owner as
+frontend builds: download output and idle heartbeats reach the lifecycle caller,
+and cancellation or deadline expiry terminates the complete owned process tree.
+Problem: capturing the browser check with `subprocess.run` hid several minutes
+of downloads and could leave its installer descendants alive after a timeout.
+Decision: reuse the preparation runner and existing frontend deadline.
+Alternative rejected: an additional timeout or retry policy would duplicate the
+existing lifecycle budget without fixing output and descendant ownership.
+
+The exclusive-storage preflight distinguishes unreadable or invalid Python source
+from a forbidden database capability. Both refuse startup; source failures name
+the affected checkout files and request host-view verification. A stale FUSE
+lookup can return file attributes while `open` fails, so database-ownership
+remediation would address the wrong problem.
+
+Environment selection preserves the active `__main__.__spec__.name` as a
+`python -m` invocation for resident hosts and other module entry points. Script
+launches retain their forwarded argv. Problem: `sys.argv[0]` is the module file,
+so replaying it as a script during interpreter selection removes the checkout
+root from the import path and breaks resident execution before readiness.
+Decision: the stdlib bootstrap environment owner supplies shared re-exec argv
+to bootstrap, server entry and application boot. Alternative rejected: adding
+`PYTHONPATH` in execution-host callers hides the broken entry contract and
+leaves other module launches exposed.
+
+CLI status retains the last failed preparation beside a different current
+ownership problem when the recorded worker exit was planned and readiness has
+not passed. An old host's lock must not hide a preparation failure that occurred
+before the replacement acquired its lock; both causes remain visible.

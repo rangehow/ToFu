@@ -125,7 +125,12 @@ mode `0600` after every update.
 An install rerun preserves the selected backend, local source edits, unspecified
 provider settings, and the configured port. Clean source checkouts update only
 by fast-forward; `--no-update` skips that step. Matching frontend artifacts are
-reused without a download or Node. `--port` overrides an inherited `PORT` for
+reused without a download or Node. When a source checkout has local Vite build
+dependencies, stale frontend assets are prepared through `serverctl.py
+prepare-frontend --parts frontend` before environment publication; a failed
+source build preserves the selected environment and published frontend rather
+than downloading a release graph from another source revision. Release trees
+without a local builder retain the verified archive path. `--port` overrides an inherited `PORT` for
 both configuration and child startup. No occupied port is silently changed and
 no unrelated listener is killed. A healthy worker identified by the existing
 lifecycle manager is verified, not restarted, when it provably runs this

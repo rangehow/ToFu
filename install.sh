@@ -2682,6 +2682,13 @@ fi  # ── end legacy conda path ($_FAST_PATH_DONE != 1) ──
 step "Installing verified prebuilt frontend"
 if (cd "$INSTALL_DIR" && "$ENV_PYTHON" scripts/verify_frontend_dist.py --authoring-freshness); then
     ok "Existing frontend matches this checkout — no download required"
+elif [[ -f "${INSTALL_DIR}/scripts/build_frontend.mjs" \
+        && -f "${INSTALL_DIR}/node_modules/vite/package.json" ]]; then
+    info "Preparing frontend from this checkout with the lifecycle artifact owner"
+    TOFU_PROJECT_PATH="$INSTALL_DIR" TOFU_PYTHON="$ENV_PYTHON" \
+        "$ENV_PYTHON" "${INSTALL_DIR}/serverctl.py" prepare-frontend --parts frontend \
+        || fail "Source frontend preparation failed; previous environment and frontend preserved. See ${TOFU_INSTALL_LOG}"
+    ok "Source frontend verified (no release download required)"
 else
 _FRONTEND_VERSION="$(tr -d '[:space:]' < "${INSTALL_DIR}/VERSION")"
 [[ -n "$_FRONTEND_VERSION" ]] || fail "VERSION is empty; cannot resolve frontend artifact"

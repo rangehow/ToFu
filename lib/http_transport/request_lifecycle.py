@@ -198,21 +198,23 @@ async def enforce_boot_gate():
     runner = current_app.extensions.get('tofu_boot_runner')
     if runner is None:
         return None
-    from lib.server.server_boot_readiness import application_boot_snapshot
-    snapshot = application_boot_snapshot(current_app)
-    status = snapshot['status']
-    if status == 'ready':
-        return None
-    # After API startup, saved state stays readable through an executor outage.
-    if runner.status == 'ready' and request.method in {'GET', 'HEAD', 'OPTIONS'}:
-        return None
+    # Exempt traffic must not discover the execution owner on a network disk.
+    # In particular, probes and ready-state reads keep the listener observable
+    # while that disk or the execution service is unavailable.
     path = request.path
     if not path.startswith('/api/') or path in _BOOT_GATE_OPEN_PATHS:
         return None
     if runner.status == 'ready' and (
-            path in _STORAGE_WRITE_FENCE_EXEMPT_PATHS
+            request.method in {'GET', 'HEAD', 'OPTIONS'}
+            or path in _STORAGE_WRITE_FENCE_EXEMPT_PATHS
             or (path.endswith('/decide') and path.startswith(
                 _STORAGE_WRITE_FENCE_EXEMPT_DECIDE_PREFIXES))):
+        return None
+    from quart.utils import run_sync
+    from lib.server.server_boot_readiness import application_boot_snapshot
+    snapshot = await run_sync(application_boot_snapshot)(current_app._get_current_object())
+    status = snapshot['status']
+    if status == 'ready':
         return None
     from lib.api_response import api_error
     if status == 'failed':

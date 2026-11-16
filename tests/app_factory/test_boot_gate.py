@@ -419,3 +419,66 @@ def test_live_execution_startup_is_running_then_ready_in_probes_and_gate():
                 assert admitted == [True]
 
     asyncio.run(call())
+
+
+@pytest.mark.parametrize('status,path,method', [
+    ('running', '/api/health', 'GET'),
+    ('running', '/plain-page', 'GET'),
+    ('ready', '/api/some-resource', 'GET'),
+    ('ready', '/api/some-resource', 'HEAD'),
+    ('ready', '/api/v4/update/restart', 'POST'),
+])
+def test_gate_exempt_requests_do_not_read_execution_record(status, path, method):
+    app = _gated_app(_StubRunner(status))
+
+    class UnreachableExecutionRecord:
+        def readiness(self):
+            pytest.fail('exempt request must not wait for the execution state file')
+
+    app.extensions['tofu_command_controls'] = UnreachableExecutionRecord()
+
+    @app.post('/api/v4/update/restart')
+    async def restart():
+        return {'ok': True}
+
+    async def exercise():
+        async with app.test_app():
+            response = await app.test_client().open(path, method=method)
+            assert response.status_code == 200
+
+    asyncio.run(exercise())
+
+
+def test_write_gate_checks_current_execution_owner_off_serving_loop():
+    app = _gated_app(_StubRunner('ready'))
+    loop_thread = threading.get_ident()
+    checks = []
+    admitted = []
+
+    class ExecutionRecord:
+        state = 'unavailable'
+
+        def readiness(self):
+            assert threading.get_ident() != loop_thread, 'execution record I/O blocks serving loop'
+            checks.append(self.state)
+            return {'state': self.state, 'error': 'execution owner unavailable'}
+
+    record = ExecutionRecord()
+    app.extensions['tofu_command_controls'] = record
+
+    @app.post('/api/some-command')
+    async def command():
+        admitted.append(True)
+        return {'ok': True}
+
+    async def exercise():
+        async with app.test_app():
+            client = app.test_client()
+            assert (await client.post('/api/some-command')).status_code == 503
+            assert admitted == []
+            record.state = 'ready'
+            assert (await client.post('/api/some-command')).status_code == 200
+            assert admitted == [True]
+
+    asyncio.run(exercise())
+    assert checks == ['unavailable', 'ready']

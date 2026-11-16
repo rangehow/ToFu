@@ -810,3 +810,19 @@ CLI status retains the last failed preparation beside a different current
 ownership problem when the recorded worker exit was planned and readiness has
 not passed. An old host's lock must not hide a preparation failure that occurred
 before the replacement acquired its lock; both causes remain visible.
+
+
+### Request boot gate and execution-record I/O
+
+Problem: the async boot gate read the resident execution record on the serving
+loop before checking exemptions. A slow network-volume stat could therefore
+stall every request, including health probes and the SSE reconnects meant to
+recover the connection. Decision: exempt probes and non-API paths before any
+execution lookup; after API startup, reads and existing lifecycle recovery
+commands also bypass that lookup. Non-exempt requests offload the same current
+boot/execution projection through Quart's existing executor, preserving context
+and the fail-closed write verdict. The boot and health views retain their
+current execution verdict through their synchronous view boundary. Alternatives
+rejected: caching a ready verdict could admit writes after the execution owner
+exits; increasing health timeouts conceals the event-loop stall. Verify
+`tests/app_factory/test_boot_gate.py` and the HTTP request-lifecycle suite.

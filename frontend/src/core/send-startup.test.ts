@@ -87,6 +87,34 @@ describe('retryTransientSendStartup', () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it('lets a sent write settle across a user stop and starts no further attempt', async () => {
+    const user = new AbortController();
+    const signals: AbortSignal[] = [];
+    let acknowledge!: (value: string) => void;
+    const run = vi.fn((signal: AbortSignal) => {
+      signals.push(signal);
+      return new Promise<string>((resolve) => { acknowledge = resolve; });
+    });
+    const outcome = retryTransientSendStartup({
+      signal: user.signal, run, retryDelayMs: () => 0, inFlightOnCancel: 'settle',
+    });
+    user.abort();
+    expect(signals[0].aborted).toBe(false);
+    acknowledge('committed');
+    await expect(outcome).resolves.toBe('committed');
+
+    const stopped = new AbortController();
+    const failing = vi.fn(async () => {
+      stopped.abort();
+      throw failure({ status: 0, code: 'network' });
+    });
+    const failed = await retryTransientSendStartup({
+      signal: stopped.signal, run: failing, retryDelayMs: () => 0, inFlightOnCancel: 'settle',
+    }).catch((error: unknown) => error);
+    expect(failed).toMatchObject({ code: 'network' });
+    expect(failing).toHaveBeenCalledTimes(1);
+  });
+
   it('ends the backoff when the user stops and starts no further attempt', async () => {
     vi.useFakeTimers();
     const user = new AbortController();

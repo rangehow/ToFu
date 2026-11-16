@@ -4,24 +4,24 @@ import { createComposerTranslationStatus } from './composer-translation-status';
 
 afterEach(() => { vi.useRealTimers(); document.body.replaceChildren(); });
 describe('composer translation progress', () => {
-  it('keeps an insertion preview in one receipt through preparation and translation', () => {
+  it('keeps an insertion preview in one receipt without a phase label', () => {
     vi.useFakeTimers();
     document.body.innerHTML = '<div class="input-box"><textarea>next draft</textarea></div>';
     const receipt = createComposerTranslationStatus({ document, now: () => 0,
       activeConversationId: () => 'c1', label: key => key });
-    const wait = receipt.begin('c1', 'send', { phase: 'preparing', message: '<b>补充约束</b>' });
+    const wait = receipt.begin('c1', 'send', { message: '<b>补充约束</b>' });
     const row = document.querySelector('[role="status"]');
     expect(row?.querySelector('.composer-translation-message')?.textContent).toBe('<b>补充约束</b>');
     expect(row?.querySelector('b')).toBeNull();
-    expect(row?.textContent).toContain('send.preparing');
-    receipt.update(wait, { phase: 'translating' });
+    expect(row?.querySelector('.composer-translation-phase')).toBeNull();
+    expect(row?.textContent).not.toContain('translationWait.send');
+    receipt.update(wait, { message: '<b>补充约束</b>' });
     expect(document.querySelector('[role="status"]')).toBe(row);
-    expect(row?.textContent).toContain('translationWait.send');
     expect(row?.textContent).not.toContain('modelPending');
     expect(row?.querySelector('.composer-translation-message')?.textContent).toBe('<b>补充约束</b>');
     receipt.finish(wait, 'completed');
     expect(document.querySelector('[role="status"]')).toBeNull();
-    receipt.update(wait, { phase: 'preparing' });
+    receipt.update(wait, { message: 'late' });
     expect(document.querySelector('[role="status"]')).toBeNull();
     expect(document.querySelector('textarea')?.value).toBe('next draft');
     expect(vi.getTimerCount()).toBe(0);
@@ -63,6 +63,7 @@ describe('composer translation progress', () => {
     expect(document.querySelector('[role="status"]')).not.toBeNull();
     receipt.finish(wait, 'cancelled');
     expect(document.querySelector('[role="status"]')?.textContent).toContain('modelUnknown');
+    expect(document.querySelector('.composer-translation-outcome')?.textContent).toBe('preview.cancelled');
     expect(vi.getTimerCount()).toBe(0);
     receipt.destroy();
   });
@@ -89,8 +90,7 @@ describe('composer translation progress', () => {
     const newer = receipt.begin('c1', 'turn');
     receipt.finish(order === 'older' ? older : newer, 'completed', 'gpt-6-luna');
     expect(document.querySelector('[role="status"]')?.getAttribute('data-state')).toBe('pending');
-    expect(document.querySelector('[role="status"]')?.textContent).toContain(
-      order === 'older' ? 'translationWait.turn' : 'translationWait.send');
+    expect(document.querySelector('.composer-translation-outcome')).toBeNull();
     expect(vi.getTimerCount()).toBe(1);
     receipt.finish(order === 'older' ? newer : older, 'completed');
     expect(document.querySelector('[role="status"]')).toBeNull();

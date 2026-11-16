@@ -83,9 +83,10 @@ function updateSendButton() {
   const translating = Boolean(conv?._translating);
   const startupConnecting = Boolean(conv?._genStartCtrl);
   const turnBusy = Boolean(conv && convIsBusy(conv));
-  const stopping = Boolean(conv?._finishingStream);
+  // A stopped startup still awaits its submission's answer; show it stopping.
+  const stopping = Boolean(conv?._finishingStream || conv?._genStartStop);
   const stop = () => {
-    if (!conv || conv._finishingStream) return;
+    if (!conv || conv._finishingStream || conv._genStartStop) return;
     if (translating) {
       _stopTranslation(conv);
       return;

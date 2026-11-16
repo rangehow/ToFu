@@ -377,7 +377,8 @@ def test_visual_successful_composer_translation_clears(browser, frontend_visual_
         }""", {"language": language, "theme": theme, "labels": labels})
         status = page.locator('.composer-translation-status')
         assert status.is_visible()
-        assert status.locator('.composer-translation-phase').inner_text() == labels['translationWait.send']
+        assert status.locator('.composer-translation-phase').count() == 0
+        assert labels['translationWait.waited'] in status.inner_text()
         OUT.mkdir(parents=True, exist_ok=True)
         page.screenshot(path=str(OUT / f"translation-compaction-composer-{language}-{theme}-pending.png"), animations="disabled")
         page.evaluate("() => window.__translationFixture.finish(window.__translationToken, 'completed', 'Luna')")

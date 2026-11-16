@@ -13,6 +13,8 @@ import { programCardOpensItself } from '../presentation/program-batch-presentati
 import { boundedProgramDisplay, programActivityMembers, retainedInputDirectoryCounts, retainedProgramValueBytes } from '../presentation/program-activity';
 
 import { escapeCodeText, highlightCodeToHtml } from '../presentation/code-highlight';
+import { disclosureToggleHtml } from '../presentation/disclosure-toggle';
+import { TOOL_ROUND_CHEVRON_RIGHT_SVG } from '../presentation/tool-round-icons';
 import { reconcileRichCardHtml } from './rich-card-reconciliation';
 
 export type ProgramCardText = (
@@ -135,16 +137,16 @@ export function programExecutionCardHtml(
   // Expanding a quiet completed card asks for its outcome, so settled evidence
   // opens first. Gateway history stays closed until its lazy body is requested.
   const resultOpen = !running && !gateway;
-  const resultBlock = result ? `<details data-rich-key="result:${running ? 'running' : needsModel ? 'observation' : failed ? 'error' : 'result'}" class="ptc-detail ptc-result${failed ? ' ptc-result-error' : ''}"${gateway && row._snapshotToolResult ? ' data-lazy-tool-result' : ''}${resultOpen ? ' open' : ''}><summary>${escapeCodeText(text(needsModel ? 'ptc.observation' : 'ptc.result', needsModel ? 'Evidence for judgment' : 'Program result'))}</summary><div class="ptool-result-body"><pre>${escapeCodeText(result)}</pre></div></details>` : '';
-  const codeBlock = code ? `<details data-rich-key="source" class="ptc-detail ptc-code"><summary>${escapeCodeText(text('ptc.code', 'Model-generated execution code'))}</summary><pre><code class="language-${language}">${highlightCodeToHtml(code, language)}</code></pre></details>` : '';
+  const resultBlock = result ? `<details data-rich-key="result:${running ? 'running' : needsModel ? 'observation' : failed ? 'error' : 'result'}" class="ptc-detail ptc-result${failed ? ' ptc-result-error' : ''}"${gateway && row._snapshotToolResult ? ' data-lazy-tool-result' : ''}${resultOpen ? ' open' : ''}>${disclosureToggleHtml(escapeCodeText(text(needsModel ? 'ptc.observation' : 'ptc.result', needsModel ? 'Evidence for judgment' : 'Program result')))}<div class="ptool-result-body"><pre>${escapeCodeText(result)}</pre></div></details>` : '';
+  const codeBlock = code ? `<details data-rich-key="source" class="ptc-detail ptc-code">${disclosureToggleHtml(escapeCodeText(text('ptc.code', 'Model-generated execution code')))}<pre><code class="language-${language}">${highlightCodeToHtml(code, language)}</code></pre></details>` : '';
   // Source stays a separate disclosure so observing evidence never opens code.
   // All attribute values below are fixed, or escaped just like visible text.
   return `<details data-rich-key="program" data-program-attention="${attention}" class="ptc-card${running ? ' ptc-running' : ''}${needsModel ? ' ptc-needs-model' : ''}"${actionable ? ' open' : ''}>`
-    + `<summary class="ptc-head ptool-line"><span class="ptc-chevron" aria-hidden="true">›</span><span class="ptc-title">${escapeCodeText(text('ptc.title', 'Program execution'))}</span><span class="ptc-status${failed ? ' ptc-status-error' : ''}">${escapeCodeText(status)}</span>${summary.length ? `<span class="ptc-meta">${escapeCodeText(summary.join(' · '))}</span>` : ''}</summary>`
+    + `<summary class="ptc-head ptool-line"><span class="ptc-chevron" aria-hidden="true">${TOOL_ROUND_CHEVRON_RIGHT_SVG}</span><span class="ptc-title">${escapeCodeText(text('ptc.title', 'Program execution'))}</span><span class="ptc-status${failed ? ' ptc-status-error' : ''}">${escapeCodeText(status)}</span>${summary.length ? `<span class="ptc-meta">${escapeCodeText(summary.join(' · '))}</span>` : ''}</summary>`
     + '<div class="ptc-body">'
     + (reason ? `<p class="ptc-observation">${escapeCodeText(reason)}</p>` : '')
     + resultBlock + codeBlock
-    + (debug && row.programStats && typeof row.programStats === 'object' ? `<details data-rich-key="technical" class="ptc-detail ptc-technical"><summary>${escapeCodeText(text('ptc.technical', 'Technical details'))}</summary><div class="ptc-measurements">${metrics.map(metric => `<span>${escapeCodeText(metric)}</span>`).join('')}</div><details data-rich-key="counters" class="ptc-detail"><summary>${escapeCodeText(text('ptc.counters', 'Raw execution counters'))}</summary><pre>${escapeCodeText(boundedProgramDisplay(row.programStats))}</pre></details></details>` : '')
+    + (debug && row.programStats && typeof row.programStats === 'object' ? `<details data-rich-key="technical" class="ptc-detail ptc-technical">${disclosureToggleHtml(escapeCodeText(text('ptc.technical', 'Technical details')))}<div class="ptc-measurements">${metrics.map(metric => `<span>${escapeCodeText(metric)}</span>`).join('')}</div><details data-rich-key="counters" class="ptc-detail">${disclosureToggleHtml(escapeCodeText(text('ptc.counters', 'Raw execution counters')))}<pre>${escapeCodeText(boundedProgramDisplay(row.programStats))}</pre></details></details>` : '')
     + '</div></details>';
 }
 

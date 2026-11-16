@@ -1048,6 +1048,16 @@
   --signal-latency-bar-gap:2px;
 }
 
+/* Swarm inbox receipts (08-injection-receipts.css): peer-bubble ink, update
+   card stripe/agent/error inks and raw payload surface. Themes override below. */
+:root{
+  --sw-peer-ink:#82aaff;
+  --sw-card-stripe:rgba(251,191,36,0.5);
+  --sw-card-agent-ink:#fbbf24;
+  --sw-card-error-ink:#ef4444;
+  --sw-raw-surface:rgba(255,255,255,0.02);
+}
+
 /* Warm charcoal and tofu cream. Light palettes remain independently selectable. */
 :root:not([data-theme]), :root[data-theme="dark"] {
   color-scheme: dark;
@@ -1097,6 +1107,8 @@
 }
 
 [data-theme="light"]{
+  --sw-peer-ink:#3b5bdb;
+  --sw-raw-surface:rgba(0,0,0,0.03);
   --success-text:#19664D;
   --success-bg:rgba(31,122,92,0.08);
   --success-border:rgba(31,122,92,0.25);
@@ -1116,6 +1128,13 @@
 
 [data-theme="tofu"]{
   --font-ui:var(--sans-body);
+  --sw-peer-ink:#5b54c7;
+  --sw-card-stripe:#d98c3f;
+  --sw-card-agent-ink:#b06d28;
+  --sw-card-paper:#faf8f3;
+  --sw-card-paper-edge:#e0d9c8;
+  --sw-raw-surface:rgba(0,0,0,0.04);
+  --sw-raw-ink:#3a342c;
 
   /* CO-PILOT keeps its established paper/ink/gold chrome independently of chat. */
   --project-surface:#faf8f3;
@@ -9123,30 +9142,28 @@ summary.sw-tl-line::-webkit-details-marker { display: none; }
 .sw-inbox-row>.sw-inbox-row-header{cursor:pointer;list-style:none;display:flex;align-items:center;gap:var(--space-2)}
 .sw-inbox-row>.sw-inbox-row-header::-webkit-details-marker{display:none}
 .sw-inbox-row .sw-inbox-row-ids{color:var(--text-tertiary);font-family:'JetBrains Mono',monospace;font-size:10px;opacity:0.85}
-/* Collapse affordance: a caret appended after the row label (same convention as
-   the convmeta / memory / todo blocks). The explicit .sw-inbox-row-chev span was
-   removed so the far-right slot belongs unambiguously to the "模型原文" button. */
-.sw-inbox-row>.sw-inbox-row-header .ptool-text::after{content:" ▸";font-size:10px;opacity:0.5}
-.sw-inbox-row[open]>.sw-inbox-row-header .ptool-text::after{content:" ▾"}
+/* Collapse affordance: the shared fold chevron after the row label
+   (09-tool-cards.css). The explicit .sw-inbox-row-chev span was removed so the
+   far-right slot belongs unambiguously to the "模型原文" button. */
 /* "Who sent this" bubble — a conversation TITLE (via convTitleById), not a raw
    id. Reads like the peer-msg provenance banner so the sender is legible. It is
    a <button>: clicking jumps to the source conversation (delegated handler in
    tool_rounds.js). */
 .sw-peer-from-group{display:inline-flex;align-items:center;gap:var(--space-1);flex-wrap:wrap;min-width:0}
-.sw-peer-from-bubble{display:inline-flex;align-items:center;gap:5px;flex-shrink:1;min-width:0;max-width:420px;padding:1px 9px;border:1px solid rgba(130,170,255,.35);background:rgba(130,170,255,.09);border-radius:9px;font-size:var(--font-size-xs);line-height:1.4;color:#82aaff;font-weight:600;font-family:inherit;cursor:pointer;transition:background .15s,border-color .15s}
-.sw-peer-from-bubble:hover{background:rgba(130,170,255,.2);border-color:rgba(130,170,255,.65)}
+.sw-peer-from-bubble{display:inline-flex;align-items:center;gap:calc(var(--space-1) + var(--control-edge-inset));flex-shrink:1;min-width:0;max-width:420px;padding:var(--control-edge-inset) calc(var(--space-2) + var(--control-edge-inset));border:var(--control-edge-inset) solid color-mix(in srgb,var(--sw-peer-ink) 35%,transparent);background:color-mix(in srgb,var(--sw-peer-ink) 9%,transparent);border-radius:9px;font-size:var(--font-size-xs);line-height:1.4;color:var(--sw-peer-ink);font-weight:600;font-family:inherit;cursor:pointer;transition:background .15s,border-color .15s}
+.sw-peer-from-bubble:hover{background:color-mix(in srgb,var(--sw-peer-ink) 20%,transparent);border-color:color-mix(in srgb,var(--sw-peer-ink) 65%,transparent)}
 .sw-peer-from-bubble svg{display:block;flex-shrink:0}
 .sw-peer-from-bubble>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sw-peer-from-bubble .sw-peer-jump{opacity:.45;margin-left:1px}
+.sw-peer-from-bubble .sw-peer-jump{opacity:.45;margin-left:var(--control-edge-inset)}
 .sw-peer-from-bubble:hover .sw-peer-jump{opacity:1}
 /* Inside an expanded body card the bubble gets the full card width — the title
    must be readable end-to-end there, not ellipsized like the cramped header. */
 .sw-peer-card-item .sw-peer-from-bubble{max-width:100%}
-.sw-peer-from-more{flex-shrink:0;padding:1px 7px;border-radius:9px;font-size:10px;font-weight:700;color:var(--text-tertiary);background:rgba(130,170,255,.12)}
+.sw-peer-from-more{flex-shrink:0;padding:var(--control-edge-inset) calc(var(--space-2) - var(--control-edge-inset));border-radius:9px;font-size:10px;font-weight:700;color:var(--text-tertiary);background:color-mix(in srgb,var(--sw-peer-ink) 12%,transparent)}
 /* Inbox/peer/steer rows: the right-hand control group owns the right
    end of the header — exactly ONE owner, same as every other row. */
 .sw-inbox-row>.sw-inbox-row-header .ptool-row-ctl{margin-left:auto}
-.sw-inbox-row .sw-inbox-row-body{padding:6px 10px var(--space-2) var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)}
+.sw-inbox-row .sw-inbox-row-body{padding:calc(var(--space-1) + 2 * var(--control-edge-inset)) calc(var(--space-2) + 2 * var(--control-edge-inset)) var(--space-2) var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)}
 
 /* A styled flex body overrides the UA's closed-<details> hiding rule. Keep
    every injection lane compact until its summary is explicitly opened. */
@@ -9154,31 +9171,25 @@ summary.sw-tl-line::-webkit-details-marker { display: none; }
 .sw-inbox-row-empty{color:var(--text-tertiary);font-size:var(--font-size-sm);font-style:italic}
 /* ── Beautified sub-agent / peer update cards (human view) ──
    Replaces the old raw-<pre> XML dump. Clean field header + Markdown body. */
-.sw-card{border:1px solid var(--border);border-left:2px solid rgba(251,191,36,0.5);border-radius:7px;padding:var(--space-2) 11px;background:var(--bg-secondary);display:flex;flex-direction:column;gap:6px}
-.sw-card-head{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
-.sw-card-agent{font-family:'JetBrains Mono',monospace;font-size:var(--font-size-sm);font-weight:700;color:#fbbf24}
-.sw-card-role{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em;color:var(--chip-neutral-color);background:var(--chip-neutral-bg);padding:1px 7px;border-radius:7px}
+.sw-card{border:var(--control-edge-inset) solid var(--border);border-left:2px solid var(--sw-card-stripe);border-radius:7px;padding:var(--space-2) calc(var(--space-3) - var(--control-edge-inset));background:var(--bg-secondary);display:flex;flex-direction:column;gap:calc(var(--space-1) + 2 * var(--control-edge-inset))}
+.sw-card-head{display:flex;align-items:center;gap:calc(var(--space-2) - var(--control-edge-inset));flex-wrap:wrap}
+.sw-card-agent{font-family:'JetBrains Mono',monospace;font-size:var(--font-size-sm);font-weight:700;color:var(--sw-card-agent-ink)}
+.sw-card-role{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em;color:var(--chip-neutral-color);background:var(--chip-neutral-bg);padding:var(--control-edge-inset) calc(var(--space-2) - var(--control-edge-inset));border-radius:7px}
 .sw-card-status{margin-left:0}
 .sw-card-meta{margin-left:auto;font-size:10.5px;color:var(--text-tertiary);font-family:'JetBrains Mono',monospace}
-.sw-card-error{font-size:var(--font-size-sm);line-height:1.5;color:var(--pb-red,#ef4444);background:color-mix(in srgb,var(--pb-red,#ef4444) 8%,transparent);border-radius:5px;padding:6px 9px;overflow-wrap:anywhere}
+.sw-card-error{font-size:var(--font-size-sm);line-height:1.5;color:var(--pb-red,var(--sw-card-error-ink));background:color-mix(in srgb,var(--pb-red,var(--sw-card-error-ink)) 8%,transparent);border-radius:5px;padding:calc(var(--space-1) + 2 * var(--control-edge-inset)) calc(var(--space-2) + var(--control-edge-inset));overflow-wrap:anywhere}
 .sw-card-preview{font-size:12.5px;line-height:1.55;color:var(--text-primary);overflow-wrap:anywhere}
 .sw-card-preview > :first-child{margin-top:0}
 .sw-card-preview > :last-child{margin-bottom:0}
-.sw-card-file{display:inline-flex;align-items:center;gap:5px;font-size:var(--font-size-xs);color:var(--text-tertiary);font-family:'JetBrains Mono',monospace;overflow-wrap:anywhere}
+.sw-card-file{display:inline-flex;align-items:center;gap:calc(var(--space-1) + var(--control-edge-inset));font-size:var(--font-size-xs);color:var(--text-tertiary);font-family:'JetBrains Mono',monospace;overflow-wrap:anywhere}
 .sw-card-file svg{display:block;flex-shrink:0}
-.sw-card-raw-pre{margin:0;white-space:pre-wrap;word-break:break-word;font-family:'JetBrains Mono',monospace;font-size:var(--font-size-xs);line-height:1.5;color:var(--text-secondary);background:rgba(255,255,255,0.02);border-radius:6px;padding:var(--space-2) 10px;max-height:280px;overflow:auto}
+.sw-card-raw-pre{margin:0;white-space:pre-wrap;word-break:break-word;font-family:'JetBrains Mono',monospace;font-size:var(--font-size-xs);line-height:1.5;color:var(--text-secondary);background:var(--sw-raw-surface);border-radius:6px;padding:var(--space-2) calc(var(--space-2) + 2 * var(--control-edge-inset));max-height:280px;overflow:auto}
 .sw-card-rawonly .sw-card-raw-pre,.sw-peer-card-item{}
 .sw-peer-card-item{border-left-color:var(--accent)}
-[data-theme="light"] .sw-card-raw-pre{background:rgba(0,0,0,0.03)}
-[data-theme="light"] .sw-peer-from-bubble{color:#3b5bdb;border-color:rgba(59,91,219,.35);background:rgba(59,91,219,.08)}
-[data-theme="light"] .sw-peer-from-bubble:hover{background:rgba(59,91,219,.16);border-color:rgba(59,91,219,.55)}
-[data-theme="light"] .sw-peer-from-more{background:rgba(59,91,219,.12)}
-[data-theme="tofu"] .sw-card{background:#faf8f3;border-color:#e0d9c8;border-left-color:#d98c3f}
-[data-theme="tofu"] .sw-card-agent{color:#b06d28}
-[data-theme="tofu"] .sw-card-raw-pre{background:rgba(0,0,0,0.04);color:#3a342c}
-[data-theme="tofu"] .sw-peer-from-bubble{color:#5b54c7;border-color:rgba(91,84,199,.35);background:rgba(91,84,199,.08)}
-[data-theme="tofu"] .sw-peer-from-bubble:hover{background:rgba(91,84,199,.16);border-color:rgba(91,84,199,.55)}
-[data-theme="tofu"] .sw-peer-from-more{background:rgba(91,84,199,.12)}
+:is([data-theme="light"],[data-theme="tofu"]) .sw-peer-from-bubble{background:color-mix(in srgb,var(--sw-peer-ink) 8%,transparent)}
+:is([data-theme="light"],[data-theme="tofu"]) .sw-peer-from-bubble:hover{background:color-mix(in srgb,var(--sw-peer-ink) 16%,transparent);border-color:color-mix(in srgb,var(--sw-peer-ink) 55%,transparent)}
+[data-theme="tofu"] .sw-card{background:var(--sw-card-paper);border-color:var(--sw-card-paper-edge)}
+[data-theme="tofu"] .sw-card-raw-pre{color:var(--sw-raw-ink)}
 /* ── Agent rounds: live result preview and prerequisites ──
    Shared keyframes (fadeIn, blink) are consumed beyond the swarm panel. */
 @keyframes agentPulse { 0%, 100% { opacity: 0.6; transform: scale(0.9); } 50% { opacity: 1; transform: scale(1.1); } }
@@ -9584,7 +9595,8 @@ html[data-tofu-planned-interruption="true"] .net-latency-badge{visibility:hidden
 .ptc-head::-webkit-details-marker { display: none; }
 .ptc-head:hover { background: var(--bg-hover); }
 .ptc-head:focus-visible, .ptc-detail summary:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-.ptc-chevron { color: var(--text-tertiary); transition: transform var(--motion-fast) var(--ease-standard); }
+.ptc-chevron { display: inline-flex; flex: none; align-items: center; justify-content: center; width: var(--space-4); height: var(--space-4); color: var(--text-tertiary); transition: transform var(--motion-fast) var(--ease-standard); }
+.ptc-chevron > svg { width: var(--space-4); height: var(--space-4); }
 .ptc-card[open] > .ptc-head > .ptc-chevron { transform: rotate(90deg); }
 .ptc-body { margin: var(--space-1) var(--space-3) var(--space-2) var(--space-4); padding-inline-start: var(--space-3); border-inline-start: var(--control-edge-inset) solid var(--border); }
 .ptc-title { font-weight: var(--weight-semibold); color: var(--text-primary); }
@@ -11332,8 +11344,8 @@ html[data-tofu-planned-interruption="true"] .net-latency-badge{visibility:hidden
    not a raw diff row. */
 .ptool-batch-done-single.md-content {
   padding: var(--space-2) var(--space-3);
-  background: rgba(255,255,255,0.03);
-  border: 1px solid rgba(255,255,255,0.06);
+  background: color-mix(in srgb, white 3%, transparent);
+  border: var(--control-edge-inset) solid color-mix(in srgb, white 6%, transparent);
   font-size: var(--font-size-md);
 }
 .ptool-batch-done-single.md-content > :first-child { margin-top: 0; }
@@ -11358,23 +11370,15 @@ html[data-tofu-planned-interruption="true"] .net-latency-badge{visibility:hidden
 .ptool-memory-block > summary:hover {
   background: var(--accent-subtle);
 }
-.ptool-memory-block > summary .ptool-text::after {
-  content: " ▸";
-  font-size: 10px;
-  opacity: 0.5;
-}
-.ptool-memory-block[open] > summary .ptool-text::after {
-  content: " ▾";
-}
 .ptool-memory-body {
-  margin: var(--space-1) 0 6px 11px;
-  padding: var(--space-3) 14px;
+  margin: var(--space-1) 0 calc(var(--space-1) + 2 * var(--control-edge-inset)) calc(var(--space-3) - var(--control-edge-inset));
+  padding: var(--space-3) calc(var(--space-3) + 2 * var(--control-edge-inset));
   border-left: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
   background: var(--accent-subtle);
   border-radius: 0 8px 8px 0;
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  gap: calc(var(--space-2) + var(--control-edge-inset));
 }
 .ptool-memory-name {
   font-size: 13.5px;
@@ -11386,7 +11390,7 @@ html[data-tofu-planned-interruption="true"] .net-latency-badge{visibility:hidden
 .ptool-memory-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: calc(var(--space-1) + 2 * var(--control-edge-inset));
 }
 .ptool-memory-chip {
   display: inline-flex;
@@ -11421,7 +11425,7 @@ html[data-tofu-planned-interruption="true"] .net-latency-badge{visibility:hidden
 }
 .ptool-memory-content {
   font-size: var(--font-size-md);
-  padding-top: 9px;
+  padding-top: calc(var(--space-2) + var(--control-edge-inset));
   border-top: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
 }
 .ptool-memory-content > :first-child { margin-top: 0; }
@@ -11450,17 +11454,9 @@ html[data-tofu-planned-interruption="true"] .net-latency-badge{visibility:hidden
 }
 .ptool-result-block > summary::-webkit-details-marker { display: none; }
 .ptool-result-block > summary::marker { display: none; content: ""; }
-.ptool-result-block > summary .ptool-text::after {
-  content: " ▸";
-  font-size: 10px;
-  opacity: 0.5;
-}
-.ptool-result-block[open] > summary .ptool-text::after {
-  content: " ▾";
-}
 .ptool-result-body {
-  margin: 2px 0 6px 11px;
-  padding: 2px var(--space-2) 2px 10px;
+  margin: calc(2 * var(--control-edge-inset)) 0 calc(var(--space-1) + 2 * var(--control-edge-inset)) calc(var(--space-3) - var(--control-edge-inset));
+  padding: calc(2 * var(--control-edge-inset)) var(--space-2) calc(2 * var(--control-edge-inset)) calc(var(--space-2) + 2 * var(--control-edge-inset));
   border-left: 2px solid var(--border);
 }
 .ptool-result-pre {
@@ -11472,7 +11468,7 @@ html[data-tofu-planned-interruption="true"] .net-latency-badge{visibility:hidden
 }
 .ptool-result-pre > code {
   display: block;
-  padding: 10px var(--space-3);
+  padding: calc(var(--space-2) + 2 * var(--control-edge-inset)) var(--space-3);
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   font-size: var(--font-size-xs);
   line-height: 1.55;
@@ -11483,7 +11479,7 @@ html[data-tofu-planned-interruption="true"] .net-latency-badge{visibility:hidden
   overflow-y: auto;
 }
 .ptool-result-trunc {
-  padding: var(--space-1) 2px 0;
+  padding: var(--space-1) calc(2 * var(--control-edge-inset)) 0;
   font-size: 10.5px;
   color: var(--text-tertiary);
   font-style: italic;
@@ -11503,8 +11499,8 @@ html[data-tofu-planned-interruption="true"] .net-latency-badge{visibility:hidden
 /* Minimal settle chip on the bare-line catch-all (.ptool-line without a
    result body): solid token colors, never opacity (tool-row state rule). */
 .ptool-line-status {
-  margin-left: 6px;
-  padding: 0 6px;
+  margin-left: calc(var(--space-1) + 2 * var(--control-edge-inset));
+  padding: 0 calc(var(--space-1) + 2 * var(--control-edge-inset));
   border: 1px solid var(--border-light);
   border-radius: 999px;
   font-size: 10px;
@@ -11948,10 +11944,27 @@ html[data-tofu-planned-interruption="true"] .net-latency-badge{visibility:hidden
   transition: transform var(--motion-fast) var(--ease-standard);
 }
 details[open] > .ptool-coord-toggle > svg { transform: rotate(90deg); }
-:is(.ptool-coord-more, .ptool-coord-original, .ptool-coord-debug, .ptool-coord-raw) > :not(summary) {
+:is(.ptool-coord-more, .ptool-coord-original, .ptool-coord-debug, .ptool-coord-raw, .ptool-todo-history, .ptool-work-receipt) > :not(summary) {
   margin-inline-start: calc(var(--space-4) + var(--space-1));
 }
-:is(.ptool-coord-more, .ptool-coord-original, .ptool-coord-debug)[open] > summary { margin-bottom: var(--space-1); }
+:is(.ptool-coord-more, .ptool-coord-original, .ptool-coord-debug, .ptool-work-receipt)[open] > summary { margin-bottom: var(--space-1); }
+/* Tool rows outside the conversation surface (paper panels) carry the same
+   turning chevron after their label; inside the surface,
+   23-reading-process.css draws it at the row's end and hides this one. */
+:is(.ptool-result-block, .ptool-memory-block, .ptool-convmeta-block, .ptool-todo-block, .sw-inbox-row) > summary .ptool-text::after {
+  content: '';
+  display: inline-block;
+  box-sizing: border-box;
+  width: calc(var(--space-1) * 1.5);
+  height: calc(var(--space-1) * 1.5);
+  margin-inline: var(--space-2) var(--space-1);
+  vertical-align: middle;
+  border-inline-end: var(--control-edge-inset) solid var(--text-tertiary);
+  border-block-end: var(--control-edge-inset) solid var(--text-tertiary);
+  transform: rotate(-45deg);
+  transition: transform var(--motion-fast) var(--ease-standard);
+}
+:is(.ptool-result-block, .ptool-memory-block, .ptool-convmeta-block, .ptool-todo-block, .sw-inbox-row)[open] > summary .ptool-text::after { transform: rotate(45deg); }
 .ptool-coord-prose { min-width: 0; overflow-wrap: anywhere; }
 /* A translated text's authored original, one click away. */
 .ptool-coord-original > .ptool-coord-toggle { color: var(--text-tertiary); font-size: var(--conversation-font-size-caption); }
@@ -12025,14 +12038,6 @@ details[open] > .ptool-coord-toggle > svg { transform: rotate(90deg); }
 }
 .ptool-convmeta-block > summary:hover {
   background: var(--accent-subtle);
-}
-.ptool-convmeta-block > summary .ptool-text::after {
-  content: " ▸";
-  font-size: var(--font-size-xs);
-  opacity: 0.5;
-}
-.ptool-convmeta-block[open] > summary .ptool-text::after {
-  content: " ▾";
 }
 .ptool-convmeta-src {
   display: inline-flex;
@@ -25840,7 +25845,7 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
  * The caret is a pseudo-element of the FLEX ROW, so it is an atomic flex item
  * that can never wrap onto a line of its own — the failure the edit card had
  * while its caret was inline text inside the wrapping label. */
-.conversation-surface :is(.ptool-result-header, .ptool-results-header, .sw-inbox-row-header, .ptool-todo-header, .ptool-batch-done-header, .ptool-memory-header, .conversation-tool-card__summary)::after {
+.conversation-surface :is(.ptool-result-header, .ptool-results-header, .sw-inbox-row-header, .ptool-todo-header, .ptool-batch-done-header, .ptool-memory-header, .ptool-convmeta-header, .conversation-tool-card__summary)::after {
   content: '';
   box-sizing: border-box;
   flex: 0 0 var(--space-2);
@@ -25852,7 +25857,7 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
   transform: rotate(-45deg);
   color: var(--text-secondary);
 }
-.conversation-surface details[open] > :is(.ptool-result-header, .sw-inbox-row-header, .ptool-todo-header, .ptool-batch-done-header, .ptool-memory-header, .conversation-tool-card__summary)::after,
+.conversation-surface details[open] > :is(.ptool-result-header, .sw-inbox-row-header, .ptool-todo-header, .ptool-batch-done-header, .ptool-memory-header, .ptool-convmeta-header, .conversation-tool-card__summary)::after,
 .conversation-surface .ptool-results-header[aria-expanded="true"]::after {
   transform: rotate(45deg);
 }
@@ -25866,7 +25871,7 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
   color: var(--text-secondary);
 }
 .conversation-surface .ptool-results-header > .ptool-results-toggle,
-.conversation-surface :is(.ptool-result-header, .sw-inbox-row-header, .ptool-todo-header, .ptool-batch-done-header, .ptool-memory-header) .ptool-text::after {
+.conversation-surface :is(.ptool-result-header, .sw-inbox-row-header, .ptool-todo-header, .ptool-batch-done-header, .ptool-memory-header, .ptool-convmeta-header) .ptool-text::after {
   display: none;
 }
 .conversation-surface .ptc-head::before,

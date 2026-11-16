@@ -19,7 +19,7 @@ describe('program lexical activity', () => {
     expect(html).toContain('Script: look up prior results');
     expect(html).not.toContain('No source tools called again');
     expect(programExecutionCardHtml(round, undefined, false, true)).toContain('No source tools called again');
-    expect(html).toMatch(/class="ptc-detail ptc-result" open><summary>Program result<\/summary><div class="ptool-result-body"><pre>\[\]<\/pre>/);
+    expect(html).toMatch(/class="ptc-detail ptc-result" open><summary class="ptool-coord-toggle"><svg [^]*?<\/svg><span>Program result<\/span><\/summary><div class="ptool-result-body"><pre>\[\]<\/pre>/);
     expect(html).not.toContain('intent');
   });
 });

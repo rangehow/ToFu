@@ -283,6 +283,16 @@
   --signal-latency-bar-gap:2px;
 }
 
+/* Swarm inbox receipts (08-injection-receipts.css): peer-bubble ink, update
+   card stripe/agent/error inks and raw payload surface. Themes override below. */
+:root{
+  --sw-peer-ink:#82aaff;
+  --sw-card-stripe:rgba(251,191,36,0.5);
+  --sw-card-agent-ink:#fbbf24;
+  --sw-card-error-ink:#ef4444;
+  --sw-raw-surface:rgba(255,255,255,0.02);
+}
+
 /* Warm charcoal and tofu cream. Light palettes remain independently selectable. */
 :root:not([data-theme]), :root[data-theme="dark"] {
   color-scheme: dark;
@@ -332,6 +342,8 @@
 }
 
 [data-theme="light"]{
+  --sw-peer-ink:#3b5bdb;
+  --sw-raw-surface:rgba(0,0,0,0.03);
   --success-text:#19664D;
   --success-bg:rgba(31,122,92,0.08);
   --success-border:rgba(31,122,92,0.25);
@@ -351,6 +363,13 @@
 
 [data-theme="tofu"]{
   --font-ui:var(--sans-body);
+  --sw-peer-ink:#5b54c7;
+  --sw-card-stripe:#d98c3f;
+  --sw-card-agent-ink:#b06d28;
+  --sw-card-paper:#faf8f3;
+  --sw-card-paper-edge:#e0d9c8;
+  --sw-raw-surface:rgba(0,0,0,0.04);
+  --sw-raw-ink:#3a342c;
 
   /* CO-PILOT keeps its established paper/ink/gold chrome independently of chat. */
   --project-surface:#faf8f3;

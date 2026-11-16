@@ -4,7 +4,7 @@
  * label arrives already translated; this module authors no copy.
  */
 import { escapeHtmlText as escape } from '../../../html-safety';
-import { TOOL_ROUND_CHEVRON_RIGHT_SVG } from '../../presentation/tool-round-icons';
+import { disclosureToggleHtml } from '../../presentation/disclosure-toggle';
 
 import type { ToolChip, ToolDebugField } from './contracts';
 
@@ -43,7 +43,7 @@ export function sectionHtml(heading: string, innerHtml: string): string {
 
 /** Every disclosure inside a card opens from the tool rows' chevron, which turns down when open. */
 function toggleHtml(label: string): string {
-  return `<summary class="ptool-coord-toggle">${TOOL_ROUND_CHEVRON_RIGHT_SVG}<span>${escape(label)}</span></summary>`;
+  return disclosureToggleHtml(escape(label));
 }
 
 /** A labeled disclosure around already-escaped markup. */

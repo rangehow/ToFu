@@ -2911,9 +2911,10 @@ The same choice is the presentation mode elsewhere (`readLanding`/`subscribeLand
 view's sidebar never loads the animated lead office (docs/PROJECT_COORDINATION.md, "Lead office"); it shows
 each lead's 成果 list instead, and both views open a deliverable through the one opener in
 `features/lead-deliverables/open.ts` (docs/PROJECT_COORDINATION.md, "Lead deliverables").
-`01-workspace-dock.css` places the workspace in the shell grid: HUD across the top, the scene, and the
-application's own conversation column docked beside it by `body[data-conversation-dock]` (closed, brief
-or chat), which the world adapter owns; every other piece of classic chrome stays hidden. The docked chat
+`01-workspace-dock.css` places the workspace in the shell grid: HUD across the top, the scene under all of
+the rest, and the application's own conversation column docked over the scene's right side by
+`body[data-conversation-dock]` (closed, brief or chat), which the world adapter owns; the camera keeps its
+scale and pans, so docking never re-fits the floor. Every other piece of classic chrome stays hidden. The docked chat
 keeps the theme's own reading surface. The shell suspends the column's transcript transport in the world
 unless the chat is docked, and a turn in the hidden column has no paint opportunity (no perception).
 - `model.ts` projects coordination reads into teams: the Global Router's zone, one zone per bound
@@ -2928,7 +2929,8 @@ unless the chat is docked, and a turn in the hidden column has no paint opportun
 - `events.ts` derives the only animation that tells a story: between two successful reads, a Worker's
   assignment reached `completed` with a new `resultRevision`, or a lead's latest report changed. The
   author walks from its desk to the owner's office, leaves the document and walks back (a Worker whose
-  attempt ended leaves the floor). First reads, re-reads, busy flips and tool activity never animate.
+  attempt ended leaves the floor). Tool activity and busy flips within a presence never animate; a change
+  of who is on the floor is a walk or, while the first reads settle, a fade (`actors.ts`), never a pop.
 - `live.ts` reads with GETs only, through the shared transport behind a read-only guard. Push comes from
   the application's own `/api/push` owner (`notify` `conv_changed`, `project` `coordinator_report` /
   `coordinator_progress`); hints coalesce per team with `CONVERSATION_CATALOG_REFRESH_DELAY_MS`, each
@@ -2946,15 +2948,30 @@ unless the chat is docked, and a turn in the hidden column has no paint opportun
   column at a time while that shortens the plan, so a team stacks its pods when that lets the next team
   share its row. Rejected: a greedy ragged layout (holes beside a short last row) and stretching only a
   lone last room (a near-empty room the width of the floor).
-- `office.ts` draws the static floor once per layout in `art-worker.ts` (`paint.ts` on an OffscreenCanvas
-  at device pixel ratio): the procedural base (long-board floor, window wall, carpeted team rooms with a
-  header band, daylight from the windows, wall shade, vignette and night lamp pools at the lead desks)
-  paints at once (`data-art="base"` shows the world), the furniture follows when the atlas has decoded
-  (`data-art="ready"`). A person stays hidden until its sheet has decoded, so no empty box or bodiless
-  emblem shows while art arrives. It keeps people, lit screens, documents and walkers as keyed DOM sprites from
-  the office game's authored sheets (`sprites.ts`). Seats keep their slot while their person stays. One
-  shared typing beat restyles all running people at once; reduced motion and hidden tabs stop it.
-  Arrows move focus spatially between people and documents, Enter opens, Esc closes the panel.
+- `office.ts` mounts the office on the shared game stage (`features/office-game/engine`) with camera
+  gestures (drag, wheel or pinch, +/-/0), spatial arrow-key focus over people and documents (the stage's
+  accessible `.evo-target` buttons; Enter opens, Esc closes the panel) and a camera that fits the whole
+  view, so a docked panel is an inset the camera pans within.
+- `scene.ts` draws the office as one canvas frame, so the floor and everyone on it always agree:
+  procedural floor and light (`paint.ts`: long boards, window wall with skies by hour, carpeted team rooms,
+  daylight, wall shade, vignette, night lamps at the head desks), furniture stamped from the art atlas with
+  each pod pre-painted as one layer, then people, lit screens, documents, emblems, signs and tooltips.
+  The floor and the light are device-pixel layers keyed by camera transform and content, rebuilt once a key
+  has held for a frame: a settled frame blits two layers and draws the sprites, and the stage sleeps while
+  nothing moves (it wakes on the art's beat while people type, else on the hour for the skies). Rooms never
+  shrink while the office is open (each team keeps the most desks it has needed), a floor plan that does
+  change blends by identity (`tween.ts`: rooms slide, new pods fade in), seats and the spots in the line at
+  the owner's door keep their person.
+- `actors.ts` gives every person a desk, a rest (the desk, a spot at the owner's door, or gone) and the
+  walk there along the walkways (`routes.ts`: waypoints that bend with a blending floor). A Worker who
+  arrives walks in through the entrance, one who leaves walks out (and turns round where it stands when
+  its work restarts on the way), a report is carried to the owner's desk and laid down, a lead with a
+  question walks to the door. While the first reads settle, and on the update that ends them, people fade
+  in and out where they rest instead: what changes then is knowledge, not the office. Each typist keeps its
+  own beat offset and tempo; reduced motion settles every move at once.
+- `art.ts` decodes the atlas, sheets and sprites once per theme; a theme change keeps the previous art
+  until the new atlas, sprites and the sheets of everyone on the floor have decoded, then reskins floor,
+  furniture and people in the same frame. `.w-office[data-art="ready"]` marks decoded art.
 - `brief.ts` / `panel.ts`: clicking a person or a document opens their panel, which leads with what they
   did (a Worker's delivered result or current task, a lead's latest report), the evidence (acceptance
   checks with the lead's verdicts, review, delivered checkpoint; the lead's board) and the decisions waiting
@@ -2999,27 +3016,60 @@ by sending free text from the office (no binding to the question); keeping the r
 question collapsed (the question is what the `?` asked the owner for); translating in the server read
 (reads start no work, docs/PROJECT_COORDINATION.md).
 
+### Motion on the office game stage (2026-11-17)
+
+**Problem:** the owner found the office's animation "flashing all over the place" (11-16). A same-time
+read-only A/B on live data (two `readonly_proxy.mjs` front doors, one with `--frontend-dir` on the
+candidate; 90 s each in headless Chromium) measured the DOM office: when one Worker left, the floor plan
+followed the head count and reflowed in one frame (18 seated people jumped 14-50 px; 17.7% of the screen
+changed at once). Earlier the same evening people popped in and out about once a second on attempt flips,
+every typist switched cells on one shared beat, and the floor art arrived seconds after the people.
+
+**Decision:** the office is one canvas scene on the shared office game stage (above), calm by
+construction: grow-only rooms, blended relayouts, presence shown as walking, per-person tempo, sticky
+waiting spots, cached static layers. Who is on the floor is the model's rule, unchanged. With the same
+probe the canvas office showed no flash and moved no seated person; the Worker who left walked out through
+the entrance while nobody else moved, and the art had decoded at 0.8 s (6.9 s before).
+
+**Alternatives rejected:**
+- DOM sprites with CSS transitions over a separately painted floor: floor and people update at different
+  times, so a relayout still tears and a floor repaint still flashes.
+- Keeping everyone seated until a reload: the floor stops being backend truth.
+- A time-based linger before a Worker leaves: a tuning constant; the hold already ends on data (the
+  assignment read).
+- The earlier "full-redraw Canvas2D scene" rejection (GAME-UI-1: 33 fps for 301 rooms) described a scene
+  that redrew every room every frame; this one caches floor and light, sleeps while still and draws tens of
+  people.
+
 **Alternatives rejected:**
 - One room per Worker (Tofu Tower, GAME-UI-1): the owner asked for a shared floor where people sit together.
 - A second chat or form inside the scene: it would compete with the classic surface and its authority. (The
   question card mounts the classic answer control with its existing authority; it is not a second form.)
-- Animating tool calls or attempt churn: it is noise, not progress; only reports walk.
-- A full-redraw Canvas2D scene (measured by GAME-UI-1 at 33 fps for 301 rooms) and PixiJS/three.js.
+- Animating tool calls or attempt churn: it is noise, not progress; only presence changes and reports move.
+- PixiJS/three.js: a second engine beside the office game stage.
 
 **Measured:** not yet on production. The frame, long-task and heap figures with 351+ agents on live data
 replace this line once recorded after the R3 restart window.
 
 Specifications: `model.test.ts`, `events.test.ts`, `brief.test.ts`, `live.test.ts` and `layout.test.ts`
-use recorded live shapes (`testing/recorded.ts`); `attention.test.ts`, `world-dom.test.ts`; the question
+use recorded live shapes (`testing/recorded.ts`); `attention.test.ts`, `world-dom.test.ts`; walkways
+`routes.test.ts`, floor blends `tween.test.ts`, walking, turning round, errands and tempo `actors.test.ts`,
+the scene through attempt churn, new pods, settling, sticky spots and carried reports `scene.test.ts`, the
+stage's spatial focus and view-fit camera `office-game/testing/engine.test.cjs`; the question
 card, answer binding, marker clearing, paging and per-lead questions `question-card.test.ts`;
 `conversation/application/question-focus.test.ts`, the question target in `conversation-viewport.test.ts`, the
 real-browser reveal, highlight and reply chip `tests/visual/test_visual_answer_in_conversation.py`; the cold office
 read and loading state through the real transport (`live-office-read.test.ts`, `app.test.ts`); the shell,
 send and held-office-read journeys `tests/e2e/test_e2e_world_office.py`. Live read-only review uses
 `scripts/browser_crash_repro/readonly_proxy.mjs --frontend-upstream` (page from a scratch server running
-the candidate, API reads and push from production, every write refused and logged).
+the candidate, API reads and push from production, every write refused and logged), or `--frontend-dir`
+for a frontend-only candidate build.
 
 **Before it can replace the classic default for good:**
 - A busy-change push hint (proposed to HARNESS-1C): without it a team page is re-read on member hints.
+- A working assignments read: `GET /api/v4/project/coordination/assignments` answered 500 for every
+  project on production (11-16/17; hermetic route tests pass; `_safe_route_error_response` returns an
+  unmapped `StorageError` as 500 without logging it). Without it the hold that keeps a Worker seated
+  between attempts never applies, so attempt churn shows as Workers walking out and back.
 - The attention route; reading a report in the brief does not mark it read (read-only until the owner asks
   for an operational layer).

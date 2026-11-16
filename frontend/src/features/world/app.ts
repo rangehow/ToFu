@@ -1,10 +1,12 @@
 /** Tofu office: the game-led landing workspace inside the application shell. Composes the live read-only
  * sources, the office projection and its report events, the open-plan scene, the HUD and the person panel,
- * with one requestAnimationFrame-coalesced render per change. The only interaction is choosing someone to
+ * with one requestAnimationFrame-coalesced render per change. The interaction is choosing someone to
  * talk to: a person or a document opens that person's panel (brief first, then the application's own chat
- * through the shell). Esc closes the panel; arrows and Enter work in the office.
+ * through the shell); a lead's open question is answered in its card through the shared answer control, or
+ * "in the conversation" at that question. Esc closes the panel; arrows and Enter work in the office.
  * Entry point: mountWorld (returns teardown and the route hook). */
 import { t } from '../../i18n';
+import type { ChoicePorts } from '../../rich-response/choices';
 import { projectBrief, type TurnRef } from './brief';
 import { reportEvents } from './events';
 import { createHud, type PushState } from './hud';
@@ -24,6 +26,10 @@ export type ConversationDock = 'closed' | 'brief' | 'chat';
 export interface WorldShell {
   /** Show this person's real conversation in the application's chat column, optionally at one Turn. */
   openChat(conversationId: string, turn: TurnRef | null): void;
+  /** Show this person's conversation at one ask_human question, highlighted, with the composer replying to it. */
+  openQuestion(conversationId: string, question: { turnId: string; ordinal?: number; guidanceId: string }): void;
+  /** Ports of the shared answer control for one question's Turn (undefined: not answerable here). */
+  answerPorts(conversationId: string, turnId: string): ChoicePorts | undefined;
   dock(mode: ConversationDock): void;
   classic(): void;
   push: PushPort | null;
@@ -38,12 +44,20 @@ export interface WorldOptions {
  * busy, which owner questions are open (the text still comes from the lead's tail) and open incidents. */
 const sourcesOf = (team: LiveTeam) => [team.team, team.assignments, team.progress, team.reports, team.questions];
 
-function input(team: LiveTeam, facts: FactsView | null, busy: ReadonlySet<string> | null, alarms: number | null): TeamInput {
+/** A question answered from its card leaves the office at once (its '?' marker clears); the key is dropped
+ * once the reads no longer list it, so the authority decides from then on. */
+const answerKey = (conversationId: string, guidanceId: string) => `${conversationId}\u0000${guidanceId}`;
+
+function input(team: LiveTeam, facts: FactsView | null, busy: ReadonlySet<string> | null, alarms: number | null,
+  answered: Set<string>, listed: Set<string>): TeamInput {
   const sources = sourcesOf(team);
+  const questions = factQuestions(facts, team.leadId, team.questions.value) ?? team.questions.value;
+  for (const question of questions || []) listed.add(answerKey(question.conversationId, question.guidanceId));
   return {
     key: team.key, kind: team.kind, name: team.name, color: team.color, leadId: team.leadId,
     team: team.team.value, assignments: team.assignments.value, progress: team.progress.value,
-    reports: team.reports.value, questions: factQuestions(facts, team.leadId, team.questions.value) ?? team.questions.value,
+    reports: team.reports.value,
+    questions: questions && questions.filter(question => !answered.has(answerKey(question.conversationId, question.guidanceId))),
     failed: sources.some(source => source.status === 'error'), held: new Set(),
     ...(busy ? { busy } : {}), ...(team.kind === 'watchdog' && alarms !== null ? { alarms } : {}),
   };
@@ -59,6 +73,7 @@ export function mountWorld(root: HTMLElement, shell: WorldShell, options: WorldO
   const held = new Map<string, Map<string, { at: number; reads: number }>>();
   const arrived: DeskDocument[] = [];
   const opened = new Set<string>();
+  const answered = new Set<string>();
   const live = (options.live || (onChange => createWorldLive(onChange, shell.push)))(schedule);
   const labels: PersonLabels = {
     router: t('world.role.router'), watchdog: t('world.role.watchdog'), lead: team => t('world.role.lead', { team }),
@@ -75,6 +90,13 @@ export function mountWorld(root: HTMLElement, shell: WorldShell, options: WorldO
       shell.openChat(id, turn);
     },
     brief: () => shell.dock('brief'),
+    answerPorts: decision => shell.answerPorts(decision.conversationId, decision.turn.turnId),
+    answerInChat: decision => {
+      panel.setTab('chat');
+      shell.dock('chat');
+      shell.openQuestion(decision.conversationId, { ...decision.turn, guidanceId: decision.guidanceId });
+    },
+    answered: decision => { answered.add(answerKey(decision.conversationId, decision.guidanceId)); schedule(); },
   });
   const empty = document.createElement('p');
   empty.className = 'w-empty';
@@ -224,9 +246,10 @@ export function mountWorld(root: HTMLElement, shell: WorldShell, options: WorldO
     const facts = live.state.facts;
     const busy = busyConversations(facts);
     const alarms = openAlarms(facts);
+    const listed = new Set<string>();
     for (const team of live.state.teams) {
       const previous = inputs.get(team.key);
-      const value = input(team, facts, busy, alarms);
+      const value = input(team, facts, busy, alarms, answered, listed);
       for (const member of team.team.value?.conversations || []) titles.set(member.conversationId, member.title);
       if (previous) {
         for (const event of reportEvents(previous, value, titles)) {
@@ -252,6 +275,7 @@ export function mountWorld(root: HTMLElement, shell: WorldShell, options: WorldO
       next.set(team.key, value);
     }
     inputs = next;
+    for (const key of answered) if (!listed.has(key)) answered.delete(key);
     office = projectOffice(time, [...next.values()], labels);
     const leadDocuments = new Set(office.documents.map(document => document.id));
     office.documents = [...office.documents, ...arrived.filter(document => !leadDocuments.has(document.id))]

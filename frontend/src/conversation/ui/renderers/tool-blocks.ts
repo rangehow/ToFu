@@ -9,6 +9,7 @@
 import { renderRichResponse, disposeRichResponse } from '../../../rich-response/renderer';
 
 import { projectRichToolResult } from '../../../rich-response/tool-result';
+import { guidancePromptBlock, isGuidanceAnswerMode } from '../../../rich-response/guidance-answer';
 import {
   type ConversationBlockViewModel,
   type ConversationTurnViewModel,
@@ -110,8 +111,13 @@ function renderToolBlockContent(
     bodyState.choiceScope = choiceScope;
     if (bodyState.rich) disposeRichResponse(bodyState.rich);
   }
-  if (block.round?.toolName === 'ask_human' && ['choice','batch'].includes(String(block.round.guidanceType ?? ''))
-      && block.round.guidanceId && bodyState.choices) {
+  // "Answer in conversation" scrolls to and highlights this question by its id (conversation-viewport.ts).
+  const guidanceId = block.round?.toolName === 'ask_human' && typeof block.round.guidanceId === 'string' ? block.round.guidanceId : '';
+  if (guidanceId) node.dataset.guidanceId = guidanceId;
+  else delete node.dataset.guidanceId;
+  const guidanceMode = block.round?.guidanceType;
+  const questionRound = block.round;
+  if (questionRound && guidanceId && isGuidanceAnswerMode(guidanceMode) && bodyState.choices) {
     disposeLazyToolResult(node); bodyState.detach?.(); bodyState.detach = undefined;
     bodyState.rich ??= node.ownerDocument.createElement('div');
     // Shared summary/effect owners may add siblings. Keep the mounted form in
@@ -121,14 +127,15 @@ function renderToolBlockContent(
       header = node.ownerDocument.createElement('div');
       node.replaceChildren(header, bodyState.rich);
     }
-    paintQuestionSummary(header, block.round, ports);
+    paintQuestionSummary(header, questionRound, ports);
     resetManagedHtml(node);
     node.dataset.rendererMode = 'native-choice';
-    renderRichResponse(bodyState.rich, { version: 1, title: ports.localizedText?.('rich.question', 'Question') ?? 'Question',
-      blocks: [{ type: block.round.guidanceType === 'choice' ? 'choice_prompt' : 'form_prompt', id: 'human-choice', title: ports.localizedText?.('rich.question', 'Question') ?? 'Question', interactionId: block.round.guidanceId }] },
+    const questionTitle = ports.localizedText?.('rich.question', 'Question') ?? 'Question';
+    renderRichResponse(bodyState.rich, { version: 1, title: questionTitle,
+      blocks: [guidancePromptBlock(guidanceMode, guidanceId, questionTitle)] },
       { conversationId: turn.source.conversationId, choices: bodyState.choices,
         renderMarkdown: source => ports.renderSafeMarkdownHtml(source),
-        interactionSnapshot: JSON.stringify([turn.status, block.round.status, block.round.guidanceResponse]), text: (key, fallback) => ports.localizedText?.(key, fallback) ?? fallback });
+        interactionSnapshot: JSON.stringify([turn.status, questionRound.status, questionRound.guidanceResponse]), text: (key, fallback) => ports.localizedText?.(key, fallback) ?? fallback });
     return;
   }
 

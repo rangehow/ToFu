@@ -6,6 +6,8 @@ import '../../../styles/application/00-design-tokens.css';
 import '../../../styles/application/30-ui-kit.css';
 import '../../../styles/application/01-workspace-dock.css';
 import '../../../styles/application/27-world-office.css';
+import '../../../styles/application/03-rich-surfaces.css';
+import '../../../styles/application/03-rich-choices.css';
 import { ready, t } from '../../../i18n';
 import { mountWorld, type ConversationDock } from '../app';
 import { fixtureLive, type FixtureSnapshot } from './fixture';
@@ -19,6 +21,8 @@ void Promise.all([ready(), fetch(params.get('fixture') || './live.json').then(re
     let source: ReturnType<typeof fixtureLive> | null = null;
     const world = mountWorld(root, {
       openChat: id => { chat.dataset.conversation = id; },
+      openQuestion: (id, question) => { chat.dataset.conversation = id; chat.dataset.question = question.guidanceId; },
+      answerPorts: (id, turnId) => source?.answerPorts(id, turnId),
       dock: (mode: ConversationDock) => { document.body.dataset.conversationDock = mode; },
       classic: () => { document.body.dataset.classic = 'requested'; },
       push: null,
@@ -26,5 +30,5 @@ void Promise.all([ready(), fetch(params.get('fixture') || './live.json').then(re
       live: onChange => (source = fixtureLive(snapshot, onChange, { scale: Number(params.get('scale') || 0) })),
       now: () => (params.has('now') ? Number(params.get('now')) : Date.now()),
     });
-    (window as unknown as { __world: unknown }).__world = { report: (team: string) => source?.report(team), office: () => world.office() };
+    (window as unknown as { __world: unknown }).__world = { report: (team: string) => source?.report(team), office: () => world.office(), replies: () => source?.replies };
   });

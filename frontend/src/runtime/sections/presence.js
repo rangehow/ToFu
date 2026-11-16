@@ -398,6 +398,7 @@
       return function () { pushUnsubscribe('project', '*', refresh); stopReconnect?.(); };
     },
     navigate: function (id) { if (typeof loadConversation === 'function') loadConversation(id); },
+    openQuestion: function (id) { void runtimeScope.openConversationAtQuestion?.(id, null); },
     // A project floor of the headquarters goes down to that project, as its rail entry does.
     openProject: function (path, id) {
       var folder = (typeof getFolders === 'function' ? getFolders() : []).find(function (item) {

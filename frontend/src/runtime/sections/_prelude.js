@@ -275,6 +275,7 @@ import {
 import { createHumanGuidancePresentationStore } from '../conversation/application/human-guidance-presentation';
 
 import { createAuthenticatedChoiceInteractionPorts } from '../conversation/application/choice-interaction';
+import { findQuestionFocus } from '../conversation/application/question-focus';
 
 import { createTurnCommandId } from '../core/turn-command';
 import {

@@ -2960,11 +2960,49 @@ unless the chat is docked, and a turn in the hidden column has no paint opportun
   checks with the lead's verdicts, review, delivered checkpoint; the lead's board) and the decisions waiting
   on the owner. "Chat" (or "Show in the conversation") opens that person's conversation in the docked
   classic ConversationSurface and composer, aligned to the Turn the item came from: the same component and
-  authority as the classic UI. The brief itself writes nothing (no read marks).
+  authority as the classic UI. The brief itself writes nothing (no read marks); answering a question is
+  the owner's own existing answer command, below.
+- Owner questions (owner complaint 2026-11-16, decision below): a lead with open `ask_human` questions
+  leads its panel with one compact question card; the rest of the brief folds behind "Progress".
+
+### Owner questions in the office (2026-11-16)
+
+**Problem:** clicking a lead with the `?` marker opened a long English question above a longer progress
+report, and "Answer in the conversation" jumped to the bottom of the chat with an empty composer: the
+owner could neither answer there nor reply to that question ("感觉都不能引用到这个问题").
+
+**Decision:**
+- The card shows the question (in the conversation's reading language when translation is on), its
+  choices, an own-answer box, the stated default ("If unanswered: …"), the project and blocking state;
+  with several questions, `1/N` with previous/next. Each lead lists only its own questions.
+- One answer control, `rich-response/guidance-answer.ts` (`mountGuidanceAnswer`/`mountGuidanceAnswerFor`
+  over `choices.ts`/`guidance-form.ts`), serves the classic conversation's question card (via
+  `guidancePromptBlock` in `renderers/tool-blocks.ts`), the studio card and, through "answer in
+  conversation", the sidebar's lead office. Its ports are the existing `choice-interaction.ts` adapter:
+  `answer_guidance` for a waiting question, a quoted chat reply for a non-blocking one. A choice in the
+  studio card answers at once (`submitOnChoose`). Display translation (`displayTranslation` port, the
+  retained EN→CN question translation and its presentation cache) changes only what is shown; answers and
+  quotes keep the question's original text.
+- A chat reply binds to its question through the quote: `guidanceReplyQuote` ends every question quote
+  with `[question <guidanceId>]` (card replies, form replies and the composer chip alike).
+- An answer from the card marks it "Answered" and drops that question from the office input at once, so
+  the `?` clears; the key is forgotten when the reads stop listing the question.
+- "Answer in the conversation" (studio card, and a `?` lead or project floor in the sidebar's lead office)
+  calls the one runtime handler `openConversationAtQuestion` (`ui/turn_nav.js`, selection in
+  `conversation/application/question-focus.ts`): it pages the question's Turn in, reveals it with a
+  `RevealTarget` so the viewport aligns the question's own block (`data-guidance-id`), opens folding
+  disclosures and highlights it once, and puts the composer in reply mode with a removable reply-quote
+  chip. Without a named question it takes the newest open one.
+
+**Alternatives rejected:** a studio-only answer form (a second implementation of answer authority); answering
+by sending free text from the office (no binding to the question); keeping the report first with the
+question collapsed (the question is what the `?` asked the owner for); translating in the server read
+(reads start no work, docs/PROJECT_COORDINATION.md).
 
 **Alternatives rejected:**
 - One room per Worker (Tofu Tower, GAME-UI-1): the owner asked for a shared floor where people sit together.
-- A second chat or form inside the scene: it would compete with the classic surface and its authority.
+- A second chat or form inside the scene: it would compete with the classic surface and its authority. (The
+  question card mounts the classic answer control with its existing authority; it is not a second form.)
 - Animating tool calls or attempt churn: it is noise, not progress; only reports walk.
 - A full-redraw Canvas2D scene (measured by GAME-UI-1 at 33 fps for 301 rooms) and PixiJS/three.js.
 
@@ -2972,7 +3010,10 @@ unless the chat is docked, and a turn in the hidden column has no paint opportun
 replace this line once recorded after the R3 restart window.
 
 Specifications: `model.test.ts`, `events.test.ts`, `brief.test.ts`, `live.test.ts` and `layout.test.ts`
-use recorded live shapes (`testing/recorded.ts`); `attention.test.ts`, `world-dom.test.ts`; the cold office
+use recorded live shapes (`testing/recorded.ts`); `attention.test.ts`, `world-dom.test.ts`; the question
+card, answer binding, marker clearing, paging and per-lead questions `question-card.test.ts`;
+`conversation/application/question-focus.test.ts`, the question target in `conversation-viewport.test.ts`, the
+real-browser reveal, highlight and reply chip `tests/visual/test_visual_answer_in_conversation.py`; the cold office
 read and loading state through the real transport (`live-office-read.test.ts`, `app.test.ts`); the shell,
 send and held-office-read journeys `tests/e2e/test_e2e_world_office.py`. Live read-only review uses
 `scripts/browser_crash_repro/readonly_proxy.mjs --frontend-upstream` (page from a scratch server running

@@ -1225,7 +1225,11 @@ sessions and tells the human what matters.
   and returns at once; the human's answer is an ordinary message quoting
   the question (the card fills the composer's existing reply-quote and sends,
   or adds to an existing draft), so it steers a live turn or starts the next
-  one. `blocking=true` waits as before; a chat message sent instead of the card
+  one. The quote ends with `[question <guidanceId>]`, so the reply names the
+  exact question it answers; the office's question card and "answer in
+  conversation" use the same answer control and quote
+  ([FRONTEND_ARCHITECTURE.md](FRONTEND_ARCHITECTURE.md), "Owner questions in
+  the office"). `blocking=true` waits as before; a chat message sent instead of the card
   ends the wait and reaches the model as the answer or new direction. Only a
   steer the seam authored as human input counts, and a Global Router forward
   of the owner's message only once `require_human_turn` verifies it: channel

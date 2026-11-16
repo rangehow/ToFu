@@ -10,6 +10,7 @@ import { goToWorkspace, hasMountedWorkspace, mountWorkspacePage, showWorkspace }
 import { rememberLanding } from '../application-shell/landing';
 import { mountWorld, type WorldShell } from './world/app';
 import type { PushFrame, PushPort } from './world/live';
+import type { ChoicePorts } from '../rich-response/choices';
 import { cancelPendingReveal, openConversationTurn } from './lead-deliverables/open';
 
 type PushHandler = (frame: PushFrame) => void;
@@ -30,6 +31,9 @@ function pushPort(): PushPort | null {
   };
 }
 
+type OpenAtQuestion = (conversationId: string, question: { turnId: string; ordinal?: number; guidanceId: string } | null) => Promise<boolean>;
+type AnswerPorts = (conversationId: string, turnId: string) => ChoicePorts;
+
 export function openWorld(): void {
   // Arriving in the office (the classic top bar's link, an address or the landing) makes it the landing view.
   rememberLanding('world');
@@ -43,6 +47,17 @@ export function openWorld(): void {
   let leaving = false;
   const shell: WorldShell = {
     openChat: openConversationTurn,
+    // The same handler as a '?' lead in the sidebar's lead office (runtime ui/turn_nav.js).
+    openQuestion(conversationId, question) {
+      cancelPendingReveal();
+      const openAt = readLiveRuntimeBinding('openConversationAtQuestion') as OpenAtQuestion | undefined;
+      if (typeof openAt === 'function') void openAt(conversationId, question);
+      else legacy.loadConversation?.(conversationId);
+    },
+    answerPorts(conversationId, turnId) {
+      const ports = readLiveRuntimeBinding('guidanceAnswerPorts') as AnswerPorts | undefined;
+      return typeof ports === 'function' ? ports(conversationId, turnId) : undefined;
+    },
     // The dock is the body's data-conversation-dock (01-workspace-dock.css places the column from it).
     // Re-announcing the workspace lets the shell resume or suspend the column's transcript transport;
     // while the world is being left, the next workspace announces itself.

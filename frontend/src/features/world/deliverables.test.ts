@@ -58,7 +58,8 @@ function mount() {
   const opened: LeadDeliverable[] = [];
   const chats: unknown[] = [], docks: string[] = [];
   const page = mountWorld(root, {
-    openChat: (...args) => { chats.push(args); }, dock: mode => { docks.push(mode); }, classic() {}, push: null,
+    openChat: (...args) => { chats.push(args); }, openQuestion() {}, answerPorts: () => undefined,
+    dock: mode => { docks.push(mode); }, classic() {}, push: null,
   }, { deliverables: () => ({ open: item => { opened.push(item); return true; }, openSource: () => true }) });
   return { page, opened, chats, docks };
 }

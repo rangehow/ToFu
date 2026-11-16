@@ -13,7 +13,11 @@ export type Verdict = 'met' | 'unmet' | 'unknown' | 'unreviewed';
 /** The Turn an item came from; the ordinal, when known, lets the classic owner page an older Turn in. */
 export interface TurnRef { turnId: string; ordinal?: number }
 export interface BriefCheck { text: string; verdict: Verdict; evidence: string }
-export interface BriefDecision { question: string; blocking: boolean; fallback: string; turn: TurnRef; at: number }
+/** One open owner question of a lead: its ask_human guidance id and Turn bind the answer to it. */
+export interface BriefDecision {
+  guidanceId: string; conversationId: string; project: string;
+  question: string; blocking: boolean; fallback: string; turn: TurnRef; at: number;
+}
 export type BriefLead =
   | { kind: 'result'; markdown: string; turn: TurnRef | null; status: CoordinationGraphStatus }
   | { kind: 'task'; markdown: string; turn: TurnRef | null; status: CoordinationGraphStatus }
@@ -76,6 +80,7 @@ export function projectBrief(person: Person, input: TeamInput | undefined, now: 
   }
   const questions: ReadonlyArray<OpenQuestion> = input.questions || [];
   brief.decisions = questions.map(question => ({
+    guidanceId: question.guidanceId, conversationId: question.conversationId, project: input.name,
     question: question.question, blocking: question.blocking, fallback: question.defaultText,
     turn: { turnId: question.turnId, ordinal: question.ordinal }, at: question.createdAt,
   }));

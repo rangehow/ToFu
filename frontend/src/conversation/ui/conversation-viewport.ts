@@ -147,15 +147,43 @@ export function createConversationViewportPort(
   return {
     get following() { return following; },
     isNearBottom: nearBottom,
-    scrollToTurn(root, turnId, onScroll) {
+    scrollToTurn(root, turnId, onScroll, target) {
       if (disposed || !viewport.contains(root)) return false;
-      const findTarget = (): HTMLElement | undefined => {
+      const findTurn = (): HTMLElement | undefined => {
         for (const node of root.querySelectorAll<HTMLElement>('[data-turn-id]')) {
           if (node.dataset.turnId === turnId) return node;
         }
         return undefined;
       };
-      if (!findTarget()) return false;
+      // A question target aligns its own block (opening any disclosure that folds it) instead of the
+      // Turn's first line; a Turn whose question block is not mounted still aligns the Turn.
+      const findBlock = (turn: HTMLElement): HTMLElement | undefined => {
+        if (!target) return undefined;
+        for (const node of turn.querySelectorAll<HTMLElement>('[data-guidance-id]')) {
+          if (node.dataset.guidanceId === target.guidanceId) return node;
+        }
+        return undefined;
+      };
+      const findTarget = (): HTMLElement | undefined => {
+        const turn = findTurn();
+        return turn ? findBlock(turn) ?? turn : undefined;
+      };
+      const turn = findTurn();
+      if (!turn) return false;
+      const block = findBlock(turn);
+      if (block) {
+        for (let node = block.parentElement; node && node !== turn; node = node.parentElement) {
+          if (node instanceof HTMLDetailsElement && !node.open) node.open = true;
+        }
+        for (const marked of root.querySelectorAll<HTMLElement>('[data-reveal-highlight]')) delete marked.dataset.revealHighlight;
+        block.dataset.revealHighlight = 'question';
+        const settle = (event: Event): void => {
+          if (event.target !== block) return;
+          block.removeEventListener('animationend', settle);
+          delete block.dataset.revealHighlight;
+        };
+        block.addEventListener('animationend', settle);
+      }
       suspendFollow();
       const align = (): void => {
         const target = findTarget();

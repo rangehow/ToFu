@@ -1108,7 +1108,7 @@ export function createConversationSurfaceEngine(
     },
     showEarlier() { return moveWindow('earlier', 'main'); },
     showLater() { return moveWindow('later', 'main'); },
-    revealTurn(turnId) {
+    revealTurn(turnId, target) {
       if (disposed || !latestViewModel) return false;
       const lane = latestViewModel.mainLane;
       const index = lane.turns.findIndex(turn => turn.turnId === turnId);
@@ -1130,7 +1130,7 @@ export function createConversationSurfaceEngine(
         // Native scroll events arrive later. This exact navigation is not a
         // reader gesture asking the lazy boundary to move another window.
         lastViewportTop = options.scrollViewport?.scrollTop ?? 0;
-      });
+      }, target);
       return aligned ?? true;
     },
     isNearLatest(threshold) {

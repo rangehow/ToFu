@@ -5,7 +5,7 @@
  * stays answerable and its answer is an ordinary chat message quoting the
  * question, delivered through the `replyInChat` port.
  */
-import { validGuidanceAnswer } from '../../rich-response/guidance-values';
+import { guidanceReplyQuote, validGuidanceAnswer } from '../../rich-response/guidance-values';
 import type { ChoiceInteraction, ChoicePorts } from '../../rich-response/choices';
 
 import type { CreateAttemptRequest } from '../../api/conversation-sync.generated';
@@ -22,13 +22,18 @@ export interface ChoiceInteractionDependencies {
   text?(key: string, fallback: string): string;
   /** Sends (or drafts beside unsent composer work) a quoted chat reply. */
   replyInChat?(request: { conversationId: string; guidanceId: string; quote: string; responseText: string }): Promise<'sent' | 'drafted'>;
+  /** The question in the reading language when the conversation translates (null: show it as written).
+   * Display only: answers and quotes keep the original question and option labels. */
+  displayTranslation?(request: GuidanceDisplayRequest, signal: AbortSignal): Promise<GuidanceDisplayText | null>;
 }
+export interface GuidanceDisplayRequest { conversationId: string; guidanceId: string; question: string; options: string[]; descriptions: string[] }
+export interface GuidanceDisplayText { question: string; options?: string[]; descriptions?: string[] }
 
-/** The question as a chat quote; batch questions are numbered like their form. */
+/** The question as a chat quote bound to its id; batch questions are numbered like their form. */
 function replyQuote(interaction: ChoiceInteraction): string {
-  return interaction.mode === 'batch' && interaction.questions?.length
+  return guidanceReplyQuote(interaction.interactionId, interaction.mode === 'batch' && interaction.questions?.length
     ? interaction.questions.map((item, index) => `${index + 1}. ${item.question.trim()}`).join('\n\n')
-    : interaction.question.trim();
+    : interaction.question);
 }
 
 /** A chat message is read by people: batch answers become numbered lines. */
@@ -48,6 +53,18 @@ export function createChoiceInteractionPorts(dependencies: ChoiceInteractionDepe
     const rounds = record(turn.projection).toolRounds;
     return Array.isArray(rounds) && rounds.map(record)
       .some(round => round.guidanceId === interactionId && round.guidanceBlocking === false);
+  };
+
+  // The reading-language text of each loaded question, so an answer's projection keeps the same language.
+  const displays = new Map<string, GuidanceDisplayText>();
+  const withDisplay = (value: ChoiceInteraction): ChoiceInteraction => {
+    const display = displays.get(value.interactionId);
+    if (!display) return value;
+    const sameLength = (items: string[] | undefined) => Array.isArray(items) && items.length === value.options.length
+      && items.every(item => typeof item === 'string');
+    return { ...value, displayQuestion: display.question,
+      ...(sameLength(display.options) ? { displayOptions: display.options } : {}),
+      ...(sameLength(display.descriptions) ? { displayDescriptions: display.descriptions } : {}) };
   };
 
   let attempted: { interactionId: string; response: string; commandId: string; body: RecordValue } | null = null;
@@ -81,13 +98,15 @@ export function createChoiceInteractionPorts(dependencies: ChoiceInteractionDepe
       return {question:question.question,options:declaredOptions(question.options,question.response_type==='choice'),descriptions:descriptions(question.options)};
     }):undefined;
     if(mode==='batch'&&(!questions?.length||questions.length>8))throw new Error('Invalid question form');
+    const defaultAnswer = typeof round.guidanceDefault === 'string' && round.guidanceDefault.trim()
+      ? { defaultAnswer: round.guidanceDefault.trim() } : {};
     const metadata = [round.results, round.toolMeta].flatMap(value => Array.isArray(value) ? value.map(record) : []);
     const answer = typeof round.guidanceResponse === 'string' ? round.guidanceResponse
       : metadata.find(meta => meta.guidanceId === interactionId && typeof meta.userResponse === 'string')?.userResponse;
     if (round.guidanceBlocking === false) {
       const replied = repliedInChat.get(interactionId);
       return { interactionId, mode, questions, question: String(round.guidanceQuestion ?? ''), options,
-        descriptions: descriptions(round.guidanceOptions),
+        descriptions: descriptions(round.guidanceOptions), ...defaultAnswer,
         ...(replied === undefined
           ? { state: 'pending' as const, note: text('toolHumanGuidance.nonBlockingHint',
             'Work continues meanwhile; your reply is sent as a normal message.') }
@@ -100,14 +119,27 @@ export function createChoiceInteractionPorts(dependencies: ChoiceInteractionDepe
       || resumeOptions.some(option => option.operation === 'answer_guidance'
         && record(option.anchor).guidanceId === interactionId);
     return { interactionId, mode, questions, question: String(round.guidanceQuestion ?? ''), options,
-      descriptions: descriptions(round.guidanceOptions),
+      descriptions: descriptions(round.guidanceOptions), ...defaultAnswer,
       state: typeof answer === 'string' ? 'answered' : eligible ? 'pending' : 'stale',
       ...(typeof answer === 'string' ? { response: answer } : {}) };
   };
   return {
     commandId: dependencies.commandId,
     text: dependencies.text,
-    load: async (interactionId, signal) => project(await read(interactionId, signal), interactionId),
+    load: async (interactionId, signal) => {
+      const value = project(await read(interactionId, signal), interactionId);
+      if (!dependencies.displayTranslation || value.mode === 'batch' || !value.question.trim()) return value;
+      let display: GuidanceDisplayText | null = null;
+      try {
+        display = await dependencies.displayTranslation({ conversationId, guidanceId: interactionId, question: value.question,
+          options: value.options, descriptions: value.descriptions ?? [] }, signal);
+      } catch {
+        display = null; // The question as written is still answerable.
+      }
+      if (signal.aborted) throw new Error('Disposed interaction');
+      if (display?.question) displays.set(interactionId, display);
+      return withDisplay(value);
+    },
     submit: async (interactionId, response, commandId, signal) => {
       const turn = await read(interactionId, signal);
       const current = project(turn, interactionId);
@@ -118,12 +150,12 @@ export function createChoiceInteractionPorts(dependencies: ChoiceInteractionDepe
           quote: replyQuote(current), responseText: replyText(current, response) });
         if (signal.aborted) throw new Error('Disposed interaction');
         if (outcome !== 'sent') {
-          return { ...current, note: text('toolHumanGuidance.replyDrafted', 'Your reply is in the composer \u2014 send it when ready') };
+          return withDisplay({ ...current, note: text('toolHumanGuidance.replyDrafted', 'Your reply is in the composer \u2014 send it when ready') });
         }
         repliedInChat.set(interactionId, response);
-        return project(turn, interactionId);
+        return withDisplay(project(turn, interactionId));
       }
-      if (current.state === 'answered') return current; // Durable replay, no second command.
+      if (current.state === 'answered') return withDisplay(current); // Durable replay, no second command.
       const retry = attempted?.interactionId === interactionId && attempted.response === response && attempted.commandId === commandId;
       if ((!retry && current.state !== 'pending') || !validGuidanceAnswer(current.mode,current.options,current.questions,response)) throw new Error('Question is stale or choice is undeclared');
       if (!retry) attempted = { interactionId, response, commandId, body: {
@@ -151,7 +183,7 @@ export function createChoiceInteractionPorts(dependencies: ChoiceInteractionDepe
       }
       // The accepted-attempt reply proves durability even before executor output
       // folds the answer into toolMeta. Reload obtains the server projection.
-      return { ...accepted, state: 'answered', response: accepted.response ?? response };
+      return withDisplay({ ...accepted, state: 'answered', response: accepted.response ?? response });
     },
   };
 }

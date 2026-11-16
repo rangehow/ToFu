@@ -671,6 +671,8 @@
 .rich-guidance-own-input { margin-top: var(--space-2); }
 .hg-own-answer-label { margin-top: var(--space-2); color: var(--text-secondary); font-size: var(--font-size-sm); }
 
+.rich-guidance-default { color: var(--text-secondary); font-size: var(--font-size-sm); line-height: var(--leading-body); }
+.rich-guidance-default[hidden] { display: none; }
 .rich-guidance-status { color: var(--text-secondary); font-size: var(--font-size-sm); line-height: var(--leading-body); }
 .rich-guidance-status:empty { display: none; }
 .rich-guidance-actions { flex-wrap: wrap; }
@@ -690,6 +692,16 @@
   flex-shrink: 1; min-width: 0; margin-inline-start: auto; white-space: normal; text-align: end;
 }
 .hg-batch-own-input { margin-top: var(--space-2); }
+
+/* "Answer in conversation" lands on the question's own block and marks it once. */
+[data-reveal-highlight="question"] { animation: question-reveal 2.4s var(--ease-standard) 1; }
+@keyframes question-reveal {
+  0%, 35% { box-shadow: 0 0 0 var(--space-1) var(--accent), 0 0 0 var(--space-3) var(--accent-subtle); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-reveal-highlight="question"] { animation: none; box-shadow: 0 0 0 var(--space-1) var(--accent); }
+}
 /* Source citations: supplied metadata only, with no remote thumbnail residency. */
 .rich-citation-list {
   display: flex;

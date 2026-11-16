@@ -13,13 +13,14 @@ const OWN_ANSWER='\u0000own';
 export function renderGuidanceForm(doc:Document,block:form_prompt,ports:ChoicePorts|undefined,renderMarkdown?:(source:string)=>string){
   const text=(key:string,fallback:string)=>ports?.text?.(key,fallback)??fallback;
   const node=doc.createElement('form');node.className='rich-guidance-form';
-  const heading=doc.createElement('p'),fields=doc.createElement('fieldset'),status=doc.createElement('p');
+  const heading=doc.createElement('p'),fields=doc.createElement('fieldset'),status=doc.createElement('p'),fallback=doc.createElement('p');
+  fallback.className='rich-guidance-default';fallback.hidden=true;
   status.className='rich-guidance-status';heading.className='rich-guidance-hint';status.setAttribute('role','status');status.setAttribute('aria-live','polite');
   const submit=createButton({label:text('rich.submit','Submit answer'),variant:'primary',type:'submit',size:'sm',disabled:true},doc);
   const reload=createButton({label:text('rich.reload','Reload answer'),variant:'ghost',size:'sm'},doc);
   submit.dataset.richControl='form-submit';reload.dataset.richControl='form-reload';
   const toolbar=doc.createElement('div');toolbar.className='ui-toolbar rich-guidance-actions';toolbar.append(submit,reload);
-  node.append(heading,fields,status,toolbar);
+  node.append(heading,fields,fallback,status,toolbar);
   let disposed=false,saving=false,flight:AbortController|undefined,interaction:ChoiceInteraction|undefined,signature='';
   let inputs:Array<HTMLInputElement|HTMLSelectElement>=[],command:{response:string;id:string}|undefined;
   // A choice question's select can switch to its own-answer field; declared options never bound the owner.
@@ -34,7 +35,7 @@ export function renderGuidanceForm(doc:Document,block:form_prompt,ports:ChoicePo
   }
   function apply(value:ChoiceInteraction){
     if(value.interactionId!==block.interactionId||!['free_text','batch'].includes(value.mode??''))throw new Error('Unsupported form');
-    const questions:GuidanceQuestion[]=value.mode==='batch'?value.questions??[]:[{question:value.question,options:[]}];
+    const questions:GuidanceQuestion[]=value.mode==='batch'?value.questions??[]:[{question:value.displayQuestion||value.question,options:[]}];
     if(!questions.length||questions.length>8||questions.some(q=>!q.question||q.question.length>32768||!Array.isArray(q.options)))throw new Error('Invalid form');
     interaction=value;heading.textContent=text('rich.surface.formHint','Your answers will be saved to this task. Execution remains subject to its existing checks.');
     const next=JSON.stringify(questions);
@@ -70,6 +71,8 @@ export function renderGuidanceForm(doc:Document,block:form_prompt,ports:ChoicePo
       }else inputs[0].value=value.response??'';
     }
     showOwn();
+    fallback.hidden=!value.defaultAnswer||value.state!=='pending';
+    fallback.textContent=value.defaultAnswer?`${text('rich.defaultAnswer','If unanswered')}: ${value.defaultAnswer}`:'';
     status.textContent=value.state==='answered'?value.note??text('rich.answerSaved','Answer saved')
       :value.state==='stale'?text('rich.answerStale','This question is no longer answerable. Reload to check its current state.'):value.note??text('rich.surface.unsaved','Answers are not saved until you submit.');
   }

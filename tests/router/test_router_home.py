@@ -40,11 +40,55 @@ def test_creation_is_an_idempotent_committed_repository(root):
     assert home == router_home_location(7)
     head = _git(home, 'rev-parse', 'HEAD')
     tracked = set(_git(home, 'ls-files').splitlines())
-    assert {'README.md', '.gitignore'} <= tracked
+    assert {'README.md', '.gitignore', 'RESOURCES.md'} <= tracked
     assert _git(home, 'status', '--porcelain') == ''
     assert _git(home, 'rev-parse', '--show-toplevel') == home
     assert router_home_path(7) == home
     assert _git(home, 'rev-parse', 'HEAD') == head
+
+
+def test_resource_registry_seeded_from_its_documented_source_and_never_overwritten(root):
+    from lib.router.home import owner_resources, router_home_location
+    import json
+    from pathlib import Path
+
+    def read(home):
+        return owner_resources(7, content=True)
+
+    # A pre-existing home without a registry (the R13 gap) is seeded on the next
+    # idempotent open; the path leads are given is the one that exists.
+    home = router_home_path(7)
+    os.unlink(os.path.join(home, 'RESOURCES.md'))
+    assert read(home) == {'path': os.path.join(router_home_location(7), 'RESOURCES.md'),
+                          'available': False}
+    assert router_home_path(7) == home
+    registry = read(home)
+    assert registry['available'] is True and registry['bytes'] > 0
+    seed = registry['content']
+    assert seed.startswith('# Owner resource registry')
+    assert 'Never store a secret here' in seed
+    assert 'how to obtain' in seed
+    # Every queue the patrol's documented seed names is in the registry; the
+    # registry is names and how to obtain them, never a credential value.
+    patrol = json.loads(Path('scripts/hope_patrol/queues.json').read_text())
+    for queue in patrol['queues']:
+        assert f'`{queue}`' in seed
+    for source in ('scripts/hope_patrol/queues.json', 'references/queues.md',
+                   'references/rsi-queues-2026q4.md'):
+        assert source in seed
+    for forbidden in ('ghp_', 'github_pat_', 'pypi-', 'BEGIN', 'Bearer '):
+        assert forbidden not in seed
+    # The seed matches the committed baseline byte for byte, so a home left at
+    # its seed stays a clean repository.
+    assert _git(home, 'status', '--porcelain') == ''
+    assert _git(home, 'show', 'HEAD:RESOURCES.md') == seed.rstrip('\n')
+
+    # Owner or reviewed-Worker edits win: the seed never restores or overwrites.
+    edited = '# Owner resources\n\n| Resource | Detail |\n| H800 queue | 64 GPUs |\n'
+    with open(os.path.join(home, 'RESOURCES.md'), 'w', encoding='utf-8') as stream:
+        stream.write(edited)
+    router_home_path(7)
+    assert read(home)['content'] == edited
 
 
 def test_home_inside_a_source_checkout_is_its_own_repository(tmp_path, monkeypatch):

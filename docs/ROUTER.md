@@ -1850,6 +1850,21 @@ projects. Nothing else changes.
   following a link; a long text arrives in pages through the artifact
   readers). Workers read it by absolute path; Global Router home Workers update
   it through ordinary reviewed publication.
+
+  **Seed.** R13 named the file before anything wrote it, so a home whose
+  registry lane never published reported `available=false` while leads were
+  pointed at it. `router_home_path` now writes `RESOURCES.md` once — at
+  creation and on the first open of a pre-existing home that lacks it — from
+  `_RESOURCES` in `lib/router/home.py`: the queues of
+  `scripts/hope_patrol/queues.json` (the compute patrol's documented seed,
+  itself sourced from the owner's 2026-11-13 Hope account audit), the queue
+  and resource-code observations of the Hope skill's `references/queues.md`
+  and `references/rsi-queues-2026q4.md`, and key/storage rows that name only
+  how to obtain each one. A seed row names its source and read date and is
+  not a live capacity or grant. The write is write-once: an owner or
+  reviewed-Worker edit — or deletion — is never overwritten or restored, so
+  `available=false` remains truthful when the owner removes it. The seed
+  holds no secret value and no secret-shaped material.
 - **Audit.** Every cross-project message is an immutable original in the
   recipient's owner-scoped mailbox (sender, `senderProject`, kind, time and
   receipts). The sender reads it with `get_project_messages` (outgoing), the

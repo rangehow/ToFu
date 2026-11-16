@@ -141,6 +141,39 @@ def test_dead_worker_preserves_output_and_unknown_accounting_without_replay(
     assert execute_claimed_attempt(context, context.claim.payload) == outcome
 
 
+def test_a_moved_host_settles_the_attempt_its_retired_host_recorded_as_exited(
+        claimed, process_witness, monkeypatch, tmp_path):
+    """2026-11-16 host move (coordinator-4950501b, attempt 5234bf17): the old host's
+    manager joined its execution host's exit, but the successor host could not observe
+    that kernel, so recovery refused on every claim and the Turn stayed running."""
+    import lib.process_owner as owners
+    from lib import turn_lifecycle as turns
+    from lib.conversation_sync.worker_execution import execute_claimed_attempt
+    from lib.durable_worker import WorkerDomainSettlementUnknown
+    context, pair, factory, owner = claimed
+    process, witness = process_witness
+    here = owners.process_owner()
+    retired = {**witness, 'host': 'retired-host'}
+    enter(claimed, retired)
+    monkeypatch.setattr(owners, 'exit_evidence_dir', lambda: str(tmp_path))
+    monkeypatch.setattr('lib.conversation_sync.task_start.start_conversation_attempt_executor',
+                        lambda *a, **kw: pytest.fail('unknown effects were replayed'))
+    process.kill()
+    process.wait()
+    with pytest.raises(WorkerDomainSettlementUnknown):
+        execute_claimed_attempt(context, context.claim.payload)
+    with monkeypatch.context() as on_retired_host:
+        on_retired_host.setattr(owners, 'process_owner', lambda: {**here, 'host': 'retired-host'})
+        owners.record_exit(retired, str(tmp_path))
+    resumed, resumes = _watch_recovered_resume(monkeypatch)
+    outcome = execute_claimed_attempt(context, context.claim.payload)
+    assert outcome.status == 'failed'
+    turn = turns.get_turn(pair['turn']['conversationId'], pair['turn']['turnId'], user_id=owner)
+    assert (turn['status'], turn['settlement']['cause']) == ('interrupted', 'server_restart')
+    assert resumed.wait(30) and resumes == [(owner, pair['turn']['conversationId'],
+                                             pair['turn']['turnId'], pair['attempt']['attemptId'])]
+
+
 def test_the_serving_process_runs_dispatch_recovery_for_an_attempt_a_dead_process_left(
         claimed, process_witness, monkeypatch):
     """FORENSICS item 5 (2026-11-11, NDP request attempt e11ce7a7): the stopping process

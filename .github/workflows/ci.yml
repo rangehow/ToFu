@@ -209,6 +209,8 @@ jobs:
         with:
           name: coverage-unit
           path: .coverage
+          # upload-artifact@v4 skips dotfiles unless asked to include them.
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
 
@@ -241,6 +243,7 @@ jobs:
         with:
           name: coverage-api
           path: .coverage
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
 

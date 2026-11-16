@@ -120,7 +120,7 @@ function _renderReportSkeleton(container, lang, view) {
       _reportStartingPhaseHtml(lang, view) +
     '</div>' +
     '<details class="paper-report-thinking" id="' + px + 'ThinkingBlock" open style="display:none">' +
-      '<summary><span class="thinking-dot"></span>' +
+      '<summary class="ui-disclosure"><span class="thinking-dot"></span>' +
         (lang === 'zh' ? '思考中…' : 'Thinking…') +
       '</summary>' +
       '<div class="paper-report-thinking-body" id="' + px + 'ThinkingBody"></div>' +

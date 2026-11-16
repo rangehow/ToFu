@@ -124,8 +124,7 @@
     },
     {
       "path": "03-paper-reader.css",
-      "responsibility": "Paper sidebar, workbench and report reading",
-      "legacyTokenSha256": "743043e1b69e41f6c65d329c3ad1910afd5fad896ef2a5250beef3f00597a7f4"
+      "responsibility": "Paper sidebar, workbench and report reading"
     },
     {
       "path": "03-paper-reader-streaming.css"
@@ -696,7 +695,6 @@
     {
       "path": "14-local-control.css",
       "responsibility": "Local Control dialog capability cards and connection evidence",
-      "legacyTokenSha256": "28856229c1375b9df36c36ccfca3160181be1c1f73975dd5aeee78e085995132",
       "featureEntry": "frontend/src/features/local-control.ts"
     },
     {

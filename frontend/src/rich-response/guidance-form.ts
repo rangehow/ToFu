@@ -2,7 +2,7 @@
  * Questions come from the owned server Turn; only answer_guidance can accept.
  * Draft fields survive reload and an uncertain ACK reuses the command identity.
  */
-import {createButton,createField} from '../ui';
+import {createButton,createDisclosureSummary,createField} from '../ui';
 import {setGuidanceQuestion,type ChoicePorts,type ChoiceInteraction} from './choices';
 import type {form_prompt} from './contract.generated';
 import {validGuidanceAnswer,type GuidanceQuestion} from './guidance-values';
@@ -60,7 +60,7 @@ export function renderGuidanceForm(doc:Document,block:form_prompt,ports:ChoicePo
           field.el.append(own);owns[index]=own;
         }else owns[index]=undefined;
         if(question.descriptions?.some(Boolean)){
-          const help=doc.createElement('details'),summary=doc.createElement('summary');summary.textContent=text('rich.surface.optionDetails','Option details');help.append(summary);
+          const help=doc.createElement('details'),summary=createDisclosureSummary(doc,text('rich.surface.optionDetails','Option details'));help.append(summary);
           question.options.forEach((option,i)=>{const line=doc.createElement('p');line.textContent=option+': '+(question.descriptions?.[i]??'');help.append(line);});fields.append(help);
         }
       });

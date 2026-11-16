@@ -2,7 +2,7 @@
  * Search, sort and page choices survive refresh. Unknown is distinct from
  * zero; capacity is not a scheduling promise. Writes remain existing commands.
  */
-import { createButton, createChoice, createField, createProgress } from '../ui';
+import { createButton, createChoice, createDisclosureSummary, createField, createProgress } from '../ui';
 import type { resource_panel, resourceRow, resourceSnapshot } from './contract.generated';
 import { resourceHub, type ResourceHub, type ResourceState, type SurfaceContext } from './resource-client';
 import { surfaceNode, type SurfaceText } from './surface-blocks';
@@ -20,7 +20,7 @@ export function renderResourcePanel(doc: Document, block: resource_panel, ports:
   live.input.dataset.richControl='resource-live';
   const provenance=node('p','','rich-resource-provenance');
   const source=doc.createElement('details'); source.className='rich-resource-source';
-  const sourceBody=node('pre');source.append(node('summary',text('rich.surface.source','Source and freshness')),sourceBody);
+  const sourceBody=node('pre');source.append(createDisclosureSummary(doc,text('rich.surface.source','Source and freshness')),sourceBody);
   const filters=node('div','','rich-resource-filters');
   const search=createField({label:text('rich.surface.search','Find queue or resource')},doc);
   const searchInput=search.control as HTMLInputElement;searchInput.dataset.richControl='resource-search';

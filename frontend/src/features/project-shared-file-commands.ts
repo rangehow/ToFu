@@ -2,7 +2,7 @@
  * Registration pins canonical bytes server-side. Refresh observes old reference
  * metadata only; replacement is a hint requiring a current human source.
  */
-import { createAlert, createChoice } from '../ui';
+import { createAlert, createChoice, createDisclosureSummary } from '../ui';
 import { t } from '../i18n';
 import type { ProjectSharedFilesRegister, ProjectSharedFilesRefresh, ProjectSharedFilesEntry } from '../api/project-continuity.generated';
 import type { ProjectDispatchPorts } from './project-dispatch';
@@ -19,7 +19,7 @@ const safeRelative = (value: string) => !!value && !value.startsWith('/') && !va
   && value.split('/').every(part => !!part && part !== '.' && part !== '..');
 export function createSharedFileCommands(ports: SharedFileCommandPorts, dispatch: ProjectDispatchPorts, scope: ContinuityScope,
   onDone: () => void, entry?: ProjectSharedFilesEntry): HTMLElement {
-  const root = stack('details'); root.append(text(t(entry ? 'projectShared.refresh' : 'projectShared.register'), 'summary'));
+  const root = stack('details'); root.append(createDisclosureSummary(document, t(entry ? 'projectShared.refresh' : 'projectShared.register')));
   const form = stack(), status = stack(), retry = stack(); root.append(status, retry, form);
   if (!ownsContinuityScope(scope)) return root;
   const source = sourceField(form, dispatch.humanTurns, scope.conversationId, entry ? 'sharedRefreshSource' : 'sharedSource');

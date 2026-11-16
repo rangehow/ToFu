@@ -1,6 +1,7 @@
 /** Model/Offering reasoning form. Edits the existing Settings draft through
  * an injected stage port; protocol compilation and persistence stay server-owned. */
 import { t } from '../../i18n';
+import { createDisclosureSummary } from '../../ui';
 import type { ModelRoutingInferenceProfile, ModelRoutingDocument } from '../../api/api-v1-model-routing.generated';
 
 type Profile = ModelRoutingInferenceProfile;
@@ -11,8 +12,7 @@ export function createReasoningEditor(ports: {
 }): HTMLElement {
   const root = document.createElement('details');
   root.className = 'stg-reasoning-editor';
-  const summary = document.createElement('summary');
-  summary.textContent = t('modelReasoning.title');
+  const summary = createDisclosureSummary(document, t('modelReasoning.title'));
   root.append(summary);
   let built = false;
   root.addEventListener('toggle', () => {
@@ -120,8 +120,7 @@ export function mountProviderReasoningEditors(root: HTMLElement, getDraft: () =>
     if (!offerings.length) continue;
     const group = document.createElement('details');
     group.className = 'stg-reasoning-editor';
-    const summary = document.createElement('summary');
-    summary.textContent = t('modelReasoning.providerOverrides');
+    const summary = createDisclosureSummary(document, t('modelReasoning.providerOverrides'));
     group.append(summary);
     let built = false;
     group.addEventListener('toggle', () => {

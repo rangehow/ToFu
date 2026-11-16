@@ -382,7 +382,7 @@
 
     // thinking (only for older rounds that weren't L2-stripped)
     if (m.thinking) {
-      inner += `<details class="cd-thinking"><summary>reasoning · ${m.thinking.length.toLocaleString()} chars</summary><pre><code>${_esc(m.thinking)}</code></pre></details>`;
+      inner += `<details class="cd-thinking"><summary class="ui-disclosure">reasoning · ${m.thinking.length.toLocaleString()} chars</summary><pre><code>${_esc(m.thinking)}</code></pre></details>`;
     }
 
     const meta = [];
@@ -499,7 +499,7 @@
     ].join('');
     const calls = Array.isArray(cost.calls) ? cost.calls.slice(0, 16).filter(call => call && typeof call === 'object') : [];
     const callsBlock = calls.length ? `<details class="cd-receipt-files">
-      <summary>${_esc(_t('compactionViewer.receiptAttempts'))}</summary>
+      <summary class="ui-disclosure">${_esc(_t('compactionViewer.receiptAttempts'))}</summary>
       <ul>${calls.map(call => `<li><code>${_esc(call.model || unknown)}</code> · <code>${_esc(call.providerId || unknown)}</code> · ${_esc(usd(call.costUsd, call.known))}${call.reason ? ` · ${_esc(call.reason)}` : ''}</li>`).join('')}</ul>
     </details>` : '';
     const economicsBlock = economics ? `

@@ -1,5 +1,5 @@
 /** Bounded fact/consumer page projection. Decisions and request lifecycle stay in panel.ts. */
-import { createButton, createField } from '../../ui';
+import { createButton, createDisclosureSummary, createField } from '../../ui';
 import type { WorkingFactEntry, WorkingFactConsumer, WorkingFactOwnerDecision } from '../../api/working-facts.generated';
 import type { Draft, Text } from './ports';
 
@@ -17,7 +17,7 @@ export function status(t: Text, value: string) {
 export function factRow(doc: Document, fact: WorkingFactEntry, draft: Draft, t: Text,
   submit: (action: WorkingFactOwnerDecision['action']) => void) {
   const el = doc.createElement('details'); el.dataset.workingFact = fact.id;
-  const summary = node(doc, 'summary', status(t, fact.status) + ' · ' + fact.text);
+  const summary = createDisclosureSummary(doc, status(t, fact.status) + ' · ' + fact.text);
   el.append(summary);
   // Materialize only expanded rows; the current page owns at most twenty rows.
   el.addEventListener('toggle', () => {
@@ -62,7 +62,7 @@ export function consumerRow(doc: Document, row: WorkingFactConsumer, t: Text) {
   const assessment = row.requiresRevalidation ? t('workingFacts.revalidate', 'Needs revalidation')
     : row.consumptionUncertain ? t('workingFacts.uncertain', 'Use not fully confirmed') : t('workingFacts.unchanged', 'Recorded basis unchanged');
   const uncertain = row.requiresRevalidation && row.consumptionUncertain ? ' · ' + t('workingFacts.uncertain', 'Use not fully confirmed') : '';
-  el.append(node(doc, 'summary', assessment + uncertain + ' · ' + row.taskId));
+  el.append(createDisclosureSummary(doc, assessment + uncertain + ' · ' + row.taskId));
   if (row.turnId) el.append(node(doc, 'p', t('workingFacts.turn', 'Turn') + ': ' + row.turnId));
   if (row.attemptId) el.append(node(doc, 'p', t('workingFacts.attempt', 'Attempt') + ': ' + row.attemptId));
   el.addEventListener('toggle', () => {

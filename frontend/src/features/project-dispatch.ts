@@ -2,7 +2,7 @@
  * Server owns grants/results. No render-triggered writes, polling or delivery inference.
  * One uncertain grant survives drawer teardown: retries reuse its exact body/key.
  */
-import { createAlert, createButton, createChoice, createField } from '../ui';
+import { createAlert, createButton, createChoice, createDisclosureSummary, createField } from '../ui';
 import { t } from '../i18n';
 
 import { createDispatchDependencies, dependencyProjection, sameDependencies } from './project-dispatch-dependencies';
@@ -61,7 +61,7 @@ export function createProjectDispatch(ports: ProjectDispatchPorts, scope: Scope)
   const root = document.createElement('section'); root.className = 'ui-stack';
   root.dataset.testid = 'project-dispatch';
   const disclosure = document.createElement('details');
-  disclosure.append(text(t('projectDispatch.title'), 'summary'));
+  disclosure.append(createDisclosureSummary(document, t('projectDispatch.title')));
   const form = document.createElement('form'); form.className = 'ui-stack';
   const fields = document.createElement('div'); fields.className = 'ui-stack';
   const inputs: Array<HTMLInputElement | HTMLSelectElement> = [];

@@ -7,7 +7,7 @@
  * classic ConversationSurface below this header), so chatting with a person is the classic chat itself.
  * Entry point: createPanel. Dependencies: i18n, ui button factory, safe text projection, sprites. */
 import { t, type I18nKey } from '../../i18n';
-import { createButton } from '../../ui';
+import { createButton, createDisclosureSummary } from '../../ui';
 import type { ChoiceInteraction, ChoicePorts } from '../../rich-response/choices';
 import { mountGuidanceAnswerFor, type GuidanceAnswerMount } from '../../rich-response/guidance-answer';
 import type { Brief, BriefCheck, BriefDecision, TurnRef, Verdict } from './brief';
@@ -231,7 +231,8 @@ export function createPanel(ports: PanelPorts) {
     if (decisions.length) {
       questionCard(body, decisions);
       const more = el('details', 'w-brief-more', body);
-      el('summary', 'w-brief-more-summary', more).textContent = t('world.brief.progress');
+      const moreSummary = createDisclosureSummary(document, t('world.brief.progress'));
+      moreSummary.classList.add('w-brief-more-summary'); more.append(moreSummary);
       more.open = progressOpen;
       more.addEventListener('toggle', () => { progressOpen = more.open; });
       rest = more;

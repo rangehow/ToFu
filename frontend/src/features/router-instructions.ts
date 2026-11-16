@@ -5,7 +5,7 @@
  * are owner-only (no model tool); cancellation is final.
  */
 import type { RouterInstruction, RouterInstructionPage } from '../api/router.generated';
-import { createButton } from '../ui';
+import { createButton, createDisclosureSummary } from '../ui';
 import { t } from '../i18n';
 
 export interface RouterInstructionPorts {
@@ -35,7 +35,7 @@ export function createRouterInstructions(ports: RouterInstructionPorts) {
 
   const el = document.createElement('details');
   el.className = 'router-instructions';
-  const summary = document.createElement('summary');
+  const summary = createDisclosureSummary(document);
   summary.dataset.i18n = 'routerInstructions.title';
   summary.textContent = t('routerInstructions.title');
   const status = document.createElement('p');

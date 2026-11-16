@@ -1,7 +1,7 @@
 /** Native UI over persisted response data. No model markup, script or business state.
  * Entries own reader disclosure, compatible focus and abortable image requests.
  */
-import { createButton, createProgress } from '../ui';
+import { createButton, createDisclosureSummary, createProgress } from '../ui';
 import { request, resolvePath } from '../api/transport';
 
 import type { action, asset, metric } from './contract.generated';
@@ -108,7 +108,7 @@ export function renderRichResponse(host: HTMLElement, value: unknown, ports: Ric
     details.className = 'rich-block';
     details.dataset.richBlock = block.id;
     details.open = old ? old.node.open : true;
-    details.append(element('summary', block.title));
+    details.append(createDisclosureSummary(doc, block.title));
     const abort = new AbortController();
     const cleanups: Array<() => void> = [];
     const button = (label: string, key: string, fn?: () => void) => {

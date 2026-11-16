@@ -14,6 +14,7 @@
  * Dependencies: injected goal API, translation, element, calendar and clock
  * ports; data is rendered with DOM text nodes only.
  */
+import { DISCLOSURE_CLASS } from '../../ui';
 import { MYDAY_PRESENTATION_ASSETS } from './presentation-assets';
 import {
   calendarMarks,
@@ -678,8 +679,8 @@ export function createMyDayGoalBoard(ports: MyDayGoalBoardPorts): Readonly<MyDay
 
   function archivedSection(archived: MyDayGoal[]): HTMLElement {
     const section = el('div', 'myday-goal-archived');
-    const toggle = button('myday-goal-btn ghost myday-goal-archived-toggle',
-      `${archivedOpen ? '▾' : '▸'} ${t('myday.goalsArchived')} (${archived.length})`,
+    const toggle = button(`myday-goal-btn ghost myday-goal-archived-toggle ${DISCLOSURE_CLASS}`,
+      `${t('myday.goalsArchived')} (${archived.length})`,
       () => { archivedOpen = !archivedOpen; render(); });
     toggle.setAttribute('aria-expanded', String(archivedOpen));
     section.append(toggle);

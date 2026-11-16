@@ -76,7 +76,8 @@ const renderers = feature.createClassicConversationRenderers({
   renderSafeMarkdownHtml:String, renderToolBlockHtml:html,
   renderInjectionBlockHtml:html, renderProvenanceBlockHtml:html, renderTurnFooterHtml:html,
 });
-const turn = {turnId:'turn',actor:'assistant',status:kind==='footer'?'completed':'running',segments:[],source:{projection:{}}};
+const turn = {turnId:'turn',actor:'assistant',status:kind==='footer'?'completed':'running',segments:[],source:{projection:{}},
+  metadata:{translation:{completed:false,available:false,displayMode:'original',pending:false,failed:false}}};
 const context = {conversationId:'fixture',turn,lane:{laneId:'main'}};
 const block = {kind,id:'block',name:'fixture',channel:'inbox',items:[],value:{},round:{},result:{}};
 const paint = () => kind === 'footer' ? renderers.renderTurnFooter(root,turn,context)

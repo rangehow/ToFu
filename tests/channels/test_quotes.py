@@ -84,7 +84,7 @@ def test_quoting_tofus_own_send_shows_the_outbox_text_labelled_tofu(channel, dis
 @requires_dx
 def test_the_11_09_quote_reply_resolves_from_the_outbox(channel, dispatch):
     """The real shape (2026-11-09): a type-20 push whose quote names our outbox item's platform ID."""
-    from tofu_meituan.dx.adapter import event_from_live
+    from tofu_yourprovider.dx.adapter import event_from_live
     item = _sent_item(channel, key='opus-pi-cache-result-20261109')
     event = event_from_live({'mid': '1813753412537282560', 'uuid': 'u-q', 'from': OWNER_UID, 'fromName': '阮俊豪',
                              'gid': '900', 'type': 20, 'message': {'searchText': '性能分数呢'}},
@@ -322,7 +322,7 @@ def test_a_message_without_a_quote_carries_no_reply_quotes(channel, dispatch):
 def test_a_robot_post_is_registered_under_its_item_so_a_quote_finds_its_text(channel, dispatch):
     """The notification robot's posts (C6) name their item in the echo registry: a quote of one shows
     that part's exact text, and the robot's own echo still confirms nothing (P12)."""
-    from tofu_meituan.dx.robot import RobotMessage, deliver_text
+    from tofu_yourprovider.dx.robot import RobotMessage, deliver_text
     channel.update_account('dx', lambda account: {**account, 'commandChat': COMMAND})
 
     class Robot:

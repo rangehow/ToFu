@@ -108,7 +108,7 @@ def test_checkout_member_without_an_install_is_not_offered(environment, tmp_path
 def test_declared_members_describe_their_tracked_pyproject():
     import tomllib
     from lib.runtime.checkout_distributions import CHECKOUT_DISTRIBUTIONS, _CheckoutDistribution
-    assert {'tofu-environments', 'tofu-meituan-environments'} <= set(CHECKOUT_DISTRIBUTIONS)
+    assert {'tofu-environments', 'tofu-yourprovider-environments'} <= set(CHECKOUT_DISTRIBUTIONS)
     for name, relative in CHECKOUT_DISTRIBUTIONS.items():
         if not (ROOT / relative).is_dir():
             # Only a release-tier overlay bundle may be absent (public core).

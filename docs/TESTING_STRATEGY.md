@@ -1153,7 +1153,7 @@ stands for "nothing answers").
   run `tests/support/production_api_guard_probe.py`, which refuses the
   production defaults below the guard itself and starts only children that name
   a target without connecting, so the specification stays safe when the guard is
-  broken. `bundles/meituan/tests/conftest.py` applies the same guard and, like
+  broken. `bundles/yourprovider/tests/conftest.py` applies the same guard and, like
   the main conftest, removes the inherited port variables after reading them,
   so no bundle test or child inherits production's port.
 
@@ -1509,7 +1509,7 @@ starts workers, so the controller, its workers and everything tests start
 (TofuDB, SQL Sidecar and PostgreSQL engines, Node, browsers, Git, cargo)
 inherit it. Direct pytest, the Make targets, `scripts/verify.py` and
 `landing_verification record`/`check` all load this conftest,
-so no launcher wraps it; `bundles/meituan/tests/conftest.py`, outside the
+so no launcher wraps it; `bundles/yourprovider/tests/conftest.py`, outside the
 testpaths, calls the same owner for `make test-bundles`. Package suites do not
 load that conftest; the sessions verification and the selector run for them
 load `tests/support/lower_priority_plugin.py`, which calls the same owner as

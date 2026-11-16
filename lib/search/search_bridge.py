@@ -671,7 +671,7 @@ class _ChatuiMcpDocumentReader(_SiteReaderBase):
 
     A catalog entry's ``document_reader`` names the hosts and path shape of
     documents an anonymous fetch can only see as an SSO login wall (for
-    example 学城 in the Meituan overlay, ~80K chars of JS/config noise that
+    example 学城 in the YourProvider overlay, ~80K chars of JS/config noise that
     poisoned fetch_url results). The connector reads the same URL under the
     user's identity. As a tofu-search READER this runs before the anonymous
     pipeline, so both direct fetch_url and web_search result-fetching return

@@ -146,7 +146,7 @@ def test_a_quote_reply_reaches_the_real_router_turn_with_the_quoted_message(worl
     content and carries the quoted message, labelled as Tofu's, in replyQuotes; the model reads it
     above his words, and his authored text is his message alone."""
     from lib.channels import outbox, quotes
-    from tofu_meituan.dx.adapter import event_from_live
+    from tofu_yourprovider.dx.adapter import event_from_live
     from lib.channels.ingress import ingest
     from lib.tasks_pkg.conv_message_builder._transform import _transform_messages
     from lib.turn_initiation import require_human_turn, steer_author

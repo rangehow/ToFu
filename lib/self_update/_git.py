@@ -102,7 +102,11 @@ def _run_git(args: list[str], timeout: int = 30) -> subprocess.CompletedProcess:
                 [executable, *arguments],
                 cwd=_ROOT,
                 capture_output=True,
+                # Git writes UTF-8; the Windows locale default (cp1252) kills
+                # the reader thread on `git diff HEAD` of non-ASCII content.
                 text=True,
+                encoding='utf-8',
+                errors='replace',
                 timeout=timeout,
                 env=environment,
             )
@@ -145,6 +149,7 @@ def _run_git_streaming(args: list[str], timeout: int = 30,
     proc = subprocess.Popen(
         argv, cwd=_ROOT,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        encoding='utf-8', errors='replace',
     )
 
     stderr_lines: list[str] = []

@@ -511,8 +511,24 @@ DolphinFS 上，新机的 `--start` 在旧机还在服务时直接拒绝。所�
    while fingerprinting <文件>：引擎指纹遍历工作区（`packages/tofu-db/src/**.rs`
    等），目录列表里有该文件、打开却 ENOENT。若 `git -C <checkout> status --short
    packages/tofu-db` 干净且 `ls -l <文件>` 能看到它，就是本机 DolphinFS 元数据缓存
-   还停留在另一台机器替换文件之前，文件并未被删除；`ls -l` 后重跑 `--check`。若 status 不干净，是有
+   还停留在另一台机器替换文件之前，文件并未被删除。若 status 不干净，是有
    landing 正在写 checkout，等它结束再重跑。
+
+   陈旧视图不止一个文件：`git_land`（`lib/project_mod/checkout_landing.py::_apply`）
+   和编辑器都用“临时文件 + `os.replace`”写文件，名字指向新 inode、旧 inode 被删。
+   一台 bgfuse 客户端若仍缓存着旧的 名字→inode 查找和属性，`stat` 报旧大小和
+   mtime，`open()` 报 ENOENT；同样状态的 Python/Rust 源会让新机跑旧代码。所以
+   `--check` 有一项 `checkout view`（`scripts/verify_checkout_view.py`）：逐个比对
+   每个已跟踪文件在本机读到的内容（`git hash-object`）和 index（`git ls-files -s`），
+   列出每个不一致或读不了的文件，有就 FAIL，`--start` 也因此拒绝启动。本地修改
+   只有在旧机 `--record` 记录过同样字节时才放行（`data/host-state/checkout-view.json`，
+   同时记 HEAD 和 index 摘要，任一不符即 FAIL）。修复：旧机
+   `python3 scripts/verify_checkout_view.py --record`（可选 `--rematerialize --since
+   <rev>`：干净文件以相同字节、权限、mtime 换成新 inode，跳过本地修改）；新机
+   `.venv/bin/python scripts/migrate_host.py --refresh-view`：先列出出问题文件所在
+   目录（FUSE readdirplus 会替换 inode 已变的缓存项），仍不一致的再用 index 字节
+   “临时文件 + 原子 rename”重写，从不碰已记录的未提交工作；然后 `--verify-view`、
+   `--check`。
 2. 旧机终端（确认新机 `--check` 通过后才执行）：
 
    ```bash

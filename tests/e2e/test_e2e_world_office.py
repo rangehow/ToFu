@@ -103,7 +103,10 @@ def test_a_person_opens_their_real_conversation_and_the_classic_composer_sends(o
     assert ensured.ok, ensured.text()
     router_id = ensured.json()['conversationId'] if 'conversationId' in ensured.json() else ensured.json()['data']['conversationId']
     writes = []
-    page.on('request', lambda request: writes.append(f'{request.method} {request.url}') if request.method not in ('GET', 'HEAD') else None)
+    # The shell's diagnostic relay (boot warnings, main-thread stall reports) is not the office writing; it flushes
+    # on its own schedule during boot whatever the office does.
+    page.on('request', lambda request: writes.append(f'{request.method} {request.url}')
+            if request.method not in ('GET', 'HEAD') and not request.url.endswith('/api/v4/logs/client') else None)
     try:
         _boot(page, live_server)
         # People are drawn on the canvas; each has an accessible button over them for the keyboard.

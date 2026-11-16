@@ -394,7 +394,7 @@ import {
 } from '../core/send-startup';
 import { sendFailureToastDetail } from '../conversation/presentation/send-failure-message';
 import {
-  DOMPurify, canEnsureHljsLanguage, ensureHljsLanguage, hljs, loadHtml2Canvas, loadKatex, marked,
+  DOMPurify, canEnsureHljsLanguage, ensureHljsLanguage, hljs, loadHljs, loadHtml2Canvas, loadKatex, marked,
 } from '../vendor-runtime';
 // The retained service registry is infrastructure, not a feature initialized
 // in manifest order. Declare it before any eager composition so adding a new
@@ -3081,6 +3081,7 @@ const markdownRenderer = createMarkdownRenderer({
   ensureMath: () => typeof _ensureKatex === 'function' ? _ensureKatex() : undefined,
   ensureHighlightLanguage: typeof ensureHljsLanguage === 'function' ? ensureHljsLanguage : undefined,
   canEnsureHighlightLanguage: typeof canEnsureHljsLanguage === 'function' ? canEnsureHljsLanguage : undefined,
+  loadHighlighter: typeof loadHljs === 'function' ? loadHljs : undefined,
 });
 function renderMarkdown(text, options) {
   return markdownRenderer.render(text, options);

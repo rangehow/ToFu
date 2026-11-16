@@ -19,6 +19,7 @@ const markdownRenderer = createMarkdownRenderer({
   ensureMath: () => typeof _ensureKatex === 'function' ? _ensureKatex() : undefined,
   ensureHighlightLanguage: typeof ensureHljsLanguage === 'function' ? ensureHljsLanguage : undefined,
   canEnsureHighlightLanguage: typeof canEnsureHljsLanguage === 'function' ? canEnsureHljsLanguage : undefined,
+  loadHighlighter: typeof loadHljs === 'function' ? loadHljs : undefined,
 });
 function renderMarkdown(text, options) {
   return markdownRenderer.render(text, options);

@@ -39,6 +39,8 @@ export interface MarkdownRendererPorts {
   readonly ensureMath: () => void | Promise<unknown>;
   readonly ensureHighlightLanguage?: (language: string) => Promise<boolean>;
   readonly canEnsureHighlightLanguage?: (language: string) => boolean;
+  /** Loads the highlighter the environment reports afterwards. */
+  readonly loadHighlighter?: () => Promise<unknown>;
   readonly reportFailure?: (error: unknown) => void;
 }
 

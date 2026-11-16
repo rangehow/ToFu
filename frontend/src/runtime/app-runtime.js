@@ -21892,7 +21892,13 @@ let backgroundConversationActivity = new Map();
   }
   function sidebarPath() {
     var folder = sidebarFolder();
-    return folder ? norm(folder.projectPaths?.[0] || folder.projectPath || '') : projectPath();
+    if (folder) return norm(folder.projectPaths?.[0] || folder.projectPath || '');
+    // The uncategorized view lists only chats outside every folder: an open
+    // chat filed in a project folder must not claim the slot of its card.
+    var conv = typeof getActiveConv === 'function' ? getActiveConv() : null;
+    var filed = !!conv?.folderId && typeof getFolders === 'function'
+      && getFolders().some(function (item) { return item.id === conv.folderId; });
+    return filed ? '' : projectPath();
   }
   function scope(sidebarOnly) {
     var resolvePath = sidebarOnly ? sidebarPath : projectPath;

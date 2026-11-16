@@ -178,7 +178,7 @@ it('bridges the main coordinator card and health checks to their typed owners an
   document.body.innerHTML = '<aside id="sidebar"><div class="sidebar-header"></div><div class="sidebar-action-row"></div></aside>'
     + '<div id="convList"></div><div id="presenceStrip"></div><div class="conv-status-strip"><div id="projectBar"></div></div>';
   const runtime: Record<string, any> = {}, open = vi.fn();
-  let active: { id: string; projectPath: string } | null = null;
+  let active: { id: string; projectPath: string; folderId?: string } | null = null;
   let folder = '';
   const folders = [{ id: 'project-folder', projectPaths: ['/project'] }];
   const router = { projectPath: '/data/router/1', conversationId: 'coordinator-router', revision: 1,
@@ -259,6 +259,13 @@ it('bridges the main coordinator card and health checks to their typed owners an
     expect(slot.hidden).toBe(true);
     folder = ''; runtime.presenceRefresh();
     expect(slot.hidden).toBe(false);
+    // The uncategorized view keeps the card while the open chat is filed in a project folder.
+    active = { id: 'filed', projectPath: '/project', folderId: 'project-folder' }; runtime.presenceRefresh();
+    expect(slot.hidden).toBe(false);
+    expect(document.querySelector('#projectCoordinatorEntry .coordination-leader')).toBeNull();
+    // A folder id naming no known folder leaves the chat uncategorized.
+    active = { id: 'orphan', projectPath: '/project', folderId: 'deleted-folder' }; runtime.presenceRefresh();
+    expect(slot.hidden).toBe(true);
   } finally { window.dispatchEvent(new Event('pagehide')); }
   expect(document.querySelector('.global-router-card')).toBeNull();
   expect(document.querySelector('.router-watchdog')).toBeNull();

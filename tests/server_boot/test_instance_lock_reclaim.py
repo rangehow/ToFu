@@ -291,3 +291,28 @@ def test_neuter_blind_flock_fails_case_a(srv, tmp_path):
         assert not log.has('warning', 'reclaiming stale lock')
     finally:
         orphan.close()
+
+
+def test_acquiring_a_lock_another_host_named_records_that_hosts_retirement(srv, tmp_path, monkeypatch):
+    """2026-11-16 host move: the new host took the lock the old host named, but
+    nothing recorded that hand-off, so Attempts the old host entered stayed running."""
+    import lib.process_owner as owners
+    lock = str(tmp_path / '.server.lock')
+    _write_lock(lock, 2797781, 'retired-host')
+    log = _Log()
+    ok, fd = srv._acquire_instance_lock(lock, log, hostname=platform.node())
+    try:
+        assert ok
+    finally:
+        fd.close()
+    monkeypatch.setattr(owners, 'exit_evidence_dir', lambda: str(tmp_path / 'process-exits'))
+    here = owners.process_owner()
+    if here is None:
+        pytest.skip('local Linux process incarnation evidence unavailable')
+    assert owners.owner_state({**here, 'host': 'retired-host'}) == 'dead'
+    assert owners.owner_state({**here, 'host': 'other-host'}) == 'unknown'
+    # Re-acquiring a lock this host named retires nothing.
+    ok, fd = srv._acquire_instance_lock(lock, _Log(), hostname=platform.node())
+    fd.close()
+    assert [path.name for path in (tmp_path / 'process-exits' / 'hosts').iterdir()] == [
+        owners._host_retirement_path('retired-host', tmp_path).name]

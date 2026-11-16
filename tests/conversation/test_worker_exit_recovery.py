@@ -174,6 +174,43 @@ def test_a_moved_host_settles_the_attempt_its_retired_host_recorded_as_exited(
                                              pair['turn']['turnId'], pair['attempt']['attemptId'])]
 
 
+def test_stop_settles_an_attempt_whose_host_handed_off_the_serving_lock(
+        claimed, process_witness, monkeypatch, tmp_path):
+    """Owner report 2026-11-16: after the move even Stop could not end the Turn the
+    old host entered, and that host's exit was never recorded. Taking over the lock
+    the old host named retires that host, so the next claim settles the Stop."""
+    import logging
+    import lib.process_owner as owners
+    from lib import turn_lifecycle as turns
+    from lib.conversation_sync.worker_execution import cancel_claimed_attempt
+    from lib.durable_worker import StorageWorkerJobStore, WorkerDomainSettlementUnknown
+    from lib.server_boot.lock import _acquire_instance_lock
+    context, pair, factory, owner = claimed
+    process, witness = process_witness
+    enter(claimed, {**witness, 'host': 'retired-host'})
+    process.kill()
+    process.wait()
+    monkeypatch.setattr(owners, 'exit_evidence_dir', lambda: str(tmp_path / 'process-exits'))
+    monkeypatch.setattr('lib.conversation_sync.task_start.start_conversation_attempt_executor',
+                        lambda *a, **kw: pytest.fail('unknown effects were replayed'))
+    turns.abort_attempt(pair['attempt']['attemptId'], user_id=owner, withdraw_dispatch=False)
+    context.observe_claim_state(StorageWorkerJobStore(client_factory=factory).claim_state(
+        context.claim, now_ms=1))
+    assert context.cancellation_requested
+    with pytest.raises(WorkerDomainSettlementUnknown):
+        cancel_claimed_attempt(context, context.claim.payload)
+    assert turns.get_attempt(pair['attempt']['attemptId'], user_id=owner)['status'] == 'running'
+    lock = tmp_path / '.server.lock'
+    lock.write_text('2797781@retired-host\n')
+    ok, fd = _acquire_instance_lock(str(lock), logging.getLogger(__name__))
+    fd.close()
+    assert ok
+    cancel_claimed_attempt(context, context.claim.payload)
+    turn = turns.get_turn(pair['turn']['conversationId'], pair['turn']['turnId'], user_id=owner)
+    # As for a dead local process: Stop ends it, its external outcome stays unknown.
+    assert turn['status'] == 'failed'
+
+
 def test_the_serving_process_runs_dispatch_recovery_for_an_attempt_a_dead_process_left(
         claimed, process_witness, monkeypatch):
     """FORENSICS item 5 (2026-11-11, NDP request attempt e11ce7a7): the stopping process

@@ -126,3 +126,17 @@ def test_recorded_exit_proves_death_only_where_the_kernel_cannot_and_is_never_la
         owners.record_exit(stamp, tmp_path / 'copy')
     recorded.write_text(json.dumps({'format': owners.EXIT_RECORD_FORMAT, 'owner': other}))
     assert owners.owner_state(stamp) == 'unknown'
+
+
+def test_host_retirement_covers_only_other_hosts(tmp_path, monkeypatch):
+    here = owners.process_owner()
+    if here is None:
+        pytest.skip('local Linux process incarnation evidence unavailable')
+    monkeypatch.setattr(owners, 'exit_evidence_dir', lambda: str(tmp_path))
+    with pytest.raises(ValueError, match='another host'):
+        owners.record_host_retired(here['host'], tmp_path, evidence={})
+    owners.record_host_retired('retired-host', tmp_path, evidence={'lock': '1@retired-host'})
+    assert owners.owner_state({**here, 'host': 'retired-host'}) == 'dead'
+    # This host's own processes keep kernel evidence; a retirement never reaches them.
+    assert owners.owner_state(here) == 'alive'
+    assert owners.owner_state({**here, 'boot': 'other-boot'}) == 'unknown'

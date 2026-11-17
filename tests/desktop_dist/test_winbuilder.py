@@ -412,6 +412,48 @@ def test_both_pipelines_build_the_gitignored_vite_graph_before_pyinstaller():
     assert 'verify_frontend_dist.py' in body
 
 
+def test_the_windows_pipeline_builds_the_tofudb_engine_before_pyinstaller():
+    import inspect
+    src = inspect.getsource(wb._pipeline)
+    assert (src.index('archive HEAD')
+            < src.index('_build_tofudb_exe(src, log_fh)')
+            < src.index('-m PyInstaller'))
+
+
+def test_tofudb_exe_lands_where_tofu_spec_looks(tmp_path, monkeypatch):
+    """tofu.spec bundles packages/tofu-db/target/release/tofu-db.exe; the
+    cross build writes under its own target triple in the cached dir."""
+    from lib.desktop_dist import builder as lb
+    cache = tmp_path / 'cache'
+    tools_bin = cache / 'tools' / 'bin'
+    tools_bin.mkdir(parents=True)
+    for name in ('zig', 'cargo-zigbuild'):
+        (tools_bin / name).write_text('')
+    monkeypatch.setattr(wb.wintoolchain, 'cache_dir', lambda: str(cache))
+    monkeypatch.setattr(wb, '_conda_tools_add',
+                        lambda *a: pytest.fail('tools already present'))
+    cmds = []
+
+    def fake_sh(cmd, log_fh, *, cwd=None, env=None, **kw):
+        cmds.append((cmd, env))
+        if cmd.startswith('cargo zigbuild'):
+            out = (cache / 'tofudb-target' / wb._TOFUDB_WIN_TARGET
+                   / 'release')
+            out.mkdir(parents=True)
+            (out / 'tofu-db.exe').write_bytes(b'MZ')
+
+    monkeypatch.setattr(lb, '_sh', fake_sh)
+    src = tmp_path / 'src'
+    src.mkdir()
+    wb._build_tofudb_exe(str(src), None)
+    built = src / 'packages' / 'tofu-db' / 'target' / 'release' / 'tofu-db.exe'
+    assert built.read_bytes() == b'MZ'
+    env = cmds[-1][1]
+    assert env['CARGO_TARGET_DIR'] == str(cache / 'tofudb-target')
+    assert env['PATH'].split(os.pathsep)[0] == str(tools_bin)
+    assert '-Wno-error=date-time' in env['CFLAGS_x86_64_pc_windows_gnu']
+
+
 # ═══════════════════════════════════════════════════════════════════
 #  NEUTER — the two traps must bite
 # ═══════════════════════════════════════════════════════════════════

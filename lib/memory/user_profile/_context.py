@@ -625,12 +625,27 @@ def update_context_item(item_id: str, updates: dict, scope: str = '', *,
 
 
 def delete_context_item(item_id: str, scope: str = '') -> bool:
+    """Delete an active item, or one still awaiting the owner's confirmation.
+
+    Either deletion leaves a ``delete`` record, the learner's tombstone.
+    Superseded items are refused: they record why a belief was dropped.
+    """
     with context_transaction(scope):
         doc = load_context(scope)
         remaining = [item for item in doc['items'] if item.get('id') != item_id]
-        if len(remaining) == len(doc['items']):
+        if len(remaining) < len(doc['items']):
+            save_context_items(remaining, scope)
+            return True
+        pending = next((item for item in doc['inactive_items']
+                        if item.get('id') == item_id
+                        and item.get('status') == 'needs_confirmation'), None)
+        if pending is None:
             return False
-        save_context_items(remaining, scope)
+        doc['inactive_items'] = [item for item in doc['inactive_items']
+                                 if item is not pending]
+        write_json_atomic(context_path(scope), doc)
+        _append_change(scope, 'delete', pending, None)
+        audit_log('user_context_pending_deleted')
         return True
 
 

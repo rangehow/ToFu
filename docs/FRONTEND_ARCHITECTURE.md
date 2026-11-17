@@ -2956,15 +2956,19 @@ unless the chat is docked, and a turn in the hidden column has no paint opportun
   accessible `.evo-target` buttons; Enter opens, Esc closes the panel) and a camera that fits the whole
   view, so a docked panel is an inset the camera pans within.
 - `scene.ts` draws the office as one canvas frame, so the floor and everyone on it always agree:
-  procedural floor and light (`paint.ts`: long boards, window wall with skies by hour, carpeted team rooms,
-  daylight, wall shade, vignette, night lamps at the head desks), furniture stamped from the art atlas with
-  each pod pre-painted as one layer, then people, lit screens, documents, emblems, signs and tooltips.
+  procedural floor (`paint.ts`: long boards, window wall with skies by hour), team rooms as furnished
+  dioramas and the light by local time (`diorama.ts`, art direction below), furniture stamped from the art
+  atlas with each pod pre-painted as one layer, then people, lit screens, documents, the grade, then what
+  each person is doing (`life.ts`: name tags, screen glow, bubbles, raised hands, confetti), emblems, signs
+  and tooltips.
   Pods and character sheets are kept at the frame's resolution (a power of two, like mip levels), so
   everything is drawn at about one to one: resampling the full-resolution sheet for every person on every
   frame cost more than the rest of the frame together and stalled blends on a software-rasterized canvas.
-  The floor and the light are device-pixel layers keyed by camera transform and content, rebuilt once a key
-  has held for a frame: a settled frame blits two layers and draws the sprites, and the stage sleeps while
-  nothing moves (it wakes on the art's beat while people type, else on the hour for the skies). Rooms never
+  The floor and the grade are device-pixel layers keyed by camera transform and content (the floor rebuilt
+  once a key has held for a frame; the grade always in its own layer, because the night cuts its light pools
+  out of it): a settled frame blits two layers and draws the sprites. While anyone is on the floor the
+  office is alive and draws every frame (screens flicker, bubbles think, tags breathe, dust drifts); under
+  reduced motion it sleeps and wakes once a minute for the wall clocks. Rooms never
   shrink while the office is open (each team keeps the most desks it has needed), a floor plan that does
   change blends by identity (`tween.ts`: rooms by team, pods and desks by index, decor by the key of its
   place): rooms slide and resize; something leaving fades out over the first half of the blend and something
@@ -2977,8 +2981,8 @@ unless the chat is docked, and a turn in the hidden column has no paint opportun
 - `actors.ts` gives every person a desk, a rest (the desk, a spot at the owner's door, or gone) and the
   walk there along the walkways (`routes.ts`: waypoints that bend with a blending floor). A Worker who
   arrives walks in through the entrance, one who leaves walks out (and turns round where it stands when
-  its work restarts on the way), a report is carried to the owner's desk and laid down, a lead with a
-  question walks to the door. While the first reads settle, and on the update that ends them, people fade
+  its work restarts on the way), a report is carried to the owner's desk, laid down and celebrated (two
+  hops, confetti) before the walk back, a lead with a question walks to the door and raises a hand. While the first reads settle, and on the update that ends them, people fade
   in and out where they rest instead: what changes then is knowledge, not the office. Each typist keeps its
   own beat offset and tempo; reduced motion settles every move at once.
 - `art.ts` decodes the atlas, sheets and sprites once per theme; a theme change keeps the previous art
@@ -2993,6 +2997,87 @@ unless the chat is docked, and a turn in the hidden column has no paint opportun
   the owner's own existing answer command, below.
 - Owner questions (owner complaint 2026-11-16, decision below): a lead with open `ask_human` questions
   leads its panel with one compact question card; the rest of the brief folds behind "Progress".
+
+### Office art direction (2026-11-17)
+
+**Problem:** the owner found the office "still far too ugly" (11-17): flat pastel rooms that were mostly
+empty rug, small people on a uniform beige floor, no light, and names readable only by hovering. The office
+must show at a glance what every lead and Worker is doing and be a pleasure to look at.
+
+**Decision:** a lit miniature office, "diorama at golden hour". References, and what each one lends:
+- *Kairosoft (Game Dev Story, Pocket Academy)*: every staff member is visible at a desk and status reads
+  from a glance at their head (bubbles, sparks, a celebration when something ships). Here: a name tag with a
+  status light on everyone, a thought bubble while assigned work waits, a raised waving hand for an open
+  owner question, confetti and a hop when a delivery lands.
+- *Two Point Hospital / Two Point Campus*: each room is a distinct place (its own floor material, wall
+  colour, signage), with chunky saturated props, strong contact shadows and furniture that fills the room.
+  Here: rooms with back walls, glass partitions and a doorway, four floor materials, a backlit sign, framed
+  pictures, a clock, shelves, lounges in the spare floor.
+- *Stardew Valley / Eastward night lighting*: the evening darkens the world while practical lights keep warm
+  pools and screens glow. Here: one grade per local hour, light pools under pod pendants, head-desk and floor
+  lamps, the bar and the entrance, and every working screen glowing cool and flickering.
+
+The rules that keep it a status board:
+- **Palette**: materials stay warm and muted (oak, cream, team colour mixed half-way to a neutral);
+  saturation is spent only on signals. Amber `#F4B740` (question), red (exception) and gold `#E8B04A`
+  (delivery) remain reserved; ambient art never uses them. Status lights: green working, periwinkle waiting,
+  grey idle, amber question, red exception, gold delivering.
+- **Typography**: the UI font throughout. Tags are bold 8.5 units drawn in screen pixels (never below 10 CSS
+  px) and show the whole name. A desk row's tags are packed left to right, each on the innermost line where it
+  clears the tags already there (`tagLines`), so a row of short names stays on one line and lines are added
+  only where neighbours would touch; a tag wider than its desk slides along its line to stay inside the room,
+  and only a name longer than a whole pod row is cut. Worker tags are lighter than leads' (no drop shadow,
+  slightly translucent pill, full-contrast text) so a crowded floor reads as people first. Each person in the
+  line at the owner's door gets a line of their own; signs are 14-unit heavy type lit like a neon tube in the
+  team colour, painted once per content.
+- **Light**: key light from the window wall. Day: long slanting sunbeams leaning with the hour; golden hour
+  warms; dusk tints violet and darkens; night (21-5) darkens the floor and cuts pools under every practical
+  light. Contact shadows under furniture and pods, ambient occlusion along the back wall and partitions.
+  Labels, tags and signals are drawn after the grade, so they are equally legible at night.
+- **Characters and assets**: one sticker style everywhere: warm ink contour, flat fill, a highlight on the
+  side facing the window, a cel shade on the far side, a contact shadow. People (eleven role silhouettes,
+  three palette variants each, assets/README.md) were redrawn in it: a larger chibi head with brows, two-glint
+  eyes and a shaded cheek, a lit hair sheen, garments at raised saturation (people carry the colour, surfaces
+  stay muted), and new cells for a raised hand and a cheer; the scene adds a die-cut cream outline to each
+  sheet layer, which separates them from any floor in either theme. Desks (bevelled lit top, grain, drawer
+  front), teal upholstered chairs and leaf-by-leaf plants of six species are redrawn in the atlas. Rooms,
+  walls, floors, furniture (shelves, cabinets, sofas, armchairs, tables, floor lamps, credenzas, rugs), signs,
+  clocks, tags, bubbles, the alarm ring, steam and confetti are drawn procedurally in the same style. Room
+  floors are quiet (carpet tiles a 5 % tone apart, narrow boards close in tone, sparse terrazzo, faint
+  broadloom bands), so the people and signals on them carry the contrast. Every asset is original to Tofu
+  (generated by `scripts/gen_world_art.py` or drawn in code; no third-party art; no licence to record).
+- **Camera and composition**: the whole office still fits the view. A window taller than the plan gives its
+  spare height to the rooms (`layout.ts`), not to bare corridor floor, and the head desk and pods sit under
+  the sign, so a room's spare floor is its lounge. Furniture goes only where nobody walks or sits
+  (`roomFurniture`: beside the head desk under the back wall, right of the pods, under them).
+- **Motion**: only state moves. Typing (the sheets' cells) with a flickering screen; waiting: dots travel in a
+  thought bubble; question: the sheet's raised hand waving and a bobbing `?` (at the owner's door, or at the
+  desk when the line is full); exception: a red pulse on the floor and a short jolt every two seconds; idle:
+  steam over the desk; delivering: the carry walk, then two hops with arms thrown up at the top of each, a happy
+  face and confetti at the owner's desk, then the walk back.
+  Ambient: wall clocks show the local time, dust drifts in the sunbeams. Every loop is a function of time and
+  a per-person phase (no two people in step); reduced motion draws time zero and moves nothing.
+
+**Why it is eye-catching yet readable:** contrast is spent on people and signals, not on surfaces, so the
+eye lands on who is doing what; the grade makes time of day legible at once and turns the night office into
+glowing working desks; every person carries their name and state, so nothing needs hovering.
+
+**Measured** (headless Chromium 1228, software raster, 1600 x 960, DPR 1, 10 s windows, fixture preview with
+53 people of whom 44 work, after the 11-17 redraw): 60.0 fps, p99 frame 16.8 ms, no frame over 20 ms at 15:00
+and 22:00 in the light theme and 22:00 in the dark; renderer CPU 0.27-0.28 of a core (the office before the
+lit diorama, same fixture: 0.03, because it slept between typing beats; the first diorama pass: 0.25). Reduced
+motion: 60 fps, CPU 0.003. Earlier live-data runs (24 people): 60 fps, CPU 0.19-0.23; DPR 2: 0.52. A run during
+a host load average of 156 once dropped to 34 fps and recovered to 60 fps when repeated.
+The cost is the always-on animation, which is the point of the change; the stage still sleeps when the tab
+is hidden or the office is off screen. A blind vision-model comparison (output/studio-art-redraw-20261117/blind)
+preferred this version in all six pairs (day, night and a 2x close-up, against the pre-diorama office and
+against the first diorama pass).
+
+**Alternatives rejected:**
+- Isometric rebuild: new geometry, depth sorting and hit-testing for the same information (assets/README.md).
+- A darker theme only: the light theme is the owner's, and time of day carries more meaning than a theme.
+- Names only on hover: the floor must read as a status board at a glance.
+- Throttling the ambient animation to save CPU: a tuning knob; a still office is what reduced motion is for.
 
 ### Owner questions in the office (2026-11-16)
 
@@ -3067,6 +3152,7 @@ Specifications: `model.test.ts`, `events.test.ts`, `brief.test.ts`, `live.test.t
 use recorded live shapes (`testing/recorded.ts`); `attention.test.ts`, `world-dom.test.ts`; walkways
 `routes.test.ts`, floor blends `tween.test.ts`, walking, turning round, errands and tempo `actors.test.ts`,
 the scene through attempt churn, new pods, settling, sticky spots and carried reports `scene.test.ts`, the
+grade, room furniture and lights `diorama.test.ts`, the delivery's celebration `actors.test.ts`, the
 stage's spatial focus and view-fit camera `office-game/testing/engine.test.cjs`; the question
 card, answer binding, marker clearing, paging and per-lead questions `question-card.test.ts`;
 `conversation/application/question-focus.test.ts`, the question target in `conversation-viewport.test.ts`, the

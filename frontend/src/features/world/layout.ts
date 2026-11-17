@@ -209,8 +209,8 @@ function compactRows(teams: ReadonlyArray<TeamShape>, width: number, floorTop: n
 function buildZone(key: string, x: number, y: number, row: number, shape: ZoneShape, w: number, h: number): ZoneLayout {
   const pods: Pod[] = [];
   const left = x + (w - shape.w) / 2;
-  // The head desk and its pods sit in the middle of a taller room; the team sign stays at the top.
-  const top = y + (h - shape.h) / 2;
+  // The head desk and its pods stay under the team sign; a taller room's spare floor below them is its lounge.
+  const top = y;
   for (let index = 0; index < shape.pods; index += 1) {
     const column = index % shape.columns;
     const line = Math.floor(index / shape.columns);
@@ -238,6 +238,9 @@ export function layoutOffice(viewportWidth: number, teams: ReadonlyArray<TeamSha
   // Each row is justified: its zones share the leftover width and take the row's height, so the teams read
   // as one even block of rooms with no ragged holes in the floor.
   const rows = compactRows(teams.filter(each => each.kind !== 'watchdog'), width, floorTop);
+  // A window taller than the plan gives the rows its spare height (rooms, not bare corridor floor, fill it).
+  const spare = Math.max(0, Math.floor(viewportHeight / scale) - (rowsBottom(rows) + CORRIDOR + BOTTOM_H + MARGIN));
+  rows.forEach((line, index) => { line.y += (spare / rows.length) * index; line.height += spare / rows.length; });
   const zones: ZoneLayout[] = [];
   const rowBottoms: number[] = [];
   rows.forEach((line, row) => {

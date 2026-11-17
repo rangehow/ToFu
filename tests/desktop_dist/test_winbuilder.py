@@ -405,7 +405,7 @@ def test_both_pipelines_build_the_gitignored_vite_graph_before_pyinstaller():
                 inspect.getsource(lb._pipeline)):
         i_archive = src.index('archive HEAD')
         i_front = src.index('build_frontend(src, log_fh)')
-        i_pyinst = src.index('PyInstaller')
+        i_pyinst = src.index('-m PyInstaller')
         assert i_archive < i_front < i_pyinst
     body = inspect.getsource(lb.build_frontend)
     assert 'npm run build:frontend' in body

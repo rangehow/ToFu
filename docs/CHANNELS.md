@@ -1130,8 +1130,9 @@ the notification robot keeps posting the text.
   (`/api/v4/slides/<task_id>/file`; the job manifest names the owner and
   conversation, and the newest export in its deck directory is sent). With
   `attachments=[{path, project}]` it is a regular file inside one of the
-  owner's registered project roots (`get_recent_projects`, named exactly as
-  `get_router_projects` lists it), read the same way and recorded with that
+  owner's registered project roots (a root of any of the owner's project
+  folders, primary or not, or a project with a coordination binding; named
+  exactly as `get_router_projects` lists it; never the router home), read the same way and recorded with that
   project as its provenance (`OutboxAttachmentView.project`): how a project's
   deliverable reaches a chat, since only the Global Router sends (C7;
   CHANNEL_PROTOCOL.md P13).

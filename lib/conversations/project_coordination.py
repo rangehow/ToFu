@@ -81,6 +81,12 @@ class ProjectCoordinationRepository:
         path, key = self._identity(path)
         return self._public(path, self._record(path, key))
 
+    def is_bound(self, path: str) -> bool:
+        """Whether ``path`` has a coordination binding (a row get_router_projects pages), whatever its target."""
+        path, key = self._identity(path)
+        row = self._record(path, key)
+        return bool(row and row['value']['conversationId'])
+
     def create(self, path: str, *, folder_id: str, expected_revision: int,
                command_id: str) -> dict:
         """Create an empty ordinary conversation, then CAS-bind; never execute.

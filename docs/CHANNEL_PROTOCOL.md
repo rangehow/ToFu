@@ -612,7 +612,9 @@ private verified copy; adapters never read caller paths. Admissible:
    following symlinks;
 2. an artifact or slide deck the sending conversation published;
 3. `{path, project}`: a regular file inside the registered project root the
-   Global Router names (`lib.project_mod.config.get_recent_projects`), read
+   Global Router names (a root of one of the owner's project folders, primary
+   or secondary, or a project with a coordination binding, the rows
+   `get_router_projects` lists; not the router home or watchdog), read
    with the same no-follow snapshot and limits, recorded on the item with
    that project as its provenance and shown in 代发记录: the path by which a
    project's file reaches the Global Router.
@@ -638,7 +640,9 @@ pick the wrong project.
 second copy of the owner's file per delivery and an approval round trip for a
 file the owner already owns. Channel tools in project conversations: spreads
 send authority, against C7. Any absolute path: would let a send exfiltrate
-files outside the owner's projects.
+files outside the owner's projects. The recent-project list: navigation
+history the owner can clear, not a registration; it can be empty while
+`get_router_projects` lists the project, refusing every `{path, project}`.
 
 ### P14. Observability
 

@@ -542,6 +542,12 @@ def test_process_service_keeps_failed_stop_owner_discoverable():
 
     class Runtime:
         fail_stop = True
+        closed = False
+
+        # StorageRuntime.close: refuse every later start, then the bounded stop.
+        def close(self, timeout=10.0):
+            self.closed = True
+            self.stop(timeout=timeout)
 
         def stop(self, timeout=10.0):
             if self.fail_stop:
@@ -555,6 +561,7 @@ def test_process_service_keeps_failed_stop_owner_discoverable():
     try:
         with pytest.raises(RuntimeError, match='owner still alive'):
             stop_storage(timeout=0.1)
+        assert runtime.closed, 'a process shutdown closes, not merely stops, the runtime'
         assert storage_runtime() is runtime
         assert storage_status()['state'] == 'stopping'
 

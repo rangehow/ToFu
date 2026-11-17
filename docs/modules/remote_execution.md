@@ -15,6 +15,8 @@ the same thing; the tool field keeps the name `device`.
 | Bridge credential resolution | `lib/bridge_auth.py`, `routes/_bridge_caller.py` |
 | Poll HTTP adapter | `routes/desktop.py` |
 | Device registry, command queue, streams | `lib/desktop/bridge.py` |
+| Bridge owner across the API/execution split | `lib/desktop/bridge_relay.py` over `lib/runtime/loopback_relay.py` |
+| Node ID per host (shared home directories) | `lib/desktop_agent/host_identity.py`, `lib/desktop_agent/_run.py::_ensure_agent_id` |
 | Node status/listing/removal, pairing, distribution API | `routes/api_v1/desktop.py` |
 | Pairing authority (6-digit code + link secret, one row) | `lib/desktop/pairing.py` |
 | Node runtime (bridge loop, command execution) | `lib/desktop_agent/` |
@@ -40,6 +42,34 @@ declared capabilities, share roots and the optional `system` facts (below); stat
 authenticated owner. The in-memory bridge
 queue is deliberately ephemeral transport, not durable job state (credentials/owner records stay in the Sidecar); a
 restart fails outstanding bridge calls honestly and durable jobs reconcile via their own state machine.
+
+### One node ID per host
+
+Problem: the node ID (`agent_id`) lived only in the agent config
+(`~/.tofu/desktop_agent.json`, or `TOFU_DESKTOP_CONFIG`). Hosts sharing one home
+directory (containers on a network home) read one file and presented one ID,
+so the server saw one node whose registry entry they overwrote poll by poll,
+and an addressed command reached whichever twin polled first.
+
+Decision: the config keeps one ID per host in `agent_ids`, keyed by
+`host_identity.host_key()`: a digest of the platform machine identifier
+(`/etc/machine-id`, macOS `IOPlatformUUID`, Windows `MachineGuid`), plus the
+hostname on Linux because containers built from one image share
+`/etc/machine-id`. Renaming a Mac or Windows computer keeps its ID; renaming a
+Linux host (or recreating a container) yields a new node ID. Only digests are
+stored. Migration: the legacy single `agent_id` goes to the first host that
+starts with the new build and stays in the file for older builds; a second
+host that shared it gets a fresh ID. Pairing credentials are not bound to the
+node ID, so every host keeps polling with the shared attachment; removing one
+of them through its credential (`disconnect_credential`) still drops every
+node on that credential.
+
+Alternatives considered: a host-local file outside the home (`/etc`,
+`/var/lib`) is not writable by an unprivileged node and `/tmp` does not survive
+a container restart; server-side conflict detection by per-boot nonce needs a
+wire change and cannot tell which twin keeps the ID (still the remedy for a
+config file copied between machines, together with device-held keys in
+[the multi-device design](../MULTI_DEVICE_NETWORK_DESIGN.md#7-identity-trust-and-pairing)).
 
 ## Command lifecycle
 
@@ -247,6 +277,43 @@ row carries `version` and `older_than_server`, the status payload adds
 `server_version` and `installers_refreshing`, and both download surfaces
 (Local Control, Settings) label an older installer as such instead of
 presenting it as current.
+
+## Bridge owner across the API/execution split
+
+Problem: the managed composition runs an `api` host that terminates node polls
+(`routes/desktop.py`) and a resident `execution` host that runs desktop tools,
+the environment device listing, `await_device`, desktop egress and the task
+liveness judge. The registry, queue and streams of `lib/desktop/bridge.py` are
+process-local, so the execution host saw no nodes: desktop tools were not even
+offered (`is_desktop_agent_connected` was false there) while Settings showed
+the node online.
+
+Decision: as for the [browser bridge](browser_automation.md#bridge-owner-across-the-apiexecution-split),
+the API host stays the single owner. At background-service start it publishes
+`<project>/data/desktop-bridge-relay.json` (mode 0600, per-incarnation bearer
+token, removed on stop) over the shared loopback transport
+(`lib/runtime/loopback_relay.py`); the execution host selects it and the
+public verbs of `lib/desktop/bridge.py` forward there: `list_agents`,
+`online_agents`, `online_connection`, `is_desktop_agent_connected`,
+`command_active` (liveness judge), `send_desktop_command`,
+`enqueue_desktop_command`, `consume_desktop_command`,
+`release_desktop_command` and `get_frames`. Addressing and tier admission run
+in the owner against the node's own frame. Poll-side verbs (register, take,
+resolve, revoke) are never relayed. Role `all` keeps the in-process owner.
+Caller EOF cancels the owner-side wait like a local Stop; the caller keeps its
+task's device-wait publication. An unreachable owner is a command error (and
+`resolve_device_target` names it); presence predicates read it as no reachable
+device; nothing is replayed.
+
+Alternatives considered: moving the registry into the execution host would
+forward every poll the other way; a durable shared registry would store
+transient liveness.
+
+Verification: `tests/desktop/test_desktop_bridge_relay.py` drives a real
+separate owner process (owner-scoped listing, name resolution, command round
+trip through the desktop tool handler, owner-side tier refusal, streamed
+frames, liveness and cancellation), missing owner, token refusal and role
+selection.
 
 ## Failure semantics
 

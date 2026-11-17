@@ -1,8 +1,8 @@
 """Desktop Agent — local config persistence.
 
 Tiny JSON store for agent-local settings that must survive restarts —
-currently the stable ``agent_id`` (RWA P0 registration frame, see
-docs/modules/remote_execution.md). Path: ``TOFU_DESKTOP_CONFIG`` env
+currently the stable node id per host (``agent_ids``; RWA P0 registration
+frame, see docs/modules/remote_execution.md). Path: ``TOFU_DESKTOP_CONFIG`` env
 var, else ``~/.tofu/desktop_agent.json``.
 """
 
@@ -15,7 +15,12 @@ from lib.log import get_logger
 logger = get_logger(__name__)
 
 _DEFAULT_CONFIG = {
-    'agent_id': '',  # generated on first start by _run._ensure_agent_id
+    # Legacy single node id: claimed by the first host that starts, kept for
+    # older builds that read only this field.
+    'agent_id': '',
+    # {host_key: node id} (lib/desktop_agent/host_identity.py): hosts sharing
+    # this file (one network home) keep distinct node ids. _run._ensure_agent_id.
+    'agent_ids': {},
     # RWA P1: [{name, path}] — the agent's declared project worktrees;
     # project_* commands are confined to these roots (constraint ⑤).
     'share_roots': [],

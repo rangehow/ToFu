@@ -71,6 +71,11 @@ _EXTRA_KEEPERS = {
     'tests/export/test_export_git_reads.py',
     'tests/evaluations/test_yourprovider_sandbox_score.py',
     'tests/evaluations/test_owner_memory_benchmark.py',
+    'tests/evaluations/test_owner_memory_failure_selection.py',
+    'tests/evaluations/test_owner_memory_midtask.py',
+    'tests/evaluations/test_owner_memory_phase1_cost.py',
+    'tests/evaluations/test_owner_memory_replay.py',
+    'tests/evaluations/test_owner_memory_triggers.py',
     'tests/deploy/test_migrate_host.py',
     # Portable diagnostic dependencies are owned by the public keep-list;
     # this set contains only deliberately private source.

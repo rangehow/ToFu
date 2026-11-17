@@ -245,6 +245,8 @@ def _pipeline(workdir: str, version: str, sha: str, log_fh,
     os.makedirs(src, exist_ok=True)
     _sh(f'git -C {_REPO_ROOT} archive HEAD | tar -x -C {src}', log_fh,
         shell=True)
+    from . import builder as _linux_builder
+    _linux_builder.build_frontend(src, log_fh)
 
     winpy = _ensure_winpython(log_fh)
     _ensure_guest_hosts(log_fh)
@@ -257,7 +259,6 @@ def _pipeline(workdir: str, version: str, sha: str, log_fh,
              f'{winpy} -m pip install --no-warn-script-location '
              f'--no-deps {_z(ts_src)}', log_fh, env=pip_env)
 
-    from . import builder as _linux_builder
     build_reqs = _linux_builder._requirements_without_tofu_search(
         os.path.join(src, 'requirements.txt'), workdir)
     extras = ' '.join(_BUILD_EXTRAS)

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.12.28
 
 - `SearchConfig.skip_domains` is a source ban only and defaults to empty. The
   nine JS/social hosts it used to list by default (YouTube, X/Twitter,

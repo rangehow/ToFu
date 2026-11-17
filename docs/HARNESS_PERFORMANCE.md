@@ -559,29 +559,124 @@ the next execution-host restart.
 
 Considered and not taken in this pass:
 
-- **Cache the normalized model-routing document.** Steady Turns spend about
-  14 ms of the 79 ms in `ModelRoutingRepository.get`, which runs
-  `normalize_document` (7 ms for a 91-model aggregate) on every read, twice
-  per Turn. An exact cache keyed by the raw document digest would cut each
-  read to under 1 ms, but `lib/model_routing/AGENTS.md` requires every request
-  to read and validate its own owner revision and forbids a global authority
-  cache; this needs that owner's decision, so it is reported, not changed.
 - **A byte bound instead of the encoder for small requests.** Byte-level BPE
   never yields more tokens than bytes, but admission counts feed serving-unit
   conversion, telemetry and the memoized-count parity contract of
   `lib/token_counter`; the encoder load is about 80 ms of the first Turn.
 
+### Third pass (2026-11-17): dispatch recovery, per-Turn preparation
+
+Method. **Dispatch recovery:** a private authority restored with `tofu-db
+restore` from the live store's closed backup (`data/backups/tofudb/closed`,
+durable sequence 1,005,251, 02:04 that day) into `.eval-runs/` on DolphinFS,
+opened by an engine built from this source; `benchmarks/startup_dispatch_recovery.py`
+runs one `recover_persisted_dispatch` pass per fresh process (the boot shape:
+4 project scopes, 188 assignments, 5.4 MB of rows), arms alternating on the
+same converged copy after one warm-up pass, storage exchanges counted by
+operation (a pipelined batch is one). cProfile of the before arm located the
+cost. **Per-Turn preparation:** `[TaskStartupTiming]` stages of harness Turns,
+`ModelRoutingRepository.get` against TofuDB with the 91-model aggregate (60
+reads per process, 3 alternating pairs), and the harness suite
+(`harness_perf/run.py --smoke`, 5 alternating pairs, chat and `true` TTFR
+pooled, n = 30 per arm). `scripts/agent_loop_load_test.py` now installs the
+live catalog size (91 Models): every Turn reads and validates the whole owner
+aggregate, so the former one-model document hid that cost. The shared host
+ran at load average 170–310 (58 CPUs) throughout; clocks are observations,
+counts are the result.
+
+| metric | before | after |
+|---|---|---|
+| dispatch recovery pass, fresh process, median of 5 (alternating) | 29.6 s (6.7–38.8) | **21.5 s** (13.2–23.3) |
+| same, an earlier single pair on a less loaded host | 2.27 s | **1.80 s** |
+| storage exchanges per pass | 574 | **200** |
+| `project.dispatch.get` point reads per pass | 415 | 65 (+ 12 page batches) |
+| `turn.attempt.get` per pass | 57 | 17 (+ 4 batches, one per scope) |
+| schema walk of the 188 stored rows, cold process | 0.92 s | **0.50 s** |
+| `ModelRoutingRepository.get`, 91 models, median of 60 (3 pairs) | 8.4 / 10.2 / 8.1 ms | **3.6 / 3.0 / 3.3 ms** |
+| `worker_entry_signal` per Turn (git child), loaded host | 15–35 ms | 0 (no child) |
+| harness TTFR chat + `true`, pooled n = 30, median (p25–p75) | 2,364 ms (270–3,404) | 1,551 ms (116–2,596) |
+
+The pooled suite medians are bimodal with host load (per-run medians 99 ms to
+4.7 s in both arms) and do not isolate this change; the component rows do.
+Live recovery took 13 s at the 00:15 boot; the copy is post-boot, so its
+Coordinator resumed in place at that boot is no longer interrupted and its
+births (the two 6 s gaps of the live log) are not in the reproduced pass.
+
+9. **A whole-project dispatch read takes one exchange per index page.**
+   Problem: `SegmentedDispatch.discover` and full or cohort walks read every
+   assignment document with its own `project.dispatch.get` (415 round trips
+   for 188 rows). Decision: `index_pages` yields each stored index page, and
+   its documents are read together through `get_many` (`query_many`, one
+   pipelined exchange); every document is still checked alone against its
+   index row. Specification:
+   `test_whole_project_reads_take_one_exchange_per_index_page_not_per_row`
+   on SQLite, PostgreSQL and native authorities.
+10. **Recovery reads the attempts of the lanes it decides together.**
+    Problem: `_recovery_skip_reason` read each executed lane's attempt in its
+    own round trip. Decision: the pass applies the row-only filters
+    (`_filter_reason`) first and reads the attempts of the remaining executed,
+    unreviewed lanes with one `turn_lifecycle.get_attempts`
+    (`repository.read_attempts`); `restart_resume(..., attempt=)` decides from
+    that row, and a read error fails only its own lane. Every write still
+    rereads under its CAS or live admission, as before. Alternatives: a
+    pass-scoped attempt cache (a second reader of the same fact with its own
+    staleness rule); prefetching Turns as well (only interrupted attempts read
+    one, 18 per pass).
+11. **A stored row repeats no schema walk of a value already proven.**
+    Problem: a fresh process (every boot) walked each stored assignment whole
+    with jsonschema, although the grants of one Coordinator request carry the
+    same delegation policy and profile verbatim (12 and 8 distinct values in
+    188 rows; 2.7 of 5.4 MB). Decision: a cold row is decided member by member
+    (the `_members` rule already used for changed rows), and a member whose
+    schema only references a definition is skipped when that exact canonical
+    content was already proven valid under it in this process
+    (`_VALID_SHARED_VALUE_DIGESTS`, digests only, failures never recorded).
+    3,000 random corruptions of the real rows got the same verdict as a whole
+    walk with the memo warm. Alternatives: persisting proofs beside the
+    documents (a storage-contract change, and a forged proof would skip
+    validation); skipping validation in passive discovery (decisions read the
+    discovered rows before their own reread); a faster validator library (a
+    new dependency for one owner). The two ledger arrays (`modelAttempts`,
+    `toolAttempts`, 0.35 s) are distinct per row and are still walked.
+12. **A model-routing read skips the walk only for content proven canonical.**
+    Problem: `ModelRoutingRepository.get` ran `normalize_document` over the
+    whole owner aggregate on every read, twice per Turn (5–7 ms each at 91
+    Models). `lib/model_routing/AGENTS.md` forbids a global authority cache
+    because every request must read and validate its own owner revision.
+    Decision: every read still fetches and decodes its own revision; per owner
+    boundary the repository keeps only the canonical digest of the last stored
+    document that normalization returned unchanged (equal value and equal
+    canonical JSON, so `1` vs `1.0` or a tuple never pass), and a read whose
+    decoded content has that digest is already its validated form. No
+    document, revision or secret is retained, so the invariant holds: the
+    verdict is a pure function of the exact bytes the request read under this
+    process's pinned schema and defaults. Alternatives: a document cache keyed
+    by revision (an authority cache, and revision is not content after a
+    restore); validating only at write time (rows written by other versions or
+    restored from backup would never be checked); reading once per Turn
+    (two owners read independently by design). Specification:
+    `tests/model_routing/test_repository_read_validation.py`.
+13. **Worker entry asks Git for a checkout's identity once.** Problem: the
+    isolated-work signal at worker entry spawned `git rev-parse
+    --show-toplevel` on every Turn with a project, right after binding had
+    identified the same checkout from its metadata (`worker_entry_signal`,
+    15–35 ms on the loaded host; a folder that is not a checkout paid a failing
+    child). Decision: binding records each writable root's top level, or that
+    it has none (`admitted_checkout_root`); the signal passes it to
+    `has_active_workspace_for_work(checkout_root=)` or returns at once.
+    Specification: `tests/project_mod/test_worker_entry_checkout_identity.py`
+    (the recorded top level equals Git's for a checkout, a subdirectory, a
+    symlink alias and a linked worktree).
+
 ### Remaining
 
-- Dispatch recovery is now the larger part of live "Storage recovery": 13 s
-  on 2026-11-17 over three project scopes, with two 6 s gaps around one
-  Coordinator resumed in place. It was not reproduced on an isolated instance
-  (it needs the live dispatch record's shape); the next step is a py-spy of
-  `recover_persisted_dispatch` on a copy of a large dispatch record.
-- Steady submit to first byte (79 ms) is per-Turn preparation owned by the
-  round path: model-routing reads (above), tool assembly in `create_task`
-  (about 17 ms) and settled-row copies (about 14 ms); the API to
-  execution-host handoff itself is about 10 ms (persist 2, start 2, claim 4,
-  dispatch entry 2).
+- Dispatch recovery: per-item reads left are `conversation.get` and Stop
+  watermark `record.get` (21 each, the Stop checks of eligible lanes), and
+  the Coordinator continuation's Turn reads; the ledger-array schema walk
+  (0.35 s per boot) is the largest compute left.
+- Steady submit to first byte: tool assembly (`startup_tools`, about 10 ms)
+  and context composition (`startup_context_compose`, about 15 ms) are the
+  largest stages left; the API to execution-host handoff is about 10 ms.
 - Execution host to ready is 2.9 s of host work plus the manager's plan child
   against the ≤ 2 s target: `import server` and pinning remain.
+

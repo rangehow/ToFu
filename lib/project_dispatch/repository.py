@@ -266,18 +266,58 @@ def _validate_stored_row(row, definition, identity, *, decoded=False):
             raise ProjectDispatchError('Invalid dispatch record JSON') from exc
         return
     key = (definition, identity)
-    proven = _VALID_STORED_ROW_DIGESTS.get(key)
+    proven = _VALID_STORED_ROW_DIGESTS.get(key) or {}
     if proven == digests:
         return
-    if proven is None:
-        _validate_schema(row, definition)
+    declared, required = shape
+    if not required <= digests.keys() <= declared or any(
+            proven.get(name) != digest and not _member_valid(definition, name, row[name], digest)
+            for name, digest in digests.items()):
+        raise ProjectDispatchError(f'Invalid dispatch {definition}')
+    _VALID_STORED_ROW_DIGESTS[key] = digests
+
+
+# (definition, canonical digest) of exact JSON values proven valid under a
+# definition a property schema only references, whichever row held them. Grants
+# of one Coordinator request repeat its delegation policy and profile verbatim,
+# so a boot that validates every stored row walks each distinct value once; a
+# value of a plain closed object definition (``_members``) is decided member by
+# member. Like the per-row digests, entries record only completed validations of
+# exact content, and their number follows the distinct stored values.
+_VALID_SHARED_VALUE_DIGESTS = set()
+
+
+@lru_cache(maxsize=None)
+def _referenced_definition(definition, name):
+    """The definition a property schema consists only of a reference to, else None."""
+    schema = CONTRACT['$defs'][definition]['properties'].get(name)
+    if not isinstance(schema, dict) or set(schema) != {'$ref'} or not schema['$ref'].startswith('#/$defs/'):
+        return None
+    target = schema['$ref'][len('#/$defs/'):]
+    return target if '/' not in target and target in CONTRACT['$defs'] else None
+
+
+def _member_valid(definition, name, value, digest=None):
+    """Whether exact JSON ``value`` is valid as member ``name`` of ``definition``."""
+    target = _referenced_definition(definition, name)
+    if target is None:
+        return _validator(f'{definition}/properties/{name}').is_valid(value)
+    if digest is None:
+        digest = sha256_holding_gil(json.dumps(
+            value, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+            allow_nan=False).encode('utf-8')).digest()
+    if (target, digest) in _VALID_SHARED_VALUE_DIGESTS:
+        return True
+    shape = _members(target)
+    if shape is None or not isinstance(value, dict):
+        valid = _validator(target).is_valid(value)
     else:
         declared, required = shape
-        if not required <= digests.keys() <= declared or any(
-                proven.get(name) != digest and not _validator(f'{definition}/properties/{name}').is_valid(row[name])
-                for name, digest in digests.items()):
-            raise ProjectDispatchError(f'Invalid dispatch {definition}')
-    _VALID_STORED_ROW_DIGESTS[key] = digests
+        valid = required <= value.keys() <= declared and all(
+            _member_valid(target, member, item) for member, item in value.items())
+    if valid:
+        _VALID_SHARED_VALUE_DIGESTS.add((target, digest))
+    return valid
 
 
 def batch_requests(request):
@@ -641,7 +681,7 @@ class ProjectDispatchRepository:
         resume = self.restart_resume(assignment)
         return resume is not None and resume['option'] is not None
 
-    def restart_resume(self, assignment):
+    def restart_resume(self, assignment, *, attempt=None):
         """How recovery continues a restart-interrupted execution in place, or why it cannot.
 
         ``None`` unless a service restart settled the execution's Attempt and Turn
@@ -658,7 +698,8 @@ class ProjectDispatchRepository:
         execution = assignment.get('execution')
         if execution is None or assignment.get('review') is not None:
             return None
-        attempt = self.get_attempt(execution['attemptId'])
+        if attempt is None:
+            attempt = self.get_attempt(execution['attemptId'])
         if not isinstance(attempt, Mapping) or attempt.get('status') != 'interrupted':
             return None
         conversation_id = assignment['request']['recipientId']
@@ -690,6 +731,21 @@ class ProjectDispatchRepository:
             from lib.turn_lifecycle import get_attempt
             getter = get_attempt
         return decision_read(('attempt', attempt_id), lambda: getter(attempt_id, user_id=self.owner))
+
+    def read_attempts(self, attempt_ids):
+        """``get_attempt`` of each id in one exchange: id -> row, or the error its read raised."""
+        attempt_ids = list(dict.fromkeys(attempt_ids))
+        if self.attempt_get is not None:
+            def one(attempt_id):
+                try:
+                    return self.attempt_get(attempt_id, user_id=self.owner)
+                except Exception as error:
+                    return error
+            return {attempt_id: one(attempt_id) for attempt_id in attempt_ids}
+        if not attempt_ids:
+            return {}
+        from lib.turn_lifecycle import get_attempts
+        return dict(zip(attempt_ids, get_attempts(attempt_ids, user_id=self.owner)))
 
     def read_turn(self, conversation_id, turn_id, *, projection=True):
         """``turn_get`` of this owner's Turn, with or without its projection, once per decision."""

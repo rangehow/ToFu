@@ -38,13 +38,8 @@ def _stats():
 _RECOVERY_FILTERS = frozenset({'other_scope', 'other_recipient', 'not_a_dependent'})
 
 
-def _recovery_skip_reason(assignment, repository, *, owner, project, recipient_id,
-                          coordinator_only, affected, clock) -> str:
-    """Why recovery leaves this assignment alone, or '' when it is eligible.
-
-    Evaluated in the original order, so the restart-paused read still runs only
-    for assignments that pass the cheaper checks.
-    """
+def _filter_reason(assignment, *, owner, project, recipient_id, coordinator_only, affected) -> str:
+    """The skip reason recovery decides from the discovered row alone, or ''."""
     request, grant = assignment['request'], assignment['grant']
     if coordinator_only or request.get('profile', {}).get('mode') == 'coordinator':
         return 'coordinator_profile'
@@ -56,8 +51,27 @@ def _recovery_skip_reason(assignment, repository, *, owner, project, recipient_i
         return 'other_recipient'
     if affected is not None and assignment['id'] not in affected:
         return 'not_a_dependent'
+    return ''
+
+
+def _recovery_skip_reason(assignment, repository, *, owner, project, recipient_id,
+                          coordinator_only, affected, clock, attempts=None) -> str:
+    """Why recovery leaves this assignment alone, or '' when it is eligible.
+
+    Evaluated in the original order, so the restart-paused read still runs only
+    for assignments that pass the cheaper checks. ``attempts`` holds execution
+    attempts the pass already read together (id -> row or the read's error).
+    """
+    reason = _filter_reason(assignment, owner=owner, project=project, recipient_id=recipient_id,
+                            coordinator_only=coordinator_only, affected=affected)
+    if reason:
+        return reason
+    request, grant = assignment['request'], assignment['grant']
     if assignment['execution'] is not None:
-        resume = repository.restart_resume(assignment)
+        attempt = (attempts or {}).get(assignment['execution']['attemptId'])
+        if isinstance(attempt, Exception):
+            raise attempt
+        resume = repository.restart_resume(assignment, attempt=attempt)
         if resume is None:
             return 'execution_not_restart_paused'
         verdict = resume['verdict']
@@ -134,6 +148,13 @@ def recover_project_dispatch(owner: int, project: str, *, recipient_id=None, coo
                 affected.add(row['id'])
         affected.discard(prerequisite_id)
     stats = _stats()
+    # Every lane the filters leave is decided from its execution attempt: read
+    # them in one exchange, not one round trip per lane.
+    attempts = repository.read_attempts(
+        assignment['execution']['attemptId'] for assignment in rows
+        if assignment['execution'] is not None and assignment.get('review') is None
+        and not _filter_reason(assignment, owner=owner, project=project, recipient_id=recipient_id,
+                               coordinator_only=coordinator_only, affected=affected))
     for assignment in rows:
         stats['scanned'] += 1
         if (assignment['execution'] is not None
@@ -150,7 +171,7 @@ def recover_project_dispatch(owner: int, project: str, *, recipient_id=None, coo
             request, grant = assignment['request'], assignment['grant']
             reason = _recovery_skip_reason(
                 assignment, repository, owner=owner, project=project, recipient_id=recipient_id,
-                coordinator_only=coordinator_only, affected=affected, clock=clock)
+                coordinator_only=coordinator_only, affected=affected, clock=clock, attempts=attempts)
             if reason:
                 stats['skipped'] += 1
                 _log_recovery_skip(assignment, owner, reason)

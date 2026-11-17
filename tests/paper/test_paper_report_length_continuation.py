@@ -164,6 +164,12 @@ def test_stop_during_truncated_round_is_not_continued(report_case):
     ('line one\n', '\nnext', '\nnext'),
     ('', 'start', 'start'),
     ('ends\n\n', '\n', '\n'),
+    # Live seam (deepseek-v4-flash): only the cut line's last word repeated.
+    ('- **Berges et', 'et al., "M', ' al., "M'),
+    ('a b c', 'b c d', ' d'),
+    # A tail that is not a whole word in the continuation is not a repeat.
+    ('accuracy of 1', '1,000 samples', '1,000 samples'),
+    ('in the', 'theory', 'theory'),
 ])
 def test_join_length_continuation_seam(prefix, continuation, expected):
     assert join_length_continuation(prefix, continuation) == expected

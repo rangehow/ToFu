@@ -70,6 +70,17 @@ def test_insertion_is_canonical_and_drops_repeated_sections():
     assert 'Sure, here' not in out
 
 
+def test_insertion_keeps_thematic_break_between_sections():
+    report = '\n---\n\n'.join(f'## {EN[i]}\nBody {i}.\n' for i in (0, 1, 3))
+    missing = find_missing_sections(report, 'en')
+    reply = f'## {EN[2]}\nTerms body.\n'
+    out, repaired = insert_repaired_sections(report, reply, missing[:1], 'en')
+    assert [s.index for s in repaired] == [2]
+    between = out[out.index(EN[2]):out.index(EN[3])]
+    assert '\n---\n' in between
+    assert out.count('\n---\n') == 3
+
+
 @pytest.fixture
 def report_case(monkeypatch):
     from tests.support.paper_report import isolated_report_case

@@ -4,7 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from tests.support.sidecar_fixtures import module_declares_plugin
+from tests.support.sidecar_fixtures import (
+    installed_storage_runtime, module_declares_plugin)
 
 
 pytestmark = pytest.mark.unit
@@ -27,3 +28,33 @@ def test_malformed_module_plugin_declaration_fails_closed():
     request = _request(declared=None)
 
     assert module_declares_plugin(request, 'tests._artifact_sidecar') is False
+
+
+class _Runtime:
+    def __init__(self, ready):
+        self.ready = ready
+        self.events = []
+
+    def start(self):
+        self.ready = True
+        self.events.append('start')
+
+    def stop(self, timeout=10.0):
+        self.ready = False
+        self.events.append('stop')
+
+
+@pytest.mark.parametrize('was_ready', [True, False])
+def test_module_sidecar_hands_the_process_authority_back(monkeypatch, was_ready):
+    """A session live_server keeps serving after a module's own Sidecar."""
+    from lib.storage import service
+
+    session, module = _Runtime(ready=was_ready), _Runtime(ready=False)
+    monkeypatch.setattr(service, '_runtime', session)
+    with installed_storage_runtime(module):
+        module.start()
+        assert service.started_storage_runtime() is module
+    assert module.events == ['start', 'stop']
+    assert service.started_storage_runtime() is session
+    assert session.events == (['stop', 'start'] if was_ready else ['stop'])
+    assert session.ready is was_ready

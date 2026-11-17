@@ -7,7 +7,8 @@ import os
 from cryptography.fernet import Fernet
 import pytest
 
-from tests.support.sidecar_fixtures import module_declares_plugin
+from tests.support.sidecar_fixtures import (
+    installed_storage_runtime, module_declares_plugin)
 
 
 _PLUGIN_NAME = 'tests._credential_sidecar'
@@ -29,7 +30,6 @@ def credential_storage(request, tmp_path_factory):
         return
 
     from lib.storage import StorageRuntime, StorageSupervisor
-    from lib.storage.service import install_runtime_for_test
 
     project_root = tmp_path_factory.mktemp('credential-sidecar')
     previous_secret_key = os.environ.get('TOFU_SECRET_ENCRYPTION_KEY')
@@ -45,13 +45,11 @@ def credential_storage(request, tmp_path_factory):
         ),
         auto_restart=False,
     )
-    install_runtime_for_test(runtime)
-    runtime.start()
     try:
-        yield runtime
+        with installed_storage_runtime(runtime):
+            runtime.start()
+            yield runtime
     finally:
-        runtime.stop()
-        install_runtime_for_test(None)
         if previous_secret_key is None:
             os.environ.pop('TOFU_SECRET_ENCRYPTION_KEY', None)
         else:

@@ -50,6 +50,9 @@ def test_update_modal_visible_panels_have_spacing(frontend_visual_page, theme, w
         listLifecycleApprovals: async () => ({records: []}),
       }};
     }''', {'theme': theme, 'translations': translations})
+    # update.js ships in the demand-loaded utility-panels owner, whose
+    # stylesheet (not the startup sheet) carries the update panel rules.
+    page.add_style_tag(path=str(ROOT / 'frontend/src/features/utility-panels.css'))
     page.add_script_tag(path=str(ROOT / 'frontend/src/runtime/sections/update.js'))
     page.evaluate('openUpdateDialog()')
     notice = page.locator('#updateActionArea > .upd-badge.warn')

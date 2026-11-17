@@ -129,6 +129,9 @@ __pycache__/
 !/benchmarks/
 /benchmarks/*
 !/benchmarks/AGENTS.md
+!/benchmarks/markdown_worker/
+/benchmarks/markdown_worker/*
+!/benchmarks/markdown_worker/reference_5c55a9d1b/
 !/benchmarks/settled_turn_retention.py
 !/benchmarks/verification_bundle_reuse.py
 !/benchmarks/sse_text_accumulation.py

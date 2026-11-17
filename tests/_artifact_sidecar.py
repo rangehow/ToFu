@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from tests.support.sidecar_fixtures import module_declares_plugin
+from tests.support.sidecar_fixtures import (
+    installed_storage_runtime, module_declares_plugin)
 
 
 _PLUGIN_NAME = 'tests._artifact_sidecar'
@@ -18,7 +19,6 @@ def artifact_storage(request, tmp_path_factory):
         return
 
     from lib.storage import StorageRuntime, StorageSupervisor
-    from lib.storage.service import install_runtime_for_test
 
     project_root = tmp_path_factory.mktemp('artifact-sidecar')
     runtime = StorageRuntime(
@@ -26,10 +26,6 @@ def artifact_storage(request, tmp_path_factory):
             project_root=project_root, backend='sqlite', startup_timeout=60),
         auto_restart=False,
     )
-    install_runtime_for_test(runtime)
-    runtime.start()
-    try:
+    with installed_storage_runtime(runtime):
+        runtime.start()
         yield runtime
-    finally:
-        runtime.stop()
-        install_runtime_for_test(None)

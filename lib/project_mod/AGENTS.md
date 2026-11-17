@@ -186,8 +186,18 @@ runner there with its documented option grammar, never a second view. sudo/doas
 options follow ``_PRIVILEGE_GRAMMARS``, which ``_unwrap_command_parts`` shares. Never reintroduce an ad-hoc string splitter or a
 raw-text match for delete-target or dangerous-command judgement, and never turn
 a parse failure or an unknown wrapper/runner option into a refusal unless the
-text could run rm/rmdir/unlink or matches `DANGEROUS_PATTERNS`. Verify `tests/project_mod/test_delete_guard.py`,
-`tests/project_mod/test_delete_guard_structure.py` and
+text could run rm/rmdir/unlink or matches `DANGEROUS_PATTERNS`. The delete
+guard follows ``control_structure`` (the parse's reserved words paired into the
+compound commands a shell runs; ``case`` clauses are ``CaseClause``/``CaseEnd``
+marker items) as an abstract interpreter: each path through a construct runs on
+its own state copy and the paths join after it. Never mark single assignments as
+"maybe" instead. Variables the command never binds come from the environment its
+shell starts with, an explicit input: run_command passes the child environment it
+built, the cwd-less pre-hook passes none and defers those operands ("Catastrophic-
+delete guard control flow" in `docs/modules/tools_execution.md`). Verify
+`tests/project_mod/test_delete_guard.py`,
+`tests/project_mod/test_delete_guard_structure.py`,
+`tests/project_mod/test_delete_guard_control_flow.py` and
 `tests/project_mod/test_dangerous_command_structure.py`.
 
 `git_guard.py` owns the shared-checkout Git guard: ack-nonce lifecycle,

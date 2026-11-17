@@ -6,9 +6,11 @@ and the scripts nested inside them, so the guards
 (``command_analysis._catastrophic_delete_detail`` and
 ``command_analysis.dangerous_command_rule``) judge only words a shell would
 run as commands and never data, and so a rewrite edits only command text
-(:func:`shell_rewrite_text`). Entry points: :func:`parse_shell_structure`,
-:func:`shell_rewrite_text`. Dependencies: the standard library only; it
-executes, reads and writes nothing.
+(:func:`shell_rewrite_text`); and group those items into the compound
+commands a shell executes (:func:`control_structure`) for a caller that
+follows execution order. Entry points: :func:`parse_shell_structure`,
+:func:`control_structure`, :func:`shell_rewrite_text`. Dependencies: the
+standard library only; it executes, reads and writes nothing.
 
 Each construct is delimited the way a POSIX/bash parser delimits it:
 
@@ -23,10 +25,12 @@ Each construct is delimited the way a POSIX/bash parser delimits it:
   commands; an expanding (unquoted-delimiter) body contributes its command
   substitutions as nested scripts;
 * here-strings and redirections, which are never command words;
-* compound syntax: ``( … )`` groups, ``case … esac`` clauses, ``[[ … ]]``
-  tests, ``(( … ))`` arithmetic, ``name()`` function definitions, array
+* compound syntax: ``( … )`` groups, ``case … esac`` clauses (marked by
+  :class:`CaseClause` and :class:`CaseEnd` items), ``[[ … ]]`` tests,
+  ``(( … ))`` arithmetic, ``name()`` function definitions, array
   assignments. Reserved words (``if``, ``then``, ``do``, ``{`` …) stay leading
-  words of the next simple command for the caller to strip.
+  words of the next simple command for the caller to strip;
+  :func:`control_structure` pairs them up.
 
 Anything this parser cannot delimit raises :class:`ShellStructureUnknown`;
 the caller decides how conservative to be. Whether a heredoc body or a
@@ -85,6 +89,24 @@ Subshell = namedtuple(
     'Subshell', ['body', 'separator', 'redirects', 'nested', 'heredocs'])
 Subshell.__doc__ = """A ``( … )`` group: *body* runs in a child shell."""
 
+CaseClause = namedtuple(
+    'CaseClause',
+    ['patterns', 'words', 'redirects', 'separator', 'nested', 'heredocs'])
+CaseClause.__doc__ = """Start of one ``case`` clause; its commands follow.
+
+A marker, never a command: ``words``, ``redirects`` and ``heredocs`` are
+empty. ``patterns``: the raw pattern words. ``nested``: the substitutions the
+patterns run. ``separator``: the terminator of the clause before it (``''``
+for the first clause, ``';;'``, ``';&'`` or ``';;&'``).
+"""
+
+CaseEnd = namedtuple(
+    'CaseEnd', ['words', 'redirects', 'separator', 'nested', 'heredocs'])
+CaseEnd.__doc__ = """``esac``, a marker: ``redirects``, ``nested`` and ``heredocs``
+apply to the whole ``case`` command; ``separator`` is the terminator of its
+last clause (``''`` when none); ``words`` is empty.
+"""
+
 
 class Heredoc:
     """One heredoc: its body is stdin data for the command that owns it."""
@@ -106,8 +128,267 @@ class Heredoc:
 
 
 def parse_shell_structure(source):
-    """Return the items (``SimpleCommand``/``Subshell``) of *source*, in order."""
+    """Return the items (``SimpleCommand``/``Subshell``, and the
+    ``CaseClause``/``CaseEnd`` markers of a ``case``) of *source*, in order."""
     return _Lexer(source, 0, 0).script()
+
+
+# ── The commands a shell executes, in execution order ──────────────────────
+
+AndOr = namedtuple('AndOr', ['pipelines', 'background'])
+AndOr.__doc__ = """Pipelines joined by ``&&``/``||``: ``pipelines`` are
+``(operator, Pipeline)`` pairs, the operator before each (``''`` for the
+first); ``background`` when an ``&`` ends the list (it runs in a child shell).
+A script is a tuple of these."""
+
+Pipeline = namedtuple('Pipeline', ['commands'])
+Pipeline.__doc__ = """Commands joined by ``|`` (:class:`ItemRun` or
+:class:`Compound`); with more than one, each runs in a child shell."""
+
+ItemRun = namedtuple('ItemRun', ['index', 'words'])
+ItemRun.__doc__ = """Item ``index`` of the script run as one command: a
+``Subshell`` (``words`` is None) or a ``SimpleCommand`` whose ``words`` follow
+the reserved words in front of it."""
+
+Compound = namedtuple('Compound', ['kind', 'parts', 'items'])
+Compound.__doc__ = """One compound command; ``items`` are the indices of the
+items that hold only its syntax (``fi``, ``done``, a ``for`` or ``case``
+header …), whose redirects and substitutions belong to the whole command.
+
+``kind`` and ``parts``: ``'group'`` ``(body,)``; ``'if'`` ``(clauses,
+else_body)`` with ``(condition, body)`` clauses and ``else_body`` None when
+absent; ``'while'``/``'until'`` ``(condition, body)``; ``'for'`` ``(header,
+body)``, ``header`` the raw words from ``for``/``select`` before ``do``;
+``'case'`` ``(clauses,)`` of ``(CaseClause item index, body, terminator)``;
+``'function'`` ``(name, body)``, ``body`` the command node it defines. Every
+condition and body is a script."""
+
+_Token = namedtuple('_Token', ['kind', 'value', 'index', 'separator'])
+# Reserved words in front of a command; ``for``/``select``, ``case``,
+# ``function`` and ``time`` have rules of their own.
+_CONTROL_WORDS = frozenset({
+    '{', '}', '!', 'if', 'then', 'elif', 'else', 'fi', 'while', 'until', 'do',
+    'done'})
+_CLOSING_WORDS = frozenset({'}', 'fi', 'done'})
+_TIMED_WORDS = _CONTROL_WORDS | {'for', 'select', 'case', 'function'}
+_IF_BODY_ENDS = frozenset({'elif', 'else', 'fi'})
+
+
+class _Unreadable(Exception):
+    """Reserved words that do not pair up the way a shell requires."""
+
+
+def control_structure(items):
+    """The commands a shell runs for *items* (one script of
+    :func:`parse_shell_structure`): a tuple of :class:`AndOr` whose pipelines
+    hold :class:`ItemRun` and :class:`Compound` nodes. None when the reserved
+    words do not pair up the way a shell requires (the shell rejects such a
+    script) or nest deeper than this module parses."""
+    reader = _ControlReader(items)
+    try:
+        return reader.script(frozenset())
+    except _Unreadable:
+        return None
+
+
+def _item_tokens(item):
+    """``(kind, value)`` control tokens of one ``SimpleCommand`` item."""
+    words, tokens, position = item.words, [], 0
+    while position < len(words):
+        word, rest = words[position], len(words) - position
+        if word in _CONTROL_WORDS or (
+                word == 'time' and rest > 1 and words[position + 1] in _TIMED_WORDS):
+            tokens.append(('word', word))
+            position += 1
+        elif word in ('for', 'select'):
+            end = _loop_header_end(words, position)
+            tokens.append(('for', words[position:end]))
+            position = end
+        elif word == 'case':
+            tokens.append(('case', words[position:]))
+            position = len(words)
+        elif word == 'function' and rest > 1:
+            tokens.append(('function', words[position + 1]))
+            position += 3 if words[position + 2:position + 3] == ('()',) else 2
+        elif rest == 2 and words[position + 1] == '()':
+            tokens.append(('function', word))
+            position = len(words)
+        else:
+            tokens.append(('command', words[position:]))
+            position = len(words)
+    if not tokens or (tokens[-1][0] == 'word' and tokens[-1][1] not in _CLOSING_WORDS
+                      and (item.redirects or item.nested or item.heredocs)):
+        # `{ >log; … }`, `! >$(…)`: redirections alone are the first command.
+        tokens.append(('command', ()))
+    return tokens
+
+
+def _loop_header_end(words, position):
+    """End of the ``for``/``select`` header at ``words[position]``: its name and
+    ``in`` list (or ``((…))`` clause), before a ``do`` in the same item."""
+    following = position + 2
+    if (words[position + 1:position + 2] and not words[position + 1].startswith('((')
+            and words[following:following + 1] == ('in',)):
+        return len(words)
+    if words[following:following + 1] == ('do',):
+        return following
+    return len(words)
+
+
+class _ControlReader:
+    """Recursive descent over the control tokens of one script's items."""
+
+    def __init__(self, items):
+        self.tokens, self.commands = [], set()
+        for index, item in enumerate(items):
+            if isinstance(item, CaseClause):
+                self.tokens.append(_Token('clause', None, index, item.separator))
+            elif isinstance(item, CaseEnd):
+                self.tokens.append(_Token('esac', None, index, item.separator))
+            elif isinstance(item, Subshell):
+                self.tokens.append(_Token('subshell', None, index, item.separator))
+                self.commands.add(index)
+            else:
+                separator = item.separator
+                for kind, value in _item_tokens(item):
+                    self.tokens.append(_Token(kind, value, index, separator))
+                    separator = ''
+                    if kind == 'command':
+                        self.commands.add(index)
+        self.position = 0
+        self.depth = 0
+
+    def _peek(self):
+        return self.tokens[self.position] if self.position < len(self.tokens) else None
+
+    def _ends(self, stops):
+        token = self._peek()
+        return token is None or token.kind in stops or (
+            token.kind == 'word' and token.value in stops)
+
+    def _at(self, word):
+        token = self._peek()
+        return token is not None and token.kind == 'word' and token.value == word
+
+    def _take(self, owned):
+        """Consume the current token as syntax of the compound being read."""
+        token = self._peek()
+        if token.index not in self.commands and token.index not in owned:
+            owned.append(token.index)
+        self.position += 1
+        return token
+
+    def _expect(self, word, owned):
+        if not self._at(word):
+            raise _Unreadable(f'expected {word}')
+        self._take(owned)
+
+    def script(self, stops):
+        lists = []
+        while not self._ends(stops):
+            lists.append(self._and_or(stops))
+        return tuple(lists)
+
+    def _and_or(self, stops):
+        pipelines = [('', self._pipeline(stops))]
+        while not self._ends(stops) and self._peek().separator in ('&&', '||'):
+            pipelines.append((self._peek().separator, self._pipeline(stops)))
+        token = self._peek()
+        return AndOr(tuple(pipelines), token is not None and token.separator == '&')
+
+    def _pipeline(self, stops):
+        commands = [self._command()]
+        while not self._ends(stops) and self._peek().separator == '|':
+            commands.append(self._command())
+        return Pipeline(tuple(commands))
+
+    def _command(self):
+        token = self._peek()
+        if token is None:
+            raise _Unreadable('a command is missing')
+        if token.kind in ('command', 'subshell'):
+            self.position += 1
+            return ItemRun(token.index, token.value)
+        if token.kind == 'word' and token.value in ('!', 'time'):
+            self.position += 1
+            return self._command()
+        reader = {'for': self._for, 'case': self._case, 'function': self._function}.get(
+            token.kind) or {'{': self._group, 'if': self._if, 'while': self._loop,
+                            'until': self._loop}.get(token.value)
+        if reader is None:
+            raise _Unreadable(f'unexpected {token.value or token.kind}')
+        self.depth += 1
+        if self.depth > _MAX_DEPTH:
+            raise _Unreadable('nesting too deep')
+        try:
+            return reader()
+        finally:
+            self.depth -= 1
+
+    def _group(self):
+        owned = []
+        self._expect('{', owned)
+        body = self.script(frozenset({'}'}))
+        self._expect('}', owned)
+        return Compound('group', (body,), tuple(owned))
+
+    def _if(self):
+        owned, clauses, else_body = [], [], None
+        self._expect('if', owned)
+        while True:
+            condition = self.script(frozenset({'then'}))
+            self._expect('then', owned)
+            clauses.append((condition, self.script(_IF_BODY_ENDS)))
+            if not self._at('elif'):
+                break
+            self._take(owned)
+        if self._at('else'):
+            self._take(owned)
+            else_body = self.script(frozenset({'fi'}))
+        self._expect('fi', owned)
+        return Compound('if', (tuple(clauses), else_body), tuple(owned))
+
+    def _loop(self):
+        owned = []
+        kind = self._take(owned).value
+        condition = self.script(frozenset({'do'}))
+        self._expect('do', owned)
+        body = self.script(frozenset({'done'}))
+        self._expect('done', owned)
+        return Compound(kind, (condition, body), tuple(owned))
+
+    def _for(self):
+        owned = []
+        header = self._take(owned).value
+        if self._at('{'):  # bash: `for x in a; { …; }`
+            body = (AndOr((('', Pipeline((self._group(),))),), False),)
+        else:
+            self._expect('do', owned)
+            body = self.script(frozenset({'done'}))
+            self._expect('done', owned)
+        return Compound('for', (header, body), tuple(owned))
+
+    def _case(self):
+        owned, markers, bodies = [], [], []
+        self._take(owned)
+        while True:
+            token = self._peek()
+            if token is None or token.kind not in ('clause', 'esac'):
+                raise _Unreadable('expected a case clause')
+            self.position += 1
+            markers.append(token)
+            if token.kind == 'esac':
+                owned.append(token.index)
+                break
+            bodies.append(self.script(frozenset({'clause', 'esac'})))
+        clauses = tuple((marker.index, body, following.separator)
+                        for marker, body, following in zip(markers, bodies, markers[1:]))
+        return Compound('case', (clauses,), tuple(owned))
+
+    def _function(self):
+        owned = []
+        name = self._take(owned).value
+        return Compound('function', (name, self._command()), tuple(owned))
 
 
 RewriteText = namedtuple('RewriteText', ['view', 'ranges'])
@@ -236,6 +517,7 @@ class _Lexer:
         self.depth = depth
         self.base = base
         self.pending = []
+        self.case_terminator = ''
         # Set to lists only by a parse in source coordinates (_rewrite_regions):
         # simple-command ranges and regions outside command text.
         self.command_ranges = None
@@ -276,8 +558,10 @@ class _Lexer:
                 for terminator in (';;&', ';;', ';&'):
                     if self.s.startswith(terminator, self.i):
                         self.i += len(terminator)
+                        self.case_terminator = terminator
                         return tuple(items)
                 if self._at_word('esac'):
+                    self.case_terminator = ''
                     return tuple(items)
             if char == ';':
                 if self.s.startswith(';;', self.i):
@@ -398,6 +682,7 @@ class _Lexer:
         words.append('in')
         items = [SimpleCommand(tuple(words), tuple(redirects), separator,
                                tuple(nested), tuple(heredocs))]
+        terminator = ''
         while True:
             self._blanks(newlines=True, comments=True)
             if self.i >= self.n:
@@ -407,7 +692,7 @@ class _Lexer:
                 break
             if self.s[self.i] == '(':
                 self.i += 1
-            pattern_nested = []
+            patterns, pattern_nested = [], []
             while True:
                 self._blanks(newlines=True)
                 if self.i >= self.n:
@@ -421,13 +706,13 @@ class _Lexer:
                     continue
                 if char in '\n;&(<>':
                     self._fail('malformed case pattern')
-                self._word(pattern_nested)
-            if pattern_nested:
-                items.append(SimpleCommand((), (), ';', tuple(pattern_nested), ()))
+                patterns.append(self._word(pattern_nested))
+            items.append(CaseClause(tuple(patterns), (), (), terminator,
+                                    tuple(pattern_nested), ()))
             items.extend(self.script('case'))
+            terminator = self.case_terminator
         trailing, more, trailing_heredocs = self._trailing_redirects()
-        if trailing or more or trailing_heredocs:
-            items.append(SimpleCommand((), trailing, ';', more, trailing_heredocs))
+        items.append(CaseEnd((), trailing, terminator, more, trailing_heredocs))
         return items
 
     # ── words ─────────────────────────────────────────────────────────

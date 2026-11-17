@@ -1481,14 +1481,37 @@ def _run_command_tool(base, command, *, timeout, stdin_callback, task, on_chunk,
     if _is_dangerous_command(command):
         return 'Error: Command blocked for safety: matches dangerous pattern.'
 
+    # Build the child environment once, before the delete guard reads it.
+    # Besides avoiding duplicate policy work, this is the explicit seam where
+    # command egress can select one direct/proxy route without mutating
+    # process-global environment state. Only lightweight probes race;
+    # ``exec_command`` is still spawned once.
+    try:
+        from lib.project_mod.git_command_scope import leading_cd_directory
+        from lib.mcp.queue_policy import canonical_project_path
+        child_env = _get_cmd_env(
+            base, credential_env, strip_credential_vars,
+            owner_user_id=(task or {}).get('_userId'),
+            project_root=environment_root,
+            project_path=canonical_project_path(task or {}),
+            venv_start=leading_cd_directory(command, base) if base else None)
+    except Exception as _env_e:
+        logger.error(
+            'run_command environment setup failed (cwd=%s): %s',
+            base, _env_e, exc_info=True)
+        return (f'$ {command}\n\n'
+                f'Error starting command: {_env_e}\n'
+                f'[exit code: -1]')
+
     # Catastrophic top-level deletion guard — refuse `rm /mnt`, `rm -rf /`,
     #   `rmdir /home`, etc. OUTRIGHT. These are never legitimate and are the
     #   exact failure mode that wiped shared paths during a benchmark run.
     #   Checked before the trash rewrite so a shallow target is never even
-    #   moved to trash — it is rejected.
+    #   moved to trash — it is rejected. Variables expand as in the child
+    #   environment the command starts with, never this server's.
     from lib.project_mod.command_analysis import (
         _catastrophic_delete_detail, delete_refusal_message)
-    _cat = _catastrophic_delete_detail(command, cwd=base)
+    _cat = _catastrophic_delete_detail(command, cwd=base, environment=child_env)
     if _cat is not None:
         logger.error('[run_command] BLOCKED catastrophic delete (reason=%s) %s', _cat[1],
                      command_log_fields(command, cwd=base, task=task,
@@ -1714,27 +1737,6 @@ def _run_command_tool(base, command, *, timeout, stdin_callback, task, on_chunk,
     #   deletes are already rejected above and never reach here. The grep
     #   redirect splice and scanner budget ride the same exec-side-only seam.
     exec_command = _maybe_wrap_rm_with_trash(_exec_source, base)
-
-    # Build the child environment once. Besides avoiding duplicate policy
-    # work, this is the explicit seam where command egress can select one
-    # direct/proxy route without mutating process-global environment state.
-    # Only lightweight probes race; ``exec_command`` is still spawned once.
-    try:
-        from lib.project_mod.git_command_scope import leading_cd_directory
-        from lib.mcp.queue_policy import canonical_project_path
-        child_env = _get_cmd_env(
-            base, credential_env, strip_credential_vars,
-            owner_user_id=(task or {}).get('_userId'),
-            project_root=environment_root,
-            project_path=canonical_project_path(task or {}),
-            venv_start=leading_cd_directory(command, base) if base else None)
-    except Exception as _env_e:
-        logger.error(
-            'run_command environment setup failed (cwd=%s): %s',
-            base, _env_e, exc_info=True)
-        return (f'$ {command}\n\n'
-                f'Error starting command: {_env_e}\n'
-                f'[exit code: -1]')
 
     if _probe_source is not None:
         # curl has environment-selected file sinks outside curlrc/argv too.

@@ -639,6 +639,85 @@ Tests: `tests/project_mod/test_delete_guard.py`,
 `tests/project_mod/test_delete_guard_structure.py`, the run_command and
 pre-hook neighbours.
 
+## Catastrophic-delete guard control flow
+
+Problem (2026-11-17): the safety pre-hook refused a GitHub release query,
+`printf … > "$TMPDIR/gh_hdr" || { d=$(mktemp -d); …; TMPDIR=$d; }; …;
+rm -f "$TMPDIR/gh_hdr"`, as a delete of `/gh_hdr`. The guard's shell state
+read the parse as straight-line code. Its one exception gave an assignment
+whose own separator was `||` an extra empty candidate: inside the `{ … }`
+group `d` became possibly empty and `TMPDIR=$d` inherited it. Every other
+conditional assignment counted as certain, so `test -d x && X=/tmp/a;
+rm -rf "$X/"`, an `if` or `case` branch, a loop body or second iteration, a
+function body (judged as if it ran where it was defined), `break`,
+`continue`, `return`, a backgrounded `&&` list and a quoted or `~` loop word
+each hid a delete of `/` or the home directory: 17 of 19 such shapes passed.
+A value built from an unproven name collapsed to empty as a whole, so
+`E="$D/x"; rm -rf "$E"` hid `/x`. Unbound variables expanded in the
+server's environment, not the command's: the `$TMPDIR` a task checkout's
+commands get was unknown to the guard, so a scoped scratch delete was
+refused, and a variable only the server had was trusted.
+
+Decision (2026-11-17): `command_structure.control_structure` pairs the
+parse's reserved words into and-or lists, pipelines and compound commands:
+`{ }`, `if`/`elif`/`else`, `while`/`until`, `for`/`select`, `case` (the parser
+marks its clauses with `CaseClause`/`CaseEnd` items carrying patterns and
+terminators) and function definitions. The guard interprets that structure:
+each path through a construct runs on its own copy of the state, and the
+state after it joins every path. An `&&`/`||` operand runs from the list's
+success or failure state; at most one `if`/`case` branch runs, none without
+an `else` or a `*` pattern; `;&`/`;;&` carry state into later clauses. A loop's
+head is the fixpoint of its iterations, and `break`/`continue`/`return` carry
+their state to where they lead. A function body runs on the caller's state
+where it is called (`local` names restored) and is also judged where it is
+defined; a recursive function is refused only when the command could delete.
+A value set holds `_DYNAMIC` ("or unproven") beside its literals and keeps the
+empty collapse of a derived value (`_Collapsed`), so a literal from one path
+is judged as itself and `E="$D/x"` as `/x`. A set that outgrows its bound
+becomes `_OVERFLOW`: judged like `_DYNAMIC` (the existing overflow policy) but
+kept by every join, so every join is monotone and every fixpoint terminates.
+Reserved words that do not pair up (the shell rejects the script) fall back to
+treating every item as optional and repeatable: sound, never a refusal by
+structure. Variables a command never binds come from the environment its shell
+starts with, an explicit input: run_command builds the child environment
+before the guard and passes it; the desktop agent keeps its process
+environment, which its children inherit; the cwd-less pre-hook passes none, and
+every operand that reads an unbound variable or `$PWD` is left to the
+executor's pass.
+
+Alternatives rejected: extending the `||` patch to `&&`, groups and `if`
+(a per-statement "maybe" mark either leaks into later statements of the same
+branch, the reported refusal, or misses that the whole branch may not run);
+weak updates on every assignment (sound, but still refuses the reported
+command because `d` stays possibly empty inside its branch); turning the flat
+items into a tree for every consumer (the dangerous guard and every rewrite
+read the flat items, and a second view would drift); refusing a script whose
+structure the reader cannot follow (a reader gap would block valid commands,
+while the fallback stays sound); widening a loop value after one changed
+iteration (refuses converging loops such as `X=$Y; Y=/tmp/b`); judging the
+pre-hook against the server environment (not the child's) or an empty one
+(every `$TMPDIR` delete refused before the executor sees the real value).
+
+Verification: `tests/project_mod/test_delete_guard_control_flow.py` holds the
+report, both tables, loops, functions, `case`, the environment contract, the
+structure reader and the executor wiring. A differential fuzz (seeded scripts
+of assignments and control flow run by dash and bash, `printf` in place of
+the delete, the shell's value compared with the guard's candidates) found the
+derived-value collapse, a fixpoint that cycled when an overflowing set fell
+back to `_DYNAMIC`, and a `local` run on only some paths of a function body;
+after the fixes 17,058 compared runs had no miss outside the overflow policy
+(325 runs). `tests/project_mod/test_delete_guard_shell_oracle.py` keeps a
+seeded subset whose value sets cannot overflow, so the property holds
+exactly; it fails when a branch stops joining, a derived value loses its
+collapse, or an `&&`/`||` operand is taken as certain.
+
+Known limits: positional parameters (`$1`, `"$@"`) inside function bodies are
+not bound at calls; `trap` strings, sourced files and `export -f` are not
+followed; `set`, `read`, `unset`, `source` and `eval` still reset bindings to
+the starting environment; `cd` to a wholly unproven directory keeps the old
+cwd; a configured `SHELL_PREFIX` may change the environment before the
+command.
+
 ## Dangerous-command guard structure
 
 Problem (2026-10-27 .. 2026-11-02, hit repeatedly by swarm workers): the

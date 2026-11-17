@@ -31,6 +31,7 @@ from lib.paper.agent_loop_policy import run_guarded_paper_agent_loop
 from lib.paper.agent_usage import PaperAgentUsageMeter
 from lib.paper.prompts import report_continuation_prompt
 from lib.paper.report_engine._body import ReportBodyProjection
+from lib.paper.report_engine._normalize import normalize_report_markdown_with_changes
 from lib.paper.report_engine._publication import publish_report
 from lib.paper.review._lang import (
     is_rebuttal_lang,
@@ -66,6 +67,32 @@ from lib.paper.report_engine._hooks import (
 )
 
 logger = get_logger(__name__)
+
+
+def _clean_report_body(task, body, *, normalize_markdown):
+    # Strip LLM preamble before the first heading. Models often emit
+    # "Now I have enough information..." / "Let me compile..." / multi-
+    # paragraph "I'll research..." before the actual Markdown report
+    # starts at the first `## ` or `# `. Strip aggressively — any text
+    # before the first heading is non-report chatter regardless of length.
+    _heading_start = re.search(r'^#{1,6}\s', body.text, re.MULTILINE)
+    if _heading_start and _heading_start.start() > 0:
+        preamble = body.text[:_heading_start.start()].strip()
+        if preamble:
+            logger.info('[Paper:Report] Stripping %d-char preamble: %.120s',
+                        len(preamble), preamble.replace('\n', ' '))
+            body.text = body.text[_heading_start.start():]
+
+    # Ordinary reports: deterministically repair formatting-rule violations
+    # (outer ```markdown wrapper, closing chatter, LaTeX in backticks).
+    # Review-family bodies have their own finalizers in run_report_task.
+    if not normalize_markdown:
+        return
+    body.text, md_changes = normalize_report_markdown_with_changes(body.text)
+    if md_changes:
+        task['full_text'] = body.text
+        logger.info('[Paper:Report] Task %s — normalized report Markdown: %s',
+                    task['task_id'], ', '.join(f'{c.kind}={c.count}' for c in md_changes))
 
 
 def _report_length_continuation(task, body, messages, abort_signal):
@@ -298,19 +325,7 @@ def run_report_task(task, messages, images):
                     task['task_id'], len(body.text), elapsed)
 
         body.adopt_terminal_response()
-
-        # Strip LLM preamble before the first heading. Models often emit
-        # "Now I have enough information..." / "Let me compile..." / multi-
-        # paragraph "I'll research..." before the actual Markdown report
-        # starts at the first `## ` or `# `. Strip aggressively — any text
-        # before the first heading is non-report chatter regardless of length.
-        _heading_start = re.search(r'^#{1,6}\s', body.text, re.MULTILINE)
-        if _heading_start and _heading_start.start() > 0:
-            preamble = body.text[:_heading_start.start()].strip()
-            if preamble:
-                logger.info('[Paper:Report] Stripping %d-char preamble: %.120s',
-                            len(preamble), preamble.replace('\n', ' '))
-                body.text = body.text[_heading_start.start():]
+        _clean_report_body(task, body, normalize_markdown=not _is_review_family)
 
         # Resolve the best title from three sources, in priority order:
         #   1. A non-placeholder stored title (user-renamed or already-resolved

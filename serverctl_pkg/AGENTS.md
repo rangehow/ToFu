@@ -67,6 +67,11 @@ single recovery record. Verify `test_execution_composition.py` for those ports.
 `execution_plan.py` prepares a source/environment/configuration digest before
 host admission; it uses the existing pinned-source discovery boundary and
 `runtime_replica`'s install fingerprint, and never copies an app.
+Its source is `pinned_import_source.application_sources`: the test suite
+(`NON_APPLICATION_PACKAGES`) is not executable source, so a test-only edit
+neither replaces the host nor costs a boot its reads. After application
+construction the host compares its frozen pins by stat (`unchanged_since_freeze`)
+and re-hashes only a changed checkout.
 It runs the shared static storage boundary before drain. Only a source mismatch
 during application construction may authorize source refresh after physical
 exit; startup failures and policy/dependency changes keep the generation fence.

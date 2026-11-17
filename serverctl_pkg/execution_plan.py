@@ -44,23 +44,17 @@ def require_plan_match(expected: dict, actual: dict, *, stage: str) -> None:
 
 def prepare_plan(project: Path, environment: dict[str, str], *, python: str = sys.executable) -> dict:
     from lib.runtime.checkout_distributions import installed_checkout_roots
-    from lib.runtime.pinned_import_source import _importable_sources, source_identity
-    from lib.storage.storage_boundary import require_exclusive_sidecar_boundary
-    from runtime_guards import without_materialized_resource_defaults
-    from serverctl_pkg.runtime_replica import describe_environment, fingerprint
+    from lib.runtime.pinned_import_source import application_sources, source_identity
 
     project = project.resolve()
-    # The same startup authority must refuse an invalid candidate while the old
-    # application is still serving, not first after replacement has drained it.
-    require_exclusive_sidecar_boundary(project)
+    policy = prepare_launch_policy(project, environment, python=python)
     roots = [project]
     search = Path(environment.get('TOFU_SEARCH_PATH') or project / 'packages/tofu-search')
     if search.is_dir():
         roots.append(search.resolve())
     # The same installed first-party roots server.py serves from this checkout.
     roots.extend(Path(root) for root in installed_checkout_roots(project))
-    sources = {Path(path) for root in roots
-               for path in _importable_sources(str(root), recurse=True, ignore_errors=False)}
+    sources = {Path(path) for root in roots for path in application_sources(str(root))}
 
     def read_sources():
         for path in sorted(sources):
@@ -71,13 +65,24 @@ def prepare_plan(project: Path, environment: dict[str, str], *, python: str = sy
                     after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
                 raise ExecutionSourceChanged(f'Execution source changed during preparation: {path}')
             yield str(path), content
-    identity = source_identity(read_sources())
+    return {**policy, **source_identity(read_sources())}
+
+
+def prepare_launch_policy(project: Path, environment: dict[str, str], *,
+                          python: str = sys.executable) -> dict:
+    """Every plan field except executable source identity (``SOURCE_FIELDS``)."""
+    from lib.storage.storage_boundary import require_exclusive_sidecar_boundary
+    from runtime_guards import without_materialized_resource_defaults
+    from serverctl_pkg.runtime_replica import describe_environment, fingerprint
+
+    # The same startup authority must refuse an invalid candidate while the old
+    # application is still serving, not first after replacement has drained it.
+    require_exclusive_sidecar_boundary(project.resolve())
     # Launch policy, not the free-memory/disk observation its retention defaults came from.
     configuration = json.dumps(without_materialized_resource_defaults(environment), sort_keys=True,
                                separators=(',', ':')).encode()
     # Installed packages are executable source too; None when the layout cannot be described.
     installed = describe_environment(python)
     return {'format': PLAN_FORMAT, 'python': python,
-            **identity,
             'environmentFingerprint': None if installed is None else fingerprint(installed),
             'configurationSha256': hashlib.sha256(configuration).hexdigest()}

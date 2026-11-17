@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import json
+import re
 import socket
 import subprocess
 
@@ -36,6 +37,7 @@ _BOUNDARY_SEARCH_PATTERN = (
     r'write_transaction|db_execute_with_retry|allocate_scoped_sequence|'
     r'lock_scoped_sequence|cursor|commit|rollback|connect|execute|'
     r'executemany)\b|tofu.{0,64}schema')
+_BOUNDARY_SEARCH_RE = re.compile(_BOUNDARY_SEARCH_PATTERN)
 
 @dataclass(frozen=True, slots=True)
 class BoundaryViolation:
@@ -88,17 +90,7 @@ def _python_files(project_root: Path):
                 indexed.extend(
                     (base / name).relative_to(project_root).as_posix()
                     for name in files if name.endswith('.py'))
-    all_files = sorted(set(indexed))
-    candidates = _candidate_python_files(project_root)
-    if candidates is not None:
-        # Every capability recognized by the AST scanner contains one of the
-        # lexical markers above. Avoid constructing ASTs for the thousands of
-        # unrelated Python files on high-latency project filesystems. The
-        # conservative fallback below keeps the old full scan when ripgrep is
-        # unavailable or returns an infrastructure error.
-        all_files = [relative for relative in all_files
-                     if relative in candidates]
-    for relative in all_files:
+    for relative in sorted(set(indexed)):
         if not relative.endswith('.py'):
             continue
         if relative.startswith('lib/storage_authority_sql/'):
@@ -106,9 +98,25 @@ def _python_files(project_root: Path):
         yield project_root / relative
 
 
-def _candidate_python_files(project_root: Path) -> set[str] | None:
-    search_paths = [str(path.relative_to(project_root))
-                    for path in _source_roots(project_root) if path.exists()]
+def _mentions_boundary_marker(path: Path) -> bool:
+    try:
+        with open(path, 'rb') as handle:
+            source = handle.read().decode('utf-8', errors='surrogateescape')
+    except OSError:
+        # Unreadable files reach the AST scanner, which reports them.
+        return True
+    return _BOUNDARY_SEARCH_RE.search(source) is not None
+
+
+def _candidate_python_files(project_root: Path, relatives: list[str]) -> set[str] | None:
+    """Which of ``relatives`` carry a lexical marker; None when rg cannot say.
+
+    Every capability recognized by the AST scanner contains one of the
+    markers, so a file without one has no violation and needs no AST.
+    ripgrep is only an accelerator: when it is unavailable or fails, the same
+    marker test runs in Python, so the gate admits the same files either way.
+    """
+    search_paths = relatives
     if not search_paths:
         return set()
     try:
@@ -247,16 +255,28 @@ def _scan_python_file(path: Path, relative: str) -> list[BoundaryViolation]:
 
     # Network transports whose connect(address) opens a socket, never a
     # database: names bound to these modules are not database receivers.
+    # One traversal gathers socket names, driver imports and every call; the
+    # calls are judged afterwards, each on its own, once socket names are known.
     socket_names = {'socket'}
+    calls: list[ast.Call] = []
     for imported in ast.walk(tree):
-        if isinstance(imported, ast.Import):
+        if isinstance(imported, ast.Call):
+            calls.append(imported)
+        elif isinstance(imported, ast.Import):
             for alias in imported.names:
                 if alias.name == 'websockets':
                     socket_names.add(alias.asname or alias.name)
-        if isinstance(imported, ast.ImportFrom) and imported.module == 'socket':
-            for alias in imported.names:
-                socket_names.add(alias.asname or alias.name)
-        if (isinstance(imported, ast.Assign)
+                if alias.name.split('.')[0] in _DRIVERS:
+                    violations.append(BoundaryViolation(
+                        relative, imported.lineno, 'database_driver_import'))
+        elif isinstance(imported, ast.ImportFrom):
+            if imported.module == 'socket':
+                for alias in imported.names:
+                    socket_names.add(alias.asname or alias.name)
+            if (imported.module or '').split('.')[0] in _DRIVERS:
+                violations.append(BoundaryViolation(
+                    relative, imported.lineno, 'database_driver_import'))
+        elif (isinstance(imported, ast.Assign)
                 and isinstance(imported.value, ast.Call)
                 and isinstance(imported.value.func, ast.Attribute)
                 and imported.value.func.attr == 'socket'):
@@ -264,50 +284,34 @@ def _scan_python_file(path: Path, relative: str) -> list[BoundaryViolation]:
                 if isinstance(target, ast.Name):
                     socket_names.add(target.id)
 
-    class Visitor(ast.NodeVisitor):
-        def visit_Call(self, node: ast.Call):
-            function = node.func
-            if isinstance(function, ast.Name) and function.id in _BANNED_CALLS:
+    for node in calls:
+        function = node.func
+        if isinstance(function, ast.Name) and function.id in _BANNED_CALLS:
+            violations.append(BoundaryViolation(
+                relative, node.lineno, function.id))
+        elif isinstance(function, ast.Attribute):
+            if (function.attr in _TRANSACTION_METHODS
+                    and database_shaped_receiver(function.value)):
                 violations.append(BoundaryViolation(
-                    relative, node.lineno, function.id))
-            elif isinstance(function, ast.Attribute):
-                if (function.attr in _TRANSACTION_METHODS
-                        and database_shaped_receiver(function.value)):
+                    relative, node.lineno,
+                    f'direct_{function.attr}'))
+            elif function.attr in {'connect', 'execute', 'executemany'}:
+                if (function.attr == 'connect'
+                        and isinstance(function.value, ast.Name)
+                        and function.value.id in socket_names):
+                    continue
+                first = _literal_text(node.args[0]) if node.args else None
+                # No-argument transport/domain connect methods do not
+                # establish database ownership. Keep driver imports,
+                # DB-shaped handles and argument-bearing factories fenced.
+                connects_database = (function.attr == 'connect' and (
+                    database_shaped_receiver(function.value)
+                    or bool(node.args) or bool(node.keywords)))
+                if (connects_database or first is not None
+                        and first.lstrip().lower().startswith(_SQL_PREFIXES)):
                     violations.append(BoundaryViolation(
                         relative, node.lineno,
                         f'direct_{function.attr}'))
-                elif function.attr in {'connect', 'execute', 'executemany'}:
-                    if (function.attr == 'connect'
-                            and isinstance(function.value, ast.Name)
-                            and function.value.id in socket_names):
-                        self.generic_visit(node)
-                        return
-                    first = _literal_text(node.args[0]) if node.args else None
-                    # No-argument transport/domain connect methods do not
-                    # establish database ownership. Keep driver imports,
-                    # DB-shaped handles and argument-bearing factories fenced.
-                    connects_database = (function.attr == 'connect' and (
-                        database_shaped_receiver(function.value)
-                        or bool(node.args) or bool(node.keywords)))
-                    if (connects_database or first is not None
-                            and first.lstrip().lower().startswith(_SQL_PREFIXES)):
-                        violations.append(BoundaryViolation(
-                            relative, node.lineno,
-                            f'direct_{function.attr}'))
-            self.generic_visit(node)
-
-    Visitor().visit(tree)
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                if alias.name.split('.')[0] in _DRIVERS:
-                    violations.append(BoundaryViolation(
-                        relative, node.lineno, 'database_driver_import'))
-        elif isinstance(node, ast.ImportFrom):
-            module = node.module or ''
-            if module.split('.')[0] in _DRIVERS:
-                violations.append(BoundaryViolation(
-                    relative, node.lineno, 'database_driver_import'))
     # Keep the scanner's own literal out of the plugin callback inventory.
     if ('tofu' + '.schema') in source:
         violations.append(BoundaryViolation(
@@ -327,6 +331,10 @@ def scan_storage_boundary(project_root: Path) -> list[BoundaryViolation]:
     violations: list[BoundaryViolation] = []
     cached = _read_boundary_cache(root)
     next_cache: dict[str, dict[str, object]] = {}
+    # Every listed file is cached by stat signature, markerless ones with no
+    # violations, so an unchanged checkout costs one listing and one stat per
+    # file: neither a full-tree lexical search nor an AST on every boot.
+    files = []
     for path in _python_files(root):
         relative = path.relative_to(root).as_posix()
         signature = _file_signature(path)
@@ -334,10 +342,19 @@ def scan_storage_boundary(project_root: Path) -> list[BoundaryViolation]:
         old_signature = old.get('signature') if isinstance(old, dict) else None
         old_violations = _cached_violations(
             old.get('violations') if isinstance(old, dict) else None)
-        if signature is not None and old_signature == signature and old_violations is not None:
-            file_violations = old_violations
-        else:
+        reusable = (signature is not None and old_signature == signature
+                    and old_violations is not None)
+        files.append((path, relative, signature, old_violations if reusable else None))
+    changed = [relative for _path, relative, _signature, known in files if known is None]
+    candidates = _candidate_python_files(root, changed) if changed else set()
+    for path, relative, signature, known in files:
+        if known is not None:
+            file_violations = known
+        elif (relative in candidates if candidates is not None
+              else _mentions_boundary_marker(path)):
             file_violations = _scan_python_file(path, relative)
+        else:
+            file_violations = []
         violations.extend(file_violations)
         if signature is not None:
             next_cache[relative] = {

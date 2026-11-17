@@ -48,6 +48,12 @@ from lib.log import get_logger
 logger = get_logger(__name__)
 
 _PACKAGE_INIT = '__init__.py'
+# Top-level packages of an application root that no application process
+# imports: the repository's test suite (tests/server/test_execution_plan.py
+# specifies that application source never imports it). They are not part of
+# an execution generation, so a test-only edit neither replaces the resident
+# execution host nor costs every boot a read of its files.
+NON_APPLICATION_PACKAGES = frozenset({'tests'})
 
 
 def source_identity(sources: Iterable[tuple[str, bytes]]) -> dict:
@@ -110,11 +116,19 @@ def _read_pin(path: str) -> _Pin | None:
     return _Pin(after, source)
 
 
-def _importable_sources(directory: str, *, recurse: bool, ignore_errors: bool = True) -> Iterator[str]:
+def application_sources(root: str) -> Iterator[str]:
+    """The executable application source under one import root."""
+    return _importable_sources(root, recurse=True, ignore_errors=False,
+                               skip_packages=NON_APPLICATION_PACKAGES)
+
+
+def _importable_sources(directory: str, *, recurse: bool, ignore_errors: bool = True,
+                        skip_packages: frozenset[str] = frozenset()) -> Iterator[str]:
     """Yield the ``.py`` files the import system can load from ``directory``.
 
     With ``recurse``, a subdirectory is entered only when it holds
     ``__init__.py``, so data kept inside a package is never listed.
+    ``skip_packages`` names packages directly inside ``directory`` to omit.
     """
     pending = [directory]
     while pending:
@@ -135,7 +149,8 @@ def _importable_sources(directory: str, *, recurse: bool, ignore_errors: bool = 
                         stem + extension in names
                         for extension in importlib.machinery.EXTENSION_SUFFIXES):
                     yield os.path.join(current, name)
-            elif recurse and name.isidentifier() and name != '__pycache__':
+            elif (recurse and name.isidentifier() and name != '__pycache__'
+                    and not (current == directory and name in skip_packages)):
                 child = os.path.join(current, name)
                 if os.path.isfile(os.path.join(child, _PACKAGE_INIT)):
                     pending.append(child)
@@ -183,6 +198,7 @@ class PinnedImportSource:
         self._sweeps: list[threading.Thread] = []
         self._lock = threading.Lock()
         self._frozen = False
+        self._frozen_sources: frozenset[str] = frozenset()
 
     def install(self) -> None:
         """Insert the finder ahead of PathFinder and pin the source in use."""
@@ -218,8 +234,7 @@ class PinnedImportSource:
         describes retained bytes, so composition can compare its prepared plan.
         """
         self.join()
-        sources = sorted({os.path.abspath(path) for root in self._roots
-                          for path in _importable_sources(root, recurse=True, ignore_errors=False)})
+        sources = sorted(self._listed_sources())
         for path in sources:
             if path not in self._pins:
                 pin = _read_pin(path)
@@ -232,7 +247,30 @@ class PinnedImportSource:
                 if len(parts) > 1 and parts[0] != '..':
                     self._packages.add(parts[0])
         self._frozen = True
+        self._frozen_sources = frozenset(sources)
         return source_identity((path, pin.source()) for path, pin in sorted(self._pins.items()))
+
+    def unchanged_since_freeze(self) -> bool:
+        """Whether the checkout still holds exactly the frozen generation.
+
+        One listing and one stat per file replace re-reading every source:
+        a file whose size and mtime match its pin is the pinned revision (the
+        same rule bytecode reuse follows); any other file is read and compared
+        byte for byte, so a touched but identical file is still unchanged.
+        """
+        if not self._frozen or self._listed_sources() != self._frozen_sources:
+            return False
+        for path in self._frozen_sources:
+            pin = self._pins[path]
+            if pin.on_disk(path):
+                continue
+            current = _read_pin(path)
+            if current is None or current.source() != pin.source():
+                return False
+        return True
+
+    def _listed_sources(self) -> set[str]:
+        return {os.path.abspath(path) for root in self._roots for path in application_sources(root)}
 
     def find_spec(self, fullname, path=None, target=None):
         if self._frozen:
@@ -258,7 +296,7 @@ class PinnedImportSource:
 
     def _frozen_spec(self, fullname, path):
         top, _, tail = fullname.partition('.')
-        if tail and top not in self._packages:
+        if top in NON_APPLICATION_PACKAGES or (tail and top not in self._packages):
             return None
         entries = path if path is not None else sys.path
         name = fullname.rpartition('.')[2]
@@ -303,7 +341,8 @@ class PinnedImportSource:
 
     def _application_package(self, name, spec) -> str | None:
         """The directory of ``name`` when it is a regular package in a root."""
-        if '.' in name or spec is None or not spec.origin or not spec.submodule_search_locations:
+        if ('.' in name or name in NON_APPLICATION_PACKAGES or spec is None or not spec.origin
+                or not spec.submodule_search_locations):
             return None
         directory, base = os.path.split(os.path.abspath(spec.origin))
         if base == _PACKAGE_INIT and os.path.dirname(directory) in self._roots:

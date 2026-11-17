@@ -56,7 +56,7 @@ def test_runtime_boundary_has_same_scope_with_or_without_git_and_rg(
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("import sqlite3\nconn = sqlite3.connect('offline.db')\n")
     monkeypatch.setattr(storage_boundary, '_candidate_python_files',
-        lambda root: {'lib/business.py'} if lexical_prefilter else None)
+        lambda root, relatives: {'lib/business.py'} if lexical_prefilter else None)
 
     report = storage_boundary.boundary_report(tmp_path)
     assert report['files'] == ['lib/business.py']
@@ -298,6 +298,41 @@ def test_exclusive_boundary_scanner_reuses_unchanged_file_results(
     source.write_text("note = 'executemany'\n", encoding='utf-8')
     boundary.scan_storage_boundary(tmp_path)
     assert len(scanned) == first_count + 1
+
+
+@pytest.mark.parametrize('ripgrep', [True, False])
+def test_unchanged_checkout_needs_no_lexical_search_or_ast(
+        tmp_path, boundary_cache, monkeypatch, ripgrep):
+    """Startup cost: an unchanged tree is one listing plus one stat per file."""
+    import lib.storage.storage_boundary as boundary
+
+    plain = tmp_path / 'lib' / 'plain.py'
+    plain.parent.mkdir(parents=True)
+    plain.write_text('VALUE = 1\n', encoding='utf-8')
+    marked = tmp_path / 'lib' / 'marked.py'
+    marked.write_text("note = 'execute'\n", encoding='utf-8')
+    searched, scanned = [], []
+    search, scan = boundary._candidate_python_files, boundary._scan_python_file
+
+    def counting_search(root, relatives):
+        searched.append(sorted(relatives))
+        return search(root, relatives) if ripgrep else None
+
+    monkeypatch.setattr(boundary, '_candidate_python_files', counting_search)
+    monkeypatch.setattr(boundary, '_scan_python_file',
+                        lambda path, relative: scanned.append(relative) or scan(path, relative))
+    assert boundary.scan_storage_boundary(tmp_path) == []
+    assert searched == [['lib/marked.py', 'lib/plain.py']]
+    assert scanned == ['lib/marked.py']
+
+    assert boundary.scan_storage_boundary(tmp_path) == []
+    assert searched == [['lib/marked.py', 'lib/plain.py']] and scanned == ['lib/marked.py']
+
+    plain.write_text("import sqlite3\nsqlite3.connect('x.db')\n", encoding='utf-8')
+    assert {item.capability for item in boundary.scan_storage_boundary(tmp_path)} == {
+        'database_driver_import', 'direct_connect'}
+    assert searched[-1] == ['lib/plain.py']
+    assert scanned == ['lib/marked.py', 'lib/plain.py']
 
 
 def _driver_imports(path: Path) -> list[str]:

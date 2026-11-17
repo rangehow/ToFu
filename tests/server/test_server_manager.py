@@ -861,7 +861,7 @@ def test_reconcile_logs_worker_ready_with_boot_elapsed(
     project = _project(tmp_path)
     monkeypatch.setattr(
         sm, 'read_lock_status',
-        lambda _p: _status(project, running=True, pid=4321))
+        lambda _p, _server_env=None: _status(project, running=True, pid=4321))
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [])
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: True)
     manager = sm.LifecycleManager(str(project))
@@ -1018,7 +1018,7 @@ def test_start_queues_offline_maintenance_without_spawning_or_crashloop(
         tmp_path, monkeypatch):
     project = _project(tmp_path)
     monkeypatch.setattr(
-        sm, 'read_lock_status', lambda _path: _status(project))
+        sm, 'read_lock_status', lambda _path, _server_env=None: _status(project))
     monkeypatch.setattr(sm, 'listener_pids', lambda _port: [])
     monkeypatch.setattr(sm, 'port_accepts', lambda *_args, **_kwargs: False)
     manager = sm.LifecycleManager(str(project))
@@ -1073,7 +1073,7 @@ def test_restart_waits_for_just_stopped_sidecar_lease(
     sleeps = []
     starts = []
 
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _path: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _path, _server_env=None: _status(project))
     monkeypatch.setattr(
         manager, 'stop',
         lambda **_kwargs: {'ok': True, 'message': 'stopped cleanly'},
@@ -1103,7 +1103,7 @@ def test_restart_waits_for_just_stopped_sidecar_lease(
 
 def _restart_without_worker(manager, project, monkeypatch):
     starts = []
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _path: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _path, _server_env=None: _status(project))
     monkeypatch.setattr(manager, 'stop', lambda **_kwargs: {'ok': True, 'message': 'stopped cleanly'})
     monkeypatch.setattr(manager, '_active_storage_lease', lambda: {'held': False})
     monkeypatch.setattr(manager, 'start', lambda **kwargs: starts.append(kwargs) or {'ok': True})
@@ -1273,7 +1273,7 @@ def test_status_verified_readiness_resolves_inconclusive_tcp_probe(
     live = _status(project, running=True, pid=42)
     if case == 'identity_conflict':
         live['projectMatches'] = False
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: live)
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: live)
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: False)
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [99] if case == 'port_conflict' else [42])
     monkeypatch.setattr(sm, 'proc_env_value', lambda *_a: None)
@@ -1318,7 +1318,7 @@ def test_storage_fenced_worker_is_escalated_once_and_its_recovery_logged(
     """
     project = _project(tmp_path)
     live = _status(project, running=True, pid=4321)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: live)
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: live)
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: True)
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [4321])
     manager = sm.LifecycleManager(str(project))
@@ -1389,7 +1389,7 @@ def test_live_but_unready_worker_degrades_without_wedge_restart(
         tmp_path, monkeypatch, probe_liveness):
     project = _project(tmp_path)
     live = _status(project, running=True, pid=4321)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: live)
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: live)
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: True)
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [4321])
     manager = sm.LifecycleManager(str(project))
@@ -1483,7 +1483,7 @@ def test_reconcile_never_recycles_a_healthy_worker_whose_rss_reads_enormous(
 
     monkeypatch.setattr(sm, 'Path', _EnormousResidentSet)
     monkeypatch.setattr(
-        sm, 'read_lock_status', lambda _p: _status(project, running=True, pid=4321))
+        sm, 'read_lock_status', lambda _p, _server_env=None: _status(project, running=True, pid=4321))
     monkeypatch.setattr(sm, 'listener_pids', lambda _port: [4321])
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: True)
     monkeypatch.setattr(sm, 'cgroup_oom_kill_count', lambda: 7)
@@ -1510,7 +1510,7 @@ def test_reconcile_never_recycles_a_healthy_worker_whose_rss_reads_enormous(
 
 def test_adopts_existing_worker_without_restart(tmp_path, monkeypatch):
     project = _project(tmp_path)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project, running=True, pid=1234))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project, running=True, pid=1234))
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: True)
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [1234])
     manager = sm.LifecycleManager(str(project))
@@ -1533,7 +1533,7 @@ def test_adoption_reconciles_stale_port_from_live_worker_argv(
     sm._atomic_json(project / 'data' / 'server-manager-state.json', initial)
     live = _status(project, running=True, pid=1234)
     live['cmdline'] = 'python server.py --no-tls --port 15000'
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: live)
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: live)
     monkeypatch.setattr(sm, 'port_accepts', lambda port, **_k: port == 15000)
     monkeypatch.setattr(sm, 'listener_pids',
                         lambda port: [1234] if port == 15000 else [])
@@ -1551,7 +1551,7 @@ def test_adoption_reconciles_stale_port_from_live_worker_argv(
 
 def test_start_is_idempotent_for_adopted_worker(tmp_path, monkeypatch):
     project = _project(tmp_path)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project, running=True, pid=1234))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project, running=True, pid=1234))
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: True)
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [1234])
     manager = sm.LifecycleManager(str(project))
@@ -1567,7 +1567,7 @@ def test_start_is_idempotent_for_adopted_worker(tmp_path, monkeypatch):
 
 def test_unknown_port_owner_fails_closed(tmp_path, monkeypatch):
     project = _project(tmp_path)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project))
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [])
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: True)
     manager = sm.LifecycleManager(str(project))
@@ -1580,7 +1580,7 @@ def test_unknown_port_owner_fails_closed(tmp_path, monkeypatch):
 def test_starting_worker_listener_is_not_misclassified_as_foreign(
         tmp_path, monkeypatch):
     project = _project(tmp_path)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project))
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [4321])
     monkeypatch.setattr(sm, 'proc_start_ticks', lambda _pid: 99)
     monkeypatch.setattr(sm, 'proc_cwd', lambda _pid: str(project.resolve()))
@@ -1596,7 +1596,7 @@ def test_starting_worker_listener_is_not_misclassified_as_foreign(
 def test_starting_listener_with_identity_mismatch_still_fails_closed(
         tmp_path, monkeypatch):
     project = _project(tmp_path)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project))
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [4321])
     monkeypatch.setattr(sm, 'proc_start_ticks', lambda _pid: 100)
     monkeypatch.setattr(sm, 'proc_cwd', lambda _pid: str(project.resolve()))
@@ -1610,7 +1610,7 @@ def test_starting_listener_with_identity_mismatch_still_fails_closed(
 
 def test_start_rejects_malformed_http_configuration(tmp_path, monkeypatch):
     project = _project(tmp_path)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project))
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [])
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: False)
     manager = sm.LifecycleManager(str(project))
@@ -1660,7 +1660,7 @@ def test_manager_quarantines_persisted_pytest_environment_before_adoption(
     monkeypatch.setattr(sm, 'project_server_env', lambda _project: {'PORT': '15000'})
     monkeypatch.setattr(
         sm, 'read_lock_status',
-        lambda project: _status(Path(project)))
+        lambda project, _server_env=None: _status(Path(project)))
 
     manager = sm.LifecycleManager('/srv/tofu')
 
@@ -1742,12 +1742,12 @@ def test_existing_worker_with_pytest_storage_is_never_adopted(
 
 def test_stop_persists_desired_before_signal(tmp_path, monkeypatch):
     project = _project(tmp_path)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project))
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [])
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: False)
     manager = sm.LifecycleManager(str(project))
     live = _status(project, running=True, pid=2222)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: live)
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: live)
 
     def fake_terminate(_status_value, **_kwargs):
         persisted = json.loads(manager.state_path.read_text())
@@ -1765,7 +1765,7 @@ def test_stop_persists_desired_before_signal(tmp_path, monkeypatch):
 
 def test_abnormal_exit_schedules_then_retries(tmp_path, monkeypatch):
     project = _project(tmp_path)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project))
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [])
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: False)
     manager = sm.LifecycleManager(str(project))
@@ -1786,7 +1786,7 @@ def test_status_crashloop_ignores_a_stale_consecutive_count(
     clock = [1000.0]
     monkeypatch.setattr(sm, '_now', lambda: clock[0])
     project = _project(tmp_path)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project))
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [])
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: False)
     manager = sm.LifecycleManager(str(project))
@@ -1810,7 +1810,7 @@ def test_retry_spawn_skips_while_failed_generation_still_holds_the_lock(
     lock = {'running': True}
     monkeypatch.setattr(
         sm, 'read_lock_status',
-        lambda _p: _status(project, running=lock['running'], pid=987654))
+        lambda _p, _server_env=None: _status(project, running=lock['running'], pid=987654))
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [])
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: False)
     manager = sm.LifecycleManager(str(project))
@@ -1835,7 +1835,7 @@ def test_failure_window_catches_repeated_post_health_crashes(
     clock = [1000.0]
     monkeypatch.setattr(sm, '_now', lambda: clock[0])
     project = _project(tmp_path)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project))
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [])
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: False)
     manager = sm.LifecycleManager(str(project))
@@ -1863,7 +1863,7 @@ def test_crashloop_reconcile_does_not_inflate_failure_diagnostics(
     clock = [1000.0]
     monkeypatch.setattr(sm, '_now', lambda: clock[0])
     project = _project(tmp_path)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project))
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [])
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: False)
     manager = sm.LifecycleManager(str(project))
@@ -1896,7 +1896,7 @@ def test_failure_window_expires_old_incidents(tmp_path, monkeypatch):
     clock = [1000.0]
     monkeypatch.setattr(sm, '_now', lambda: clock[0])
     project = _project(tmp_path)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project))
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [])
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: False)
     manager = sm.LifecycleManager(str(project))
@@ -1912,7 +1912,7 @@ def test_failure_window_expires_old_incidents(tmp_path, monkeypatch):
 def test_failure_is_correlated_with_cgroup_oom_counter_delta(
         tmp_path, monkeypatch):
     project = _project(tmp_path)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project))
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [])
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: False)
     monkeypatch.setattr(sm, 'cgroup_oom_kill_count', lambda: 8)
@@ -1931,7 +1931,7 @@ def test_failure_is_correlated_with_cgroup_oom_counter_delta(
 def test_failure_without_oom_delta_remains_unexpected_exit(
         tmp_path, monkeypatch):
     project = _project(tmp_path)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project))
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [])
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: False)
     monkeypatch.setattr(sm, 'cgroup_oom_kill_count', lambda: 8)
@@ -1969,7 +1969,7 @@ def _install_clean_worker_marker(
 def test_clean_exit_recovers_immediately_without_spending_failure_budget(
         tmp_path, monkeypatch):
     project = _project(tmp_path)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project))
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [])
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: False)
     manager = sm.LifecycleManager(str(project))
@@ -1996,7 +1996,7 @@ def test_clean_exit_recovers_immediately_without_spending_failure_budget(
 def test_generic_clean_signal_without_manager_intent_spends_failure_budget(
         tmp_path, monkeypatch):
     project = _project(tmp_path)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project))
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [])
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: False)
     monkeypatch.setattr(sm, 'cgroup_oom_kill_count', lambda: 0)
@@ -2016,7 +2016,7 @@ def test_generic_clean_signal_without_manager_intent_spends_failure_budget(
 def test_manager_restart_intent_proves_generic_signal_was_planned(
         tmp_path, monkeypatch):
     project = _project(tmp_path)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project))
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [])
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: False)
     manager = sm.LifecycleManager(str(project))
@@ -2056,7 +2056,7 @@ def test_graceful_signal_after_ready_restarts_without_spending_failure_budget(
     (workerReadyLoggedAt) distinguishes a served generation from a booting one.
     """
     project = _project(tmp_path)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project))
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [])
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: False)
     monkeypatch.setattr(sm, 'cgroup_oom_kill_count', lambda: 0)
@@ -2092,7 +2092,7 @@ def test_signal_before_ready_still_spends_failure_budget(tmp_path, monkeypatch):
     worker must keep spending budget toward the crashloop latch.
     """
     project = _project(tmp_path)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project))
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [])
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: False)
     monkeypatch.setattr(sm, 'cgroup_oom_kill_count', lambda: 0)
@@ -2113,7 +2113,7 @@ def test_booting_heartbeat_is_judged_by_boot_grace_not_wedge_stale(
         tmp_path, monkeypatch):
     """A booting-phase heartbeat gets the boot grace, not the 180 s wedge."""
     project = _project(tmp_path)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project))
     manager = sm.LifecycleManager(str(project))
     heartbeat_dir = tmp_path / 'heartbeat'
     heartbeat_dir.mkdir()
@@ -2143,7 +2143,7 @@ def test_booting_heartbeat_is_judged_by_boot_grace_not_wedge_stale(
 def test_clean_exit_is_counted_once_while_orphan_sidecar_lease_drains(
         tmp_path, monkeypatch):
     project = _project(tmp_path)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project))
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [])
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: False)
     manager = sm.LifecycleManager(str(project))
@@ -2180,7 +2180,7 @@ def test_clean_exit_is_counted_once_while_orphan_sidecar_lease_drains(
 def test_manual_clean_exit_changes_durable_desired_state_to_stopped(
         tmp_path, monkeypatch):
     project = _project(tmp_path)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project))
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [])
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: False)
     manager = sm.LifecycleManager(str(project))
@@ -2211,7 +2211,7 @@ def _unsupervised_departure(tmp_path, monkeypatch, *, marker_reason=None,
     clock = [50_000.0]
     monkeypatch.setattr(sm, '_now', lambda: clock[0])
     project = _project(tmp_path)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project))
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [])
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: False)
     monkeypatch.setattr(sm, 'cgroup_oom_kill_count', lambda: 0)
@@ -2335,7 +2335,7 @@ def test_stopped_reconcile_records_its_own_termination_as_a_manual_stop(
     live = {'running': True}
     monkeypatch.setattr(
         sm, 'read_lock_status',
-        lambda _p: _status(project, running=live['running'], pid=987654))
+        lambda _p, _server_env=None: _status(project, running=live['running'], pid=987654))
 
     def drain(_status_value, **_kwargs):
         (project / 'data' / '.server_shutdown.json').write_text(json.dumps({
@@ -2359,7 +2359,7 @@ def test_stopped_reconcile_records_its_own_termination_as_a_manual_stop(
 def test_stale_or_wrong_pid_clean_marker_cannot_hide_worker_failure(
         tmp_path, monkeypatch):
     project = _project(tmp_path)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project))
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [])
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: False)
     monkeypatch.setattr(sm, 'cgroup_oom_kill_count', lambda: 0)
@@ -2382,7 +2382,7 @@ def test_stale_or_wrong_pid_clean_marker_cannot_hide_worker_failure(
 def test_real_failure_is_counted_before_orphan_sidecar_lease_wait(
         tmp_path, monkeypatch):
     project = _project(tmp_path)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project))
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [])
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: False)
     monkeypatch.setattr(sm, 'cgroup_oom_kill_count', lambda: 0)
@@ -2456,7 +2456,7 @@ def test_persisted_manual_stop_survives_manager_restart(tmp_path, monkeypatch):
     }
     sm._atomic_json(project / 'data' / 'server-manager-state.json', state)
     monkeypatch.setattr(sm, 'read_lock_status',
-                        lambda _p: _status(project, running=True, pid=4321))
+                        lambda _p, _server_env=None: _status(project, running=True, pid=4321))
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: True)
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [4321])
     manager = sm.LifecycleManager(str(project))
@@ -2477,7 +2477,7 @@ def test_external_owner_is_conflict_never_adopted(tmp_path, monkeypatch):
     project = _project(tmp_path)
     external = _status(project, running=True, pid=7654)
     external['externalOwner'] = 'desktop'
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: external)
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: external)
     monkeypatch.setattr(sm, 'listener_pids', lambda _p: [7654])
     manager = sm.LifecycleManager(str(project))
     status = manager.status()
@@ -2496,7 +2496,7 @@ def test_project_env_controls_default_managed_port(tmp_path, monkeypatch):
         'TOFU_MALLOC_ARENA_MAX=3\nTOFU_NUMERIC_THREADS=2\n'
         f'TOFU_DATA_DIR={project / "state-volume"}\n'
         'TOFU_STORAGE_RPC_CAPACITY=5\nUNSAFE=x\n')
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project))
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: False)
     manager = sm.LifecycleManager(str(project))
     assert manager.port == 16789
@@ -2515,7 +2515,7 @@ def test_retired_resource_profile_is_not_forwarded_to_the_worker(tmp_path, monke
     project = _project(tmp_path)
     (project / '.env').write_text(
         'TOFU_RESOURCE_PROFILE=throughput\nTOFU_DEPLOYMENT_MODE=distributed\n')
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project))
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: False)
     manager = sm.LifecycleManager(str(project))
     assert 'TOFU_RESOURCE_PROFILE' not in sm.SERVER_ENV_KEYS
@@ -2528,7 +2528,7 @@ def test_spawn_translates_project_allocator_override_after_env_merge(
     project = _project(tmp_path)
     (project / '.env').write_text('TOFU_MALLOC_ARENA_MAX=3\n')
     monkeypatch.setenv('MALLOC_ARENA_MAX', '19')
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _p: _status(project))
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: _status(project))
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: False)
     monkeypatch.setattr(sm, 'proc_start_ticks', lambda _pid: 99)
     child_environment = {}
@@ -2575,7 +2575,10 @@ def _retire_spawned_workers(manager, project):
 
 _WORKER = r'''import fcntl, json, os, signal, socket, sys, time
 from http.server import BaseHTTPRequestHandler, HTTPServer
-data = os.path.join(os.getcwd(), 'data')
+# Like a real worker's data_root(): TOFU_DATA_DIR wins over the project's data/.
+explicit = os.environ.get('TOFU_DATA_DIR')
+data = ((explicit if os.path.basename(explicit) == 'data' else os.path.join(explicit, 'data'))
+        if explicit else os.path.join(os.getcwd(), 'data'))
 os.makedirs(data, exist_ok=True)
 lock_path = os.path.join(data, '.server.lock')
 lock = open(lock_path, 'w+')
@@ -3001,11 +3004,12 @@ def test_serverctl_process_roundtrip(tmp_path, entry):
     for name in (
             'serverctl.py', 'server_manager.py', 'supervisor.py',
             'supervisor.sh', 'supervisor_protocol.py', 'tofu_dotenv.py',
-            'runtime_guards.py', 'tofu_db/__init__.py', 'tofu_db/_loopback.py'):
+            'runtime_guards.py', 'runtime_path_policy.py', 'tofu_db/__init__.py', 'tofu_db/_loopback.py'):
         (project / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(root / name, project / name)
     (project / 'bootstrap_pkg').mkdir()
-    for name in ('__init__.py', 'resource_policy_generated.py', 'process_roles.py', 'server_entry.py'):
+    for name in ('__init__.py', 'resource_policy_generated.py', 'process_roles.py', 'server_entry.py',
+                 'env_reexec.py'):
         shutil.copy(root / 'bootstrap_pkg' / name, project / 'bootstrap_pkg' / name)
     shutil.copy(root / 'server.py', project / 'server-entry.py')
     (project / 'server.py').write_text(_WORKER)
@@ -3094,7 +3098,8 @@ def test_serverctl_process_roundtrip(tmp_path, entry):
             persisted = json.loads((project / 'data/server-manager-state.json').read_text())
             assert persisted['desired'] == 'running'
             assert persisted['launchSource'] == 'python-server.py'
-            assert sm.read_lock_status(str(project))['running'] is True
+            assert sm.read_lock_status(
+                str(project), {'TOFU_DATA_DIR': env['TOFU_DATA_DIR']})['running'] is True
             final_stop = subprocess.run(
                 [sys.executable, 'serverctl.py', 'stop'], cwd=project, env=env,
                 capture_output=True, text=True, timeout=30)

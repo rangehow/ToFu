@@ -85,7 +85,7 @@ def test_startup_terminal_outcomes_preserve_owner_and_do_not_authorize_failed_re
             return dict(stored)
         def command(self, operation, payload, command_id):
             finishes.append(payload)
-    def settle(task, root):
+    def settle(task, root, **_):
         calls.append((task, root, delivery.task_outcome(task)))
     monkeypatch.setattr(startup, 'get_storage_client', lambda **kw: Client())
     monkeypatch.setattr(delivery, 'record_task_workspace_intents', settle)
@@ -119,7 +119,7 @@ def test_startup_recovery_records_a_restart_pause_not_a_stop(monkeypatch, stored
 
     monkeypatch.setattr(startup, 'get_storage_client', lambda **kw: Client())
     monkeypatch.setattr(delivery, 'record_task_workspace_intents',
-                        lambda task, root: outcomes.append(delivery.workspace_outcome(task)))
+                        lambda task, root, **_: outcomes.append(delivery.workspace_outcome(task)))
     # The paused work stays active for its resumed attempt (same task identity).
     assert startup.recover_active_work_items() == 0
     assert outcomes == ['interrupted']

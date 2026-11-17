@@ -280,3 +280,34 @@ def test_frozen_identity_describes_actual_pins_not_later_checkout(checkout):
     identity = source.freeze()
     assert identity['sourceSha256'] == before['sourceSha256']
     assert identity['sourceSha256'] != prepare_plan(checkout.root, {})['sourceSha256']
+
+
+def test_unchanged_since_freeze_follows_content_not_timestamps(checkout):
+    helper = checkout.write('helper.py', 'VALUE = "prepared"\n')
+    source = checkout.install()
+    source.freeze()
+    assert source.unchanged_since_freeze()
+    os.utime(helper, ns=(1, 1))
+    assert source.unchanged_since_freeze()
+    checkout.write('helper.py', 'VALUE = "rewritten"\n')
+    assert not source.unchanged_since_freeze()
+    checkout.write('helper.py', 'VALUE = "prepared"\n')
+    assert source.unchanged_since_freeze()
+    checkout.write('added.py', 'VALUE = "new"\n')
+    assert not source.unchanged_since_freeze()
+
+
+def test_frozen_generation_excludes_the_test_suite(checkout):
+    from lib.runtime.pinned_import_source import NON_APPLICATION_PACKAGES
+    suite = next(iter(NON_APPLICATION_PACKAGES))
+    outside = checkout.root / suite
+    if outside.exists():
+        pytest.skip('the synthetic root already holds a test-suite package')
+    outside.mkdir()
+    (outside / '__init__.py').write_text('')
+    (outside / 'test_case.py').write_text('VALUE = 1\n')
+    source = checkout.install()
+    identity = source.freeze()
+    assert identity['sourceFiles'] == 1
+    (outside / 'test_case.py').write_text('VALUE = 2\n')
+    assert source.unchanged_since_freeze()

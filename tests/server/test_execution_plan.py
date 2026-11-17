@@ -153,6 +153,30 @@ def test_installed_checkout_distribution_source_changes_generation(tmp_path, mon
     assert installed != prepare_plan(project, {}, python='/env/python')
 
 
+def test_test_suite_edits_are_not_a_new_execution_generation(tmp_path):
+    from serverctl_pkg.execution_plan import prepare_plan
+    project = _source(tmp_path)
+    (project / 'tests').mkdir()
+    (project / 'tests/__init__.py').write_text('')
+    (project / 'tests/test_task.py').write_text('def test_value():\n    pass\n')
+    plan = prepare_plan(project, {}, python='/env/python')
+    (project / 'tests/test_task.py').write_text('def test_value():\n    assert True\n')
+    (project / 'tests/test_added.py').write_text('')
+    assert plan == prepare_plan(project, {}, python='/env/python')
+
+
+def test_application_source_never_imports_the_test_suite():
+    """The premise of NON_APPLICATION_PACKAGES: no generation member imports it."""
+    import re
+    from lib.runtime.pinned_import_source import NON_APPLICATION_PACKAGES, application_sources
+    root = Path(__file__).resolve().parents[2]
+    pattern = re.compile(r'^\s*(?:from|import)\s+(%s)(?:[.\s]|$)' % '|'.join(NON_APPLICATION_PACKAGES),
+                         re.MULTILINE)
+    offenders = [path for path in application_sources(str(root))
+                 if pattern.search(Path(path).read_text(encoding='utf-8', errors='replace'))]
+    assert offenders == []
+
+
 @pytest.mark.parametrize('package', ['tofu_db', 'tofu_workers', 'scripts', 'new_runtime_owner'])
 def test_every_importable_runtime_package_changes_generation(tmp_path, package):
     from serverctl_pkg.execution_plan import prepare_plan

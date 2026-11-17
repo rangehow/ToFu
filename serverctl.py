@@ -23,6 +23,7 @@ import urllib.request
 
 from tofu_db._loopback import urlopen as loopback_urlopen
 from pathlib import Path
+from collections.abc import Mapping
 from typing import NamedTuple
 
 from runtime_guards import UNLIMITED, resource_budget_manifest
@@ -45,8 +46,10 @@ from serverctl_pkg.restart_budget import (
 )
 
 
-PROJECT = os.path.realpath(os.environ.get('TOFU_PROJECT_PATH') or
-                           os.path.dirname(os.path.abspath(__file__)))
+# The checkout this file belongs to is the project it controls. A Tofu shell
+# exports the serving instance's TOFU_PROJECT_PATH, so reading it here made a
+# start from another checkout act on the live instance.
+PROJECT = os.path.realpath(os.path.dirname(os.path.abspath(__file__)))
 MANAGER_HOST = os.environ.get('TOFU_SUPERVISOR_HOST', '127.0.0.1')
 try:
     MANAGER_PORT = int(os.environ.get('TOFU_SUPERVISOR_PORT', '15001'))
@@ -77,6 +80,43 @@ _CGROUP_V1_STAT = '/sys/fs/cgroup/memory/memory.stat'
 
 class ManagerUnavailable(RuntimeError):
     pass
+
+
+class ManagerServesAnotherProject(RuntimeError):
+    """The manager port answers for other projects: another live instance owns it."""
+
+    def __init__(self, projects: list[str]):
+        self.projects = list(projects)
+        super().__init__(
+            f'the lifecycle manager on {BASE_URL} serves {", ".join(self.projects)}, not '
+            f'{PROJECT}. Nothing was changed. Give this checkout its own manager port '
+            '(TOFU_SUPERVISOR_PORT) and server PORT; benchmarks/startup_idle_dispatch.py '
+            'builds a complete isolated environment.')
+
+
+class InheritedInstanceEnvironment(RuntimeError):
+    """The environment names another instance's project: it belongs to that instance."""
+
+    def __init__(self, inherited_project: str):
+        self.inherited_project = inherited_project
+        super().__init__(
+            f'this environment belongs to the Tofu instance of {inherited_project} '
+            f'(TOFU_PROJECT_PATH), not {PROJECT}. Its port, storage connection, heartbeat and '
+            'process role would reach that instance. Nothing was changed. Start this checkout '
+            'from a clean environment with its own PORT and TOFU_SUPERVISOR_PORT '
+            '(benchmarks/startup_idle_dispatch.py builds one).')
+
+
+# Commands that launch, stop or reconfigure processes or build artifacts.
+_INSTANCE_ACTIONS = frozenset({
+    'start', 'stop', 'restart', 'ensure', 'install-recovery', 'prepare-frontend'})
+
+
+def refuse_inherited_instance_environment(environment: Mapping[str, str] = os.environ) -> None:
+    """Raise when *environment* carries another checkout's ``TOFU_PROJECT_PATH``."""
+    inherited = (environment.get('TOFU_PROJECT_PATH') or '').strip()
+    if inherited and os.path.realpath(inherited) != PROJECT:
+        raise InheritedInstanceEnvironment(os.path.realpath(inherited))
 
 
 def _control_command(*arguments: object) -> str:
@@ -250,12 +290,16 @@ def _request(path: str, body: dict | None = None, timeout: float = 5.0) -> dict:
 
 
 def _manager_health() -> dict | None:
+    """This checkout's manager health; raise when the port's manager serves others."""
     try:
         payload = _request('/health', timeout=1.0)
-        if payload.get('ok') and PROJECT in payload.get('projects', []):
-            return payload
     except ManagerUnavailable:
-        pass
+        return None
+    projects = [str(item) for item in payload.get('projects') or []]
+    if payload.get('ok') and PROJECT in projects:
+        return payload
+    if payload.get('ok') and projects:
+        raise ManagerServesAnotherProject(projects)
     return None
 
 
@@ -2961,12 +3005,21 @@ def main(argv: list[str] | None = None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
     # Cron's internal recovery verb stays accepted but is intentionally absent
     # from human/model-facing help; it is not an operation users should choose.
+    if raw and raw[0] in _INSTANCE_ACTIONS | {'install'}:
+        try:
+            refuse_inherited_instance_environment()
+        except InheritedInstanceEnvironment as exc:
+            print(f'Refused: {exc}', file=sys.stderr)
+            return 2
     if raw == ['ensure']:
         try:
             return cmd_ensure(argparse.Namespace())
         except ManagerUnavailable as exc:
             print(f'Tofu manager unavailable: {exc}', file=sys.stderr)
             return 1
+        except ManagerServesAnotherProject as exc:
+            print(f'Refused: {exc}', file=sys.stderr)
+            return 2
     if raw and raw[0] == 'install':
         print(
             "'serverctl.py install' was renamed to 'install-recovery'; "
@@ -2984,6 +3037,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f'Tofu manager unavailable: {exc}', file=sys.stderr)
         print(f'Diagnose: {_control_command("doctor")}', file=sys.stderr)
         return 1
+    except ManagerServesAnotherProject as exc:
+        print(f'Refused: {exc}', file=sys.stderr)
+        return 2
 
 
 if __name__ == '__main__':

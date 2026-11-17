@@ -925,21 +925,30 @@ def save_worker_workspaces(task: dict, *, capture=None) -> list[dict]:
     return saved
 
 
-def record_task_workspace_intents(task: dict, project_path: str = '') -> dict | None:
-    """Persist boot handoff before work.finish, without capturing old checkouts."""
+def record_task_workspace_intents(task: dict, project_path: str = '', *,
+                                  checkouts: dict | None = None) -> dict | None:
+    """Persist boot handoff before work.finish, without capturing old checkouts.
+
+    ``checkouts`` is one recovery pass's memo of resolved checkout identities
+    (path -> ``_checkout`` result): boot visits many work items of the same
+    project, and each identity costs an ancestor walk and two Git children on
+    the project volume. A failed resolution is not remembered.
+    """
     def record_intent(*args, **kwargs):
         from lib.integration_control import record_task_workspace_intent
         return record_task_workspace_intent(*args, **kwargs)
 
     return _settle_task_workspaces(
         task, project_path, settle_workspace=record_intent,
-        acknowledgement_key='_workspaceDeliveryIntentAcknowledgedOutcome')
+        acknowledgement_key='_workspaceDeliveryIntentAcknowledgedOutcome',
+        checkouts=checkouts)
 
 
 def _settle_task_workspaces(task: dict, project_path: str = '', project_paths=None,
                             *, evidence: dict | None = None,
                             settle_workspace: Callable[..., dict | None],
-                            acknowledgement_key: str) -> dict | None:
+                            acknowledgement_key: str,
+                            checkouts: dict | None = None) -> dict | None:
     """Share registration, outcome, receipt and failure handling across receivers."""
     if (task.get('_transientRuntime') or not task.get('id')
             or task.get('_workspaceDeliveryOwnershipRejected')):
@@ -967,7 +976,12 @@ def _settle_task_workspaces(task: dict, project_path: str = '', project_paths=No
     settled = set()
     for path in roots:
         try:
-            info = _checkout(path)
+            if checkouts is None:
+                info = _checkout(path)
+            elif path in checkouts:
+                info = checkouts[path]
+            else:
+                info = checkouts[path] = _checkout(path)
             if not info or info[1] in settled:
                 continue
 

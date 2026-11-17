@@ -79,22 +79,20 @@ def _pid_is_live_server(pid):
 # cannot block, and a loop wedged in a FUSE syscall simply stops REFRESHING
 # the local file → its age grows → that IS the wedged signal. Wall-clock (not
 # monotonic) because a DIFFERENT process interprets it.
-_HEARTBEAT_FILE = 'server.heartbeat'
-
-
 def _heartbeat_dir():
-    """Local-disk directory for the loop-heartbeat sidecar (see block comment).
-
-    Overridable via ``TOFU_HEARTBEAT_DIR``; defaults to the dedicated local
-    runtime directory ``/tmp/tofu/heartbeat``.
-    """
-    d = (os.environ.get('TOFU_HEARTBEAT_DIR', '') or '').strip()
-    return d or '/tmp/tofu/heartbeat'
+    """Local-disk directory for this instance's loop-heartbeat sidecar (see block comment)."""
+    return os.path.dirname(_heartbeat_path())
 
 
 def _heartbeat_path():
-    """Absolute path of the heartbeat sidecar file."""
-    return os.path.join(_heartbeat_dir(), _HEARTBEAT_FILE)
+    """Absolute heartbeat path of the instance whose lock is in this process's data root.
+
+    ``TOFU_HEARTBEAT_DIR`` overrides the directory; by default every data root has its
+    own file (``runtime_path_policy.instance_heartbeat_path``), so a scratch instance
+    never overwrites the live server's heartbeat.
+    """
+    from runtime_path_policy import get_runtime_base, instance_heartbeat_path
+    return instance_heartbeat_path(os.path.join(get_runtime_base(), 'data'))
 
 
 def _write_heartbeat(pid=None, ts=None, path=None, *, phase='serving'):

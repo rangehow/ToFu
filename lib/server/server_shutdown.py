@@ -212,15 +212,60 @@ def _shutdown_timing_to_stderr(line: str) -> None:
         pass
 
 
+class ShutdownRequest(threading.Event):
+    """A process shutdown flag whose ``set`` also wakes the loops awaiting it.
+
+    Signal handlers, restart paths and worker threads set it from any thread;
+    the serving loop awaits ``wait_async`` instead of polling ``is_set``, so
+    an idle server takes no timer wakeups for it and the drain begins at once.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._waiters_lock = threading.Lock()
+        self._waiters: list[tuple[asyncio.AbstractEventLoop, asyncio.Future]] = []
+
+    def set(self) -> None:
+        super().set()
+        with self._waiters_lock:
+            waiters, self._waiters = self._waiters, []
+        for loop, future in waiters:
+            try:
+                loop.call_soon_threadsafe(_resolve_waiter, future)
+            except RuntimeError:
+                pass  # That loop already closed; nothing awaits there anymore.
+
+    async def wait_async(self) -> None:
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        with self._waiters_lock:
+            if self.is_set():
+                return
+            self._waiters.append((loop, future))
+        try:
+            await future
+        finally:
+            with self._waiters_lock:
+                if (loop, future) in self._waiters:
+                    self._waiters.remove((loop, future))
+
+
+def _resolve_waiter(future: asyncio.Future) -> None:
+    if not future.done():
+        future.set_result(None)
+
+
 async def wait_for_shutdown_trigger(
-    shutdown_requested: Any,
+    shutdown_requested: ShutdownRequest | asyncio.Event,
     *,
     logger: logging.Logger | None = None,
     close_push_clients: Any = None,
 ) -> None:
     """Wake push sockets before Hypercorn begins its connection drain."""
-    while not shutdown_requested.is_set():
-        await asyncio.sleep(0.05)
+    if isinstance(shutdown_requested, asyncio.Event):
+        await shutdown_requested.wait()
+    else:
+        await shutdown_requested.wait_async()
     _shutdown_timing_to_stderr('shutdown trigger observed by serving loop')
     log = logger or logging.getLogger('server')
     try:
@@ -553,5 +598,6 @@ __all__ = [
     'shutdown_hard_deadline_seconds',
     'shutdown_production_runtime',
     'start_shutdown_hard_deadline',
+    'ShutdownRequest',
     'wait_for_shutdown_trigger',
 ]

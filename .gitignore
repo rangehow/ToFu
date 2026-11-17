@@ -129,6 +129,8 @@ __pycache__/
 !/benchmarks/
 /benchmarks/*
 !/benchmarks/AGENTS.md
+!/benchmarks/startup_idle_dispatch.py
+!/benchmarks/startup_recovery_batch.py
 !/benchmarks/settled_turn_retention.py
 !/benchmarks/agent_round_overhead.py
 !/benchmarks/mcp_live_schema_projection.py

@@ -224,7 +224,7 @@ def test_push_websocket_exits_before_lifespan_shutdown_when_drain_starts(
     from lib.agent_core.push import PushHub
     from lib.api_keys import AuthContext
     from lib.app.app_factory import create_base_app
-    from lib.server.server_shutdown import wait_for_shutdown_trigger
+    from lib.server.server_shutdown import ShutdownRequest, wait_for_shutdown_trigger
     from routes.push import push_bp
 
     context = AuthContext(
@@ -248,7 +248,7 @@ def test_push_websocket_exits_before_lifespan_shutdown_when_drain_starts(
                         break
                     await asyncio.sleep(0.01)
                 assert hub.client_count == 1
-                shutdown_requested = threading.Event()
+                shutdown_requested = ShutdownRequest()
                 shutdown_requested.set()
                 await wait_for_shutdown_trigger(
                     shutdown_requested,

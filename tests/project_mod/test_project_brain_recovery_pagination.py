@@ -90,13 +90,54 @@ def test_recovery_deduplicates_acknowledged_work_without_aliasing_owners(monkeyp
 
     monkeypatch.setattr(startup, 'get_storage_client', lambda **kw: Client())
     monkeypatch.setattr(delivery, 'record_task_workspace_intents',
-                        lambda task, root: intents.append((task['_userId'], root)))
+                        lambda task, root, **_: intents.append((task['_userId'], root)))
 
     assert startup.recover_active_work_items() == 3
     assert len(queries) == 3
     assert finishes == [(7, '/project-a', 'work'), (8, '/project-a', 'work'),
                         (7, '/project-b', 'work')]
     assert intents == [(7, '/project-a'), (8, '/project-a'), (7, '/project-b')]
+
+
+def test_a_recovery_page_reads_its_tasks_in_one_exchange_and_each_checkout_once(monkeypatch):
+    """2026-11-17: 32 paused items over 4 projects cost 10 s of boot, one replay read and
+    one checkout identity (an ancestor walk and two Git children) per item."""
+    from lib.conversations import project_brain_startup as startup
+    from lib.tasks_pkg import workspace_delivery as delivery
+
+    exchanges, resolved = [], []
+    projects = [f'/project-{index}' for index in range(3)]
+
+    class Client:
+        def maintenance(self, operation, payload, **kwargs):
+            return {'capped': False, 'projects': [
+                {'ownerUserId': 7, 'projectKey': project, 'workItems': [
+                    {'id': f'work-{project}-{index}', 'taskId': f'task-{project}-{index}',
+                     'status': 'active'} for index in range(4)]}
+                for project in projects]}
+
+        def query(self, operation, payload, **kwargs):
+            assert operation == 'record.list', 'task results are read through query_many'
+            return []
+
+        def query_many(self, requests, deadline=None):
+            exchanges.append([payload['key'] for _operation, payload in requests])
+            return [{'status': 'interrupted', 'config': {}} for _request in requests]
+
+        def command(self, operation, payload, command_id):
+            raise AssertionError('restart-paused work stays active')
+
+    def checkout(path, **_kwargs):
+        resolved.append(path)
+        return None
+
+    monkeypatch.setattr(startup, 'get_storage_client', lambda **kw: Client())
+    monkeypatch.setattr(delivery, '_checkout', checkout)
+    monkeypatch.setattr(delivery, '_read_only', lambda path, task: False)
+
+    assert startup.recover_active_work_items() == 0
+    assert exchanges == [[f'task-{project}-{index}' for project in projects for index in range(4)]]
+    assert sorted(resolved) == sorted(set(resolved)) and len(resolved) == len(projects)
 
 
 def test_empty_active_page_still_has_continuation(recovery_database):
@@ -229,7 +270,7 @@ def test_startup_preserves_active_work_until_intent_acknowledged(monkeypatch, fa
             finishes.append(payload)
             del active[payload['work_id']]
 
-    def settle(task, root):
+    def settle(task, root, **_):
         attempts.append(task['id'])
         assert task['_userId'] == 7
         assert root == '/project'
@@ -289,7 +330,7 @@ def test_startup_does_not_synthesize_publication_authority(monkeypatch, stored, 
         def command(self, operation, payload, command_id):
             finishes.append(payload)
 
-    def settle(task, root):
+    def settle(task, root, **_):
         assert task['config']['readOnlyPaths'] == ['/readonly']
         evidence = dict(stored.get('metadata') or {}, **stored)
         assert task.get('finishReason') == evidence.get('finishReason')

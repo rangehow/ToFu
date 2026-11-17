@@ -1222,12 +1222,9 @@ async def serve_until_shutdown(
         personal_key=personal_key,
     )
 
-    # Bridge the SIGTERM threading.Event to an async trigger Hypercorn
-    # awaits. When set, Hypercorn stops accepting new connections and
-    # drains in-flight ones within graceful_timeout. Poll cheaply (the
-    # signal handler can't touch loop state directly from a thread); the
-    # interval bounds how long a requested restart/shutdown idles before
-    # the drain even begins.
+    # Bridge the process ShutdownRequest to an async trigger Hypercorn
+    # awaits. When set (from any thread), Hypercorn stops accepting new
+    # connections and drains in-flight ones within graceful_timeout.
     async def _shutdown_trigger():
         from lib.server.server_shutdown import wait_for_shutdown_trigger
         await wait_for_shutdown_trigger(
@@ -1324,8 +1321,8 @@ if __name__ == '__main__':
     # The flag is consumed by an asyncio.Event created inside the serving
     # loop (see _serve) and handed to hypercorn_serve(shutdown_trigger=…)
     # so in-flight requests / SSE streams drain cleanly.
-    import threading as _threading
-    _shutdown_requested = _threading.Event()
+    from lib.server.server_shutdown import ShutdownRequest
+    _shutdown_requested = ShutdownRequest()
     from lib.compat import safe_signal
     def _signal_shutdown(signum, frame):
         # A SECOND signal while we're already draining = the user is impatient

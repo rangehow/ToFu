@@ -9,7 +9,8 @@ output limit), ``LengthContinuation`` (joined terminal text across rounds) and
 ``length_continuation_hook`` (the shared-loop ``decide_round`` hook) and
 ``premature_close_recovery_hook`` (the shared-loop ``retry_bonus`` hook).
 Dependencies: ``lib.agent_loop`` directives and premature-close detector,
-and ``prompts.length_continuation_prompt``.
+``prompts.length_continuation_prompt`` and the shared context-injection
+writer (registry id ``paper_length_continuation``).
 
 A stream that closes before the provider's finish frame is the same
 interruption as an output cap when it already carried answer text: the partial
@@ -99,6 +100,14 @@ class LengthContinuation:
         return True
 
 
+def _append_continuation_request(messages, msg, ui_lang):
+    from lib.tasks_pkg.context_composer import append_injection
+    messages.append({key: value for key, value in msg.items()
+                     if key != 'tool_calls'})
+    append_injection(messages, 'paper_length_continuation',
+                     length_continuation_prompt(ui_lang))
+
+
 def length_continuation_hook(continuation, messages, abort_signal, *,
                              ui_lang, task_id, log_prefix):
     """Return the ``decide_round`` hook that resumes output-cap truncation.
@@ -120,10 +129,7 @@ def length_continuation_hook(continuation, messages, abort_signal, *,
             return None
         logger.info('%s Task %s round %d — output cap reached; requesting '
                     'continuation', log_prefix, task_id, rnd + 1)
-        messages.append({key: value for key, value in msg.items()
-                         if key != 'tool_calls'})
-        messages.append({'role': 'user',
-                         'content': length_continuation_prompt(ui_lang)})
+        _append_continuation_request(messages, msg, ui_lang)
         return LoopDirective.continue_round()
 
     return _continue_truncated
@@ -151,10 +157,7 @@ def premature_close_recovery_hook(continuation, messages, abort_signal, *,
                 'after %d chars; requesting continuation',
                 log_prefix, task_id, rnd + 1, state,
                 len(continuation.terminal_text or ''))
-            messages.append({key: value for key, value in msg.items()
-                             if key != 'tool_calls'})
-            messages.append({'role': 'user',
-                             'content': length_continuation_prompt(ui_lang)})
+            _append_continuation_request(messages, msg, ui_lang)
             return True
         logger.warning(
             '%s Task %s round %d — stream closed before finish (state=%s) '

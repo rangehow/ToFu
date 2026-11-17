@@ -71,6 +71,9 @@ from lib.tasks_pkg.orchestrator._tool_assembly_prep import (
 from lib.tasks_pkg.orchestrator._config_resolution import (
     resolve_and_seed_model_config,
 )
+from lib.tasks_pkg.orchestrator._model_continuation import (
+    continue_resumed_model,
+)
 from lib.tasks_pkg.orchestrator._provider_binding import (
     bind_provider_and_affinity,
 )
@@ -169,6 +172,16 @@ def _execute_task_invocation(
             #    (slice 30 → _config_resolution; the 17-field unpack below
             #    stays inline as local binding).
             mcfg = resolve_and_seed_model_config(cfg, task)
+            # An interrupted Attempt that switched to a fallback model keeps
+            # running there after a resume: the accepted config model would
+            # pay a fresh cache write (and usually a second refusal). Resolve
+            # every model-dependent field for the continued model BEFORE tool
+            # assembly / context composition so compaction measures against
+            # the continued model's window.
+            continued_model = continue_resumed_model(task, cfg, mcfg['model'])
+            if continued_model != mcfg['model']:
+                mcfg = resolve_and_seed_model_config(
+                    dict(cfg, model=continued_model), task)
         model           = mcfg['model']
         thinking_enabled = mcfg['thinking_enabled']
         thinking_depth  = mcfg['thinking_depth']

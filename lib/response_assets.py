@@ -14,6 +14,7 @@ import re
 import subprocess
 import sys
 
+from lib.agent_core.storage_errors import StorageError
 from lib.artifacts.core import create_artifact, get_artifact, ArtifactNotFoundError
 from lib.conversations.repository import get_conversation
 from lib.runtime.work_process_priority import work_process_argv
@@ -26,7 +27,17 @@ from lib.artifacts.image_validation_worker import MIMES
 def owned_conversation(conv_id, user_id):
     if isinstance(user_id, bool) or not isinstance(user_id, int) or user_id < 1:
         raise PermissionError('Explicit owner required')
-    if not conv_id or not get_conversation(conv_id, user_id=user_id, include_messages=False):
+    if not conv_id:
+        raise PermissionError('Conversation unavailable')
+    try:
+        conversation = get_conversation(conv_id, user_id=user_id, include_messages=False)
+    except StorageError as exc:
+        # A native authority serves one owner and refuses a foreign owner's read
+        # (authority_scope_mismatch -> database_forbidden); SQL answers not found.
+        if exc.code in {'database_forbidden', 'database_not_found'}:
+            raise PermissionError('Conversation unavailable') from exc
+        raise
+    if not conversation:
         raise PermissionError('Conversation unavailable')
 
 

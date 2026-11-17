@@ -19,13 +19,14 @@
           </div>
 
           <div id="prefsStatus" class="ctx-status" role="status" aria-live="polite"></div>
+          <section id="prefsPending" class="ctx-pending" hidden></section>
           <div id="prefsList" class="ctx-groups" aria-busy="true"></div>
 
           <section class="ctx-memory-zone" aria-labelledby="ctxMemoryTitle">
             <div class="ctx-memory-head">
               <div>
                 <div class="settings-section-title ctx-memory-title" id="ctxMemoryTitle" data-i18n="context.memoryTitle">经验记忆</div>
-                <p class="ctx-memory-intro" data-i18n="context.memoryIntro">这里仅保存经过验证、未来可复用的项目约定、故障模式和工具经验。它们不会每轮注入，只会在相关时召回。</p>
+                <p class="ctx-memory-intro" data-i18n="context.memoryIntro">助手干活时自己记下的项目经验，大多未经核实；只在相关任务中自动带上。</p>
               </div>
               <div class="ctx-memory-actions">
                 <button class="btn btn-secondary btn-sm" data-tofu-action="clearLegacyMemories(this)" data-i18n="context.clearMemories">清空旧记忆</button>

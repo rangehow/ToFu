@@ -155,8 +155,8 @@ _SPECS = (
                   'Current owner/project-bound coordinator root task',
                   presentation=NotePresentation('systemNote.reasonProjectCoordinator', 'info', 'Coordinator', 'gitMerge'),
                   authority='workflow', stability='turn', lifecycle='task',
-                  # Holds the longest role whole (the Global Router's); role tests pin the fit.
-                  max_tokens=920, layer='objective_constraints', global_budget_policy='omit',
+                  # No ceiling: an authored role is whole or absent; a clip drops its tail rules.
+                  layer='objective_constraints', global_budget_policy='omit',
                   silent_absence_reasons=('inactive', 'provider_unavailable', 'over_block_budget')),
     InjectionSpec('project_context', 'project.brain', 'coordination_evidence',
                   'Available owner/project-bound coordinator with unseen narrative; '
@@ -306,6 +306,15 @@ _SPECS = (
                   presentation=NotePresentation('systemNote.reasonPaperTools', 'info', 'Paper tools', 'file')),
     InjectionSpec('paper_output_repair', 'paper.checkpoint_engine', 'protocol_recovery',
                   'One existing repair request after a checkpoint JSON parse failure',
+                  lane='event', required=True,
+                  presentation=NotePresentation('systemNote.reasonOutputContract', 'warn', 'Output contract', 'alertTriangle')),
+    InjectionSpec('paper_length_continuation', 'paper.length_continuation', 'protocol_recovery',
+                  'Paper answer hit the output-token cap, or its stream closed early after answer '
+                  'text; ask for the rest until the model finishes or adds no text',
+                  lane='event', required=True,
+                  presentation=NotePresentation('systemNote.reasonTerminalRecovery', 'info', 'Terminal recovery', 'refreshCw')),
+    InjectionSpec('paper_section_repair', 'paper.report_engine.worker', 'result_recovery',
+                  'Adopted report body lacks some required sections; exactly one repair request',
                   lane='event', required=True,
                   presentation=NotePresentation('systemNote.reasonOutputContract', 'warn', 'Output contract', 'alertTriangle')),
     InjectionSpec('worker_policy', 'swarm.agent', 'required_contract',

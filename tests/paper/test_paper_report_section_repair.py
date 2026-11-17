@@ -121,6 +121,7 @@ def test_missing_sections_repaired_in_one_round(report_case, monkeypatch):
     assert calls[1][-2] == {'role': 'assistant', 'content': body}
     request = calls[1][-1]['content']
     assert calls[1][-1]['role'] == 'user'
+    assert calls[1][-1]['_contextInjectionId'] == 'paper_section_repair'
     assert f'## {EN[8]}' in request and f'## {EN[9]}' in request
     assert f'## {EN[7]}' not in request
     report = published[0].report

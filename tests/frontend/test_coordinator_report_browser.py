@@ -155,8 +155,7 @@ def test_running_coordinator_reply_reads_its_report_inline(page, monkeypatch, tm
         finished = 'report-worker-done-' + suffix
         done_worker = _RunningReply(finished, '整理会议纪要', settings=worker_settings)
         running.append(done_worker)
-        done_worker.finish(done_worker.start('read_files', 'call-notes', {'path': 'notes.md'}), 'notes')
-        done_worker.complete('纪要已整理。')
+        notes = done_worker.start('read_files', 'call-notes', {'path': 'notes.md'})
         live = 'report-worker-live-' + suffix
         worker = _RunningReply(live, '调研民宿价格', settings=worker_settings)
         running.append(worker)
@@ -169,6 +168,11 @@ def test_running_coordinator_reply_reads_its_report_inline(page, monkeypatch, tm
         expect(group.locator('.coordinator-conversations-body .conv-item')).to_have_count(2)
         live_row = group.locator(f'.conv-item[data-conv-id="{live}"]')
         finished_row = group.locator(f'.conv-item[data-conv-id="{finished}"]')
+        # Finish only once the browser shows it running: completing in the same
+        # instant would race the catalog read that hydrates its Turns.
+        expect(finished_row.locator('.coordinator-conversations-status')).to_have_text('运行中')
+        done_worker.finish(notes, 'notes')
+        done_worker.complete('纪要已整理。')
         # Settle the presence refresh and rail pass that follow those updates.
         page.wait_for_timeout(1000)
         _settle(page)

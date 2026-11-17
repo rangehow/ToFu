@@ -393,6 +393,68 @@ twin; the `d8e7021b` pin, which fails with the pre-R3 `_validated_binding`),
 and `tests/conversation/test_worker_attempt_real_start.py` (real quiesce, boot
 recovery, and a resumed Worker that makes tool calls and completes).
 
+## A resumed Turn continues on the model it was running on
+
+*(running contract; owner `lib/tasks_pkg/orchestrator/_model_continuation.py`)*
+
+**Problem:** an in-Attempt refusal (`content_filter`) or availability fallback
+lives only in process memory (`task['_fallback_model']`). When the interrupted
+Turn is resumed — `continue` / `checkpoint_resume`, restart resume, project
+dispatch continuation, durable worker recovery, all through orchestrator
+`run_task` — the new Attempt used to return to the Turn's accepted
+`config.model`, even though the interrupted Attempt had switched models for its
+remaining rounds. The resumed first request paid a full prompt-cache write on
+the primary model (observed: 360K tokens re-written, `cache_read=0`), then the
+primary refused again and the Attempt fell back to the same model it had
+already been running on — the same large prompt billed twice.
+
+**Decision:** a resumed Attempt continues on the logical model of the
+interrupted Attempt's last paid, response-authoring round: the highest integer
+`round` in the durable `checkpointApiRounds` ledger whose row does not carry
+`responseAuthoring: false` and whose `tag` is not a discarded/refused charge
+(those attempts were billed but their response was never adopted). The
+continuation applies only when all three hold:
+
+1. that model differs from the accepted `config.model`;
+2. the resume did not explicitly choose a different model;
+3. the model is still admitted for this task by the same admission boundary
+   the refusal fallback path uses
+   (`llm_fallback._retry._get_fallback_model`, which honors the configured
+   fallback model and the per-task `disableModelFallback` opt-out). Otherwise
+   normal selection applies.
+
+*Explicit choice* is defined by the existing acceptance-time marker
+`_resumeModelSwitchFrom` (`RESUME_MODEL_SWITCH_FROM_CONFIG_KEY`):
+`command_service.create_attempt` stamps it when a
+continue/checkpoint_resume/answer_guidance request's `config.model` differs
+from the submitted Turn's rail snapshot model — the pause → switch-model →
+continue sequence. It is read before storage rebinds the snapshot, lives in
+the durable Attempt config, and therefore decides identically on request
+replay and durable worker recovery. No new marker, knob, or threshold is
+introduced.
+
+The continued model is resolved BEFORE tools and context are assembled:
+`run_task` re-resolves the model config with the continued model, so
+`max_tokens`, the executable tool catalog, and the context window the
+compaction thresholds measure against all belong to the model that actually
+runs. Preset and thinking stay the round's own values, exactly as the
+in-Attempt refusal fallback keeps them. `task['_fallback_model']` /
+`_fallback_from` are restamped (kind `resume_continuation`) so done/persist
+still report `fallbackModel` / `actualModel`; one log line names the
+continuation.
+
+**Alternatives rejected:** rewriting the accepted Attempt config would falsify
+the owner's recorded choice and leak into every later resume; persisting
+`conv_affinity` (a provider-key stickiness hint) cannot carry a logical model
+decision and would cross credential boundaries; always retrying the primary
+first pays a refusal plus a full cache write on every restart.
+
+Verification: `tests/tasks_pkg/test_resume_model_continuation.py` (last paid
+authoring row elects the fallback with unchanged preset/thinking, unadmitted
+model falls back to accepted, refused/discarded rows skipped, explicit switch
+wins, fallback reporting preserved, and `run_task` resolves tools/context for
+the continued model before assembly).
+
 ## Problem
 
 Goals run for hours to days. Committed-effect recovery now spans

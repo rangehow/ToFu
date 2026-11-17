@@ -43,7 +43,7 @@ class RecordClient:
         key = (payload['namespace'], payload['key'])
         current = self.rows.get(key)
         actual = current['version'] if current else 0
-        if payload.get('expected_version') != actual:
+        if 'expected_version' in payload and payload['expected_version'] != actual:
             raise StorageError('database_conflict', 'stale record')
         if operation == 'record.delete':
             self.rows.pop(key, None)

@@ -7,6 +7,7 @@ import pytest
 
 from lib.llm.llm_errors import AbortedError
 from lib.paper.tools import make_paper_task_tool_executor
+from lib.paper.length_continuation import OUTPUT_TOKEN_CEILING
 
 pytestmark = pytest.mark.unit
 
@@ -134,7 +135,7 @@ def test_workers_preserve_draft_reset_feedback_and_terminal_policy(
         requests.append((list(history), kwargs))
         assert kwargs['strict_model'] is True
         assert kwargs['prefer_model'] == 'kimi-k3'
-        assert kwargs['max_tokens'] == (8000 if workflow == 'qa' else 16000)
+        assert kwargs['max_tokens'] == OUTPUT_TOKEN_CEILING
         assert kwargs['thinking_enabled'] is False
         if len(requests) == 1:
             on_content('interim draft')
@@ -227,7 +228,7 @@ def test_report_preserves_multi_tool_rounds_feedback_and_publication(
         requests.append(list(history))
         assert kwargs['prefer_model'] == 'model-a'
         assert kwargs['strict_model'] is True
-        assert kwargs['max_tokens'] == 128000
+        assert kwargs['max_tokens'] == OUTPUT_TOKEN_CEILING
         if len(requests) == 1:
             on_thinking('checking evidence')
             on_content('interim draft')

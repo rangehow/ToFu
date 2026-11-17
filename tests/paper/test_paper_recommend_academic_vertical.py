@@ -233,6 +233,34 @@ def test_neuter_force_vertical_is_load_bearing():
     _ok('NEUTER: with _RESEARCH_VERTICAL blanked, research reverts to model vertical (load-bearing)')
 
 
+def test_research_tool_done_carries_search_diagnostic():
+    """The research card must show WHY a search was empty (network error vs
+    no usable evidence), so the tool_done event forwards ``searchDiag``."""
+    from lib.agent_loop.agent_loop import AbortSignal
+
+    class _Budget:
+        def append(self, messages, **kw):
+            return kw['content']
+
+    events = []
+    diag = {'reason': 'network_error'}
+    execute = tools_mod.make_research_tool_executor(
+        [], user_question='q', abort_signal=AbortSignal.from_callback(None),
+        result_budget=_Budget(),
+        paper_tool_executor=lambda *a, **k: ('body', [], diag, None, None),
+        on_tool_event=events.append)
+    execute(0, {'id': 'tc1', 'function': {
+        'name': 'web_search', 'arguments': json.dumps({'query': 'q'})}})
+    done = [e for e in events if e['type'] == 'tool_done']
+    assert done and done[0].get('searchDiag') == diag, events
+
+
+def test_prompt_tells_model_to_stop_once_confirmed():
+    prompt = research_mod._RECOMMEND_SYSTEM
+    assert 'STOP researching' in prompt
+    assert 'Do not repeat a query or re-open a URL' in prompt
+
+
 def main():
     print()
     print(_color('═══ Paper Recommend — Forced Academic Vertical Tests ═══', '36'))

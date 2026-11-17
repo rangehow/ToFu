@@ -808,11 +808,19 @@ sibling namespaces whose authority no longer exists and whose LOCK is free.
 **Worker command scratch (2026-11-16).** Problem: Worker scratch landed in the
 shared `/tmp` and beside the task checkouts, where nothing could tell whose it
 was. Decision: a command whose environment root is a pooled task checkout runs
-with `TMPDIR=<owner dir>/.tmp-<checkout>` (`task_spares.checkout_scratch`,
-set in `run_command._get_cmd_env`), outside the tree Git captures, and
-delivery reclamation and discard remove it with the checkout
-(`task_spares.retire_scratch`). It lives as long as the assignment, so a file
-one command writes is there for the next and for background commands.
+with `TMPDIR=/tmp/tofu-<uid>-tmp/<digest of the checkout path>`
+(`task_spares.checkout_scratch`, set in `run_command._get_cmd_env`), outside
+the tree Git captures, and delivery reclamation and discard remove it with the
+checkout (`task_spares.retire_scratch`). It lives as long as the assignment, so
+a file one command writes is there for the next and for background commands.
+The path is short because programs bind AF_UNIX sockets under `$TMPDIR` and
+`sun_path` holds 108 bytes: the first placement, `<owner dir>/.tmp-<checkout>`
+(about 125 characters), made headless Chromium abort with "Socket path too
+long" at `$TMPDIR/org.chromium.Chromium.XXXXXX/SingletonSocket`, which the
+frontend bundle canary reported as a rejected graph (2026-11-17).
+Alternatives rejected for that: a short `TMPDIR` only for browser launches
+(every other socket user, e.g. Python multiprocessing, still fails); a
+shorter name beside the checkout (the owner directory alone is 60 characters).
 Measured cost: `_get_cmd_env` median 1.27 ms without, 1.30 ms with (four
 alternating rounds of 300). Alternatives rejected: a per-command `TMPDIR`
 (multi-command work loses its files); removal at attempt end (a background

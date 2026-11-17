@@ -13,7 +13,9 @@
  *   FAULTFS_CONTROL   optional file re-read at most every 5 ms; content
  *                     "fsync_us=<n> enospc=<0|1>" replaces both settings
  *   FAULTFS_STATS     optional 4 KiB file of shared counters (survives
- *                     SIGKILL because it is a MAP_SHARED mapping)
+ *                     SIGKILL because it is a MAP_SHARED mapping); with
+ *                     FAULTFS_FSYNC_US=0 it measures a real medium's
+ *                     barriers (count and time spent in the real call)
  *
  * Build: cc -O2 -shared -fPIC -o faultfs.so faultfs.c -ldl
  */
@@ -35,6 +37,7 @@ struct faultfs_stats {
     unsigned long long injected_ns;       /* latency added to them */
     unsigned long long enospc_returns;    /* write-family calls refused */
     unsigned long long out_of_scope;      /* barriers on other paths */
+    unsigned long long medium_ns;         /* time inside the real in-scope barrier calls */
 };
 
 static const char *g_root;
@@ -113,14 +116,17 @@ static int in_scope(int fd) {
     return strncmp(target, g_root, g_root_len) == 0;
 }
 
-static void barrier_delay(int fd) {
+static void barrier_delay(int fd, long long medium_ns) {
     refresh_control();
     if (!in_scope(fd)) {
         if (g_stats) __atomic_fetch_add(&g_stats->out_of_scope, 1, __ATOMIC_RELAXED);
         return;
     }
     long us = g_fsync_us;
-    if (g_stats) __atomic_fetch_add(&g_stats->barriers, 1, __ATOMIC_RELAXED);
+    if (g_stats) {
+        __atomic_fetch_add(&g_stats->barriers, 1, __ATOMIC_RELAXED);
+        __atomic_fetch_add(&g_stats->medium_ns, (unsigned long long)medium_ns, __ATOMIC_RELAXED);
+    }
     if (us <= 0) return;
     struct timespec ts = {us / 1000000, (us % 1000000) * 1000};
     while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {}
@@ -140,29 +146,33 @@ static int refuse_write(int fd) {
 
 int fsync(int fd) {
     REAL(fsync);
+    long long started = now_ns();
     int rc = real_fsync(fd);
-    if (rc == 0) barrier_delay(fd);
+    if (rc == 0) barrier_delay(fd, now_ns() - started);
     return rc;
 }
 
 int fdatasync(int fd) {
     REAL(fdatasync);
+    long long started = now_ns();
     int rc = real_fdatasync(fd);
-    if (rc == 0) barrier_delay(fd);
+    if (rc == 0) barrier_delay(fd, now_ns() - started);
     return rc;
 }
 
 int syncfs(int fd) {
     REAL(syncfs);
+    long long started = now_ns();
     int rc = real_syncfs(fd);
-    if (rc == 0) barrier_delay(fd);
+    if (rc == 0) barrier_delay(fd, now_ns() - started);
     return rc;
 }
 
 int sync_file_range(int fd, off64_t offset, off64_t nbytes, unsigned int flags) {
     REAL(sync_file_range);
+    long long started = now_ns();
     int rc = real_sync_file_range(fd, offset, nbytes, flags);
-    if (rc == 0 && (flags & SYNC_FILE_RANGE_WAIT_AFTER)) barrier_delay(fd);
+    if (rc == 0 && (flags & SYNC_FILE_RANGE_WAIT_AFTER)) barrier_delay(fd, now_ns() - started);
     return rc;
 }
 

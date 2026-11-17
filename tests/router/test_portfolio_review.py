@@ -2,9 +2,8 @@
 
 Admission spec: in rank order (expected value per unit of cost) the review
 starts every candidate that passes the authority gate, is neither running nor a
-duplicate of open work, does not conflict with an active initiative of the same
-project, and whose resources are measured available: there is no count of
-starts. A candidate that needs owner approval never starts automatically; a
+duplicate of open work, and whose resources are measured available: there is no
+count of starts and no per-project initiative serialization. A candidate that needs owner approval never starts automatically; a
 rate-limited provider defers with the provider's own retry time; a start the
 Project Router does not accept (its executor could not launch) leaves the
 candidate pending with the recorded reason. Starts go through the same
@@ -232,7 +231,7 @@ def test_a_review_starts_every_admitted_candidate_in_value_order(world):
     assert all(row['admission']['ranked'] == 5 for row in summary['started'])
 
 
-def test_a_conflicting_or_duplicate_candidate_waits_for_the_active_work(world):
+def test_independent_same_project_initiatives_start_but_duplicates_wait(world):
     cheap = candidate(world, idempotency_key='cheap', problem='Router turns pay twice for one context.')
     costly = candidate(world, idempotency_key='costly', problem='A slower alternative in the same project.',
                        validation={'step': 'A whole evaluation grid.', 'gpu_hours': 0.0, 'model_cny': 500.0,
@@ -245,14 +244,19 @@ def test_a_conflicting_or_duplicate_candidate_waits_for_the_active_work(world):
     elsewhere = candidate(world, idempotency_key='elsewhere', project='elsewhere', problem='Unrelated work.')
     summary = review(world)
     started = {row['opportunityId'] for row in summary['started']}
-    assert started == {cheap['opportunityId'], elsewhere['opportunityId']}
+    assert started == {cheap['opportunityId'], costly['opportunityId'], elsewhere['opportunityId']}
     waiting = {row['opportunityId']: row['blockers'] for row in summary['waiting']}
-    assert waiting[costly['opportunityId']] == [f'project_busy:{cheap["opportunityId"]}']
     assert waiting[gated['opportunityId']] == ['owner_approval']
     assert waiting[twin['opportunityId']] == [f'duplicate:{gated["opportunityId"]}']
-    # Once the active initiative settles, its project takes the next candidate.
+    # Same-project starts remain independent queued requests and usage accounts.
+    requests = [call for call in forwards(world) if call['message']['origin']['forwardedFrom']]
+    assert all(call['inject_mode'] == 'queue' for call in requests)
+    input_turns = [registry(world).read(identity)['initiative']['request']['inputTurnId']
+                   for identity in (cheap['opportunityId'], costly['opportunityId'])]
+    assert len(set(input_turns)) == 2
+    # Settling one does not restart or duplicate the other.
     registry(world).settle(cheap['opportunityId'], {'outcome': {'amount': 12.0, 'evidence': ['runs/1.json']}})
-    assert [row['opportunityId'] for row in review(world)['started']] == [costly['opportunityId']]
+    assert review(world)['started'] == []
 
 
 def test_a_dependency_blocks_until_it_is_delivered(world):

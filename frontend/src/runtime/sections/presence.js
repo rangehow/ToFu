@@ -215,7 +215,6 @@
     } : undefined,
 
     changed: function () { if (typeof renderConversationList === 'function') renderConversationList(); },
-    office: sidebarOnly ? function (facts) { floorFacts = facts; placeLeadOffice(); } : undefined,
     canCreate: function () { return typeof getActiveFolderId === 'function' && !!getActiveFolderId(); },
     create: async function (ports, binding) {
       var folderId = typeof getActiveFolderId === 'function' ? getActiveFolderId() : '';
@@ -241,45 +240,28 @@
     },
   });
   }
-  /* Narrow bridge to the typed lead office (features/lead-office/office.ts), loaded
-   * when a lead first shows in the sidebar; delete with the retained presence
-   * adapter. A lead's team view sits in a slot right beneath its sidebar entry
-   * (the project's Coordinator row on a floor, the main coordinator's card at
-   * the headquarters), where the conversations it started used to open; their
-   * archive group follows the slot. The surface that reads the shown lead's
-   * binding, board and report hands them over; the catalog supplies live flags.
-   * Only the studio mode shows it: the classic mode (readLanding() === 'chat')
-   * keeps the plain Coordinator row and its conversation group, and never
-   * imports the office, so no scene, art, render loop or office read starts. */
-  var projectOfficeSlot = document.createElement('div');
-  projectOfficeSlot.className = 'lead-office-slot';
-  projectOfficeSlot.hidden = true;
-  sidebar.after(projectOfficeSlot);
-  var routerOfficeSlot = document.createElement('div');
-  routerOfficeSlot.className = 'lead-office-slot';
-  routerOfficeSlot.hidden = true;
   /* Narrow bridge to the typed lead deliverables (features/lead-deliverables/list.ts),
-   * loaded when a lead first shows in the classic sidebar; delete with the retained
-   * presence adapter. A lead's 成果 list sits right after its office slot, above the
-   * archive of conversations it started. Only the classic mode shows it: the studio's
-   * office opens the same deliverables from its desks and shelf. */
+   * loaded when a lead first shows in the sidebar; delete with the retained presence
+   * adapter. A lead's 成果 list sits right after its sidebar entry, above the archive
+   * of conversations it started. The sidebar is the classic view's alone (the studio,
+   * #/world, hides it and opens the same deliverables from its own office), so it
+   * holds plain rows only: no office scene is ever mounted here. */
   var projectDeliverablesSlot = document.createElement('div');
   projectDeliverablesSlot.className = 'lead-deliverables-slot';
   projectDeliverablesSlot.hidden = true;
-  projectOfficeSlot.after(projectDeliverablesSlot);
+  sidebar.after(projectDeliverablesSlot);
   var routerDeliverablesSlot = document.createElement('div');
   routerDeliverablesSlot.className = 'lead-deliverables-slot';
   routerDeliverablesSlot.hidden = true;
   var leadDeliverablesModule = null, leadDeliverablesLoading = null, leadDeliverableLists = {};
   var leadDeliverablesExpanded = new Map();
   function placeLeadDeliverables() {
-    var classic = readLanding() !== 'world';
     var headquarters = !routerEntryHost.hidden;
     var routerId = globalRouter ? globalRouter.conversationId() : '';
     var projectLead = sidebar.querySelector('[data-coordinator-id]')?.dataset.coordinatorId || '';
     var targets = {
-      project: classic && !headquarters && projectLead ? { leadId: projectLead, path: sidebarPath() || '' } : null,
-      router: classic && headquarters && routerId ? { leadId: routerId, path: globalRouter.home() || '' } : null,
+      project: !headquarters && projectLead ? { leadId: projectLead, path: sidebarPath() || '' } : null,
+      router: headquarters && routerId ? { leadId: routerId, path: globalRouter.home() || '' } : null,
     };
     if ((targets.project || targets.router) && !leadDeliverablesModule) { loadLeadDeliverablesModule(); return; }
     [['project', projectDeliverablesSlot], ['router', routerDeliverablesSlot]].forEach(function (entry) {
@@ -321,94 +303,6 @@
     readExpanded: function (id) { return leadDeliverablesExpanded.has(id) ? leadDeliverablesExpanded.get(id) : null; },
     writeExpanded: function (id, expanded) { leadDeliverablesExpanded.set(id, expanded); },
   };
-  var leadOffice = null, leadOfficeLoading = null, floorFacts = null, headquartersFacts = null, officeLeadId = '';
-  function runningFlags(row) {
-    var flags = _convStatusFlags(row);
-    return flags.streaming || flags.waiting || Boolean(flags.background && !flags.background.queuedOnly);
-  }
-  /* One office, beneath whichever entry the sidebar shows: the main coordinator's
-   * card where the list has no project of its own, the project's row otherwise. */
-  function placeLeadOffice() {
-    var headquarters = !routerEntryHost.hidden;
-    var facts = readLanding() === 'world' ? (headquarters ? headquartersFacts : floorFacts) : null;
-    var slot = headquarters ? routerOfficeSlot : projectOfficeSlot;
-    var other = headquarters ? projectOfficeSlot : routerOfficeSlot;
-    if (!other.hidden) other.hidden = true;
-    if (facts && !leadOffice) { loadLeadOfficeModule(); facts = null; }
-    if (!facts) {
-      leadOffice?.hide();
-      if (!slot.hidden) slot.hidden = true;
-    } else {
-      if (leadOffice.root.parentNode !== slot) slot.append(leadOffice.root);
-      if (slot.hidden) slot.hidden = false;
-      leadOffice.show({ altitude: headquarters ? 'headquarters' : 'floor', path: facts.scope.path,
-        leadId: facts.binding.conversationId, board: facts.board, report: facts.report });
-    }
-    placeLeadDeliverables();
-    // The archive group drops its running tally while the office shows that work.
-    var shown = leadOffice?.leadId() || '';
-    if (shown !== officeLeadId) { officeLeadId = shown; coordinatorConversationGroups?.refresh(); }
-  }
-  function loadLeadOfficeModule() {
-    if (leadOfficeLoading || typeof loadLeadOffice !== 'function') return;
-    leadOfficeLoading = loadLeadOffice().then(function (module) {
-      leadOffice = module.createLeadOffice(leadOfficePorts);
-      placeLeadOffice();
-    }).catch(function (error) {
-      // The entry above stays fully usable; the next lead paint retries the import.
-      leadOfficeLoading = null;
-      console.warn('[LeadOffice] load failed', error);
-    });
-  }
-  var stopLandingWatch = subscribeLanding(function () { placeLeadOffice(); });
-  var leadOfficePorts = {
-    assignments: function (path, signal) { return Api.project.coordinationAssignments(path, undefined, {}, signal); },
-    projects: function (cursor, signal) { return Api.project.routerProjects(cursor, signal); },
-    folders: function () {
-      return (typeof getFolders === 'function' ? getFolders() : []).map(function (folder) {
-        return { name: folder.name || '', color: folder.color || '',
-          paths: (folder.projectPaths && folder.projectPaths.length ? folder.projectPaths : [folder.projectPath]).filter(Boolean) };
-      });
-    },
-    live: function (id) {
-      var row = conversations.find(function (item) { return item.id === id; });
-      return row ? coordinatorWorkerStatus(_convStatusFlags(row),
-        !!(runtimeScope.ConversationTurnRead?.ordered?.(row) || []).length) : null;
-    },
-    runningWorkers: function (leadId) {
-      return conversations.filter(function (row) { return row._coordinatorSource === leadId && runningFlags(row); })
-        .map(function (row) {
-          return { conversationId: row.id, title: _conversationDisplayTitle(row.title, t('chat.newConversation')) };
-        });
-    },
-    title: function (id) {
-      var row = conversations.find(function (item) { return item.id === id; });
-      return row && row.title ? _conversationDisplayTitle(row.title, '') : '';
-    },
-    // The lead conversation's own row: the office shows it while any chat is open.
-    leadActivity: function (id) {
-      var row = conversations.find(function (item) { return item.id === id; });
-      var flags = row ? _convStatusFlags(row) : {};
-      return { streaming: !!(flags.streaming || flags.waiting), awaitingHuman: !!flags.awaitingHuman };
-    },
-    currentConversationId: function () { return activeRouterConversationId(); },
-    subscribe: function (refresh) {
-      pushSubscribe('project', '*', refresh);
-      var stopReconnect = typeof pushOnReconnect === 'function' ? pushOnReconnect(refresh) : null;
-      return function () { pushUnsubscribe('project', '*', refresh); stopReconnect?.(); };
-    },
-    navigate: function (id) { if (typeof loadConversation === 'function') loadConversation(id); },
-    openQuestion: function (id) { void runtimeScope.openConversationAtQuestion?.(id, null); },
-    // A project floor of the headquarters goes down to that project, as its rail entry does.
-    openProject: function (path, id) {
-      var folder = (typeof getFolders === 'function' ? getFolders() : []).find(function (item) {
-        return (item.projectPaths && item.projectPaths.length ? item.projectPaths : [item.projectPath])
-          .some(function (root) { return !!root && norm(root) === norm(path); });
-      });
-      if (folder && typeof setActiveFolderId === 'function' && getActiveFolderId() !== folder.id) setActiveFolderId(folder.id);
-      if (id && typeof loadConversation === 'function') loadConversation(id);
-    },
-  };
   var surface = createSurface(false);
   var sidebarSurface = createSurface(true);
   // Narrow bridge to the typed Global Router and Watchdog owners
@@ -418,8 +312,7 @@
   var routerEntryHost = document.createElement('div');
   routerEntryHost.id = 'globalRouterEntry';
   column.insertBefore(routerEntryHost, sidebar);
-  routerEntryHost.after(routerOfficeSlot);
-  routerOfficeSlot.after(routerDeliverablesSlot);
+  routerEntryHost.after(routerDeliverablesSlot);
   var routerHeaderHost = document.createElement('div');
   var watchdogHeaderHost = document.createElement('div');
   host.before(routerHeaderHost, watchdogHeaderHost);
@@ -437,7 +330,6 @@
   var routerWatchdog = createRouterWatchdogEntry({
     read: function (signal) { return Api.project.routerWatchdog(signal); },
     ensure: function () { return Api.project.ensureRouterWatchdog(); },
-    configureReview: function (request) { return Api.project.configureRouterWatchdogReview(request); },
     open: openRouterConversation,
     back: function () { if (globalRouter.conversationId()) openRouterConversation(globalRouter.conversationId()); },
     activeConversationId: activeRouterConversationId,
@@ -449,11 +341,6 @@
     read: function (signal) { return Api.project.routerOwnerDelegation(signal); },
     set: function (granted) { return Api.project.setRouterOwnerDelegation(granted); },
   });
-  // Portfolio ownership: the visible stop/pause switch for proactive work (docs/ROUTER.md R10).
-  var routerPortfolio = createRouterPortfolio({
-    read: function (signal) { return Api.project.routerPortfolio(signal); },
-    setEnabled: function (enabled) { return Api.project.setRouterPortfolioReview(enabled); },
-  });
   var globalRouter = createGlobalRouterEntry({
     read: function (signal) { return Api.project.globalRouter(signal); },
     ensure: function () { return Api.project.ensureGlobalRouter(); },
@@ -461,6 +348,8 @@
     activeConversationId: activeRouterConversationId,
     notifyError: notifyRouterError,
     changed: routerIdentityChanged,
+    // Ensuring the main coordinator also turns its health checks on (docs/ROUTER.md R7).
+    ensured: function () { routerWatchdog.reload(); },
     workerModel: routerWorkerModelPorts,
     instructions: {
       list: function (cursor, signal) { return Api.project.routerInstructions(cursor, signal); },
@@ -469,20 +358,7 @@
       cancel: function (id) { return Api.project.cancelRouterInstruction(id); },
     },
   }, { sidebar: routerEntryHost, header: routerHeaderHost,
-    controls: [routerOwnerDelegation.settings, routerWatchdog.settings, routerPortfolio.settings] });
-  /* The router home's binding, board and report for the headquarters office, read
-   * by the same surface owner as a project's. Its own row is never shown (the
-   * main coordinator's card holds that slot), so it has nothing to open or create. */
-  function routerHomeShown() {
-    return routerEntryHost.hidden || !globalRouter.conversationId() ? '' : norm(globalRouter.home());
-  }
-  var headquartersSurface = createProjectCoordinationSurface({
-    sidebar: document.createElement('div'), canvas: document.createElement('div'), mode: 'sidebar',
-    scope: function () { var home = routerHomeShown(); return home ? projectScope(home, routerHomeShown, true) : null; },
-    sidebarPath: routerHomeShown,
-    details: function () {}, create: function () {},
-    office: function (facts) { headquartersFacts = facts; placeLeadOffice(); },
-  });
+    controls: [routerOwnerDelegation.settings, routerWatchdog.settings] });
   // Other surfaces (the studio's compute-stall dialog) ensure the Watchdog through its
   // owner, so the header and composer steering adopt the binding they open.
   runtimeScope.ensureRouterWatchdogConversation = function () { return routerWatchdog.ensure(); };
@@ -502,11 +378,11 @@
   };
   // Progress rounds seen in the open conversation (ui/tool_rounds.js) refresh the board.
   runtimeScope.observeCoordinatorProgress = function (progress) {
-    surface.observeProgress(progress); sidebarSurface.observeProgress(progress); headquartersSurface.observeProgress(progress);
+    surface.observeProgress(progress); sidebarSurface.observeProgress(progress);
   };
   // The shared revalidation (core/conversation_invalidation.js) retries failed binding reads.
   runtimeScope.recoverProjectCoordination = function () {
-    surface.recover(); sidebarSurface.recover(); headquartersSurface.recover();
+    surface.recover(); sidebarSurface.recover();
   };
   // Reached from the main coordinator's card and settings, never as list rows.
   runtimeScope.routerConversationIds = function () {
@@ -521,9 +397,9 @@
     var projectBar = document.getElementById('projectBar');
     var projectBarHidden = isRouterManaged(projectPath());
     if (projectBar && projectBar.hidden !== projectBarHidden) projectBar.hidden = projectBarHidden;
-    surface.refresh(); sidebarSurface.refresh(); headquartersSurface.refresh(); globalRouter.refresh(); routerWatchdog.refresh();
+    surface.refresh(); sidebarSurface.refresh(); globalRouter.refresh(); routerWatchdog.refresh();
     // Which entry the sidebar shows may have changed without either lead's facts changing.
-    placeLeadOffice();
+    placeLeadDeliverables();
   };
   // Remove with the retained catalog bridge; grouping policy, rendering and
   // provenance live in the typed group and existing conversation owners.
@@ -531,7 +407,7 @@
     listHost: list,
     pinned: function () {
       var pins = [];
-      // Each group follows its entry's office slot: the archive sits under the team view.
+      // Each group follows its entry's deliverables slot: the archive sits under the 成果 list.
       var project = sidebar.querySelector('[data-coordinator-id]')?.dataset.coordinatorId;
       if (project) pins.push({ id: project, path: sidebarPath(), host: projectDeliverablesSlot });
       // Both router conversations stay reserved, so neither becomes a replaced
@@ -579,7 +455,6 @@
       return coordinatorWorkerStatus(_convStatusFlags(c),
         !!(runtimeScope.ConversationTurnRead?.ordered?.(c) || []).length);
     },
-    officeShows: function (id) { return !!id && id === officeLeadId; },
     hasBackground: function (c) {
       return typeof backgroundConversationActivity !== 'undefined'
         && backgroundConversationActivity.has(c.id);
@@ -593,13 +468,12 @@
   runtimeScope.presenceRefresh = function (options) {
     refreshPresence();
     if (!options || !options.withoutGroups) coordinatorConversationGroups.refresh();
-    leadOffice?.refresh();
   };
   window.addEventListener('pagehide', function (event) {
     if (!event.persisted) {
       delete runtimeScope.recoverProjectCoordination;
-      surface.destroy(); sidebarSurface.destroy(); headquartersSurface.destroy(); globalRouter.destroy(); routerWatchdog.destroy();
-      coordinatorConversationGroups.destroy(); leadOffice?.destroy(); stopLandingWatch();
+      surface.destroy(); sidebarSurface.destroy(); globalRouter.destroy(); routerWatchdog.destroy();
+      coordinatorConversationGroups.destroy();
       Object.values(leadDeliverableLists).forEach(function (list) { list.destroy(); });
     }
   });

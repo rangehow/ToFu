@@ -162,6 +162,27 @@ describe('Global Router entry (the main coordinator)', () => {
     expect(view.textContent).toContain('strong-model');
   });
 
+  it('announces each available ensure, never a passive read or a failed ensure', async () => {
+    const ensured = vi.fn();
+    const ok = setup(available);
+    ok.ports.ensured = ensured;
+    await settle();
+    expect(ensured).not.toHaveBeenCalled();
+    ok.card.click();
+    await settle();
+    expect(ensured).toHaveBeenCalledTimes(1);
+    ok.entry.destroy();
+    for (const answer of [new Error('home not writable'), unbound]) {
+      const refused = setup(unbound, answer);
+      refused.ports.ensured = ensured;
+      refused.card.click();
+      await settle();
+      expect(refused.ports.notifyError).toHaveBeenCalledTimes(1);
+      refused.entry.destroy();
+    }
+    expect(ensured).toHaveBeenCalledTimes(1);
+  });
+
   it('reports failures explicitly and ignores repeated activation while ensuring', async () => {
     const { ports, card } = setup(new Error('offline'), new Error('home not writable'));
     card.click(); card.click();

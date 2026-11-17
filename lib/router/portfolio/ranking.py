@@ -84,9 +84,9 @@ def start_blockers(candidate: dict, *, instruction: dict | None, router_conversa
     - a duplicate of open work: the same work identity as an ``active``
       initiative or a proposal ranked ``ahead`` of it, so a twin never starts
       while the other runs or waits (for example for the owner's approval);
-    - a conflict: an ``active`` initiative of the same project. Each initiative
-      is its own request in that project's Project Router; two at once would
-      share one Coordinator and their measured outcomes could not be told apart.
+    Independent initiatives of one project may run together. Each is its own
+    queued request with its own usage account, so sharing one Project Router
+    does not conflate their measured outcomes or costs.
     """
     blockers = []
     approval = candidate['approval']
@@ -115,9 +115,6 @@ def start_blockers(candidate: dict, *, instruction: dict | None, router_conversa
                  and work_identity(other) == identity), None)
     if twin is not None:
         blockers.append(f'duplicate:{twin["opportunityId"]}')
-    running = next((other for other in active if other['projectPath'] == candidate['projectPath']), None)
-    if running is not None:
-        blockers.append(f'project_busy:{running["opportunityId"]}')
     return blockers
 
 

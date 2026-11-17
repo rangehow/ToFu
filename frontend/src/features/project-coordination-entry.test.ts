@@ -8,16 +8,13 @@ import { createCoordinatorConversationGroups } from './coordinator-conversation-
 import type { ProjectCoordinationPorts } from './project-coordination';
 
 import { createProjectConversationNavigation } from './project-conversation-navigation';
-import { LANDING_STORAGE_KEY, readLanding, rememberLanding, subscribeLanding } from '../application-shell/landing';
+import { LANDING_STORAGE_KEY, rememberLanding } from '../application-shell/landing';
 vi.mock('../i18n', () => ({ t: (key: string) => key }));
 const passiveReads = { coordinatorReports: async () => undefined, coordinatorBudget: async () => null, coordinatorProgress: async () => null,
   workerConversations: async () => ({ conversations: [], nextCursor: null, coverage: 'complete' }) };
-// presence.js also bridges the Global Router, its owner delegation, its portfolio and the Watchdog entries; these coordination specs stub them.
-// presence.js always constructs the portfolio and passes its `settings` element into the router's controls, so it rides with the owner-delegation stub every harness already prepends.
-const routerSettingsStub = 'const createRouterOwnerDelegation = () => ({ settings: document.createElement(\'details\'), destroy() {} });\n'
-  + 'const createRouterPortfolio = () => ({ settings: document.createElement(\'details\'), destroy() {} });\n';
-// These coordination specs run in the classic mode, where no lead office loads.
-const ownerDelegationStub = routerSettingsStub + 'const readLanding = () => \'chat\'; const subscribeLanding = () => () => {};\n';
+// presence.js also bridges the Global Router, its owner delegation and the Watchdog entries; these coordination specs stub them.
+const routerSettingsStub = 'const createRouterOwnerDelegation = () => ({ settings: document.createElement(\'details\'), destroy() {} });\n';
+const ownerDelegationStub = routerSettingsStub;
 const routerStub = ownerDelegationStub + 'const createGlobalRouterEntry = () => ({ refresh() {}, destroy() {}, home() { return \'\'; }, conversationId() { return \'\'; } });\n'
   + 'const createRouterWatchdogEntry = () => ({ refresh() {}, destroy() {}, location() { return \'\'; }, conversationId() { return \'\'; } });\n';
 
@@ -38,11 +35,8 @@ it('mounts the leader above date groups using explicit binding without promoting
     );
     await vi.waitFor(() => expect(document.querySelector('[data-coordinator-id="leader"]')).not.toBeNull());
     const entry = document.getElementById('projectCoordinatorEntry')!;
-    // The entry's office slot follows it (empty until a lead office shows), then its deliverables slot, then the list.
-    const officeSlot = entry.nextElementSibling as HTMLElement;
-    expect(officeSlot.className).toBe('lead-office-slot');
-    expect(officeSlot.hidden).toBe(true);
-    const deliverablesSlot = officeSlot.nextElementSibling as HTMLElement;
+    // The entry's deliverables slot follows it, then the list.
+    const deliverablesSlot = entry.nextElementSibling as HTMLElement;
     expect(deliverablesSlot.className).toBe('lead-deliverables-slot');
     expect(deliverablesSlot.nextElementSibling?.id).toBe('convList');
     const row = entry.querySelector<HTMLElement>('.coordination-leader')!;
@@ -190,16 +184,18 @@ it('bridges the main coordinator card and health checks to their typed owners an
   const watchdog = { projectPath: '/data/router/1/.tofu-watchdog', conversationId: 'coordinator-watchdog', revision: 1,
     availability: 'available', capabilities: router.capabilities,
     review: { enabled: false, schedule: '7,37 * * * *', taskId: null } };
-  const routerWatchdog = vi.fn(async () => ({ ...watchdog, conversationId: '', revision: 0, availability: 'unbound' }));
+  // Ensuring the main coordinator turns its health checks on, so the read after it finds the Watchdog.
+  const routerWatchdog = vi.fn()
+    .mockResolvedValueOnce({ ...watchdog, conversationId: '', revision: 0, availability: 'unbound' })
+    .mockResolvedValue(watchdog);
   const ensureRouterWatchdog = vi.fn(async () => watchdog);
-  const configureRouterWatchdogReview = vi.fn(async () => watchdog);
   new Function('runtimeScope', 'pushSubscribe', 'pushUnsubscribe', 'createProjectCoordinationSurface', 'createSameTaskReadJoin',
     'openProjectCoordinationWorkspace', 'getActiveConv', 'Api', 'getFolders', 'getActiveFolderId', 'loadConversation',
     '_projectConversationNavigation', 'createGlobalRouterEntry', 'createRouterWatchdogEntry', 'createCoordinatorConversationGroups', 'const conversations = [];\n' + ownerDelegationStub + 'const mergeConversationCatalogRows = () => 0; const renderConversationList = () => {};\n' + source)(
     runtime, vi.fn(), vi.fn(), createProjectCoordinationSurface, createSameTaskReadJoin, vi.fn(), () => active,
     { project: { ...passiveReads, coordination: async () => ({ conversationId: '', availability: 'unbound', revision: 0 }),
       board: async () => null, coordinationAssignments: async () => ({ assignments: [] }),
-      globalRouter, ensureGlobalRouter, routerWatchdog, ensureRouterWatchdog, configureRouterWatchdogReview } },
+      globalRouter, ensureGlobalRouter, routerWatchdog, ensureRouterWatchdog } },
     () => folders, () => folder, open, createProjectConversationNavigation(), createGlobalRouterEntry, createRouterWatchdogEntry,
     createCoordinatorConversationGroups,
   );
@@ -207,11 +203,10 @@ it('bridges the main coordinator card and health checks to their typed owners an
     // No pinned rows above New Chat: the main coordinator takes the leader slot of the list.
     expect(document.querySelector('#sidebar .sidebar-header')!.nextElementSibling!.className).toBe('sidebar-action-row');
     const slot = document.getElementById('globalRouterEntry')!;
-    // The main coordinator's card is followed by its office slot, its deliverables slot, then the project entry.
-    const routerOffice = slot.nextElementSibling as HTMLElement;
-    expect(routerOffice.className).toBe('lead-office-slot');
-    expect(routerOffice.nextElementSibling!.className).toBe('lead-deliverables-slot');
-    expect(routerOffice.nextElementSibling!.nextElementSibling!.id).toBe('projectCoordinatorEntry');
+    // The main coordinator's card is followed by its deliverables slot, then the project entry.
+    const routerDeliverables = slot.nextElementSibling as HTMLElement;
+    expect(routerDeliverables.className).toBe('lead-deliverables-slot');
+    expect(routerDeliverables.nextElementSibling!.id).toBe('projectCoordinatorEntry');
     expect(slot.parentElement!.className).toBe('coordination-conversation-column');
     const card = slot.querySelector<HTMLElement>('.coordination-leader.global-router-card')!;
     expect(card.querySelector('.coordination-leader-label')!.textContent).toBe('globalRouter.entry');
@@ -221,9 +216,11 @@ it('bridges the main coordinator card and health checks to their typed owners an
     expect(strip.previousElementSibling!.querySelector('.router-watchdog-header')).not.toBeNull();
     const routerHeader = strip.previousElementSibling!.previousElementSibling!.querySelector('.global-router-header')!;
     expect(strip.parentElement!.querySelector(':scope > .lead-office-slot, :scope > .lead-office, :scope > .lead-deliverables-slot')).toBeNull();
-    // Health checks live in the main coordinator's settings, not in a sidebar entry of their own.
+    // Health checks are a fold in the main coordinator's header with nothing to switch, not a sidebar entry.
     const healthChecks = routerHeader.querySelector<HTMLDetailsElement>('details.router-watchdog')!;
     expect(healthChecks).not.toBeNull();
+    expect(healthChecks.querySelectorAll('input')).toHaveLength(0);
+    expect(routerHeader.querySelector('.router-portfolio')).toBeNull();
     expect(globalRouter).toHaveBeenCalledTimes(1);
     expect(routerWatchdog).toHaveBeenCalledTimes(1);
     // Unbound reads name no Coordinator chat for the composer to steer.
@@ -234,14 +231,14 @@ it('bridges the main coordinator card and health checks to their typed owners an
     await vi.waitFor(() => expect(open).toHaveBeenCalledWith('coordinator-router'));
     expect(ensureGlobalRouter).toHaveBeenCalledTimes(1);
     expect(runtime.isCoordinatorConversation('coordinator-router')).toBe(true);
-    healthChecks.querySelector<HTMLButtonElement>('.router-watchdog-off button')!.click();
-    await vi.waitFor(() => expect(ensureRouterWatchdog).toHaveBeenCalledTimes(1));
+    // Ensuring the main coordinator re-reads its health checks: on, with nothing for the owner to do.
     await vi.waitFor(() => expect(runtime.isCoordinatorConversation('coordinator-watchdog')).toBe(true));
+    expect(routerWatchdog).toHaveBeenCalledTimes(2);
+    expect(ensureRouterWatchdog).not.toHaveBeenCalled();
     expect(open).not.toHaveBeenCalledWith('coordinator-watchdog');
-    healthChecks.querySelector<HTMLButtonElement>('.router-watchdog-on button:last-of-type')!.click();
+    healthChecks.querySelector<HTMLButtonElement>('button')!.click();
     expect(open).toHaveBeenCalledWith('coordinator-watchdog');
     expect(runtime.isCoordinatorConversation('')).toBe(false);
-    expect(configureRouterWatchdogReview).not.toHaveBeenCalled();
     // Both chats are reached from the card and its settings, never as list rows.
     expect(runtime.routerConversationIds()).toEqual(['coordinator-router', 'coordinator-watchdog']);
     // The studio's compute-stall dialog ensures the Watchdog through the same owner.
@@ -465,8 +462,7 @@ it.each([
 
 /** presence.js over a mutable folder list, with the main coordinator card and the folder settings opener. */
 function mountFolderView(folders: { id: string; name: string; projectPaths: string[] }[], selected: () => string,
-  reads: Record<string, unknown>, conversations: unknown[] = [], loadLeadOffice?: () => Promise<unknown>,
-  loadLeadDeliverables?: () => Promise<unknown>) {
+  reads: Record<string, unknown>, conversations: unknown[] = [], loadLeadDeliverables?: () => Promise<unknown>) {
   document.body.innerHTML = '<div id="convList"></div><div id="presenceStrip"></div>';
   const runtime: Record<string, any> = {}, settings = vi.fn();
   const stub = 'const createGlobalRouterEntry = () => ({ refresh() {}, destroy() {}, home() { return "/data/router/1"; }, conversationId() { return "coordinator-router"; } });\n'
@@ -475,11 +471,11 @@ function mountFolderView(folders: { id: string; name: string; projectPaths: stri
   new Function('runtimeScope', 'pushSubscribe', 'pushUnsubscribe', 'createProjectCoordinationSurface', 'createSameTaskReadJoin',
     'openProjectCoordinationWorkspace', 'getActiveConv', 'Api', 'getFolders', 'getActiveFolderId',
     'loadConversation', '_projectConversationNavigation', 'createCoordinatorConversationGroups', '_promptRenameFolder', 'conversations',
-    'readLanding', 'subscribeLanding', 'loadLeadOffice', 'loadLeadDeliverables',
+    'loadLeadDeliverables',
     stub + 'const mergeConversationCatalogRows = () => 0; const renderConversationList = () => {};\n' + source)(
     runtime, vi.fn(), vi.fn(), createProjectCoordinationSurface, createSameTaskReadJoin, vi.fn(), () => null, { project: reads },
     () => folders, selected, vi.fn(), createProjectConversationNavigation(), createCoordinatorConversationGroups, settings, conversations,
-    readLanding, subscribeLanding, loadLeadOffice, loadLeadDeliverables,
+    loadLeadDeliverables,
   );
   return { runtime, settings };
 }
@@ -531,8 +527,8 @@ it.each(['/srv/测试项目', '/srv/プロジェクト'.normalize('NFD'), '/srv/
       await vi.waitFor(() => expect(document.querySelector('#projectCoordinatorEntry [data-coordinator-id="leader"]')).not.toBeNull());
       runtime.presenceRefresh();
       await vi.waitFor(() => expect(reads.workerConversations).toHaveBeenCalledWith(root, undefined, expect.any(AbortSignal)));
-      // The archive group follows the entry's office slot.
-      const group = document.querySelector<HTMLElement>('#projectCoordinatorEntry + .lead-office-slot + .lead-deliverables-slot + .coordinator-conversations-host .coordinator-conversations');
+      // The archive group follows the entry's deliverables slot.
+      const group = document.querySelector<HTMLElement>('#projectCoordinatorEntry + .lead-deliverables-slot + .coordinator-conversations-host .coordinator-conversations');
       await vi.waitFor(() => expect(group?.hidden).toBe(false));
       expect(group!.dataset.coordinatorId).toBe('leader');
       expect(group!.querySelector('.coordinator-conversations-count')!.textContent).toBe('1');
@@ -540,18 +536,12 @@ it.each(['/srv/测试项目', '/srv/プロジェクト'.normalize('NFD'), '/srv/
     } finally { window.dispatchEvent(new Event('pagehide')); }
   });
 
-it('shows a lead\'s work as the plain list in the classic mode and loads the animated office only in the studio', async () => {
-  localStorage.setItem(LANDING_STORAGE_KEY, 'chat');
+// Owner report 2026-11-17: the classic sidebar embedded the animated lead office whenever the stored
+// landing was the studio (the default). The studio hides this sidebar, so it holds plain rows in every mode.
+it.each(['chat', 'world'] as const)('shows a lead\'s work as plain rows in the sidebar whatever the stored landing (%s)', async (landing) => {
+  localStorage.setItem(LANDING_STORAGE_KEY, landing);
   const reads = coordinatorReads();
   const worker = { id: 'worker', title: 'Worker', projectPath: '/project', folderId: 'folder', _coordinatorSource: 'leader', updatedAt: 2 };
-  let shownLead = '';
-  const office = {
-    root: Object.assign(document.createElement('section'), { className: 'lead-office' }),
-    show: vi.fn((context: { leadId: string }) => { shownLead = context.leadId; }),
-    hide: vi.fn(() => { shownLead = ''; }),
-    leadId: () => shownLead, refresh() {}, destroy: vi.fn(),
-  };
-  const loadLeadOffice = vi.fn(async () => ({ createLeadOffice: () => office }));
   let deliverablesLead = '';
   const deliverables = {
     root: Object.assign(document.createElement('section'), { className: 'lead-deliverables' }),
@@ -564,81 +554,33 @@ it('shows a lead\'s work as the plain list in the classic mode and loads the ani
     createLeadDeliverables: () => deliverables, createDeliverableOpener: () => opener, runtimeOpenPorts: () => ({}),
   }));
   const { runtime } = mountFolderView([{ id: 'folder', name: 'Project', projectPaths: ['/project'] }], () => 'folder', reads, [worker],
-    loadLeadOffice, loadLeadDeliverables);
-  const slot = () => document.querySelector<HTMLElement>('#projectCoordinatorEntry + .lead-office-slot')!;
-  const deliverablesSlot = () => document.querySelector<HTMLElement>('#projectCoordinatorEntry + .lead-office-slot + .lead-deliverables-slot')!;
+    loadLeadDeliverables);
+  const deliverablesSlot = () => document.querySelector<HTMLElement>('#projectCoordinatorEntry + .lead-deliverables-slot')!;
   try {
     await vi.waitFor(() => expect(document.querySelector('#projectCoordinatorEntry [data-coordinator-id="leader"]')).not.toBeNull());
     await vi.waitFor(() => expect(reads.coordinatorProgress).toHaveBeenCalled());
     runtime.presenceRefresh();
     await nextTask();
-    // Classic: the Coordinator row and its Worker list, with no office module, scene or reads of its own.
-    const group = document.querySelector<HTMLElement>('#projectCoordinatorEntry + .lead-office-slot + .lead-deliverables-slot + .coordinator-conversations-host .coordinator-conversations');
+    // The Coordinator row, its 成果 list and its Worker list with their running tally; no office slot, scene or reads.
+    const group = document.querySelector<HTMLElement>('#projectCoordinatorEntry + .lead-deliverables-slot + .coordinator-conversations-host .coordinator-conversations');
     await vi.waitFor(() => expect(group?.hidden).toBe(false));
     expect(group!.querySelector('.coordinator-conversations-count')!.textContent).toBe('1');
-    expect(slot().hidden).toBe(true);
-    expect(slot().childElementCount).toBe(0);
-    expect(loadLeadOffice).not.toHaveBeenCalled();
+    expect(document.querySelector('.lead-office-slot, .lead-office')).toBeNull();
     expect(reads.coordinationAssignments).not.toHaveBeenCalled();
-    // Classic: the lead's 成果 list sits beneath its row, above the archive.
     await vi.waitFor(() => expect(deliverables.show).toHaveBeenCalledWith({ leadId: 'leader', path: '/project' }));
     expect(deliverablesSlot().hidden).toBe(false);
     expect(deliverables.root.parentElement).toBe(deliverablesSlot());
-
-    // Switching to the studio shows the lead's office beneath its row, above the same list.
-    rememberLanding('world');
-    await vi.waitFor(() => expect(office.show).toHaveBeenCalledWith(expect.objectContaining({ altitude: 'floor', leadId: 'leader' })));
-    expect(loadLeadOffice).toHaveBeenCalledTimes(1);
-    expect(slot().hidden).toBe(false);
-    expect(office.root.parentElement).toBe(slot());
-    // The studio's office opens deliverables itself: no sidebar list.
-    expect(deliverables.hide).toHaveBeenCalled();
-    expect(deliverablesSlot().hidden).toBe(true);
-
-    // Back to classic: the office stops (its scene, loop and reads end in hide) and the slot empties from view.
-    rememberLanding('chat');
-    expect(office.hide).toHaveBeenCalled();
-    expect(shownLead).toBe('');
-    expect(slot().hidden).toBe(true);
-    const shows = office.show.mock.calls.length;
+    // Switching the stored mode either way changes nothing in the sidebar.
+    rememberLanding(landing === 'chat' ? 'world' : 'chat');
     runtime.presenceRefresh();
     await nextTask();
-    expect(office.show).toHaveBeenCalledTimes(shows);
-    expect(group!.hidden).toBe(false);
+    expect(document.querySelector('.lead-office-slot, .lead-office')).toBeNull();
     expect(deliverablesSlot().hidden).toBe(false);
     expect(deliverablesLead).toBe('leader');
+    expect(group!.hidden).toBe(false);
   } finally { window.dispatchEvent(new Event('pagehide')); localStorage.removeItem(LANDING_STORAGE_KEY); }
-  // Teardown releases the mode subscription: a later switch reaches no torn-down sidebar.
-  expect(office.destroy).toHaveBeenCalled();
   expect(deliverables.destroy).toHaveBeenCalled();
   expect(loadLeadDeliverables).toHaveBeenCalledTimes(1);
-  const showsAtTeardown = office.show.mock.calls.length, hidesAtTeardown = office.hide.mock.calls.length;
-  rememberLanding('chat');
-  rememberLanding('world');
-  expect(office.show).toHaveBeenCalledTimes(showsAtTeardown);
-  expect(office.hide).toHaveBeenCalledTimes(hidesAtTeardown);
-  localStorage.removeItem(LANDING_STORAGE_KEY);
-});
-
-it('reads the presentation mode with the pre-paint rule and announces every change, in this tab or another', () => {
-  localStorage.removeItem(LANDING_STORAGE_KEY);
-  expect(readLanding()).toBe('world');
-  const changed = vi.fn();
-  const stop = subscribeLanding(changed);
-  try {
-    rememberLanding('chat');
-    expect(readLanding()).toBe('chat');
-    rememberLanding('chat');
-    expect(changed.mock.calls).toEqual([['chat']]);
-    localStorage.setItem(LANDING_STORAGE_KEY, 'world');
-    window.dispatchEvent(new StorageEvent('storage', { key: LANDING_STORAGE_KEY }));
-    expect(changed.mock.calls).toEqual([['chat'], ['world']]);
-    window.dispatchEvent(new StorageEvent('storage', { key: 'unrelated' }));
-    expect(changed).toHaveBeenCalledTimes(2);
-  } finally { stop(); localStorage.removeItem(LANDING_STORAGE_KEY); }
-  rememberLanding('chat');
-  expect(changed).toHaveBeenCalledTimes(2);
-  localStorage.removeItem(LANDING_STORAGE_KEY);
 });
 
 it('issues each coordination read once per push frame for the canvas and sidebar together', async () => {

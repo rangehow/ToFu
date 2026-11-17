@@ -271,6 +271,9 @@ def test_scheduler_bootstrap_respects_storage_backup_ownership(
         def _ensure_default_router_portfolio_review_task(self):
             calls.append('portfolio-review')
 
+        def _ensure_default_router_health_checks(self):
+            calls.append('health-checks')
+
     fake = FakeManager()
     monkeypatch.delenv('TOFU_DISABLE_SCHEDULER', raising=False)
     monkeypatch.setattr(manager_module, 'get_scheduler', lambda: fake)
@@ -291,8 +294,9 @@ def test_scheduler_bootstrap_respects_storage_backup_ownership(
     assert manager_module.start_scheduler_worker(principal=principal) is fake
     assert calls[:5] == ['start', 'daily', 'probe', 'intel', 'optimizer']
     # The R10 owner built-ins follow the money-correctness sweep; the portfolio
-    # review is installed at boot, on unless the owner paused it.
-    assert calls[-4:] == ['reserve', 'digest', 'quiet-release', 'portfolio-review']
+    # review is installed at boot, on unless the owner paused it, and so are
+    # the main coordinator's health checks (R7).
+    assert calls[-5:] == ['reserve', 'digest', 'quiet-release', 'portfolio-review', 'health-checks']
     assert calls.count('backup') == expected_backup_bootstraps
     # The storage switch the engine honours is installed with the backup task.
     assert calls.count('storage-reclaim') == expected_backup_bootstraps

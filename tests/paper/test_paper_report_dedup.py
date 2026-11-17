@@ -85,11 +85,12 @@ def _restore_dispatch(orig):
         re_mod.PaperArtifactRepository = _REPOSITORY_STACK.pop()
 
 
-REPORT_BODY = (
-    '## ⚡ TL;DR\nThe Transformer dispenses with recurrence.\n\n'
-    '## 📋 Paper Card\n| Title | Attention |\n\n'
-    '## 📝 Technical Reference\nThe end.\n'
-)
+def _complete_report_body():
+    from tests.support.paper_report import complete_report_body
+    return complete_report_body() + 'The end.\n'
+
+
+REPORT_BODY = _complete_report_body()
 
 
 def test_interim_draft_discarded():

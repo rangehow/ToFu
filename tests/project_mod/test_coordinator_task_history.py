@@ -91,6 +91,15 @@ def task(title, status='in_progress', **extra):
     return {'title': title, 'status': status, **extra}
 
 
+def test_unowned_projection_includes_dropped_open_outcomes(board):
+    from lib.conversations.coordinator_continuation import unowned_outcomes
+    board.publish(task('Paper B: the missing gate verdict'), task('Paper A: diagnose the result'))
+    board.publish(task('Paper A: diagnose the result'))
+    dropped = board.read(group='dropped')['tasks']
+    assert [entry['title'] for entry in dropped] == ['Paper B: the missing gate verdict']
+    assert unowned_outcomes([], [], dropped)['dropped'] == dropped
+
+
 def test_a_task_dropped_from_a_later_board_stays_in_the_history(board):
     b = board
     b.publish(task('Fix the sidebar', 'completed', progress='Merged and verified.'),
@@ -348,3 +357,18 @@ def test_projection_of_five_thousand_tasks_stays_fast(board):
     print(f'history read 5016 tasks: first page {first * 1000:.0f} ms, search {searched * 1000:.0f} ms')
     # The bound documents the measured cost with room for a loaded CI host.
     assert first < 2.0 and searched < 2.0
+
+
+def test_the_page_carries_the_board_translation_and_search_matches_it(board):
+    b = board
+    b.publish(task('Research homestays', 'completed'))
+    b.publish(task('Book flights', progress='Comparing fares'))
+    progress = CoordinatorTaskProgress(7, '/project', client=b.store, bindings=b.bindings,
+                                       notify=lambda: None, clock=b.clock)
+    assert progress.attach_translation(b.scope, 'Chinese', {'Book flights': '订机票', 'Comparing fares': '比较票价'})
+    page = b.read()
+    assert page['translation']['target'] == 'Chinese'
+    assert {entry['source']: entry['text'] for entry in page['translation']['texts']} == {
+        'Book flights': '订机票', 'Comparing fares': '比较票价'}
+    assert [entry['title'] for entry in b.read(query='票价')['tasks']] == ['Book flights']
+    assert b.read(query='订机票')['counts']['in_progress'] == 1

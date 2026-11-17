@@ -3,7 +3,9 @@
  * App-wide guard: no screen shows a bare disclosure triangle (▶/▸/▾/▼…).
  *
  * 1. No authored source (TS/JS/HTML/locale JSON, CSS declarations) carries a
- *    triangle glyph, except the reviewed non-disclosure uses listed below.
+ *    triangle glyph, except the reviewed non-disclosure uses listed below, and
+ *    no stylesheet draws one out of borders (a zero-size box with a
+ *    transparent border pair: the 成果 toggle drew its caret that way).
  * 2. Every <summary> an authored source creates opens from the shared chevron
  *    (`ui-disclosure` / createDisclosureSummary), or is a reviewed exemption
  *    whose stylesheet suppresses the native marker and draws its own caret.
@@ -66,6 +68,14 @@ function pseudo(selector: string): [string, string] {
 }
 function matches(element: Element, selector: string): boolean {
   try { return element.matches(selector); } catch { return false; }
+}
+/** A zero-size box whose solid border meets a transparent one renders a triangle. */
+function drawsBorderTriangle(decls: ReadonlyMap<string, string>): boolean {
+  const zero = (prop: string) => /^0(px)?$/.test((decls.get(prop) ?? '').trim());
+  const borders = [...decls].filter(([prop]) => /^border(-(top|right|bottom|left|block|inline)(-(start|end))?)?$/.test(prop));
+  return zero('width') && zero('height')
+    && borders.some(([, value]) => /\btransparent\b/.test(value))
+    && borders.some(([, value]) => /\bsolid\b/.test(value) && !/\btransparent\b/.test(value));
 }
 function markerHidden(summary: Element): boolean {
   return RULES.some((rule) => !pseudo(rule.selector)[1]
@@ -144,6 +154,12 @@ describe('the whole app never shows a bare disclosure triangle', () => {
       });
     }
     expect(offenders).toEqual([]);
+  });
+
+  it('draws no triangle out of CSS borders', () => {
+    expect(drawsBorderTriangle(new Map([['width', '0'], ['height', '0'],
+      ['border-block', '4px solid transparent'], ['border-inline-start', '5px solid var(--text-tertiary)']]))).toBe(true);
+    expect(RULES.filter((rule) => drawsBorderTriangle(rule.decls)).map((rule) => rule.selector)).toEqual([]);
   });
 
   it('opens every <summary> from the shared chevron or a reviewed own caret', () => {

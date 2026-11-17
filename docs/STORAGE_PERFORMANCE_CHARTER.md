@@ -1970,7 +1970,10 @@ Verdict:
   point-read p50, `create_pair` p50 and throughput. TofuDB does this while
   paying 2.1x the durable barriers (about 32 k vs about 15.3 k injected).
   The emulated medium charges only barrier latency, not cold reads or
-  metadata, so the real volume's read costs are not covered.
+  metadata, so the real volume's read costs are not covered. On the real
+  volume ([rerun below](#the-same-comparison-on-the-real-dolphinfs-volume-2026-11-17)),
+  the Sidecar's per-write cost makes it fall behind at 3x and 5x, so the
+  throughput tie holds only at 1x.
 
 **The failed 2026-11-15 5x Sidecar run ("B": 1,351 failures, 36 s writer
 stall) was host CPU starvation, not a Sidecar defect.** Its raw reports were
@@ -2017,6 +2020,188 @@ done
 The starvation reproduction runs the same Sidecar command with `--scales 5`
 under `taskset -c <8 CPUs>`, with N `sh -c 'while :; do :; done'` loops
 pinned to the same CPUs.
+
+### The same comparison on the real DolphinFS volume (2026-11-17)
+
+The record above emulates DolphinFS with 0.77 ms per barrier on local XFS.
+This rerun puts both stores' data on the real volume production uses
+(`fuse.bgfuse`, `/mnt/your-fs`), in a
+scratch directory `FMG/your-username/tofu-dfsbench-scratch-20261117/leg-*`,
+next to the live checkout but not inside it. Each leg reached it through
+production's preloaded userspace client (`LD_PRELOAD` plus `LIBBGFS_*`, as in
+the live engine's environment). Each leg's root was deleted after its report
+was copied, and the scratch directory was removed at the end. The rest
+matches the local record: same host, same seed (0.2x, 1,404 Turns, 229 MB),
+90 s phases at 1x/3x/5x, fresh root per leg, ABAB legs (Sidecar r1, TofuDB
+r1, Sidecar r2, TofuDB r2). The Sidecar used its optimized defaults (WAL,
+`synchronous=FULL`). TofuDB used the same engine source as the local record
+(`source_sha256` 5cb942c407fe, built with the FMG toolchain and certified
+with `--prepare-only`), production's engine settings and
+`--durability strict`. `faultfs` ran with `FAULTFS_FSYNC_US=0`, so it
+injected nothing and only counted in-scope barriers and the time spent in
+the real call (`medium_ns`).
+
+**DolphinFS defect found: I/O on an unlinked open file fails.** In the first
+ABAB run, the Sidecar fell back from group commit on almost every batch: 50,
+384 and 1,070 fallbacks out of 53, 388 and 1,076 batches at 1x/3x/5x. Its
+turn-search projection also logged 735 `disk I/O error`s. Both stores ran
+with 0 such errors on local disk. The causal chain:
+
+1. With the SQLite cause logged, every fallback was `SQLITE_IOERR_WRITE`
+   inside a job (`turn.event.record`, `create_pair`, ...). SQLite had
+   already rolled the transaction back, so `ROLLBACK TO tofu_gc` failed with
+   `no such savepoint`.
+2. An interposer on the write calls showed the failing call: `pwrite64` of
+   61,504 bytes to `<TMPDIR>/etilqs_* (deleted)` returned `ENOENT`. That is
+   one of SQLite's temporary files, which SQLite unlinks as soon as it opens
+   them.
+3. A minimal probe on the volume confirmed it. After `open`+`unlink`,
+   `pwrite`, `pread` and `fsync` return `ENOENT`, while `fstat` works. This
+   happens through both the preload client and kernel FUSE. POSIX requires
+   that I/O on such a file succeeds.
+
+The Tofu defect was the harness: it set the child's `TMPDIR` under the
+measured root, so SQLite's temporary files landed on DolphinFS. Production
+sets no `TMPDIR` (checked in `/proc/<pid>/environ` of the API host,
+execution host and engine), so its temporary files are host-local. The
+harness now gives the child a private host-local `TMPDIR` that it removes
+after the run
+(`test_child_temporary_files_stay_off_the_measured_medium`). The batch
+fallback warning now names the SQLite cause instead of only the generic
+`SQLite operation failed`. After the fix, the rerun below had 0 fallbacks,
+0 I/O errors and 0 tracebacks in the Sidecar legs. TofuDB was unaffected in
+both runs. A Sidecar started with `TMPDIR` (or `SQLITE_TMPDIR`) on
+DolphinFS would still degrade this way.
+
+**Medium.** `benchmarks/storage_medium_probe.py`, run twice on the scratch
+directory with production's preload, against local XFS (p50/p99 ms):
+
+| probe | DolphinFS | local XFS |
+|---|---|---|
+| 4 KiB append + `fdatasync` | 0.53/1.06 · 0.40/0.90 | 0.037/0.10 · 0.040/0.09 |
+| 4 KiB append, no sync | 0.18/0.34 · 0.19/0.28 | 0.001 |
+| 64 KiB append + `fdatasync` | 1.03/3.05 · 1.01/3.01 | 0.07/0.17 |
+| publish 4 KiB block (tmp, fsync, rename, dir fsync) | 3.5/4.3 · 3.3/4.2 | 0.15-0.17 |
+| file create · rename | 1.7 · 0.80 | 0.045 · 0.018 |
+| cold 4 KiB random read | 0.10/0.19 · 0.11/0.53 | 0.09/0.10 |
+
+A bare 4 KiB `fdatasync` costs 0.22-0.26 ms p50. The 72-77 ms measured on
+2026-11-15 is not this volume's behavior today.
+
+Results after the fix, p50/p99 ms, r1 · r2:
+
+| leg | load1 min/median/max | in-scope barriers | time in barriers | mean barrier |
+|---|---|---|---|---|
+| Sidecar r1 | 11.7 / 29.1 / 47.4 | 11,131 | 11.6 s | 1.04 ms |
+| TofuDB r1 | 8.2 / 10.7 / 31.8 | 26,184 | 10.1 s | 0.39 ms |
+| Sidecar r2 | 7.8 / 27.8 / 43.4 | 11,633 | 12.5 s | 1.07 ms |
+| TofuDB r2 | 10.6 / 25.2 / 71.6 | 25,651 | 18.7 s | 0.73 ms |
+
+| op | scale | Sidecar | TofuDB strict |
+|---|---|---|---|
+| turn.event.record | 1x | 11.4/281 · 11.3/211 | 1.46/62 · 1.60/64 |
+| | 3x | 13.5/469 · 13.3/942 | 1.48/66 · 1.52/122 |
+| | 5x | 28.8/1,596 · 24.0/891 | 1.58/98 · 1.59/129 |
+| turn.sync.changes | 1x | 0.72/3.5 · 0.66/2.6 | 0.40/1.6 · 0.41/1.7 |
+| | 5x | 0.73/13 · 0.66/6.6 | 0.40/2.7 · 0.42/3.1 |
+| record.get | 1x | 0.29/0.75 · 0.29/0.71 | 0.22/0.61 · 0.23/0.64 |
+| | 3x | 0.27/1.9 · 0.25/1.5 | 0.23/0.74 · 0.24/0.72 |
+| | 5x | 0.30/4.6 · 0.27/2.7 | 0.25/0.93 · 0.25/0.99 |
+| turn.get:metadata | 5x | 0.40/6.3 · 0.36/4.7 | 0.34/1.7 · 0.35/1.8 |
+| worker_job.heartbeat | 5x | 62/807 · 38/786 | 0.70/11 · 0.71/17 |
+| turn.create_pair | 1x | 164/205 · 134/140 | 21/24 · 20/23 |
+| | 5x | 566/594 · 441/620 | 67/95 · 77/97 |
+| worker_job.claim_next | 1x | 116/126 · 113/114 | 8.8/14 · 6.9/9.1 |
+| | 3x | 218/234 · 243/251 | 21/54 · 22/36 |
+| | 5x | 393/405 · 349/379 | 29/295 · 41/63 |
+| worker_job.complete | 1x | 177/5,277 · 94/4,444 | 12/15 · 13/17 |
+| | 3x | 4,971/5,773 · 205/10,974 | 63/73 · 129/159 |
+| | 5x | 10,959/13,036 · 3,660/10,254 | 111/124 · 94/119 |
+| conversation.list | 5x | 7.9/15 · 6.5/19 | 2.6/3.5 · 2.9/21 |
+| phase-stop settlement herd | 1x | 5,288/5,303 · 4,582/4,600 | 44/65 · 46/58 |
+| | 3x | 8,967/13,935 · 12,434/12,468 | 115/136 · 112/249 |
+| | 5x | 10,325/17,600 · 10,151/16,665 | 202/254 · 290/345 |
+| completed ops/s | 1x / 3x / 5x | 335/955/1,482 · 337/952/1,545 | 341/1,017/1,686 · 340/1,016/1,689 |
+| events · Turns (5x) | | 6,298 · 93; 6,486 · 108 | 6,961 · 109; 6,962 · 109 |
+| failed requests | | r1 5x: 15 `database_timeout` (settlement herd); otherwise 0 | 0 · 0 |
+| seed (229 MB) | | 103 s · 100 s | 6.9 s · 4.8 s |
+
+The first run, with the temporary-file defect, gave the same ranking. For
+example, Sidecar `claim_next` at 1x was 193/372 · 183/234 ms and its 5x
+throughput 1,432 · 1,428 ops/s, against TofuDB's 8.8/12 · 7.3/29 ms and
+1,689 · 1,689 ops/s, with lower host load (median 7-15). The Sidecar's
+writer-bound tails are therefore not an artifact of that defect or of the
+second run's higher host load. The second run's load was uneven, with
+Sidecar legs at median 28-29 and TofuDB at 11 and 25. Even at its 71.6
+peak it stayed far below the 180 CPUs, and the CPU-starvation signature
+above needs a run queue several times the available CPUs.
+
+Verdict on the real volume:
+
+- **TofuDB wins every write-bound operation by 7-100x at p50, and the gap
+  is several times the emulated one.** Locally, Sidecar `claim_next` was 2x
+  TofuDB's; on DolphinFS it is 8-16x. `complete` is seconds against
+  ~100 ms, and the end-of-phase settlement herd takes 4.6-12 s against
+  44-290 ms. Streamed events are 7-18x faster at p50 (1.5 vs 11-29 ms).
+- **Throughput: TofuDB keeps up at every scale; the Sidecar does not at
+  5x.** At 1x the two are level (335-337 vs 340-341 ops/s). At 3x the
+  Sidecar falls 6% behind (952-955 vs 1,016-1,017 ops/s), and at 5x it
+  completes 1,482-1,545 vs 1,686-1,689 ops/s, 93-108 vs 109 Turns. One
+  Sidecar 5x leg failed 15 settlement writes with `database_timeout`.
+- **Point reads: close at p50; TofuDB has tighter tails.** `record.get` is
+  0.25-0.30 vs 0.22-0.25 ms; p99 at 5x is 2.7-4.6 vs 0.93-0.99 ms. Reads
+  hit both stores' caches, so the medium barely shows.
+- **The Sidecar wins no operation**, as on local disk. TofuDB again issues
+  more barriers (about 26 k vs 11 k).
+
+**Measured sync cost against the 0.77 ms model.** The average in-scope
+barrier cost 0.39-0.73 ms for TofuDB and 1.04-1.07 ms for the Sidecar under
+load, so barrier latency alone brackets the model. A bare 4 KiB `fdatasync`
+is cheaper than the model (0.22-0.26 ms); a Sidecar fsync also flushes the
+WAL frames written before it. Barriers do not explain the Sidecar's
+slowdown, though: they took 11.6-12.5 s over the whole Sidecar leg (seed
+plus three 90 s phases). The model
+charged only barriers and missed the cost of every write call. On DolphinFS
+a 4 KiB append costs 0.18 ms even without a sync, against 0.001 ms
+locally. A 60 s 1x phase per store, counted with a diagnostic interposer
+on the in-scope calls:
+
+| store | write calls | time in writes | barriers | time in barriers | reads |
+|---|---|---|---|---|---|
+| Sidecar | 119,497 `pwrite` (2.4 KB avg) | 25.8 s (0.22 ms each) | 1,198 `fsync` | 1.3 s | 252,810 `pread`, 2.9 s |
+| TofuDB | 2,521 `write` (106 KB avg) | 2.7 s (1.07 ms each) | 2,833 | 1.2 s | 15,767, 1.5 s |
+
+SQLite issues one write per page: a WAL frame per dirty page at commit, and
+again at every checkpoint. Its single writer thread, which also runs the
+inline checkpoints, therefore spent about 40% of the window inside
+`pwrite`. TofuDB appends large sequential buffers,
+about 50x fewer calls for the same bytes. The 0.77 ms model is a fair
+barrier model, but it understates the Sidecar's real DolphinFS cost by
+about 20x, because 95% of that cost is per-write, not per-sync. Seeding shows
+the same thing: on DolphinFS the Sidecar takes 100-103 s against TofuDB's
+5-7 s, while the same Sidecar seed takes 5.8 s on local disk.
+
+Not covered: the rerun shared the volume (not the directory) with the live
+production engine. Nothing under the live checkout was opened, but
+production-engine latency during the legs was not monitored. Leg logs (`run.log`) contain
+shutdown-time `[RouterWatchdog] ... Storage sidecar is unavailable`
+tracebacks after the last phase in one TofuDB leg; they postdate every
+measured phase.
+
+Reproduce (from a checkout, with `$TOFUDB_BIN` built from it and certified;
+`S` is a fresh directory on the DolphinFS volume outside any Tofu checkout;
+run from a shell carrying production's `LD_PRELOAD`/`LIBBGFS_*`):
+
+```sh
+cc -O2 -shared -fPIC -o $TMPDIR/faultfs.so benchmarks/agent_storage/faultfs.c -ldl
+for b in "--backend sqlite" "--backend tofudb --engine $TOFUDB_BIN --durability strict" \
+         "--backend sqlite" "--backend tofudb --engine $TOFUDB_BIN --durability strict"; do
+  R=$S/leg-$(date +%s); LD_PRELOAD="$TMPDIR/faultfs.so $LD_PRELOAD" FAULTFS_ROOT=$R FAULTFS_FSYNC_US=0 \
+    FAULTFS_STATS=$TMPDIR/$(basename $R).stats .venv/bin/python3 scripts/tofudb_load_test.py --root $R $b \
+    --seed-scale 0.2 --scales 1,3,5 --duration 90 --run-id dfs
+  cp -r $R/results $TMPDIR/$(basename $R)-results && rm -rf -- "$R"
+done
+```
 
 ## TofuDB hot paths on the production DolphinFS client (2026-11-15)
 

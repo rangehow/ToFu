@@ -25,7 +25,17 @@ def home_root(tmp_path, monkeypatch):
     return root
 
 
-def test_read_is_passive_and_ensure_is_idempotent(flask_client, chat_sidecar, home_root):
+@pytest.fixture
+def no_review_chosen(chat_sidecar):
+    """The periodic review row is per owner; this module's storage outlives each test's router home."""
+    from lib.router.watchdog.review import review_task_id
+    from lib.scheduler.manager import get_scheduler
+    get_scheduler().delete_task(review_task_id(1), user_id=1)
+    yield
+    get_scheduler().delete_task(review_task_id(1), user_id=1)
+
+
+def test_read_is_passive_and_ensure_is_idempotent(flask_client, chat_sidecar, home_root, no_review_chosen):
     unbound = flask_client.get('/api/v4/router')
     assert unbound.status_code == 200, unbound.get_json()
     assert unbound.get_json()['availability'] == 'unbound' and unbound.get_json()['workerModel'] == ''
@@ -37,11 +47,32 @@ def test_read_is_passive_and_ensure_is_idempotent(flask_client, chat_sidecar, ho
     router = first.get_json()
     assert router['availability'] == 'available' and router['revision'] == 1
     assert os.path.isdir(os.path.join(router['projectPath'], '.git'))
+    # Health checks come with the main coordinator, on by default (owner decision 2026-11-17).
+    health = flask_client.get('/api/v4/router/watchdog').get_json()
+    assert health['availability'] == 'available' and health['projectPath'].startswith(router['projectPath'] + '/')
+    assert health['review']['enabled'] is True and health['review']['schedule'] == '7,37 * * * *'
+    assert health['review']['taskId']
     again = flask_client.post('/api/v4/router', json={}, headers={'Idempotency-Key': 'ensure-2'})
     assert again.get_json()['conversationId'] == router['conversationId']
     assert flask_client.get('/api/v4/router').get_json() == router
     assert flask_client.post('/api/v4/router', json={'unexpected': 1},
                              headers={'Idempotency-Key': 'ensure-3'}).status_code == 400
+
+
+def test_health_checks_that_cannot_be_ensured_never_keep_the_owner_out_of_the_main_coordinator(
+        flask_client, chat_sidecar, home_root, monkeypatch):
+    from lib.storage import StorageError
+
+    def unavailable(owner, *, tenant_id=None):
+        raise StorageError('database_unavailable', 'scheduler store is restarting')
+    monkeypatch.setattr('lib.router.watchdog.review.ensure_health_checks', unavailable)
+    ensured = flask_client.post('/api/v4/router', json={}, headers={'Idempotency-Key': 'ensure-degraded'})
+    assert ensured.status_code == 200, ensured.get_json()
+    assert ensured.get_json()['availability'] == 'available'
+    assert flask_client.get('/api/v4/router/watchdog').get_json()['availability'] == 'unbound'
+    # The Watchdog's own ensure reports the failure instead.
+    refused = flask_client.post('/api/v4/router/watchdog', json={}, headers={'Idempotency-Key': 'watchdog'})
+    assert refused.status_code == 503, refused.get_json()
 
 
 def test_git_unavailability_is_a_safe_retryable_503_not_an_uncaught_500(
@@ -193,7 +224,7 @@ def test_owner_pauses_and_resumes_standing_instructions(flask_client, chat_sidec
 
 
 def test_watchdog_read_is_passive_ensure_is_idempotent_and_review_is_owner_controlled(
-        flask_client, chat_sidecar, home_root):
+        flask_client, chat_sidecar, home_root, no_review_chosen):
     endpoint = '/api/v4/router/watchdog'
     unbound = flask_client.get(endpoint)
     assert unbound.status_code == 200, unbound.get_json()
@@ -208,14 +239,13 @@ def test_watchdog_read_is_passive_ensure_is_idempotent_and_review_is_owner_contr
     watchdog = first.get_json()
     assert watchdog['availability'] == 'available' and watchdog['projectPath'].endswith('/.tofu-watchdog')
     assert os.path.isdir(watchdog['projectPath'])
+    # Ensuring health checks turns the periodic review on; nobody has to configure it.
+    state = watchdog['review']
+    assert state['enabled'] is True and state['schedule'] == '7,37 * * * *' and state['taskId']
     again = flask_client.post(endpoint, json={}, headers={'Idempotency-Key': 'watchdog-2'}).get_json()
-    assert again['conversationId'] == watchdog['conversationId']
+    assert again == watchdog
     review = endpoint + '/review'
     assert flask_client.post(review, json={'enabled': True}).status_code == 400
-    enabled = flask_client.post(review, json={'enabled': True}, headers={'Idempotency-Key': 'review-1'})
-    assert enabled.status_code == 200, enabled.get_json()
-    state = enabled.get_json()['review']
-    assert state['enabled'] is True and state['schedule'] == '7,37 * * * *' and state['taskId']
     custom = flask_client.post(review, json={'enabled': True, 'schedule': '*/20 * * * *'},
                                headers={'Idempotency-Key': 'review-2'}).get_json()['review']
     assert custom == {**state, 'schedule': '*/20 * * * *'}
@@ -223,6 +253,10 @@ def test_watchdog_read_is_passive_ensure_is_idempotent_and_review_is_owner_contr
                              headers={'Idempotency-Key': 'review-3'}).status_code == 400
     off = flask_client.post(review, json={'enabled': False}, headers={'Idempotency-Key': 'review-4'})
     assert off.get_json()['review'] == {**custom, 'enabled': False}
+    assert flask_client.get(endpoint).get_json() == off.get_json()
+    # The owner's choice survives every later ensure, the main coordinator's included.
+    assert flask_client.post(endpoint, json={}, headers={'Idempotency-Key': 'watchdog-3'}).get_json() == off.get_json()
+    flask_client.post('/api/v4/router', json={}, headers={'Idempotency-Key': 'router'})
     assert flask_client.get(endpoint).get_json() == off.get_json()
 
 

@@ -266,11 +266,8 @@ describe('composer delivery into a live reply', () => {
     Object.assign(h.env, {
       window, showChoice, pushSubscribe: vi.fn(), pushUnsubscribe: vi.fn(),
       createProjectCoordinationSurface, createSameTaskReadJoin, createGlobalRouterEntry, createRouterWatchdogEntry, createCoordinatorConversationGroups,
-      // The main coordinator header's owner-delegation and portfolio disclosures are not under test here.
+      // The main coordinator header's owner-delegation disclosure is not under test here.
       createRouterOwnerDelegation: () => ({ settings: document.createElement('details'), destroy() {} }),
-      createRouterPortfolio: () => ({ settings: document.createElement('details'), destroy() {} }),
-      // The classic mode: the sidebar lead office (not under test here) never loads.
-      readLanding: () => 'chat', subscribeLanding: () => () => {},
       openProjectCoordinationWorkspace: vi.fn(), getFolders: () => folders,
       // Retained conversation-list owners the Coordinator groups paint rows and status with.
       _convStatusFlags: () => ({}), mergeConversationCatalogRows: vi.fn(),
@@ -290,7 +287,8 @@ describe('composer delivery into a live reply', () => {
       expect(document.querySelector('#projectCoordinatorEntry [data-coordinator-id="coordinator-project"]')).not.toBeNull();
       // Both passive reads landed: these header controls exist only for an available binding.
       expect(document.querySelector('.global-router-header .router-worker-model')).not.toBeNull();
-      expect(document.querySelector<HTMLInputElement>('.router-watchdog-schedule input')?.value).toBe(watchdog.review.schedule);
+      expect(document.querySelector<HTMLElement>('.global-router-header .router-watchdog summary')?.dataset.i18n)
+        .toBe('routerWatchdog.summaryFaultsOnly');
     });
     return {
       ...h, showChoice,

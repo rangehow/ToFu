@@ -1249,7 +1249,12 @@ sessions and tells the human what matters.
   A republished board keeps the translations of texts it still shows; a dropped
   job (restart, refused admission, translator failure) leaves the board as
   written until the next publish. The card shows covered texts translated,
-  with the shared "Original" toggle back to the board as written. Alternatives
+  with the shared "Original" toggle back to the board as written. The task
+  history page carries the same translation, so a task still on the board
+  reads as on the card (its original text stays in the row's tooltip) and
+  history search also matches it; a task that left the board shows its text
+  as written, because the head keeps only the texts its board still shows.
+  Alternatives
   rejected: having the Coordinator write in the reading language (the board
   would leave its working language and turning translation off could not
   restore it); translating in the browser or on the GET read (rendering and
@@ -1671,6 +1676,58 @@ wakes it. Unconfirmed model usage never
 stops the request; unsettled tool effects still block delivery claims. Stop,
 binding withdrawal and missing source evidence refuse further birth. Grants and
 continuation receipts share the segmented project-head CAS.
+
+### Open outcomes cannot disappear from continuation context (2026-11-17)
+
+Problem: the Parallel lead staffed one paper while Paper B had no accountable
+Worker. The wake showed open board rows and actionable Workers, but never asked
+which outcomes lacked a running or queued owner; settled outcomes vanished from
+that view. The Router also blocked every distinct second initiative of a project
+as `project_busy`. A board rewrite could omit an unfinished outcome entirely.
+
+Decision: `coordinator_continuation.py` derives an advisory ownership section
+from the existing board, task history, dispatch history and conversation titles.
+Every automatic wake lists open outcomes whose names no running/queued Worker
+names, and dropped open outcomes separately. Matching uses the shared outcome
+label, never a broad brief or generic infrastructure vocabulary. It grants no
+authority, starts no work and adds no store, knob, threshold or cap.
+`router.portfolio.ranking.start_blockers` no longer serializes distinct
+initiatives of one project; each remains a separate queued request and usage
+account. Duplicate work and unmet dependencies still block.
+
+Alternatives rejected: per-Worker settlement Turns (they split shared judgment);
+steering every initiative into the live request (it merges cost attribution);
+fuzzy text matching or a second outcome-owner registry (false ownership or a
+second authority); automatic dispatch from the warning (visibility must not
+become authority); claiming the replay passed when the historical board omitted
+Paper B (the evidence is in `output/PARALLEL_UNOWNED_REPLAY_2026-11-17.md`).
+
+Durable sources beyond the current board (2026-11-17, second pass): the
+projection also reads every Coordinator request of the binding. Its durable
+Turn's board revisions are parsed and folded by the task history's own
+`boards_from_rounds`/`fold_boards`, recovering dropped outcomes the current
+head never recorded. An unfinished request whose Turn states no outcome at all
+contributes its owner request text; a durable `coordinatorSettlements` finish
+receipt, or a request whose board/history already states its outcomes, adds
+none. Durable task history stays authoritative; the folded transcript is only
+used where it is incomplete or predates it, and the two are merged by history
+key. A Worker owning the board's renamed continuation does not erase the
+dropped row: only a Worker naming the dropped outcome's own title owns it.
+Ownership still reuses existing running/queued Worker titles. No new store,
+heuristic, knob or cap was added.
+
+Replay limitation (second pass): the real 12:29:22 drop is replayed through
+the production projection; its next wake input lists
+`- [dropped] Paper B: cross-harness long-horizon terminal benchmark (was dropped)`
+while Paper B's Worker was running. The 11-09–11-15 replay over every retained
+board in that window flags **no** Paper B outcome: no board named it, no durable
+history record predates 11-17, and the only owner request text naming Paper B
+is the 11-17 12:42 Router forward. The retained lead conversation was created
+11-15 16:06, so this is not evidence about the earlier INS deployment; the
+requested "first continuation after 11-09" remains **not evidenced**.
+Evidence: `output/PARALLEL_UNOWNED_REPLAY_2026-11-17.{md,json}`. Specs:
+`test_coordinator_continuation_context.py`, `test_coordinator_task_history.py`,
+`test_portfolio_review.py`.
 
 ### Continuation context is anchored on the task board (2026-11-15)
 
@@ -2134,6 +2191,28 @@ contracts, not claims that a running service has loaded this checkout.
 
 ### Lead office (owner decision 2026-11-12)
 
+Status (owner decision 2026-11-17, "经典模式和普通对话一样，动画只留在 Studio"): the
+lead office is not mounted anywhere. The classic sidebar shows each lead as plain
+rows: its entry row, its 成果 list (`features/lead-deliverables/`, "Lead
+deliverables") and the archive of the conversations it started, with each Worker's
+status and the running tally. The studio (`#/world`, `features/world/`) is the only
+animated surface; it hides the classic sidebar (`01-workspace-dock.css`). The
+2026-11-15 rule below gated the sidebar office on the stored landing choice
+(`tofu_landing_workspace`), which is `world` by default and after every studio visit, so the
+office appeared in the classic chat view, the one place that sidebar is seen; that
+mode read and its change subscription are removed with it.
+Problem: the owner saw animated office rooms per Worker under 项目负责人 in the classic
+view. Decision: remove the mount from the common owner (`presence.js`) rather than
+re-key its gate on the shown workspace, because the sidebar is never visible in the
+studio, so no gate could ever show it there. Alternatives considered: gating on
+`body[data-workspace]` (a dead branch: the studio hides the sidebar); hiding the slot
+with CSS (would still load and run the scene). The `features/lead-office/` module,
+its stylesheet and copy remain in the tree, unreferenced by the runtime, until the
+studio redesign decides whether any of it is reused; the text below records its
+design. Specifications: `project-coordination-entry.test.ts` (plain rows whatever the
+stored landing) and `tests/frontend/test_lead_sidebar_plain_browser.py` (real
+browser, both stored landings, studio round trip).
+
 Problem: owners prefer talking to their leads, and the multi-level lead system
 already coordinates the work, so the Goal Studio's game office had become a
 separate destination owners do not open: a game reachable only through its own
@@ -2199,26 +2278,9 @@ office for project leads only omits the main coordinator; a new progress endpoin
 or polling loop would duplicate the assignment, board and report authorities;
 plain list rows lose the spatial, at-a-glance reading the art gives.
 
-The office is the studio mode's sidebar only (owner decision 2026-11-15: "经典模式下，
-侧栏不要显示动画界面"). The mode is the one landing choice of
-`application-shell/landing.ts` (`readLanding()`: `world` is the studio, `chat` the
-classic view, the same rule index.html's pre-paint applies); `presence.js` reads it
-when placing the office and follows `subscribeLanding` for switches in this tab or
-another. In the classic mode the lead's entry row and its conversation group, with
-each Worker's status and the running tally, are the whole team view: the office
-module, its stage, art, render loop and assignment reads are never imported or
-started, and switching to classic hides a shown office, which disposes its stage
-and subscription. Alternatives considered: a CSS rule hiding the office would still
-load and run its scene; a separate sidebar setting would be a second source of
-truth for the same mode choice.
-Specifications: `frontend/src/features/lead-office/*.test.ts`,
-`project-coordination-surface.test.ts` (office facts for the shown entry across
-its project's chats, none for the main view), `coordinator-conversation-group.test.ts`
-(the archive without a running tally), `project-coordination-entry.test.ts` (classic
-mode never loads the office; switching modes shows and hides it) and
-`tests/frontend/test_lead_office_browser.py`
-(floor and headquarters beneath their entries, keyboard doors, the framed room,
-the office kept across navigation, a project floor opening its folder).
+Until 2026-11-17 the office was the studio mode's sidebar only (owner decision
+2026-11-15), keyed on the stored landing choice; that coupling is removed (status
+above). Specifications of the unmounted module: `frontend/src/features/lead-office/*.test.ts`.
 
 ### Lead office art and state mapping (owner request 2026-11-15)
 
@@ -3002,7 +3064,13 @@ authorization boundary, default deny: a path must be a regular file inside the
 sending task's verified read roots, read without following symlinks
 (`lib.artifacts.file_snapshot`); an `att_media_` reference must be one of the
 owner's own attachments (owner-scoped lookup); an image must be shown in the
-sender's conversation. Anything else is refused (`attachment_refused`) before any
+sender's conversation: in one of its messages, or in an owner message steered
+into the Turn the sender is running. A steer never enters the task's messages,
+so its images are read from its records (this executor's delivered ones and
+those committed to the live Turn), and only a record whose committed author is
+the owner's own input here counts (`require_human_turn`): nonhuman steers and
+Global Router forwards add none (2026-11-17: a Coordinator could not forward the
+screenshot the owner steered into its turn). Anything else is refused (`attachment_refused`) before any
 record is written or anything is sent. An admitted file is stored once, by digest,
 through `lib.media_attachments.ingest_received_file` (origin `agent_message`), the
 same retained attachment a channel file or chat upload becomes; no size or count
@@ -3031,7 +3099,8 @@ Alternatives rejected:
 
 Verification: `tests/project_mod/test_lead_attachments.py` (real Sidecar: image,
 PDF, text and arbitrary binary delivery; refused outside, traversal, symlink,
-directory, missing, foreign-owner and unseen-image references) and
+directory, missing, foreign-owner and unseen-image references; an owner-steered
+image admitted, a nonhuman, agent-authored or forwarded steer's refused) and
 `tests/project_mod/test_lead_attachment_delivery.py` (each message path and the
 contract mirror).
 

@@ -1668,6 +1668,18 @@ class ScheduledTaskManager:
 
         return self._ensure_default_task(**REVIEW_TASK, enabled=True)[0]
 
+    def _ensure_default_router_health_checks(self):
+        """Health checks are on wherever the main coordinator exists (docs/ROUTER.md R7)."""
+        owner_user_id = self._background_principal().require_owner(
+            context='built-in scheduler task')
+        from lib.router.binding import global_router
+
+        if global_router(owner_user_id, create=False)['availability'] != 'available':
+            return None
+        from lib.router.watchdog.review import ensure_health_checks
+
+        return ensure_health_checks(owner_user_id)
+
     def _ensure_default_proactive_quiet_release_task(self):
         """Install the quiet-hours release (docs/ROUTER.md R10)."""
         return self._ensure_default_task(
@@ -1928,6 +1940,7 @@ def start_scheduler_worker(*, principal: PrincipalContext):
         bootstraps.append(mgr._ensure_default_proactive_digest_task)
         bootstraps.append(mgr._ensure_default_proactive_quiet_release_task)
         bootstraps.append(mgr._ensure_default_router_portfolio_review_task)
+        bootstraps.append(mgr._ensure_default_router_health_checks)
     else:
         logger.info(
             '[Scheduler] Distributed scheduler has no implicit owner; personal '

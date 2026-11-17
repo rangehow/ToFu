@@ -32,17 +32,18 @@ def test_child_environment_inherits_no_production_settings(harness, tmp_path, mo
     monkeypatch.setenv('TOFU_DATA_DIR', '/live/tofu/data')
     monkeypatch.setenv('PYTHONPATH', '/live/tofu')
     engine = tmp_path / 'engine' / 'tofu-db'
-    env = harness._child_environment(tmp_path, engine, 'a' * 64, 'normal')
+    env = harness._child_environment(tmp_path, tmp_path / 'scratch', engine, 'a' * 64, 'normal')
 
     assert 'TOFU_STORAGE_CONNECTION_FILE' not in env
-    for key in ('HOME', 'TMPDIR', 'XDG_CACHE_HOME', 'TOFU_DATA_DIR', 'TOFU_PROJECT_PATH'):
+    for key in ('HOME', 'XDG_CACHE_HOME', 'TOFU_DATA_DIR', 'TOFU_PROJECT_PATH'):
         assert Path(env[key]).is_relative_to(tmp_path), key
+    assert env['TMPDIR'] == str(tmp_path / 'scratch')
     assert env['PYTHONPATH'] == str(harness.PROJECT_ROOT)
     assert env['TOFUDB_BIN'] == str(engine)
     assert env['TOFU_DB_DURABILITY'] == 'normal'
-    assert 'TOFU_DB_DURABILITY' not in harness._child_environment(tmp_path, engine, 'a' * 64, 'auto')
+    assert 'TOFU_DB_DURABILITY' not in harness._child_environment(tmp_path, tmp_path / 'scratch', engine, 'a' * 64, 'auto')
     assert 'TOFU_DB_REQUEST_PROFILE_EVERY' not in env
-    profiled = harness._child_environment(tmp_path, engine, 'a' * 64, 'normal', request_profile=True)
+    profiled = harness._child_environment(tmp_path, tmp_path / 'scratch', engine, 'a' * 64, 'normal', request_profile=True)
     assert profiled['TOFU_DB_REQUEST_PROFILE_EVERY'] == '1'
 
 
@@ -55,7 +56,7 @@ def test_child_environment_keeps_the_medium_client_for_both_backends(harness, tm
     monkeypatch.setenv('FAULTFS_FSYNC_US', '770')
     monkeypatch.setenv('TOFU_UNRELATED_SETTING', '1')
     engine = tmp_path / 'engine' / 'tofu-db' if backend == 'tofudb' else None
-    env = harness._child_environment(tmp_path, engine, 'a' * 64, 'strict', backend)
+    env = harness._child_environment(tmp_path, tmp_path / 'scratch', engine, 'a' * 64, 'strict', backend)
     assert env['LD_PRELOAD'] == '/opt/client/libpreload.so'
     assert env['LIBBGFS_CONFIG_FILE'] == '/opt/client/preload.conf'
     assert env['FAULTFS_FSYNC_US'] == '770'
@@ -275,18 +276,18 @@ def test_sidecar_leg_runs_the_same_isolated_mix_without_engine_settings(harness,
     child stays isolated, selects the sqlite store, and inherits no TofuDB engine
     pinning or engine tuning that would not apply to it."""
     monkeypatch.setenv('TOFU_STORAGE_CONNECTION_FILE', '/live/tofu/data/native-storage-connection.json')
-    env = harness._child_environment(tmp_path, None, '', 'normal', 'sqlite')
+    env = harness._child_environment(tmp_path, tmp_path / 'scratch', None, '', 'normal', 'sqlite')
     native_deadline = lambda: harness._child_environment(
-        tmp_path, tmp_path / 'tofu-db', 'a' * 64, 'normal')['TOFU_STORAGE_RPC_DEADLINE_S']
+        tmp_path, tmp_path / 'scratch', tmp_path / 'tofu-db', 'a' * 64, 'normal')['TOFU_STORAGE_RPC_DEADLINE_S']
 
     assert env['TOFU_PERSONAL_STORAGE_BACKEND'] == 'sqlite'
     assert env['TOFU_STORAGE_FASTPATH'] == 'off'
     assert env['TOFU_STORAGE_RPC_DEADLINE_S'] == native_deadline() == '20'
     assert 'TOFU_STORAGE_CONNECTION_FILE' not in env
-    for key in ('HOME', 'TMPDIR', 'TOFU_DATA_DIR', 'TOFU_PROJECT_PATH'):
+    for key in ('HOME', 'TOFU_DATA_DIR', 'TOFU_PROJECT_PATH'):
         assert Path(env[key]).is_relative_to(tmp_path), key
     assert not [key for key in env if key.startswith(('TOFUDB_', 'TOFU_DB_'))]
-    native = harness._child_environment(tmp_path, tmp_path / 'tofu-db', 'a' * 64, 'normal')
+    native = harness._child_environment(tmp_path, tmp_path / 'scratch', tmp_path / 'tofu-db', 'a' * 64, 'normal')
     assert native['TOFU_PERSONAL_STORAGE_BACKEND'] == 'tofudb'
 
 
@@ -304,6 +305,31 @@ def test_sidecar_leg_needs_no_engine_binary(harness, tmp_path, monkeypatch):
     assert launched['command'][launched['command'].index('--backend') + 1] == 'sqlite'
     with pytest.raises(SystemExit, match='must name a tofu-db binary'):
         harness.main(['--root', str(tmp_path / 'root'), '--engine', ''])
+
+
+def test_child_temporary_files_stay_off_the_measured_medium(harness, tmp_path, monkeypatch):
+    """SQLite unlinks its temporary files right after opening them; DolphinFS
+    fails I/O on such a file, so a TMPDIR under a DolphinFS root failed Sidecar
+    batches with SQLITE_IOERR_WRITE. Production's TMPDIR is host-local, and the
+    child's must be too: private, outside the root, and removed after the run."""
+    host_tmp = tmp_path / 'host-tmp'
+    host_tmp.mkdir()
+    from serverctl_pkg import local_placement
+    monkeypatch.setattr(local_placement, 'temporary_root', lambda: str(host_tmp))
+    seen = {}
+
+    def run(command, env, cwd):
+        scratch = Path(env['TMPDIR'])
+        seen.update(scratch=scratch, mode=scratch.stat().st_mode & 0o777)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(harness.subprocess, 'run', run)
+    root = tmp_path / 'root'
+    assert harness.main(['--root', str(root), '--backend', 'sqlite']) == 0
+    assert seen['scratch'].parent == host_tmp
+    assert not seen['scratch'].is_relative_to(root)
+    assert seen['mode'] == 0o700
+    assert not seen['scratch'].exists()
 
 
 def test_maintenance_prunes_through_the_application_retention_sweep(harness, monkeypatch):

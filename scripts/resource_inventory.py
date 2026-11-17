@@ -99,8 +99,8 @@ def artifacts(project: Path) -> list[tuple[str, str, list[str]]]:
                    and is_checkout(p))),
         ('task checkout spares', 'task_spares: recycled by demand, oldest removed near the reserve',
          _children(workspaces, lambda p: p.name.startswith(('.spare-', '.preparing-')))),
-        ('task command scratch (.tmp-<checkout>)', 'removed when its checkout retires',
-         _children(workspaces, lambda p: p.name.startswith('.tmp-'))),
+        ('task command scratch', 'removed when its checkout retires',
+         tmp_glob(f'tofu-{uid}-tmp/*')),
         ('stray files beside task checkouts', 'none: agents write them by name (AGENTS.md: use $TMPDIR)',
          _children(workspaces, lambda p: not p.name.startswith('.') and not is_checkout(p)
                    and p.parent.name.startswith('u'))),

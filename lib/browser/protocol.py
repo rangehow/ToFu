@@ -43,6 +43,10 @@ class BrowserCapability(str, Enum):
     FILE_EXPORT = 'file_export'
     DOWNLOADS = 'downloads'
     SCREENSHOT = 'screenshot'
+    # Internal, never model-facing: report which cookies equal credentials the
+    # owner's server already stores, compared in the browser on one-time keyed
+    # digests so no value crosses the bridge (lib/mcp/browser_credentials.py).
+    COOKIE_MATCH = 'cookie_match'
 
 
 ALL_CAPABILITIES = frozenset(item.value for item in BrowserCapability)

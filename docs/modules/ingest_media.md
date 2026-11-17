@@ -189,6 +189,44 @@ duplicate execution authority; relying on accumulated callbacks would persist
 retry duplicates; merging report and QA settlement would change stop behavior.
 Verify complete-worker projection, abort, dedup and artifact-integrity tests.
 
+**Report Markdown repair — Problem:** weaker models break the prompt's
+formatting rules: they wrap the whole report in a ```markdown fence (after the
+preamble strip only the orphaned closer remains, rendering an empty code box),
+append reader-addressed closing remarks, and put LaTeX inside backticks.
+**Decision:** `report_engine/_normalize.py` is a pure, zero-LLM pass the worker
+applies to ordinary (non-review-family) report bodies right after the preamble
+strip; it unwraps the outer fence, drops trailing closing remarks, and turns a
+backtick span into `$…$` only when it holds a known LaTeX math command or
+`_{`/`^{` and no code signal. `\(…\)`/`\[…\]` are left alone (both renderers
+support them) and fake image targets stay with `images/injection.py`.
+**Alternatives rejected:** a renderer backtick→math heuristic garbled real
+code for every surface (removed from `prepare-source.ts`); prompt-only rules are
+ignored by the models this targets. Verify
+`tests/paper/test_paper_report_markdown_normalize.py`.
+
+**Output-cap continuation (report, Q&A, Deepen) — Problem:** a no-tool round
+that ends with `finish_reason == 'length'` (the model's output cap after
+`_clamp_max_tokens`) was published as if complete, so models with small output
+caps silently lost the final sections; Q&A and Deepen also passed private
+`max_tokens` caps (8000/16000) below many models' native limits.
+**Decision:** `lib/paper/length_continuation.py` is the one policy. All three
+workers pass `OUTPUT_TOKEN_CEILING` (128000, clamped by dispatch) and install
+`length_continuation_hook`, which appends the partial answer plus
+`prompts.length_continuation_prompt` and continues the shared loop;
+continuation deltas stream normally. `LengthContinuation` makes the terminal
+text the joined partials plus the final response (`join_length_continuation`:
+exact seam join, dropping only an exact repeat of the cut line); the report's
+`_body.py` adopts it as the terminal body, and Q&A/Deepen publish it (with a
+`delta_reset` convergence when a seam was deduplicated). There is no continuation cap: the loop
+ends when the model finishes, on Stop, or when a continuation adds no visible
+text (the body as generated is then published). Review/rebuttal documents keep
+single-round behaviour. **Alternatives rejected:** a fixed continuation count
+is a tuning knob; adopting only the last message would discard earlier parts;
+fuzzy overlap matching needs a similarity threshold; per-engine copies of
+the join/continue logic would drift. Verify
+`test_paper_report_length_continuation.py`,
+`test_paper_qa_deepen_length_continuation.py` and the body-projection suite.
+
 **Problem:** the retained report presenter mixed rendering with event mutation,
 sequence deduplication and push teardown; releasing its task subscription also
 removed sibling listeners. **Decision:** `report-events.ts` owns typed stream

@@ -3,6 +3,8 @@ import { escapeHtml as escape } from '../../html-safety';
 import type { I18nKey } from '../../i18n';
 
 import { scheduleAnimationFrame } from '../../conversation/ui/animation-frame-scheduler';
+import { reconcileRichCardHtml } from '../../conversation/ui/rich-card-reconciliation';
+import { createButton, createDisclosureSummary } from '../../ui';
 import {
   paperAttachPush,
   paperDetachPush,
@@ -49,6 +51,7 @@ export interface RecommendStream extends PaperPushState {
   interpreted: boolean;
   researchCount: number;
   researchLabel: string;
+  researchSeconds: number;
   toolRounds: RecommendToolRound[];
   results: Array<RecommendCard | undefined>;
   correction: RecommendCorrection | null;
@@ -68,7 +71,8 @@ interface RecommendApi {
   recommendAbort(taskId: string): Promise<unknown>;
 }
 
-type RecElement = HTMLElement & { _recSig?: string; _recToolKey?: string };
+type RecElement = HTMLElement & { _recSig?: string; _recToolHtml?: string };
+type RecResearchElement = HTMLDetailsElement & { _recPhase?: 'research' | 'settled' };
 
 type RecommendWindow = Window & {
   Api?: { paper?: RecommendApi };
@@ -97,6 +101,7 @@ type RecommendWindow = Window & {
   _paintRecommendNow?: typeof paintRecommendNow;
   _openRecommendResult?: typeof openRecommendResult;
   _openRecommendCorrection?: typeof openRecommendCorrection;
+  _stopRecommend?: typeof stopRecommend;
   _destroyPaperRecommend?: typeof destroyPaperRecommend;
 };
 
@@ -149,6 +154,7 @@ export function newRecStream(description: string): RecommendStream {
     interpreted: false,
     researchCount: 0,
     researchLabel: '',
+    researchSeconds: 0,
     toolRounds: [],
     results: [],
     correction: null,
@@ -190,12 +196,17 @@ export async function recommendPapers(description: string): Promise<void> {
       throw new Error(errorMessage(start.error, 'recommend start failed'));
     }
     if (state()._recStream !== stream) return;
+    if (stream.aborted) {
+      // Stop was pressed while the start request was in flight.
+      void api().recommendAbort(taskId).catch(() => undefined);
+      return;
+    }
     stream.taskId = taskId;
     stream.status = 'running';
     await pollRecommendTask(stream);
   } catch (error: unknown) {
     console.error('[Paper] recommend failed:', error);
-    if (state()._recStream === stream) {
+    if (state()._recStream === stream && !stream.aborted) {
       stream.status = 'error';
       renderRecommendError();
     }
@@ -297,7 +308,10 @@ export function applyRecommendEvent(
       const round = stream.toolRounds.find((row) => row.roundNum === event.roundNum);
       if (round) {
         round.status = 'done';
-        if (typeof event.elapsed === 'number') round._elapsed = `${event.elapsed.toFixed(1)}s`;
+        if (typeof event.elapsed === 'number') {
+          round._elapsed = `${event.elapsed.toFixed(1)}s`;
+          stream.researchSeconds += event.elapsed;
+        }
         for (const field of [
           'toolContent', 'results', 'searchDiag', 'engineBreakdown', 'verticals',
         ]) {
@@ -423,8 +437,10 @@ export function paintRecommendNow(): void {
   const viewer = document.getElementById('paperPdfViewer');
   if (!viewer) return;
   const grounded = stream.results.filter(Boolean).length;
+  const stopped = stream.aborted && stream.status !== 'done' && stream.status !== 'error';
+  const running = !stopped && (stream.status === 'pending' || stream.status === 'running');
   const slots = stream.interpreted
-    ? Math.max(grounded, stream.status === 'done' ? grounded : stream.candidateCount)
+    ? Math.max(grounded, running ? stream.candidateCount : grounded)
     : 0;
   let shell = viewer.querySelector<HTMLElement>('.paper-search[data-rec-shell]');
   if (!shell) {
@@ -436,25 +452,50 @@ export function paintRecommendNow(): void {
       + escape(translate('paper.recommendTitle')) + '</div>'
       + '<div class="paper-search-head-q">“' + escape(stream.description)
       + '”</div></div></div>';
+    // Results lead; the research timeline follows as a disclosure so a long
+    // search log never pushes the cards below the fold.
     viewer.innerHTML = '<div class="paper-search" data-rec-shell="1">' + header
-      + '<div class="paper-rec-status" data-rec-status aria-live="polite"></div>'
-      + '<div class="paper-report-tools paper-rec-tools" data-rec-tools></div>'
+      + '<div class="paper-rec-status" data-rec-status>'
+      + '<span class="paper-rec-status-text" data-rec-status-text tabindex="-1"'
+      + ' role="status" aria-live="polite"></span></div>'
       + '<div class="paper-rec-banner" data-rec-banner></div>'
       + '<div class="paper-search-hint" data-rec-hint hidden>'
       + escape(translate('paper.recommendHint')) + '</div>'
-      + '<div class="paper-result-list" data-rec-list aria-live="polite" aria-relevant="additions"></div></div>';
+      + '<div class="paper-result-list" data-rec-list aria-live="polite" aria-relevant="additions"></div>'
+      + '<details class="paper-rec-research" data-rec-research hidden>'
+      + '<div class="paper-report-tools paper-rec-tools" data-rec-tools></div></details></div>';
     shell = viewer.querySelector<HTMLElement>('.paper-search[data-rec-shell]');
+    const stop = createButton({
+      label: translate('paper.recommendStop'),
+      variant: 'secondary',
+      size: 'sm',
+      onClick: stopRecommend,
+    }, viewer.ownerDocument);
+    stop.classList.add('paper-rec-stop');
+    stop.setAttribute('data-rec-stop', '');
+    stop.hidden = true;
+    shell?.querySelector('[data-rec-status]')?.appendChild(stop);
+    const summary = createDisclosureSummary(viewer.ownerDocument);
+    summary.classList.add('paper-rec-research-summary');
+    summary.setAttribute('data-rec-research-summary', '');
+    shell?.querySelector('[data-rec-research]')?.prepend(summary);
   }
   if (!shell) return;
   const statusElement = shell.querySelector<RecElement>('[data-rec-status]');
+  const statusTextElement = shell.querySelector<RecElement>('[data-rec-status-text]');
+  const stopElement = shell.querySelector<HTMLButtonElement>('[data-rec-stop]');
+  const researchElement = shell.querySelector<RecResearchElement>('[data-rec-research]');
+  const researchSummaryElement = shell.querySelector<RecElement>('[data-rec-research-summary]');
   const toolsElement = shell.querySelector<RecElement>('[data-rec-tools]');
   const bannerElement = shell.querySelector<RecElement>('[data-rec-banner]');
   const hintElement = shell.querySelector<HTMLElement>('[data-rec-hint]');
   const listElement = shell.querySelector<HTMLElement>('[data-rec-list]');
-  if (!statusElement || !bannerElement || !listElement) return;
+  if (!statusElement || !statusTextElement || !bannerElement || !listElement) return;
 
   let statusHtml = '';
-  if (!stream.interpreted && stream.status !== 'error') {
+  if (stopped) {
+    statusHtml = escape(translate('paper.recommendStopped'));
+  } else if (!stream.interpreted && stream.status !== 'error') {
     const text = stream.researchCount > 0
       ? translate('paper.recommendResearching').replace('{n}', String(stream.researchCount))
       : translate('paper.recommendInterpreting');
@@ -464,21 +505,46 @@ export function paintRecommendNow(): void {
       + escape(translate('paper.recommendGrounding')
         .replace('{n}', String(grounded)).replace('{total}', String(slots)));
   }
-  if (statusElement._recSig !== statusHtml) {
-    statusElement.innerHTML = statusHtml;
-    statusElement.hidden = !statusHtml;
-    statusElement._recSig = statusHtml;
+  if (statusTextElement._recSig !== statusHtml) {
+    statusTextElement.innerHTML = statusHtml;
+    statusTextElement._recSig = statusHtml;
   }
+  if (stopElement) {
+    const showStop = running && (!stream.interpreted || grounded < slots);
+    if (!showStop && stopElement.hidden === false
+        && stopElement.ownerDocument.activeElement === stopElement) {
+      statusTextElement.focus();
+    }
+    stopElement.hidden = !showStop;
+  }
+  statusElement.hidden = !statusHtml;
 
-  if (toolsElement) {
-    const searching = stream.toolRounds.filter((round) => round.status === 'searching').length;
-    const key = `${stream.toolRounds.length}:${searching}`;
-    if (toolsElement._recToolKey !== key) {
-      const render = globals().renderToolRoundsHTML;
-      toolsElement.innerHTML = stream.toolRounds.length && render
-        ? render(stream.toolRounds, stream.status === 'running') : '';
-      toolsElement.hidden = stream.toolRounds.length === 0;
-      toolsElement._recToolKey = key;
+  if (toolsElement && researchElement) {
+    const render = globals().renderToolRoundsHTML;
+    const html = stream.toolRounds.length && render
+      ? render(stream.toolRounds, running) : '';
+    if (toolsElement._recToolHtml !== html) {
+      // Patch in place: replacing innerHTML restarted every row's entry
+      // animation and collapsed rows the reader had expanded on each event.
+      reconcileRichCardHtml(toolsElement, html);
+      toolsElement._recToolHtml = html;
+    }
+    researchElement.hidden = !html;
+    // Open while researching so progress is visible, fold once on settling;
+    // between phase changes the reader's own open/closed choice stands.
+    const phase = running && !stream.interpreted ? 'research' : 'settled';
+    if (researchElement._recPhase !== phase) {
+      researchElement.open = phase === 'research';
+      researchElement._recPhase = phase;
+    }
+    if (researchSummaryElement) {
+      const seconds = stream.researchSeconds > 0
+        ? ` · ${stream.researchSeconds.toFixed(1)}s` : '';
+      const summary = translate('paper.recommendResearchSummary')
+        .replace('{n}', String(stream.toolRounds.length)) + seconds;
+      if (researchSummaryElement.textContent !== summary) {
+        researchSummaryElement.textContent = summary;
+      }
     }
   }
 
@@ -554,6 +620,16 @@ export function openRecommendCorrection(): void {
   );
 }
 
+export function stopRecommend(): void {
+  const stream = state()._recStream;
+  if (!stream || stream.aborted) return;
+  if (stream.status !== 'pending' && stream.status !== 'running') return;
+  stream.aborted = true;
+  paperDetachPush(stream);
+  if (stream.taskId) void api().recommendAbort(stream.taskId).catch(() => undefined);
+  paintRecommendNow();
+}
+
 export function destroyPaperRecommend(): void {
   const stream = state()._recStream;
   if (!stream) return;
@@ -582,6 +658,7 @@ export function installPaperRecommendGlobals(): void {
   target._paintRecommendNow = paintRecommendNow;
   target._openRecommendResult = openRecommendResult;
   target._openRecommendCorrection = openRecommendCorrection;
+  target._stopRecommend = stopRecommend;
   target._destroyPaperRecommend = destroyPaperRecommend;
 }
 

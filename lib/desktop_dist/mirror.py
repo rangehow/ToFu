@@ -192,6 +192,11 @@ def refresh_now(prefer: tuple[str, str] | None = None,
                            name)
             continue
         cur = existing.get(name)
+        if (cur or {}).get('source') == 'built' and os.path.isfile(dest):
+            # The on-server build of this server's own code shares the
+            # release asset's file name; replacing it would silently hand
+            # visitors the published build again.
+            continue
         try:
             expected_sha = _release_sha256(asset)
             expected_size = asset.get('size')

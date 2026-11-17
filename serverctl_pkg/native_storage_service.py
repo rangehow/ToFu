@@ -1,13 +1,18 @@
 """Native storage policy on the shared resident-process lifecycle owner."""
 from __future__ import annotations
 
+import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 
-from serverctl_pkg.restart_budget import NATIVE_SERVICE_PREPARATION_SECONDS, NATIVE_SERVICE_STOP_SECONDS
+from serverctl_pkg.restart_budget import (
+    NATIVE_GENERATION_PROBE_SECONDS, NATIVE_SERVICE_PREPARATION_SECONDS, NATIVE_SERVICE_STOP_SECONDS,
+)
 from serverctl_pkg import resident_service as resident
 from serverctl_pkg.resident_service import (
     ResidentService, acquire_service_lock, process_matches, write_record,
@@ -48,6 +53,14 @@ def serves_web_owner(state_path: Path, service_id: str, host_pid: int, web_pid: 
                 and env.get(b'TOFU_PROJECT_PATH') == record['projectPath'].encode())
     except (OSError, KeyError, ValueError):
         return False
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def failed_host_verdict(project: str) -> dict | None:
@@ -130,6 +143,111 @@ class NativeStorageService(ResidentService):
                 or not process_matches(record['managerPid'], record.get('managerStartTime'))):
             return None
         return dict(record['plan'])
+
+    def probe_generation(self, plan: dict | None, environment: dict[str, str]) -> None:
+        """Start a new engine on a disposable authority, health handshake included, before drain.
+
+        The live authority stays leased by the serving host, so this is the
+        closest pre-shutdown proof that the new generation's engine starts and
+        answers. Raises when it does not; the serving worker is then retained.
+        """
+        serving = self.record().get('plan') or {}
+        if (not plan or not plan.get('binary')
+                or plan.get('binarySha256') == serving.get('binarySha256')):
+            return
+        from serverctl_pkg.native_engine import _run
+        _run([self.python, str(self.project / 'scripts/check_tofudb_engine_drift.py'),
+              '--binary', str(plan['binary']), '--json'], cwd=self.project,
+             environment=environment, timeout=NATIVE_GENERATION_PROBE_SECONDS,
+             progress='Starting the new storage engine on a disposable authority')
+
+    # --- last known-good engine (docs/NATIVE_STORAGE_LIFECYCLE.md,
+    # "Rolling back a generation that never served") ---------------------
+
+    def known_good_directory(self) -> Path:
+        return self.project / 'data' / 'native-storage-known-good'
+
+    def engine_contract(self, plan: dict) -> str:
+        """The storage contract the engine of ``plan`` is bound to for this source, or ''."""
+        from serverctl_pkg.native_engine import retention_refusal, storage_contract_sha256
+        if retention_refusal(self.project, plan):
+            return ''
+        return storage_contract_sha256(self.project)
+
+    def current_contract(self) -> str:
+        from serverctl_pkg.native_engine import storage_contract_sha256
+        return storage_contract_sha256(self.project)
+
+    def deploy_engine(self, copy: Path, dest: Path, contract: str, note: str) -> None:
+        """Publish ``copy`` at ``dest`` through the one supported engine deployment owner."""
+        from scripts import deploy_tofudb_engine
+        deploy_tofudb_engine.deploy(argparse.Namespace(
+            binary=str(copy), dest=str(dest), evidence=None, note=note,
+            env_file=str(self.project / '.env'), no_env_sync=False, no_smoke=False,
+            dry_run=False), storage_contract_sha256=contract)
+
+    def retain_known_good(self) -> dict:
+        """Keep a private copy of the ready host's engine; it is what a failed successor rolls back to.
+
+        Only the newest known-good engine is kept (one reconstructible copy).
+        ``{}`` when the ready host runs no managed engine or its contract is unknown.
+        """
+        record = self.record()
+        plan = record.get('plan') if record.get('state') == 'ready' else None
+        if not isinstance(plan, dict) or not plan.get('binarySha256') or not plan.get('binary'):
+            return {}
+        digest, binary = str(plan['binarySha256']), Path(str(plan['binary']))
+        contract = self.engine_contract(plan)
+        if not contract:
+            return {}
+        root = self.known_good_directory()
+        target = root / digest
+        copy = target / binary.name
+        if not copy.is_file():
+            root.mkdir(parents=True, exist_ok=True)
+            staging = Path(tempfile.mkdtemp(prefix='.staging-', dir=root))
+            try:
+                shutil.copy2(binary, staging / binary.name)
+                if (binary.parent / 'libtofu_db.so').is_file():
+                    shutil.copy2(binary.parent / 'libtofu_db.so', staging / 'libtofu_db.so')
+                if _sha256(staging / binary.name) != digest:
+                    raise RuntimeError(f'{binary} changed while it was copied; not retained')
+                shutil.rmtree(target, ignore_errors=True)
+                os.replace(staging, target)
+            finally:
+                shutil.rmtree(staging, ignore_errors=True)
+        for other in root.iterdir():
+            if other != target:
+                shutil.rmtree(other, ignore_errors=True)
+        return {'binarySha256': digest, 'binary': str(binary), 'copy': str(copy),
+                'storageContractSha256': contract}
+
+    def restore_known_good(self, known_good: dict) -> str:
+        """Redeploy the known-good engine when the current plan runs another one.
+
+        Returns what was rolled back ('' when the engine already is the known-good
+        one, so only the host needs replacing). Raises when a rollback is needed
+        but not allowed: the copy is gone or altered, or this source needs another
+        storage contract (the keep rule of restart preparation). The deployment
+        owner also refuses an engine that cannot read the store's features.
+        """
+        current = self.record().get('plan') or {}
+        digest = str(known_good.get('binarySha256') or '')
+        if not digest or current.get('binarySha256') in (None, '', digest):
+            return ''
+        copy = Path(str(known_good.get('copy') or ''))
+        if not copy.is_file() or _sha256(copy) != digest:
+            raise RuntimeError(f'the known-good engine copy {copy} is missing or altered')
+        contract = self.current_contract()
+        if known_good.get('storageContractSha256') != contract:
+            raise RuntimeError(
+                f'the known-good engine {digest[:12]} serves storage contract '
+                f'{str(known_good.get("storageContractSha256"))[:12]}; this source needs {contract[:12]}')
+        dest = Path(str(current.get('binary') or known_good.get('binary')))
+        failed = str(current.get('binarySha256'))
+        self.deploy_engine(copy, dest, contract,
+                           f'automatic rollback from {failed[:12]}, whose first start never served')
+        return f'storage engine rolled back from {failed[:12]} to the last known-good {digest[:12]}'
 
     def owns_lease(self, lease: dict) -> bool:
         record = self.record()

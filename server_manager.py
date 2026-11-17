@@ -1408,6 +1408,9 @@ class LifecycleManager:
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
         self._monitor: threading.Thread | None = None
+        self._head_reflog: Path | None = None
+        self._head_reflog_seen: tuple[int, int] | None = None
+        self._precertify_thread: threading.Thread | None = None
         self._worker_bytecode_cache_lock_fd: int | None = None
         self._worker_runtime_lock_fds: list[int] = []
         self._pending_runtime_build: tuple[str, list[str]] | None = None
@@ -1495,6 +1498,11 @@ class LifecycleManager:
             # Set while an application restart kept the storage host instead
             # of preparing the checkout's storage generation; see restart().
             'storageRetention': {},
+            # The engine of the last storage host a worker served through, and
+            # the automatic recoveries of generations that never served since
+            # the last explicit start/restart (_recover_generation_that_never_served).
+            'knownGood': {},
+            'storageRecoveries': [],
             'lastPortReconciledAt': 0.0,
             'lastPortReconciledFrom': None,
             'lastPortReconciledSource': '',
@@ -1546,6 +1554,10 @@ class LifecycleManager:
             state['storageBlocker'] = {}
         if not isinstance(state.get('storageRetention'), dict):
             state['storageRetention'] = {}
+        if not isinstance(state.get('knownGood'), dict):
+            state['knownGood'] = {}
+        if not isinstance(state.get('storageRecoveries'), list):
+            state['storageRecoveries'] = []
         if not isinstance(state.get('workerBytecodeCache'), dict):
             state['workerBytecodeCache'] = {}
         if not isinstance(state.get('workerRuntime'), dict):
@@ -1615,7 +1627,92 @@ class LifecycleManager:
         self._state['nextRetryAt'] = 0.0
         self._state['executionRecovery'] = {}
         self._state['replacementRetry'] = {}
+        self._state['storageRecoveries'] = []
         self._replacement_inputs = None
+
+    def _remember_known_good(self) -> None:
+        """A worker served: its storage host's engine becomes the rollback target."""
+        try:
+            known = self._native_storage.retain_known_good()
+        except Exception as exc:
+            logger.warning('last known-good storage engine was not retained: %s', exc)
+            return
+        if known:
+            known['at'] = _now()
+            self._state['knownGood'] = known
+        recovery = (self._state.get('lastRestart') or {}).get('recovery')
+        if isinstance(recovery, dict) and not recovery.get('restoredAt'):
+            recovery['restoredAt'] = _now()
+            logger.info(
+                'service restored after automatic storage recovery (%s) in %.1fs',
+                recovery.get('action') or 'storage host replaced',
+                recovery['restoredAt'] - float(recovery.get('at') or recovery['restoredAt']))
+
+    def _recover_generation_that_never_served(self, pid: Any) -> bool:
+        """Restore service when a new generation's storage failed before it ever served.
+
+        2026-11-17 21:49 (A6): the old worker had been stopped, the new
+        generation's first storage start failed and the host published
+        ``failed; explicit restart required`` for 20.8 minutes. Within the
+        host, ``StorageRuntime.start_supervised`` retries a failed first start
+        under its crash budget; only a host that still publishes ``failed``
+        (its breaker tripped, or a host error) reaches this point. The manager
+        then rolls the engine back to the last known-good one when this
+        generation changed it, and replaces the failed host and the unready
+        worker, as an explicit restart would. Each recovery is charged to the
+        manager's failure budget value; past it the verdict stays for a human.
+        """
+        # Only a generation this manager spawned and never saw ready; an adopted
+        # worker may have served before its storage failed (2026-11-11), which
+        # keeps the escalation-only path.
+        if (self._state.get('workerReadyLoggedAt')
+                or self._state.get('launchSource') in ('', 'adopted')):
+            return False
+        record = self._native_storage.record()
+        if record.get('state') != 'failed':
+            return False
+        verdict = f"native storage host failed: {record.get('error') or 'no error recorded'}"
+        recoveries = list(self._state.get('storageRecoveries') or [])
+        if len(recoveries) >= self.max_failures:
+            if not str(self._state.get('lastError') or '').startswith('automatic storage recovery exhausted'):
+                error = (f'automatic storage recovery exhausted after {len(recoveries)} attempts; '
+                         f'{verdict}; explicit restart required')
+                logger.error('%s', error)
+                self._set_observed('degraded', error)
+                self._save()
+            return True
+        now = _now()
+        known = dict(self._state.get('knownGood') or {})
+        try:
+            action = self._native_storage.restore_known_good(known)
+        except Exception as exc:
+            action = ''
+            logger.error('rollback to the last known-good storage engine %s refused: %s; '
+                         'replacing the failed storage host with the current generation',
+                         str(known.get('binarySha256') or 'none')[:12], exc)
+        recoveries.append(now)
+        self._state['storageRecoveries'] = recoveries
+        outcome = self._state.get('lastRestart')
+        if not isinstance(outcome, dict):
+            outcome = self._state['lastRestart'] = {'source': 'automatic', 'startedAt': now}
+        outcome['recovery'] = {
+            'at': now, 'attempt': len(recoveries), 'cause': verdict[:2000],
+            'action': action or 'failed storage host and unready worker replaced',
+            'rolledBack': bool(action), 'knownGoodEngine': known.get('binarySha256') or ''}
+        logger.error(
+            'worker pid=%s never became ready: %s; restoring service automatically '
+            '(recovery %d/%d): %s', pid, verdict, len(recoveries), self.max_failures,
+            action or 'replacing the failed storage host and the unready worker')
+        stopped = self.stop(source='storage-recovery', keep_desired_running=True)
+        if not stopped.get('ok'):
+            logger.error('automatic storage recovery could not stop worker pid=%s: %s',
+                         pid, stopped.get('message'))
+            return True
+        self._wait_for_stopped_sidecar_release()
+        result = self._spawn('storage-recovery', reset_failed_storage=True)
+        outcome['recovery']['spawn'] = str(result.get('message') or '')[:500]
+        self._save()
+        return True
 
     def _storage_data_dir(self) -> Path:
         """Resolve the worker's declared authority root without app imports."""
@@ -2416,6 +2513,48 @@ class LifecycleManager:
             else:
                 self._last_monitor_error = ''
                 self._monitor_error_count = 0
+            self._precertify_engine_after_head_moves()
+
+    def _precertify_engine_after_head_moves(self) -> None:
+        """Certify HEAD's storage engine in the background once HEAD moves.
+
+        A restart after an engine-input landing then finds HEAD already
+        certified instead of running the 20-60 min gate before it can stop
+        anything (docs/NATIVE_STORAGE_LIFECYCLE.md, "Certifying ahead of the
+        restart"). HEAD moves are observed through the reflog's stat, so an
+        idle checkout costs one stat per monitor tick.
+        """
+        if self._head_reflog is None:
+            try:
+                path = subprocess.run(
+                    ['git', '-C', self.project, 'rev-parse', '--git-path', 'logs/HEAD'],
+                    capture_output=True, text=True, timeout=30, check=True).stdout.strip()
+            except (OSError, subprocess.SubprocessError):
+                path = ''
+            self._head_reflog = (Path(self.project) / path) if path else Path()
+        if not self._head_reflog.name:
+            return
+        try:
+            stat = self._head_reflog.stat()
+            observed = (stat.st_size, stat.st_mtime_ns)
+        except OSError:
+            return
+        if observed == self._head_reflog_seen:
+            return
+        if self._precertify_thread is not None and self._precertify_thread.is_alive():
+            return
+        self._head_reflog_seen = observed
+
+        def trigger() -> None:
+            from serverctl_pkg.engine_precertify import start_background
+            result = start_background(Path(self.project), self.python)
+            if result.get('started'):
+                logger.info('background storage engine certification started pid=%s: %s; log %s',
+                            result.get('pid'), result.get('reason'), result.get('log'))
+
+        self._precertify_thread = threading.Thread(
+            target=trigger, name='tofu-engine-precertify', daemon=True)
+        self._precertify_thread.start()
 
     def _maintain_process_logs(self, *, force: bool = False) -> None:
         """Bound inherited stdout files without application dependencies.
@@ -3598,6 +3737,14 @@ class LifecycleManager:
             return self._refuse_restart(
                 'resident preparation',
                 f'resident service preparation failed before shutdown: {exc}')
+        try:
+            if not retention_reason:
+                self._native_storage.probe_generation(storage_plan, preparation_environment)
+        except Exception as exc:
+            return self._refuse_restart(
+                'storage probe',
+                'the new storage engine did not start and answer on a disposable '
+                f'authority before shutdown: {exc}')
         with self._lock:
             if configuration != self._restart_configuration():
                 return self._refuse_restart('preparation', (
@@ -3799,6 +3946,7 @@ class LifecycleManager:
                             self._trace_total_suffix())
                         self._settle_runtime_suspect()
                         self._request_pending_runtime_build()
+                        self._remember_known_good()
                     self._state['failureHistory'] = self._recent_failure_times(now)
                     oom_count = cgroup_oom_kill_count()
                     if oom_count is not None:
@@ -3816,6 +3964,8 @@ class LifecycleManager:
                     # worker available to finish startup/recovery and never
                     # feed a Sidecar outage into the wedge-restart policy.
                     self._state['wedgeSince'] = 0.0
+                    if self._recover_generation_that_never_served(status.get('pid')):
+                        return
                     self._note_unready_worker(
                         status.get('pid'),
                         str(probe.get('readinessError')

@@ -437,9 +437,16 @@ def decide(approval_id: str, approved: bool, *, provenance) -> dict | None:
         for rec in records:
             if rec.get('id') != approval_id:
                 continue
-            if rec.get('status') != 'pending':
+            # A deny after approval revokes an approved, unconsumed approval: the
+            # Settings force-confirm cancel arrives after the approve (2026-11-17
+            # 19:39) and must not leave a valid restart token behind.
+            revoking = not approved and rec.get('status') == 'approved'
+            if rec.get('status') != 'pending' and not revoking:
                 outcome['record'] = None
                 return document
+            if revoking:
+                rec['revoked_at'] = now
+                rec.pop('expires_at', None)
             rec['status'] = 'approved' if approved else 'denied'
             rec['decided_at'] = now
             rec['decided_by'] = decided_by
@@ -463,7 +470,8 @@ def decide(approval_id: str, approved: bool, *, provenance) -> dict | None:
                   approval_id=approval_id, approved=approved)
         return None
     logger.warning('[Lifecycle] %s %s by %s (id=%s, ua=%.80s)', rec['action'],
-                   'APPROVED' if approved else 'DENIED', decided_by,
+                   'APPROVED' if approved else
+                   'REVOKED after approval' if rec.get('revoked_at') else 'DENIED', decided_by,
                    approval_id[:8], decide_ua or '-')
     audit_log('lifecycle_approval_decided', approval_id=approval_id,
               action=rec['action'], approved=approved, decided_by=decided_by,
@@ -1117,6 +1125,21 @@ def manager_restart_outcome(accepted: float) -> dict:
     return outcome if _valid_timestamp(stamp) and stamp >= accepted else {}
 
 
+def latest_restart_recovery() -> dict | None:
+    """The manager's automatic recovery of its latest restart, or None.
+
+    Set when that restart's new generation failed before it ever served and the
+    manager rolled storage back / replaced it instead of waiting for a human
+    (server_manager ``_recover_generation_that_never_served``).
+    """
+    from server_manager import read_restart_outcome
+    recovery = read_restart_outcome(_manager_project()).get('recovery')
+    if not isinstance(recovery, dict):
+        return None
+    return {key: recovery.get(key)
+            for key in ('at', 'attempt', 'action', 'cause', 'rolledBack', 'restoredAt')}
+
+
 def _manager_worker_served_since(moment: float) -> bool:
     """Whether the manager saw its current worker ready at or after ``moment``."""
     from server_manager import MANAGER_STATE_FILE
@@ -1620,6 +1643,6 @@ __all__ = [
     'delegated_action_id', 'delegated_action',
     'delegated_actions', 'begin_delegated_action', 'record_delegated_refusal',
     'settle_delegated_action', 'accept_delegated_restart',
-    'manager_restart_outcome', 'observed_restart',
+    'manager_restart_outcome', 'latest_restart_recovery', 'observed_restart',
     'restart_notices', 'note_restart_notice', 'claim_restart_notice', 'finish_restart_notice',
 ]

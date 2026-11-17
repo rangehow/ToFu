@@ -5239,6 +5239,7 @@
   "update.codePending": "Local code changes detected — the running process still serves the old code; they take effect after a restart.",
   "update.lastRestartFailed": "Last restart failed at stage \"{stage}\". The server kept running the old code.",
   "update.lastRestartFailedHint": "Fix the cause, then restart again.",
+  "update.lastRestartRecovered": "The last restart's new server failed before it served; service was restored automatically: {action}.",
   "update.codeUnchangedHint": "The new process loaded byte-identical source — your local changes may not have taken effect (edited a different checkout, or the changes were reverted?).",
   "update.codeUnchangedTitle": "Server restarted, but code is unchanged",
   "update.copyLog": "Copy log",

@@ -681,6 +681,57 @@ still counts as a crash. LIVENESS proposed a fix: the launcher reports a typed
 lease-held startup error on the readiness channel, and the supervisor maps it
 to `StorageStartDeferred`. It is not implemented here.
 
+## Rolling back a generation that never served
+
+Problem: `start_supervised` retries inside the host, but a first start that
+keeps failing trips the breaker and the host still publishes `failed`. The old
+worker is already gone at that point (2026-11-17 21:49-22:10: 20.8 minutes
+without service until the owner restarted by hand).
+
+Decision: the lifecycle manager restores service itself.
+- When a worker becomes ready, the manager keeps a private copy of its storage
+  host's engine under `data/native-storage-known-good/` (only the newest; a
+  reconstructible copy) and records it as `knownGood`.
+- When a worker this manager spawned is live but has never been ready and its
+  storage host publishes `failed`, `_recover_generation_that_never_served`
+  redeploys the known-good engine through `scripts/deploy_tofudb_engine.py`
+  (same pins, `build.json` receipt and store-feature check) if this generation
+  changed the engine and the known-good engine is bound to the current storage
+  contract. It then replaces the failed host and the unready worker as an
+  explicit restart would. Without a permitted rollback it still replaces them
+  with the current generation. This differs from the rejected "rollback to
+  the newest certified engine" (Engine certification gate below). The target
+  is the engine that served this store moments before, and the deployment's
+  store-feature check (`store_features.require_readable`) refuses it if the
+  failed start already wrote a feature that engine cannot read.
+- Each recovery counts against the manager's failure budget value
+  (`max_failures`) until an explicit start or restart. When the budget runs
+  out, the verdict stays `degraded` with "automatic storage recovery
+  exhausted" for a human.
+- The outcome is `lastRestart.recovery` (cause, action, `rolledBack`,
+  `restoredAt`). server-manager.log logs "never became ready … restoring
+  service automatically" and then "service restored after automatic storage
+  recovery". Settings shows it as `last_restart_recovery` from `/update/check`.
+- Adopted workers (which may have served before their storage failed,
+  2026-11-11) keep the escalation-only path.
+
+Before the old worker is drained, `restart()` also starts a changed engine on a
+disposable authority (`NativeStorageService.probe_generation`, via
+`scripts/check_tofudb_engine_drift.py`). A new engine that cannot start or
+answer its health handshake is refused at stage `storage probe`, and the old
+server keeps serving.
+
+Alternatives rejected:
+- Keeping the old worker running until the new one is ready: the storage
+  authority lease admits one engine at a time.
+- Rolling back the application code too: only the engine changes the storage
+  generation, and the application already serves any engine bound to its
+  contract.
+- A separate rollback retry budget: that would be a second, tuned budget.
+
+Specification: `tests/server/test_restart_storage_rollback.py` (a real manager,
+worker and resident host).
+
 Verification: `tests/storage/test_storage_restart_breaker.py`, which covers
 the post-trip recovery, the backoff, the crash-storm worker and the hook
 failure. Also `tests/server/test_native_storage_host_state.py` and the
@@ -873,6 +924,43 @@ must not become certification inputs.
   create a work root on its filesystem, or a failing gate refuse with one actionable line before
   the manager is asked to stop anything. The operator override skips it; the
   in-app restart and the manager's own spawns do not run it.
+- **Certifying ahead of the restart** (2026-11-17: after an engine-input
+  landing, every restart blocked 21-59 min on that gate).
+  - The lifecycle manager watches the checkout's HEAD reflog (one `stat` per
+    monitor tick). When HEAD moves, it calls
+    `serverctl_pkg.engine_precertify.start_background`.
+  - That checks cheaply whether a start would run the gate.
+    `pending_certification` caches HEAD's engine fingerprint per engine-input
+    tree id in `engine-certifications/precertify-identity.json`.
+  - If the gate is needed, it launches the same
+    `certify_head_before_start` in a detached child. The child logs to
+    `logs/engine-precertify.log` and reports to
+    `engine-certifications/background.json` (commit, start, end, ok, message).
+  - One gate runs per checkout (`engine-certifications/.gate.lock`). A
+    restart that arrives mid-run prints which run it waits for, and then uses
+    that run's record instead of starting a second gate.
+  - A run certifies the HEAD it started at. If HEAD moves during the run, the
+    next trigger after it ends certifies the new HEAD; there is no queue and
+    no tuning knob.
+  - The gate, its checks, fixture choice and records are unchanged.
+  - Measured with a fake 3-s gate (`test_restart_path_cost_with_and_without_a_background_record`):
+    the restart-path call takes about the gate's duration without a
+    background record and well under a second with one.
+
+  Alternatives rejected:
+  - Certifying in CI: no CI host has a settled production-shaped fixture.
+  - Certifying only in `git_land.py`: most landings are integration
+    deliveries that bypass it.
+  - Keeping certification lazy: 20-60 min blocked restarts.
+
+  Policy for engine-input landings (`packages/tofu-db`, the storage
+  contracts):
+  - Land them together, not one by one.
+  - Let the background gate for the last one finish before landing the next.
+  - Restart only after `background.json` reports `ok: true` for the current
+    HEAD.
+  - A landing during a run is certified by the next run, so batching saves
+    whole gate runs.
 - **Automatic spawns** (crash, planned and lease recovery) prepare only the
   frontend; the new storage host's admission keeps or refuses the deployed
   engine. Starting the manager is not an engine decision either.

@@ -25,6 +25,10 @@ ARTIFACT_PREPARATION_SECONDS = STORAGE_ENGINE_PREFLIGHT_SECONDS + FRONTEND_PREFL
 # First admission may import from a slow installed environment. This entire
 # budget runs before the serving worker is drained; expiration preserves it.
 NATIVE_SERVICE_PREPARATION_SECONDS = 120.0
+# A new engine is started on a disposable authority (cold start, health
+# handshake, contract probes) before the serving worker is drained; the same
+# first-admission class of work as above.
+NATIVE_GENERATION_PROBE_SECONDS = NATIVE_SERVICE_PREPARATION_SECONDS
 # A replaced or stopped host drains its native daemon: maintenance stop,
 # overlay merge and the closing checkpoint. On the FUSE authority a clean drain
 # measured up to 13.4 s + 17.6 s; a kill inside the checkpoint moved 51-102 s of
@@ -35,4 +39,5 @@ NATIVE_SERVICE_STOP_SECONDS = NATIVE_DAEMON_STOP_SECONDS + 10.0
 # Maximum configured worker shutdown, manager escalation, storage lease release,
 # then command/transport overhead. Readiness observation has its own clock.
 LIFECYCLE_REQUEST_SECONDS = (ARTIFACT_PREPARATION_SECONDS + 300 + 5 + 10 + 45
-                             + NATIVE_SERVICE_PREPARATION_SECONDS + NATIVE_SERVICE_STOP_SECONDS)
+                             + NATIVE_SERVICE_PREPARATION_SECONDS + NATIVE_GENERATION_PROBE_SECONDS
+                             + NATIVE_SERVICE_STOP_SECONDS)

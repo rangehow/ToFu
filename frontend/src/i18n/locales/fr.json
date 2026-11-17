@@ -5239,6 +5239,7 @@
   "update.codePending": "Modifications locales du code détectées — le processus en cours utilise toujours l’ancien code ; elles prendront effet après un redémarrage.",
   "update.lastRestartFailed": "Le dernier redémarrage a échoué à l’étape « {stage} ». Le serveur exécute toujours l’ancien code.",
   "update.lastRestartFailedHint": "Corrigez la cause, puis redémarrez à nouveau.",
+  "update.lastRestartRecovered": "Le nouveau serveur du dernier redémarrage a échoué avant de servir ; le service a été rétabli automatiquement : {action}.",
   "update.codeUnchangedHint": "Le nouveau processus a chargé un code source strictement identique — vos modifications locales n’ont peut-être pas été prises en compte (autre copie de travail modifiée, ou modifications annulées ?).",
   "update.codeUnchangedTitle": "Serveur redémarré, mais code inchangé",
   "update.copyLog": "Copier le journal",

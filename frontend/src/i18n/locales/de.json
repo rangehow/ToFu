@@ -5239,6 +5239,7 @@
   "update.codePending": "Lokale Codeänderungen erkannt — der laufende Prozess verwendet noch den alten Code. Die Änderungen werden nach einem Neustart wirksam.",
   "update.lastRestartFailed": "Der letzte Neustart ist in der Phase „{stage}“ fehlgeschlagen. Der Server läuft weiter mit dem alten Code.",
   "update.lastRestartFailedHint": "Beheben Sie die Ursache und starten Sie dann erneut neu.",
+  "update.lastRestartRecovered": "Der neue Server des letzten Neustarts ist vor dem ersten Einsatz ausgefallen; der Dienst wurde automatisch wiederhergestellt: {action}.",
   "update.codeUnchangedHint": "Der neue Prozess hat byteidentischen Quellcode geladen — Ihre lokalen Änderungen sind möglicherweise nicht wirksam geworden (andere Arbeitskopie bearbeitet oder Änderungen zurückgesetzt?).",
   "update.codeUnchangedTitle": "Server neu gestartet, aber Code unverändert",
   "update.copyLog": "Protokoll kopieren",

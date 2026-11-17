@@ -5239,6 +5239,7 @@
   "update.codePending": "ローカルのコード変更を検出しました — 実行中のプロセスは古いコードのままです。変更は再起動後に反映されます。",
   "update.lastRestartFailed": "前回の再起動は「{stage}」段階で失敗しました。サーバーは古いコードのまま稼働しています。",
   "update.lastRestartFailedHint": "原因を解消してから、もう一度再起動してください。",
+  "update.lastRestartRecovered": "前回の再起動で新しいサーバーがサービス開始前に失敗したため、自動的にサービスを復旧しました: {action}。",
   "update.codeUnchangedHint": "新しいプロセスが読み込んだソースは再起動前とまったく同じです — ローカルの変更が反映されていない可能性があります（別のチェックアウトを編集したか、変更が元に戻されていませんか？）。",
   "update.codeUnchangedTitle": "サーバーは再起動しましたが、コードは変更されていません",
   "update.copyLog": "ログをコピー",

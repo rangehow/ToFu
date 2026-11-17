@@ -411,7 +411,12 @@ def test_a_forward_steered_into_a_commitment_wake_is_that_turns_request(routed):
     repository.validate(repository.admission(row['id']))
     page = get_workers(task, routed.coordinator_scope, {})
     assert page['scope'] == 'request' and [item['current_request'] for item in page['workers']] == [True]
-    # The Worker's objective quotes the owner's verbatim words.
+    # The Worker's input links the owner's steered message instead of repeating it
+    # (docs/PROJECT_COORDINATION.md "Continuation context is anchored on the task board").
     inputs = get_storage_client().query('turn.list', {
         'conversation_id': row['request']['recipientId'], 'user_id': routed.owner})
-    assert any(TEXT in str((item.get('projection') or {}).get('content') or '') for item in inputs), inputs
+    [objective] = [item['projection']['content'] for item in inputs if item['kind'] == 'input']
+    assert objective.startswith('Resume and verify\n\n'), objective
+    assert TEXT not in objective
+    for part in (source['conversationId'], 'Turn ' + source['turnId'], 'message ' + source['steerId']):
+        assert part in objective, (part, objective)

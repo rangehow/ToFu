@@ -993,18 +993,56 @@ reimplement the fence, restart and validation rules.
   the existing lifetime. Alternatives rejected: raising the hint (a tuned
   constant that still churns above it); an admission cap on concurrent reads
   (hardware/capacity limits on work are forbidden).
-- **SQLite durability and checkpointing are unchanged.** WAL,
-  `synchronous=FULL` (a WAL sync before every acknowledged COMMIT) and the
-  inline `wal_autocheckpoint=4096` stay; the fastpath shipper still owns
-  checkpoints when active. Alternatives measured and rejected (2026-11-15): a
-  background `PASSIVE` checkpointer woken per commit showed no win at 1x/3x
-  and a 5x run with event p99 3.1 s and a WAL grown to 25,011 frames (a
-  concurrent checkpoint trails the newest commit, so the writer rarely finds
-  the WAL fully backfilled and cannot restart it); `synchronous=NORMAL`
-  (weakens acknowledged durability); `locking_mode=EXCLUSIVE` (shuts out the
-  read pool); moving the authority to a local disk (the host has no
-  persistent local volume, [native authority placement](STORAGE_OPERATIONS.md#native-authority-placement)).
+- **SQLite durability is unchanged.** WAL and `synchronous=FULL` (a WAL
+  sync before every acknowledged COMMIT) stay; the fastpath shipper still
+  owns checkpoints when active. Alternatives rejected (2026-11-15):
+  `synchronous=NORMAL` (weakens acknowledged durability);
+  `locking_mode=EXCLUSIVE` (shuts out the read pool); moving the authority
+  to a local disk (the host has no persistent local volume,
+  [native authority placement](STORAGE_OPERATIONS.md#native-authority-placement)).
   Measurements: [SQL Sidecar on DolphinFS](STORAGE_PERFORMANCE_CHARTER.md#sql-sidecar-on-dolphinfs-2026-11-15).
+- **Checkpoints run beside the writer.** Problem: SQLite's automatic
+  checkpoint (`wal_autocheckpoint=4096`) runs inside whichever writer
+  COMMIT leaves the WAL at 4,096 frames or more, on the single writer
+  thread, so every queued job waits while it copies; after a settlement
+  herd that was 0.1-0.9 s even with coalesced page runs, and
+  `worker_job.complete` still moved with where the crossing landed
+  ([Checkpoint page runs](STORAGE_PERFORMANCE_CHARTER.md#checkpoint-page-runs-the-two-regressions-2026-11-17)).
+  Decision (`adapters/sqlite_checkpointer.py`): with the coalescing VFS
+  loaded the writer runs `wal_autocheckpoint=0` and `WalCheckpointer`
+  keeps SQLite's rule on its own connection: after each writer commit,
+  while the WAL holds 4,096 frames or more and some are not backfilled, it
+  runs one `PASSIVE` checkpoint, which takes no write lock, so commits
+  continue while it copies (at coalesced speed, see the shim above). SQLite
+  restarts the WAL only at a write transaction that begins with the WAL
+  fully backfilled, and a writer committing back to back always begins
+  while the checkpointer copies its previous commit, so between batches the
+  writer finishes a due checkpoint itself when less than 4,096 frames are
+  left to copy; a larger backlog stays with the checkpointer. The shim's
+  SQL functions `tofu_wal_frames()` and `tofu_wal_backfilled()` read the
+  wal-index for both decisions. Without the shim the inline checkpoint
+  stays. 4,096 remains the existing checkpoint size; nothing new is tuned.
+  Why the WAL must restart: on DolphinFS the first touch of each 32 KiB
+  wal-index region a growing WAL needs costs about 1 s on the writer
+  (measured: commits that crossed into a new region took 1.08-1.18 s, all
+  others p50 1.4 ms), and a WAL that never restarts touches a new region
+  every 4,096 frames.
+  Reconciling the 2026-11-15 rejection: that background checkpointer
+  copied one page per call and left the restart to chance; the measured
+  failure (a 25,011-frame WAL and event p99 3.1 s at 5x) is this one. The
+  first version of this change repeated it on DolphinFS (a 168,751-frame
+  WAL during the seed, 1.2 s `turn.create_pair` at 1x). Coalesced
+  concurrent copies and the writer-side remainder are what keep the WAL
+  restarting. Its "no 1x/3x win" was measured on `/dev/shm`, where page
+  writes cost microseconds and the inline checkpoint was cheap. Alternatives rejected: a checkpoint on the writer
+  thread when its queue is empty (a herd's completions arrive about 1 ms
+  after their settlement commits are acknowledged, so the writer is
+  "idle" exactly when they arrive and they wait behind the copy; an
+  interrupted one restarts from scratch and never finishes at 5x);
+  checkpointing before a large commit (a herd batch alone exceeds 4,096
+  frames, so its own commit still crosses); a writer-side checkpoint of
+  any size (that is the stall); a smaller `wal_autocheckpoint` (a knob).
+  Specs: `tests/storage_authority_sql/test_sqlite_checkpointer.py`.
 - The ordered SQLite writer accepts waiting jobs without a count quota.
   `TOFU_STORAGE_SQLITE_WRITER_QUEUE_CAPACITY` is a legacy sizing hint for
   shared RAM/metric policies. Writer acquisition uses the caller deadline,
@@ -1182,6 +1220,59 @@ reimplement the fence, restart and validation rules.
     sync follows a commit, so readers in other processes could see a
     commit header before its frames. Flushing at the commit frame keeps
     every mode correct.
+- **The shim also writes each checkpoint run of adjacent pages in one
+  call.** Problem: the inline `wal_autocheckpoint=4096` runs inside the
+  writer commit that crosses the threshold and copied one page per
+  `pwrite`, so a 3,000-12,000-page checkpoint held the single writer for
+  0.3-6 s on DolphinFS, almost all of it in those writes (WAL reads are
+  ~3 µs each there). Every job queued behind it waited. That stall, not the
+  coalesced commits, was the 1x `turn.create_pair` regression (the seed
+  leaves the WAL just below the threshold; with faster seed commits the
+  crossing moved from a seed write into the first burst) and the bimodal
+  `worker_job.complete` (completions queued behind a phase-stop herd commit
+  that also checkpointed) in
+  [The WAL coalescing VFS on DolphinFS](STORAGE_PERFORMANCE_CHARTER.md#the-wal-coalescing-vfs-on-dolphinfs-2026-11-17).
+  Decision: between `SQLITE_FCNTL_CKPT_START` and `SQLITE_FCNTL_CKPT_DONE`
+  the shim appends each page write that continues the previous one and
+  writes the run (in unix-VFS-sized calls) before any other call on the
+  database file. Checkpoints copy pages in ascending order, so appended
+  rows give runs of about 12 pages. A failed run must fail the checkpoint:
+  SQLite records the backfill right after the copy, and when the copy
+  stops short of the WAL's end (a reader, or a writer appending during a
+  `PASSIVE` checkpoint) no later database call could report a deferred
+  failure. So at `CKPT_START` the shim reads the frames being copied
+  (after `nBackfill` up to `nBackfillAttempted`) and their page numbers
+  from the wal-index (both documented in
+  [the WAL-index format](https://www.sqlite.org/walformat.html)) and finds
+  the highest page the checkpoint certainly copies: a page with a frame in
+  that range, none after it, within the database size. From that page on
+  it writes the pending run and then each page as stock does, so every
+  failure is returned by one of the copy's own writes. Only if SQLite
+  copies nothing from that page on (the database shrank and regrew while
+  the checkpoint started) is a run pending at `CKPT_DONE`; if that write
+  fails the process aborts before SQLite records the backfill, and
+  recovery replays the intact WAL, the same fail-stop the writer uses for
+  a failed rollback. A checkpoint whose wal-index regions the connection
+  has not mapped passes through as stock. Other connections never read
+  the pages in flight: every page copied is in the WAL below their read
+  marks, and `READ_LOCK(0)` excludes readers that ignore the WAL. Bytes
+  and sync order are unchanged.
+  Spec additions: automatic and FULL checkpoints write at least 4x fewer
+  calls than stock with the same syncs, and one stopped short by a reader
+  at least 2x fewer; a failed database write at eight points loses no
+  acknowledged commit with automatic, FULL, reader-stopped and concurrent
+  `PASSIVE` checkpoints. Mutants that buffer the last page or ignore later
+  frames of a page fail them.
+  Alternatives rejected:
+  - Prefetching the WAL range a checkpoint reads: those reads are already
+    cheap on DolphinFS.
+  - A smaller or larger `wal_autocheckpoint`, or deferring checkpoints out
+    of measured phases: tuned knobs (principle 5) that move the stall
+    instead of shrinking it.
+  - Coalescing only whole-WAL checkpoints (the first version): it relied
+    on the checkpointing connection being the only writer, which the
+    checkpointer below is not, and left stopped-short checkpoints at one
+    call per page.
   Other settings measured on the real volume and rejected
   ([SQLite write calls on DolphinFS](STORAGE_PERFORMANCE_CHARTER.md#sqlite-write-calls-on-dolphinfs-2026-11-17)):
   - `page_size=65536`, SQLite's documented maximum: the volume's 512 KiB

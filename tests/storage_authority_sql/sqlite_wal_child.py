@@ -19,6 +19,7 @@ import json
 import shutil
 import sqlite3
 import sys
+import threading
 from pathlib import Path
 
 _SQLITE_TESTCTRL_PRNG_SEED = 28
@@ -42,6 +43,14 @@ def _payload(txn: int, row: int) -> bytes:
     return (seed * (size // len(seed) + 1))[:size]
 
 
+_OUTPUT = threading.Lock()
+
+
+def _say(line: str) -> None:
+    with _OUTPUT:
+        print(line, flush=True)
+
+
 def main() -> None:
     spec = json.loads(sys.argv[1])
     sqlite3.connect(':memory:').close()
@@ -52,23 +61,60 @@ def main() -> None:
     for library in spec.get('extensions', []):
         loader.load_extension(library)
     path = spec['database']
-    if spec.get('vfs'):
-        connection = sqlite3.connect(
-            f"{Path(path).absolute().as_uri()}?vfs={spec['vfs']}", uri=True, isolation_level=None)
-    else:
-        connection = sqlite3.connect(path, isolation_level=None)
+
+    def connect() -> sqlite3.Connection:
+        if spec.get('vfs'):
+            return sqlite3.connect(
+                f"{Path(path).absolute().as_uri()}?vfs={spec['vfs']}", uri=True,
+                isolation_level=None)
+        return sqlite3.connect(path, isolation_level=None)
+
+    connection = connect()
     connection.execute('PRAGMA journal_mode=WAL')
     connection.execute('PRAGMA synchronous=FULL')
     # A small page cache makes large transactions spill frames mid-transaction
     # and rewrite them; frequent checkpoints restart the WAL from offset 0.
     connection.execute(f"PRAGMA cache_size={spec.get('cache_pages', 24)}")
-    connection.execute(f"PRAGMA wal_autocheckpoint={spec.get('checkpoint_pages', 64)}")
+    # 'auto': SQLite's automatic checkpoint, which holds no write lock.
+    # 'full': an explicit FULL checkpoint every eighth transaction, which
+    # holds it; busy_timeout=0 stops one short at a pinned reader at once.
+    # 'concurrent': a second connection runs PASSIVE checkpoints in a thread
+    # while this one commits, as the Sidecar's checkpointer does.
+    full_checkpoints = spec.get('checkpoint') == 'full'
+    concurrent = spec.get('checkpoint') == 'concurrent'
+    if full_checkpoints or concurrent:
+        connection.execute('PRAGMA wal_autocheckpoint=0')
+        connection.execute('PRAGMA busy_timeout=0')
+    else:
+        connection.execute(f"PRAGMA wal_autocheckpoint={spec.get('checkpoint_pages', 64)}")
     connection.execute('CREATE TABLE IF NOT EXISTS t(id INTEGER PRIMARY KEY, txn INTEGER, payload BLOB)')
     connection.execute('CREATE INDEX IF NOT EXISTS t_txn ON t(txn)')
     connection.execute('CREATE TABLE IF NOT EXISTS ledger(txn INTEGER PRIMARY KEY, rows INTEGER)')
     connection.execute('CREATE TABLE IF NOT EXISTS counter(id INTEGER PRIMARY KEY, value INTEGER)')
     connection.execute('INSERT OR IGNORE INTO counter VALUES (1, 0)')
+    # A reader re-pinned every fifth transaction holds a snapshot older than
+    # the WAL's end, so checkpoints stop short of it (partial backfills).
+    reader = connect() if spec.get('pinned_reader') else None
+    done = threading.Event()
+
+    def checkpoint_beside() -> None:
+        checkpointer = connect()
+        while not done.is_set():
+            try:
+                checkpointer.execute('PRAGMA wal_checkpoint(PASSIVE)').fetchone()
+            except sqlite3.Error as exc:
+                _say(f'checkpoint_failed concurrent {exc}')
+        checkpointer.close()
+
+    beside = threading.Thread(target=checkpoint_beside) if concurrent else None
+    if beside is not None:
+        beside.start()
     for txn in range(1, spec['transactions'] + 1):
+        if reader is not None and txn % 5 == 1:
+            if reader.in_transaction:
+                reader.execute('COMMIT')
+            reader.execute('BEGIN')
+            reader.execute('SELECT count(*) FROM ledger').fetchone()
         rows = 150 if txn % 10 == 0 else 1 + txn % 7
         try:
             connection.execute('BEGIN IMMEDIATE')
@@ -94,16 +140,27 @@ def main() -> None:
         except sqlite3.Error as exc:
             if connection.in_transaction:
                 connection.execute('ROLLBACK')
-            print(f'failed {txn} {exc}', flush=True)
+            _say(f'failed {txn} {exc}')
             continue
-        print(f'ack {txn}', flush=True)
+        _say(f'ack {txn}')
+        if full_checkpoints and txn % 8 == 0:
+            try:
+                connection.execute('PRAGMA wal_checkpoint(FULL)').fetchone()
+            except sqlite3.Error as exc:
+                _say(f'checkpoint_failed {txn} {exc}')
+    if beside is not None:
+        done.set()
+        beside.join()
+    if reader is not None:
+        reader.close()
     if spec.get('snapshot'):
         for suffix in ('', '-wal'):
             shutil.copyfile(path + suffix, spec['snapshot'] + suffix)
-    wal_writes, syncs = loader.execute(
-        'SELECT tofu_fault_wal_writes(), tofu_fault_syncs()').fetchone()
+    wal_writes, db_writes, syncs = loader.execute(
+        'SELECT tofu_fault_wal_writes(), tofu_fault_db_writes(), tofu_fault_syncs()').fetchone()
     connection.close()
-    print('stats ' + json.dumps({'wal_writes': wal_writes, 'syncs': syncs}), flush=True)
+    print('stats ' + json.dumps(
+        {'wal_writes': wal_writes, 'db_writes': db_writes, 'syncs': syncs}), flush=True)
 
 
 if __name__ == '__main__':

@@ -2910,9 +2910,9 @@ lazily through `features/world.ts`; nothing of the office is in the first-paint 
 without a route opens `#/world` unless the owner's last explicit choice (`tofu_landing_workspace`, written
 by `application-shell/landing.ts`) is the classic view, and an address that names a route is honoured as
 given. The HUD's "Classic view" button opens `#/chat`; the classic top bar's "Office" link returns.
-The same choice is the presentation mode elsewhere (`readLanding`/`subscribeLanding`): the classic
-view's sidebar never loads the animated lead office (docs/PROJECT_COORDINATION.md, "Lead office"); it shows
-each lead's 成果 list instead, and both views open a deliverable through the one opener in
+The classic sidebar is the classic view's alone (the studio hides it), so it never mounts an animated
+scene whatever the stored choice (docs/PROJECT_COORDINATION.md, "Lead office"); it shows each lead's
+成果 list, and both views open a deliverable through the one opener in
 `features/lead-deliverables/open.ts` (docs/PROJECT_COORDINATION.md, "Lead deliverables").
 `01-workspace-dock.css` places the workspace in the shell grid: HUD across the top, the scene under all of
 the rest, and the application's own conversation column docked over the scene's right side by

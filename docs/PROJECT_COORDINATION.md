@@ -2139,6 +2139,28 @@ contracts, not claims that a running service has loaded this checkout.
 
 ### Lead office (owner decision 2026-11-12)
 
+Status (owner decision 2026-11-17, "经典模式和普通对话一样，动画只留在 Studio"): the
+lead office is not mounted anywhere. The classic sidebar shows each lead as plain
+rows: its entry row, its 成果 list (`features/lead-deliverables/`, "Lead
+deliverables") and the archive of the conversations it started, with each Worker's
+status and the running tally. The studio (`#/world`, `features/world/`) is the only
+animated surface; it hides the classic sidebar (`01-workspace-dock.css`). The
+2026-11-15 rule below gated the sidebar office on the stored landing choice
+(`tofu_landing_workspace`), which is `world` by default and after every studio visit, so the
+office appeared in the classic chat view, the one place that sidebar is seen; that
+mode read and its change subscription are removed with it.
+Problem: the owner saw animated office rooms per Worker under 项目负责人 in the classic
+view. Decision: remove the mount from the common owner (`presence.js`) rather than
+re-key its gate on the shown workspace, because the sidebar is never visible in the
+studio, so no gate could ever show it there. Alternatives considered: gating on
+`body[data-workspace]` (a dead branch: the studio hides the sidebar); hiding the slot
+with CSS (would still load and run the scene). The `features/lead-office/` module,
+its stylesheet and copy remain in the tree, unreferenced by the runtime, until the
+studio redesign decides whether any of it is reused; the text below records its
+design. Specifications: `project-coordination-entry.test.ts` (plain rows whatever the
+stored landing) and `tests/frontend/test_lead_sidebar_plain_browser.py` (real
+browser, both stored landings, studio round trip).
+
 Problem: owners prefer talking to their leads, and the multi-level lead system
 already coordinates the work, so the Goal Studio's game office had become a
 separate destination owners do not open: a game reachable only through its own
@@ -2204,26 +2226,9 @@ office for project leads only omits the main coordinator; a new progress endpoin
 or polling loop would duplicate the assignment, board and report authorities;
 plain list rows lose the spatial, at-a-glance reading the art gives.
 
-The office is the studio mode's sidebar only (owner decision 2026-11-15: "经典模式下，
-侧栏不要显示动画界面"). The mode is the one landing choice of
-`application-shell/landing.ts` (`readLanding()`: `world` is the studio, `chat` the
-classic view, the same rule index.html's pre-paint applies); `presence.js` reads it
-when placing the office and follows `subscribeLanding` for switches in this tab or
-another. In the classic mode the lead's entry row and its conversation group, with
-each Worker's status and the running tally, are the whole team view: the office
-module, its stage, art, render loop and assignment reads are never imported or
-started, and switching to classic hides a shown office, which disposes its stage
-and subscription. Alternatives considered: a CSS rule hiding the office would still
-load and run its scene; a separate sidebar setting would be a second source of
-truth for the same mode choice.
-Specifications: `frontend/src/features/lead-office/*.test.ts`,
-`project-coordination-surface.test.ts` (office facts for the shown entry across
-its project's chats, none for the main view), `coordinator-conversation-group.test.ts`
-(the archive without a running tally), `project-coordination-entry.test.ts` (classic
-mode never loads the office; switching modes shows and hides it) and
-`tests/frontend/test_lead_office_browser.py`
-(floor and headquarters beneath their entries, keyboard doors, the framed room,
-the office kept across navigation, a project floor opening its folder).
+Until 2026-11-17 the office was the studio mode's sidebar only (owner decision
+2026-11-15), keyed on the stored landing choice; that coupling is removed (status
+above). Specifications of the unmounted module: `frontend/src/features/lead-office/*.test.ts`.
 
 ### Lead office art and state mapping (owner request 2026-11-15)
 

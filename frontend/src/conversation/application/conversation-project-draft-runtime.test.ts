@@ -269,8 +269,6 @@ describe('composer delivery into a live reply', () => {
       // The main coordinator header's owner-delegation and portfolio disclosures are not under test here.
       createRouterOwnerDelegation: () => ({ settings: document.createElement('details'), destroy() {} }),
       createRouterPortfolio: () => ({ settings: document.createElement('details'), destroy() {} }),
-      // The classic mode: the sidebar lead office (not under test here) never loads.
-      readLanding: () => 'chat', subscribeLanding: () => () => {},
       openProjectCoordinationWorkspace: vi.fn(), getFolders: () => folders,
       // Retained conversation-list owners the Coordinator groups paint rows and status with.
       _convStatusFlags: () => ({}), mergeConversationCatalogRows: vi.fn(),

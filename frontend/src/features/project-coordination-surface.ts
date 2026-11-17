@@ -27,14 +27,6 @@ export interface CoordinatorProgressObservation {
   projectPath: string; conversationId: string; bindingRevision: number; revision: number;
 }
 
-/** The settled facts of the Coordinator a sidebar entry shows, as that entry painted them. */
-export interface CoordinatorOfficeFacts {
-  scope: ProjectCoordinationPorts;
-  binding: CoordinationBinding;
-  board: CoordinatorProgressBoard | null;
-  report: CoordinatorReportState | undefined;
-}
-
 /** Hub-with-satellites mark: the sidebar entry needed a recognizable identity,
  * not a bare text row that read as a stray label. */
 function coordinationMark(): SVGSVGElement {
@@ -74,9 +66,6 @@ export function createProjectCoordinationSurface(ports: {
   canCreate?(): boolean;
 
   changed?(): void;
-  /** Sidebar: the shown project's bound Coordinator with a task board (facts), or
-   * none (null). The lead office beneath the entry follows these facts. */
-  office?(facts: CoordinatorOfficeFacts | null): void;
 }) {
   let alive = true, generation = 0, pending = false;
   let flight: AbortController | null = null;
@@ -217,17 +206,16 @@ export function createProjectCoordinationSurface(ports: {
         else ports.sidebar.replaceChildren();
         ports.canvas.replaceChildren(); finishedOpen = false; rendered = '';
         lastReport = undefined; acknowledgedTurnId = ''; settled = undefined;
-        ports.office?.(null);
       } else {
         // The previous conversation's canvas must not remain while the new
         // scope reads are in flight: it is repainted from the settled project
-        // reads below, or cleared. Sidebar geometry, the office included, stays stable.
+        // reads below, or cleared. Sidebar geometry stays stable.
         resumed = resumableReads(scope);
         if (!resumed) ports.canvas.replaceChildren();
       }
       unreadInView = null;
     }
-    if (!scope) { unsubscribe?.(); unsubscribe = undefined; subscribedPath = ''; ports.office?.(null); return; }
+    if (!scope) { unsubscribe?.(); unsubscribe = undefined; subscribedPath = ''; return; }
     if (subscribedPath !== scope.path) {
       unsubscribe?.(); subscribedPath = scope.path;
       unsubscribe = scope.subscribe?.(invalidate);
@@ -398,13 +386,8 @@ export function createProjectCoordinationSurface(ports: {
         }
         ports.sidebar.append(row);
       }
-      if (ports.mode === 'sidebar') {
-        // The sidebar owns navigation only, never the active conversation canvas.
-        // A bound Coordinator with a task board shows its team beneath its entry.
-        const shown = norm(ports.sidebarPath()) === norm(scope.path);
-        ports.office?.(shown && binding?.availability === 'available' && scope.progress
-          ? { scope, binding, board: progressBoard, report } : null);
-      } else if (binding?.availability === 'available' && binding.conversationId === scope.currentConversationId) {
+      // The sidebar owns navigation only, never the active conversation canvas.
+      if (ports.mode !== 'sidebar' && binding?.availability === 'available' && binding.conversationId === scope.currentConversationId) {
         if (boardCard) {
           const view: CoordinatorProgressView = progressUnavailable ? { kind: 'unavailable' }
             : progressBoard ? { kind: 'board', board: progressBoard, translation } : { kind: 'empty' };
@@ -511,7 +494,7 @@ export function createProjectCoordinationSurface(ports: {
   }
   return { refresh, recover, coordinatorId, observeProgress, destroy() {
     alive = false; generation++; flight?.abort(); flight = null; pending = false; unreadInView = null;
-    dropBoardCard(); ports.office?.(null);
+    dropBoardCard();
     window.removeEventListener('online', recoverBinding);
     document.removeEventListener('visibilitychange', recoverBinding);
     unsubscribe?.(); coordinatorByPath.clear(); settled = undefined; boardListeners.clear();

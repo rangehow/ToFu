@@ -256,6 +256,8 @@ The toolbar measures last prompt usage / **full** model window, falling back to 
 | Registry ID | Necessity decision and admission | Content-cost policy |
 |---|---|---|
 | `paper_output_repair` | One checkpoint JSON repair after an actual parse failure; shared event writer preserves the existing retry prompt and gives the occurrence provenance | Required; the Paper owner retains its existing one-retry policy |
+| `paper_length_continuation` | Paper report/Q&A/Deepen round ended at the output-token cap, or its stream closed early after answer text; the shared event writer appends the continuation request after the kept partial answer | Required; `lib/paper/length_continuation.py` stops when the model finishes or adds no text (no count cap) |
+| `paper_section_repair` | Adopted Paper report body lacks some (not all) required sections; one request names exactly the missing sections | Required; the report worker owns its single repair round |
 | `platform_static` | Keep platform operating contract as dedicated system prefix; absent in explicit replace-system mode | Required; no advisory clipping; not lossy history |
 | `role_directive` | Keep only for an explicitly specialized role | Required; 5,000 tokens |
 | `goal_objective` | Chat Goal worker's durable objective restated verbatim (inline bound 4,000 chars; byte-stable per run so prefix caching holds and compaction cannot drift scope) | Required; 8,000 tokens |

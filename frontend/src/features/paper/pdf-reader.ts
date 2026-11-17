@@ -2,7 +2,7 @@
  * Public entry: createPdfReader. Owns document/loading/render handles, page shells,
  * reading anchors and teardown. UI chrome owns labels, controls and build tasks.
  */
-import './pdf-reader.css';
+import '../../styles/application/03-pdf-reader.css';
 
 import { createLifecycleScope } from '../../lifecycle';
 import { PAPER_BUILD_LIMITS as limits } from '../../api/paper-build.generated';

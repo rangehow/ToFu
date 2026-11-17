@@ -114,30 +114,6 @@ test('lazy grammar upgrades mounted terminal code, preserves current text and ig
   assert.equal(f.renderer.cacheStats().entries, 0);
 });
 
-test('a late highlighter upgrades mounted terminal code and then requests its lazy grammar', async t => {
-  let release, loads = 0, grammarLoads = 0;
-  const pending = new Promise(resolve => { release = resolve; });
-  const f = fixture(t, { loadHighlighter: () => { loads++; return pending; },
-    ensureHighlightLanguage: async () => { grammarLoads++; return false; }, canEnsureHighlightLanguage: () => true });
-  const root = f.environment.document.querySelector('main');
-  root.innerHTML = f.renderer.render('```js\nknown\n```\n\n```lua\nexotic\n```');
-  assert.equal(root.querySelector('.hljs'), null);
-  assert.equal(f.renderer.cacheStats().entries, 0);
-  f.renderer.render('```js\nstreaming\n```', { streaming: true });
-  await Promise.resolve(); assert.equal(loads, 1);
-  root.querySelector('code').textContent = 'current';
-  f.environment.highlighter = { getLanguage: language => language === 'js',
-    highlight: text => ({ value: `<span class="fresh">${text}</span>` }), highlightAuto: text => ({ value: `<i>${text}</i>` }) };
-  release(); await new Promise(resolve => setImmediate(resolve));
-  const [known, exotic] = root.querySelectorAll('code');
-  assert.equal(known.querySelector('.fresh').textContent, 'current');
-  assert.ok(known.classList.contains('hljs') && exotic.classList.contains('hljs'));
-  assert.equal(exotic.querySelector('i').textContent.trim(), 'exotic');
-  assert.equal(known.dataset.markdownHighlighter, undefined);
-  await new Promise(resolve => setImmediate(resolve)); assert.equal(grammarLoads, 1);
-  assert.match(f.renderer.render('```js\nnext\n```'), /class="fresh"/);
-});
-
 test('late grammar completion after disposal never touches mounted code', async t => {
   let ready = false, release;
   let f, reads = 0;

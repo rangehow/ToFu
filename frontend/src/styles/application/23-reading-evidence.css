@@ -147,6 +147,13 @@
 
 /* Provenance and alternate-language content are tertiary disclosures. */
 
+.conversation-surface .turn-prov {
+  margin: 0 0 var(--space-1);
+  padding: var(--space-1) var(--space-1);
+  color: var(--text-tertiary);
+  font-size: var(--conversation-font-size-caption);
+}
+
 .conversation-surface .bilingual-block {
   margin: var(--space-3) 0 0;
   border: 0;

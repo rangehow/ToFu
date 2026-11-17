@@ -54,7 +54,7 @@ pytestmark = [pytest.mark.visual, pytest.mark.slow]
 # which is the RESULT we assert.
 _SETTINGS_TABS = (
     'general', 'api', 'preset', 'mcp', 'skills', 'knowledge', 'search', 'speech',
-    'translate', 'oauth', 'network', 'devices', 'messaging', 'preferences',
+    'translate', 'oauth', 'network', 'devices', 'feishu', 'preferences',
     'advanced',
 )
 

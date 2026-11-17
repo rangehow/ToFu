@@ -23,7 +23,7 @@ import threading
 import time
 
 from lib.log import get_logger
-from lib.agent_core.model_context_revision import model_context_revision
+from lib.storage.model_continuation import model_context_revision
 from .repository import (CONTRACT, DispatchContention, ProjectDispatchError, _validate_schema,
                          transient_dispatch_failure)
 

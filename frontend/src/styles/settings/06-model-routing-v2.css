@@ -3,7 +3,9 @@
    (07-access-matrix.css); this file carries the card chrome, the shared
    picker/catalog overlay shell, and the small inline parts (capability chips,
    structured pricing, status filter chips) the matrix reuses. */
-.stg-v2-manager-brand span{color:var(--text-muted,#777);font-size:var(--font-size-sm)}
+.stg-v2-intro{display:flex;align-items:baseline;justify-content:space-between;gap:var(--space-4);margin:0 0 var(--space-3);padding:10px 0;border-bottom:1px solid var(--border,#ddd)}
+.stg-v2-intro strong{font-size:var(--font-size-md)}
+.stg-v2-intro span,.stg-v2-manager-brand span{color:var(--text-muted,#777);font-size:var(--font-size-sm)}
 
 /* The v2 card reuses the legacy .stg-provider-card chrome (hard border, offset
    shadow, cream head hover) from the application shell; the rules below only
@@ -56,6 +58,21 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
 .stg-provider-card-v2 .stg-provider-foot-actions .stg-toggle{padding-top:6px;padding-bottom:0}
 .stg-provider-card-v2 .stg-models-section{margin-top:14px;padding-top:14px;border-top:1px solid var(--s-line,rgba(26,24,20,.08))}
 /* Capability chips — matrix root-row meta line and picker/catalog rows. */
+.stg-provider-card-v2 .stg-cap,.stg-v2-manager .stg-cap{padding:2px var(--space-2);border:0;border-radius:999px;background:rgba(26,24,20,.06);color:var(--s-ink-soft,#3d362c);font-size:10px;font-weight:700;letter-spacing:.03em;text-transform:uppercase}
+.stg-provider-card-v2 .stg-cap.text,.stg-v2-manager .stg-cap.text{color:#2563eb;background:rgba(96,165,250,.14)}
+.stg-provider-card-v2 .stg-cap.vision,.stg-v2-manager .stg-cap.vision{color:#7c3aed;background:rgba(167,139,250,.14)}
+.stg-provider-card-v2 .stg-cap.cheap,.stg-v2-manager .stg-cap.cheap{color:#15803d;background:rgba(74,222,128,.14)}
+.stg-provider-card-v2 .stg-cap.image_gen,.stg-v2-manager .stg-cap.image_gen{color:#db2777;background:rgba(244,114,182,.14)}
+.stg-provider-card-v2 .stg-cap.embedding,.stg-v2-manager .stg-cap.embedding{color:#0d9488;background:rgba(45,212,191,.14)}
+.stg-provider-card-v2 .stg-cap.thinking,.stg-v2-manager .stg-cap.thinking{color:#c2410c;background:rgba(251,146,60,.15)}
+.stg-provider-card-v2 .stg-cap.video,.stg-v2-manager .stg-cap.video{color:#a16207;background:rgba(250,204,21,.16)}
+.stg-provider-card-v2 .stg-cap.audio_chat,.stg-v2-manager .stg-cap.audio_chat{color:#0369a1;background:rgba(56,189,248,.14)}
+.stg-provider-card-v2 .stg-cap.video_gen,.stg-v2-manager .stg-cap.video_gen{color:#9333ea;background:rgba(192,132,252,.15)}
+.stg-provider-card-v2 .stg-cap.audio_gen,.stg-v2-manager .stg-cap.audio_gen{color:#b45309;background:rgba(251,191,36,.16)}
+.stg-provider-card-v2 .stg-cap.tts,.stg-v2-manager .stg-cap.tts{color:#0e7490;background:rgba(34,211,238,.13)}
+.stg-provider-card-v2 .stg-cap.transcription,.stg-v2-manager .stg-cap.transcription{color:#4338ca;background:rgba(129,140,248,.14)}
+.stg-provider-card-v2 .stg-cap.reranking,.stg-v2-manager .stg-cap.reranking{color:#4d7c0f;background:rgba(163,230,53,.16)}
+.stg-tpl-wizard-alias{color:var(--s-gold-dim,#a87d2e)!important}
 
 .stg-v2-close{border:1px solid var(--border,#ddd);background:var(--bg-primary,#fff);color:var(--text-primary,#222);font:600 12px/1.2 inherit;cursor:pointer}
 .stg-v2-close:focus-visible{outline:2px solid var(--accent,#6d5dfc);outline-offset:2px}
@@ -82,14 +99,39 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
 .stg-v2-catalog-icon{display:grid;place-items:center}
 
 /* ── 结构化价格件（矩阵根行 meta / catalog 行共用）── */
+.stg-v2-price-cur{margin-right:5px;font-weight:700}
+.stg-v2-price-io{margin-right:2px;color:var(--s-gold-dim,#a87d2e);font-size:9px;font-weight:800}
+.stg-v2-price-sep{margin:0 var(--space-1);opacity:.45}
+.stg-v2-price-tag{margin-left:6px;padding:0 5px;border-radius:4px;background:rgba(201,153,63,.13);color:var(--s-gold-dim,#a87d2e);font-size:9px;font-weight:800;white-space:nowrap}
 
 /* ── 状态过滤 chips（矩阵 manage row 的全部/已启用/已停用/待确认）── */
+.stg-v2-filter-chip{display:inline-flex;align-items:center;gap:5px;padding:var(--space-1) 11px;border:1px solid var(--s-line-strong,rgba(26,24,20,.15));border-radius:999px;background:var(--s-white,#faf8f3);color:var(--s-ink-soft,#3d362c);font-size:var(--font-size-xs);font-weight:700;cursor:pointer;transition:border-color .14s,background .14s,color .14s}
+.stg-v2-filter-chip em{color:var(--text-muted,#777);font-size:10px;font-style:normal;font-weight:800}
+.stg-v2-filter-chip:hover{border-color:var(--s-gold-dim,#a87d2e);color:var(--s-gold-dim,#a87d2e)}
+.stg-v2-filter-chip.active{border-color:var(--s-gold,#c9993f);background:var(--s-gold-glow,rgba(201,153,63,.14));color:var(--s-ink,#1a1814)}
+.stg-v2-filter-chip.active em{color:var(--s-gold-dim,#a87d2e)}
+.stg-v2-filter-chip:focus-visible{outline:2px solid var(--s-gold,#c9993f);outline-offset:2px}
 
 .stg-tpl-wizard{width:min(720px,94vw)}
 .stg-tpl-wizard .stg-modal-body{display:grid;gap:var(--space-3)}
 .stg-tpl-wizard-keylabel{display:grid;gap:6px;color:var(--s-ink,#1a1814);font-size:var(--font-size-sm);font-weight:800}
 .stg-tpl-wizard-key{width:100%;min-height:38px;padding:var(--space-2) 10px;border:var(--s-border,1px solid rgba(26,24,20,.15));border-radius:8px;background:#fff;color:var(--s-ink,#1a1814);font:12px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace}
-.stg-tpl-wizard-key:focus{outline:none;border-color:var(--s-gold,#c9993f);box-shadow:0 0 0 3px var(--s-gold-glow,rgba(201,153,63,.18))}
+.stg-tpl-wizard-key:focus,.stg-tpl-wizard-search:focus{outline:none;border-color:var(--s-gold,#c9993f);box-shadow:0 0 0 3px var(--s-gold-glow,rgba(201,153,63,.18))}
+.stg-tpl-wizard-keyhint{color:var(--s-ink-soft,#3d362c);font-size:var(--font-size-xs);font-weight:500}
+.stg-tpl-wizard-toolbar{display:flex;align-items:center;gap:var(--space-2)}
+.stg-tpl-wizard-search{flex:1;min-width:0;min-height:36px;padding:7px 10px;border:var(--s-border,1px solid rgba(26,24,20,.15));border-radius:8px;background:#fff;color:var(--s-ink,#1a1814);font-size:var(--font-size-sm)}
+.stg-tpl-wizard-count{color:var(--s-ink-soft,#3d362c);font-size:var(--font-size-xs);font-weight:700;white-space:nowrap}
+.stg-tpl-wizard-link{padding:2px var(--space-1);border:0;background:transparent;color:var(--s-gold-dim,#a87d2e);font-size:var(--font-size-xs);font-weight:800;cursor:pointer;white-space:nowrap}
+.stg-tpl-wizard-link:hover{color:var(--s-gold,#c9993f)}
+.stg-tpl-wizard-link:focus-visible{outline:2px solid var(--s-gold,#c9993f);outline-offset:2px}
+.stg-tpl-wizard-list{display:grid;max-height:min(470px,55vh);overflow:auto;border:var(--s-border,1px solid rgba(26,24,20,.15));border-radius:10px;background:#fff}
+.stg-tpl-wizard-row{display:grid;grid-template-columns:auto minmax(0,1fr) minmax(120px,.65fr);align-items:center;gap:10px;min-height:52px;padding:var(--space-2) 10px;border-bottom:1px solid color-mix(in srgb,var(--s-ink,#1a1814) 18%,transparent);cursor:pointer}
+.stg-tpl-wizard-row:last-child{border-bottom:0}
+.stg-tpl-wizard-row:hover{background:var(--s-cream,#f2ecda)}
+.stg-tpl-wizard-identity{display:grid;min-width:0;gap:3px}
+.stg-tpl-wizard-mid{overflow:hidden;color:var(--s-ink,#1a1814);font:800 12px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;text-overflow:ellipsis;white-space:nowrap}
+.stg-tpl-wizard-alias{overflow:hidden;font:10px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;text-overflow:ellipsis;white-space:nowrap}
+.stg-tpl-wizard-meta{color:var(--s-ink-soft,#3d362c);font-size:10px;text-align:right}
 /* ── 本地部署 preset chooser — grouped card tiles（不影响服务商模板下拉的紧凑样式）── */
 .stg-local-deploy .stg-modal-body{gap:var(--space-2)}
 .stg-local-deploy .stg-modal-desc{margin-bottom:6px}
@@ -148,6 +190,7 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
   .stg-template-grid{grid-template-columns:minmax(0,1fr)}
   .stg-template-item,.stg-template-info,.stg-template-name{min-width:0}
   .stg-template-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .stg-v2-intro{align-items:flex-start;flex-direction:column;gap:var(--space-1)}
   .stg-provider-head-v2{align-items:flex-start;flex-wrap:wrap}
   .stg-provider-head-v2 .stg-provider-info{flex:1}
   .stg-provider-head-v2 .stg-provider-badges{order:3;width:100%;justify-content:flex-start;padding-left:42px}
@@ -161,6 +204,10 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
   .stg-v2-picker-row-price{display:none}
   .stg-v2-catalog-row{grid-template-columns:24px minmax(0,1fr)}
   #stgModelCatalogSearch{width:100%}
+  .stg-tpl-wizard-row{grid-template-columns:auto minmax(0,1fr)}
+  .stg-tpl-wizard-meta{grid-column:2;text-align:left}
+  .stg-tpl-wizard-toolbar{align-items:stretch;flex-wrap:wrap}
+  .stg-tpl-wizard-search{flex-basis:100%}
 }
 
 @media (prefers-reduced-motion:reduce){.stg-v2-manager-overlay{backdrop-filter:none}}

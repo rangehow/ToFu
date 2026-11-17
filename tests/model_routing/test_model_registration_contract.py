@@ -7,8 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from tests.support.overlay import private_overlay_installed
-
 pytestmark = pytest.mark.unit
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -192,11 +190,11 @@ def test_capabilities_auto_marker_dropped_by_explicit_toggle_edit():
 def test_glm53_uses_the_complete_registration_shape():
     from lib.provider.provider_template_recipes import offering_recipes
 
-    paths = [ROOT / 'static' / 'provider_templates' / 'glm.json']
-    if private_overlay_installed():
+    for path in (
+        ROOT / 'static' / 'provider_templates' / 'glm.json',
         # The yourprovider template retired into its release-tier bundle.
-        paths.append(ROOT / 'bundles' / 'yourprovider' / 'provider_templates' / 'yourprovider.json')
-    for path in paths:
+        ROOT / 'bundles' / 'yourprovider' / 'provider_templates' / 'yourprovider.json',
+    ):
         template = json.loads(path.read_text(encoding='utf-8'))
         filename = path.name
         recipes = offering_recipes(template, allow_legacy=False)

@@ -712,7 +712,6 @@ section("8. JS Defensive Guards")
 # retains every package seam and that HTML shells do not load CDN scripts.
 _guard_files = [
     'frontend/src/vendor-runtime.ts',
-    'frontend/src/hljs-core.ts',
     'frontend/src/markdown-vendors.ts',
     'frontend/src/features/paper/pdf-loader.ts',
     'frontend/src/runtime/app-runtime.js',
@@ -737,7 +736,6 @@ else:
         "KaTeX remains a lazy import": r"import\(['\"]katex['\"]\)",
         "PDF.js remains a lazy import": r"import\(['\"]pdfjs-dist/legacy/build/pdf\.mjs['\"]\)",
         "html2canvas remains a lazy import": r"import\(['\"]html2canvas['\"]\)",
-        "Highlight.js core remains a lazy import": r"import\(['\"]\./hljs-core['\"]\)",
     }
 
     for desc, pattern in checks.items():

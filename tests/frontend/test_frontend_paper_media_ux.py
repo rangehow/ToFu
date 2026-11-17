@@ -610,8 +610,7 @@ def test_static_i18n_keys():
 
 
 def test_static_css_classes():
-    css = open(os.path.join(ROOT, 'frontend', 'src', 'features', 'paper-reader.css'),
-               encoding='utf-8').read()
+    css = open(os.path.join(ROOT, 'static', 'styles.css'), encoding='utf-8').read()
     for cls in ('.paper-stepper', '.paper-step.is-active',
                 '.paper-step.is-done', '.paper-media-activity',
                 '.paper-media-activity.is-stale', '.paper-video-cell.is-pending'):

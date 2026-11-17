@@ -16,6 +16,8 @@ export interface AlertOptions {
   title: string;
   body?: string;
   dismissible?: boolean;
+  /** Accessible name of the dismiss button in the page's language. */
+  dismissLabel?: string;
   onDismiss?: () => void;
 }
 
@@ -54,7 +56,7 @@ export function createAlert(options: AlertOptions): AlertHandle {
     icon.innerHTML = CLOSE_ICON_SVG;
     const button = createIconButton({
       icon: icon.firstElementChild ?? icon,
-      label: '关闭提示',
+      label: options.dismissLabel ?? '关闭提示',
       size: 'sm',
       onClick: dismiss,
     });

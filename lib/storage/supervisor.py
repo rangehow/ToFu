@@ -1069,6 +1069,7 @@ class StorageSupervisor:
         self._client: StorageClient | None = None
         self._token = ''
         self._intentional_stop = False
+        self._closed = False
         self._starting = False
         self._ready_backend: str | None = None
         self._native_fastpath: dict | None = None
@@ -1362,6 +1363,7 @@ class StorageSupervisor:
                     'Storage sidecar pid=%d was reaped exit_code=%d; its '
                     'project lease is released, starting the successor',
                     predecessor.pid, predecessor_code)
+            self._refuse_start_after_close_locked()
             self._intentional_stop = False
             self._starting = True
             self._ready_backend = None
@@ -1832,6 +1834,7 @@ class StorageSupervisor:
             if self._starting:
                 raise RuntimeError(
                     'storage sidecar startup is already in progress')
+            self._refuse_start_after_close_locked()
             self._intentional_stop = False
             self._starting = True
             self._ready_backend = None
@@ -2257,6 +2260,7 @@ class StorageSupervisor:
                 return self._client  # type: ignore[return-value]
             if self._starting:
                 raise RuntimeError('storage sidecar startup is already in progress')
+            self._refuse_start_after_close_locked()
             self._intentional_stop = False
             self._starting = True
             self._ready_backend = None
@@ -2304,6 +2308,7 @@ class StorageSupervisor:
                 self._starting = False
                 self._client = None
                 self._external_attached = False
+                self._refuse_start_after_close_locked()
             # The restart loop logs only this message, so it carries the cause.
             cause = ('' if last_error is None else
                      f'; last error: {type(last_error).__name__}: '
@@ -2793,6 +2798,27 @@ class StorageSupervisor:
         except Exception as _e:
             logger.debug('close client quietly failed: %s', _e)
             pass
+
+    def _refuse_start_after_close_locked(self) -> None:
+        # Checked under the same lock that re-arms the stop flags: a close that
+        # lands while a start is on its way in must not be undone by that start.
+        if self._closed:
+            raise StorageError(
+                'database_unavailable',
+                'Storage supervisor was closed by its owner and never starts again',
+                retryable=False)
+
+    def close(self, timeout: float = 10.0) -> None:
+        """Stop, and refuse every later start of this supervisor.
+
+        ``stop()`` ends the current authority but a later ``start()`` re-arms
+        it, which crash restarts rely on. An owner that discards the
+        supervisor (process shutdown) closes it instead, so a start still on
+        its way in, such as a boot retry, cannot attach a new authority.
+        """
+        with self._lock:
+            self._closed = True
+        self.stop(timeout=timeout)
 
     def stop(self, timeout: float = 10.0) -> None:
         if self._connection_file is not None:

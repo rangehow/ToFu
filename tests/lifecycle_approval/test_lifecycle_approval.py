@@ -131,7 +131,28 @@ class TestTokenStore:
     def test_decide_twice_rejected(self, store):
         rec = la.create_request('restart')
         assert la.decide(rec['id'], True, provenance=HUMAN_UI) is not None
-        assert la.decide(rec['id'], False, provenance=HUMAN_UI) is None  # already terminal
+        assert la.decide(rec['id'], True, provenance=HUMAN_UI) is None  # already decided
+
+    def test_cancel_after_approval_revokes_the_unconsumed_approval(self, store):
+        """2026-11-17 19:39: the force dialog's cancel reached decide(approved=False)
+        after the approve, got 404 and left a restart approval valid for 600 s."""
+        rec = la.create_request('restart')
+        la.decide(rec['id'], True, provenance=HUMAN_UI)
+
+        revoked = la.decide(rec['id'], False, provenance=HUMAN_UI)
+
+        assert revoked is not None and revoked['status'] == 'denied' and revoked['revoked_at']
+        ok, why = la.validate(rec['id'], 'restart')
+        assert not ok and 'denied' in why
+        ok, _ = la.consume(rec['id'], 'restart')
+        assert not ok
+
+    def test_a_consumed_approval_cannot_be_revoked(self, store):
+        rec = la.create_request('restart')
+        la.decide(rec['id'], True, provenance=HUMAN_UI)
+        assert la.consume(rec['id'], 'restart')[0]
+        assert la.decide(rec['id'], False, provenance=HUMAN_UI) is None
+        assert la.get(rec['id'])['status'] == 'consumed'
 
     def test_list_records_filters(self, store):
         r1 = la.create_request('restart')

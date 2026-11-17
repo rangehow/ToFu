@@ -455,10 +455,10 @@ Rejected: arbitrary splits retaining ambient dependencies; repeated suffix scans
 **Composer/Inspector styles:** Problem: `02-messages-composer.css` mixed 85,875 bytes / 920 lines of field, menus, updates, image receipts and diagnostics. Decision: 22 ordered owners plus the extracted shell owner (largest 83 lines); 17 unchanged copies retain exact admission hashes, while field/Inspector edits pass tokens without exemptions. Only five Inspector owners defer; visible tool anchors, persisted image receipts and Update remain critical. Measurement: critical CSS falls 1,296,877 → 1,275,273 bytes (279,294 → 274,293 gzip); all deferred authoring still counts toward budgets. Alternatives rejected: deferring the whole sheet breaks chat receipts; renamed raw edits evade token admission; a second CSS loader races native preload. Reading and interaction evidence is in `RENDER_CONTRACT.md`.
 
 **Capability and conversation styles:** Problem: one 81,436-byte sheet mixed
-browser setup, Local Control, Memory, branches, references, agent evidence,
+browser setup, Local Control (now the browser extension dialog), Memory, branches, references, agent evidence,
 toasts and reasoning controls. Decision: ten explicit owners (largest 18,987
 bytes), with unchanged copied rules admitted by exact manifest hashes.
-Memory body and Local Control styles use their existing feature imports and
+Memory body and browser extension dialog styles use their existing feature imports and
 Vite's before-visible CSS admission. Memory frame/palette rules remain critical
 before shared mobile rules; shared modal links and capability toggles have a
 critical owner. Memory's responsive body rules move with its panel, and Skills
@@ -502,23 +502,6 @@ budget ownership, and an always-loaded per-owner dynamic import is architecture
 debt (see Paper's `panel-owners.ts` below); shipping the memory fix without crash
 detection, which leaves those crashes unrecorded. Ratchet the ceiling down when a
 structural saving lands.
-
-**Total budget scope.** `scripts/frontend_budget.py` caps the total at 1026 KiB
-gzip. That total counts every file the primary entries (`main.ts`, `admin.ts`)
-load eagerly, each file once: their startup sets and every shared static chunk
-they import. **Problem:** the total used to count the whole module graph,
-including on-demand chunks. Once the feature set outgrew the budget, it reached
-1589.7 KiB on 2026-11-17, and about 430 KiB of that was pdfjs, KaTeX, CodeMirror,
-html2canvas, highlight.js and marked, all in use. Lazy-loading a feature then
-could not lower the number, so the only way to pass was to drop features.
-**Decision (owner, 2026-11-17):** the total excludes on-demand chunks.
-Each async chunk keeps its 120 KiB ceiling, and the pdf.worker keeps its
-standalone URL-asset ceiling. The startup entry, per-chunk and stylesheet
-limits stay as strict as before. A startup regression still fails both its
-entry line and the total. **Alternatives rejected:** raising the total to the
-measured size, because startup bloat could then hide inside headroom that lazy
-chunks no longer use; dropping or replacing in-use libraries to fit a number
-that users don't pay for at startup.
 
 Self-hosted font delivery uses lossless WOFF2 generated from the retained TTF
 sources: the nine converted files total 259,548 bytes instead of 771,600 bytes.
@@ -734,7 +717,7 @@ requesting the application preserves the waterfall. Tests: `main.test.ts`,
   storm (`tests/myday/test_myday_calendar_single_flight.py`).
   `frontend/src/features/background.ts` has no presenter import: cache-first
   digest refresh and reminders can preload without parsing the panel. The
-  board's styles are `frontend/src/features/myday-goals.css`, imported by the same chunk.
+  board's styles are the deferred `16-my-day-goals.css` of the same chunk.
   Static empty, check and delete SVG markup has one immutable typed owner in
   `frontend/src/features/myday/presentation-assets.ts`.
 - Conversation catalog instant-paint metadata lives in the typed
@@ -808,7 +791,7 @@ requesting the application preserves the waterfall. Tests: `main.test.ts`,
   conversation/mode changes release the panel and its PDF resources. Search,
   outline and logs open on demand; verified build locations can follow edits.
   See [Paper builds](PAPER_BUILDS.md#chat-preview) for bounds and verification.
-- Settings retained presenters are demand-loaded as the manifest-owned `settings-presenters` runtime. `frontend/src/features/settings.ts` evaluates the typed Settings owners before that retained island, so every declared typed service is present when the generated runtime closes its dependency boundary. The shell routes `openSettings`, `closeSettings`, `saveSettings`, `switchSettingsTab`, and onboarding's immediate `_oauthLogin` through the feature bridge. Saving keeps its busy latch until feature-toggle writes are acknowledged; a rejected, missing, or failed acknowledgement reaches the footer error and leaves Settings open for retry. Routing-authority reads are coalesced and retried before dependent speech/routing persistence. Reassignable shell state and Settings working copies cross the private registry through live accessors; a captured array, set, boolean, or cache reference is not an acceptable lazy-runtime dependency. Optional panel presentation follows the same residency boundary: the Devices tab imports `frontend/src/features/settings/devices.css`; the Database tab owner (`database.ts` with its `database.css`) and the channel tab owners (`dx-channel.ts`, `github-channel.ts`, `bot-channel.ts`, sharing `channel-settings.css` through `channel-settings-view.ts`) are separate chunks that `tab-activation.ts` demand-loads on the first visit, keeping them out of the Settings async budget; Skills and Preferences tab rules ride their lazy feature entries (`skills/skills.css`, `memory/preferences.css`); the modal shell, access matrix, MCP and system-prompt rules sit beside their Settings owners (`settings-shell.css`, `access-matrix.css`, `mcp.css`, `system-prompt-editor.css`) while shared `.stg-*` chrome the Devices panel and the update card use stays in the startup sheet; the Tools inventory owns its complete base/comfort rules in `tools-inventory.css`, and shared modal-only refinements live in `settings-comfort.css`. A manifest-generated CSS entry imports ordered base sections before those refinements; Vite waits for CSS before invocation. The project-folder remote-device picker stays eager because it can render without opening Settings.
+- Settings retained presenters are demand-loaded as the manifest-owned `settings-presenters` runtime. `frontend/src/features/settings.ts` evaluates the typed Settings owners before that retained island, so every declared typed service is present when the generated runtime closes its dependency boundary. The shell routes `openSettings`, `closeSettings`, `saveSettings`, `switchSettingsTab`, and onboarding's immediate `_oauthLogin` through the feature bridge. Saving keeps its busy latch until feature-toggle writes are acknowledged; a rejected, missing, or failed acknowledgement reaches the footer error and leaves Settings open for retry. Routing-authority reads are coalesced and retried before dependent speech/routing persistence. Reassignable shell state and Settings working copies cross the private registry through live accessors; a captured array, set, boolean, or cache reference is not an acceptable lazy-runtime dependency. Optional panel presentation follows the same residency boundary: the Tools inventory owns its complete base/comfort rules in `tools-inventory.css`, and shared modal-only refinements live in `settings-comfort.css`. A manifest-generated CSS entry imports ordered base sections before those refinements; Vite waits for CSS before invocation. The project-folder remote-device picker stays eager because it can render without opening Settings.
 - The composer has one compact **conversation bar**, owned by `features/conversation-bar/{project-context,context-meter,turn-navigation}.ts` and `25-conversation-bar.css`. Project location is the left segment of a content-sized project cluster: Auto stays beside the names. Idle width lives in the strip between Auto and the meter, not inside a stretched trigger. Names that fit that leftover (strip minus Auto/meter/turns/chrome) join with a middle dot; `+N` only counts names that do not. Labels are measured at `max-content` so ellipsis stretch cannot collapse a fit to `+N`. A ResizeObserver on the strip/bar (and sibling mutations) refits the list and is disconnected on destroy. A literal context meter and fixed previous/count/next follow it. There is no pet, scene, pocket, separate project card or ornamental sphere. Native buttons open shared nonmodal `disclosure.ts` panels for full paths and permissions, context counts/compaction actions, and a TurnStore jump list. Named container queries compact labels by actual pane width, not only screen width. Narrow panes move Auto/Manual into project details; the bar never wraps. Panels become fixed before anchor measurement so body flex cannot shift the UI. Escape returns focus; native outside click/focus wins, and resize/scroll/ hidden-page dismissal releases the panel's temporary listeners. Retained project/context/turn adapters inject existing command and accounting ports, not another store. Exact rank jumps hydrate stable IDs through the v3 coordinator, then the Surface mounts its bounded 80-turn window and aligns through the viewport owner. Instant alignment and one cancellable layout correction replace competing native smooth scrolling; lazy-history frames are invalidated before a jump. The directory shows the authoritative round total and mounts at most 50 rows with numeric/first/last access, not loaded-body arithmetic. Late history responses are fenced by view generation; project permission/clear completion shares the project controller's navigation generation. Manual compaction is single-flight per page and its progress is visible only in the originating conversation. UI previews cap text at 24,000 characters; durable summaries stay server-owned. Specs: `node --test tests/context_meter.test.cjs tests/turn_navigation.test.cjs tests/project_location.test.cjs`, `tests/conversation/test_conversation_bar_browser.py`, Surface window/reveal tests and `tests/visual/test_visual_turn_jump_scroll.py`.
 - Timer creation settles an immutable `timerReceipt` through ordinary tool-result metadata; typed cards describe the background handoff after reload without a waiting-task spinner or browser timer. Live panel rows distinguish code predicates, ready dispatch, fired, failed and expired states; desktop/mobile evidence lives in `tests/visual/test_visual_timer_panel.py`. Update, Timer, and Optimizer retained presenters are one demand-loaded
   `utility-panels` runtime behind `frontend/src/features/utility-panels.ts`.
@@ -850,36 +833,59 @@ requesting the application preserves the waterfall. Tests: `main.test.ts`,
   `runtimeScope`, while the lazy presenter is the sole writer, preserving drop
   arbitration without a browser global or captured state.
 - The Project folder workbench is the manifest-owned, demand-loaded `project-presenters` runtime behind `frontend/src/features/project.ts`. Core project state, bar rendering, restore/SSE reconciliation, and background rescan remain retained because they run without the modal. A conversation restore carries its primary recent-path intent inside the same `setPaths` request; an explicit workbench apply carries a primary-first prefix of at most 32 selected roots without truncating the authoritative project list. The browser owns no second recent-path write, and background/status reconciliation omits the optional intent. Write approvals, subprocess stdin, and apply-code confirmation remain in the small retained `execution-interactions.js` section, so coding actions neither wait for nor retain the folder browser. The generated presenter imports its typed browse coordinator, the shared folder browser (`features/project/folder-browser.ts`) and static icon owner only on demand; the section only binds the staged workspace, drop zone and remote-device group to that browser. Mutable conversation/project authority crosses one frozen `ProjectPresentationShellState` live accessor object; individual values must not be captured through `featureRegistry`. The retained clear path probes the optional `ProjectModalPresentation` cleanup owner and never invokes the open/close feature stub, preventing an idle clear from fetching the workspace.
-- Local Control's modal, capability status probes, node list and pairing
-  ("Add a machine": one click mints `POST /api/v4/desktop/pair-code?base=`
-  with the page's live origin + `BASE_PATH`, shows the link, 6-digit code and
-  a countdown until a new node appears; Remove uses
-  `DELETE /api/v4/desktop/nodes/<id>` or revokes an offline credential),
-  download/diagnostic presentation, three-second open-modal poll, and
-  browser-assisted desktop poll relay are the manifest-owned, demand-loaded
-  `local-control-presenters`
-  runtime behind `frontend/src/features/local-control.ts`. The retained
-  `local-control-state.js` section owns only the merged permission badge,
-  which counts the desktop switch (the browser is always on and has no
-  switch), and reads reachability through the optional live
-  `LocalControlPresentationState`; an absent owner means unprobed, not broken.
-  Reachability is an observation that only the open modal's poll maintains,
-  so opening the menu that holds the row asks a loaded owner to re-probe both
-  status endpoints once (reachability and the row only; the closed modal is
-  not repainted). The row therefore never presents a closed session's answer,
-  and a never-requested owner is not loaded for it. Clearing reachability on
-  close was rejected because unknown reads as healthy (an enabled desktop whose
-  agent dropped would look live), and a background poll would add an interval
-  for a row that is visible only while its menu is open.
-  The independent browser/desktop wire flags cross one frozen
-  `LocalControlShellState` getter port and remain conversation-owned. Normal
-  boot, generic `misc` commands, badge repaint, and modal close paths do not
-  import the workbench. The exact `#tofu-agent-relay` native-agent deep link is
-  the sole boot-time exception: the typed feature prepares the relay owner for
-  thirty minutes without opening the modal. Opening the modal starts its
-  bounded status poll and closing it clears that interval; modal open alone
-  never scans localhost because Chromium may require Local Network Access
-  permission.
+- **Computer control has no browser surface (owner decision 2026-11-17).**
+  Problem: the "Local Control" (本机控制) surface framed device control as
+  local, while Tofu is moving to seamless, consistent connections with many
+  kinds of devices; its pairing, node list, Settings → Devices tab and
+  Project-panel remote-device picker would have to be relearned under the new
+  design. Decision: remove every frontend entry point for computer control —
+  the composer Extras and mobile rows, the dialog with its desktop switch,
+  pairing, node list, diagnostics inbox and browser-assisted SSO poll relay,
+  the Settings → Devices tab and its `setting:devices` jump target, and the
+  Project-panel remote-device group — removed, not flag-hidden, with the copy
+  that only served them. Device tools, the deep link and Settings → Devices
+  now belong to the Devices workspace below. The backend (desktop wire,
+  node protocol, pairing, device waits, remote worktrees and their HTTP
+  routes) is unchanged, and conversations already bound to a `remote:` path
+  still restore. Where multi-device connectivity lives in the UI is decided by
+  the multi-device design in [remote execution](modules/remote_execution.md).
+  Alternatives rejected: hiding the surface behind a feature flag (dead code
+  that still ships and drifts) and keeping the desktop half under a new name
+  (pre-empts the multi-device design).
+- **Devices workspace: computer control returns as a device capability**
+  ([multi-device design](MULTI_DEVICE_NETWORK_DESIGN.md) §9, decision 4).
+  Problem: the removal above left pairing, fleet health and permissions with
+  no home, and a Settings tab cannot show a fleet. Decision: a top-level
+  workspace `#/devices` (`page-host.ts` workspace `devices`,
+  `features/devices.ts`, lazy chunk with `38-devices.css`) holds the Home
+  card, the fleet grouped by kind with live health, the add-device wizard
+  (`#/devices/add[/<nodeId>]`: kind → one-shot code/link/one-line headless
+  command → confirm the pending node with its fingerprint → name, Home-ceiling
+  preset, default), the device drawer (`#/devices/<key>`: health, Home /
+  Device (read-only) / Effective capability table, default per kind, remove &
+  revoke) and the topology explainer. A sidebar-foot pill
+  (`#sidebarDevicesPill`, a plain link; `features/devices-pill.ts` loads at
+  idle) shows `online/total` and attention. One store
+  (`features/devices/live.ts`) joins the Home's registries and re-reads only
+  on the owner `notify` frame `devices.changed` and on push reconnect — no
+  polling; while the push channel is down rows say "last known", a failed
+  source keeps its last good value and is named, and a changed Home boot ID is
+  announced as a restart. Settings → Devices keeps only the default device
+  per kind and pending device waits, plus a link to the page. The browser no
+  longer sends `desktopEnabled`: the Home decides device tools for the owner's
+  attended turn (`lib/conv_config/_resolve.py`, Home ceiling ∩ device switch).
+  The node's `#tofu-agent-relay` deep link starts the browser relay
+  (`features/devices/relay.ts`, broker protocol unchanged) and lands on the
+  page. Alternatives rejected: keeping the fleet in Settings (no health at a
+  glance) and a sidebar device list (grows with every device).
+- The browser extension dialog (install, upgrade and connection status of the
+  Tofu extension) is the manifest-owned, demand-loaded
+  `browser-extension-presenters` runtime behind
+  `frontend/src/features/browser-extension.ts`, opened from Settings → Search
+  & Web Access ("Install or upgrade extension") and from a site adapter's
+  upgrade action. It shows one detected-state instruction over a static
+  floor, polls `GET /api/v4/browser/status` every three seconds only while
+  open, and clears the interval on close.
 - Debug Panel and Request Inspector DOM, task/payload/trace reads, live TurnStore subscription, poll and six Inspector CSS owners belong to the demand-loaded `diagnostics-presenters` entry. Native `diagnostics-message-disclosure.ts` supplies UI disclosure buttons. CSS preload completes before markup; closed panels load neither these sheets nor the runtime. The retained
   `core/debug_state.js` authority owns only evidence that must exist before a
   panel opens: diagnostics/error and per-task snapshot bounds, clipboard
@@ -1092,23 +1098,6 @@ requesting the application preserves the waterfall. Tests: `main.test.ts`,
   Composition installs line breaks and a strict-GFM delete tokenizer before
   retained rendering code runs. A tokenizer miss returns `undefined` to stop
   Marked v12 from falling through to its permissive single-tilde rule.
-- highlight.js is never in the startup graph: `vendor-runtime.ts` loads
-  `hljs-core.ts` (core plus the high-frequency chat grammars) on the first
-  settled code block and other grammars from `hljs-lazy-langs.ts`. Until the
-  core arrives code renders as plain text; `markdown/code-blocks.ts` then
-  highlights the mounted terminal blocks its renderer produced. The theme
-  stylesheet stays in the startup sheet so its cascade position is unchanged.
-- Demand-loaded features own their CSS beside the importing module (for
-  example `features/settings/settings-shell.css`, `features/myday-panel.css`,
-  `features/paper/preview-*.css`); `frontend/src/styles/application/` holds
-  only startup-composed sections. Rules move with an owner only when every
-  class they name is rendered by that owner alone. The Paper podcast/video
-  studio rules ride `features/paper-reader.css` with `paper-media-presenters`.
-- Startup code that only a user action or a later read needs is imported on
-  that demand: the inline turn editor loads on the first Edit
-  (`_editNativeTurn`; reconciliation runs only once it exists), and the Global
-  Router's Worker-model and standing-instruction settings load when a read
-  binds the router, since its header shows only then.
 - Product copy uses the generated `I18nKey`/`Translator` contract. The source
   locales named by `frontend/src/i18n/languages.json` (zh, en) are the only key
   and placeholder authority; feature-local string-key translator interfaces
@@ -1283,12 +1272,7 @@ requesting the application preserves the waterfall. Tests: `main.test.ts`,
   alternate grouping policies or browser globals.
 - Brand detection and brand badge rendering live separately in
   `frontend/src/core/model-brand-detection.ts` and
-  `frontend/src/core/model-brand-icons.ts`. The retained `_brandSvg` alias is
-  `core/model-brand-badge.ts`: it renders the sized badge at once and loads the
-  SVG registry as its own chunk on first use; the registry defines the
-  `<tofu-brand-mark>` element each early badge holds, so mounted and later
-  inserted marks upgrade in place (a MutationObserver or re-render pass was
-  rejected: cached HTML inserted after the load would stay empty). Model/provider text and natural,
+  `frontend/src/core/model-brand-icons.ts`; model/provider text and natural,
   numeric-aware ordering live in `frontend/src/core/model-display-names.ts`.
   Catalog lookups are injected and remain live, while retained `_detectBrand`,
   `_brandSvg`, and model-sort names are module-private prelude aliases only.
@@ -1399,7 +1383,7 @@ sufficient.
 | Demand-loaded Image Generation presentation and live composer state | manifest bundle `image-generation` + `frontend/src/features/image.ts` + `ImageGenerationComposerState` |
 | Demand-loaded local Knowledge Workbench in Settings and drop state | manifest bundle `knowledge-presenters` + `frontend/src/features/settings/knowledge-tab.ts` |
 | Demand-loaded Project workspace with retained state/coding interactions | manifest bundle `project-presenters` + `frontend/src/features/project.ts` + `ProjectPresentationShellState` |
-| Demand-loaded Local Control with retained merged badge | manifest bundle `local-control-presenters` + `frontend/src/features/local-control.ts` + `LocalControlShellState` |
+| Demand-loaded browser extension dialog | manifest bundle `browser-extension-presenters` + `frontend/src/features/browser-extension.ts` |
 | Demand-loaded Debug/Request Inspector with retained bounded evidence | manifest bundle `diagnostics-presenters` + `frontend/src/features/diagnostics-presenters.ts` + `DebugShellState` |
 | Demand-loaded Compaction Viewer with typed bounded history projection | manifest bundle `compaction-viewer-presenters` + `frontend/src/features/compaction-viewer.ts` + `core/compaction-history-state.ts` |
 | Generated Orchestration request projection and stable endpoint facade | `frontend/src/features/orchestration/request-contracts.generated.ts` + `api-client.ts` |

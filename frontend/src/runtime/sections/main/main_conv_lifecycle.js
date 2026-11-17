@@ -151,7 +151,6 @@ function loadConversation(id) {
       fetchEnabled: !!fetchEnabled,
       codeExecEnabled: !!codeExecEnabled,
       browserEnabled: !!browserEnabled,
-      desktopEnabled: !!desktopEnabled,
       memoryEnabled: !!memoryEnabled,
       schedulerEnabled: !!schedulerEnabled,
       autopilotEnabled: !!autopilotEnabled,
@@ -738,7 +737,6 @@ function _buildToolbarOverrides() {
     memoryEnabled,
     schedulerEnabled,
     browserEnabled,
-    desktopEnabled,
     imageGenEnabled,
     imageGenMode,
     imageGenModel: _igSelectedModel,
@@ -757,7 +755,7 @@ function _buildToolbarOverrides() {
     // translates the assistant reply to it instead of the old Chinese hard-pin.
     uiLang: (typeof _i18nLang !== 'undefined' ? _i18nLang : 'zh'),
     autoApply: autoApplyWrites,
-    /* _browserClientId is refreshed only while the Local Control panel is
+    /* _browserClientId is refreshed only while the browser extension dialog is
      * open. Outside it, fall back to the DOM stamp the LOCAL extension left
      * on this document (origin_marker.js) so a conversation started without
      * ever opening the panel still pins automation to THIS machine instead

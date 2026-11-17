@@ -3,36 +3,75 @@
   "responsibility": "Ordered authoring sections for the generated application stylesheet.",
   "output": "static/styles.css",
   "sections": [
-    { "path": "03-rich-surfaces.css", "responsibility": "Composable native response surfaces" },
-    { "path": "18-artifact-review.css", "responsibility": "Version-bound owner review within the artifact panel" },
-    { "path": "18-artifact-file-card.css", "responsibility": "Published attachment card and presentation page preview within the artifact panel" },
-
-    { "path": "03-rich-response.css" },
-
-    { "path": "03-rich-choices.css", "responsibility": "Owner-bound human guidance layout" },
-
-    { "path": "03-rich-citations.css", "responsibility": "Supplied-source citation chips and preview dialogs" },
-
-    { "path": "03-data-chart.css", "responsibility": "Native bounded numeric data charts" },
+    {
+      "path": "03-rich-surfaces.css",
+      "responsibility": "Composable native response surfaces"
+    },
+    {
+      "path": "18-artifact-review.css",
+      "responsibility": "Version-bound owner review within the artifact panel"
+    },
+    {
+      "path": "18-artifact-file-card.css",
+      "responsibility": "Published attachment card and presentation page preview within the artifact panel"
+    },
+    {
+      "path": "03-rich-response.css"
+    },
+    {
+      "path": "03-rich-choices.css",
+      "responsibility": "Owner-bound human guidance layout"
+    },
+    {
+      "path": "03-rich-citations.css",
+      "responsibility": "Supplied-source citation chips and preview dialogs"
+    },
+    {
+      "path": "03-data-chart.css",
+      "responsibility": "Native bounded numeric data charts"
+    },
     {
       "path": "00-design-tokens.css"
     },
     {
       "path": "01-shell-navigation.css"
     },
-    { "path": "01-workspace-dock.css", "responsibility": "World workspace shell grid: the office scene with the conversation column docked beside it" },
-    { "path": "01-message-surfaces.css", "responsibility": "Avatar letter gradients, reading measure, message media, live translation and search result cards" },
-    { "path": "01-conversation-review.css", "responsibility": "Completed replies awaiting review in the conversation sidebar" },
-
+    {
+      "path": "01-workspace-dock.css",
+      "responsibility": "World workspace shell grid: the office scene with the conversation column docked beside it"
+    },
+    {
+      "path": "38-devices-pill.css",
+      "responsibility": "Sidebar Devices status pill and the Devices workspace shell rules"
+    },
+    {
+      "path": "01-message-surfaces.css",
+      "responsibility": "Avatar letter gradients, reading measure, message media, live translation and search result cards"
+    },
+    {
+      "path": "01-conversation-review.css",
+      "responsibility": "Completed replies awaiting review in the conversation sidebar"
+    },
     {
       "path": "31-folder-settings.css",
       "responsibility": "Sidebar folder settings workbench: default roots rail and searchable recents"
     },
-
-    { "path": "32-agent-sidebar-dock.css", "responsibility": "Keyed background-agent dock and responsive right-hand rail" },
-    { "path": "35-global-router.css", "responsibility": "Main coordinator (Global Router) card slot, its compact conversation header and the compact Router controls it hosts: Worker model, standing instructions, Act for me and health checks" },
-    { "path": "35-router-watchdog.css", "responsibility": "Health checks (Router Watchdog) fold body in the main coordinator's header (one sentence and the way into its chat), and the Watchdog conversation header" },
-    { "path": "02-inspector-tool-anchors.css", "responsibility": "inspector tool anchors" },
+    {
+      "path": "32-agent-sidebar-dock.css",
+      "responsibility": "Keyed background-agent dock and responsive right-hand rail"
+    },
+    {
+      "path": "35-global-router.css",
+      "responsibility": "Main coordinator (Global Router) card slot, its compact conversation header and the compact Router controls it hosts: Worker model, standing instructions, Act for me and health checks"
+    },
+    {
+      "path": "35-router-watchdog.css",
+      "responsibility": "Health checks (Router Watchdog) fold body in the main coordinator's header (one sentence and the way into its chat), and the Watchdog conversation header"
+    },
+    {
+      "path": "02-inspector-tool-anchors.css",
+      "responsibility": "inspector tool anchors"
+    },
     {
       "path": "02-composer-geometry.css",
       "responsibility": "composer geometry",
@@ -463,7 +502,10 @@
     {
       "path": "13-tofu-theme-composer-tools.css"
     },
-    { "path": "14-selection-popup.css", "responsibility": "Selection actions and composer quote previews" },
+    {
+      "path": "14-selection-popup.css",
+      "responsibility": "Selection actions and composer quote previews"
+    },
     {
       "path": "14-browser-setup.css",
       "responsibility": "Browser setup instructions and desktop capability state",
@@ -577,5 +619,15 @@
     }
   ],
   "deferredSections": [
+    {
+      "path": "38-devices.css",
+      "responsibility": "Devices workspace: fleet page, device drawer, add-device wizard and topology",
+      "featureEntry": "frontend/src/features/devices.ts"
+    },
+    {
+      "path": "14-browser-extension.css",
+      "responsibility": "Browser extension dialog: capability card, install instruction and connection status",
+      "featureEntry": "frontend/src/features/browser-extension.ts"
+    }
   ]
 }

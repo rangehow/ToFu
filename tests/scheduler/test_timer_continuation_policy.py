@@ -328,7 +328,15 @@ def test_continuation_shares_the_creating_turns_replay_witness(monkeypatch):
         _deliver(monkeypatch, _timer_tools_config(creator), settings)['config'])
 
     checkpoint = {'policyFields': _policy_fields(creator)}
-    assert policy_witness_drift(checkpoint, continuation) == []
+    # The owner's attended turn has device tools (lib/conv_config/_resolve.py,
+    # docs/modules/remote_execution.md "Device routing and permissions"); a
+    # scheduled turn never gains that attended capability, so it is the one
+    # field that differs and the continuation rebuilds cold.
+    assert creator['desktopEnabled'] is True and continuation['desktopEnabled'] is False
+    assert policy_witness_drift(checkpoint, continuation) == ['desktopEnabled']
+    creator_without_devices = {**creator, 'desktopEnabled': False}
+    assert policy_witness_drift({'policyFields': _policy_fields(creator_without_devices)},
+                                continuation) == []
 
 
 # ── A steered continuation that fell back to the queue ──────────────────────

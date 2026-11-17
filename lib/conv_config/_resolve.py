@@ -187,8 +187,14 @@ def resolve_conv_config(
             _coerce_bool(conv.get('browserEnabled')),
             is_active=is_active,
         ),
+        # Always on for the owner's own attended turn: the composer no longer
+        # has a computer-control toggle (removed until the Devices page lands),
+        # so its stale ``false`` must not hide the tools. Each call is placed
+        # and permission-checked by the device routing (lib/desktop/routing.py)
+        # and the family is offered only while one of the owner's devices is
+        # online. Scheduled, delegated and Worker turns keep their explicit False.
         'desktopEnabled': _pick(
-            _coerce_bool(ov.get('desktopEnabled')),
+            True,
             _coerce_bool(conv.get('desktopEnabled')),
             is_active=is_active,
         ),

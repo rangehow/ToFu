@@ -1,48 +1,13 @@
-"""tests/server/test_devices_panel_and_platform_download.py — the Devices settings
-page must actually be STYLED, must paint its two lanes as one generation, and
-the desktop download must name the file for the user's platform.
+"""tests/server/test_platform_download.py — the desktop download must name
+the file for the user's platform, and the Settings desktop card must render it.
 
 WHAT THIS GUARDS
 ----------------
-Three defects, all measured on the shipped tree before this suite existed.
-
-1. **The panel was never styled at all.** ``devices.html`` +
-   ``settings/devices.js`` between them use nine classes — ``stg-desc``,
-   ``stg-row``, ``stg-table``, ``stg-dim``, bare ``stg-btn``,
-   ``devices-agent-row``, ``devices-offline``, ``devices-online-dot``,
-   ``devices-token-row`` — and every one of them had **zero** rule in
-   ``styles.css`` AND zero in ``settings.css``. So the browser fell back to
-   its defaults: an unstyled ``<table>``, a system ``<button>``, ``<p>`` with
-   nothing but default margin. This is not "ugly design", it is *the absence
-   of design*, and no amount of tweaking existing rules could have fixed it
-   because there were no existing rules.
-
-   ``.stg-*`` is shared settings chrome and lives in ``styles.css``;
-   ``.devices-*`` is page-specific and loads with the typed Devices owner.
-
-2. **A lane must always reach a terminal state.** (Historically two lanes;
-   paired credentials are now listed as nodes, so one lane remains.)
-   ``_populateDevicesTab`` reset
-   ``devicesAgentsList`` to a loading line but never touched
-   ``devicesTokensList``. One request fed both lanes, so the screen could show
-   "loading…" above a settled "no tokens yet" — two different answers to the
-   same question at the same instant.
-
-   Worse, ``Api.desktop.devices()`` is declared ``{onError:'null'}``, which
-   api.js documents as *"rejections become null"*. A dead backend therefore
-   **resolves** with ``null`` and lands in ``.then``, so the ``.catch`` branch
-   that painted the ⚠ line was structurally unreachable and "loading…" could
-   stay on screen forever. A lane must always reach a terminal state.
-
-3. **The download link made the user guess.** ``_desktop_download_url``
-   returned only ``…/releases/latest`` — a page carrying five assets (two
-   DMGs, an .exe, a .tar.gz, SHA256SUMS). The user had to know which one their
-   machine takes.
-
-   The asset names must be derived from the ONE list in
-   ``scripts/release_assets.py``; a sixth hand-typed copy in a route would
-   drift the moment a platform is added (and the release gates would keep
-   passing, because they only know the platforms still on their own list).
+The download link once made the user guess: ``_desktop_download_url``
+returned only ``…/releases/latest`` — a page carrying five assets (two DMGs,
+an .exe, a .tar.gz, SHA256SUMS). The asset names must be derived from the ONE
+list in ``scripts/release_assets.py``; a hand-typed copy in a route would
+drift the moment a platform is added.
 
 THE macOS TRAP
 --------------
@@ -57,7 +22,6 @@ open, which is strictly worse than asking them to choose.
 
 from __future__ import annotations
 
-import functools
 import importlib.util
 import json
 import os
@@ -74,18 +38,11 @@ from tests._jsdom import require_node_modules
 pytestmark = pytest.mark.unit
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-STYLES_CSS = ROOT / "static" / "styles.css"
-SETTINGS_CSS = ROOT / "static" / "settings.css"
-DEVICES_JS = ROOT / "frontend" / "src" / "features" / "settings" / "devices.ts"
-DEVICES_CSS = ROOT / "frontend" / "src" / "features" / "settings" / "devices.css"
-SETTINGS_ENTRY = ROOT / "frontend" / "src" / "features" / "settings.ts"
-DEVICES_HTML = ROOT / "static" / "settings_panels" / "devices.html"
 ASSET_SCRIPT = ROOT / "scripts" / "release_assets.py"
+CLIENT_DOWNLOADS_TS = ROOT / "frontend" / "src" / "features" / "settings" / "client-downloads.ts"
 
-from tests._runtime_sections import native_module_path, runtime_section_path
+from tests._runtime_sections import native_module_path
 
-PROJECT_JS = Path(runtime_section_path('project.js'))
-LC_JS = Path(runtime_section_path('local-control.js'))
 
 
 def _node() -> str:
@@ -94,271 +51,8 @@ def _node() -> str:
     return exe
 
 
-def _strip_css_comments(css: str) -> str:
-    return re.sub(r"/\*.*?\*/", "", css, flags=re.S)
-
-
-@functools.lru_cache(maxsize=1)
-def _styles() -> str:
-    return _strip_css_comments(STYLES_CSS.read_text(encoding="utf-8"))
-
-
-@functools.lru_cache(maxsize=1)
-def _settings() -> str:
-    return _strip_css_comments(SETTINGS_CSS.read_text(encoding="utf-8"))
-
-
-@functools.lru_cache(maxsize=1)
-def _devices() -> str:
-    return _strip_css_comments(DEVICES_CSS.read_text(encoding="utf-8"))
-
-
-def _has_rule(css: str, cls: str) -> bool:
-    """True when ``css`` declares at least one rule whose selector names ``cls``.
-
-    Matches the class as a whole token followed by something that can legally
-    continue a selector — so ``.stg-btn`` is NOT satisfied by ``.stg-btn-danger``
-    (the defect: every variant existed, the base did not).
-    """
-    return re.search(r"\.%s(?![\w-])[^{}]*\{" % re.escape(cls), css) is not None
-
-
 # ══════════════════════════════════════════════════════════════════
-#  1. The panel must have styles at all
-# ══════════════════════════════════════════════════════════════════
-
-# Shared settings chrome — styles.css owns it (test_settings_panels_parity's
-# split rule: only page-specific prefixes move to settings.css).
-_SHARED_CHROME = ("stg-desc", "stg-row", "stg-table", "stg-dim", "stg-btn")
-
-# Page-specific — the lazy typed Devices feature owns it.
-_PAGE_SPECIFIC = ("devices-agent-row", "devices-offline",
-                  "devices-online-dot", "devices-tiers", "devices-remove-btn")
-
-
-@pytest.mark.parametrize("cls", _SHARED_CHROME)
-def test_shared_settings_chrome_is_defined(cls):
-    """THE REGRESSION. Each of these had ZERO rules in either stylesheet.
-
-    ``stg-btn`` is the sharpest case: ``.stg-btn-danger`` / ``-add`` / ``-icon``
-    / ``-balance`` all existed, so the name *looked* defined — but the Devices
-    page uses the BARE class for its two primary buttons, and no bare rule was
-    ever written. Both buttons rendered as raw system chrome.
-    """
-    assert _has_rule(_styles(), cls), (
-        f".{cls} has no rule in styles.css. It is used by the Devices settings "
-        f"panel, so without one the element falls back to browser defaults — "
-        f"which is exactly how this page shipped unstyled."
-    )
-
-
-@pytest.mark.parametrize("cls", _PAGE_SPECIFIC)
-def test_page_specific_device_classes_are_defined(cls):
-    """The node table had no rules either."""
-    assert _has_rule(_devices(), cls), (
-        f".{cls} has no rule in the lazy Devices stylesheet. Page-specific "
-        "styles belong beside devices.ts; styles.css keeps shared .stg-* chrome."
-    )
-
-
-def test_settings_feature_imports_device_styles():
-    assert "import './settings/devices.css';" in SETTINGS_ENTRY.read_text(
-        encoding="utf-8",
-    )
-
-
-def test_device_classes_are_not_split_across_both_stylesheets():
-    """Half-migration guard, mirroring test_settings_panels_parity.
-
-    A prefix living in BOTH files is the split-brain state where nobody can
-    tell which file owns the page.
-    """
-    leaked = [
-        c for c in _PAGE_SPECIFIC
-        if _has_rule(_styles(), c) or _has_rule(_settings(), c)
-    ]
-    assert not leaked, (
-        "page-specific Devices classes also exist in an eager stylesheet: "
-        f"{leaked}. They belong only in the lazy Devices owner."
-    )
-
-
-def test_every_class_the_devices_panel_uses_has_a_rule():
-    """Catch-all: scrape the markup + renderer, demand a rule for each class.
-
-    The parametrised tests above pin the classes that were measured broken.
-    This one keeps a NEW unstyled class from being added later — the same
-    mistake, one commit further on.
-    """
-    html = DEVICES_HTML.read_text(encoding="utf-8")
-    js = DEVICES_JS.read_text(encoding="utf-8")
-    used: set[str] = set()
-    for blob in (html, js):
-        for group in re.findall(r'class="([^"]+)"', blob):
-            for token in group.split():
-                # The renderers build class lists by string concatenation, so a
-                # scraped group can end mid-expression (`devices-agent-row'` +
-                # …). Keep only whole, syntactically-valid class tokens — a
-                # fragment would be an unfixable phantom, and demanding a rule
-                # for one would make this guard impossible to satisfy.
-                if not re.fullmatch(r"[A-Za-z_-][\w-]*", token):
-                    continue
-                if token.startswith(("stg-", "devices-")):
-                    used.add(token)
-    for group in re.findall(r"element\([^,]+,\s*'([^']*)'", js):
-        used.update(token for token in group.split()
-                    if token.startswith(("stg-", "devices-")))
-    assert used, "scraper found no classes — the regex stopped matching"
-    both = _styles() + "\n" + _settings() + "\n" + _devices()
-    missing = sorted(c for c in used if not _has_rule(both, c))
-    assert not missing, (
-        f"Devices panel uses classes with NO rule anywhere: {missing}. "
-        f"An unstyled class renders as a browser default, which is how this "
-        f"panel shipped looking broken."
-    )
-
-
-def test_the_remote_devices_picker_is_styled_too():
-    """The SAME feature paints a second surface — the project folder browser's
-    "remote devices" group (``#remoteDevicesSection`` in index.html, rendered
-    by ``project.js::_renderRemoteDevicesSection``). Its classes were unstyled
-    for the same reason, so fixing only the settings tab would leave the other
-    half of the feature raw.
-    """
-    js = PROJECT_JS.read_text(encoding="utf-8")
-    used = {t for g in re.findall(r'class="([^"]+)"', js) for t in g.split()
-            if t.startswith("remote-")
-            and re.fullmatch(r"[A-Za-z_-][\w-]*", t)}
-    assert used, "no remote-* classes found in project.js — regex stale"
-    both = _styles() + "\n" + _settings()
-    missing = sorted(c for c in used if not _has_rule(both, c))
-    assert not missing, (
-        f"remote-device picker classes with no rule: {missing}"
-    )
-
-
-# ══════════════════════════════════════════════════════════════════
-#  2. The node lane always reaches a terminal state
-# ══════════════════════════════════════════════════════════════════
-#
-# The Devices tab used to paint two lanes (agents + bridge tokens) from one
-# payload; paired credentials are now nodes themselves (an offline paired
-# credential is listed as an offline node), so ONE lane carries one answer.
-
-DEVICES_DOM = """
-<div id="settingsTab_devices">
-  <div id="devicesAgentsList"></div>
-</div>
-"""
-
-_HARNESS = textwrap.dedent("""
-    const {{ JSDOM }} = require('jsdom');
-    const dom = new JSDOM(`<!DOCTYPE html><body>{html}</body>`);
-    global.document = dom.window.document;
-    global.window = dom.window;
-    global.navigator = dom.window.navigator;
-    global.HTMLElement = dom.window.HTMLElement;
-    global.DocumentFragment = dom.window.DocumentFragment;
-    global.AbortController = dom.window.AbortController;
-    global.AbortSignal = dom.window.AbortSignal;
-    global.t = (k) => k;
-    global.escapeHtml = (s) => String(s == null ? '' : s)
-      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    global.showToast = () => {{}};
-    global.Api = {{ desktop: {{
-      nodes: () => {payload},
-      removeNode: () => Promise.resolve(null),
-      revokeToken: () => Promise.resolve(null),
-    }} }};
-    window.Api = global.Api;
-    window.t = global.t;
-    window.showToast = global.showToast;
-
-    {shipped}
-
-    const nodes = () => document.getElementById('devicesAgentsList');
-    const snap = () => ({{
-      nodesHtml: nodes().innerHTML,
-      nodesText: nodes().textContent.trim(),
-    }});
-
-    const out = {{}};
-    DevicesFeature.populateDevicesTab();
-    // The FIRST frame: synchronous, before any promise can settle. This is
-    // literally what the user sees at t=0.
-    out.firstPaint = snap();
-
-    setTimeout(() => {{
-      out.settled = snap();
-      console.log(JSON.stringify(out));
-    }}, 40);
-""")
-
-
-def _run_devices(payload_js: str) -> dict:
-    require_node_modules('jsdom', 'esbuild')
-    src = _HARNESS.format(
-        html=DEVICES_DOM.replace("\n", ""),
-        payload=payload_js,
-        shipped=_devices_bundle(),
-    )
-    proc = subprocess.run([_node(), "-e", src], cwd=ROOT,
-                          capture_output=True, text=True, timeout=60)
-    assert proc.returncode == 0, (
-        f"harness exited {proc.returncode}\n"
-        f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
-    )
-    return json.loads(proc.stdout.strip().splitlines()[-1])
-
-
-def test_the_lane_announces_loading_on_first_paint():
-    """A repaint replaces the previous answer at once, never shows it stale."""
-    out = _run_devices("Promise.resolve({nodes: []})")
-    assert "stg-loading" in out["firstPaint"]["nodesHtml"], out["firstPaint"]
-
-
-def test_a_null_payload_reaches_a_visible_terminal_state():
-    """THE UNREACHABLE CATCH.
-
-    ``Api.desktop.nodes()`` is declared ``{onError:'null'}``, so a dead
-    backend RESOLVES with ``null`` — it never rejects. A failure must be
-    handled on the success path, or "loading…" is permanent.
-    """
-    out = _run_devices("Promise.resolve(null)")
-    settled = out["settled"]
-    assert "stg-loading" not in settled["nodesHtml"], (
-        "the lane is STILL showing the loading state after a null payload")
-    # …and it must not LIE: `null` means "we could not ask", not "you own no
-    # devices" — a user whose computer IS paired would conclude it was gone.
-    assert "devices-load-failed" in settled["nodesHtml"], (
-        f"the lane renders the EMPTY state after a failed load: "
-        f"{settled['nodesHtml']!r}")
-
-
-def test_a_rejected_promise_also_terminates_the_lane():
-    out = _run_devices("Promise.reject(new Error('boom'))")
-    settled = out["settled"]
-    assert "stg-loading" not in settled["nodesHtml"]
-    assert "devices-load-failed" in settled["nodesHtml"], (
-        "the lane was blanked on error instead of reporting it")
-
-
-def test_a_successful_payload_renders_every_node():
-    """THE COMPLEMENT that stops 'always show an error' from passing."""
-    out = _run_devices(
-        "Promise.resolve({nodes: [{node_id:'abcdef1234', name:'my-mac',"
-        " platform:'darwin', online:true, share_roots:[{name:'work'}],"
-        " tiers:{read:true}, credential:{id:'k1', name:'my-mac'}, attachment:'paired'},"
-        " {node_id:null, name:'laptop', online:false, tiers:{read:true},"
-        " credential:{id:'k2', name:'laptop'}, attachment:'paired'}]})")
-    settled = out["settled"]
-    assert "my-mac" in settled["nodesText"], settled
-    assert "laptop" in settled["nodesText"], settled
-    assert "stg-loading" not in settled["nodesHtml"]
-
-
-# ══════════════════════════════════════════════════════════════════
-#  3. The download must name the file for THIS machine
+#  1. The download must name the file for THIS machine
 # ══════════════════════════════════════════════════════════════════
 
 def _asset_mod():
@@ -567,87 +261,13 @@ def test_direct_urls_point_at_a_real_asset_not_the_listing_page():
 
 
 # ══════════════════════════════════════════════════════════════════
-#  4. The frontend must actually CONSUME the platform links
+#  2. The frontend must actually CONSUME the platform links
 # ══════════════════════════════════════════════════════════════════
 #
 # A backend that resolves the right installer is worth nothing if no rendered
 # element links to it. This is the "my Python guards were all green while the
 # fix was unreachable in the product" failure mode: the only way to rule it out
 # is a guard that drives the SHIPPED renderer end-to-end.
-
-@functools.lru_cache(maxsize=1)
-def _devices_bundle() -> str:
-    esbuild = ROOT / 'node_modules' / '.bin' / 'esbuild'
-    require_node_modules('esbuild')
-    proc = subprocess.run(
-        [str(esbuild), str(DEVICES_JS), '--bundle', '--format=iife',
-         '--global-name=DevicesFeature', '--platform=browser'],
-        cwd=ROOT, capture_output=True, text=True, timeout=60,
-    )
-    assert proc.returncode == 0, proc.stderr
-    return proc.stdout
-
-_LC_HARNESS = textwrap.dedent("""
-    const {{ JSDOM }} = require('jsdom');
-    const dom = new JSDOM('<!DOCTYPE html><body>' +
-      '<div id="localControlModal">' +
-      '<span class="lc-cap-status" id="lcDesktopStatus">' +
-      '<span class="browser-status-dot"></span>' +
-      '<span class="lc-status-text"></span></span>' +
-      '<button class="lc-switch" id="lcDesktopSwitch"></button>' +
-      '<p class="lc-cap-about" id="lcDesktopAbout"></p>' +
-      '<div class="lc-cap-setup" id="lcDesktopSetup"></div>' +
-      '<p class="lc-perm-note" id="lcPermNote"></p>' +
-      '</div><div id="localControlToggle"></div>' +
-      '<span id="localControlBadge"></span></body>');
-    global.document = dom.window.document;
-    global.window = dom.window;
-    global.navigator = dom.window.navigator;
-    global.t = (k) => k;
-    global.escapeHtml = (s) => String(s == null ? '' : s)
-      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-      .replace(/"/g,'&quot;');
-    global.desktopEnabled = false;
-    global.browserEnabled = false;
-    global.showToast = () => {{}};
-    window.t = global.t;
-    window.escapeHtml = global.escapeHtml;
-    window.showToast = global.showToast;
-
-    {shipped}
-
-    const locale = {locale};
-    global.t = (k) => locale[k] || k;
-    window.t = global.t;
-    const snapshots = [];
-    for (const payload of [{payload}]) {{
-      _lcRenderDesktop(payload);
-      const box = document.getElementById('lcDesktopSetup');
-      const links = Array.from(box.querySelectorAll('a')).map(a => ({{
-        href: a.getAttribute('href'),
-        text: a.textContent,
-        cls: a.className,
-      }}));
-      snapshots.push({{ html: box.innerHTML, text: box.textContent, links }});
-    }}
-    console.log(JSON.stringify({{ ...snapshots[snapshots.length - 1], snapshots }}));
-""")
-
-
-def _run_lc_desktop(payload_js: str, language: str | None = None) -> dict:
-    require_node_modules('jsdom')
-    src = _LC_HARNESS.format(
-        shipped=LC_JS.read_text(encoding="utf-8"), payload=payload_js,
-        locale=("require(" + json.dumps(str(
-            ROOT / 'frontend/src/i18n/locales' / f'{language}.json')) + ")")
-        if language else '{}')
-    proc = subprocess.run([_node(), "-e", src], cwd=ROOT,
-                          capture_output=True, text=True, timeout=60)
-    assert proc.returncode == 0, (
-        f"harness exited {proc.returncode}\n"
-        f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
-    return json.loads(proc.stdout.strip().splitlines()[-1])
-
 
 SETTINGS_CORE_JS = Path(native_module_path(
     '.native/settings-core-panel.js',
@@ -659,8 +279,8 @@ def _run_settings_desktop_card(payload_js: str, language: str | None = None,
                                uad_js: str = 'null') -> dict:
     """Drive the Settings → About&Update full-desktop card end-to-end.
 
-    The full Windows/macOS installers moved OUT of Local Control (they are a
-    download, not a control) into this card — so the direct-link guards drive
+    The full Windows/macOS installers are a download, not a control, and
+    live in this card — so the direct-link guards drive
     the shipped `_stgDownloadLinks` renderer exactly as it runs in product.
     `uad_js` stubs `navigator.userAgentData` (absent by default, as in
     Safari/jsdom) so the arch-recommendation branch is drivable.
@@ -752,7 +372,7 @@ def test_the_settings_desktop_card_renders_a_direct_link_per_installer():
 ])
 def test_the_settings_desktop_card_names_versions_against_the_server(
         older, refreshing, phrase):
-    """Same contract as Local Control: the row shows the installer version,
+    """The row shows the installer version,
     and one older than the server says so instead of passing as current."""
     version = "0.18.0" if older else "0.19.2"
     out = _run_settings_desktop_card(json.dumps({
@@ -833,168 +453,6 @@ def test_the_detected_arch_gets_a_subtle_recommendation(language, word):
         f"expected exactly ONE recommendation badge: {out['html']!r}")
 
 
-def test_local_control_offers_the_full_desktop_app_for_pairing():
-    """Every Tofu desktop install is a node, so the pairing instruction offers
-    the FULL desktop app for the visitor's OS — the retired controlled-end
-    installer (personalized .exe, TofuRemote assets) is gone for good."""
-    out = _run_lc_desktop(json.dumps({
-        'setup_state': 'pair', 'connected': False, 'nodes': [],
-        'visitor_os': 'windows',
-        'download_url': 'https://example.invalid/releases/latest',
-        'downloads': [{
-            'os': 'windows', 'arch': 'x86_64', 'label': 'Windows installer',
-            'filename': 'Tofu-Setup-0.17.0-win64.exe',
-            'url': 'https://example.invalid/d/Tofu-Setup-0.17.0-win64.exe'}],
-    }))
-    hrefs = [l['href'] or '' for l in out['links']]
-    assert 'https://example.invalid/d/Tofu-Setup-0.17.0-win64.exe' in hrefs, out['links']
-    assert not any('agent-installer' in h or 'TofuRemote' in h for h in hrefs), hrefs
-    assert 'lcAgentInstallerBtn' not in out['html']
-    assert '受控端' not in out['text']
-
-
-def _lc_windows_payload(version, older, refreshing=False):
-    return json.dumps({
-        'setup_state': 'pair', 'connected': False, 'nodes': [],
-        'visitor_os': 'windows', 'server_version': '0.19.2',
-        'installers_refreshing': refreshing,
-        'download_url': 'https://example.invalid/releases/latest',
-        'downloads': [{
-            'os': 'windows', 'arch': 'x86_64', 'label': 'Windows installer',
-            'filename': f'Tofu-Setup-{version}-win64.exe', 'version': version,
-            'older_than_server': older, 'size': 136507710,
-            'url': f'https://example.invalid/d/Tofu-Setup-{version}-win64.exe'}],
-    })
-
-
-@pytest.mark.parametrize('language', [None, 'en'])
-def test_local_control_names_the_installer_version(language):
-    """The button says which build it hands out; a current one carries no
-    warning."""
-    out = _run_lc_desktop(_lc_windows_payload('0.19.2', False), language)
-    direct = [l for l in out['links'] if 'lc-dl-direct' in (l['cls'] or '')]
-    assert len(direct) == 1 and 'v0.19.2' in direct[0]['text'], direct
-    assert 'lc-warn' not in out['html'], out['html']
-
-
-@pytest.mark.parametrize('refreshing,zh,en', [
-    (True, '服务器正在获取新版', 'The server is fetching the newer one'),
-    (False, '服务器暂时没取到新版', 'has not fetched the newer one yet'),
-])
-def test_local_control_warns_when_the_installer_is_older_than_the_server(
-        refreshing, zh, en):
-    """Incident 2026-11-16: a 0.19.2 server's panel offered the 0.18.0
-    installer with nothing saying so, and that build crashed at boot on
-    Windows. The row now names both versions and whether a newer installer
-    is on its way."""
-    for language, phrase in ((None, zh), ('en', en)):
-        out = _run_lc_desktop(
-            _lc_windows_payload('0.18.0', True, refreshing), language)
-        assert 'lc-warn' in out['html'], out['html']
-        assert 'v0.18.0' in out['text'] and 'v0.19.2' in out['text'], out['text']
-        assert phrase in out['text'], (language, out['text'])
-        assert '{version}' not in out['text'] and '{server}' not in out['text']
-
-
-def test_local_control_repaints_when_the_newer_installer_lands():
-    """The 3 s poll only rewrites the box when its render inputs change; the
-    warning must clear once the mirror swaps in the current installer."""
-    out = _run_lc_desktop(_lc_windows_payload('0.18.0', True, True) + ', ' +
-                          _lc_windows_payload('0.19.2', False))
-    first, last = out['snapshots']
-    assert 'lc-warn' in first['html'] and 'lc-warn' not in last['html']
-    assert 'v0.19.2' in last['text']
-
-
-def test_a_mac_visitor_gets_both_dmgs_and_no_exe():
-    """The server picks the rows for the visitor's OS; the panel renders them
-    verbatim — two DMGs when the chip is unknowable, never a Windows .exe."""
-    out = _run_lc_desktop(
-        "{setup_state:'pair', connected:false, nodes:[], visitor_os:'macos',"
-        " download_url:'https://example.invalid/releases/latest',"
-        " downloads:[{os:'macos',arch:'arm64',label:'macOS arm64 DMG',"
-        " filename:'Tofu-0.17.0-macos-arm64.dmg',"
-        " url:'https://example.invalid/d/Tofu-0.17.0-macos-arm64.dmg'},"
-        " {os:'macos',arch:'x86_64',label:'macOS x86_64 DMG',"
-        " filename:'Tofu-0.17.0-macos-x86_64.dmg',"
-        " url:'https://example.invalid/d/Tofu-0.17.0-macos-x86_64.dmg'}]}")
-    direct = [l for l in out["links"] if "lc-dl-direct" in (l["cls"] or "")]
-    assert len(direct) == 2, out["links"]
-    assert not any('.exe' in (l["href"] or '') for l in out["links"]), out["links"]
-
-
-_LC_SCAN_PRELUDE = textwrap.dedent("""
-    const { JSDOM } = require('jsdom');
-    const dom = new JSDOM('<!DOCTYPE html><body>' +
-      '<p id="lcAgentRelayHint"></p>' +
-      '<button id="lcAgentRelayStart"></button></body>');
-    global.document = dom.window.document;
-    global.window = dom.window;
-    global.navigator = dom.window.navigator;
-    global.t = (k) => k;
-    global.escapeHtml = (s) => String(s == null ? '' : s);
-    global.showToast = () => {};
-    window.t = global.t;
-    window.escapeHtml = global.escapeHtml;
-    window.showToast = global.showToast;
-    // No broker on this machine: every loopback probe refuses.
-    global.fetch = function () {
-      return Promise.reject(new Error('connection refused'));
-    };
-    global.Api = { desktop: {} };
-""")
-
-_LC_SCAN_DRIVE = textwrap.dedent("""
-
-    const hint = document.getElementById('lcAgentRelayHint');
-    _lcEnsureAgentRelay(60000);
-    const onClick = { state: _lcAgentRelay.state, text: hint.textContent };
-    setTimeout(function () {
-      console.log(JSON.stringify({
-        onClick: onClick,
-        settled: { state: _lcAgentRelay.state, text: hint.textContent },
-        stillWatching: _lcAgentRelay.watchTimer !== null,
-        buttonShown:
-          document.getElementById('lcAgentRelayStart').style.display !== 'none'
-      }));
-      process.exit(0);
-    }, 300);
-""")
-
-
-def _run_lc_scan() -> dict:
-    require_node_modules('jsdom')
-    src = (_LC_SCAN_PRELUDE + LC_JS.read_text(encoding="utf-8")
-           + _LC_SCAN_DRIVE)
-    proc = subprocess.run([_node(), "-e", src], cwd=ROOT,
-                          capture_output=True, text=True, timeout=60)
-    assert proc.returncode == 0, (
-        f"harness exited {proc.returncode}\n"
-        f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
-    return json.loads(proc.stdout.strip().splitlines()[-1])
-
-
-def test_the_relay_button_answers_its_own_click_when_no_agent_runs():
-    """THE DEAD CLICK: with no broker on 15180..15189 the watch found
-    nothing and painted nothing — the button looked broken to exactly the
-    user it exists for (no agent installed yet). The click must paint
-    'scanning' synchronously and the empty scan must settle into a visible
-    'not found' instruction, while the watch keeps running so a later
-    install is still picked up without another click."""
-    out = _run_lc_scan()
-    assert out["onClick"]["state"] == "scanning", (
-        f"the click painted nothing: {out!r}")
-    assert out["onClick"]["text"], "the scanning hint is empty"
-    assert out["settled"]["state"] == "notfound", (
-        f"an empty scan never surfaced: {out!r}")
-    assert out["settled"]["text"] != out["onClick"]["text"], (
-        "the not-found instruction never replaced the scanning text")
-    assert out["stillWatching"], (
-        "the watch died with the first empty scan — a later install would "
-        "never be picked up")
-    assert out["buttonShown"], "the retry button vanished on an empty scan"
-
-
 def test_the_releases_page_link_survives_as_a_fallback():
     """An unrecognised platform (empty `downloads`) must still get somewhere.
 
@@ -1002,9 +460,8 @@ def test_the_releases_page_link_survives_as_a_fallback():
     unreachable GitHub API — the direct links are an upgrade, never a
     replacement for the page that always works.
     """
-    out = _run_lc_desktop(
-        "{setup_state:'pair', download_url:'https://example.invalid/releases/latest',"
-        " server_url:'https://tofu.invalid', downloads:[]}")
+    out = _run_settings_desktop_card(
+        "{download_url:'https://example.invalid/releases/latest', downloads:[]}")
     hrefs = [l["href"] for l in out["links"]]
     assert "https://example.invalid/releases/latest" in hrefs, (
         f"the releases-page fallback disappeared; a visitor whose platform we "
@@ -1041,25 +498,22 @@ def test_the_client_resolves_its_own_architecture():
     button — would be arch-blind. The client must ask
     `navigator.userAgentData.getHighEntropyValues` itself and pass the answer.
     """
-    src = LC_JS.read_text(encoding="utf-8")
+    src = CLIENT_DOWNLOADS_TS.read_text(encoding="utf-8")
     code = "\n".join(ln for ln in src.splitlines()
                      if not ln.lstrip().startswith(("*", "/*", "//")))
     assert "getHighEntropyValues" in code, (
-        "local-control never asks the browser for its architecture, so the "
-        "macOS two-DMG ambiguity can never be resolved for anyone")
-    assert "Api.desktop.status(" in code, (
+        "the Settings desktop card never asks the browser for its architecture")
+    assert "desktop.status(" in code, (
         "the resolved architecture is never threaded into the status probe")
-    api = Path(runtime_section_path('api.js')).read_text(encoding='utf-8')
+    api = (ROOT / 'frontend/src/api/endpoint-registry/desktop.ts').read_text(encoding='utf-8')
     assert re.search(r"status:\s*\(arch", api), (
-        "Api.desktop.status does not accept the client-resolved architecture, "
-        "so the value local-control computes cannot reach the server")
+        "Api.desktop.status does not accept the client-resolved architecture")
 
 
 def test_every_new_download_string_is_translated():
     """A raw i18n key in the download row is a visible defect."""
-    src = LC_JS.read_text(encoding="utf-8")
-    keys = set(re.findall(r"_lcT\('(local\.desktopDownload[A-Za-z]*|"
-                          r"local\.desktopArchAmbiguous)'", src))
+    src = CLIENT_DOWNLOADS_TS.read_text(encoding="utf-8")
+    keys = set(re.findall(r"stgDlT\('(settings\.[A-Za-z]+)'", src))
     assert keys, "the download row uses no translated strings at all"
     catalogs = [json.loads((ROOT / 'frontend' / 'src' / 'i18n' / 'locales'
                             / f'{language}.json').read_text(encoding='utf-8'))
@@ -1070,7 +524,7 @@ def test_every_new_download_string_is_translated():
 
 
 # ══════════════════════════════════════════════════════════════════
-#  5. The URL and the FILENAME must come from ONE snapshot
+#  3. The URL and the FILENAME must come from ONE snapshot
 # ══════════════════════════════════════════════════════════════════
 #
 # THE DEFECT. The URL was assembled as

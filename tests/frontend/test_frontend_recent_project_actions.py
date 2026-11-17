@@ -58,7 +58,7 @@ const { window, check, report } = setup({
   html: '<!DOCTYPE html><body>' +
     '<div id="projectModal"><div class="modal project-modal pm-workbench">' +
     '<span id="pmMobileCount"></span><div class="pm-body">' +
-    '<div class="pm-browser-pane"><div id="remoteDevicesSection" style="display:none"></div></div>' +
+    '<div class="pm-browser-pane"></div>' +
     '</div><div id="projectModalHint"></div></div></div></body>',
   targets: [process.argv[2]],
   globals: {

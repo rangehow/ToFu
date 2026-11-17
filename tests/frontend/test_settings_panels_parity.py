@@ -274,10 +274,6 @@ _SETTINGS_ONLY_CSS_PREFIXES = (
     r'\.stg-dropdown-visibility',           # preset / display (batch C)
     r'\.chip\b', r'\.auth-src',             # search / network (batch D)
     r'\.two-col',                           # settings row layout (batch D)
-    # The project-folder remote-device picker remains available before
-    # Settings loads. Settings-tab `.devices-*` rules now live beside the lazy
-    # typed owner and are enforced by test_devices_panel_and_platform_download.
-    r'\.remote-agent', r'\.remote-root', r'\.remote-devices',
     # Tools inventory styles now live beside its lazy typed owner and are
     # enforced by test_frontend_tools_panel.py.
 )

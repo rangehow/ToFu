@@ -239,9 +239,9 @@ class TestModelContext:
         assert text.splitlines()[1].startswith(' - Desktop devices online')
         assert text.splitlines()[2:] == [
             '   server (agent agent-linux): linux 6.8.0, x86_64, default shell sh '
-            '(available: sh)',
+            '(available: sh); allowed: read, exec',
             '   workstation (agent agent-win): windows 11, AMD64, default shell powershell '
-            '(available: sh, powershell, cmd)',
+            '(available: sh, powershell, cmd); allowed: read, exec',
         ]
         assert text == self._environment({'desktop_run_command'})
 

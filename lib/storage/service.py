@@ -79,7 +79,9 @@ def stop_storage(timeout: float = 10.0) -> None:
         # caller can construct a second runtime while the old Sidecar still
         # holds the project lease; it also hides a failed stop from the re-exec
         # gate.  The service lock serializes this rare lifecycle transition.
-        runtime.stop(timeout=timeout)
+        # Closing (not just stopping) the discarded runtime refuses a start
+        # still on its way in, e.g. a boot attempt that pinned it.
+        runtime.close(timeout=timeout)
         if _runtime is runtime:
             _runtime = None
 

@@ -19,7 +19,7 @@ import uuid
 
 import requests
 
-from lib.desktop_agent._dispatch import COMMANDS, dispatch_command
+from lib.desktop_agent._dispatch import COMMANDS, dispatch_command, home_tier_refusal
 from lib.desktop_wire import limit, protocol_version
 
 from lib.desktop_agent._runtime import ProtocolMismatch, RuntimeState, retry_delay, validate_poll_response
@@ -316,10 +316,19 @@ def run_agent(server_url, permissions, poll_interval=1.0, bridge_secret='',
                 lambda: time.monotonic() - last_contact[0] <= limit('desktop_connection_seconds'))
         return paper_worker
 
+    from lib.desktop_agent._journal import CallJournal
+    journal = CallJournal()
+
     class CompletionQueue:
         stop = stop_event
+
+        def __init__(self, cmd=None):
+            self.cmd = cmd
+
         def append(self, result):
             try:
+                if self.cmd is not None:
+                    journal.complete(self.cmd['type'], self.cmd.get('params'), result)
                 if not stop_event.is_set():
                     result_queue.append(result)
             finally:
@@ -328,7 +337,15 @@ def run_agent(server_url, permissions, poll_interval=1.0, bridge_secret='',
     def execute(cmd):
         cmd_id, cmd_type = cmd['id'], cmd['type']
         params = cmd.get('params', {})
-        completion = CompletionQueue()
+        refusal = home_tier_refusal(cmd_type, params, cmd.get('home_tiers'))
+        if refusal:
+            CompletionQueue().append({'id': cmd_id, 'result': None, 'error': refusal})
+            return
+        recorded = journal.begin(cmd)
+        if recorded is not None:
+            CompletionQueue().append(recorded)
+            return
+        completion = CompletionQueue(cmd)
         try:
             if cmd_type == 'paper_build':
                 if not permissions.get('allow_exec'):

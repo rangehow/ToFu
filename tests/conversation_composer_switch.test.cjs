@@ -241,7 +241,7 @@ test('enabled image generation captures changed selection through deferred persi
 });
 
 test('changed empty outgoing shell reconciles metadata but does not upload settings', () => {
-  const h = harness({outgoing: {desktopEnabled: true}, turns: 0});
+  const h = harness({outgoing: {fetchEnabled: true}, turns: 0});
   h.open(); h.flushTimers();
   assert.deepEqual(h.reconciliations, [null]);
   assert.deepEqual(h.writes, []);

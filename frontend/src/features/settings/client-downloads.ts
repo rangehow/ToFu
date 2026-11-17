@@ -44,8 +44,8 @@ const globals = () => featureRegistry as unknown as ClientRuntime;
 
 /* Generic download-link rows for an installer card (desktop full / agent
  * Rows mirror the mobile client card's `.stg-mobile-*` chrome so both cards
- * read as ONE download component. Same payload contract as the Local Control
- * panel: `{download_url, downloads}` from /api/v4/desktop/status. The
+ * read as ONE download component. Payload contract:
+ * `{download_url, downloads}` from /api/v4/desktop/status. The
  * releases page stays as the escape hatch for an unrecognised platform, a
  * release missing an asset, or an unreachable GitHub API. */
 function stgFmtDlSize(bytes: unknown): string {
@@ -70,8 +70,8 @@ function stgResolveDlUrl(url: string): string {
 /* t() with a readable fallback — the download copy must never surface a
  * raw i18n key when the locale chunk is absent (jsdom harness, stale
  * bundle). */
-function stgDlT(key: 'settings.desktopRecommend' | 'settings.mobileDownload' | 'local.desktopDownloadAll' |
-  'local.desktopOlder' | 'local.desktopOlderRefreshing', fallback: string): string {
+function stgDlT(key: 'settings.desktopRecommend' | 'settings.mobileDownload' | 'settings.desktopDownloadAll' |
+  'settings.desktopOlder' | 'settings.desktopOlderRefreshing', fallback: string): string {
   // Resolve through the registry (window.t in product, the harness's locale
   // translator in jsdom) so the download card honours the ACTIVE language;
   // the bundled i18n t is keyed to its own initialised locale only.
@@ -167,9 +167,9 @@ function stgDownloadLinks(d: DesktopStatus | null, arch: string): string {
   }
   if (older) {
     const note = d?.installers_refreshing
-      ? stgDlT('local.desktopOlderRefreshing',
+      ? stgDlT('settings.desktopOlderRefreshing',
         '⚠️ 这个安装包是 v{version}，比服务器（v{server}）旧，可能无法启动或连接。服务器正在获取新版，完成后这里会自动换成新链接。')
-      : stgDlT('local.desktopOlder',
+      : stgDlT('settings.desktopOlder',
         '⚠️ 这个安装包是 v{version}，比服务器（v{server}）旧，可能无法启动或连接。服务器暂时没取到新版，请稍后再打开这里，或从「查看全部下载」获取。');
     html += '<p class="stg-desktop-older">' + escapeHtml(note
       .replace('{version}', older.version || '?')
@@ -178,7 +178,7 @@ function stgDownloadLinks(d: DesktopStatus | null, arch: string): string {
   if (page) {
     html += '<a class="stg-desktop-all" href="' +
       escapeHtml(page) + '" target="_blank" rel="noopener noreferrer">' +
-      escapeHtml(stgDlT('local.desktopDownloadAll', '查看全部下载 ↗')) + '</a>';
+      escapeHtml(stgDlT('settings.desktopDownloadAll', '查看全部下载 ↗')) + '</a>';
   }
   return html;
 }
@@ -186,8 +186,7 @@ function stgDownloadLinks(d: DesktopStatus | null, arch: string): string {
 /* The full Windows/macOS desktop clients are a download, not a control —
  * they live in Settings → 关于与更新, next to the mobile client card.
  * Config-gated like the mobile card: hidden until /api/v4/desktop/status
- * answers with at least a releases page. Pairing an installed app with this
- * server happens in Local Control ("Add a machine"). */
+ * answers with at least a releases page. */
 export function renderSettingsDesktopCard(session = currentSettingsReadSession()): void {
   const card = document.getElementById('settingsDesktopCard');
   if (!card) return;

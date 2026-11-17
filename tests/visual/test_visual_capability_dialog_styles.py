@@ -1,4 +1,4 @@
-"""Memory and Local Control styles follow their feature's admission and retry lifecycle."""
+"""Memory and browser extension dialog styles follow their feature's admission and retry lifecycle."""
 import pytest
 from playwright.sync_api import expect
 
@@ -9,11 +9,11 @@ from tests.visual.test_visual_feature_style_residency import (
 pytestmark = [pytest.mark.visual, pytest.mark.auth_mode('open')]
 CASES = [
     ('memory', 'openMemoryModal', 'closeMemoryModal', '#memoryModal', '.memory-modal'),
-    ('local-control', 'openLocalControlModal', 'closeLocalControlModal', '#localControlModal', '.local-modal'),
+    ('browser-extension', 'openBrowserExtensionModal', 'closeBrowserExtensionModal', '#browserExtensionModal', '.browser-ext-modal'),
 ]
 
 
-@pytest.mark.parametrize('case', CASES, ids=['memory', 'local-control'])
+@pytest.mark.parametrize('case', CASES, ids=['memory', 'browser-extension'])
 @pytest.mark.parametrize('theme', ['light', 'dark', 'tofu'])
 @pytest.mark.parametrize('width', [390, 1280])
 def test_dialog_waits_for_its_styles_and_reuses_them(browser, live_server, case, theme, width):
@@ -62,7 +62,7 @@ def test_dialog_waits_for_its_styles_and_reuses_them(browser, live_server, case,
         context.close()
 
 
-@pytest.mark.parametrize('case', CASES, ids=['memory', 'local-control'])
+@pytest.mark.parametrize('case', CASES, ids=['memory', 'browser-extension'])
 def test_failed_dialog_styles_remain_closed_after_existing_reload_recovery(browser, live_server, case):
     feature, open_action, _, overlay, _ = case
     failed_asset = sorted(_styles(f'frontend/src/features/{feature}.ts'))[0]

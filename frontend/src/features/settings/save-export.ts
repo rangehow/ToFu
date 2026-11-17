@@ -80,7 +80,6 @@ function closeSettings(): void {
   const bridge = globals() as unknown as Record<string, unknown>;
   for (const name of [
     '_destroyPrivateHosts', '_destroyBrowserAccess',
-    '_destroyDevicesTab',
     '_destroySpeechTab', '_destroyCatpawSettings', '_destroySubscriptionPlans',
     '_destroyCredentialsVault', '_destroyAuthSources',
     '_destroyKnowledgeTab',

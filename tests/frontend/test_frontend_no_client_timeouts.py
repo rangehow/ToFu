@@ -257,8 +257,6 @@ _PROBE_FILES = frozenset({
     'core/conversation_catalog.js',      # bounded catalog liveness/retry probe
     'core/pending_sync.js',              # queued-write flush probe
     'main/main_send_pipeline.js',        # chat-START handshake (not the stream)
-    'local-control.js',                  # loopback relay discovery/long-poll;
-                                         # never waits on an LLM/task stream
     'diag_collect.js',                   # diagnostics collector
     'api.js',                            # the seam itself: arms a timer ONLY
                                          # when a caller passes an explicit
@@ -316,12 +314,16 @@ class TestNoNewAbortTimersOnWaits:
               'genuinely a probe, add the file to _PROBE_FILES with a reason.')
 
     def test_the_scan_actually_finds_things(self):
-        """Anti-vacuity: a regex that matches nothing would make the ratchet
-        above pass forever. The probe files MUST still show up."""
-        found = _scan_abort_timers()
-        assert found, 'the abort-timer scan found nothing at all — it is vacuous'
-        assert any(f in _PROBE_FILES for f in found), \
-            'no allow-listed probe matched — the pattern likely broke'
+        """Anti-vacuity: a regex that matches nothing, or a walk that reads no
+        files, would make the ratchet above pass forever. The retained runtime
+        may legitimately hold no abort timer at all, so the scanner is proven
+        against the shapes it exists to catch."""
+        for shape in ('var timer = setTimeout(function () { controller.abort(); }, 15000);',
+                      'fetch(url, { signal: AbortSignal.timeout(timeoutMs) });'):
+            assert _ABORT_TIMER_RE.search(shape), f'the ratchet misses {shape!r}'
+        scanned = [fn for _dir, _sub, files in os.walk(JS) for fn in files
+                   if fn.endswith('.js')]
+        assert 'main.js' in scanned, 'the ratchet walk never reached the retained sections'
 
     def test_scan_ignores_comments(self):
         """charter #24 both directions: a commented-out timer must not trip

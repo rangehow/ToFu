@@ -251,7 +251,8 @@ def _run_readiness_critical_storage_step(
 
 def _start_storage_authority_sql():
     """Start and verify the required storage authority."""
-    from lib.storage import start_storage, storage_status
+    from lib.storage import storage_status
+    from lib.storage.service import storage_runtime
 
     # A managed external authority has already admitted its engine. Its
     # attaching client still verifies source, binary pin, scope and handshake;
@@ -268,9 +269,13 @@ def _start_storage_authority_sql():
     # RPC on the boot critical path. The in-memory snapshot carries the
     # same truth for the log line without another round trip.
     status = None
+    # Every attempt starts this one runtime. Shutdown closes it, which ends the
+    # loop; asking for the process runtime per attempt got a fresh one after
+    # shutdown and outlived the stop budget (2026-11-17 22:08).
+    runtime = storage_runtime()
     for attempt in range(1, _SIDECAR_START_ATTEMPTS + 1):
         try:
-            start_storage()
+            runtime.start()
             status = storage_status()
             if not status.get('ready'):
                 raise RuntimeError('storage sidecar did not report ready')

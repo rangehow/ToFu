@@ -321,6 +321,17 @@ function _restartFailureHtml(r) {
     '<p class="upd-err-reason">' + escapeHtml(t('update.lastRestartFailedHint')) + '</p></div>';
 }
 
+/** The latest restart's new server failed before it ever served and the
+ *  manager restored service on its own (rolled the storage engine back or
+ *  replaced the failed storage host): say what it did. */
+function _restartRecoveryHtml(r) {
+  const recovery = r && r.last_restart_recovery;
+  if (!recovery || !recovery.action) return '';
+  return '<div class="upd-err"><div class="upd-err-title">' +
+    escapeHtml(t('update.lastRestartRecovered', { action: recovery.action })) + '</div>' +
+    '<pre class="upd-err-reason" style="white-space:pre-wrap">' + escapeHtml(recovery.cause || '') + '</pre></div>';
+}
+
 function _renderUpdateDialogBody(r) {
   const body = document.getElementById('updateModalBody');
   if (!body) return;
@@ -384,7 +395,7 @@ function _renderUpdateDialogBody(r) {
 
   body.innerHTML =
     _updateHeroHtml(r) +
-    '<div class="upd-action" id="updateActionArea">' + _restartFailureHtml(r) + _codePendingHtml(r) + actionHtml + '</div>' +
+    '<div class="upd-action" id="updateActionArea">' + _restartFailureHtml(r) + _restartRecoveryHtml(r) + _codePendingHtml(r) + actionHtml + '</div>' +
     '<div id="updateLifecycleApprovals" style="display:none"></div>';
   _renderPendingLifecycleApprovals();
 }

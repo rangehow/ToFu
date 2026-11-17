@@ -68,6 +68,12 @@ APPLICATION_STORAGE_CONTRACTS = ('contracts/storage_v2.json', 'contracts/native_
 # through those generated sources, here.
 ENGINE_GENERATED_SOURCE_ROOT = 'packages/tofu-db/src'
 MANAGED_ENGINE_ROOT = 'packages/tofu-db/target'
+# One engine gate runs per checkout at a time: a restart's automatic
+# certification waits for (and reuses) an in-flight background run
+# (``engine_precertify``), which records itself in the status file.
+CERTIFICATION_GATE_LOCK = 'packages/tofu-db/target/engine-certifications/.gate.lock'
+BACKGROUND_CERTIFICATION_STATUS = 'packages/tofu-db/target/engine-certifications/background.json'
+_held_gate_lock: ContextVar[Path | None] = ContextVar('engine_certification_gate_lock', default=None)
 _progress_observer: ContextVar[Callable[[str], None] | None] = ContextVar("engine_progress_observer", default=None)
 _progress_phase: ContextVar[str | None] = ContextVar("engine_progress_phase", default=None)
 _progress_recovering: ContextVar[bool] = ContextVar("engine_progress_recovering", default=False)
@@ -1040,19 +1046,67 @@ def certify_head_before_start(root: Path, environment: dict | None = None) -> No
         raise EnginePreparationError(
             refused + f'engine inputs differ from commit {commit[:12]} ({", ".join(dirty)}); '
             'commit or revert them, then start again.')
-    fixture = _certification_fixture(root)
-    _report_progress(f"Certifying HEAD's storage engine {expected[:12]} (commit {commit[:12]}) with the engine "
-                     f'gate against {fixture} before anything is stopped; this takes hours.')
-    started = time.monotonic()
-    with _certification_work_root(root, fixture) as work_root:
-        returncode = _run_engine_gate(root, commit, fixture, work_root)
-    record, problem = passing_record(root, expected, storage_contract_sha256(root))
+    with certification_gate_lock(root):
+        record, problem = passing_record(root, expected, contract)
+        if record is not None:
+            _report_progress(f'Using {record.summary()}, recorded by the engine gate run this start waited for.')
+            return
+        fixture = _certification_fixture(root)
+        _report_progress(f"Certifying HEAD's storage engine {expected[:12]} (commit {commit[:12]}) with the engine "
+                         f'gate against {fixture} before anything is stopped; this takes hours.')
+        started = time.monotonic()
+        with _certification_work_root(root, fixture) as work_root:
+            returncode = _run_engine_gate(root, commit, fixture, work_root)
+        record, problem = passing_record(root, expected, storage_contract_sha256(root))
     if record is None:
         raise EnginePreparationError(
             refused + f'the engine gate exited {returncode} and {problem} (evidence: '
             f'{root / MANAGED_ENGINE_ROOT}/engine-certifications/runs/); fix the failed check and start again, '
             'or deploy uncertified once: serverctl.py restart --deploy-uncertified-engine "<reason>".')
     _report_progress(f'Certified {record.summary()} in {time.monotonic() - started:.0f}s.')
+
+
+def background_certification_status(root: Path) -> dict | None:
+    """The last background gate run's status document, if one is readable."""
+    try:
+        status = json.loads((Path(root) / BACKGROUND_CERTIFICATION_STATUS).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    return status if isinstance(status, dict) else None
+
+
+@contextmanager
+def certification_gate_lock(root: Path, *, blocking: bool = True) -> Iterator[bool]:
+    """Hold the checkout's engine gate lock; yields False when non-blocking and another run holds it.
+
+    Re-entrant within one process, so a background run holding it can call
+    ``certify_head_before_start``. A blocking wait announces the run it waits for.
+    """
+    import fcntl
+    path = Path(root) / CERTIFICATION_GATE_LOCK
+    if _held_gate_lock.get() == path:
+        yield True
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('a+') as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            if not blocking:
+                yield False
+                return
+            status = background_certification_status(root) or {}
+            _report_progress(
+                f"Waiting for the engine gate run already certifying commit {str(status.get('commit') or 'unknown')[:12]} "
+                f"(started {status.get('startedAt') or 'at an unknown time'}, pid {status.get('pid') or 'unknown'}; "
+                f'{root / BACKGROUND_CERTIFICATION_STATUS}) instead of starting a second one.')
+            fcntl.flock(handle, fcntl.LOCK_EX)
+        token = _held_gate_lock.set(path)
+        try:
+            yield True
+        finally:
+            _held_gate_lock.reset(token)
+            fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 @contextmanager
@@ -1089,18 +1143,28 @@ def _certification_work_root(root: Path, fixture: Path) -> Iterator[Path]:
 
 def _head_engine_inputs(root: Path) -> tuple[str, list[str]]:
     """HEAD's commit and the engine/contract inputs whose working copy differs from it."""
+    paths = engine_input_paths(root)
+    commit = _run(['git', '-C', str(root), 'rev-parse', '--verify', 'HEAD'], cwd=root,
+                  environment=dict(os.environ), timeout=stage_seconds(30), failure_subject='Reading HEAD')
+    return commit.strip(), uncommitted_engine_inputs(root, paths)
+
+
+def engine_input_paths(root: Path) -> list[str]:
+    """Checkout-relative crate directories and files the engine and storage contract identities read."""
     paths = {location.resolve().relative_to(root).as_posix()
              for location, _relative, _paths, _inherits in source_layout(root)}
     paths.update(key for key, _path in external_source_inputs(root))
     paths.update(APPLICATION_STORAGE_CONTRACTS)
-    commit = _run(['git', '-C', str(root), 'rev-parse', '--verify', 'HEAD'], cwd=root,
-                  environment=dict(os.environ), timeout=stage_seconds(30), failure_subject='Reading HEAD')
+    return sorted(paths)
+
+
+def uncommitted_engine_inputs(root: Path, paths: list[str]) -> list[str]:
     differing = []
     for listing in (['diff', '--name-only', 'HEAD'], ['ls-files', '--others', '--exclude-standard']):
-        differing += _run(['git', '-C', str(root), *listing, '--', *sorted(paths)], cwd=root,
+        differing += _run(['git', '-C', str(root), *listing, '--', *paths], cwd=root,
                           environment=dict(os.environ), timeout=stage_seconds(30),
                           failure_subject='Listing uncommitted engine inputs').splitlines()
-    return commit.strip(), differing
+    return differing
 
 
 def _authority_in_use(authority: Path) -> bool:

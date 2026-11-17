@@ -80,7 +80,7 @@ type BrowserAccessWindow = Window & {
   t?: (key: string, values?: Record<string, unknown>) => string;
   showToast?: (message: string) => void;
   closeSettings?: () => void;
-  openLocalControlModal?: (options?: { browserUpgrade?: boolean }) => void;
+  openBrowserExtensionModal?: (options?: { browserUpgrade?: boolean }) => void;
   _renderSearchBrowserAccessOwner?: () => void;
   _testSearchBrowserOwner?: () => Promise<void>;
   _browserAccessDenyReadOwner?: () => Promise<void>;
@@ -228,11 +228,11 @@ export function browserAdapterUpgradeDetail(
 }
 
 export function openBrowserExtensionUpgrade(): void {
-  const openUpgradeSurface = globals().openLocalControlModal;
+  const openUpgradeSurface = globals().openBrowserExtensionModal;
   if (typeof openUpgradeSurface !== 'function') {
     globals().showToast?.(translate(
       'settings.browserUpgradeUnavailable',
-      '暂时无法打开升级页，请从「本机控制」进入浏览器扩展安装。',
+      '暂时无法打开升级页，请稍后重试。',
     ));
     return;
   }

@@ -133,6 +133,26 @@ def permission_refusal(cmd_type, params, permissions):
     return f'Command {cmd_type} requires {flag} flag'
 
 
+def home_tier_refusal(cmd_type, params, home_tiers):
+    """Node-side re-check of the Home ceiling the command carries.
+
+    The Home sends its ceiling for this node with every command
+    (contracts/device_routing_v1.schema.json); the node runs a command only
+    when its tier is in that ceiling AND in the node's own switch
+    (:func:`permission_refusal`). A command without ``home_tiers`` comes from
+    a Home that predates ceilings and is judged by the node's switch alone.
+    """
+    if home_tiers is None:
+        return None
+    tier = required_tier(cmd_type, params if isinstance(params, dict) else {})
+    if tier in (None, 'read', 'control'):
+        return None
+    if isinstance(home_tiers, dict) and home_tiers.get(tier) is True:
+        return None
+    return (f'permission_denied: {cmd_type} needs the {tier} permission, which the Home '
+            'does not allow on this device')
+
+
 def dispatch_command(cmd_type, params, permissions):
     """Execute a command if permitted."""
     if cmd_type not in COMMANDS:

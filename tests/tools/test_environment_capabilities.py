@@ -179,11 +179,11 @@ def test_host_exposure_parity(tmp_path):
 
 
 def test_local_kernel_withholds_device_tools(tmp_path, monkeypatch):
-    monkeypatch.setattr('lib.desktop.is_desktop_agent_connected', lambda: True)
+    monkeypatch.setattr('lib.desktop.routing.has_reachable_device', lambda owner: True)
     local = EnvironmentSnapshot(revision=1, local_kernel=True, unavailable={
         'devices': 'local_kernel', 'lan_discovery': 'local_kernel'})
     desktop = dict(project_path=str(tmp_path), project_enabled=True,
-                   desktop_enabled=True)
+                   desktop_enabled=True, owner_user_id=1)
     full_ctx = _ctx(environment=EVERY_CAPABILITY_AVAILABLE, **desktop)
     local_ctx = _ctx(environment=local, **desktop)
     assemble_tool_list(full_ctx)

@@ -22,7 +22,7 @@ This domain lets an authenticated owner use one connected Chromium extension for
 | Native site discovery/execution, pacing and declarative site packs | `lib/browser/site_tool.py`, `lib/browser/adapters.py`, `lib/browser/site_pacing.py`, `lib/site_packs/` ([`../SITE_PACKS.md`](../SITE_PACKS.md)) |
 | Site observations, verified knowledge and health | `lib/browser/site_observations.py`, `lib/site_knowledge/`, `lib/site_doctor/` |
 | Model-facing browser tools | `lib/tools/browser.py`, `lib/browser/dispatch.py` |
-| Settings/status UI | browser settings and Local Control frontend modules |
+| Settings/status UI | browser settings (`frontend/src/features/settings/browser-access.ts`) and the browser extension dialog (`frontend/src/runtime/sections/browser-extension.js`) |
 | Extension installation/release | `browser_extension/`, extension release scripts |
 
 The extension uses a minimal two-color **T** monogram rather than a detailed
@@ -712,7 +712,7 @@ The tool appears only with an owner-scoped current extension and is selected for
 
 Chrome permits one debugger owner per tab. Open DevTools, another debugger, or external detach yields an explicit error; the bridge never seizes the DevTools UI. `chrome://`, extension, file, view-source and DevTools pages are refused.
 ## User experience
-Settings shows device/version/protocol/capabilities, adapter health, denials and grants. Missing capability names the device and links to Local Control upgrade; a handshake-rejected device stays outside the registry while a bounded owner-scoped recovery note offers the current build. The first 426 carries `Retry-After`, then a bounded credential-digest cooldown rejects before storage auth; a current-protocol header clears only that stale cooldown after an in-place upgrade while the authenticated frame remains authoritative. Version 5.4.1 preserves results across 429 or transport failure, obeys server delay, and bisects 413 batches before failing only an oversized singleton. A same-device retry seamlessly supersedes its older waiter and both retain normal 200 semantics. Repeated 4xx access rows keep first/power-of-two/heartbeat checkpoints plus exact metrics instead of durable-log spam.
+Settings shows device/version/protocol/capabilities, adapter health, denials and grants. Missing capability names the device and links to the browser extension dialog's upgrade; a handshake-rejected device stays outside the registry while a bounded owner-scoped recovery note offers the current build. The first 426 carries `Retry-After`, then a bounded credential-digest cooldown rejects before storage auth; a current-protocol header clears only that stale cooldown after an in-place upgrade while the authenticated frame remains authoritative. Version 5.4.1 preserves results across 429 or transport failure, obeys server delay, and bisects 413 batches before failing only an oversized singleton. A same-device retry seamlessly supersedes its older waiter and both retain normal 200 semantics. Repeated 4xx access rows keep first/power-of-two/heartbeat checkpoints plus exact metrics instead of durable-log spam.
 
 Negotiated DevTools shows “ready”; invocations retain their timeline badge, approval dialog and Chrome debugging indicator. Adapter failures show unavailable, failed policy writes stay failed, and no unexplained upgrade badge is valid. Search exposes Fast/Balanced/Deep; backend presets own limits and custom overrides stay explicit. `browser_fill_form` compiles the whole field list (text, checkbox, native/react-select/antd select, button, file, multi_search) into ONE page-side script per call — a single `execute_js` round trip (extension override 100 s, under the command ceiling) instead of one command per field. Every field is read back and verified in-page, and submit fires only when all fields verify, so a half-filled form is never posted; failures name the exact field plus observed options, so repairs cost one targeted retry (clear-first re-fills are idempotent), and the filled form's HTML is kept as a bounded per-owner snapshot under `data/browser_form_snapshots/` (newest 10, ≤1 MB each, never logged) for offline inspection instead of re-reading the live page. `type='file'` fields attach a local file to an `input[type=file]`: the server resolves the path through the workspace seam (absolute paths allowed), enforces a 20 MiB ceiling with an explicit error, tags label-addressed inputs with `data-tofu-ref`, streams bytes via `page_upload`, and the fill script verifies the attachment by filename — the submit gate covers uploads exactly like typed fields. `type='multi_search'` drives search-then-pick widgets (OpenReview Authors, assignee/tag pickers) without site selectors: each comma-separated query is searched, matched exactly (href parameter beats name text, so IDs win over duplicate names), added via the row's plus/sole-button control, and confirmed by the selection materializing; already-selected items are skipped, and per-item stage errors (resolve/search-input/search/result-match/add-button/confirm) name the first failing stage so repairs stay local instead of re-guessing the whole page.
 
@@ -746,15 +746,16 @@ sole availability gate. Callers that pass `browserEnabled=False` (paper,
 project dispatch, explicit headless runs) keep it off their wire. The
 Local Control badge, the Extras count and the per-turn chips no longer count
 the browser. Timers inherit the flag, and their hand-built poll loop includes
-the browser tools while an extension is connected. The desktop switch, its pin
-and its one-way gate are unchanged.
+the browser tools while an extension is connected. The desktop switch and the
+Local Control badge later left the UI with computer control (2026-11-17,
+[frontend record](../FRONTEND_ARCHITECTURE.md)).
 Alternatives rejected: forcing the flag on but keeping the pin adds the eager
 schemas to every native Tool Search request; deleting the flag would also
 expose the browser to runs that explicitly opt out and break the headless
 `browser` option.
 Verify `tests/tools/test_browser_capability_discovery.py`,
 `tests/conversation/test_conv_config.py` and
-`tests/server/test_frontend_local_control_merge.py`.
+`tests/frontend/test_frontend_browser_extension_dialog.py`.
 ## Failure semantics
 - Missing device/protocol/capabilities: reject the poll with HTTP 426 + `Retry-After`; do not register an anonymous or downgraded client. Retain only bounded owner-scoped recovery/cooldown notes needed to direct an installed device to upgrade.
 - Wrong owner/device result: ignore/reject it without settling another task.

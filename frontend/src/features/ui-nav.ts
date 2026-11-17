@@ -43,6 +43,7 @@ export const PAGE_JUMP_TARGETS: Readonly<Record<string, PageJumpTarget>> = Objec
   'knowledge-base': { entry: 'openKnowledgeBase', nameKey: 'knowledge.title' },
   'daily-report': { entry: 'openDailyReport', nameKey: 'myday.title' },
   'update': { entry: 'openUpdateDialog', nameKey: 'update.title' },
+  'devices': { entry: 'openDevices', nameKey: 'devicesPage.title' },
 });
 
 type UiNavBridge = {

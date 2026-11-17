@@ -66,6 +66,11 @@ class CommandControls:
         return call(self._endpoint(), 'mcp_reconcile', '', user_id=user_id,
                     params={'server': server, 'action': action})
 
+    def execution_device_policy_reconcile(self, *, user_id):
+        if self._service is None:
+            return None
+        return call(self._endpoint(), 'device_policy_reconcile', '', user_id=user_id, params={})
+
 
 def configure(app, *, process_role, environ):
     service = None
@@ -110,6 +115,18 @@ def execution_mcp_reconcile(app, *, user_id, server, action):
     if controls is None:
         return None
     return controls.execution_mcp_reconcile(user_id=user_id, server=server, action=action)
+
+
+def execution_device_policy_reconcile(app, *, user_id):
+    """Drop the execution incarnation's (and its shards') cached device policy.
+
+    The route already committed the owner's change and invalidated this
+    process's cache. None without a split: this process runs every Turn.
+    """
+    controls = app.extensions.get(_CLIENT_KEY)
+    if controls is None:
+        return None
+    return controls.execution_device_policy_reconcile(user_id=user_id)
 
 
 def background_activity(app, *, user_id):

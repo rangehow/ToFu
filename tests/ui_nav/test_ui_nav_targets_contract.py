@@ -39,7 +39,7 @@ SETTING_LABELS = {
     'speech': 'settings.tabSpeech',
     'knowledge': 'settings.tabKnowledge',
     'network': 'settings.tabNetwork',
-    'devices': 'settings.tabDevices',
+    'device-defaults': 'settings.tabDevices',
     'preferences': 'settings.tabPreferences',
     'skills': 'settings.tabSkills',
     'tools': 'settings.tabTools',

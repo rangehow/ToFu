@@ -159,7 +159,7 @@ Tell the user, with the values from the receipt:
 - Next: in Tofu, open **Settings → Providers** and add a model provider with
   their API key.
 - Optional: browser features need the companion extension; install it from
-  **Settings → Local Control**.
+  **Settings → Search & Web Access → Install or upgrade extension**.
 - Manage the service from `install_dir` with `<python> serverctl.py status`,
   `stop` or `restart`; `stop` and `restart` ask for confirmation.
 - To update Tofu later, paste the same line into the agent again.

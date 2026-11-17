@@ -65,8 +65,9 @@ the composed-sheet size budgets.
   `features/local-control*.css`); only startup-composed sections stay in
   `application/`.
 - `14-*` owners separate browser setup, shared capability controls, Memory,
-  Local Control, branches, references, agent evidence, toasts and reasoning.
-  Memory body and Local Control styles import from their feature entries.
+  the browser extension dialog, branches, references, agent evidence, toasts
+  and reasoning.
+  Memory body and browser extension styles import from their feature entries.
   `14-memory-shell.css` stays before shared mobile rules; global modal-link
   and toggle rules stay in `14-capability-controls.css`. Memory responsive
   body rules follow the panel; Skills toast motion belongs to Settings.

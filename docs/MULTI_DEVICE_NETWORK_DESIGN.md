@@ -1,7 +1,10 @@
 # Multi-device network design: one Home, equal nodes
 
 Status: **proposal, awaiting owner decisions** (section 11), written
-2026-11-17. Phase 0 (section 10) is done; the later phases change no code yet. The running node model
+2026-11-17. The owner accepted all eight defaults (2026-11-17). Device
+routing and permissions (decisions 6 and 7) are implemented; their current
+behavior lives in [remote execution](modules/remote_execution.md#device-routing-and-permissions).
+Phase 0 (section 10) is done. The running node model
 is described in [remote execution](modules/remote_execution.md#nodes-and-pairing);
 when a phase below lands, its behavior moves into that authority and this
 proposal shrinks accordingly.

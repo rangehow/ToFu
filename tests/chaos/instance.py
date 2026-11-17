@@ -254,6 +254,18 @@ class ChaosInstance:
         self._wait(lambda: not self._execution.host_matches(record), 'execution host death')
         return pid
 
+    def restart_execution_host(self) -> float:
+        """An explicit restart's drain: SIGTERM and a joined stop within the
+        manager's budget, with no kill allowed (a host that needs one raises),
+        then the next generation. Returns the drain's seconds."""
+        started = time.monotonic()
+        self._execution.stop()
+        drained = time.monotonic() - started
+        env = self.execution_environment()
+        self._execution.ensure(self._execution.prepare(env), env)
+        self.wait_execution_ready()
+        return drained
+
     def recover_execution_host(self) -> dict:
         """``ExecutionService.recover``'s replacement step: joined stop, then ensure."""
         self._execution.stop(retire_failed_close=True)

@@ -131,6 +131,7 @@ class StorageRuntime:
         self._on_degraded = on_degraded
         self._auto_restart = auto_restart
         self._stopping = threading.Event()
+        self._closed = False
         self._restart_thread: threading.Thread | None = None
         self._restart_attempts = 0
         self._last_error = ''
@@ -560,6 +561,12 @@ class StorageRuntime:
             self._restart_thread.start()
 
     def _start(self, *, clear_stop: bool, after_trip: bool = False) -> StorageClient:
+        with self._lock:
+            if self._closed:
+                raise StorageError(
+                    'database_unavailable',
+                    'Storage runtime was closed by its owner and never starts again',
+                    retryable=False)
         if clear_stop:
             self._stopping.clear()
             with self._lock:
@@ -773,18 +780,32 @@ class StorageRuntime:
         return ('Storage writes are fenced while the sidecar is unavailable'
                 if write else 'Storage sidecar is unavailable', False)
 
+    def close(self, timeout: float = 10.0) -> None:
+        """Stop for good: the owner discards this runtime (process shutdown).
+
+        ``start()`` after ``stop()`` re-arms the runtime; after ``close()``
+        every start, including one already on its way in, is refused with a
+        non-retryable error, so no retry loop can attach a new authority to a
+        process that is shutting down.
+        """
+        with self._lock:
+            self._closed = True
+        self.stop(timeout=timeout)
+
     def stop(self, timeout: float = 10.0) -> None:
         deadline = time.monotonic() + max(0.1, float(timeout))
         self._stopping.set()
         with self._lock:
             self._ready = False
+            closed = self._closed
             # Fail fence waiters fast: stopping ends any restart-in-flight
             # window, so a parked client() must re-check and raise now
             # rather than outlive the shutdown deadline.
             self._ready_condition.notify_all()
             restart_thread = self._restart_thread
             reminder_thread = self._degraded_reminder_thread
-        self._supervisor.stop(timeout=max(0.1, deadline - time.monotonic()))
+        (self._supervisor.close if closed else self._supervisor.stop)(
+            timeout=max(0.1, deadline - time.monotonic()))
         for worker in (restart_thread, reminder_thread):
             if (worker is not None
                     and worker is not threading.current_thread()

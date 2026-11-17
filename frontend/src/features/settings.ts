@@ -3,7 +3,6 @@ import '../styles/settings/settings.generated.css';
 import './settings/access-matrix.css';
 import './settings/mcp.css';
 import { invokeFeatureEntry, type FeatureCallable } from '../runtime-bridge';
-import './settings/devices.css';
 import './settings/tools-inventory.css';
 import './settings/settings-comfort.css';
 import { setRuntimeService } from '../runtime/app-runtime.js';
@@ -33,7 +32,7 @@ import './settings/private-hosts';
 import './settings/site-packs';
 import './settings/search-gateway';
 import './settings/browser-access';
-import './settings/devices';
+import './settings/devices-defaults';
 import './settings/speech';
 import './settings/catpaw-settings';
 import './settings/kimi-code-login';
@@ -171,7 +170,7 @@ setRuntimeService('_destroyModelCatalogPanel', destroyModelCatalogPanel);
 setRuntimeService('_invalidateModelCatalogAaScores', invalidateModelCatalogAaScores);
 
 for (const name of [
-  '_destroyPrivateHosts', '_destroyBrowserAccess', '_destroyDevicesTab',
+  '_destroyPrivateHosts', '_destroyBrowserAccess',
   '_destroySpeechTab',
   '_destroyCredentialsVault', '_destroyAuthSources',
 ] as const) {

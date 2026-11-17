@@ -13,6 +13,8 @@ import { bindDialogBackdrop } from './dialog-backdrop';
 export interface DrawerOptions {
   title: string;
   body: Node | string; // string is inserted as text, never as HTML
+  /** Accessible name of the close button in the page's language. */
+  closeLabel?: string;
   onClose?: () => void;
 }
 
@@ -41,7 +43,7 @@ export function createDrawer(options: DrawerOptions): DrawerHandle {
   icon.innerHTML = CLOSE_ICON_SVG;
   const closeButton = createIconButton({
     icon: icon.firstElementChild ?? icon,
-    label: '关闭面板',
+    label: options.closeLabel ?? '关闭面板',
     onClick: () => el.close(''),
   });
   header.appendChild(closeButton);

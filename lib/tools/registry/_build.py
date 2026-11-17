@@ -272,8 +272,10 @@ def _browser_tool_spec() -> ToolSpec:
 
 
 def _build_desktop(ctx: ToolContext) -> list[dict]:
-    from lib.desktop import is_desktop_agent_connected
-    if is_desktop_agent_connected():
+    # Offered only while one of THIS owner's devices is online; every call is
+    # then placed and permission-checked by the Home (lib.desktop.routing).
+    from lib.desktop.routing import has_reachable_device
+    if ctx.owner_user_id and has_reachable_device(ctx.owner_user_id):
         from lib.desktop_tools import DESKTOP_TOOLS
         logger.debug('[Task %s] 🖥️ Desktop agent connected — %d desktop tools '
                      'enabled', ctx.tid, len(DESKTOP_TOOLS))

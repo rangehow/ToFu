@@ -32,6 +32,7 @@ const panels: Readonly<Record<string, IndependentPanel>> = {
   wechat: {populate: '_populateWechatTab', destroy: '_destroyWechatTab', refreshOnVisit: true,
     load: () => import('./bot-channel')},
   messaging: {populate: '_populateMessagingTab', refreshOnVisit: true},
+  devices: {populate: '_populateDevicesTab', destroy: '_destroyDevicesTab', refreshOnVisit: true},
 };
 const visits = new WeakMap<SettingsReadSession, Set<string>>();
 

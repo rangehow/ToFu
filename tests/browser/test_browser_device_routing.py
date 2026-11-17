@@ -90,11 +90,14 @@ def test_sticky_pick_repicks_only_after_drop():
     assert dispatch._pick_connected_client(OWNER, owned_again) == CLIENT_A
 
 
-def test_dispatch_without_pin_routes_consecutive_calls_to_one_client(
-        monkeypatch):
+def test_dispatch_without_pin_uses_the_default_browser_or_refuses(monkeypatch):
+    """Owner decision 7 (contracts/device_routing_v1.schema.json): with several
+    browsers connected an unpinned call runs on the owner-marked default browser
+    whichever polled last, and is refused when none is marked."""
     import lib.browser.access as access
     import lib.browser.dispatch as dispatch
     from lib.browser.tool_runtime import BrowserToolRuntime
+    from lib.desktop import device_policy
 
     _register(CLIENT_A)
     _register(CLIENT_B)
@@ -112,18 +115,20 @@ def test_dispatch_without_pin_routes_consecutive_calls_to_one_client(
     monkeypatch.setitem(
         dispatch.BROWSER_HANDLERS, 'browser_list_tabs',
         lambda fn_args, runtime: 'ok')
+    defaults = {'computer': None, 'server': None, 'browser': None}
+    monkeypatch.setattr(device_policy, 'defaults', lambda owner: dict(defaults))
 
+    refused = dispatch.execute_browser_tool('browser_list_tabs', {}, owner_user_id=OWNER)
+    assert 'device_ambiguous' in refused and used == []
+    defaults['browser'] = CLIENT_B
     assert dispatch.execute_browser_tool(
         'browser_list_tabs', {}, owner_user_id=OWNER) == 'ok'
-    # The OTHER machine polls again, becoming the freshest — the old rule
-    # would route the next call there.
-    _register(CLIENT_A)
+    # The OTHER machine polls again, becoming the freshest: the default still wins.
     _register(CLIENT_B)
     _register(CLIENT_A)
     assert dispatch.execute_browser_tool(
         'browser_list_tabs', {}, owner_user_id=OWNER) == 'ok'
-    assert used[0] == used[1], (
-        f'un-pinned calls drifted across devices: {used}')
+    assert used == [CLIENT_B, CLIENT_B]
 
 
 def test_dispatch_explicit_pin_unaffected_by_sticky(monkeypatch):

@@ -53,8 +53,7 @@ def test_status_reads_store_and_credentials_off_the_serving_loop(
 
     monkeypatch.setattr(desktop._dist_store, 'find_for_platform',
                         find_for_platform)
-    monkeypatch.setattr(desktop._dist_mirror, 'ensure_fresh',
-                        lambda **_kwargs: False)
+    monkeypatch.setattr(desktop._dist_mirror, 'ensure_fresh', lambda **_: False)
     monkeypatch.setattr(api_keys, 'list_keys', list_keys)
 
     response = flask_client.get(

@@ -917,28 +917,6 @@ def runtime_section(name: str, *, scope_prelude: bool = True) -> str:
         body = (lifecycle_stub + state_owner
                 + _section_source('core/debug_state.js') + body
                 + '\nvar _debugRequests = _debugRuntimeOwner.shellState.requests;\n')
-    if name == 'local-control.js':
-        # Production keeps the badge in the retained runtime and injects live
-        # permission flags into the demand-loaded modal. Raw-section fixtures
-        # historically execute the complete Local Control behavior in one
-        # classic scope, so compose those same two authored ports here instead
-        # of recreating their predicates in each jsdom harness.
-        retained_badge = _section_source('local-control-state.js')
-        state_port = r'''
-var LocalControlShellState = Object.freeze({
-  get desktopEnabled() {
-    return typeof desktopEnabled !== 'undefined'
-      ? Boolean(desktopEnabled) : Boolean(globalThis.desktopEnabled);
-  },
-});
-'''
-        body = (
-            retained_badge
-            + state_port
-            + body
-            + '\nruntimeScope.LocalControlPresentationState = '
-              'LocalControlPresentationState;\n'
-        )
     if name == 'compaction-viewer.js':
         # Production retains only the bounded history projection and injects
         # it into the demand-loaded drawer. Raw-section fixtures historically

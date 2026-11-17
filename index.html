@@ -330,6 +330,15 @@
       <!-- Populated by _renderPaperLibrary() -->
     </div>
   </div>
+  <!-- Devices status pill: a plain link to the Devices workspace; features/devices-pill.ts fills in the
+       live status once idle (docs/MULTI_DEVICE_NETWORK_DESIGN.md §9). -->
+  <a class="sidebar-devices-pill" id="sidebarDevicesPill" href="#/devices" data-workspace-link="devices" data-tone="idle">
+    <span class="sidebar-devices-pill__dot" aria-hidden="true"></span>
+    <span class="sidebar-devices-pill__text">
+      <span class="sidebar-devices-pill__label" data-i18n="devicesPage.pill.label">Devices</span>
+      <span class="sidebar-devices-pill__status" data-devices-pill-status></span>
+    </span>
+  </a>
 </aside>
 <main class="main">
   <div class="topbar">
@@ -412,6 +421,7 @@
   <div class="presence-strip collab-bar" id="presenceStrip" hidden></div>
 
   <!-- APPLICATION_SHELL_FRAGMENT:world_workspace -->
+  <div id="devicesPageContainer"></div>
   <div class="chat-wrapper">
     <!-- Project Brain — read-only signal projection plus human Watch,
          Checker, decision-promotion, and Integration control surfaces. -->
@@ -662,21 +672,6 @@
                     <span class="submenu-item-text"><span class="submenu-item-name" data-i18n="toolbar.humanAICollab">人机协作</span><span class="submenu-item-desc" data-i18n="toolbar.humanAICollabDesc">让 AI 可在需要时向你提问</span></span>
                     <span class="submenu-item-check icon-box"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></span>
                   </div>
-                  <!-- ★ Local Control — ONE entry for "let Tofu act on my machine".
-                       Merges the former #browserToggle + #desktopToggle rows: from the
-                       user's side these are one concept, and two rows + two modals +
-                       two status dots was strictly more cognitive load than one.
-                       The two backing flags (browserEnabled / desktopEnabled) stay
-                       SEPARATE on the wire — the tool families and risk tiers really do
-                       differ — only the SURFACE merges. The browser is always on (its
-                       tools need a connected extension), so only the desktop row
-                       inside #localControlModal has a switch. -->
-                  <div class="submenu-item" id="localControlToggle" data-tofu-action="openLocalControlModal()" title="Local Control">
-                    <span class="submenu-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></span>
-                    <span class="submenu-item-text"><span class="submenu-item-name" data-i18n="local.title">本机控制</span><span class="submenu-item-desc" data-i18n="local.desc">让 AI 操作你的浏览器与电脑</span></span>
-                    <span class="submenu-item-check icon-box"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></span>
-                    <span class="tool-badge" id="localControlBadge" style="display:none"></span>
-                  </div>
                   <div class="submenu-item" id="imageGenToggle" data-tofu-action="toggleImageGenTool();updateSubmenuCounts()" title="AI Image Generation">
                     <span class="submenu-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></span>
                     <span class="submenu-item-text"><span class="submenu-item-name" data-i18n="toolbar.aiDrawing">AI 绘图</span><span class="submenu-item-desc" data-i18n="toolbar.aiDrawingDesc">让 AI 更容易主动生成图片</span></span>
@@ -918,9 +913,7 @@
              by routes/common.py via lib/settings_panels.inject_panels) -->
         <!-- SETTINGS_PANEL:network -->
 
-        <!-- Devices 面板(静态部分在
-             static/settings_panels/devices.html; spliced in at render time
-             by routes/common.py via lib/settings_panels.inject_panels) -->
+        <!-- Devices defaults + link to the Devices page (frontend/src/settings-panels/devices.html) -->
         <!-- SETTINGS_PANEL:devices -->
 
         <!-- ═══ Feishu Tab ═══ -->
@@ -1255,11 +1248,8 @@
     <!-- Two-pane body: left = file tree browser · right = selected folders + recent -->
     <div class="pm-body">
       <!-- LEFT PANE: the shared folder browser (features/project/folder-browser)
-           mounts here as #folderBrowser on first open and adopts the remote
-           devices group below as its prelude. -->
-      <div class="pm-browser-pane">
-        <div id="remoteDevicesSection" class="remote-devices-section" style="display:none"></div>
-      </div>
+           mounts here as #folderBrowser on first open. -->
+      <div class="pm-browser-pane"></div>
 
       <!-- RIGHT RAIL: the shared workspace rail (features/project/workspace-rail)
            mounts here on first open, the same rail sidebar folder settings uses. -->
@@ -1277,53 +1267,37 @@
   </div>
 </div>
 
-<!-- ★ Local Control Modal — the SINGLE setup surface for "let Tofu act on my
-     machine". Replaces the former standalone #browserModal and the desktop
-     toggle that had no setup surface at all.
-
-     Structure: two capability cards (browser tabs / this computer) side by
-     side in `.lc-cols` — browser LEFT, computer RIGHT — each with its OWN
-     live status dot and its OWN enable switch, because the two backing flags
-     stay separate on the wire. Under each card sits ONE install instruction
-     chosen by detected state — never a menu of every possible path. The
-     desktop card's choice comes from the backend (`setup_state` on
-     /api/v1/desktop/status): the caller's node list, or the pairing link
-     that adds a machine. The Chrome LNA warning lives INSIDE the browser card — it
-     is a browser-capability note, not a third block between the two. -->
-<div class="modal-overlay" id="localControlModal" data-tofu-action="if(event.target===this)closeLocalControlModal()">
-  <div class="modal local-modal">
-    <h3 data-i18n="local.title">本机控制</h3>
-    <p class="modal-desc" data-i18n="local.modalDesc">让 AI 读取并操作你自己的设备。浏览器能力默认开启，连上扩展即可使用；控制这台电脑需要单独开启。</p>
-
-    <div class="lc-cols">
-    <!-- ══ Capability 1: browser tabs (LEFT column) ══ -->
-    <div class="lc-cap" id="lcBrowserCap">
-      <div class="lc-cap-head">
-        <span class="lc-cap-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span>
-        <span class="lc-cap-text">
-          <strong data-i18n="local.browserName">浏览器标签页</strong>
-          <span class="lc-cap-status" id="lcBrowserStatus">
+<!-- ★ Browser Extension Modal — install, upgrade and status of the Tofu
+     browser extension (browser-extension.js). Opened from Settings → Search
+     & Web Access. Computer control shared this dialog as "Local Control"
+     until the owner removed it from the UI (2026-11-17). The card shows ONE
+     install instruction chosen by detected state; the Chrome LNA warning is a
+     browser-capability note inside the card. -->
+<div class="modal-overlay" id="browserExtensionModal" data-tofu-action="if(event.target===this)closeBrowserExtensionModal()">
+  <div class="modal browser-ext-modal">
+    <h3 data-i18n="settings.browserConnection">浏览器连接</h3>
+    <div class="be-cap">
+      <div class="be-cap-head">
+        <span class="be-cap-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span>
+        <span class="be-cap-text">
+          <strong data-i18n="browserExt.name">浏览器标签页</strong>
+          <span class="be-cap-status" id="beBrowserStatus">
             <span class="browser-status-dot disconnected"></span>
-            <span class="lc-status-text" data-i18n="local.notInstalled">尚未安装</span>
+            <span class="be-status-text" data-i18n="browserExt.notInstalled">尚未安装</span>
           </span>
         </span>
       </div>
-      <p class="lc-cap-about" id="lcBrowserAbout" data-i18n="local.browserAbout">读取你已打开的标签页内容，并代你点击、填表单、切换页面。</p>
+      <p class="be-cap-about" data-i18n="browserExt.about">读取你已打开的标签页内容，并代你点击、填表单、切换页面。</p>
       <!-- Setup FLOOR, shipped as static markup: the install instruction is on
-           screen in the very first paint, before any status call returns. It is
-           the SAME guidance the detected `download` state renders, so a user who
-           needs it never waits, and a status call that errors or never fires
-           leaves a followable step rather than an empty box. local-control.js
-           replaces this with a more specific instruction (load-unpacked with the
-           on-disk path) once detection lands, or empties it when connected.
-           The button is wired by _lcBrowserDownload() on modal open. -->
-      <div class="lc-cap-setup" id="lcBrowserSetup">
-        <p class="lc-step" data-i18n="local.browserDownload">下载扩展并解压，然后在 Chrome / Edge 里打开扩展管理页 → 开启「开发者模式」→「加载已解压的扩展程序」→ 选择解压出的文件夹。</p>
-        <button type="button" class="btn btn-primary btn-sm" id="lcExtDownloadBtn" data-i18n="browser.stepDownloadBtn">下载扩展 ZIP</button>
+           screen in the very first paint, before any status call returns.
+           browser-extension.js replaces it with a more specific instruction
+           once detection lands, or empties it when connected. -->
+      <div class="be-cap-setup" id="beBrowserSetup">
+        <p class="be-step" data-i18n="browserExt.download">下载扩展并解压，然后在 Chrome / Edge 里打开扩展管理页 → 开启「开发者模式」→「加载已解压的扩展程序」→ 选择解压出的文件夹。</p>
+        <button type="button" class="btn btn-primary btn-sm" id="beExtDownloadBtn" data-i18n="browser.stepDownloadBtn">下载扩展 ZIP</button>
       </div>
       <!-- Chrome 142+ Local Network Access guidance. Shown only when the
-           CONNECTED extension reports Chromium >= 142. A BROWSER-capability
-           note, so it lives inside this card. -->
+           CONNECTED extension reports Chromium >= 142. -->
       <div class="browser-lna-warning" id="browserLnaWarning" style="display:none">
         <strong data-i18n="browser.lnaTitle">Chrome 142+ 可能反复弹出「访问本地网络设备」</strong>
         <p data-i18n="browser.lnaDesc">从 Chrome 142 起，访问本地网络的网页会逐站弹出权限请求，多标签搜索时需反复点击。扩展无法代为授权，请用以下任一方式关闭提示：</p>
@@ -1335,41 +1309,8 @@
       </div>
     </div>
 
-    <!-- ══ Capability 2: this computer (RIGHT column) ══ -->
-    <div class="lc-cap" id="lcDesktopCap">
-      <div class="lc-cap-head">
-        <span class="lc-cap-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></span>
-        <span class="lc-cap-text">
-          <strong data-i18n="local.desktopName">电脑</strong>
-          <span class="lc-cap-status" id="lcDesktopStatus">
-            <span class="browser-status-dot disconnected"></span>
-            <span class="lc-status-text" data-i18n="local.notRunning">未运行</span>
-          </span>
-        </span>
-        <button type="button" class="lc-switch" id="lcDesktopSwitch"
-                data-tofu-action="toggleDesktopFromLocalModal()" role="switch" aria-checked="false">
-          <span class="lc-switch-knob"></span>
-        </button>
-      </div>
-      <p class="lc-cap-about" id="lcDesktopAbout" data-i18n="local.desktopAbout">浏览与读写本机文件、截屏、打开应用、运行命令（写入与执行需单独授权）。</p>
-      <!-- Setup FLOOR (see the browser row above). No download LINK here: the
-           URL derives from the backend's UPDATE_REPO, so hardcoding one would
-           point a fork at the wrong releases page. _lcPaintFloor adds the
-           Add-a-machine button on open and _lcRenderDesktop the installer row
-           and node list a beat later. -->
-      <div class="lc-cap-setup" id="lcDesktopSetup">
-        <p class="lc-step" data-i18n="local.pairLead">让 AI 操作一台电脑：在那台电脑上安装 Tofu 桌面版，打开后选择「加入服务器」，粘贴配对链接。</p>
-      </div>
-      <!-- Permission tiers are read-only by default on every node and are
-           granted in the desktop app on that machine; each node row above
-           shows what it granted. Stated as a fact, NOT rendered as
-           checkboxes here — the server must not grant itself access. -->
-      <p class="lc-perm-note" id="lcPermNote" style="display:none" data-i18n="local.permNote">写文件、运行命令、控制鼠标键盘默认全部关闭；需要时在那台电脑的 Tofu 桌面版里单独授予。</p>
-    </div>
-    </div><!-- /lc-cols -->
-
     <div class="modal-actions">
-      <button class="btn btn-primary" data-tofu-action="closeLocalControlModal()" data-i18n="browser.close">关闭</button>
+      <button class="btn btn-primary" data-tofu-action="closeBrowserExtensionModal()" data-i18n="browser.close">关闭</button>
     </div>
   </div>
 </div>
@@ -1571,15 +1512,6 @@
   <!-- Tools section -->
   <div class="mobile-sheet-section">
     <div class="mobile-sheet-section-title" data-i18n="mobile.tools">工具</div>
-    <!-- ★ Local Control — merged entry (mirrors #localControlToggle on desktop). -->
-    <div class="mobile-sheet-item" id="mobileLocalControl" data-tofu-action="closeMobileSheet();openLocalControlModal()">
-      <span class="mobile-sheet-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></span>
-      <span class="mobile-sheet-item-text">
-        <span class="mobile-sheet-item-name" data-i18n="local.title">本机控制</span>
-        <span class="mobile-sheet-item-desc" data-i18n="local.desc">让 AI 操作你的浏览器与电脑</span>
-      </span>
-      <span class="mobile-sheet-item-check icon-box"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></span>
-    </div>
     <div class="mobile-sheet-item" id="mobileImageGen" data-tofu-action="toggleImageGenTool();updateMobileSheet()">
       <span class="mobile-sheet-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></span>
       <span class="mobile-sheet-item-text">

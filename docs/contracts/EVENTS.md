@@ -284,6 +284,17 @@ after every push reconnect, it re-reads `GET /api/v4/router/office`. Frames
 never carry a tool call, title or transcript text. Push Hub owner filtering and
 the browser's frame-owner check are both mandatory.
 
+### Device wake hint
+
+The owner-scoped `notify` channel carries `devices.changed` under the
+`__devices__` sentinel task ID after a device-policy commit (Home ceiling or
+default device, `contracts/device_routing_v1.schema.json`; `rev` is the
+committed policy revision), a Home node-registry change (`rev` is the change
+stamp in milliseconds), or a device liveness transition (online, or its
+liveness window lapsed; no `rev`). It is a hint only: clients re-read
+`GET /api/v4/devices/permissions` and the node listing. Push Hub owner
+filtering and the browser's frame-owner check are both mandatory.
+
 ### Private model-routing wake hint
 
 The owner-scoped `notify` channel also carries `model_routing.changed` under

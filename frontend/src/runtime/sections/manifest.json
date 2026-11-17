@@ -539,13 +539,12 @@
    "runtimeBindings": []
   },
   {
-   "name": "local-control-presenters",
-   "output": "frontend/src/runtime/local-control-presenters.generated.js",
+   "name": "browser-extension-presenters",
+   "output": "frontend/src/runtime/browser-extension-presenters.generated.js",
    "moduleImports": [
     {
      "source": "frontend/src/i18n/index.ts",
      "bindings": [
-      "_i18nLang",
       "t"
      ]
     },
@@ -567,47 +566,21 @@
      "kind": "value"
     },
     {
-     "name": "LocalControlShellState",
-     "kind": "object"
-    },
-    {
-     "name": "_applyDesktopUI",
-     "kind": "function"
-    },
-    {
-     "name": "_lcUpdateBadge",
-     "kind": "function"
-    },
-    {
      "name": "_safeClipboardWrite",
      "kind": "function"
     },
     {
      "name": "apiUrl",
      "kind": "function"
-    },
-    {
-     "name": "captureActiveConversationSettings",
-     "kind": "function"
-    },
-    {
-     "name": "showToast",
-     "kind": "function"
-    },
-    {
-     "name": "updateSubmenuCounts",
-     "kind": "function"
     }
    ],
    "sections": [
     {
-     "source": "local-control.js",
-     "path": "local-control.js"
+     "source": "browser-extension.js",
+     "path": "browser-extension.js"
     }
    ],
-   "runtimeExports": [
-    "LocalControlPresentationState"
-   ],
+   "runtimeExports": [],
    "runtimeBindings": []
   },
   {
@@ -1193,11 +1166,6 @@
     {
      "name": "_modelShortName",
      "kind": "function"
-    },
-    {
-     "name": "_populateDevicesTab",
-     "kind": "function",
-     "providedBy": "feature"
     },
     {
      "name": "_populateModelDropdown",
@@ -2254,10 +2222,6 @@
   {
    "source": "info-rail.js",
    "path": "info-rail.js"
-  },
-  {
-   "source": "local-control-state.js",
-   "path": "local-control-state.js"
   },
   {
    "source": "onboarding.js",

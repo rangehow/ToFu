@@ -62,12 +62,15 @@ def test_push_registry_declares_the_notify_oauth_and_office_seams():
     specs = {spec.type: spec for spec in all_push_frame_specs()}
     assert set(specs) == {
         'conv_changed', 'conv_deleted', 'folders_changed',
-        'model_routing.changed', 'codex.reset_offer.updated', 'office.fact',
+        'model_routing.changed', 'devices.changed', 'codex.reset_offer.updated',
+        'office.fact',
     }
     assert specs['conv_changed'].channel == 'notify'
     assert specs['conv_deleted'].channel == 'notify'
     assert specs['folders_changed'].channel == 'notify'
     assert specs['model_routing.changed'].channel == 'notify'
+    assert (specs['devices.changed'].channel, specs['devices.changed'].task) == (
+        'notify', '__devices__')
     assert specs['codex.reset_offer.updated'].channel == 'oauth'
     assert (specs['office.fact'].channel, specs['office.fact'].task) == ('office', '__office__')
 

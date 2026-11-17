@@ -42,6 +42,11 @@ pub struct TurnSearchWorkerMetrics {
     /// Logical (owner-budget) bytes of the projection rows those retractions
     /// deleted; physical reclamation is reported by the projection's store.
     pub retracted_logical_bytes: u64,
+    /// Conversations whose source the projection refused with a permanent
+    /// (InvalidInput) error: logged once with their identity and
+    /// acknowledged, so the rest of the batch proceeds and no round retries
+    /// them until their source changes again.
+    pub permanent_failures: u64,
 }
 
 fn poisoned(name: &str) -> io::Error {
@@ -612,7 +617,7 @@ fn process_turn_search_batch_with_control(
         return Ok(metrics);
     };
     for (dirty, source) in dirty.iter().zip(sources) {
-        if !process_conversation(
+        let processed = match process_conversation(
             authority,
             projection,
             scope,
@@ -621,7 +626,29 @@ fn process_turn_search_batch_with_control(
             &mut metrics,
             &replica,
             &should_stop,
-        )? {
+        ) {
+            // InvalidInput is the engine's refusal of the request itself (a
+            // value or identity past a bound): the same source fails the same
+            // way on every round. Retrying it suspended the whole owner's
+            // search maintenance behind one conversation, so it is recorded
+            // once and its dirty work acknowledged; a later change to the
+            // conversation schedules it again. Every page committed before the
+            // refusal stays an incomplete item record that the next diff
+            // retracts.
+            Err(error) if error.kind() == io::ErrorKind::InvalidInput => {
+                metrics.permanent_failures = metrics.permanent_failures.saturating_add(1);
+                crate::engine_log::warn(
+                    "search_permanent_failure",
+                    &format!(
+                        "tenant={} owner={} conversation={} error={error}; acknowledged without indexing",
+                        scope.tenant_id, scope.owner_user_id, dirty.conversation_id
+                    ),
+                );
+                acknowledge(authority, scope, dirty, &mut metrics)?
+            }
+            result => result?,
+        };
+        if !processed {
             break;
         }
     }
@@ -635,6 +662,10 @@ mod activation_tests;
 #[cfg(test)]
 #[path = "turn_search_worker_footprint_tests.rs"]
 mod footprint_tests;
+
+#[cfg(test)]
+#[path = "turn_search_worker_item_record_tests.rs"]
+mod item_record_tests;
 
 #[cfg(test)]
 mod tests {

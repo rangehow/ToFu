@@ -72,7 +72,7 @@ def _handle_scheduler_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, c
     )
 
 
-def _run_desktop(fn_name, fn_args, user_id='', cancellation=None, task=None):
+def _run_desktop(fn_name, fn_args, user_id='', cancellation=None, task=None, call_key=None):
     """Desktop tool executor — wraps send_desktop_command + format_desktop_result.
 
     The wire cmd_type is the full tool name verbatim: the agent's dispatch
@@ -82,20 +82,27 @@ def _run_desktop(fn_name, fn_args, user_id='', cancellation=None, task=None):
     ``device`` argument (agent ID or case-insensitive name of one of those
     agents) becomes the command's target and never reaches the agent. ``task`` lets an
     error name await_device while the owner's device is offline.
+
+    The Home decides placement before anything is sent
+    (``lib.desktop.routing.route_device_call``): the named device, else the
+    owner's default computer, else the only online device; otherwise a typed
+    refusal. ``call_key`` (the call's idempotency key) becomes the command id,
+    so a replayed call never runs twice.
     """
     from lib.desktop import format_desktop_result, send_desktop_command
-    from lib.desktop.bridge import resolve_device_target
+    from lib.desktop.routing import RoutingRefusal, route_device_call
     params = dict(fn_args)
     selector = params.pop('device', None)
     options = {} if cancellation is None else {'cancellation': cancellation}
-    target = None
     if selector is not None and not isinstance(selector, str):
         return 'Desktop Agent Error: device must be an agent ID or device name string'
-    if selector and selector.strip():
-        target, error = resolve_device_target(selector.strip(), user_id)
-        if error:
-            return _desktop_error(error, task, target)
-        options['target_agent_id'] = target['agent_id']
+    route = route_device_call(user_id, selector=selector)
+    if isinstance(route, RoutingRefusal):
+        return _desktop_error(f'{route.code}: {route.message}', task, route.agent)
+    target = route.agent
+    options['target_agent_id'] = target['agent_id']
+    if call_key:
+        options['cmd_id'] = call_key
     result, error = send_desktop_command(
         fn_name, params, timeout=None, user_id=user_id, **options)
     if error:
@@ -127,10 +134,13 @@ def _handle_desktop_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg
     # into the command — RWA P4a user scoping on relay deployments.
     from lib.project_mod.tool_admission import Cancellation
 
+    from lib.desktop.routing import call_idempotency_key
+
     def _exec_desktop(_fn_name, _fn_args):
         return _run_desktop(
             _fn_name, _fn_args, user_id=task.get('_userId', '') or '',
-            cancellation=Cancellation(task), task=task)
+            cancellation=Cancellation(task), task=task,
+            call_key=call_idempotency_key(task, rn, tc_id, _fn_name))
     return simple_call(
         task, fn_name, fn_args, rn, round_entry, tc_id,
         executor=_exec_desktop,

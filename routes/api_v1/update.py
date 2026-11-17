@@ -158,6 +158,16 @@ def _enrich_with_restart_failure(payload):
     return payload
 
 
+def _enrich_with_restart_recovery(payload):
+    """Project ``last_restart_recovery``: the manager restored service automatically
+    after the latest restart's new generation failed before it ever served
+    (server_manager ``_recover_generation_that_never_served``)."""
+    if not isinstance(payload, dict):
+        return payload
+    payload['last_restart_recovery'] = _lca.latest_restart_recovery()
+    return payload
+
+
 def _enrich_with_code_pending(payload, *, current_head=None):
     """Project "on-disk source differs from the loaded-at-boot source" onto
     the /update/check payload as ``code_pending``.
@@ -231,6 +241,10 @@ def update_check():
         payload = _enrich_with_restart_failure(payload)
     except Exception as e:
         logger.warning('[Update] restart-failure enrichment failed: %s', e)
+    try:
+        payload = _enrich_with_restart_recovery(payload)
+    except Exception as e:
+        logger.warning('[Update] restart-recovery enrichment failed: %s', e)
     return api_ok(payload)
 
 

@@ -234,6 +234,14 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ripgrep
       - name: Verify lock and sync test environment
         run: uv lock --check && uv sync --frozen --extra test
+      # The installed-wheel test builds offline from the uv cache; a changed
+      # cache key leaves the pinned build backend uncached. Cache exactly
+      # pyproject's build-system.requires first.
+      - name: Cache the pinned build backend for offline wheel builds
+        run: >-
+          python3 -c "import tomllib;print('\n'.join(tomllib.load(open('pyproject.toml','rb'))['build-system']['requires']))"
+          > "$RUNNER_TEMP/build-backend.txt"
+          && uv pip install --target "$RUNNER_TEMP/build-backend" -r "$RUNNER_TEMP/build-backend.txt"
       - name: Run API tests (parallel)
         run: >-
           uv run --frozen --extra test make test-api-core JOBS=auto

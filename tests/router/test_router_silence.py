@@ -486,6 +486,34 @@ def test_human_steer_into_a_notice_turn_disables_silence_at_the_terminal(monkeyp
     assert '_silentTurn' not in task
 
 
+@pytest.mark.parametrize('content,refused', [('[SILENT]', True), ('', False)],
+                         ids=['refused-silence', 'ordinary-empty-stop'])
+def test_a_refused_silence_tells_the_model_to_reply_instead_of_repeating_it(
+        monkeypatch, content, refused):
+    """Global Router keepalive Turn e3b2565d/attempt d00f352e (2026-11-17): the
+    gate refused three exact [SILENT] rounds, and each recovery request only said
+    the response "ended without usable assistant text". The model, which had
+    written [SILENT], repeated it until empty_stop 2/2 failed the Turn. A refused
+    declaration must be named so the model answers; an ordinary empty stop keeps
+    the generic recovery text.
+    """
+    _eligible(monkeypatch)
+    _turns(monkeypatch, initiator='human')
+    task = _task()
+    messages = [HUMAN]
+    with patch('lib.tasks_pkg.stream_handler._budget._interruptible_sleep', lambda *_: None):
+        decision = analyse_stream_result(
+            {'role': 'assistant', 'content': content}, 'stop', task, 'router-task', 'model',
+            0, 0, messages, {'_empty_stop': not content})
+    assert decision['action'] == 'continue'
+    assert '_silentTurn' not in task and not task.get('error')
+    recovery = messages[-1]['content']
+    recovery = recovery if isinstance(recovery, str) else ''.join(
+        block.get('text') or '' for block in recovery if isinstance(block, dict))
+    assert 'TERMINAL RESPONSE RECOVERY' in recovery
+    assert ('[SILENT]' in recovery) is refused
+
+
 @pytest.mark.parametrize('history', [
     [{'role': 'user', 'content': '[Owner message sent while you were replying \u00b7 '
                                      'steer_id=channel-owner-earlier]\nAnswer me first'},

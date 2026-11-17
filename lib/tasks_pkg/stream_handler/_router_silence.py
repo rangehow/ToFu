@@ -92,6 +92,11 @@ def _human_steer(task: dict, output: dict, owner: int) -> bool:
     return False
 
 
+def _log_refusal(task: dict, reason: str) -> None:
+    logger.info('[Router] silence refused: %s conv=%s turn=%s attempt=%s', reason,
+                task.get('convId'), task.get('_turnId'), task.get('_attemptId'))
+
+
 def silence_declaration_allowed(task: dict, messages) -> bool:
     """Only a durable Router reply to a nonhuman notice, with no human steer, may be silent."""
     if not _router_task(task):
@@ -117,12 +122,14 @@ def silence_declaration_allowed(task: dict, messages) -> bool:
                     'conversationId': conversation_id, 'turnId': turn_id,
                     'attemptId': attempt_id, 'eligible': False,
                 }
+                _log_refusal(task, 'owner steer pending in inbox')
                 return False
         output = get_turn(conversation_id, turn_id, user_id=owner)
         parent_id = output.get('parentTurnId') if isinstance(output, dict) else None
         if not (output.get('actor') == 'assistant'
                 and output.get('conversationId') == conversation_id
                 and output.get('turnId') == turn_id and parent_id):
+            _log_refusal(task, 'reply Turn is not a parented assistant Turn')
             return False
         if not same_turn:
             source = get_turn(conversation_id, parent_id, user_id=owner)
@@ -131,12 +138,14 @@ def silence_declaration_allowed(task: dict, messages) -> bool:
                     'conversationId': conversation_id, 'turnId': turn_id,
                     'attemptId': attempt_id, 'eligible': False,
                 }
+                _log_refusal(task, 'parent Turn is not a nonhuman notice')
                 return False
         if _human_steer(task, output, owner):
             task[SILENT_ELIGIBILITY_FIELD] = {
                 'conversationId': conversation_id, 'turnId': turn_id,
                 'attemptId': attempt_id, 'eligible': False,
             }
+            _log_refusal(task, 'owner steer in this Turn')
             return False
     except Exception:
         # A previously verified parent does not make a failed steer read safe.

@@ -5,7 +5,7 @@ must hold even while Settings carries a manual-ON override.
 Observed 2026-11-09 20:27–21:33 CST (attempt a3c09a90-8a71-458e-a307-c6812c080078,
 turn 411d2578-81f5-4d93-ad30-2a71d917f12e, 367 tool rounds before it died):
 
-  * One credential of the gateway provider (``example-corp``) has been answering
+  * One credential of the gateway provider (``sankuai``) has been answering
     ``402 {"message":"您的Credit已耗尽", ext.error.source=AIGC, stage=validation}``
     since at least 12:30. ``data/config/key_stats.json`` recorded a PERSISTENT
     ``override: true`` for that credential (set before the retained logs) and a

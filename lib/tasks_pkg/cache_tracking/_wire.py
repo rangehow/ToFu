@@ -36,6 +36,7 @@ class _WireEvidence:
     message_bytes: Any = None
     field_bytes: Any = None
     region: Any = None
+    controls: Any = None
     routing: Any = None
     tool_count: int | None = None
     tool_name_bytes: int | None = None
@@ -64,6 +65,7 @@ def _wire_evidence_from_usage(usage: dict | None) -> _WireEvidence:
         message_bytes=usage.get('_wire_bytes'),
         field_bytes=usage.get('_wire_field_bytes'),
         region=usage.get('_wire_region'),
+        controls=usage.get('_wire_controls'),
         routing=usage.get('_wire_routing'),
         tool_count=_non_negative_int(surface.get('count')),
         tool_name_bytes=_non_negative_int(surface.get('name_bytes')),
@@ -151,6 +153,76 @@ def _report_wire_prefix_change(conv_id, prev, wire_culprits, *,
             first_changed_idx, prior_prefix_boundary, prev_wire_count,
             prev.message_count, msg_count, inside_prior_prefix)
     return advertised_rewrite
+
+
+def describe_control_change(previous: Any, current: Any,
+                            model_change: Any = None) -> str:
+    """Name the changed cache controls from captured values, when present."""
+    parts = []
+    if isinstance(previous, dict) and isinstance(current, dict):
+        parts = [f'{name}: {previous.get(name)!r} → {current.get(name)!r}'
+                 for name in sorted(set(previous) | set(current))
+                 if previous.get(name) != current.get(name)]
+    if model_change:
+        parts.append(f'model: {model_change}')
+    if not parts:
+        return ('speed / tool_choice / thinking / effort (values not '
+                'captured)')
+    return '; '.join(parts)
+
+
+@dataclass(frozen=True)
+class DurableComparison:
+    """Round 1 of a cold invocation against the persisted predecessor."""
+
+    culprits: list[str]
+    routing_diff: list[str]
+
+
+def compare_durable_baseline(
+    baseline: dict, evidence: _WireEvidence, *, conv_id: str, model: str,
+    cache_read: int,
+) -> DurableComparison:
+    """Compare process-stable digests only; an absent side stays inert.
+
+    Per-message fingerprints are process-local, so a cold round names hoisted
+    region, control, model and routing changes but never message culprits.
+    """
+    from lib.tasks_pkg.wire_fingerprint import diff_byte_region, diff_routing
+    culprits: list[str] = []
+    hoisted = baseline.get('hoisted') or {}
+    if isinstance(evidence.system, dict):
+        culprits.extend(
+            f'<hoisted>.{field}' for field in ('system', 'tools')
+            if hoisted.get(field) and evidence.system.get(field)
+            and hoisted[field] != evidence.system[field])
+    region = baseline.get('region') or {}
+    current_region = evidence.region if isinstance(evidence.region, dict) else {}
+    culprits.extend(diff_byte_region(
+        {f: v for f, v in region.items() if current_region.get(f)},
+        {f: v for f, v in current_region.items() if region.get(f)}))
+    _cached_prefix = baseline.get('read', 0) + baseline.get('write', 0)
+    if '<bytes>controls' in culprits and not (
+            cache_read < _cached_prefix * 0.95
+            and _cached_prefix - cache_read >= _MIN_CACHE_MISS_TOKENS):
+        # Same rule as the live path: an equivalent control value that did
+        # not cost read-back is not evidence.
+        culprits.remove('<bytes>controls')
+    model_change = (f"{baseline['model']} → {model}"
+                    if baseline.get('model') and model
+                    and baseline['model'] != model else None)
+    if model_change:
+        culprits.append('<model>')
+    if '<bytes>controls' in culprits or model_change:
+        logger.warning(
+            '[CacheTrack] conv=%s call=1 ⚠ CACHE CONTROLS CHANGED since the '
+            'persisted predecessor round: %s (read %d, predecessor read %d).',
+            conv_id, describe_control_change(
+                baseline.get('controls'), evidence.controls, model_change),
+            cache_read, baseline.get('read', 0))
+    return DurableComparison(
+        culprits=culprits,
+        routing_diff=diff_routing(baseline.get('routing'), evidence.routing))
 
 
 @dataclass(frozen=True)
@@ -328,12 +400,14 @@ def compare_wire_evidence(
                     _wire_culprits.append('<bytes>controls')
                     logger.warning(
                         '[CacheTrack] conv=%s call=%d ⚠ CACHE CONTROLS '
-                        'CHANGED: speed / tool_choice / thinking / effort '
-                        'differ from last round and the read (%d) fell '
-                        'short of the cached prefix (%d); these controls '
-                        'invalidate cached message blocks.',
-                        conv_id, prev.call_count + 1, cache_read,
-                        _cached_prefix)
+                        'CHANGED: %s differ from last round and the read '
+                        '(%d) fell short of the cached prefix (%d); these '
+                        'controls invalidate cached message blocks.',
+                        conv_id, prev.call_count + 1,
+                        describe_control_change(
+                            prev.wire_controls, evidence.controls,
+                            client_changes.get('model')),
+                        cache_read, _cached_prefix)
             if _region_culprits:
                 _wire_culprits.extend(_region_culprits)
                 _canonical_region_changed = any(

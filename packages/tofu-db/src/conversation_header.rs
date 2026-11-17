@@ -161,10 +161,13 @@ pub(crate) struct TaskResultParentSnapshot {
     physical_version: u64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TaskResultCacheFacts {
     pub cache_prefix_hwm: Option<u64>,
     pub last_turn_cache_read: Option<u64>,
+    /// Annex of `last_turn_cache_read`: every written last read replaces
+    /// `cacheBaseline` with this object, or removes it when absent.
+    pub cache_baseline: Option<Value>,
 }
 
 fn invalid_data(message: &str) -> io::Error {
@@ -937,6 +940,7 @@ pub(crate) fn merge_task_result_cache_facts(
         }
         merged
     });
+    let requested_baseline = requested.cache_baseline;
     let last_turn_cache_read = requested.last_turn_cache_read.map(|requested| {
         let current = settings
             .get("lastTurnCacheRead")
@@ -951,8 +955,26 @@ pub(crate) fn merge_task_result_cache_facts(
             settings.insert("lastTurnCacheRead".to_owned(), Value::from(merged));
             changed = true;
         }
+        if !ambiguous_replay || current.is_none() {
+            let baseline_differs = settings.get("cacheBaseline") != requested_baseline.as_ref();
+            if baseline_differs {
+                match &requested_baseline {
+                    Some(baseline) => {
+                        settings.insert("cacheBaseline".to_owned(), baseline.clone());
+                    }
+                    None => {
+                        settings.remove("cacheBaseline");
+                    }
+                }
+                changed = true;
+            }
+        }
         merged
     });
+    let cache_baseline = last_turn_cache_read
+        .and(settings.get("cacheBaseline"))
+        .filter(|baseline| baseline.is_object())
+        .cloned();
     if changed {
         let updated_at_ms = parent
             .header
@@ -985,6 +1007,7 @@ pub(crate) fn merge_task_result_cache_facts(
     Ok(TaskResultCacheFacts {
         cache_prefix_hwm,
         last_turn_cache_read,
+        cache_baseline,
     })
 }
 

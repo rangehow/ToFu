@@ -709,6 +709,7 @@ pub(crate) struct CheckpointGuard {
     pub require_parent: bool,
     pub cache_prefix_hwm: Option<u64>,
     pub last_turn_cache_read: Option<u64>,
+    pub cache_baseline: Option<Value>,
 }
 
 impl CheckpointGuard {
@@ -720,6 +721,7 @@ impl CheckpointGuard {
         TaskResultCacheFacts {
             cache_prefix_hwm: self.cache_prefix_hwm,
             last_turn_cache_read: self.last_turn_cache_read,
+            cache_baseline: self.cache_baseline.clone(),
         }
     }
 }
@@ -754,6 +756,9 @@ fn guarded_checkpoint_response(
             }
             if let Some(value) = facts.last_turn_cache_read {
                 response["last_turn_cache_read"] = json!(value);
+            }
+            if let Some(baseline) = facts.cache_baseline {
+                response["cache_baseline"] = baseline;
             }
         }
     }
@@ -882,6 +887,11 @@ fn checkpoint_inner(
             || guard
                 .last_turn_cache_read
                 .is_some_and(|value| value > MAX_TASK_RESULT_CACHE_FACT)
+            || (guard.cache_baseline.is_some() && guard.last_turn_cache_read.is_none())
+            || guard
+                .cache_baseline
+                .as_ref()
+                .is_some_and(|baseline| !baseline.is_object())
         {
             return Err(invalid_input("invalid task result cache fact"));
         }
@@ -1859,6 +1869,7 @@ mod tests {
                 require_parent: true,
                 cache_prefix_hwm: None,
                 last_turn_cache_read: None,
+                cache_baseline: None,
             }),
             None,
         )

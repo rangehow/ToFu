@@ -44,6 +44,9 @@ class BreakReport:
     # same-route read-share split (``_health.read_share_monitor``).
     cold_group: str = ''
     ttl_window_s: int = DEFAULT_CACHE_TTL_S
+    # _detect._RoundBaseline: 'live' / 'durable' / 'none' and, for
+    # 'durable', what the persisted predecessor comparison named.
+    round_baseline: object = None
 
 
 def _split_note(report: BreakReport) -> str:
@@ -81,6 +84,8 @@ def report_confirmed_break(report: BreakReport) -> dict:
         return {'tool_name_budget': _budget_cause}
 
     if report.turn_boundary_break:
+        _baseline = report.round_baseline
+        _kind = getattr(_baseline, 'kind', 'none')
         _boundary_cause = (
             'new-turn round-1 boundary re-bill: the previous turn left '
             f'a warm ~{report.previous_turn_read}-token cached prefix, but '
@@ -92,9 +97,12 @@ def report_confirmed_break(report: BreakReport) -> dict:
             '[CacheTrack] conv=%s call=%d ⚠ TURN-BOUNDARY RE-BILL: '
             'cache_write=%d cache_read=%d (prev-turn read=%d, gap=%.1fs) '
             '— new-turn round-1 read collapsed; prefix not reused across '
-            'the turn boundary.',
+            'the turn boundary. baseline=%s changed=[%s]',
             report.conv_id, report.call_count, report.cache_write, report.cache_read,
-            report.previous_turn_read, report.elapsed)
+            report.previous_turn_read, report.elapsed, _kind,
+            ', '.join([*_baseline.culprits, *_baseline.routing_diff]
+                      if _kind == 'durable' else report.wire_culprits) or (
+                'none observed' if _kind != 'none' else 'not comparable'))
         # Attach STRUCTURED fields alongside the free-form cause so the
         # frontend can render a localized, parameterized sentence
         # (t('finishInfo.cb.turnBoundaryRebill', {prev, read, gap}))

@@ -151,8 +151,8 @@ def _save_exit(context, attempt, turn, *, proof, unknown, known_terminal=False, 
     from lib.storage import get_storage_client
     from lib.storage.errors import StorageError, describe_storage_failure, is_transient_storage_error
     from lib.task_replay.task_result_checkpoint_contract import (
-        TASK_RESULT_CACHE_PREFIX_HWM_FIELD, TASK_RESULT_CHECKPOINT_GUARD_CONTRACT,
-        TASK_RESULT_LAST_TURN_CACHE_READ_FIELD,
+        TASK_RESULT_CACHE_BASELINE_FIELD, TASK_RESULT_CACHE_PREFIX_HWM_FIELD,
+        TASK_RESULT_CHECKPOINT_GUARD_CONTRACT, TASK_RESULT_LAST_TURN_CACHE_READ_FIELD,
     )
     context.checkpoint(allow_cancelled=True)
     value, metadata, version = _result_record(context, attempt)
@@ -184,6 +184,7 @@ def _save_exit(context, attempt, turn, *, proof, unknown, known_terminal=False, 
     # settings; replaying the candidates would also overwrite newer cache facts.
     value.pop(TASK_RESULT_CACHE_PREFIX_HWM_FIELD, None)
     value.pop(TASK_RESULT_LAST_TURN_CACHE_READ_FIELD, None)
+    value.pop(TASK_RESULT_CACHE_BASELINE_FIELD, None)
     try:
         result = get_storage_client(write=True).command('task_results.checkpoint', {
             'key': context.claim.task_id, 'value': value, 'expected_version': version,

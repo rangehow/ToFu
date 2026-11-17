@@ -52,6 +52,7 @@ def validate_records(records) -> None:
             "workerScope": "registered-descendant", "revalidateOnReplay": True,
         }
         or records.get("taskResultCacheFactMaximum") != 2_147_483_647
+        or records.get("taskResultCacheBaselineMaximumBytes") != 4096
     ):
         raise ValueError("Tofu-DB records table must be owner scoped")
 

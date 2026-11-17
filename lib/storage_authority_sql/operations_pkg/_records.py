@@ -24,8 +24,11 @@ from lib.storage_authority_sql.task_result_field_codec import (
     encode_task_result_fields_for_storage,
 )
 from lib.task_replay.task_result_checkpoint_contract import (
+    CONVERSATION_CACHE_BASELINE_SETTING,
     CONVERSATION_CACHE_PREFIX_HWM_SETTING,
     CONVERSATION_LAST_TURN_CACHE_READ_SETTING,
+    TASK_RESULT_CACHE_BASELINE_FIELD,
+    TASK_RESULT_CACHE_BASELINE_MAXIMUM_BYTES,
     TASK_RESULT_CACHE_FACT_MAXIMUM,
     TASK_RESULT_CACHE_PREFIX_HWM_FIELD,
     TASK_RESULT_CACHE_SETTINGS_CONTRACT,
@@ -901,6 +904,20 @@ def _task_results_checkpoint(session: Session, payload: Mapping[str, Any]) -> An
         TASK_RESULT_LAST_TURN_CACHE_READ_FIELD,
         last_turn_cache_read_present,
     )
+    # The comparison baseline is the last read's annex: it never travels
+    # alone, and a written last read replaces or removes it.
+    requested_cache_baseline = None
+    if TASK_RESULT_CACHE_BASELINE_FIELD in checkpoint_value:
+        candidate = checkpoint_value[TASK_RESULT_CACHE_BASELINE_FIELD]
+        if (requested_last_turn_cache_read is None
+                or not isinstance(candidate, Mapping)
+                or len(orjson.dumps(candidate, option=orjson.OPT_SORT_KEYS))
+                > TASK_RESULT_CACHE_BASELINE_MAXIMUM_BYTES):
+            raise StorageError(
+                "database_protocol_error",
+                "Invalid task result cache baseline",
+            )
+        requested_cache_baseline = dict(candidate)
 
     def guarded_result(
         *,
@@ -908,7 +925,7 @@ def _task_results_checkpoint(session: Session, payload: Mapping[str, Any]) -> An
         version: int = 0,
         updated_at_ms: int = 0,
         cache_settings_committed: bool = False,
-        cache_settings_values: Mapping[str, int] | None = None,
+        cache_settings_values: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         result: dict[str, Any] = {
             "key": key,
@@ -1055,7 +1072,7 @@ def _task_results_checkpoint(session: Session, payload: Mapping[str, Any]) -> An
 
     encoded = _encoded_task_result_document(checkpoint_value)
 
-    def commit_cache_settings(*, ambiguous_replay: bool) -> dict[str, int]:
+    def commit_cache_settings(*, ambiguous_replay: bool) -> dict[str, Any]:
         """Merge requested facts while the conversation lock is held.
 
         HWM is monotonic and therefore safe to repair on every replay.  The
@@ -1066,7 +1083,7 @@ def _task_results_checkpoint(session: Session, payload: Mapping[str, Any]) -> An
         if not cache_settings_requested or parent_settings is None:
             return {}
         changed = False
-        authoritative: dict[str, int] = {}
+        authoritative: dict[str, Any] = {}
         if requested_cache_prefix_hwm is not None:
             current_hwm = parent_settings.get(
                 CONVERSATION_CACHE_PREFIX_HWM_SETTING,
@@ -1103,6 +1120,22 @@ def _task_results_checkpoint(session: Session, payload: Mapping[str, Any]) -> An
                     ] = requested_last_turn_cache_read
                     changed = True
                 current_last_read = requested_last_turn_cache_read
+                current_baseline = parent_settings.get(
+                    CONVERSATION_CACHE_BASELINE_SETTING)
+                if current_baseline != requested_cache_baseline:
+                    if requested_cache_baseline is None:
+                        parent_settings.pop(
+                            CONVERSATION_CACHE_BASELINE_SETTING, None)
+                    else:
+                        parent_settings[
+                            CONVERSATION_CACHE_BASELINE_SETTING
+                        ] = requested_cache_baseline
+                    changed = True
+            stored_baseline = parent_settings.get(
+                CONVERSATION_CACHE_BASELINE_SETTING)
+            if isinstance(stored_baseline, Mapping):
+                authoritative[TASK_RESULT_CACHE_BASELINE_FIELD] = (
+                    stored_baseline)
             authoritative[
                 TASK_RESULT_LAST_TURN_CACHE_READ_FIELD
             ] = current_last_read

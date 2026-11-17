@@ -322,7 +322,7 @@ def test_old_sidecar_response_falls_back_per_cache_fact(monkeypatch):
     )
     monkeypatch.setattr(
         "lib.tasks_pkg.cache_tracking._persist.write_last_turn_cache_read",
-        lambda conv_id, value, *, user_id: legacy_calls.append(
+        lambda conv_id, value, *, user_id, cache_baseline=None: legacy_calls.append(
             ("last", conv_id, value, user_id)) or True,
     )
     client = OldSidecarClient()

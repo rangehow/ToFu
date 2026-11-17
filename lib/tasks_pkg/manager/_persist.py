@@ -26,6 +26,8 @@ from lib.task_replay.persistence_projection import (
     trim_tool_round_for_persist,  # noqa: F401 — manager facade re-export
 )
 from lib.task_replay.task_result_checkpoint_contract import (
+    TASK_CACHE_BASELINE_CANDIDATE_FIELD,
+    TASK_RESULT_CACHE_BASELINE_FIELD,
     TASK_CACHE_PREFIX_HWM_CANDIDATE_FIELD,
     TASK_LAST_TURN_CACHE_READ_CANDIDATE_FIELD,
     TASK_RESULT_CACHE_FACT_MAXIMUM,
@@ -492,6 +494,13 @@ def _upsert_task_row(task, conv_id, *, content, thinking, status,
         cache_candidate(TASK_LAST_TURN_CACHE_READ_CANDIDATE_FIELD, minimum=0)
         if status in TASK_REPLAY_TERMINAL_STATUSES else None
     )
+    # The baseline is the last read's annex and never travels alone.
+    cache_baseline_candidate = (
+        task.get(TASK_CACHE_BASELINE_CANDIDATE_FIELD)
+        if last_turn_cache_read_candidate is not None else None
+    )
+    if not isinstance(cache_baseline_candidate, dict):
+        cache_baseline_candidate = None
     cache_settings_requested = bool(
         cache_prefix_hwm_candidate is not None
         or last_turn_cache_read_candidate is not None
@@ -579,6 +588,8 @@ def _upsert_task_row(task, conv_id, *, content, thinking, status,
     if last_turn_cache_read_candidate is not None:
         value[TASK_RESULT_LAST_TURN_CACHE_READ_FIELD] = (
             last_turn_cache_read_candidate)
+    if cache_baseline_candidate is not None:
+        value[TASK_RESULT_CACHE_BASELINE_FIELD] = cache_baseline_candidate
     for tombstone_key in ('abort_requested_at', 'abort_source'):
         if tombstone_key in current_value:
             value[tombstone_key] = current_value[tombstone_key]
@@ -607,6 +618,11 @@ def _upsert_task_row(task, conv_id, *, content, thinking, status,
                 and current == sent_value):
             task.pop(field, None)
 
+    def clear_cache_baseline_candidate():
+        if (cache_baseline_candidate is not None and task.get(
+                TASK_CACHE_BASELINE_CANDIDATE_FIELD) is cache_baseline_candidate):
+            task.pop(TASK_CACHE_BASELINE_CANDIDATE_FIELD, None)
+
     def persist_cache_settings_with_legacy_peer():
         """Retain cache durability while the Sidecar rolls independently."""
         from lib.tasks_pkg.cache_tracking._persist import (
@@ -634,7 +650,8 @@ def _upsert_task_row(task, conv_id, *, content, thinking, status,
             try:
                 last_read_durable = write_last_turn_cache_read(
                     conv_id, last_turn_cache_read_candidate,
-                    user_id=owner_user_id)
+                    user_id=owner_user_id,
+                    cache_baseline=cache_baseline_candidate)
             except Exception as cache_error:
                 last_read_durable = False
                 logger.warning(
@@ -646,6 +663,7 @@ def _upsert_task_row(task, conv_id, *, content, thinking, status,
                     TASK_LAST_TURN_CACHE_READ_CANDIDATE_FIELD,
                     last_turn_cache_read_candidate,
                 )
+                clear_cache_baseline_candidate()
 
     for attempt in range(maximum_attempts):
         try:
@@ -735,11 +753,19 @@ def _upsert_task_row(task, conv_id, *, content, thinking, status,
                     from lib.tasks_pkg.cache_tracking._persist import (
                         remember_persisted_cache_facts,
                     )
+                    authoritative_baseline = (
+                        result.get(TASK_RESULT_CACHE_BASELINE_FIELD)
+                        if isinstance(result, dict) else None
+                    )
                     remember_persisted_cache_facts(
                         conv_id,
                         user_id=owner_user_id,
                         cache_prefix_hwm=authoritative_hwm,
                         last_turn_cache_read=authoritative_last_read,
+                        cache_baseline=(
+                            authoritative_baseline
+                            if isinstance(authoritative_baseline, dict)
+                            else None),
                     )
                     if cache_prefix_hwm_candidate is not None:
                         clear_cache_candidate(
@@ -751,6 +777,7 @@ def _upsert_task_row(task, conv_id, *, content, thinking, status,
                             TASK_LAST_TURN_CACHE_READ_CANDIDATE_FIELD,
                             last_turn_cache_read_candidate,
                         )
+                        clear_cache_baseline_candidate()
                 else:
                     persist_cache_settings_with_legacy_peer()
             return True

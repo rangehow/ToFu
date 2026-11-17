@@ -63,7 +63,7 @@ from lib.tasks_pkg.cache_tracking._policy import (
 )
 from lib.tasks_pkg.cache_tracking._wire import (
     _wire_evidence_from_usage, _detect_namespace_switch,
-    compare_wire_evidence,
+    compare_durable_baseline, compare_wire_evidence,
 )
 from lib.tasks_pkg.cache_tracking import _health
 from lib.tasks_pkg.cache_tracking._advance import advance_cache_observation
@@ -259,6 +259,13 @@ def _validated_wire_region_hash(region: Any, field: str) -> str:
     return value
 
 
+def _region_hash_changed(previous: Any, current: Any, field: str) -> bool:
+    """True only when both trusted true-byte digests exist and differ."""
+    before = _validated_wire_region_hash(previous, field)
+    after = _validated_wire_region_hash(current, field)
+    return bool(before and after and before != after)
+
+
 def _emit_round_record(conv_id, call_num, verdict, *, ns_switch, ttl_flip,
                        breakpoint_lost, body_identical, namespace_verified,
                        cache_read, cache_write, elapsed, culprits=None,
@@ -267,7 +274,7 @@ def _emit_round_record(conv_id, call_num, verdict, *, ns_switch, ttl_flip,
                        wire_tool_count=None, wire_tool_name_bytes=None,
                        wire_tool_name_budget_bytes=None,
                        cold_group='', affinity='', request_identity=None, trace_id='',
-                       peer=''):
+                       peer='', baseline='none'):
     """Emit ONE machine-readable per-round cache-verdict record (ALWAYS, every
     round — not only on a break).
 
@@ -302,6 +309,10 @@ def _emit_round_record(conv_id, call_num, verdict, *, ns_switch, ttl_flip,
             'cache_read': int(cache_read or 0),
             'cache_write': int(cache_write or 0),
             'gap_s': round(float(elapsed or 0), 1),
+            # What this round was compared against: 'live' (in-memory
+            # predecessor), 'durable' (persisted predecessor after a cold
+            # start: hoisted digests, routing and gap only) or 'none'.
+            'baseline': baseline,
         }
         # The model this round ran on. Without it EVERY cost aggregation over
         #   these records has to price the whole table at one rate, which is an
@@ -413,7 +424,8 @@ def _emit_pending_l2_roi(prev, conv_id, cache_write, cache_read, usage, *,
                  turn_boundary=(prev.call_count == 0),
                  model=model or '', now=now)
 
-def _cache_observation_elapsed(prev, now, scope, key, user_id, conv_id):
+def _cache_observation_elapsed(prev, now, scope, key, user_id, conv_id,
+                               durable_time=0.0):
     # FIX: compute elapsed BEFORE updating state so TTL detection works.
     # Previously, elapsed was computed AFTER setting last_update_time = now,
     # which meant it was always 0, making the >5min TTL check dead code.
@@ -427,7 +439,9 @@ def _cache_observation_elapsed(prev, now, scope, key, user_id, conv_id):
         # reporting gap_s=0.0). Fall back to the NEWEST sibling thread's
         # timestamp for the same conv — the previous turn's true send time.
         # Runs under _cache_lock, so the sibling scan is race-free.
-        _latest_sib = 0.0
+        # A cold scoped round 1 has no sibling; the persisted predecessor
+        # round carries the previous send time instead.
+        _latest_sib = float(durable_time or 0.0)
         for _sk, _sst in _cache_states.items():
             if (scope is None and _sk[0] == user_id
                     and _sk[1] == conv_id and _sk != key
@@ -436,6 +450,36 @@ def _cache_observation_elapsed(prev, now, scope, key, user_id, conv_id):
         elapsed = now - _latest_sib if _latest_sib else 0
 
     return elapsed
+
+
+@dataclass(frozen=True)
+class _RoundBaseline:
+    """What this round is compared against, with its durable-only evidence."""
+
+    kind: str
+    elapsed: float
+    culprits: tuple = ()
+    routing_diff: tuple = ()
+
+
+def _round_baseline(prev, now, scope, key, user_id, conv_id, wire_evidence,
+                    model, cache_read) -> _RoundBaseline:
+    """Round 1 of a cold invocation compares against the persisted
+    predecessor; any in-memory predecessor (copied or own) is 'live'."""
+    durable = (scope.durable_baseline
+               if scope is not None and prev.call_count == 0
+               and scope.rounds_seen == 0 else None)
+    elapsed = _cache_observation_elapsed(
+        prev, now, scope, key, user_id, conv_id,
+        durable_time=(durable or {}).get('updated_at', 0.0))
+    if not durable:
+        return _RoundBaseline('live' if prev.call_count > 0 else 'none',
+                              elapsed)
+    comparison = compare_durable_baseline(
+        durable, wire_evidence, conv_id=conv_id, model=model,
+        cache_read=cache_read)
+    return _RoundBaseline('durable', elapsed, tuple(comparison.culprits),
+                          tuple(comparison.routing_diff))
 
 
 def _round_record_context(scope, tools, model, call_count, wire_evidence, usage) -> dict:
@@ -475,6 +519,7 @@ def _cache_verdict_finisher(
     tool_count=None, wire_tool_count=None, wire_tool_name_bytes=None,
     wire_tool_name_budget_bytes=None,
     cold_group='', affinity='', request_identity=None, trace_id='', peer='',
+    round_baseline=None,
 ):
     """Freeze this round's evidence for consistent telemetry and returned verdicts."""
     def _finish(v, record_as=None):
@@ -489,12 +534,16 @@ def _cache_verdict_finisher(
         _emit_round_record(
             conv_id, prev.call_count,
             record_as if record_as is not None else v,
-            ns_switch=_ns_switch, ttl_flip=_ttl_flip,
+            ns_switch=_ns_switch or list(round_baseline.routing_diff),
+            ttl_flip=_ttl_flip,
             breakpoint_lost=_breakpoint_lost,
             body_identical=_wire_proven_identical,
             namespace_verified=_ns_verified_same,
             cache_read=cache_read, cache_write=cache_write,
-            elapsed=elapsed, culprits=_wire_culprits, model=model,
+            elapsed=elapsed,
+            culprits=[*_wire_culprits, *(c for c in round_baseline.culprits
+                                         if c not in _wire_culprits)],
+            model=model,
             wire_available=_wire_available,
             wire_changed=_wire_prefix_changed,
             read_collapsed=_read_collapsed, lane=lane, tool_count=tool_count,
@@ -502,7 +551,7 @@ def _cache_verdict_finisher(
             wire_tool_name_bytes=wire_tool_name_bytes,
             wire_tool_name_budget_bytes=wire_tool_name_budget_bytes, cold_group=cold_group,
             affinity=affinity, request_identity=request_identity, trace_id=trace_id,
-            peer=peer)
+            peer=peer, baseline=round_baseline.kind)
         if v:
             # Keep legacy keys and the primary ledger bucket, but never
             # discard independent evidence merely because another reason
@@ -757,7 +806,9 @@ def detect_cache_break(
 
         prev_cache_read = prev.last_cache_read_tokens
 
-        elapsed = _cache_observation_elapsed(prev, now, _scope, _key, user_id, conv_id)
+        _baseline = _round_baseline(prev, now, _scope, _key, user_id, conv_id,
+                                    _wire_evidence, model, cache_read)
+        elapsed = _baseline.elapsed
 
         # Handle compaction: if compaction happened, a drop in cache_read
         # is expected — don't flag it as a break. Capture the flag BEFORE
@@ -899,16 +950,10 @@ def detect_cache_break(
             and (_cross_turn_prev_read - cache_read) >= _MIN_CACHE_MISS_TOKENS
         )
 
-        _wire_tools_verified = bool(
-            _validated_wire_region_hash(_cur_wire_region, 'tools')
-            and _validated_wire_region_hash(prev.wire_region, 'tools')
-            and _validated_wire_region_hash(_cur_wire_region, 'tools')
-            != _validated_wire_region_hash(prev.wire_region, 'tools'))
-        _wire_system_verified = bool(
-            _validated_wire_region_hash(_cur_wire_region, 'system')
-            and _validated_wire_region_hash(prev.wire_region, 'system')
-            and _validated_wire_region_hash(_cur_wire_region, 'system')
-            != _validated_wire_region_hash(prev.wire_region, 'system'))
+        _wire_tools_verified = _region_hash_changed(
+            prev.wire_region, _cur_wire_region, 'tools')
+        _wire_system_verified = _region_hash_changed(
+            prev.wire_region, _cur_wire_region, 'system')
         # ── Update state (AFTER elapsed computation) ──
 
         advance_cache_observation(
@@ -993,7 +1038,7 @@ def detect_cache_break(
             _wire_available, _wire_prefix_changed, _read_collapsed, client_changes,
             prefix_mutation_break, _prefix_culprits, _wire_tools_verified, _wire_system_verified,
             turn_boundary_break, _cross_turn_prev_read, prev_cache_read,
-            **_groups,
+            **_groups, round_baseline=_baseline,
         )
 
         # ── Report ──
@@ -1028,6 +1073,7 @@ def detect_cache_break(
                 partial_no_reuse=partial_no_reuse,
                 previous_prefix_tokens=_prev_prefix_tokens,
                 cold_group=_groups['cold_group'],
+                round_baseline=_baseline,
             )
             return _finish(report_confirmed_break(report))
         # ── No confirmed break: still emit the per-round record so the ledger

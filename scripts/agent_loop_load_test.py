@@ -524,7 +524,8 @@ def _execution_environment(driver_env: dict[str, str], connection_file: Path) ->
     return env
 
 
-def _driver_environment(root: Path, engine, digest: str, durability: str, backend: str) -> dict[str, str]:
+def _driver_environment(root: Path, scratch: Path, engine, digest: str, durability: str,
+                        backend: str) -> dict[str, str]:
     """The storage harness's scrubbed environment, with production's project layout.
 
     The execution host admits only the source tree it runs from, so
@@ -532,7 +533,7 @@ def _driver_environment(root: Path, engine, digest: str, durability: str, backen
     Runtime state still lives under ROOT: ``TOFU_DATA_DIR`` is the runtime
     base for data/ and logs/.
     """
-    env = storage_harness._child_environment(root, engine, digest, durability, backend)
+    env = storage_harness._child_environment(root, scratch, engine, digest, durability, backend)
     env['TOFU_PROJECT_PATH'] = str(PROJECT_ROOT)
     return env
 
@@ -934,8 +935,15 @@ def main(argv=None) -> int:
         command += ['--production-metrics', *[str(Path(p).resolve()) for p in args.production_metrics]]
     if args.production_elapsed:
         command += ['--production-elapsed', str(args.production_elapsed)]
-    environment = _driver_environment(root.resolve(), engine, digest, args.durability, args.backend)
-    return subprocess.run(command, env=environment, cwd=str(root.resolve())).returncode
+    import tempfile
+    from serverctl_pkg.local_placement import temporary_root
+    # Host-local TMPDIR outside ROOT, as in the storage harness.
+    scratch = Path(tempfile.mkdtemp(prefix='agent-loop-load-test-', dir=temporary_root()))
+    try:
+        environment = _driver_environment(root.resolve(), scratch, engine, digest, args.durability, args.backend)
+        return subprocess.run(command, env=environment, cwd=str(root.resolve())).returncode
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 if __name__ == '__main__':

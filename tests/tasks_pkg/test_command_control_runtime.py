@@ -225,3 +225,34 @@ def test_execution_readiness_distinguishes_live_boot_from_departed_owner(live, s
     readiness = module.CommandControls(service=service).readiness()
     assert readiness['state'] == expected
     assert bool(readiness['error']) is (expected == 'unavailable')
+
+
+def test_mcp_management_reaches_only_the_resident_incarnation(monkeypatch):
+    """The API route already applied the action to its own bridge; the split's
+    execution host must repeat it (docs/ROBUSTNESS_AUDIT_20261117.md R4/R5)."""
+    from lib.tasks_pkg import command_control_runtime as module
+    monkeypatch.setattr(module, 'apply_command_control',
+                        lambda *a, **k: pytest.fail('the API bridge already applied it'))
+    calls = []
+    monkeypatch.setattr(module, 'call', lambda *a, **k: calls.append((a, k)) or {'scheduled': True})
+    endpoint = {'serviceId': 'current'}
+    controls = module.CommandControls(service=_ready_service(endpoint))
+    assert controls.execution_mcp_reconcile(user_id=41, server='chaos', action='tools') == {'scheduled': True}
+    assert calls == [((endpoint, 'mcp_reconcile', ''),
+                      {'user_id': 41, 'params': {'server': 'chaos', 'action': 'tools'}})]
+    assert module.CommandControls(service=None).execution_mcp_reconcile(
+        user_id=41, server='chaos', action='connect') is None
+
+
+def test_mcp_reconcile_control_queues_on_the_owned_mcp_worker(monkeypatch):
+    from lib.tasks_pkg import command_controls
+    import lib.mcp.startup as startup
+    queued = []
+    monkeypatch.setattr(startup, 'request_mcp_reconcile',
+                        lambda owner, server, action: queued.append((owner, server, action)) or True)
+    assert command_controls.apply_command_control(
+        'mcp_reconcile', '', user_id=41, server='chaos', action='connect') == {'scheduled': True}
+    assert queued == [(41, 'chaos', 'connect')]
+    with pytest.raises(ValueError):
+        command_controls.apply_command_control('mcp_reconcile', 'task', user_id=41, server='chaos',
+                                               action='connect')

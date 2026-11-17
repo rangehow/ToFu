@@ -11,6 +11,7 @@
 #    make test-unit     — Run unit tests only
 #    make test-api      — Run API integration tests only
 #    make test-slow     — Run expensive deterministic tests
+#    make test-chaos    — Fault-injection smoke through an isolated two-process instance
 #    make test-visual   — Run Playwright visual E2E tests
 #    make test-e2e      — Run hermetic E2E smoke (real app + browser + stub LLM)
 #    make test-frontend — Run Vite/ESM artifact + owner contracts (needs npm)
@@ -27,7 +28,7 @@
 #
 # ═══════════════════════════════════════════════════════════════
 
-.PHONY: lint static-check architecture-check contracts-check monorepo-check test test-plan test-deps test-affected test-full test-unit test-api test-api-core test-slow test-visual test-e2e test-frontend test-all test-coverage healthcheck ci smoke help desktop desktop-icons stop vendor-mcp audit-tests suite-health
+.PHONY: lint static-check architecture-check contracts-check monorepo-check test test-plan test-deps test-affected test-full test-unit test-api test-api-core test-chaos test-slow test-visual test-e2e test-frontend test-all test-coverage healthcheck ci smoke help desktop desktop-icons stop vendor-mcp audit-tests suite-health
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -257,6 +258,9 @@ test-api-core: ## Run API integration tests against the available shipped graph
 	# Same two-phase split as test-unit: engine-lifecycle suites marked serial
 	# run in a dedicated no-xdist phase so a parallel lane cannot starve them.
 	$(PYTEST) $(PYTEST_BASE) -m "api and serial" --timeout=600 --tb=short -q $(COV_APPEND)
+
+test-chaos: ## Fault-injection smoke: real Turns through an isolated two-process instance (docs/DEFENSIVE_PATTERNS.md)
+	$(PYTEST) $(PYTEST_BASE) tests/chaos $(PYTEST_PARALLEL) --tb=short -q
 
 test-slow: ## Run expensive deterministic tests with bounded parallelism
 	$(PYTEST) $(PYTEST_BASE) -m slow $(PYTEST_PARALLEL) --timeout=600 --tb=short -q

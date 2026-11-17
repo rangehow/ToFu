@@ -38,10 +38,17 @@ def test_every_process_runs_under_the_private_root_and_attaches_only_to_its_auth
     monkeypatch.setenv('TOFU_DATA_DIR', '/live/tofu')
     monkeypatch.setenv('HOME', '/home/live')
     engine = tmp_path / 'engine' / 'tofu-db'
-    driver = harness._driver_environment(tmp_path, engine, 'a' * 64, 'normal', 'tofudb')
+    root, scratch = tmp_path / 'root', tmp_path / 'host-local-scratch'
+    driver = harness._driver_environment(root, scratch, engine, 'a' * 64, 'normal', 'tofudb')
 
-    for key in ('HOME', 'TMPDIR', 'XDG_CACHE_HOME', 'TOFU_DATA_DIR'):
-        assert Path(driver[key]).is_relative_to(tmp_path), key
+    for key in ('HOME', 'XDG_CACHE_HOME', 'TOFU_DATA_DIR'):
+        assert Path(driver[key]).is_relative_to(root), key
+    # SQLite and the engine unlink open temporary files: TMPDIR is host-local
+    # scratch outside ROOT (DolphinFS fails I/O on open-but-unlinked files).
+    assert driver['TMPDIR'] == str(scratch)
+    assert driver['TOFUDB_BIN'] == str(engine)
+    assert driver['TOFUDB_EXPECTED_SHA256'] == 'a' * 64
+    assert driver['TOFU_DB_DURABILITY'] == 'normal'
     # The execution host admits only the source tree it runs from.
     assert driver['TOFU_PROJECT_PATH'] == str(harness.PROJECT_ROOT)
     assert 'TOFU_STORAGE_CONNECTION_FILE' not in driver

@@ -57,6 +57,12 @@ class CommandControls:
             return None
         return call(self._endpoint(), 'storage_rpc_metrics', '', user_id=user_id, params={})
 
+    def execution_mcp_reconcile(self, *, user_id, server, action):
+        if self._service is None:
+            return None
+        return call(self._endpoint(), 'mcp_reconcile', '', user_id=user_id,
+                    params={'server': server, 'action': action})
+
 
 def configure(app, *, process_role, environ):
     service = None
@@ -88,6 +94,19 @@ def execution_storage_rpc_metrics(app, *, user_id):
     if controls is None:
         return None
     return controls.execution_storage_rpc_metrics(user_id=user_id)
+
+
+def execution_mcp_reconcile(app, *, user_id, server, action):
+    """Repeat an MCP management action on the execution incarnation's bridge.
+
+    The route already applied it to this process's bridge; Turns of a split
+    deployment call tools through the execution host's, so it must follow.
+    None without a split: this process's bridge serves every Turn.
+    """
+    controls = app.extensions.get(_CLIENT_KEY)
+    if controls is None:
+        return None
+    return controls.execution_mcp_reconcile(user_id=user_id, server=server, action=action)
 
 
 def background_activity(app, *, user_id):

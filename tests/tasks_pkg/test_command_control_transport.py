@@ -129,11 +129,15 @@ def test_listener_shutdown_joins_entered_callback_and_closes_admission():
     ('task_view', 'task', {'task': {}, 'workUnit': 3}),
     ('task_abort', 'task', {'aborting': 'yes'}), ('task_abort', 'task', {'aborting': True, 'status': 3}),
     ('guidance_answer', 'hg', {'resolved': 1}), ('guidance_answer', 'hg', {'resolved': True, 'reason': 'x'}),
+    # An MCP reconcile is queued or refused; never absent, never an activity view.
+    ('mcp_reconcile', '', None), ('mcp_reconcile', '', {'scheduled': 'yes'}),
+    ('mcp_reconcile', '', {'swarms': [], 'backgroundCommands': []}),
 ])
 def test_remote_response_requires_the_requested_operation_result(method, task_id, result):
     from lib.tasks_pkg.command_control_transport import CommandControlServer, call, CommandControlUnavailable
     params = ({'agent_id': 'a'} if method == 'swarm_agent_stop'
-              else {'response': 'ok'} if method == 'guidance_answer' else {})
+              else {'response': 'ok'} if method == 'guidance_answer'
+              else {'server': 'chaos', 'action': 'connect'} if method == 'mcp_reconcile' else {})
     async def run():
         server = CommandControlServer('incarnation', lambda *args, **kwargs: result)
         endpoint = await server.start()
@@ -282,3 +286,25 @@ def test_repeated_close_cancellation_still_joins_the_callback():
         assert exited.is_set()
         assert server.active_count == 0
     asyncio.run(run())
+
+
+def test_mcp_reconcile_round_trips_its_scheduling_verdict():
+    """Found by the chaos suite: the owner-method branch accepted only the
+    activity shape, so every real reconcile read as unacknowledged."""
+    from lib.tasks_pkg.command_control_transport import CommandControlServer, call
+    calls = []
+
+    def apply(method, task_id, *, user_id, deadline_unix_ms, **params):
+        calls.append((method, task_id, user_id, params))
+        return {'scheduled': True}
+
+    async def run():
+        server = CommandControlServer('incarnation', apply)
+        endpoint = await server.start()
+        try:
+            return await asyncio.to_thread(call, endpoint, 'mcp_reconcile', '', user_id=41,
+                                           params={'server': 'chaos', 'action': 'tools'})
+        finally:
+            await server.close()
+    assert asyncio.run(run()) == {'scheduled': True}
+    assert calls == [('mcp_reconcile', '', 41, {'server': 'chaos', 'action': 'tools'})]

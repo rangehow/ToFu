@@ -903,7 +903,52 @@ def _exact_pin_exemptions(sources: list[str]) -> list[str]:
     return sorted(names)
 
 
-def prewarm_vendored_launcher(command: str) -> tuple[bool, str]:
+# The existing bound of one uv warm; a cold dependency resolution fits in it.
+_WARM_SECONDS = 300
+# Cancellation observation latency of the warm wait, as in owned helpers.
+_WARM_STOP_POLL_SECONDS = 0.05
+
+
+class WarmCancelled(Exception):
+    """The owner stopped while a warm ran; its process group was retired."""
+
+
+def _run_warm(argv: list[str], env: dict[str, str], stop=None):
+    """Run one uv warm as an owned process group and retire it on every exit.
+
+    ``stop`` (a ``threading.Event``) is the startup worker's shutdown signal.
+    A warm is joined, never abandoned: an orphaned ``uv`` keeps the shared uv
+    cache lock and stalls the next boot's warm and connect behind it.
+    """
+    import subprocess
+    process = subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True, start_new_session=os.name == 'posix')
+    deadline = time.monotonic() + _WARM_SECONDS
+    try:
+        while True:
+            try:
+                out, err = process.communicate(timeout=_WARM_STOP_POLL_SECONDS)
+                return subprocess.CompletedProcess(argv, process.returncode, out, err)
+            except subprocess.TimeoutExpired:
+                if stop is not None and stop.is_set():
+                    raise WarmCancelled('pre-warm cancelled by shutdown') from None
+                if time.monotonic() >= deadline:
+                    raise subprocess.TimeoutExpired(argv, _WARM_SECONDS) from None
+    finally:
+        if os.name == 'posix':
+            from lib.project_mod.process_group import escaped_descendant_groups, retire_process_group
+            retire_process_group(process.pid, wait_leader=lambda seconds: process.wait(timeout=seconds),
+                                 escaped_groups=escaped_descendant_groups(process.pid, process.pid)
+                                 if process.poll() is None else ())
+        elif process.poll() is None:
+            process.kill()
+            process.wait()
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
+
+
+def prewarm_vendored_launcher(command: str, *, stop=None) -> tuple[bool, str]:
     """Resolve a vendored server's isolated env BEFORE connect.
 
     Intended to run in a normal worker thread (the install route's job worker
@@ -918,6 +963,7 @@ def prewarm_vendored_launcher(command: str) -> tuple[bool, str]:
     Returns ``(ready, detail)`` — ``(True, launch argv)`` on success,
     ``(False, reason)`` on failure (also stored in ``_install_last_error``).
     Non-vendored commands return ``(True, '')`` so callers just proceed.
+    ``stop`` cancels a running warm and retires its process tree.
     """
     pkg = _pkg()
     if not command or os.sep in command:
@@ -945,8 +991,10 @@ def prewarm_vendored_launcher(command: str) -> tuple[bool, str]:
     warm = argv[:-1] + ['python', '-c', f'import {import_name}']
     logger.info('[MCP] pre-warming vendored launcher %r: %s', command, ' '.join(warm))
     try:
-        proc = pkg.subprocess.run(
-            warm, env=env, capture_output=True, text=True, timeout=300)
+        proc = pkg._run_warm(warm, env, stop)
+    except WarmCancelled as e:
+        logger.info('[MCP] pre-warm of %r cancelled: %s', command, e)
+        return False, str(e)
     except (pkg.subprocess.TimeoutExpired, OSError) as e:
         msg = f'uv warm did not complete: {e}'
         logger.warning('[MCP] pre-warm of %r failed: %s', command, e)
@@ -974,7 +1022,7 @@ def prewarm_vendored_launcher(command: str) -> tuple[bool, str]:
     return True, ' '.join(argv)
 
 
-def prewarm_all_vendored() -> dict[str, str]:
+def prewarm_all_vendored(*, stop=None) -> dict[str, str]:
     """Warm the isolated env of every registered vendored launcher.
 
     Meant to run ONCE in a background thread at startup so the App-Store
@@ -983,7 +1031,7 @@ def prewarm_all_vendored() -> dict[str, str]:
     call from the event loop.
 
     Returns ``{command: 'ok' | reason}`` for the launchers that had a source
-    to warm.
+    to warm. ``stop`` ends the pass and retires a running warm.
     """
     pkg = _pkg()
     pkg._reload_vendored_if_changed()
@@ -1005,10 +1053,12 @@ def prewarm_all_vendored() -> dict[str, str]:
         return out
 
     for command in list(pkg._VENDORED_LAUNCHERS.keys()):
+        if stop is not None and stop.is_set():
+            break
         try:
             if pkg._find_vendored_source(command) is None:
                 continue
-            ready, detail = pkg.prewarm_vendored_launcher(command)
+            ready, detail = pkg.prewarm_vendored_launcher(command, stop=stop)
             out[command] = 'ok' if ready else (detail or 'warm failed')
         except Exception as e:  # never let pre-warm crash boot
             logger.warning('[MCP] pre-warm of %r failed: %s', command, e)

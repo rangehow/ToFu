@@ -52,15 +52,11 @@ def test_launcher_resolves_under_the_server_python_minor(launcher_environment):
 def test_prewarm_warms_the_interpreter_the_launch_uses(launcher_environment, monkeypatch):
     warmed = {}
 
-    class RecordingSubprocess:
-        TimeoutExpired = subprocess.TimeoutExpired
+    def run_warm(argv, env, stop=None):
+        warmed.update(env)
+        return subprocess.CompletedProcess(argv, 0, '', '')
 
-        @staticmethod
-        def run(argv, *, env, **kwargs):
-            warmed.update(env)
-            return subprocess.CompletedProcess(argv, 0, '', '')
-
-    monkeypatch.setattr(mcp_client, 'subprocess', RecordingSubprocess)
+    monkeypatch.setattr(mcp_client, '_run_warm', run_warm)
     monkeypatch.setattr(mcp_client, 'vendored_launch_argv', lambda command: [
         'uv', 'run', '--no-project', '--with-editable', str(launcher_environment), command])
 

@@ -85,6 +85,7 @@ from lib.mcp.client._vendor import (  # noqa: E402,F401
     _run_vendor_script,
     _check_snapshot_staleness,
     _find_vendored_source,
+    _run_warm,
     is_vendored_launcher,
     prewarm_vendored_launcher,
     prewarm_all_vendored,

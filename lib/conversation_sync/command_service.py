@@ -520,6 +520,10 @@ class ConversationTurnCommandService:
         config = data.get("config") or {}
         if not isinstance(config, Mapping):
             raise BadRequest("config object required", field="config")
+        if config.get("model") is not None and not isinstance(config["model"], str):
+            # Refused before any Turn exists; the executor would fail on it later.
+            raise BadRequest("config.model must be a model ID string; pass a structured "
+                             "reference as config.modelRef", field="config.model")
         from lib.tasks_pkg.plan_mode import (
             normalize_interaction_mode_conversation_settings,
             normalize_interaction_mode_runtime_config,

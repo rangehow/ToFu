@@ -196,11 +196,13 @@ def failed_test_files(junit: Path, checkout: Path) -> list[str]:
 
 class Certification:
     def __init__(self, repo: Path, commit: str, fixture: Path, work_root: Path,
-                 previous: list[Path], note: str, argv: list[str]):
+                 previous: list[Path], note: str, argv: list[str], *, cache_root: Path | None = None):
         self.repo, self.commit, self.fixture = repo, commit, fixture
         self.run_id = f'{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{commit[:12]}'
         self.work = work_root / 'runs' / self.run_id
-        self.cache = work_root / 'cache'
+        # Compiler inputs need no hard links to the fixture. Keep their incremental
+        # cache stable even when automatic certification selects a temporary work root.
+        self.cache = cache_root if cache_root is not None else work_root / 'cache'
         self.evidence = certification.certifications_root(repo) / 'runs' / self.run_id
         self.checkout = self.work / 'checkout'
         self.previous_paths, self.note, self.argv = previous, note, argv
@@ -575,4 +577,5 @@ def _prepare(args, argv: list[str]) -> Certification:
         if not path.expanduser().is_file():
             raise CertificationError(f'--previous-engine {path} is not a file')
     return Certification(repo, resolved.stdout.strip(), fixture, work_root,
-                         [path.expanduser().resolve() for path in args.previous_engine], args.note, argv)
+                         [path.expanduser().resolve() for path in args.previous_engine], args.note, argv,
+                         cache_root=local / 'engine-certify/cache' if local else None)

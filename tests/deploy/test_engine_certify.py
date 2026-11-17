@@ -262,3 +262,77 @@ def test_certification_inherits_declared_toolchain_without_project_secrets(tmp_p
     assert shutil.which('cargo', path=run.environment['PATH']) == str(cargo)
     assert 'API_KEY' not in run.environment
     assert not (run.checkout / '.env').exists()
+
+
+@pytest.mark.parametrize('local_available', [True, False])
+def test_compiler_cache_survives_changing_fixture_work_roots(tmp_path, monkeypatch, local_available):
+    from argparse import Namespace
+    from types import SimpleNamespace
+    from lib.project_mod import lanes
+
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    fixture = tmp_path / 'fixture'
+    (fixture / 'payload-segments').mkdir(parents=True)
+    (fixture / 'CONTROL').write_bytes(b'control')
+    local = tmp_path / 'local' if local_available else None
+    monkeypatch.setattr(lanes, 'repository', lambda _: SimpleNamespace(top=repo))
+    monkeypatch.setattr(lanes, 'local_root', lambda _: local)
+    monkeypatch.setattr(gate.subprocess, 'run', lambda *a, **k: SimpleNamespace(
+        returncode=0, stdout='a' * 40, stderr=''))
+    runs = [gate._prepare(Namespace(commit='HEAD', fixture=fixture,
+                                   work_root=tmp_path / name, previous_engine=[], note=''), [])
+            for name in ('first', 'second')]
+    first, second = runs
+    first.cache.mkdir(parents=True)
+    artifact = first.cache / 'warm-build'
+    artifact.write_bytes(b'compiled dependency')
+    shutil.rmtree(first.work.parent, ignore_errors=True)
+    if local_available:
+        assert second.cache == first.cache
+        assert (second.cache / artifact.name).read_bytes() == b'compiled dependency'
+        assert second.cache.is_relative_to(local)
+    else:
+        assert second.cache == tmp_path / 'second/cache'
+    assert first.work.parent != second.work.parent
+
+
+def test_shared_compiler_output_is_copied_under_lock_before_certification(tmp_path, monkeypatch):
+    from contextlib import contextmanager, nullcontext
+    from types import SimpleNamespace
+    from scripts.engine_certification import checkout_tasks
+
+    held = []
+
+    @contextmanager
+    def lock(path):
+        held.append(path)
+        yield
+        held.pop()
+
+    def build(_checkout, root, _environment, **_kwargs):
+        assert held == [root / '.build.lock']
+        binary = root / 'tofu-db'
+        binary.write_bytes(b'engine')
+        (root / 'libtofu_db.so').write_bytes(b'library')
+        return binary
+
+    def identity(path):
+        assert not held
+        return {'source_sha256': 'a' * 64}
+
+    engines = SimpleNamespace(_preparation_budget=lambda _: nullcontext(),
+                              PREPARATION_TOTAL_TIMEOUT_SECONDS=1200,
+                              _prepare_lock=lock, _build=build, build_identity=identity,
+                              source_fingerprint=lambda _: 'a' * 64)
+    monkeypatch.setattr(checkout_tasks, '_import_from', lambda *_: engines)
+    output = tmp_path / 'run/build.json'
+    output.parent.mkdir()
+    cache = tmp_path / 'cache'
+    assert checkout_tasks.build(tmp_path / 'checkout', cache, output) == 0
+    candidate = Path(json.loads(output.read_text())['binary'])
+    (cache / 'tofu-db').write_bytes(b'next engine')
+    (cache / 'libtofu_db.so').write_bytes(b'next library')
+    assert candidate.read_bytes() == b'engine'
+    assert (candidate.parent / 'libtofu_db.so').read_bytes() == b'library'
+    assert candidate.is_relative_to(output.parent)

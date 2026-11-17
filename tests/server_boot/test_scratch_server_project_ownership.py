@@ -74,19 +74,19 @@ def test_a_free_project_and_the_server_own_lock_are_allowed(tmp_path, live_owner
     project, _ = live_owner
     free = tmp_path / 'free-project'
     free.mkdir()
-    lock.refuse_project_owned_by_another_server(str(free), _scratch_lock(tmp_path))  # no lock file
+    assert lock.refuse_project_owned_by_another_server(str(free), _scratch_lock(tmp_path)) is None  # no lock file
     stale = tmp_path / 'stale-project'
     (stale / 'data').mkdir(parents=True)
     dead = subprocess.Popen([sys.executable, '-c', 'pass'])
     dead.wait()
     (stale / 'data' / '.server.lock').write_text(f'{dead.pid}@{socket.gethostname()}\n', encoding='utf-8')
-    lock.refuse_project_owned_by_another_server(str(stale), _scratch_lock(tmp_path))  # a dead pid owns nothing
+    assert lock.refuse_project_owned_by_another_server(str(stale), _scratch_lock(tmp_path)) is None  # a dead pid owns nothing
     # The project's own server: its instance lock is the project's lock and already serializes it.
-    lock.refuse_project_owned_by_another_server(str(project), str(project / 'data' / '.server.lock'))
+    assert lock.refuse_project_owned_by_another_server(str(project), str(project / 'data' / '.server.lock')) is None
     mine = tmp_path / 'mine'
     (mine / 'data').mkdir(parents=True)
     (mine / 'data' / '.server.lock').write_text(f'{os.getpid()}@{socket.gethostname()}\n', encoding='utf-8')
-    lock.refuse_project_owned_by_another_server(str(mine), _scratch_lock(tmp_path))  # a re-exec keeps its pid
+    assert lock.refuse_project_owned_by_another_server(str(mine), _scratch_lock(tmp_path)) is None  # a re-exec keeps its pid
 
 
 def test_a_scratch_server_that_inherited_a_live_project_refuses_to_start(tmp_path, live_owner):

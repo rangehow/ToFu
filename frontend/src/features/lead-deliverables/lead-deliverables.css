@@ -4,6 +4,7 @@
  * Rows speak the context rail's --tctx-* vocabulary, mapped here to the board's ink. Each row:
  * a tinted type tile, the whole title (wrapped, never clipped), then the kind in the tile's
  * ink, project (another project's items only) and age. */
+.coordinator-progress-task { --coordinator-history-glyph: 16px; }
 .coordinator-progress-task[data-expandable="true"] { display: block; }
 .coordinator-progress-task-toggle {
   display: flex; width: 100%; min-width: 0; align-items: flex-start; gap: var(--space-2);
@@ -25,23 +26,29 @@
 }
 .coordinator-progress-task-toggle[aria-expanded="true"] .coordinator-progress-task-chevron { transform: none; }
 @media (prefers-reduced-motion: reduce) { .coordinator-progress-task-chevron { transition: none; } }
-.coordinator-progress-glyph--history { width: 16px; height: 16px; flex-shrink: 0; }
+.coordinator-progress-glyph--history {
+  width: var(--coordinator-history-glyph); height: var(--coordinator-history-glyph); flex-shrink: 0; justify-content: center;
+}
 .coordinator-progress-glyph--history::before {
-  content: ''; display: block; width: 6px; height: 6px; margin: 5px; border-radius: 50%; background: var(--text-tertiary);
+  content: ''; display: block; width: 6px; height: 6px; border-radius: 50%; background: var(--text-tertiary);
 }
 .coordinator-progress-other { margin-block-start: var(--space-1); }
 .coordinator-task-deliverables {
   --ld-tile: 26px;
   --tctx-ink: var(--text-primary); --tctx-ink-soft: var(--text-secondary); --tctx-ink-faint: var(--text-tertiary);
   --tctx-rule: var(--border); --tctx-radius: var(--radius-sm); --tctx-fill: var(--bg-hover);
-  margin: var(--space-1) 0 var(--space-2) calc(16px + var(--space-2));
+  /* The rule runs under the centre of the row's status glyph. */
+  margin: var(--control-edge-inset) 0 var(--space-1) calc(var(--coordinator-history-glyph) / 2 - var(--control-edge-inset));
+  padding-inline-start: calc(var(--coordinator-history-glyph) / 2 + var(--space-2));
+  border-inline-start: var(--control-edge-inset) solid var(--border);
   font-family: var(--font-ui); font-size: var(--font-size-sm); line-height: 1.45;
 }
 .coordinator-task-deliverables__list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
 .coordinator-task-deliverables__status { margin: 0; padding: var(--space-1); color: var(--text-tertiary); font-size: var(--font-size-xs); }
 
 .lead-deliverable { --ld-tone: var(--tctx-ink-soft); position: relative; min-width: 0; border-radius: var(--tctx-radius); }
-.lead-deliverable[data-visual="delivery"], .lead-deliverable[data-visual="sheet"], .lead-deliverable[data-visual="merge"] { --ld-tone: var(--success-text); }
+.lead-deliverable[data-visual="delivery"], .lead-deliverable[data-visual="sheet"], .lead-deliverable[data-visual="merge"],
+.lead-deliverable[data-visual="completion"] { --ld-tone: var(--success-text); }
 .lead-deliverable[data-visual="progress"], .lead-deliverable[data-visual="document"], .lead-deliverable[data-visual="image"] { --ld-tone: var(--info-text); }
 .lead-deliverable[data-visual="decision"] { --ld-tone: var(--warning-text); }
 .lead-deliverable[data-visual="blocked"], .lead-deliverable[data-visual="pdf"] { --ld-tone: var(--error-text); }
@@ -103,7 +110,31 @@
 .lead-deliverable__file:hover { border-color: var(--accent); color: var(--accent); }
 .lead-deliverable__file:focus-visible { outline: var(--control-edge-inset) solid var(--accent); outline-offset: var(--control-edge-inset); }
 
+/* ── Dense board rows (owner request 2026-11-17: the expanded task wasted space) ──
+ * Under a task each item is one line: a small glyph, the title taking the free width (it
+ * still wraps, never clips) followed by its kind · age; attached files follow on the same
+ * line when they fit. A guide line ties the items to their task instead of a deep indent. */
+.coordinator-task-deliverables { --ld-tile: 18px; }
+.coordinator-task-deliverables .lead-deliverable {
+  display: flex; flex-wrap: wrap; align-items: center; column-gap: var(--space-2);
+}
+.coordinator-task-deliverables .lead-deliverable + .lead-deliverable { border-block-start: none; }
+.coordinator-task-deliverables .lead-deliverable__open {
+  flex: 0 1 auto; width: auto; align-items: center; column-gap: var(--space-2); padding: var(--control-edge-inset) var(--space-1);
+}
+.coordinator-task-deliverables .lead-deliverable__icon { font-size: var(--font-size-xs); }
+.coordinator-task-deliverables .lead-deliverable__text {
+  flex-direction: row; flex-wrap: wrap; align-items: baseline; column-gap: var(--space-2); row-gap: 0;
+}
+.coordinator-task-deliverables .lead-deliverable__title { flex: 0 1 auto; min-width: 0; font-weight: var(--weight-regular); }
+.coordinator-task-deliverables .lead-deliverable__meta { flex: 0 0 auto; margin: 0; white-space: nowrap; }
+.coordinator-task-deliverables .lead-deliverable__files { flex: 0 1 auto; padding: 0 var(--space-1); }
+.coordinator-task-deliverables .lead-deliverable__file { line-height: 1.5; }
+.coordinator-task-deliverables .lead-deliverable__source { inset-block-start: 50%; width: 20px; height: 20px; transform: translateY(-50%); }
+.coordinator-task-deliverables__status { padding: var(--control-edge-inset) var(--space-1); }
+
 /* ── The report reader the opener shows ── */
 .lead-deliverable-dialog .ui-dialog__body { max-height: 70vh; overflow-y: auto; }
 .lead-deliverable-report .ptool-coord-card { margin: 0; }
 .lead-deliverable-report__files { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-block-start: var(--space-3); }
+.lead-deliverable-report__label { margin: 0 0 var(--space-2); color: var(--text-tertiary); font-size: var(--font-size-xs); }

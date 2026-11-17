@@ -132,8 +132,8 @@ class CoordinatorReports:
     def _content(request):
         return request['title'] + '\n\n' + request['message']
 
-    def publish(self, scope, request, *, files=(), task=None):
-        """Publish ``request``; ``files`` (``reportFile``s) and ``task`` (``deliverableTaskRef``) are
+    def publish(self, scope, request, *, files=(), tasks=()):
+        """Publish ``request``; ``files`` (``reportFile``s) and ``tasks`` (``deliverableTaskRef``s) are
         what its call attached and named, carried to the relay."""
         validate_report(scope, 'reportScope')
         validate_report(request, 'reportRequest')
@@ -141,9 +141,9 @@ class CoordinatorReports:
             raise ValueError('Report title, message and idempotency key must not be blank')
         self._scope(scope)
         key, intent = self._retain_intent(scope, request)
-        return self._deliver(key, intent, files=files, task=task)
+        return self._deliver(key, intent, files=files, tasks=tasks)
 
-    def _deliver(self, key, intent, *, files=(), task=None):
+    def _deliver(self, key, intent, *, files=(), tasks=()):
         value = intent['value']; scope, request = value['scope'], value['request']
         validate_report(value, 'reportIntent')
         if type(intent['version']) is not int or intent['version'] < 1:
@@ -185,7 +185,7 @@ class CoordinatorReports:
         notify(self.owner, scope['coordinatorId'], self.project)
         # Before the intent retires: a crash here replays the relay at boot, and
         # its per-Turn command id keeps the Global Router notice exactly once.
-        self._relay(scope, request, turn['turnId'], files, task)
+        self._relay(scope, request, turn['turnId'], files, tasks)
         # Intent is reconstructible transport state only after both canonical
         # message and attention pointer have committed. Lost ACK replays safely.
         self._delete_intent(key, intent['version'])
@@ -280,7 +280,7 @@ class CoordinatorReports:
         self._hint(scope['coordinatorId'])
         return self.read()
 
-    def _relay(self, scope, request, turn_id, files=(), task=None):
+    def _relay(self, scope, request, turn_id, files=(), tasks=()):
         relay = self.relay
         if relay is None:
             from lib.router.relay import relay_project_report as relay
@@ -289,8 +289,8 @@ class CoordinatorReports:
                   'message': request['message']}
         if files:
             report['files'] = list(files)
-        if task:
-            report['task'] = dict(task)
+        if tasks:
+            report['tasks'] = [dict(task) for task in tasks]
         try:
             relay(self.owner, report, client=self.client)
         except Exception:

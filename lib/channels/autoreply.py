@@ -242,7 +242,7 @@ def _terminal_outcome(task: dict[str, Any]) -> str:
 
 
 def _verified_notice_turns(owner: int, conversation_id: str, turn_id: str) -> tuple[dict | None, dict | None]:
-    from lib.turn_initiation import INITIATOR_CHANNEL, INITIATOR_PEER, resolve_turn_initiator
+    from lib.turn_initiation import is_nonhuman_notice_turn
     from lib.turn_lifecycle import get_turn
     output = get_turn(conversation_id, turn_id, user_id=owner)
     if (not isinstance(output, dict) or output.get('actor') != 'assistant'
@@ -250,7 +250,9 @@ def _verified_notice_turns(owner: int, conversation_id: str, turn_id: str) -> tu
             or output.get('turnId') != turn_id or not output.get('parentTurnId')):
         return None, None
     source = get_turn(conversation_id, output['parentTurnId'], user_id=owner)
-    if resolve_turn_initiator(source) not in {INITIATOR_CHANNEL, INITIATOR_PEER}:
+    # Same notice test as the Router's [SILENT] gate: a scheduled wake that may
+    # end quietly must also be able to fail loudly.
+    if not is_nonhuman_notice_turn(source):
         return None, None
     return output, source
 

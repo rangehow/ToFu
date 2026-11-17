@@ -104,6 +104,18 @@ def get_bridge(user_id):
     """Resolve one explicit owner without a registry admission quota."""
     from lib.identity import require_user_id
     owner = require_user_id(user_id, context='MCP bridge owner')
+    from lib.mcp.bridge_relay import relayed_bridge
+    relayed = relayed_bridge(owner)
+    if relayed is not None:
+        # An execution shard: the execution host owns every connection.
+        return relayed
+    return local_bridge(owner)
+
+
+def local_bridge(user_id):
+    """This process's own bridge for one owner (the relay owner side uses it)."""
+    from lib.identity import require_user_id
+    owner = require_user_id(user_id, context='MCP bridge owner')
     pkg = _pkg()
     with pkg._bridge_lock:
         bridge = pkg._bridges.get(owner)

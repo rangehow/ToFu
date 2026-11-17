@@ -131,7 +131,11 @@ def test_node_loss_mid_tool_settles_unavailable_and_never_duplicates(live_server
         db.command_queue.pop(cmd_id, None)
 
         # A second node stays online throughout: nothing may be retried on it.
-        spare, spare_log = _start_node(live_server, token, spare_cfg, tmp_path / 'spare.log',
+        # Its own credential: the Home binds one credential to one node ID
+        # (contracts/desktop_node_registry_v1.schema.json x-identity.binding).
+        _row, spare_token = create_key(owner_user_id=int(OWNER), name='routing-fault-spare',
+                                       scopes=['agents:bridge'])
+        spare, spare_log = _start_node(live_server, spare_token, spare_cfg, tmp_path / 'spare.log',
                                        '--allow-write', '--allow-exec', name='spare')
         assert _wait_online(exclude=(node_id,)) is not None
         device_policy.set_defaults(int(OWNER), {'computer': node_id})

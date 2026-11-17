@@ -1108,7 +1108,10 @@ def _recover_working_registration(row: dict) -> dict:
 
     Worker registration happens after runtime admission. A live task remains
     untouched; an absent task is reconciled against owner-scoped durable verdict
-    evidence. Unknown execution is preservation debt, never publication consent.
+    evidence. Absent here is not dead: an execution shard runs durable attempts
+    outside this process, so a durable attempt still pending or running keeps the
+    receipt working (its own settlement records the outcome), as Goal recovery
+    waits for it. Unknown execution is preservation debt, never publication consent.
     Storage failures escape so the working receipt remains retryable.
     """
     from lib.storage import get_storage_client
@@ -1130,6 +1133,15 @@ def _recover_working_registration(row: dict) -> dict:
     # a permanent publication revocation.
     if live is not None:
         return _receipt(row)
+    if executor_id.startswith('conversation-attempt:'):
+        from lib.turn_lifecycle import LifecycleNotFound, get_attempt
+        try:
+            attempt = get_attempt(executor_id.removeprefix('conversation-attempt:'),
+                                  user_id=int(row['user_id']))
+        except LifecycleNotFound:
+            attempt = {}
+        if attempt.get('status') in {'pending', 'running'}:
+            return _receipt(row)
     task = get_storage_client().query('task_results.replay_get', {
         'key': executor_id, 'user_id': int(row['user_id']),
         'include_terminal_payload': False, 'include_metadata': True,

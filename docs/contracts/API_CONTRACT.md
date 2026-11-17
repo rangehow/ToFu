@@ -1575,6 +1575,10 @@ lead deliverables (`GET /api/v4/project/coordination/deliverables?conversationId
 scope `conversations`, read-only, projected from the lead's report Turns and artifact rows, newest
 first, opaque cursor (400 when malformed), 403 for a conversation the caller does not own; push hint `{projectKey, kind: "lead_deliverable",
 conversationId}` on the `project` channel) → `deliverablePage` in the same schema;
+linking a lead's earlier reports to its board tasks (`POST /api/v4/project/coordination/report-links`,
+body `{path, conversationId, links: [{turnId, tasks: [title]}]}`, scope `conversations`, idempotent,
+403 for a lead the caller does not own; titles resolve leniently and unmatched ones are returned, never
+refused) → `{linked, unlinked}`, records `reportLink` in the same schema;
 channel accounts, threads and outbox (`/api/v4/channels/*`,
 `routes/api_v1/channels.py`, behavior [CHANNELS.md](../CHANNELS.md)) →
 `contracts/channels_v1.schema.json`. See

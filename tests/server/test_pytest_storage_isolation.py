@@ -72,8 +72,12 @@ def test_inherited_git_selection_environment_is_removed_as_one_contract(tmp_path
                            'UNRELATED_TEST_INPUT': 'keep-me'}
     # Nothing inherited survives; the suite sets only its own discovery ceiling.
     assert set(packaged._INHERITED_GIT_ENV_NAMES) & set(os.environ) == {'GIT_CEILING_DIRECTORIES'}
+    # pytest's per-user root (pytest-of-<user>) holds every session's basetemp;
+    # under xdist the worker's basetemp is one level deeper (pytest-N/popen-gwN).
+    [per_user_root] = [path for path in tmp_path_factory.getbasetemp().parents
+                       if path.name.startswith('pytest-of-')]
     assert os.environ['GIT_CEILING_DIRECTORIES'].split(os.pathsep) == list(dict.fromkeys(
-        [str(tmp_path_factory.getbasetemp().parent), tempfile.gettempdir()]))
+        [str(per_user_root), tempfile.gettempdir()]))
     assert not any(packaged._INHERITED_GIT_CONFIG_ENTRY.fullmatch(name)
                    for name in os.environ)
 

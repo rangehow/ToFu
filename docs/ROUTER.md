@@ -1006,7 +1006,12 @@ point. Scope:
   engine and the manager's frontend preflight is the build that gates the
   stop, so a failed frontend build there is a manager refusal: the old
   server keeps serving and the record reads `restart_refused_by_manager`
-  with the build's reason (also in `server-manager.log`).
+  with the build's reason (also in `server-manager.log`). When no bridge
+  takes the restart, the record reads `restart_bridge_refused` and its
+  detail names each bridge with its exact reason: the manager delegation's
+  delegate error, and the in-place re-exec, which is skipped in the
+  execution host because only `server.py` can replace its own image
+  ([infra runtime](modules/infra_runtime.md)).
 - **Restart-complete notice.** The requester hears the outcome without being
   asked, exactly once (`lib/server/restart_notice.py`). Every restart the gate
   accepts opens one `restartNotices` record in the same transaction that

@@ -55,8 +55,8 @@
   },
   "$defs": {
     "deliverableKind": {
-      "description": "report: a report_to_user message of any kind (reportKind names it); file/deck/document: a published response file (a deck is a .pptx or .pptd file), rich response or long-form report; merge: a Worker result its lead accepted and merged, as the studio's trophy shelf shows it (the server projects reports and artifacts only).",
-      "enum": ["report", "file", "deck", "document", "merge"]
+      "description": "report: a report_to_user message of any kind (reportKind names it); file/deck/document: a published response file (a deck is a .pptx or .pptd file), rich response or long-form report; merge: a Worker result its lead accepted and merged, as the studio's trophy shelf shows it (the server projects reports and artifacts only); completion: the automatic work report of a board task the lead completed without a delivery report naming it, written from the task's history (its final progress note and completion time).",
+      "enum": ["report", "file", "deck", "document", "merge", "completion"]
     },
     "deliverableTurn": {
       "type": "object",
@@ -82,13 +82,27 @@
       }
     },
     "deliverableTaskRef": {
-      "description": "The board task a report_to_user call named (its task argument): the task's history identity (progressHistoryKey) and its title when the report was sent.",
+      "description": "A board task an item belongs to: the task's history identity (progressHistoryKey) and its title when the item was linked. A report names its tasks through its report_to_user call (tasks argument) or a report link (reportLink).",
       "type": "object",
       "additionalProperties": false,
       "required": ["key", "title"],
       "properties": {
         "key": {"$ref": "#/$defs/progressHistoryKey"},
         "title": {"$ref": "#/$defs/progressTask/properties/title"}
+      }
+    },
+    "reportLink": {
+      "description": "A durable link of an already published report to a board task, for reports whose call named none (reports sent before tasks existed). Keyed by owner, project, Coordinator, report Turn and task; never edits the report.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owner", "projectPath", "coordinatorId", "reportTurnId", "task", "linkedAt"],
+      "properties": {
+        "owner": {"type": "integer", "minimum": 1},
+        "projectPath": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "coordinatorId": {"type": "string", "minLength": 1, "maxLength": 256},
+        "reportTurnId": {"type": "string", "minLength": 1, "maxLength": 256},
+        "task": {"$ref": "#/$defs/deliverableTaskRef"},
+        "linkedAt": {"type": "integer", "minimum": 0}
       }
     },
     "deliverableTaskSummary": {
@@ -121,7 +135,7 @@
         "result": {"$ref": "#/$defs/deliverableTurn"},
         "reportKind": {"enum": ["progress", "decision", "blocked", "delivery"]},
         "files": {"type": "array", "items": {"$ref": "#/$defs/reportFile"}},
-        "task": {"$ref": "#/$defs/deliverableTaskRef"},
+        "tasks": {"type": "array", "items": {"$ref": "#/$defs/deliverableTaskRef"}},
         "translation": {
           "type": "object",
           "additionalProperties": false,
@@ -685,6 +699,7 @@
   "reporting": {
     "headNamespace": "project.coordinator.reports.v1",
     "pendingNamespace": "project.coordinator.reports.pending.v1",
+    "linkNamespace": "project.coordinator.report_links.v1",
     "casAttempts": 8,
     "recoveryPageSize": 32
   },

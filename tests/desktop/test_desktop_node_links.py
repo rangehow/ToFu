@@ -144,7 +144,7 @@ def test_join_starts_a_link_and_leave_stops_it(node, monkeypatch):
     links, calls = node
     import lib.desktop_agent.attachments as attachments_mod
     monkeypatch.setattr(attachments_mod, '_redeem',
-                        lambda url, secret, node_id, name, timeout: ('tok-new', ''))
+                        lambda url, body, timeout: ({'token': 'tok-new', 'id': 'k1'}, ''))
     runtime = links.NodeLinks({}, lambda msg: None)
     try:
         runtime.start()

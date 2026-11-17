@@ -50,8 +50,25 @@ UNIT_NAME="tofu-supervisor.service"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 UNIT_PATH="$UNIT_DIR/$UNIT_NAME"
 
-# setsid/watchdog launch-path state.
-PID_FILE="$BASE_DIR/data/supervisor.pid"
+# setsid/watchdog launch-path state, keyed per supervisor port: one checkout
+# may host several supervisors (an isolated instance launched from the live
+# checkout on another TOFU_SUPERVISOR_PORT), and each must own its own PID
+# entry and launch lock, or status/stop/daemon address the wrong watchdog
+# (incident 2026-11-17). The durable default port keeps the established
+# names so a watchdog started before per-port entries stays addressable.
+SUPERVISOR_DEFAULT_PORT=15001
+SUPERVISOR_PORT="${TOFU_SUPERVISOR_PORT:-$SUPERVISOR_DEFAULT_PORT}"
+if [[ ! "$SUPERVISOR_PORT" =~ ^[1-9][0-9]{0,4}$ ]] || (( SUPERVISOR_PORT > 65535 )); then
+    echo "TOFU_SUPERVISOR_PORT must be a TCP port number, got: $SUPERVISOR_PORT" >&2
+    exit 2
+fi
+if [[ "$SUPERVISOR_PORT" == "$SUPERVISOR_DEFAULT_PORT" ]]; then
+    PID_FILE="$BASE_DIR/data/supervisor.pid"
+    LAUNCH_LOCK_FILE="$BASE_DIR/data/.supervisor-launch.lock"
+else
+    PID_FILE="$BASE_DIR/data/supervisor-$SUPERVISOR_PORT.pid"
+    LAUNCH_LOCK_FILE="$BASE_DIR/data/.supervisor-launch-$SUPERVISOR_PORT.lock"
+fi
 LOG_FILE="$BASE_DIR/logs/server-manager.log"
 WATCHDOG_RESTART_SECS=2          # base backoff after a healthy run dies
 WATCHDOG_MAX_BACKOFF_SECS=60     # ceiling for the escalating backoff
@@ -191,7 +208,7 @@ cmd_daemon() {
     mkdir -p "$BASE_DIR/data" "$BASE_DIR/logs"
     # Serialize concurrent terminal/cron/@reboot ensures. Close this fd in the
     # detached child so the launch mutex belongs only to this short command.
-    exec 8>"$BASE_DIR/data/.supervisor-launch.lock"
+    exec 8>"$LAUNCH_LOCK_FILE"
     if command -v flock >/dev/null 2>&1; then
         flock -w 10 8 || { echo "Another manager launch is still in progress." >&2; exit 1; }
     fi

@@ -19,20 +19,25 @@ def test_undo_cache_evicts_lru_and_reloads_from_authority(
         directory.mkdir()
     loads: list[str] = []
 
-    def load(session_dir):
+    # _read_history is the one authoritative read behind the cache (it
+    # replaced _load_from_disk on this path with per-file journal locks).
+    def read_history(session_dir):
         loads.append(session_dir)
         return modifications._History(
-            [], [{'session': session_dir}], modifications._journal_identity(session_dir),
-            (), set(), 0)
+            [], [{'session': session_dir}], ('identity', session_dir), set(), set(), 0)
 
     monkeypatch.setattr(modifications, '_MODS_CACHE_CAPACITY', 2)
-    monkeypatch.setattr(modifications, '_read_history', load)
-    monkeypatch.setattr(modifications, '_clean_stale_tmp', lambda _path: None)
+    monkeypatch.setattr(modifications, '_read_history', read_history)
+    monkeypatch.setattr(modifications, '_journal_identity',
+                        lambda session_dir: ('identity', session_dir))
+    monkeypatch.setattr(modifications, '_sweep_crash_artifacts', lambda *_a, **_k: None)
     from collections import OrderedDict
     monkeypatch.setattr(modifications, '_mods_cache', OrderedDict())
-    monkeypatch.setattr(modifications, '_mods_cache_identity', {})
+    for name in ('_mods_cache_identity', '_mods_cache_bytes',
+                 '_mods_cache_generation', '_mods_cache_oversized'):
+        monkeypatch.setattr(modifications, name, {})
     for directory in directories:
-        modifications._committed_rows(str(directory))
+        modifications._cache_get(str(directory))
 
     assert list(modifications._mods_cache) == [
         str(directories[1]), str(directories[2]),
@@ -44,7 +49,7 @@ def test_undo_cache_evicts_lru_and_reloads_from_authority(
     }
 
     # The evicted record is reconstructed from disk and becomes newest.
-    modifications._committed_rows(str(directories[0]))
+    modifications._cache_get(str(directories[0]))
     assert loads.count(str(directories[0])) == 2
     assert list(modifications._mods_cache) == [
         str(directories[2]), str(directories[0]),

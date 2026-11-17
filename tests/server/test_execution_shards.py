@@ -306,20 +306,16 @@ def test_owner_views_union_every_process(pool, controls):
     assert [row['swarm_id'] for row in view['swarms']] == ['local', 'shard']
 
 
-def test_mcp_management_reaches_every_process_that_runs_turns(pool, controls):
+def test_mcp_management_applies_once_on_the_host_its_shards_relay_to(pool, controls):
+    """Shards own no MCP connections (lib/mcp/bridge_relay.py): the primary's
+    bridge is the only one to reconcile, and an unreachable shard cannot make
+    the answer unconfirmed."""
     from lib.tasks_pkg.command_control_transport import CommandControlUnavailable
     _local, asked, answers = controls
-    answers[1] = {'scheduled': True}
-    answers[2] = {'scheduled': True}
+    answers[1] = CommandControlUnavailable('lost')
     params = {'server': 'docs', 'action': 'connect'}
     assert pool.apply_command_control('mcp_reconcile', '', user_id=1, **params) == {'scheduled': True}
-    assert [(port, method) for port, method, _deadline in asked] == [
-        (1, 'mcp_reconcile'), (2, 'mcp_reconcile')]
-    answers[2] = {'scheduled': False}
-    assert pool.apply_command_control('mcp_reconcile', '', user_id=1, **params) == {'scheduled': False}
-    answers[2] = CommandControlUnavailable('lost')
-    with pytest.raises(CommandControlUnavailable):
-        pool.apply_command_control('mcp_reconcile', '', user_id=1, **params)
+    assert asked == []
 
 
 # ── durable worker coordinator consults the gate ───────────────────────────

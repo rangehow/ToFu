@@ -108,9 +108,11 @@ store, and the board stays the only checklist. Verify
 
 `lead_deliverables.py` projects each lead conversation's deliverables at read
 time from their owners (report Turns with the files and board task their call's
-receipt names, relayed report notices, artifact rows), filtered and summarised
-per board task for the task board; it stores nothing, never add a deliverables
-store ("Lead deliverables" in `docs/PROJECT_COORDINATION.md`). Verify `tests/project_mod/test_lead_deliverables.py`
+receipt names, report links, relayed report notices, artifact rows, and each
+completed task's automatic work report from task history), filtered and
+summarised per board task for the task board; it stores nothing, never add a
+deliverables store. `coordinator_report_links.py` keeps only links of earlier
+reports to tasks, never report content ("Lead deliverables" in `docs/PROJECT_COORDINATION.md`). Verify `tests/project_mod/test_lead_deliverables.py`
 and `tests/storage/test_lead_deliverables_authority.py`.
 
 `coordinator_continuation.py` builds the state a Coordinator wake acts on, read at

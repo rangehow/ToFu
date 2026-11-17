@@ -309,9 +309,9 @@ def refresh_supervisor(
     launch_attempted = reload_accepted
     launch_after = time.monotonic() + (3.0 if initial_health else 0.0)
     last_error = ''
-    while time.monotonic() < deadline:
+    while (remaining := deadline - time.monotonic()) > 0:
         try:
-            health = request_supervisor_json(base_url, '/health', timeout=1.0)
+            health = request_supervisor_json(base_url, '/health', timeout=min(1.0, remaining))
         except SupervisorRefreshError as exc:
             health = None
             last_error = str(exc)
@@ -334,18 +334,26 @@ def refresh_supervisor(
         + (f' ({last_error})' if last_error else ''))
 
 
+# The Supervisor acknowledges ``/restart-deferred`` before it drains anything.
+DEFERRED_RESTART_REQUEST_SECONDS = 3.0
+
+
 def request_deferred_worker_restart(
     project_path: str,
     *,
     source: str,
     environment: Mapping[str, str] | None = None,
     requested_at: float | None = None,
+    deadline_at: float | None = None,
 ) -> dict[str, Any]:
     """Ask the current Supervisor to restart its worker after replying.
 
     ``requested_at`` is the user-visible restart epoch (``time.time()`` at
     click time); the manager threads it through its stage logs so a slow
-    restart can be attributed end to end.
+    restart can be attributed end to end. ``deadline_at`` (epoch seconds) is
+    the caller's own deadline (the application restart delegate's): the
+    Supervisor refresh polls for everything it leaves after the deferred
+    request's acknowledgement (``DEFERRED_RESTART_REQUEST_SECONDS``).
     """
     env = os.environ if environment is None else environment
     project = os.path.realpath(project_path)
@@ -356,7 +364,9 @@ def request_deferred_worker_restart(
         error = production_server_environment_error(project, caller_environment)
         if error:
             raise SupervisorRefreshError(error)
-    refresh = refresh_supervisor(project, environment=env)
+    refresh = (refresh_supervisor(project, environment=env) if deadline_at is None else
+               refresh_supervisor(project, environment=env, timeout=(
+                   float(deadline_at) - time.time() - DEFERRED_RESTART_REQUEST_SECONDS)))
     body: dict[str, Any] = {'projectPath': project, 'source': source}
     if requested_at is not None:
         body['requestedAt'] = float(requested_at)
@@ -364,7 +374,7 @@ def request_deferred_worker_restart(
         supervisor_base_url(env),
         '/restart-deferred',
         body,
-        timeout=3.0,
+        timeout=DEFERRED_RESTART_REQUEST_SECONDS,
     )
     if response.get('ok') is not True:
         raise SupervisorRefreshError(

@@ -311,13 +311,13 @@ def _restart_after_acceptance(owner: int, action_id: str, requester: dict, reque
                                                      old_code=old_code, preparation=preparation)
             if accepted.get('status') != 'restarting':
                 return
-            if server_reexec.perform_server_reexec(RESTART_REASON, frontend_prevalidated=True,
-                                                   requested_at=requested_at):
+            outcome = server_reexec.perform_server_reexec(RESTART_REASON, frontend_prevalidated=True,
+                                                          requested_at=requested_at)
+            if outcome.handed_over:
                 precedence.retain_until_exit()
             else:
                 gate.settle_delegated_action(owner, action_id, status='failed',
-                                             code='restart_bridge_refused',
-                                             detail='Every restart bridge refused; the server keeps running')
+                                             code='restart_bridge_refused', detail=outcome.detail)
     except gate.DelegationRefused as refusal:
         gate.note_restart_notice(action_id, oldCode=old_code)
         gate.settle_delegated_action(owner, action_id, status='failed', code=refusal.code,

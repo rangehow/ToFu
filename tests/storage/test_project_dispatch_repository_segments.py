@@ -201,11 +201,21 @@ def test_racing_first_mutations_preserve_both_grants_and_one_cutover(owned):
         def command(self, operation, payload, command_id):
             if operation == 'record.put' and not getattr(local, 'waited', False):
                 local.waited = True
-                barrier.wait(timeout=10)
+                # No wall-clock window: a loaded host may take long to bring the
+                # other writer here. A writer that fails first aborts the barrier.
+                barrier.wait()
             return real(write=True).command(operation, payload, command_id)
     c.repo.client = lambda **kw: Racing()
+
+    def racing_authorize(command):
+        try:
+            return authorize(c, command)
+        except BaseException:
+            barrier.abort()
+            raise
+
     with ThreadPoolExecutor(max_workers=2) as workers:
-        rows = list(workers.map(lambda command: authorize(c, command), ['left', 'right']))
+        rows = list(workers.map(racing_authorize, ['left', 'right']))
     assert {row['id'] for row in c.repo.list()} == {row['id'] for row in rows}
     assert c.store.head()['value']['state']['counts']['assignments'] == 2
     assert authorize(c, 'left') == rows[0]

@@ -180,7 +180,7 @@ def test_boot_ring_records_and_bounds():
         sm = _fresh_marker_module(d)
         boots = []
         for _ in range(sm._BOOTS_KEEP + 10):
-            boots = sm.record_boot()
+            boots = sm.record_boot(crashed=True)
         assert len(boots) == sm._BOOTS_KEEP, len(boots)
         print('OK boot ring bounded at %d' % sm._BOOTS_KEEP)
 
@@ -190,12 +190,12 @@ def test_concurrent_boot_records_preserve_the_bounded_newest_ring():
         sm = _fresh_marker_module(d)
         stamps = [1000.0 + index for index in range(sm._BOOTS_KEEP)]
         with ThreadPoolExecutor(max_workers=16) as pool:
-            results = list(pool.map(sm.record_boot, stamps))
+            results = list(pool.map(lambda stamp: sm.record_boot(stamp, crashed=True), stamps))
 
         assert all(results)
         persisted = sm.read_json(sm._boots_path())
         assert len(persisted) == sm._BOOTS_KEEP
-        assert set(persisted) == set(stamps)
+        assert {entry['at'] for entry in persisted} == set(stamps)
         assert not os.path.exists(sm._boots_path() + '.tmp')
 
 
@@ -219,10 +219,54 @@ def test_report_and_arm_sets_restart_storm_flag():
         import time as _t
         now = _t.time()
         sm.write_json_atomic(sm._boots_path(),
-                             [now - i for i in range(sm._STORM_THRESHOLD)])
+                             [{'at': now - i, 'crashed': True} for i in range(sm._STORM_THRESHOLD)])
+        sm.arm()  # the previous process never marked itself clean: a crash
         cls = sm.report_and_arm()
         assert cls.get('restart_storm') is True, cls
         print('OK report_and_arm surfaces restart_storm=True')
+
+
+def test_a_completed_drain_marks_only_the_marker_this_process_armed():
+    """The resident execution host stops by draining, not in a signal handler:
+    its finished drain is a deliberate exit, so the next boot counts no crash."""
+    with tempfile.TemporaryDirectory() as d:
+        sm = _fresh_marker_module(d)
+        sm.arm()
+        assert sm.mark_drained() is True
+        cls = sm.classify_previous_shutdown()
+        assert (cls['verdict'], cls['reason']) == (sm.VERDICT_CLEAN, 'signal')
+        # A stronger intent recorded first (the owner's manual shutdown) is kept.
+        sm.arm()
+        sm.mark_clean('manual')
+        assert sm.mark_drained() is True
+        assert sm.classify_previous_shutdown()['reason'] == 'manual'
+        # Another process armed the marker: a drain here says nothing about it.
+        sm.arm(pid=os.getpid() + 1)
+        assert sm.mark_drained() is False
+        assert sm.classify_previous_shutdown()['verdict'] == sm.VERDICT_UNCLEAN
+
+
+def test_deliberate_restarts_never_make_a_storm():
+    """Only boots after an unclean exit count: any number of clean restarts in
+    a row, and a clean exit right after crashes, is not a crash loop."""
+    import time as _t
+    with tempfile.TemporaryDirectory() as d:
+        sm = _fresh_marker_module(d)
+        for _ in range(sm._STORM_THRESHOLD * 2):
+            sm.mark_clean('restart')
+            sm._this_process_report = None
+            assert sm.report_and_arm()['restart_storm'] is False
+        now = _t.time()
+        sm.write_json_atomic(sm._boots_path(),
+                             [{'at': now - i, 'crashed': True} for i in range(sm._STORM_THRESHOLD)])
+        sm.mark_clean('signal')
+        sm._this_process_report = None
+        assert sm.report_and_arm()['restart_storm'] is False
+        # Bare timestamps of an older build carry no verdict and never count.
+        sm.write_json_atomic(sm._boots_path(), [now - i for i in range(sm._STORM_THRESHOLD * 2)])
+        sm._this_process_report = None
+        assert sm.report_and_arm()['restart_storm'] is False  # the marker reads running: a crash boot
+        assert sm.is_restart_storm(now=now) is False
 
 
 if __name__ == '__main__':

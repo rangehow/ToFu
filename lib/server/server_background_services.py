@@ -343,6 +343,13 @@ def start_registered_background_services(app, *, process_role='all'):
             started += 1
     except Exception as e:
         _log.warning('Desktop bridge relay unavailable for role %s: %s', process_role, e)
+    # The execution host owns the execution plane's MCP servers; its shards relay.
+    try:
+        from lib.mcp.bridge_relay import configure_mcp_owner
+        if configure_mcp_owner(process_role=process_role, environ=os.environ) == 'owner':
+            started += 1
+    except Exception as e:
+        _log.warning('MCP bridge relay unavailable for role %s: %s', process_role, e)
 
     # ── Start the sole durable scheduler (including daily-report backfill) ──
     if process_role_has(process_role, CAPABILITY_SCHEDULED_JOBS):
@@ -735,6 +742,17 @@ def stop_registered_background_services(app, *, timeout: float = 2.0) -> int:
         late.append(LateBackgroundOwner('desktop bridge relay', writes_storage=False,
                                         reason=f'{type(exc).__name__}: {exc}'[:200]))
         log.warning('desktop bridge relay shutdown failed: %s', exc)
+
+    try:
+        from lib.mcp.bridge_relay import stop_mcp_owner
+        if not stop_mcp_owner(timeout=timeout):
+            late.append(LateBackgroundOwner('MCP bridge relay', writes_storage=False,
+                                            reason='still running'))
+            log.warning('MCP bridge relay did not stop within %.1fs', timeout)
+    except Exception as exc:
+        late.append(LateBackgroundOwner('MCP bridge relay', writes_storage=False,
+                                        reason=f'{type(exc).__name__}: {exc}'[:200]))
+        log.warning('MCP bridge relay shutdown failed: %s', exc)
 
     import importlib
     for label, module_name, stop_name, capability, writes_storage, _begin in _process_background_owners():

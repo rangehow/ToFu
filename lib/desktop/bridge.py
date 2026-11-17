@@ -648,6 +648,31 @@ def disconnect_credential(key_id, user_id) -> list:
     return removed
 
 
+def settle_lost_claims(agent_id, user_id, active_command_ids) -> list:
+    """Settle one node's claimed commands its new process cannot report.
+
+    A node process that restarted (a new ``boot_id``, lib/desktop/
+    node_registry.py) lost its predecessor's running commands and their
+    unsent results with it. Commands the predecessor claimed and the new
+    process does not list as active fail now with a typed, unconfirmed
+    outcome instead of waiting forever. Never replayed. Returns their IDs.
+    """
+    agent_id, user_id = str(agent_id or ''), str(user_id or '')
+    active = set(active_command_ids or ())
+    settled = []
+    with command_queue_lock:
+        for cmd in command_queue.values():
+            if (cmd.get('claimed_agent_id') == agent_id and (cmd.get('user_id') or '') == user_id
+                    and cmd['id'] not in active and not cmd['event'].is_set()):
+                cmd['error'] = ('the device restarted while running this command; its outcome '
+                                'is unknown and it was not run again')
+                cmd['event'].set()
+                settled.append(cmd['id'])
+    if settled:
+        logger.info('[Desktop] device %s restarted: settled %d lost command(s)', agent_id, len(settled))
+    return settled
+
+
 def _device_wait_scope(cmd):
     """Publish a queued command to the owning task's liveness judge, when known."""
     from contextlib import nullcontext

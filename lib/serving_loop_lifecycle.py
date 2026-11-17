@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import threading
 import time as _time
 from collections.abc import Mapping
 from typing import Any
@@ -170,7 +169,9 @@ def register_serving_loop_lifecycle(
         return False
 
     log = logger or logging.getLogger('server')
-    stop_event = (threading.Event()
+    from lib.server.server_shutdown import ShutdownRequest
+    # Awaitable by the serving loop (wait_for_shutdown_trigger), like server.py's.
+    stop_event = (ShutdownRequest()
                   if shutdown_requested is None else shutdown_requested)
     state = {
         'status': 'registered',

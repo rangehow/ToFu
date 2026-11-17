@@ -7,11 +7,15 @@ projects the deliverables from the owners that already hold them
 
 - reports of every kind: the lead's main-lane canonical ``coordinator_report.*``
   Turns (``coordinator_reports.py``), each with the files its ``report_to_user``
-  call attached and the board task it named (both named by that call's receipt in
-  the publishing reply); for the Global Router also the reports relayed to it,
-  named by the relay notices in its Turns (``lib/router/relay.py``, which also
-  carry the attached files and task) and read from the Project Router's canonical
-  report Turn;
+  call attached and the board tasks it named (both named by that call's receipt
+  in the publishing reply), plus the tasks a report link attaches afterwards
+  (``coordinator_report_links.py``); for the Global Router also the reports
+  relayed to it, named by the relay notices in its Turns (``lib/router/relay.py``,
+  which also carry the attached files and tasks) and read from the Project
+  Router's canonical report Turn;
+- automatic work reports: each completed board task (``coordinator_task_history``)
+  that no delivery report names, from its final progress note and completion
+  time, so every finished task has its result on the board;
 - published files, decks (.pptx/.pptd files), rich responses and long-form
   reports: the conversation's artifact rows (``lib/artifacts``), linked to the
   Turn whose tool round carries their ``artifactId``. A file a report attached
@@ -102,7 +106,7 @@ def report_kind(turn):
     return value if value in REPORT_KINDS and turn.get('actor') == 'assistant' else ''
 
 
-def report_item(turn, *, project_path, files=(), task=None):
+def report_item(turn, *, project_path, files=(), tasks=()):
     """The item of one canonical report Turn (content is ``title\\n\\nmessage``)."""
     title, _, message = str((turn.get('projection') or {}).get('content') or '').partition('\n\n')
     item = {'id': 'report:' + turn['turnId'], 'kind': 'report', 'reportKind': report_kind(turn),
@@ -111,8 +115,8 @@ def report_item(turn, *, project_path, files=(), task=None):
             'source': _source(turn['conversationId'], turn), 'summary': _clip_body(message)}
     if files:
         item['files'] = list(files)
-    if task:
-        item['task'] = dict(task)
+    if tasks:
+        item['tasks'] = [dict(task) for task in tasks]
     # The copy the conversation shows by default: the Turn's auto-translation, same layout.
     translated_title, _, translated_message = str(
         (turn.get('projection') or {}).get('translatedContent') or '').partition('\n\n')
@@ -139,22 +143,21 @@ def _file_entries(receipt):
             ] if isinstance(files, list) else []
 
 
-def _task_ref(receipt):
-    task = receipt.get('task') if receipt else None
-    if (isinstance(task, dict) and isinstance(task.get('key'), str) and _TASK_KEY.match(task['key'])
-            and isinstance(task.get('title'), str) and task['title'].strip()):
-        return {'key': task['key'], 'title': task['title']}
-    return None
+def _task_refs(receipt):
+    tasks = receipt.get('tasks') if receipt else None
+    return [{'key': task['key'], 'title': task['title']} for task in tasks
+            if isinstance(task, dict) and isinstance(task.get('key'), str) and _TASK_KEY.match(task['key'])
+            and isinstance(task.get('title'), str) and task['title'].strip()] if isinstance(tasks, list) else []
 
 
 def report_receipts(projection):
-    """``{report turnId: {'files': [reportFile], 'task': deliverableTaskRef | None}}`` of the
+    """``{report turnId: {'files': [reportFile], 'tasks': [deliverableTaskRef]}}`` of the
     ``report_to_user`` calls one reply made (segment result, else the round's stored receipt)."""
     found = {}
 
     def take(receipt):
         if receipt and isinstance(receipt.get('turnId'), str) and receipt['turnId'] not in found:
-            found[receipt['turnId']] = {'files': _file_entries(receipt), 'task': _task_ref(receipt)}
+            found[receipt['turnId']] = {'files': _file_entries(receipt), 'tasks': _task_refs(receipt)}
     for segment in (projection or {}).get('segments') or []:
         if isinstance(segment, dict) and segment.get('type') == 'tool_use' and segment.get('name') == _REPORT_TOOL:
             result = segment.get('result')
@@ -197,21 +200,34 @@ def _scan(value, artifact_ids, texts):
         texts.append(value)
 
 
-def own_task_key(item, project_path):
-    """The task key of ``item`` when it names a task of the lead's own project, else None."""
-    task = item.get('task')
-    if not task:
-        return None
+def own_task_keys(item, project_path):
+    """The keys of the tasks ``item`` names when they are of the lead's own project, else []."""
+    tasks = item.get('tasks')
+    if not tasks:
+        return []
     from lib.conversations.project_identity import normalize_project_path
     own = normalize_project_path(project_path) if project_path else ''
     theirs = normalize_project_path(item['projectPath']) if item.get('projectPath') else ''
-    return task['key'] if own == theirs else None
+    return [task['key'] for task in tasks] if own == theirs else []
+
+
+def completion_item(task, *, project_path):
+    """The automatic work report of one completed board task (a ``progressHistoryTask``)."""
+    # The row sits under its task, so it reads as the final note rather than the task's title again.
+    item = {'id': 'completion:' + task['key'], 'kind': 'completion',
+            'title': _clip(task.get('progress') or task['title'], _TITLE_MAX),
+            'projectPath': project_path or '', 'createdAt': int(task.get('completedAt') or task['changedAt']),
+            'source': None, 'tasks': [{'key': task['key'], 'title': task['title']}]}
+    if task.get('progress'):
+        item['summary'] = _clip_body(task['progress'])
+    return item
 
 
 class DeliverablesPage:
     """One owner's read of one lead conversation's deliverables, newest first."""
 
-    def __init__(self, owner, conversation_id, *, owned=None, turns=None, artifacts=None, get_turn=None):
+    def __init__(self, owner, conversation_id, *, owned=None, turns=None, artifacts=None, get_turn=None,
+                 board_tasks=None, links=None):
         self.owner = require_user_id(owner, context='lead deliverables')
         if not isinstance(conversation_id, str) or not 0 < len(conversation_id) <= 256:
             raise ValueError('conversationId is required')
@@ -220,6 +236,25 @@ class DeliverablesPage:
         self.turns = turns
         self.artifacts = artifacts
         self.get_turn = get_turn
+        self.board_tasks = board_tasks
+        self.links = links
+
+    def _task_ports(self, project_path):
+        """The lead's board tasks (its history) and its report links; nothing without a project."""
+        if not project_path:
+            return [], {}
+        board_tasks, links = self.board_tasks, self.links
+        if board_tasks is None:
+            from lib.conversations.coordinator_task_history import CoordinatorTaskHistory
+
+            def board_tasks(conversation_id):
+                return CoordinatorTaskHistory(self.owner, project_path).tasks(conversation_id)
+        if links is None:
+            from lib.conversations.coordinator_report_links import report_links
+
+            def links(conversation_id):
+                return report_links(self.owner, project_path, conversation_id)
+        return board_tasks(self.conversation_id), links(self.conversation_id)
 
     def _ports(self):
         owned, turns, artifacts, get_turn = self.owned, self.turns, self.artifacts, self.get_turn
@@ -254,7 +289,7 @@ class DeliverablesPage:
                         and turn.get('conversationId') == reference['coordinatorId']):
                     seen.add(reference['turnId'])
                     yield report_item(turn, project_path=reference['projectPath'], files=reference['files'],
-                                      task=reference['task'])
+                                      tasks=reference['tasks'])
 
     def project(self, project_path=''):
         """Every deliverable of the conversation, newest first."""
@@ -282,8 +317,21 @@ class DeliverablesPage:
             if files:
                 item['files'] = files
                 attached.update(entry['artifactId'] for entry in files)
-            if 'task' not in item and receipt.get('task'):
-                item['task'] = receipt['task']
+            if 'tasks' not in item and receipt.get('tasks'):
+                item['tasks'] = receipt['tasks']
+        board_tasks, links = self._task_ports(project_path)
+        delivered = set()
+        for item in items:
+            # A report published before its call could name a task is linked afterwards.
+            linked = links.get(item['source']['turnId']) if item['kind'] == 'report' and item['source'] else None
+            if linked:
+                named = {task['key'] for task in item.get('tasks', ())}
+                item['tasks'] = [*item.get('tasks', ()), *(task for task in linked if task['key'] not in named)]
+            if item.get('reportKind') == 'delivery':
+                delivered.update(own_task_keys(item, project_path))
+        # A completed task without a delivery report naming it gets its automatic work report.
+        items.extend(completion_item(task, project_path=project_path) for task in board_tasks
+                     if task['status'] == 'completed' and task['key'] not in delivered)
         for row in artifacts(self.conversation_id):
             if row.get('id') in attached:
                 continue
@@ -313,18 +361,19 @@ class DeliverablesPage:
         items = self.project(project_path)
         summary, other = {}, 0
         for item in items:
-            key = own_task_key(item, project_path)
-            if key is None:
+            keys = own_task_keys(item, project_path)
+            if not keys:
                 other += 1
-                continue
-            entry = summary.get(key)
-            if entry is None:
-                # Newest first: the first item names the task's latest title and time.
-                summary[key] = {'key': key, 'title': item['task']['title'], 'count': 1, 'latestAt': item['createdAt']}
-            else:
-                entry['count'] += 1
+            for ref in item.get('tasks', ()) if keys else ():
+                entry = summary.get(ref['key'])
+                if entry is None:
+                    # Newest first: the first item names the task's latest title and time.
+                    summary[ref['key']] = {'key': ref['key'], 'title': ref['title'], 'count': 1,
+                                           'latestAt': item['createdAt']}
+                else:
+                    entry['count'] += 1
         if task is not None:
-            items = [item for item in items if (own_task_key(item, project_path) or OTHER_TASKS) == task]
+            items = [item for item in items if task in (own_task_keys(item, project_path) or [OTHER_TASKS])]
         if after is not None:
             items = [item for item in items if (-item['createdAt'], _digest(item['id'])) > after]
         page = items[:PAGE_SIZE]

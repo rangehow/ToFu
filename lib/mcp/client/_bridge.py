@@ -14,6 +14,7 @@ through ``_pkg()`` at call time so a patch on ``lib.mcp.client`` is honoured.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import inspect
 import json
@@ -21,6 +22,7 @@ import os
 import tempfile
 import threading
 import time
+import uuid
 from collections.abc import Mapping
 from concurrent.futures import CancelledError, ThreadPoolExecutor
 from types import MappingProxyType
@@ -275,6 +277,24 @@ class _MCPServerHandle:
         self.tools_list_changed = False
 
 
+def catalog_snapshot_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    """One ``get_tool_catalog_snapshot`` row (fresh containers) of a catalog row."""
+    return {
+        'server_id': row['server_name'],
+        'server_name': row['server_name'],
+        'tool_name': row['tool_name'],
+        'namespaced_name': row['namespaced_name'],
+        'description': row.get('description', ''),
+        'openai_def': row['openai_def'],
+        'read_only_hint': bool(row.get('read_only_hint')),
+        'annotations': dict(row.get('annotations') or {}),
+        'output_schema': dict(row.get('output_schema') or {}),
+        'meta': dict(row.get('meta') or {}),
+        'schema_hash': str(row.get('schema_hash') or ''),
+        'catalog_version': str(row.get('catalog_version') or ''),
+    }
+
+
 class MCPBridge:
     """Bridge between MCP servers and Tofu's tool system.
 
@@ -311,6 +331,9 @@ class MCPBridge:
         # The frozen definitions are one isolated copy per generation.
         self._tool_catalog_generation = 0
         self._tool_catalog_frozen_defs: tuple[int, tuple[dict[str, Any], ...]] | None = None
+        # Distinguishes this bridge's generations from an earlier incarnation's
+        # for the shards that mirror its catalog.
+        self._catalog_instance = uuid.uuid4().hex
 
         # Per-server reconnect serialization: prevents the reactive
         # (call_tool) and proactive (keepalive) recovery paths from
@@ -705,9 +728,24 @@ class MCPBridge:
                 logger.error('[MCP] Failed to connect server %s: %s', name, e)
                 logger.debug('[MCP] Full traceback for %s:', name,
                              exc_info=(type(e.cause), e.cause, e.cause.__traceback__))
+                self._retry_failed_first_connect(name, srv_cfg)
             except Exception as e:
                 logger.error('[MCP] Failed to connect server %s: %s', name, e, exc_info=True)
+                self._retry_failed_first_connect(name, srv_cfg)
         return result
+
+    def _retry_failed_first_connect(self, name: str, srv_cfg: dict) -> None:
+        """Hand a server whose first connect failed to the keepalive's backoff.
+
+        The keepalive revisits only live servers and servers in reconnect
+        backoff; without this a transient launch failure (concurrent npx
+        launches racing on the shared npm cache) leaves this process without
+        the server for its whole life.
+        """
+        with self._lock:
+            self._configs.setdefault(name, dict(srv_cfg))
+        delay = self._breaker_record_failure(name)
+        logger.warning('[MCP] %s will be retried in %.0fs', name, delay)
 
     # Shutdown budget for a single server owner task (seconds). The owner
     # coroutine should close its context stack near-instantly once signaled
@@ -746,34 +784,47 @@ class MCPBridge:
         # a crashed server. Doing it here means the download is not racing the
         # handshake, and `evicted` tells _async_start_owner that a cold
         # dependency fetch is now unavoidable for THIS connect.
-        evicted = 0
-        try:
-            evicted = _pkg().reconcile_for_connect()
-        except Exception as e:
-            logger.debug('[MCP] npx cache reconcile skipped: %s', e)
-
-        # Vendored servers launch isolated via ``uv run --with-editable`` into
-        # an EPHEMERAL build env, re-resolving their dependency tree on every
-        # cold start. That re-resolution is exactly the 2026-09-09 failure:
-        # uv was still populating an empty build env when the 65s handshake
-        # ceiling fired, so a slow-but-alive server reported as
-        # "Request 'initialize' timed out". Grant the SAME cold budget the
-        # npx-eviction path uses, but only when we can positively identify a
-        # cold start (no successful pre-warm recorded); a warm launch keeps
-        # the fast crash ceiling. Measured: warm uv launch ~3s, cold 42s+.
-        cold_vendored = False
-        if not evicted:
+        # The shared npm cache is held across processes over the reconcile
+        # and, for a launcher that installs into it, until its handshake.
+        with contextlib.ExitStack() as npm_launch:
             try:
-                from lib.mcp.transport import stdio_command as _stdio_cmd
-                _cmd = _stdio_cmd(srv_cfg)
-                if _cmd and _pkg().vendored_needs_cold_budget(_cmd):
-                    cold_vendored = True
-                    logger.info(
-                        '[MCP] %s: vendored launcher %r has no warm cache '
-                        '— allowing the cold-install handshake budget',
-                        name, _cmd)
+                npm_launch.enter_context(_pkg().npm_cache_lock())
+            except OSError as e:
+                logger.warning('[MCP] npm cache lock unavailable: %s', e)
+            evicted = 0
+            try:
+                evicted = _pkg().reconcile_for_connect()
             except Exception as e:
-                logger.debug('[MCP] vendored cold check skipped: %s', e)
+                logger.debug('[MCP] npx cache reconcile skipped: %s', e)
+            if not _pkg().launches_into_npm_cache(srv_cfg):
+                npm_launch.close()
+
+            # Vendored servers launch isolated via ``uv run --with-editable`` into
+            # an EPHEMERAL build env, re-resolving their dependency tree on every
+            # cold start. That re-resolution is exactly the 2026-09-09 failure:
+            # uv was still populating an empty build env when the 65s handshake
+            # ceiling fired, so a slow-but-alive server reported as
+            # "Request 'initialize' timed out". Grant the SAME cold budget the
+            # npx-eviction path uses, but only when we can positively identify a
+            # cold start (no successful pre-warm recorded); a warm launch keeps
+            # the fast crash ceiling. Measured: warm uv launch ~3s, cold 42s+.
+            cold_vendored = False
+            if not evicted:
+                try:
+                    from lib.mcp.transport import stdio_command as _stdio_cmd
+                    _cmd = _stdio_cmd(srv_cfg)
+                    if _cmd and _pkg().vendored_needs_cold_budget(_cmd):
+                        cold_vendored = True
+                        logger.info(
+                            '[MCP] %s: vendored launcher %r has no warm cache '
+                            '— allowing the cold-install handshake budget',
+                            name, _cmd)
+                except Exception as e:
+                    logger.debug('[MCP] vendored cold check skipped: %s', e)
+            return self._launch_and_register(
+                name, srv_cfg, cold_install=bool(evicted) or cold_vendored)
+
+    def _launch_and_register(self, name: str, srv_cfg: dict, *, cold_install: bool) -> list:
         # Tear down any existing server with the same name BEFORE taking
         # the lock for the new registration. The disconnect itself hits
         # the async loop; holding self._lock across it would freeze every
@@ -803,8 +854,7 @@ class MCPBridge:
             generation = self._loop_generation
         with log_context(f'mcp_connect:{name}', logger=logger):
             handle, tools = self._run_async(
-                self._async_start_owner(
-                    name, srv_cfg, cold_install=bool(evicted) or cold_vendored),
+                self._async_start_owner(name, srv_cfg, cold_install=cold_install),
                 lifecycle_generation=generation)
 
         with self._loop_creation_lock:
@@ -1271,6 +1321,10 @@ class MCPBridge:
                 with self._lock:
                     self._cred_health.pop(name, None)
             srv_cfg = stored
+        if not srv_cfg.get('enabled', True):
+            # Disabled since it last connected (or first failed): stop retrying.
+            self._disconnect_one(name, forget=True)
+            raise ValueError(f'MCP server {name} is disabled')
 
         with rlock:
             # Re-check under the per-server lock: a racing caller may have
@@ -2045,20 +2099,7 @@ class MCPBridge:
         callers inject only ``openai_def`` into model requests.
         """
         with self._lock:
-            return [{
-                'server_id': row['server_name'],
-                'server_name': row['server_name'],
-                'tool_name': row['tool_name'],
-                'namespaced_name': row['namespaced_name'],
-                'description': row.get('description', ''),
-                'openai_def': row['openai_def'],
-                'read_only_hint': bool(row.get('read_only_hint')),
-                'annotations': dict(row.get('annotations') or {}),
-                'output_schema': dict(row.get('output_schema') or {}),
-                'meta': dict(row.get('meta') or {}),
-                'schema_hash': str(row.get('schema_hash') or ''),
-                'catalog_version': str(row.get('catalog_version') or ''),
-            } for row in self._tool_catalog_rows_locked()]
+            return [catalog_snapshot_row(row) for row in self._tool_catalog_rows_locked()]
 
     def get_tool_catalog_projection(
         self,
@@ -2116,6 +2157,33 @@ class MCPBridge:
         """
         with self._lock:
             return self._tool_catalog_generation
+
+    def tool_index_rows(self) -> list[tuple[str, MCPToolInfo, bool]]:
+        """Every discovered tool, sorted: ``(namespaced name, info, disabled)``.
+
+        Unlike the catalog reads this includes tools the owner disabled; the
+        rows are the bridge's own read-only values.
+        """
+        with self._lock:
+            return [(ns, info, info['tool_name'] in self._disabled_tools_for(info['server_name']))
+                    for ns, info in sorted(self._tool_index.items())]
+
+    def catalog_mirror(self, known: str) -> dict[str, Any]:
+        """The relay export of this bridge's catalog (``lib/mcp/bridge_relay.py``).
+
+        ``identity`` names this bridge incarnation and its catalog generation;
+        the rows are included only when it differs from ``known``, so a shard
+        whose mirror is current receives just the live counts.
+        """
+        with self._lock:
+            identity = f'{self._catalog_instance}:{self._tool_catalog_generation}'
+            mirror = {'identity': identity, 'connected': self._started and bool(self._servers),
+                      'servers': sorted(self._servers)}
+            if identity != known:
+                mirror['index'] = [
+                    [ns, info, info['tool_name'] in self._disabled_tools_for(info['server_name'])]
+                    for ns, info in sorted(self._tool_index.items())]
+        return mirror
 
     def is_mcp_tool(self, fn_name: str) -> bool:
         """Check if a function name is a registered MCP tool."""

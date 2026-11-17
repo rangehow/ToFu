@@ -483,6 +483,30 @@ new accept is judged). Specifications: `test_restart_interrupted_delivery.py`,
 `test_integration_delivery_denial_binds_its_executor_generation` in the TofuDB differential suite
 and, through the real start path, `tests/conversation/test_worker_attempt_real_start.py`.
 
+**A carrier in another process is not a dead attempt.** Problem: working recovery
+(`delivery._recover_working_registration`) treated an attempt with no carrier in the
+integration worker's process as gone and settled the outcome its task result showed. Execution
+shards run durable attempts outside that process, and an attempt that has just started has no
+task result yet, so the receiver settled a running Worker attempt `failed`, which is final within
+its generation. On 2026-11-17, assignment 63fa4f57 had this happen twice, 5–13 s after each
+attempt started. Each attempt then completed against a `preserved` ("Task did not complete")
+receipt, and the first one still held the shared tip `c3908d424b`, which had been captured at
+that early settlement. Decision: a
+`conversation-attempt:` executor whose durable attempt is still `pending` or `running` keeps the
+receipt `working`; its own settlement, or the durable worker's recovery of the attempt, records
+the outcome. Goal recovery waits for the attempt in the same way. Other executors keep the
+existing cold-verdict recovery. Alternatives rejected: treating a missing task result as alive
+(an orphan that never persisted would then stay `working` forever; its `failed` outcome is
+specified); querying every shard's runtime (process-local registries are not an authority).
+Specification: `test_working_recovery_leaves_an_attempt_running_in_another_process_working`.
+Recovery of a receipt preserved this way needs no new operation, because a review cannot lift a
+`failed` outcome within its generation. Once the fix is live, a follow-up (or regenerate) starts a new attempt in the same
+checkout, which reopens the receipt `working`. Its completion captures the checkout's current
+bytes onto the Worker's own `refs/tofu/checkpoints/u<owner>/<checkout>` ref, which descends from the
+early capture. The early capture equals the branch tip at the Worker's start, so Workers born on
+one tip share it; that is not cross-wiring. Specification:
+`test_a_follow_up_recovers_work_preserved_by_an_early_capture`.
+
 Successful automatic settlement immediately merges baseline-to-checkpoint changes into the
 current canonical workspace, including borrowed dirty inputs and compatible concurrent edits.
 A private index computes the merge; no validation checkout or release gate delays delivery.

@@ -52,17 +52,10 @@ def coordinator_folder(scope: dict):
     return (source.get('settings') or {}).get('folderId')
 
 
-def _report_task(scope: dict, title) -> dict | None:
-    """The board task a report names (``deliverableTaskRef``), resolved before anything is published."""
-    if title is None:
-        return None
-    if not isinstance(title, str) or not title.strip():
-        raise ValueError('task must be the exact title of a task on your task board')
-    from lib.conversations.coordinator_progress import CoordinatorTaskProgress, board_task_ref
-    current, _binding, head = CoordinatorTaskProgress(scope['user_id'], scope['project_path']).current()
-    if current is None or current['coordinatorId'] != scope['conversation_id']:
-        raise PermissionError('Coordinator binding changed; start a new authorized turn')
-    return board_task_ref(head, title.strip())
+def _report_tasks(scope: dict, titles) -> tuple[list[dict], list[str]]:
+    """The tasks a report names: ``(deliverableTaskRef list, titles that matched no task)``; never raises."""
+    from lib.conversations.coordinator_report_links import resolve_tasks
+    return resolve_tasks(scope['user_id'], scope['project_path'], scope['conversation_id'], titles)
 
 
 def _publish_report_files(task: dict, scope: dict, paths) -> list[dict]:
@@ -276,15 +269,19 @@ def execute_coordinator_tool(task: dict, name: str, arguments: dict, *, runtime_
                     lambda: reread_on_contention(task, command, label='coordinator ' + name))
         elif name == 'report_to_user':
             from lib.conversations.coordinator_reports import CoordinatorReports
-            request = {key: value for key, value in arguments.items() if key not in ('files', 'task')}
-            task_ref = _report_task(scope, arguments.get('task'))
+            request = {key: value for key, value in arguments.items() if key not in ('files', 'tasks')}
+            task_refs, unlinked = _report_tasks(scope, arguments.get('tasks'))
             files = _publish_report_files(task, scope, arguments.get('files'))
             result = CoordinatorReports(scope['user_id'], scope['project_path']).publish({
                 'owner': scope['user_id'], 'projectPath': scope['project_path'],
                 'coordinatorId': scope['conversation_id'], 'bindingRevision': scope['binding_revision'],
-            }, request, files=files, task=task_ref)
-            if task_ref:
-                result = {**result, 'task': task_ref}
+            }, request, files=files, tasks=task_refs)
+            if task_refs:
+                result = {**result, 'tasks': task_refs}
+            if unlinked:
+                result = {**result, 'unlinked_tasks': unlinked, 'unlinked_note': (
+                    'The report was sent; these titles matched no task on your board or its history, so it is '
+                    'not listed under them. Use the exact board title next time.')}
             if files:
                 result = {**result, 'files': files}
         elif name == 'update_task_progress':

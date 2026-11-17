@@ -277,7 +277,14 @@ interrupted or aborted receipt from the existing task terminal-listener seam.
 A successfully reviewed nonhuman notice may instead declare deliberate
 silence (ROUTER.md R3): its audit note stays in Tofu, with no empty reply or
 misleading completion receipt. A failed or interrupted review sends a
-command-chat warning even when that notice had no reply origin. When the
+command-chat warning even when that notice had no reply origin. "Notice" is
+the same test as the silence gate (`turn_initiation.is_nonhuman_notice_turn`):
+channel events, peer reports and every scheduled wake (a `proactive` project
+wake such as the keepalive, timers, autopilot) alike; a human or unknown
+initiator gets no such warning. Problem: this warning kept a channel/peer-only
+gate after the silence gate widened, so failed keepalive wakes settled
+`abnormal_stop` with no owner warning at all. Alternative rejected: a second
+wake-initiator list here (it drifts from the silence gate). When the
 review exhausted the terminal-response budget (empty_stop), the existing
 resume owner continues the same Turn in place as a bounded follow-up of the
 terminal observer, preserving its evidence and completed tool results; the

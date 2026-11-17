@@ -186,3 +186,21 @@ it('a row reads in the document language when it is built', () => {
   expect(row.querySelector('.lead-deliverable__age')!.textContent).toMatch(/分钟前$/);
   document.documentElement.lang = 'en';
 });
+
+/* Owner request 2026-11-17: a task completed without a delivery report shows its final note as its work report. */
+it('a completed task\'s automatic work report reads as a row and opens its final note', () => {
+  const completion = item(9, { id: 'completion:k', kind: 'completion', title: 'Polish the resume', source: null,
+    summary: 'Final in out/resume.pdf.' });
+  const row = rowsOf([completion]).rows[0];
+  expect(row.dataset.visual).toBe('completion');
+  expect(row.querySelector('.lead-deliverable__kind')!.textContent).toBe('leadDeliverables.kind.completion');
+  expect(row.querySelector('.lead-deliverable__source')).toBeNull();
+  const { open } = ports();
+  expect(createDeliverableOpener(open).open(completion)).toBe(true);
+  const dialog = document.querySelector<HTMLDialogElement>('dialog.lead-deliverable-dialog')!;
+  expect(dialog.querySelector('.lead-deliverable-report--completion')!.textContent)
+    .toBe('leadDeliverables.completionNote<p>Final in out/resume.pdf.</p>'.replace(/<\/?p>/g, ''));
+  expect(dialog.querySelector('[data-tool-card]')).toBeNull();
+  expect([...dialog.querySelectorAll('.ui-dialog__footer button')].map(button => button.textContent))
+    .toEqual(['leadDeliverables.close']);
+});

@@ -351,6 +351,50 @@ def test_a_dead_worker_needs_review_only_for_a_call_cut_off_mid_effect(
     assert drained == ['restart_recovery']
 
 
+def test_a_paused_automatic_resume_is_named_in_the_settlement_and_keeps_continue(
+        claimed, process_witness, monkeypatch):
+    """2026-11-17: a generation whose automatic resume stood down (the restart-storm
+    guard) settled the dead worker's Turn ``interrupted`` with no error, so the owner
+    saw a Turn that neither continued nor said why. Its settlement names the pause
+    and still offers Continue; restart resume leaves it to the owner."""
+    from lib import turn_lifecycle as turns
+    from lib.conversation_sync.worker_execution import execute_claimed_attempt
+    from lib.conversations import restart_resume
+    context, pair, factory, owner = claimed
+    process, witness = process_witness
+    enter(claimed, witness)
+    carrier = {'id': context.claim.task_id, 'convId': pair['turn']['conversationId'],
+               '_attemptId': pair['attempt']['attemptId'], '_turnId': pair['turn']['turnId'],
+               '_userId': owner, '_conversationWorkerContext': context, 'config': {},
+               'status': 'running', 'content': '', 'thinking': 'planning', 'toolRounds': []}
+    turns.record_task_event(carrier, {'type': 'delta', 'thinking': 'planning'})
+    process.kill()
+    process.wait()
+    monkeypatch.setattr('lib.conversation_sync.task_start.start_conversation_attempt_executor',
+                        lambda *a, **kw: pytest.fail('a paused Turn was resumed automatically'))
+    monkeypatch.setattr(restart_resume, '_PREVIOUS_SHUTDOWN',
+                        {'verdict': 'unclean', 'restart_storm': True})
+    resume_recovered_turn = restart_resume.resume_recovered_turn
+    resumed, resumes = _watch_recovered_resume(monkeypatch)
+
+    execute_claimed_attempt(context, context.claim.payload)
+    turn = turns.get_turn(pair['turn']['conversationId'], pair['turn']['turnId'], user_id=owner)
+    settlement = turn['settlement']
+    assert (turn['status'], settlement['cause']) == ('interrupted', 'server_restart')
+    assert 'continue' in {option['operation'] for option in settlement['resumeOptions']}
+    error = settlement['error']
+    assert error['code'] == 'automatic_resume_paused' and error['severity'] == 'warning'
+    assert error['automaticResume']['state'] == 'paused'
+    assert error['automaticResume']['guard'] == 'restart_storm'
+    assert 'crash loop' in error['message']
+    assert restart_resume.unknown_effects_to_review(turn) == []
+    ids = (owner, pair['turn']['conversationId'], pair['turn']['turnId'],
+           pair['attempt']['attemptId'])
+    assert resumed.wait(30) and resumes == [ids]
+    verdict = resume_recovered_turn(*ids)
+    assert verdict['outcome'] == 'not_resumed' and 'crash loop' in verdict['reason']
+
+
 @pytest.mark.parametrize('shape', sorted(set(_INTERRUPTED_CALLS) - {'answered'}))
 def test_a_dead_worker_whose_first_call_was_cut_keeps_it_held(
         claimed, process_witness, monkeypatch, shape):

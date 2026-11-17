@@ -867,7 +867,9 @@ def list_active_swarms(*, user_id: int) -> list[dict]:
     id — the stable swarm key and the conversation id are what the client
     needs to deep-link. Per-agent status is sampled OUTSIDE the registry
     lock (``get_status`` takes the session's own lock) so a busy session
-    never stalls session registry readers.
+    never stalls session registry readers. Run messages come from each
+    session's resident receipts (``message_receipts.resident_snapshot``): no
+    storage read, so the execution control answers within its deadline.
     """
     owner_user_id = require_user_id(user_id, context='swarm activity list')
     with _sessions_lock:
@@ -886,10 +888,10 @@ def list_active_swarms(*, user_id: int) -> list[dict]:
             ]
             # The dock consumes this same poll for run messages. A session key
             # is reusable; only the original task ID identifies its mailbox.
-            from lib.swarm.message_receipts import snapshot_receipts
+            from lib.swarm.message_receipts import resident_snapshot
             with session._lock:
                 specs = list(session.specs)
-            messages = snapshot_receipts(session, agents, specs)
+            messages = resident_snapshot(session, agents, specs)
             out.append({
                 'swarm_key':  key,
                 'swarm_id':   session.task_id,

@@ -103,7 +103,24 @@ checkpoint, exactly as the owner's Continue would, once.
   `user_abort` (the owner stopped it),
   a Turn a later input superseded and a Turn that ended before the stop. After a manual shutdown or in a
   restart storm (`lib.shutdown_marker` classification) nothing resumes by
-  itself. The restart notice describes the selected Turn, never a report after
+  itself, and that pause is never silent: a Turn this generation's recovery
+  interrupts carries it in its settlement (`error.code`
+  `automatic_resume_paused`, `error.automaticResume` `{state: paused, guard,
+  reason}`, Continue still offered; the browser shows the message beside
+  Interrupted), and the restart notice names the guard. The storm guard counts
+  only crash boots, boots whose previous process exited unclean, and needs this
+  boot to be one: deliberate restarts (the owner's, the Router's, a redeploy)
+  are not a crash loop however many arrive in a row. The resident execution
+  host, which arms the marker, marks it clean when its drain finishes
+  (`mark_drained`); one killed before its drain finished counts as a crash.
+  Problem (2026-11-17): every boot counted and the execution host never marked
+  its drained exits clean, so five owner restarts within two minutes paused
+  automatic resume and the next Turns sat `interrupted` with no word on why.
+  Alternatives rejected: a separate "deliberate restart" counter or a larger
+  threshold (a new knob that still misreads restarts as crashes), and writing
+  the pause onto already-settled Turns (no settlement amendment command exists
+  on either storage authority; the settling recovery already knows the pause).
+  The restart notice describes the selected Turn, never a report after
   it, and says "not interrupted by this restart" for a listed conversation
   whose latest work ended before it.
 - *A restart-cut call is classified by its declared effect (owner follow-up

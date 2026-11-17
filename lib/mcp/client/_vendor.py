@@ -19,6 +19,7 @@ Facade-routing: every access to a monkeypatchable name (state dicts,
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -567,6 +568,50 @@ def reconcile_for_connect() -> int:
     except Exception as e:  # cache hygiene must never break a connect
         logger.warning('[MCP] npx cache reconcile failed: %s', e)
         return 0
+
+
+#: Launchers that install into ``npm_config_cache`` (its ``_npx`` slots) when
+#: they start.
+_NPM_CACHE_LAUNCHERS = frozenset({'npx', 'npm'})
+
+
+def launches_into_npm_cache(srv_cfg: dict) -> bool:
+    from lib.mcp.transport import stdio_command
+    command = stdio_command(srv_cfg) or ''
+    return os.path.basename(command) in _NPM_CACHE_LAUNCHERS
+
+
+@contextlib.contextmanager
+def npm_cache_lock():
+    """Hold the shared npm cache exclusively across processes.
+
+    npm does not serialize two ``npx`` runs reifying the same ``_npx`` slot,
+    and the cutoff reconcile above deletes slots: measured live 2026-11-17,
+    53 processes launching npx servers at once on one ``data/mcp-cache/npm``
+    left github/12306-train missing in 16/14 of them (``npm error code ENOENT
+    ... syscall write``). ``connect_server`` holds this lock over the
+    reconcile and, for an npm-cache launcher, until its handshake completes,
+    so one launcher at a time owns the cache. The lock is released by the
+    kernel when its holder dies; waiting happens before the readiness timer.
+    """
+    try:
+        import fcntl
+    except ImportError:  # no POSIX advisory locks (Windows): unguarded, as before
+        yield
+        return
+    env: dict[str, str] = {}
+    _ensure_writable_caches(env)
+    cache = os.environ.get('npm_config_cache') or env.get('npm_config_cache', '')
+    if not cache:
+        yield
+        return
+    os.makedirs(cache, exist_ok=True)
+    fd = os.open(os.path.join(cache, '.tofu-launch.lock'), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
 
 
 # ── Hot-reload of the vendored registry ──────────────────

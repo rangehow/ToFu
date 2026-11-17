@@ -20,6 +20,9 @@ from lib.storage import warmup
 
 pytestmark = pytest.mark.unit
 
+# The pass reads every declared warm-up operation; never a hand-counted copy.
+OPERATIONS = len(warmup._operations(0))
+
 
 @pytest.fixture(autouse=True)
 def _drain_warmup_state():
@@ -80,7 +83,7 @@ def test_overlapping_passes_never_duplicate_an_operation():
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         with client._lock:
-            if (len(client.concurrent) == 6
+            if (len(client.concurrent) == OPERATIONS
                     and all(count == 0
                             for count in client.concurrent.values())):
                 break
@@ -170,8 +173,7 @@ def test_unstarted_probe_failure_does_not_suppress_other_reads(monkeypatch, fail
     original = threading.Thread.start
     count = 0
     expected_failures = ['conversation.list'] if failed_starts == 2 else []
-    probes = len(warmup._operations(1))
-    rendezvous = threading.Barrier(probes - len(expected_failures), timeout=10)
+    rendezvous = threading.Barrier(OPERATIONS - len(expected_failures), timeout=10)
     called = []
     lock = threading.Lock()
 
@@ -194,9 +196,9 @@ def test_unstarted_probe_failure_does_not_suppress_other_reads(monkeypatch, fail
     try:
         stats = warmup.run_warmup_pass(Client(), budget_seconds=15)
         assert stats['failed'] == expected_failures
-        assert len(stats['warmed']) == probes - len(expected_failures)
+        assert len(stats['warmed']) == OPERATIONS - len(expected_failures)
         assert ('conversation.list' in called) == (failed_starts == 1)
-        assert len(called) == len(set(called)) == probes - len(expected_failures)
+        assert len(called) == len(set(called)) == OPERATIONS - len(expected_failures)
     finally:
         pool.shutdown(wait=True)
     assert not warmup._inflight
@@ -225,7 +227,7 @@ def test_cancelled_and_broken_workers_keep_per_probe_outcomes(monkeypatch):
     stats = warmup.run_warmup_pass(_SlowClient(0), budget_seconds=5)
     assert stats['skipped'] == ['conversation.count']
     assert stats['failed'] == ['conversation.list']
-    assert len(stats['warmed']) == len(warmup._operations(1)) - 2
+    assert len(stats['warmed']) == OPERATIONS - 2
     assert not warmup._inflight
 
 

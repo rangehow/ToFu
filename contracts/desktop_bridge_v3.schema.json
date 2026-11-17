@@ -22,6 +22,25 @@
       "items": {
         "$ref": "#/$defs/Command"
       }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "fingerprint"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "pending_confirmation"
+          ]
+        },
+        "fingerprint": {
+          "type": "string", "pattern": "^[0-9A-F]{4}-[0-9A-F]{4}$"
+        }
+      },
+      "description": "Present only while the polling node waits for the owner's confirmation; commands is then empty."
     }
   },
   "additionalProperties": false,
@@ -104,6 +123,19 @@
         },
         "system": {
           "$ref": "#/$defs/SystemFacts"
+        },
+        "boot_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$",
+          "description": "Fresh per node process; the Home refuses an earlier boot of a node ID that polls again after a newer boot (contracts/desktop_node_registry_v1.schema.json x-identity.boot)."
+        },
+        "route": {
+          "enum": ["direct", "browser_relay", "home_relay"]
+        },
+        "rtt_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Round trip of the node's latest exchange that the Home answered without a hold (a poll carrying results or stream frames)."
         }
       },
       "additionalProperties": true

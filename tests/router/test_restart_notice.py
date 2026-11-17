@@ -23,6 +23,8 @@ from lib.conversations import restart_resume
 from lib.scheduler.conversation_dispatch import ScheduledTurnDispatch
 from lib.scheduler.conversation_dispatch import dispatch_scheduled_turn as REAL_TURN_DISPATCH
 from lib.server import restart_notice
+from lib.server import server_reexec
+from lib.server.server_reexec import perform_server_reexec as REAL_PERFORM_SERVER_REEXEC
 from tests.router.test_owner_delegation import (  # noqa: F401  (pytest fixtures)
     OWNER, ROUTER, _approval_document, _manager_outcome, approvals, d, human, standing,
 )
@@ -130,6 +132,17 @@ def test_a_completed_restart_wakes_the_router_that_requested_it_once_with_its_ou
     assert len(notices.calls) == 1
 
 
+def test_a_paused_automatic_resume_is_named_in_the_completed_notice(d, approvals, notices, monkeypatch):
+    _, action = _handed_over(d, approvals)
+    _new_generation(monkeypatch, action['acceptedAt'])
+    monkeypatch.setattr(restart_resume, '_PREVIOUS_SHUTDOWN', {'verdict': 'unclean', 'restart_storm': True})
+    [delivered] = restart_notice.deliver_restart_notices()
+    assert delivered['state'] == 'delivered'
+    text = notices.calls[0]['message']['content']
+    assert 'Automatic resume: paused by the restart_storm guard' in text
+    assert 'crash loop' in text and 'offers Continue' in text
+
+
 def test_a_new_server_reports_only_after_its_interrupted_conversations_resumed(
         d, approvals, notices, monkeypatch):
     _, action = _handed_over(d, approvals)
@@ -151,7 +164,7 @@ def test_a_build_failure_or_refusal_before_the_stop_notifies_the_router_at_once(
         d.prepare_error = 'frontend build failed: vite exited 1'
     else:
         monkeypatch.setattr('lib.server.server_reexec.perform_server_reexec',
-                            lambda reason, **kwargs: False)
+                            lambda reason, **kwargs: server_reexec.ServerReexecOutcome(False))
     accepted = d.restart()
     d.run_detached()
     # Delivered by the old server, which keeps serving: no restart, no tick needed.
@@ -165,6 +178,55 @@ def test_a_build_failure_or_refusal_before_the_stop_notifies_the_router_at_once(
     assert record['status'] == 'failed' and record['code'] == code
     assert _only_notice(approvals)['state'] == 'delivered'
     assert restart_notice.deliver_restart_notices() == [] and len(notices.calls) == 1
+
+
+DELEGATE_ERROR = ('Application restart delegate failed (exit 1): Supervisor did not load the current '
+                  'source generation within 12.0s (timed out)')
+
+
+def test_every_bridge_refusing_names_each_bridge_and_its_reason_from_the_execution_host(
+        d, approvals, notices, monkeypatch):
+    """Incident od-81d08dc3 (2026-11-17): the delegated restart runs in the execution
+    host, where server.py never installed its shutdown bridge. The real restart owner
+    runs here: the manager delegation fails with its delegate error, the in-place
+    re-exec is skipped with its reason instead of attempted, and the settled record,
+    its audit line and the notice name both."""
+    monkeypatch.setattr(server_reexec, 'perform_server_reexec', REAL_PERFORM_SERVER_REEXEC)
+    monkeypatch.setattr(server_reexec, '_shutdown_requester', None)
+    stages = []
+
+    def control(project, *, stage, **kwargs):
+        stages.append(stage)
+        if stage == 'delegate':
+            raise RuntimeError(DELEGATE_ERROR)
+        raise AssertionError(f'the skipped in-place bridge ran stage {stage!r}')
+    monkeypatch.setattr('serverctl_pkg.application_restart.run_application_restart_control', control)
+
+    def no_attempt(reason):
+        raise AssertionError('the in-place re-exec was attempted without a shutdown bridge')
+    monkeypatch.setattr(server_reexec, 'begin_server_reexec', no_attempt)
+    audits = []
+    monkeypatch.setattr(gate, 'audit_log', lambda event, **fields: audits.append((event, fields)))
+    monkeypatch.setattr(server_reexec, 'audit_log', lambda event, **fields: audits.append((event, fields)))
+    d.grant()
+    accepted = d.restart()
+    d.run_detached()
+
+    assert stages == ['delegate']
+    [record] = d.audit()
+    assert record['id'] == accepted['action_id']
+    assert record['status'] == 'failed' and record['code'] == 'restart_bridge_refused'
+    detail = record['detail']
+    assert detail.startswith('Every restart bridge refused; the server keeps running')
+    assert f'manager delegation: {DELEGATE_ERROR}' in detail
+    assert 'in-place re-exec: skipped' in detail and 'server.py' in detail
+    [settled] = [fields for event, fields in audits if event == 'owner_delegation_action_settled']
+    assert settled['detail'] == detail
+    [skipped] = [fields for event, fields in audits if event == 'self_update_inplace_reexec_skipped']
+    assert 'server.py' in skipped['detail']
+    [call] = notices.calls
+    text = call['message']['content']
+    assert DELEGATE_ERROR in text and 'in-place re-exec: skipped' in text
 
 
 @pytest.mark.parametrize('stage, message', [

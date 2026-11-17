@@ -7,11 +7,15 @@ authenticated) and consumed by the agent (POST /api/desktop/pair, NOT
 authenticated — the code IS the credential) to exchange for an
 agents:bridge key.
 
-The PAIRING-STORE is deliberately process-local and in-memory: a code
-lasts 5 minutes and is one-shot, so persistence would only extend the
-window an attacker has after a restart — and restarting re-seeds the
-RNG, which is what actually bounds replay. A server restart invalidates
-all outstanding codes; the panel just mints again (cheap).
+The PAIRING-STORE is durable in the Home's storage authority
+(contracts/desktop_node_registry_v1.schema.json, ``pairings`` and
+``pairing_index``): a pairing the owner just copied survives a Home restart
+and both runtime processes. Persistence does not widen the attack window:
+the expiry is absolute, redemption is one CAS from ``open`` to
+``redeemed``, and only digests of the code and link secret are stored.
+The per-IP failure budget below is transport state and stays in memory.
+Redemption mints a credential for a *pending* node that the owner confirms
+(lib/desktop/node_registry.py).
 
 The LAN DISCOVERY RESPONDER is the optional rung-B auto-discovery
 (§11.2.1): a UDP responder that advertises `http://<lan-ip>:15000` to a
@@ -33,6 +37,7 @@ import selectors
 import socket
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Optional
 
@@ -41,12 +46,11 @@ from lib.log import get_logger
 
 logger = get_logger(__name__)
 
-# The pairing-code alphabet: 6 digits, no ambiguous characters. 1e6
-# space × 300 s TTL × 3-attempt lockout = standard one-time-code posture.
+# The pairing-code alphabet: 6 digits. 1e6 space × 300 s TTL × the per-IP
+# failure budget below = the one-time-code posture; a code is one-shot.
 _CODE_ALPHABET = '0123456789'
 _CODE_LEN = 6
-_CODE_TTL_S = 300  # 5 minutes
-_MAX_ATTEMPTS = 3  # per-code brute-force lockout
+_CODE_TTL_S = 300  # 5 minutes (contracts/desktop_node_v1 x-pairing.ttl_seconds)
 
 # LAN discovery v1 magic + version. The probe is exactly this many bytes;
 # anything else is dropped (a cheap "is this even our protocol" gate).
@@ -70,16 +74,15 @@ class PairingIdentity:
             self, 'tenant_id', str(self.tenant_id or '').strip() or None)
 
 
-_STORE: dict[str, dict] = {}  # code -> {identity, expires_at, attempts}
-_STORE_LOCK = threading.Lock()
+_IP_LOCK = threading.Lock()
 
 # ── Per-IP global failure budget ──
 # The per-code 3-attempt lockout is BY DESIGN not enough: an attacker who
 # keeps guessing NEW random codes gets a fresh budget on every attempt, so
 # 1e6 codes × unlimited fresh attempts = brute-forceable. The boundary that
 # actually matters is the attacker's ATTEMPT RATE, not a single code's
-# retry count (owner 2026-08-04, verified gap). Per-code lockout stays as
-# defense-in-depth; this per-IP budget is the real boundary.
+# retry count (owner 2026-08-04, verified gap); this per-IP budget is the
+# boundary.
 # Mechanism: each failed pair-exchange from an IP records a timestamp;
 # N failures inside the window trips a cooldown during which the IP gets
 # 429 BEFORE its code is even looked up. A successful exchange resets the
@@ -97,18 +100,87 @@ def _now() -> float:
     return time.time()
 
 
+# ── Durable pairings (contracts/desktop_node_registry_v1.schema.json) ──
+# A pairing lives in the Home's storage authority, so a restart neither loses
+# a link the owner just copied nor extends it: ``expiresAt`` is absolute.
+# Neither the code nor the link secret is stored in clear; redemption finds
+# the pairing through a digest index and claims it with one CAS.
+
+def _registry_contract():
+    from lib.desktop.node_registry import CONTRACT, NAMESPACES, validate
+    return CONTRACT, NAMESPACES, validate
+
+
+def _client(write: bool = False):
+    from lib.storage import get_storage_client
+    return get_storage_client(write=write) if write else get_storage_client()
+
+
+def _digest(kind: str, secret: str) -> str:
+    return hashlib.sha256(f'tofu-pairing/v1\0{kind}\0{secret}'.encode('utf-8')).hexdigest()
+
+
+def _get(namespace: str, key: str):
+    return _client().query('record.get', {'namespace': namespace, 'key': key})
+
+
+def _put(namespace: str, key: str, value: dict, version: int) -> None:
+    _client(write=True).command('record.put', {
+        'namespace': namespace, 'key': key, 'value': value, 'expected_version': version,
+    }, 'desktop-pairing:' + uuid.uuid4().hex)
+
+
+def _delete(namespace: str, key: str, version: int) -> None:
+    from lib.agent_core.storage_errors import StorageError
+    try:
+        _client(write=True).command('record.delete', {
+            'namespace': namespace, 'key': key, 'expected_version': version,
+        }, 'desktop-pairing-delete:' + uuid.uuid4().hex)
+    except StorageError as error:
+        if error.code != 'database_conflict':
+            raise
+
+
+def _owner_pairings(owner_id: int) -> list[dict]:
+    _contract, namespaces, validate = _registry_contract()
+    prefix = f'{owner_id}:'
+    out, after = [], ''
+    while True:
+        rows = _client().query('record.list', {
+            'namespace': namespaces['pairings'], 'prefix': prefix, 'after_key': after,
+            'limit': 1000})
+        for row in rows:
+            if str(row.get('key') or '').startswith(prefix):
+                validate(row['value'], 'pairingRecord')
+                out.append(row)
+        if len(rows) < 1000:
+            return out
+        after = rows[-1]['key']
+
+
+def _retire(row: dict) -> None:
+    """Delete one finished pairing and the index records that still name it."""
+    _contract, namespaces, _validate = _registry_contract()
+    value = row['value']
+    for kind, digest in (('code', value['codeDigest']), ('link', value['linkDigest'])):
+        key = f'{kind}:{digest}'
+        index = _get(namespaces['pairing_index'], key)
+        if index is not None and index['value'].get('pairingKey') == row['key']:
+            _delete(namespaces['pairing_index'], key, index['version'])
+    _delete(namespaces['pairings'], row['key'], row['version'])
+
+
+def _sweep(owner_id: int) -> None:
+    """Retire the owner's expired or redeemed pairings (bounded by what they minted)."""
+    now = _now()
+    for row in _owner_pairings(owner_id):
+        if row['value']['state'] != 'open' or row['value']['expiresAt'] <= now:
+            _retire(row)
+
+
 def generate_code() -> str:
-    """A fresh, collision-checked 6-digit pairing code."""
-    for _ in range(32):
-        cand = ''.join(secrets.choice(_CODE_ALPHABET) for _ in range(_CODE_LEN))
-        with _STORE_LOCK:
-            # Re-use is harmless (same user, fresh TTL) but we still
-            # dodge it so two concurrent mints never collide visually.
-            if cand not in _STORE or _STORE[cand]['expires_at'] <= _now():
-                return cand
-    # 32 collisions in 1e6 space is effectively impossible; fall back to
-    # a locked counter derivation rather than fail.
-    return ''.join(_CODE_ALPHABET[secrets.randbelow(10)] for _ in range(_CODE_LEN))
+    """A fresh 6-digit pairing code (uniqueness is claimed by its index record)."""
+    return ''.join(secrets.choice(_CODE_ALPHABET) for _ in range(_CODE_LEN))
 
 
 def mint_code(
@@ -117,10 +189,30 @@ def mint_code(
     """Mint a code bound to one complete authenticated identity."""
     if not isinstance(identity, PairingIdentity):
         raise TypeError('desktop pairing requires PairingIdentity')
-    if ttl is None:
-        ttl = _CODE_TTL_S
     code, _link_secret, expires_at = mint_pairing(identity, ttl)
     return code, expires_at
+
+
+def _claim_index(namespaces, kind: str, secret: str, pairing_key: str) -> bool:
+    """Point the digest index at this pairing unless an open pairing holds it."""
+    from lib.agent_core.storage_errors import StorageError
+    key = f'{kind}:{_digest(kind, secret)}'
+    value = {'version': 1, 'pairingKey': pairing_key}
+    current = _get(namespaces['pairing_index'], key)
+    version = 0
+    if current is not None:
+        holder = _get(namespaces['pairings'], current['value'].get('pairingKey') or '')
+        if (holder is not None and holder['value']['state'] == 'open'
+                and holder['value']['expiresAt'] > _now()):
+            return False
+        version = current['version']
+    try:
+        _put(namespaces['pairing_index'], key, value, version)
+        return True
+    except StorageError as error:
+        if error.code == 'database_conflict':
+            return False
+        raise
 
 
 def mint_pairing(
@@ -128,64 +220,82 @@ def mint_pairing(
 ) -> tuple[str, str, float]:
     """Mint one pairing: a typeable 6-digit code and a link secret.
 
-    Both name the SAME one-shot row: redeeming either consumes both. The
-    link secret (``x-pairing.link_secret_bytes`` of entropy) travels inside
-    the pairing link (contracts/desktop_node_v1.schema.json) and is never typed.
+    Both name the SAME one-shot pairing record: redeeming either consumes
+    both. The link secret (``x-pairing.link_secret_bytes`` of entropy) travels
+    inside the pairing link (contracts/desktop_node_v1.schema.json) and is
+    never typed.
     """
     if not isinstance(identity, PairingIdentity):
         raise TypeError('desktop pairing requires PairingIdentity')
     if ttl is None:
         ttl = _CODE_TTL_S
     from lib.desktop_wire.node_protocol import node_contract
+    _contract, namespaces, validate = _registry_contract()
+    _sweep(identity.owner_user_id)
     link_secret = secrets.token_urlsafe(
         node_contract()['x-pairing']['link_secret_bytes'])
-    code = generate_code()
+    pairing_id = 'pr-' + uuid.uuid4().hex
+    pairing_key = f'{identity.owner_user_id}:{pairing_id}'
     expires_at = _now() + ttl
-    row = {'identity': identity, 'expires_at': expires_at, 'attempts': 0,
-           'keys': (code, link_secret)}
-    with _STORE_LOCK:
-        _STORE[code] = row
-        _STORE[link_secret] = row
+    code = generate_code()
+    record = {
+        'version': 1, 'owner': identity.owner_user_id,
+        'accountUserId': identity.account_user_id, 'tenantId': identity.tenant_id,
+        'pairingId': pairing_id, 'expiresAt': expires_at, 'state': 'open',
+        'codeDigest': _digest('code', code), 'linkDigest': _digest('link', link_secret),
+        'redeemedBy': None,
+    }
+    # The record precedes its index entries: an index always names a record.
+    _put(namespaces['pairings'], pairing_key, validate(record, 'pairingRecord'), 0)
+    if not _claim_index(namespaces, 'link', link_secret, pairing_key):
+        raise RuntimeError('pairing link secret collided')
+    while not _claim_index(namespaces, 'code', code, pairing_key):
+        # Another open pairing holds this 6-digit code: draw again.
+        code = generate_code()
+        record['codeDigest'] = _digest('code', code)
+        row = _get(namespaces['pairings'], pairing_key)
+        _put(namespaces['pairings'], pairing_key, validate(record, 'pairingRecord'), row['version'])
     return code, link_secret, expires_at
 
 
-def _drop_row_locked(row: dict) -> None:
-    for key in row.get('keys') or ():
-        if _STORE.get(key) is row:
-            del _STORE[key]
+def consume_code(code: str, *, node_id: str = '') -> Optional[PairingIdentity]:
+    """Redeem a code or link secret once; its identity on success, else ``None``.
 
-
-def _hmac(code: str, secret: str) -> str:
-    return hmac.new(secret.encode(), code.encode(), hashlib.sha256).hexdigest()
-
-
-def consume_code(code: str) -> Optional[PairingIdentity]:
-    """Validate and consume a code, returning its complete identity on
-    success, or ``None`` on any failure (missing / expired / locked /
-    over-attempted). A consume that fails the attempt budget also burns
-    the code so it cannot be re-tried.
-
-    The code is bound to its minting user; the exchange mints the
-    agents:bridge key for THAT user (the agent carries no identity of its
-    own into this call — the code is the only credential).
+    The pairing is claimed by one CAS from ``open`` to ``redeemed``: two
+    concurrent redemptions (or a replay after a Home restart) cannot both
+    win. The redeemed record is retired by the owner's next mint.
     """
-    code = (code or '').strip()
-    with _STORE_LOCK:
-        row = _STORE.get(code)
-        if row is None:
-            return None
-        if row['expires_at'] <= _now():
-            _drop_row_locked(row)
-            return None
-        row['attempts'] += 1
-        if row['attempts'] > _MAX_ATTEMPTS:
-            _drop_row_locked(row)
-            return None
-        identity = row['identity']
-        _drop_row_locked(row)  # ONE-SHOT: neither key is reusable
-    if not isinstance(identity, PairingIdentity):
-        raise RuntimeError('desktop pairing identity is corrupt')
-    return identity
+    from lib.agent_core.storage_errors import StorageError
+    secret = (code or '').strip()
+    if not secret:
+        return None
+    _contract, namespaces, validate = _registry_contract()
+    for kind in ('link', 'code'):
+        digest = _digest(kind, secret)
+        index = _get(namespaces['pairing_index'], f'{kind}:{digest}')
+        if index is None:
+            continue
+        pairing_key = index['value'].get('pairingKey') or ''
+        while True:
+            row = _get(namespaces['pairings'], pairing_key)
+            if row is None:
+                return None
+            value = validate(dict(row['value']), 'pairingRecord')
+            if (value['state'] != 'open' or value['expiresAt'] <= _now()
+                    or value[f'{kind}Digest'] != digest):
+                return None
+            value['state'] = 'redeemed'
+            value['redeemedBy'] = node_id or None
+            try:
+                _put(namespaces['pairings'], pairing_key, value, row['version'])
+            except StorageError as error:
+                if error.code == 'database_conflict':
+                    continue
+                raise
+            return PairingIdentity(owner_user_id=value['owner'],
+                                   account_user_id=value['accountUserId'],
+                                   tenant_id=value['tenantId'])
+    return None
 
 
 def ip_fail_budget_exceeded(ip: str) -> bool:
@@ -194,7 +304,7 @@ def ip_fail_budget_exceeded(ip: str) -> bool:
     attempt (that is what makes the rate bound real, not cosmetic)."""
     ip = ip or '<unknown>'
     now = _now()
-    with _STORE_LOCK:
+    with _IP_LOCK:
         blocked_until = _IP_BLOCKED.get(ip)
         if blocked_until is not None:
             if blocked_until > now:
@@ -210,7 +320,7 @@ def record_pair_failure(ip: str) -> None:
     """Record one failed pair-exchange from *ip*; trip the block at budget."""
     ip = ip or '<unknown>'
     now = _now()
-    with _STORE_LOCK:
+    with _IP_LOCK:
         fails = [t for t in _IP_FAILS.get(ip) or []
                  if now - t < _IP_FAIL_WINDOW_S]
         fails.append(now)
@@ -226,22 +336,18 @@ def record_pair_success(ip: str) -> None:
     """A successful exchange clears the IP's failure slate — a legit agent
     retrying after a transient failure is not punished forever."""
     ip = ip or '<unknown>'
-    with _STORE_LOCK:
+    with _IP_LOCK:
         _IP_FAILS.pop(ip, None)
 
 
 def pending_codes(owner_user_id: int) -> list[dict]:
-    """Metadata (no secrets) for a user's still-valid codes — the panel's
-    countdown renders against this."""
+    """The caller's still-open pairings (no secrets): the panel's countdown."""
     owner_id = require_user_id(owner_user_id, context='desktop pairing list')
     now = _now()
-    with _STORE_LOCK:
-        return [{'code': c, 'expires_at': r['expires_at'],
-                 'remaining': max(0, int(r['expires_at'] - now))}
-                for c, r in _STORE.items()
-                if r['identity'].owner_user_id == owner_id
-                and r['expires_at'] > now
-                and c == (r.get('keys') or (c,))[0]]
+    return [{'pairing_id': row['value']['pairingId'], 'expires_at': row['value']['expiresAt'],
+             'remaining': max(0, int(row['value']['expiresAt'] - now))}
+            for row in _owner_pairings(owner_id)
+            if row['value']['state'] == 'open' and row['value']['expiresAt'] > now]
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -495,11 +601,11 @@ __all__ = ['generate_code', 'mint_code', 'mint_pairing', 'consume_code', 'pendin
            'LanDiscoveryResponder', 'lan_ip', 'maybe_start_responder',
            'ip_fail_budget_exceeded', 'record_pair_failure',
            'record_pair_success',
-           '_CODE_TTL_S', '_MAX_ATTEMPTS', '_LAN_MAGIC', '_LAN_BIND',
+           '_CODE_TTL_S', '_LAN_MAGIC', '_LAN_BIND',
            '_IP_FAIL_BUDGET', '_IP_BLOCK_S']
 __all__ = ['generate_code', 'mint_code', 'mint_pairing', 'consume_code', 'pending_codes',
            'LanDiscoveryResponder',
            'ip_fail_budget_exceeded', 'record_pair_failure',
            'record_pair_success',
-           '_CODE_TTL_S', '_MAX_ATTEMPTS', '_LAN_MAGIC', '_LAN_BIND',
+           '_CODE_TTL_S', '_LAN_MAGIC', '_LAN_BIND',
            '_IP_FAIL_BUDGET', '_IP_BLOCK_S']

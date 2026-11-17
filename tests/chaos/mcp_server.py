@@ -1,7 +1,7 @@
 """A minimal stdio MCP server whose failures the chaos suite controls.
 
 Newline-delimited JSON-RPC 2.0 (the MCP stdio transport), standard library
-only. Two tools:
+only. Three tools:
 
 - ``chaos_record(note)`` appends ``note`` to ``<state>/calls.log`` and answers;
   its input schema names its argument ``note`` while ``<state>/schema`` is
@@ -9,6 +9,9 @@ only. Two tools:
   restart), so a client that kept the old declaration sends a stale argument.
 - ``chaos_crash()`` records the call, then exits the process mid-call without
   answering, as a crashing server does.
+- ``chaos_wait(note)`` records ``wait <note>``, then answers only once
+  ``<state>/hold-call`` is gone, recording ``record <note>``: a call that is
+  in flight while the chaos suite kills something.
 
 While ``<state>/hold-initialize`` exists the server does not answer
 ``initialize``: a server that is still starting while a restarted host already
@@ -23,9 +26,11 @@ import json
 import os
 from pathlib import Path
 import sys
+import threading
 import time
 
 STATE = Path(sys.argv[1])
+_OUTPUT = threading.Lock()
 
 
 def schema_version() -> str:
@@ -43,19 +48,31 @@ def tools() -> list[dict]:
                          'required': [argument], 'additionalProperties': False}},
         {'name': 'chaos_crash', 'description': 'Crash the chaos MCP server mid-call.',
          'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}},
+        {'name': 'chaos_wait', 'description': 'Record a note once the held call is released.',
+         'inputSchema': {'type': 'object', 'properties': {'note': {'type': 'string'}},
+                         'required': ['note'], 'additionalProperties': False}},
     ]
 
 
 def answer(message_id, result=None, error=None) -> None:
     payload = {'jsonrpc': '2.0', 'id': message_id}
     payload.update({'error': error} if error else {'result': result})
-    sys.stdout.write(json.dumps(payload) + '\n')
-    sys.stdout.flush()
+    with _OUTPUT:
+        sys.stdout.write(json.dumps(payload) + '\n')
+        sys.stdout.flush()
 
 
 def record(line: str) -> None:
     with open(STATE / 'calls.log', 'a') as handle:
         handle.write(line + '\n')
+
+
+def wait_call(message_id, note) -> None:
+    record(f'wait {note}')
+    while (STATE / 'hold-call').exists():
+        time.sleep(0.05)
+    record(f'record {note}')
+    answer(message_id, {'content': [{'type': 'text', 'text': f'recorded {note}'}]})
 
 
 def main() -> int:
@@ -83,6 +100,11 @@ def main() -> int:
             if name == 'chaos_crash':
                 record('crash')
                 os._exit(17)
+            if name == 'chaos_wait':
+                # Held calls wait concurrently, as a real server's do.
+                threading.Thread(target=wait_call, args=(message_id, arguments.get('note')),
+                                 daemon=True).start()
+                continue
             if name == 'chaos_record':
                 argument = 'note' if schema_version() == 'v1' else 'message'
                 if set(arguments) != {argument}:

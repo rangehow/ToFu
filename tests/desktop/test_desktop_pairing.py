@@ -58,11 +58,12 @@ def _bearer(user_id='u-pair'):
 
 
 def _clear_state():
-    from lib.desktop.pairing import _STORE, _STORE_LOCK
-    with _STORE_LOCK:
-        _STORE.clear()
     from lib.api_keys import list_keys, revoke_key
+    from lib.desktop.node_registry import NodeRegistry
     for owner_user_id in _OWNER_IDS.values():
+        registry = NodeRegistry(owner_user_id)
+        for record in registry.list():
+            registry.forget(record['nodeId'])
         for key in list_keys(owner_user_id=owner_user_id):
             revoke_key(key['id'], owner_user_id=owner_user_id)
 
@@ -90,16 +91,18 @@ class TestPairingLifecycle:
         code = body['code']
         assert len(code) == 6 and code.isdigit()
         assert body['ttl'] == pairing_mod._CODE_TTL_S
-        # The code shows up in the caller's pending list.
-        assert any(p['code'] == code for p in body['pending'])
-        self._code = code
+        # The pairing shows up in the caller's pending list, without its secret.
+        assert len(body['pending']) == 1 and code not in str(body['pending'])
+        assert body['command'].startswith('python -m lib.desktop_agent --join ')
 
     def test_2_consume_mints_a_bridge_key_for_the_codes_user(self,
-                                                              flask_client):
+                                                              flask_client, monkeypatch):
+        from lib.desktop import bridge
+        monkeypatch.setattr(bridge, 'POLL_WAIT_TIMEOUT', 0)
         auth, _, _ = _bearer('u-alice')
         code = _mint(flask_client, auth)
         r = flask_client.post('/api/desktop/pair', json={
-            'code': code, 'name': 'office-pc', 'platform': 'windows'})
+            'code': code, 'name': 'office-pc', 'platform': 'windows', 'node_id': 'x'})
         assert r.status_code == 201, r.get_data(as_text=True)
         body = r.get_json()
         assert body['scopes'] == ['agents:bridge']
@@ -113,7 +116,22 @@ class TestPairingLifecycle:
                             'platform': 'windows', 'capabilities': {},
                             'share_roots': []}},
             headers={'X-Bridge-Secret': body['token']})
+        # Pending until the owner confirms: answered, but no work and no registration.
         assert poll.status_code == 200
+        assert poll.get_json()['node'] == {'state': 'pending_confirmation',
+                                           'fingerprint': body['fingerprint']}
+        assert not bridge.list_agents(str(_OWNER_IDS['u-alice']))
+        confirm = flask_client.post('/api/v4/desktop/nodes/x/confirm', headers=auth, json={})
+        assert confirm.status_code == 200, confirm.get_data(as_text=True)
+        poll = flask_client.post(
+            '/api/desktop/poll',
+            json={'results': [], 'streams': [],
+                  'agent': {'agent_id': 'x', 'name': 'office-pc',
+                            'platform': 'windows', 'capabilities': {},
+                            'share_roots': []}},
+            headers={'X-Bridge-Secret': body['token']})
+        assert poll.status_code == 200 and 'node' not in poll.get_json()
+        assert [a['agent_id'] for a in bridge.list_agents(str(_OWNER_IDS['u-alice']))] == ['x']
 
     def test_3_code_is_one_shot(self, flask_client):
         auth, _, _ = _bearer('u-alice')
@@ -158,7 +176,7 @@ class TestPairingLifecycle:
         return _mint(cli, auth)
 
     def _consume(self, cli, code):
-        return cli.post('/api/desktop/pair', json={'code': code})
+        return cli.post('/api/desktop/pair', json={'code': code, 'node_id': 'node-1'})
 
     def _consume_ok(self, cli, code):
         r = self._consume(cli, code)
@@ -232,15 +250,15 @@ class TestLanDiscovery:
 class TestPairIpBudget:
     def setup_method(self):
         _clear_state()
-        from lib.desktop.pairing import _IP_BLOCKED, _IP_FAILS, _STORE_LOCK
-        with _STORE_LOCK:
+        from lib.desktop.pairing import _IP_BLOCKED, _IP_FAILS, _IP_LOCK
+        with _IP_LOCK:
             _IP_BLOCKED.clear()
             _IP_FAILS.clear()
 
     def _consume(self, cli, code, ip='1.2.3.4'):
         # Quart sets remote_addr from the ASGI scope's client tuple — the
         # same override the bridge-addressing suite uses.
-        return cli.post('/api/desktop/pair', json={'code': code},
+        return cli.post('/api/desktop/pair', json={'code': code, 'node_id': 'node-ip'},
                         scope_base={'client': (ip, 5555)})
 
     def test_n_failures_trip_429_before_consume(self, flask_client):

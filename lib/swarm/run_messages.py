@@ -173,7 +173,10 @@ class RunMessageRepository:
         self.client = client
 
     def load(self) -> tuple[dict, int]:
-        row = self.client().query('record.get', {'namespace': NAMESPACE, 'key': self.key})
+        return self.decode(self.client().query('record.get', {'namespace': NAMESPACE, 'key': self.key}))
+
+    def decode(self, row: dict | None) -> tuple[dict, int]:
+        """Validate one stored mailbox row for this binding; ``None`` is the empty mailbox."""
         if row is None:
             return {'binding': copy.deepcopy(self.binding), 'closed': False, 'messages': []}, 0
         value = row.get('value') if isinstance(row, dict) else None
@@ -191,8 +194,14 @@ class RunMessageRepository:
             ids.add(item['id'])
         return copy.deepcopy(value), int(row['version'])
 
-    def _publish_changes(self, previous: dict, current: dict) -> None:
-        from lib.swarm.message_receipts import publish_receipt
+    def _publish_changes(self, previous: dict, current: dict, revision: int, ticket: int) -> None:
+        from lib.swarm.message_receipts import hold_committed_mailbox, publish_receipt
+        try:
+            # First: an activity read that starts once this commit returns
+            # answers with it, without reading the mailbox again.
+            hold_committed_mailbox(self.binding, self.key, revision, current, ticket)
+        except Exception:
+            logger.warning('Swarm receipt resident apply failed')
         old = {item['id']: item for item in previous['messages']}
         for sequence, item in enumerate(current['messages'], 1):
             if old.get(item['id']) != item:
@@ -208,30 +217,47 @@ class RunMessageRepository:
             logger.warning('Swarm receipt snapshot observer failed')
 
     def change(self, update) -> dict:
+        from lib.swarm.message_receipts import forget_mailbox, observation_ticket
         uncertain_previous = None
-        for _ in range(LIMITS['casAttempts']):
-            value, revision = self.load()
-            updated = update(copy.deepcopy(value))
-            if updated == value:
-                if uncertain_previous is not None:
-                    self._publish_changes(uncertain_previous, value)
-                return value
-            try:
-                self.client(write=True).command('record.put', {
-                    'namespace': NAMESPACE, 'key': self.key, 'value': updated,
-                    'expected_version': revision,
-                }, 'swarm-message:' + uuid.uuid4().hex)
-                self._publish_changes(value, updated)
-                return updated
-            except StorageError as exc:
-                if exc.code != 'database_conflict' and not exc.retryable:
-                    raise
+        written = False
+        try:
+            for _ in range(LIMITS['casAttempts']):
+                ticket = observation_ticket()
+                value, revision = self.load()
+                updated = update(copy.deepcopy(value))
+                if updated == value:
+                    if uncertain_previous is not None:
+                        self._publish_changes(uncertain_previous, value, revision, ticket)
+                    return value
+                ticket = observation_ticket()
+                written = True
+                try:
+                    self.client(write=True).command('record.put', {
+                        'namespace': NAMESPACE, 'key': self.key, 'value': updated,
+                        'expected_version': revision,
+                    }, 'swarm-message:' + uuid.uuid4().hex)
+                except StorageError as exc:
+                    if exc.code != 'database_conflict' and not exc.retryable:
+                        raise
 
-                uncertain_previous = value
-                # Re-read natural identity after CAS conflict OR an uncertain ACK.
-                # No side effect is replayed; content/receipt state proves the write.
-        raise RunMessageError('message_concurrent_change', 'Mailbox changed concurrently; query and retry the same message identity',
-                              submission_state='unknown')
+                    uncertain_previous = value
+                    # Re-read natural identity after CAS conflict OR an uncertain ACK.
+                    # No side effect is replayed; content/receipt state proves the write.
+                    continue
+                # The CAS committed exactly expected_version + 1; never parse the
+                # receipt after the commit, where a raise would report a sent message failed.
+                self._publish_changes(value, updated, revision + 1, ticket)
+                return updated
+            raise RunMessageError('message_concurrent_change', 'Mailbox changed concurrently; query and retry the same message identity',
+                                  submission_state='unknown')
+        except BaseException:
+            if written:
+                # The mailbox may hold a write this process never confirmed.
+                try:
+                    forget_mailbox(self.binding, self.key)
+                except Exception:
+                    logger.warning('Swarm receipt resident invalidation failed')
+            raise
 
     def submit(self, *, content: str, kind: str, key: str, sender_task_id: str, before_commit=None) -> dict:
         validate_message(content=content, kind=kind, key=key)

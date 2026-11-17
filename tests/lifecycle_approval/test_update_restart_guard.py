@@ -233,7 +233,10 @@ class UpdateRestartGuardTest(unittest.TestCase):
         def dispatch(conversation, message, tools_config, **kwargs):
             sent.append((conversation, message['content'], kwargs['command_id']))
             return ScheduledTurnDispatch('started', task_id='notice-task')
-        with patch('lib.server.server_reexec.perform_server_reexec', return_value=False), \
+        refused = reexec.ServerReexecOutcome(False, (
+            ('manager delegation', 'Supervisor did not load the current source generation'),
+            ('in-place re-exec', 'skipped: pid 7 has no serving-loop shutdown bridge')))
+        with patch('lib.server.server_reexec.perform_server_reexec', return_value=refused), \
              patch('lib.router.binding.global_router', return_value={
                  'conversationId': 'router-home', 'availability': 'available', 'revision': 1}), \
              patch('lib.scheduler.conversation_dispatch.dispatch_scheduled_turn', dispatch):
@@ -241,6 +244,8 @@ class UpdateRestartGuardTest(unittest.TestCase):
         [(conversation, text, command_id)] = sent
         self.assertEqual(conversation, 'router-home')
         self.assertIn('restart_bridge_refused', text)
+        self.assertIn('manager delegation: Supervisor did not load the current source generation', text)
+        self.assertIn('in-place re-exec: skipped: pid 7 has no serving-loop shutdown bridge', text)
         self.assertIn('keeps', text)
         [notice] = la.restart_notices(states=('delivered',))
         self.assertEqual((notice['restartId'], notice['commandId']), (token, command_id))

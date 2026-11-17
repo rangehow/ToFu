@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import threading
 import time
 
 import pytest
@@ -424,10 +425,30 @@ def test_backup_failure_releases_read_slot_and_concurrency_lease(
             'lib.storage_authority_sql.adapters.sqlite.capacity_preflight',
             reject_capacity,
         )
+        # The authority's own background readers (started above) may hold a
+        # lease at any moment; the contract is about the backup's own slot.
+        acquire, release = backend._acquire_read, backend._release_read
+        held = []
+
+        backup_thread = threading.get_ident()
+
+        def acquire_tracked(deadline_at):
+            slot = acquire(deadline_at)
+            if threading.get_ident() == backup_thread:
+                held.append(slot)
+            return slot
+
+        def release_tracked(slot, **kwargs):
+            if slot in held:
+                held.remove(slot)
+            return release(slot, **kwargs)
+
+        monkeypatch.setattr(backend, '_acquire_read', acquire_tracked)
+        monkeypatch.setattr(backend, '_release_read', release_tracked)
         with pytest.raises(StorageError, match='no capacity'):
             backend.backup(time.monotonic() + 5)
 
-        assert backend.metrics()['read_active_leases'] == 0
+        assert held == []
         assert backend._backup_lock.acquire(blocking=False)
         backend._backup_lock.release()
         assert not list((tmp_path / 'data' / 'backups').glob('*.tmp-*'))

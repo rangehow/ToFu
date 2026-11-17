@@ -156,7 +156,10 @@ def test_mcp_transport_failure_reaches_common_effect_settlement(
     assert error is not None, 'MCP adapter erased operational failure metadata'
     assert error.code == ('tool_execution_timeout' if read else 'tool_effect_unknown')
     assert error.retryable is read
-    assert calls == [underlying] and reconnects == []
+    # Never replayed. A dead transport (not a read timeout) reconnects once so
+    # later calls validate against the live catalog (d90b5ef225, "dead
+    # transports refresh catalogs").
+    assert calls == [underlying] and reconnects == ([] if read else ['hope'])
     assert row['executionEffect']['state'] == 'unknown'
     if not read:
         assert row['executionEffect']['operationId'] in error.message

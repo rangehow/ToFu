@@ -50,7 +50,10 @@ def background_activity():
     from lib.tasks_pkg.command_control_transport import CommandControlUnavailable
     try:
         activity = snapshot(current_app, user_id=int(request_user_id()))
-    except CommandControlUnavailable:
+    except CommandControlUnavailable as e:
+        # One line per refused poll, like its access line; names no owner data.
+        logger.warning('[activity.v1] execution owner unconfirmed: %s cause=%s', e,
+                       type(e.__cause__).__name__ if e.__cause__ is not None else '-')
         return api_service_unavailable('The execution owner did not confirm the activity snapshot.')
     except Exception as e:
         logger.error('[activity.v1] activity snapshot failed: %s', e, exc_info=True)

@@ -1126,3 +1126,39 @@ their own gates); retrying or skipping a failing scenario (a flaky chaos test
 hides exactly the faults it exists to show). Findings and fixes:
 [robustness audit 2026-11-17](ROBUSTNESS_AUDIT_20261117.md). Specs:
 `tests/chaos/test_chaos_faults.py`.
+
+### Nodes and the node↔Home link
+
+`tests/chaos/test_chaos_nodes.py` runs real node processes (the one node
+program, `python -m lib.desktop_agent`, on simulated host identities) against
+an isolated Home started in the production project topology
+(`ChaosInstance(private_source=True)`: the manager, API host and execution
+host share one project, a private export of the runtime source, so the bridge
+relay records they publish under `<project>/data` are found by every role).
+Nodes reach the Home only through a network edge (`tests/chaos/edge.py`): an
+HTTP proxy for an origin the node cannot resolve plus a CodeLab-style
+`/proxy/<port>` prefix, which can partition, heal and follow a moved Home.
+Desktop commands run from scripted Turns through execution host → bridge relay
+→ API host → node. Every fault must leave:
+
+- **N1** the Home's node registry (record, trust state, fingerprint) and the
+  node's own identity and credential intact; no re-pair after a Home restart;
+- **N2** each node command's side effect executed at most once;
+- **N3** a clear status: the node listing's `state`/`conflict`/`online`, the
+  attachment's `revoked`/`conflict`, and a settled Turn with an error;
+- **N4** no process a node or the Home started alive after it stops;
+- **N5** paced reconnects (bounded attempts across a partition) and refusals
+  that end the link instead of looping.
+
+| Fault | Expected behavior beyond N1-N5 |
+|---|---|
+| Headless join through the proxy edge | Pending until the owner confirms (fingerprints match); then commands run. |
+| API host restart while a node command runs | The node finishes it once; the node reconnects with the same identity. |
+| Whole Home restart with a minted, unredeemed link | The link still pairs; the confirmed node reconnects; the pending node gets no work. |
+| Execution host killed while a node command runs | The command is not replayed; the recovered host sees the node through the relay. |
+| Node SIGKILL mid-command, then restarted | Its command tree dies with it; the Turn settles; the node rejoins without pairing. |
+| Partition then heal | Offline after the liveness window; a command for it is refused before enqueue; reconnect after heal. |
+| Second live process of one identity | The earlier boot is refused (`duplicate_boot`), the node is flagged, the newer process serves. |
+| Twins sharing one home directory | Distinct node IDs and credentials; revoking one leaves the other working. |
+| Recreated container on the shared home | Pairs as a re-pair naming its predecessor; confirming replaces it. |
+| Revoked device reconnecting with a copied config | One refused poll ends the link; nothing reappears on the Home. |

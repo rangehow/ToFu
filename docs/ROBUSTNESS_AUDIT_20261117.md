@@ -83,9 +83,6 @@ The suite's first expectations were corrected against the owning contracts:
 
 ## Open items
 
-- Execution sharding (in progress in a sibling lane: `call(..., deadline_unix_ms)`
-  for "execution shards") must fan `mcp_reconcile` out to every shard's bridge.
-  As written, the method reaches the single resident incarnation.
 - Every execution-host stop logs `execution exit evidence for pid … was not
   recorded: process exit is not proved by local kernel evidence`. This was
   observed in each instance teardown but not investigated.

@@ -67,7 +67,11 @@ def test_the_test_environment_hides_repositories_above_its_temporary_roots(
         tmp_path, tmp_path_factory):
     # tests/conftest.py sets the ceiling for every test; a stray repository at
     # either temporary root, like /tmp/.git, can never capture a test path.
-    above = [tmp_path_factory.getbasetemp().parent]
+    # The per-user root is pytest-of-<user>, above the session's pytest-N and,
+    # under xdist, the worker's popen-gwN basetemp: name it by its layout,
+    # never by a fixed number of parents (an explicit --basetemp has none).
+    basetemp = tmp_path_factory.getbasetemp().resolve()
+    above = [path for path in basetemp.parents if path.name.startswith('pytest-of-')][:1]
     if tmp_path.resolve().is_relative_to(Path(tempfile.gettempdir()).resolve()):
         above.append(Path(tempfile.gettempdir()))
     assert all(beyond_git_ceiling(tmp_path, root) for root in above)

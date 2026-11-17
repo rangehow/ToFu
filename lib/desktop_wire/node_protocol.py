@@ -161,14 +161,41 @@ def parse_pairing_link(text: str) -> PairingLink:
     return PairingLink(server_url=base, secret=secret, candidates=tuple(candidates[:8]))
 
 
+def fingerprint(node_id: str, credential_id: str) -> str:
+    """The short code both ends show before the owner confirms a node.
+
+    Derivation: contracts/desktop_node_registry_v1.schema.json x-identity.fingerprint.
+    """
+    import hashlib
+    digest = hashlib.sha256(
+        ('tofu-node-fingerprint/v1\0%s\0%s' % (node_id, credential_id)).encode('utf-8')
+    ).hexdigest().upper()
+    return '%s-%s' % (digest[:4], digest[4:8])
+
+
+def headless_join_command(link: str) -> str:
+    """The one-line headless join for a pairing link (x-pairing.headless_command)."""
+    import shlex
+    return 'python -m lib.desktop_agent --join %s' % shlex.quote(link)
+
+
 def parse_join_input(text: str):
-    """One join-dialog input: a pairing link, or a legacy ``<url> <token>`` line."""
+    """One join-dialog input.
+
+    A pairing link; ``<url> <6-digit code>`` (x-pairing.code_join: the code
+    form of a pairing, tried only at that URL); or a legacy ``<url> <token>``
+    connect line.
+    """
     raw = (text or '').strip()
     if '#' in raw and node_contract()['x-pairing']['fragment_key'] + '=' in raw:
         return parse_pairing_link(raw)
     parts = raw.split()
     if len(parts) == 2:
-        return LegacyConnectLine(server_url=_http_base(parts[0]), secret=parts[1].strip())
+        base, secret = _http_base(parts[0]), parts[1].strip()
+        digits = node_contract()['x-pairing']['short_code_digits']
+        if len(secret) == digits and secret.isdigit():
+            return PairingLink(server_url=base, secret=secret, candidates=(base,))
+        return LegacyConnectLine(server_url=base, secret=secret)
     if len(parts) < 2:
         raise PairingInputError('missing_parts')
     raise PairingInputError('too_many_parts')
@@ -215,7 +242,9 @@ def migrate_attachments(cfg: dict) -> bool:
 
 __all__ = [
     'LegacyConnectLine', 'PairingInputError', 'PairingLink', 'attachment_id',
-    'build_pairing_link', 'default_tiers', 'granted_tiers', 'migrate_attachments',
+    'build_pairing_link', 'default_tiers', 'fingerprint', 'granted_tiers',
+    'headless_join_command',
+    'migrate_attachments',
     'node_contract', 'parse_join_input', 'parse_pairing_link', 'required_tier',
     'tier_order', 'tier_refusal', 'tiers_from_permissions',
 ]

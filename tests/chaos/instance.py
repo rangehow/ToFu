@@ -73,7 +73,7 @@ class ChaosInstance:
     """One private deployment; every path and port is its own."""
 
     def __init__(self, root: Path, *, backend: str = 'sqlite', python: str = sys.executable,
-                 faultfs: bool = True):
+                 faultfs: bool = True, private_source: bool = False):
         self.root = Path(root).resolve()
         self.faultfs: Path | None = None
         self._want_faultfs = faultfs
@@ -81,7 +81,17 @@ class ChaosInstance:
         self.backend = backend
         self.python = python
         self.tag = uuid.uuid4().hex
-        self.state_root = self.root / 'state'
+        # private_source: the production topology, where the manager, the API
+        # host and the execution host share ONE project (bootstrap_pkg/
+        # launcher.py gives every role BASE_DIR), so records published under
+        # <project>/data -- the bridge relays among them -- are found by every
+        # role. The project is a private export of this checkout's runtime
+        # source, so its data/ belongs to the instance alone. Without it the
+        # execution host runs from the checkout while the records live under
+        # ``state``: right for the storage faults, but no relay is reachable.
+        self.private_source = private_source
+        self.source = self.root / 'source' if private_source else CHECKOUT
+        self.state_root = self.source if private_source else self.root / 'state'
         self.port = 0
         self.api: subprocess.Popen | None = None
         self.api_generation = 0
@@ -103,13 +113,36 @@ class ChaosInstance:
             INSTANCE_TAG: self.tag,
             'HOME': str(self.root / 'home'), 'TMPDIR': str(self.root / 'tmp'),
             'XDG_CACHE_HOME': str(self.root / 'home' / '.cache'),
-            'PYTHONPATH': str(CHECKOUT), 'PYTHONUNBUFFERED': '1', 'PYTHONNOUSERSITE': '1',
+            'PYTHONPATH': str(self.source), 'PYTHONUNBUFFERED': '1', 'PYTHONNOUSERSITE': '1',
             'TOFU_DATA_DIR': str(self.root / 'data'), 'TOFU_HEARTBEAT_DIR': str(self.root / 'heartbeat'),
             'TOFU_DEPLOYMENT_MODE': 'personal', 'TOFU_PERSONAL_STORAGE_BACKEND': self.backend,
             # The instance never reaches a network: loopback endpoints only.
             'NO_PROXY': '127.0.0.1,localhost', 'no_proxy': '127.0.0.1,localhost',
         })
         return env
+
+    # Trees no runtime role imports or serves.
+    _NOT_RUNTIME = ('designs/', 'tests/', 'docs/', 'android/', 'evaluations/', 'benchmarks/', 'promo/',
+                    'codex/', 'data/', 'logs/', 'node_modules/')
+
+    def _export_source(self) -> None:
+        """Copy this checkout's runtime files (tracked plus working edits) and its built UI."""
+        listed = subprocess.run(['git', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'],
+                                cwd=str(CHECKOUT), check=True, capture_output=True).stdout.split(b'\0')
+        files = [name for name in listed if name and not name.decode().startswith(self._NOT_RUNTIME)
+                 and (CHECKOUT / name.decode()).is_file()]
+        built = [str(path.relative_to(CHECKOUT)).encode()
+                 for path in (CHECKOUT / 'static' / 'vite').rglob('*') if path.is_file()]
+        self.source.mkdir(mode=0o700, parents=True)
+        pack = subprocess.Popen(['tar', '--null', '-T', '-', '-cf', '-'], cwd=str(CHECKOUT),
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        unpack = subprocess.Popen(['tar', '-xf', '-'], cwd=str(self.source), stdin=pack.stdout)
+        pack.stdout.close()
+        pack.stdin.write(b'\0'.join(files + built) + b'\0')
+        pack.stdin.close()
+        if pack.wait() or unpack.wait():
+            raise RuntimeError('could not export the chaos instance source')
+        (self.source / 'data').mkdir(mode=0o700, exist_ok=True)
 
     def _seed_caches(self) -> None:
         # tiktoken downloads its BPE into $TMPDIR/data-gym-cache when absent;
@@ -150,6 +183,8 @@ class ChaosInstance:
         if self._want_faultfs:
             self.faultfs = self._build_faultfs()
             self.set_medium(fsync_us=0, enospc=False)
+        if self.private_source and not (self.source / 'server.py').exists():
+            self._export_source()
         self.environment = self._base_environment()
         self._seed_caches()
         contract = self.state_root / 'contracts' / 'native_storage_connection_v2.json'
@@ -178,7 +213,7 @@ class ChaosInstance:
 
     def execution_environment(self) -> dict[str, str]:
         # The execution host admits only the source tree it runs from.
-        return {**self.environment, 'TOFU_PROJECT_PATH': str(CHECKOUT),
+        return {**self.environment, 'TOFU_PROJECT_PATH': str(self.source),
                 'TOFU_STORAGE_CONNECTION_FILE': self.connection_file, 'PORT': str(self.port)}
 
     def start_execution(self) -> None:
@@ -203,7 +238,7 @@ class ChaosInstance:
                 'TOFU_STORAGE_CONNECTION_FILE': self.connection_file}
 
     def start_api(self) -> None:
-        if not (CHECKOUT / 'static' / 'vite' / 'manifest.json').is_file():
+        if not (self.source / 'static' / 'vite' / 'manifest.json').is_file():
             # The api role serves the shipped graph; CI downloads it, make test-api builds it.
             raise RuntimeError('the chaos API host needs the built frontend graph: '
                                'run `npm run build:frontend` (or make frontend-build)')
@@ -211,7 +246,7 @@ class ChaosInstance:
         log = (self.root / f'api-{self.api_generation}.log').open('ab')
         self.api = subprocess.Popen(
             [self.python, 'server.py', '--host', '127.0.0.1', '--port', str(self.port)],
-            cwd=str(CHECKOUT), env=self.api_environment(), stdin=subprocess.DEVNULL,
+            cwd=str(self.source), env=self.api_environment(), stdin=subprocess.DEVNULL,
             stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         log.close()
         self._wait(self._api_ready, 'API host readiness')

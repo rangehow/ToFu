@@ -13,7 +13,6 @@ import logging
 import os
 import sys
 import time
-import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -483,18 +482,23 @@ def _default_boot(message: str, *args: Any) -> None:
 
 
 def _start_network_integrations(
-    *, logger: logging.Logger, boot: Callback, owns_inbound: bool,
+    *, logger: logging.Logger, boot: Callback, owns_inbound: bool, process_role: str,
 ) -> tuple[dict[str, Any], bool]:
     """Start integrations used by API or task-worker processes."""
     boot('Configuring MCP auto-connect…')
     mcp_config: dict[str, Any] = {}
     try:
+        from lib.mcp.bridge_relay import relays_mcp
         from lib.mcp.config import load_mcp_config, migrate_legacy_config
         from lib.mcp.startup import start_mcp_auto_connect
 
         from lib.identity import PERSONAL_USER_ID
         from runtime_guards import load_deployment_configuration
-        if load_deployment_configuration().mode == 'personal':
+        if relays_mcp(process_role):
+            # The execution host's servers serve this shard (lib/mcp/bridge_relay.py).
+            logger.info('[MCP] Auto-connect skipped: this %s relays to the execution host',
+                        process_role)
+        elif load_deployment_configuration().mode == 'personal':
             migrate_legacy_config(user_id=PERSONAL_USER_ID)
             mcp_config = load_mcp_config(user_id=PERSONAL_USER_ID)
             start_mcp_auto_connect(mcp_config, logger=logger, owner_user_id=PERSONAL_USER_ID)
@@ -594,7 +598,7 @@ def start_optional_production_services(
         CAPABILITY_ATTEMPT_EXECUTION,
     )):
         mcp_config, feishu_ok = _start_network_integrations(
-            logger=logger, boot=boot,
+            logger=logger, boot=boot, process_role=process_role,
             owns_inbound=process_role_has(process_role, CAPABILITY_TASK_WORKERS))
 
     # Retention is eager even when no new task emits an event. The event
@@ -632,7 +636,9 @@ def register_production_lifecycle(
 
     log = logger or logging.getLogger('server')
     process_role = normalize_process_role(process_role)
-    stop_event = (threading.Event()
+    from lib.server.server_shutdown import ShutdownRequest
+    # Awaitable by the serving loop (wait_for_shutdown_trigger), like server.py's.
+    stop_event = (ShutdownRequest()
                   if shutdown_requested is None else shutdown_requested)
     state = {
         'status': 'registered',

@@ -247,6 +247,10 @@ def serve(args, *, application_factory=create_application):
         if not manager_control_matches(record, args.manager_fd, write=False):
             raise RuntimeError('Execution manager control identity does not match its record')
         asyncio.run(run())
+        # The drain finished: a deliberate stop, never a crash the next boot
+        # must count toward the restart-storm guard.
+        from lib.shutdown_marker import mark_drained
+        mark_drained()
         record['state'], record['error'] = 'stopped', ''
         write_record(Path(args.state_file), record)
         return 0

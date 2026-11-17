@@ -35,7 +35,7 @@ def test_unmanaged_worker_delegates_to_manager(monkeypatch):
         'lib.server.server_reexec.begin_server_reexec',
         lambda reason: calls.append(('execv', reason)) or True)
 
-    assert reexec.perform_server_reexec('update') is True
+    assert reexec.perform_server_reexec('update').handed_over is True
     assert calls == [('/project', {
         'stage': 'delegate',
         'reason': 'update',
@@ -57,7 +57,7 @@ def test_alien_managed_worker_delegates_to_manager(monkeypatch):
         },
     )
 
-    assert reexec.perform_server_reexec('update') is True
+    assert reexec.perform_server_reexec('update').handed_over is True
     assert calls and calls[0][0] == '/project'
 
 
@@ -77,6 +77,8 @@ def test_manager_refusal_falls_back_to_self_execv(monkeypatch):
 
     monkeypatch.setattr(
         'serverctl_pkg.application_restart.run_application_restart_control', refuse)
+    # This process is server.py: its serving loop installed the shutdown bridge.
+    monkeypatch.setattr(reexec, '_shutdown_requester', lambda reason: None)
     monkeypatch.setattr(
         'lib.server.server_reexec.begin_server_reexec',
         lambda reason: calls.append(('begin', reason)) or True)
@@ -85,6 +87,6 @@ def test_manager_refusal_falls_back_to_self_execv(monkeypatch):
         lambda: calls.append(('finish',)) or True)
     monkeypatch.setattr(reexec, 'audit_log', lambda *a, **k: None)
 
-    assert reexec.perform_server_reexec('update') is True
+    assert reexec.perform_server_reexec('update').handed_over is True
     assert ('begin', 'update') in calls
     assert ('finish',) in calls

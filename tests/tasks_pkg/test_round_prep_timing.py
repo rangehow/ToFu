@@ -273,8 +273,18 @@ def test_slow_event_barrier_warns_once_without_emitting_a_task_event(delivery, m
         release.set()
 
     monkeypatch.setattr(persistence_wait, '_announce_slow_event_barrier', announce_then_release)
-    delivery.submit(lane, 1, 128, lambda: release.wait(3), lambda: None)
+    persisting = threading.Event()
+
+    def slow_persist():
+        persisting.set()
+        release.wait(3)
+
+    delivery.submit(lane, 1, 128, slow_persist, lambda: None)
     delivery.submit(lane, 2, 128, lambda: None, lambda: None)
+    # persistMs runs from the head's storage dispatch; the barrier clock starts
+    # below. Only a dispatch that precedes the barrier makes the head's storage
+    # wait cover the whole slow window the warning announces.
+    assert persisting.wait(5)
     rpt.begin_round_prep(task, 0)
 
     with rpt.round_prep_step(task, 'barrier'):

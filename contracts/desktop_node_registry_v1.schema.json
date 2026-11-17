@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "tofu.desktop-node-registry/v1",
+  "title": "Home node registry and durable pairings v1",
+  "description": "The Home's durable record of the nodes that paired with it and of the pairings it minted (docs/modules/remote_execution.md, 'Node registry, confirmation and trust'; design docs/MULTI_DEVICE_NETWORK_DESIGN.md sections 5, 7, 10). Records live in the Home's selected storage authority through portable record CAS, so they survive a Home restart and are shared by the API host and the execution host. Liveness is never stored: online/last_seen come from the bridge's poll observation. A node record is keyed '<owner>:<nodeId>'; a credential index record '<owner>:<credentialId>' names the node a credential was issued to and is a hint validated against the node record. A pairing record is keyed '<owner>:<pairingId>' and is reached during redemption through two digest index records ('code:<sha256>' and 'link:<sha256>'), so neither the 6-digit code nor the link secret is stored in clear. Owner: lib/desktop/node_registry.py and lib/desktop/pairing.py.",
+  "namespaces": {
+    "nodes": "desktop.node.v1",
+    "credentials": "desktop.node.credential.v1",
+    "pairings": "desktop.pairing.v1",
+    "pairing_index": "desktop.pairing.index.v1"
+  },
+  "x-confirmation": {
+    "description": "Owner decision 5 (2026-11-17, on): redeeming a pairing creates a pending node. A pending node's polls are admitted to the transport but it is never registered with the bridge, so no command can be addressed to it; its poll answer carries node.state='pending_confirmation' and is held until the owner confirms or the bridge long-poll window ends. Confirming makes it active; rejecting revokes the credential issued at redemption. A pairing for a node ID that is already active under another credential is a pending replacement: the active credential keeps working until the owner confirms (old credential revoked) or rejects (new credential revoked).",
+    "legacy_adoption": "A bridge credential without a node record that was not issued by pairing (credential metadata origin != 'desktop_pairing': credentials minted before this registry existed, or by the owner's authenticated POST /api/v1/desktop/token) is adopted as an active node bound to the first node ID that polls with it. A pairing-issued credential without its node record is refused (desktop_node_unregistered)."
+  },
+  "x-identity": {
+    "fingerprint": "Upper-case hex of sha256('tofu-node-fingerprint/v1\\0' + nodeId + '\\0' + credentialId), first 8 digits, formatted XXXX-XXXX. The node computes it from its own ID and the PairResponse id, the Home from its record; the owner compares both before confirming.",
+    "binding": "A credential is bound to exactly one node ID. A poll whose agent_id differs from the node its credential was issued to is refused with 409 desktop_node_identity_conflict and the node record records the conflict; the polling process stops that link instead of retrying.",
+    "boot": "Every node process sends a fresh boot_id in its poll frame. When a node ID's earlier boot polls again after a newer boot of the same ID was observed (two live processes with one identity), the earlier boot is refused with 409 desktop_node_identity_conflict; a restart (old boot silent) is never a conflict. Boot observation is transport state of the poll-terminating process, not stored."
+  },
+  "x-credential-origin": "desktop_pairing",
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,128}$"},
+    "owner": {"type": "integer", "minimum": 1},
+    "timestamp": {"type": "number", "minimum": 0},
+    "fingerprint": {"type": "string", "pattern": "^[0-9A-F]{4}-[0-9A-F]{4}$"},
+    "pendingCredential": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["credentialId", "fingerprint", "pairedAt", "name", "platform", "kind"],
+      "properties": {
+        "credentialId": {"type": "string", "minLength": 1, "maxLength": 128},
+        "fingerprint": {"$ref": "#/$defs/fingerprint"},
+        "pairedAt": {"$ref": "#/$defs/timestamp"},
+        "name": {"type": "string", "maxLength": 80},
+        "platform": {"type": "string", "maxLength": 40},
+        "kind": {"enum": ["computer", "server"]}
+      }
+    },
+    "conflict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "agentId", "at"],
+      "properties": {
+        "reason": {"description": "credential_reused: another node ID presented this node's credential; node_id_taken: another credential presented this node ID; duplicate_boot: two live processes of this node ID.", "enum": ["credential_reused", "node_id_taken", "duplicate_boot"]},
+        "agentId": {"type": "string", "maxLength": 256},
+        "at": {"$ref": "#/$defs/timestamp"}
+      }
+    },
+    "nodeRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "owner", "nodeId", "state", "credentialId", "fingerprint", "name", "platform", "kind", "origin", "pairedAt", "confirmedAt", "replacement", "conflict", "predecessor"],
+      "properties": {
+        "version": {"const": 1},
+        "owner": {"$ref": "#/$defs/owner"},
+        "nodeId": {"$ref": "#/$defs/id"},
+        "state": {"enum": ["pending", "active"]},
+        "credentialId": {"type": "string", "minLength": 1, "maxLength": 128},
+        "fingerprint": {"$ref": "#/$defs/fingerprint"},
+        "name": {"type": "string", "maxLength": 80},
+        "platform": {"type": "string", "maxLength": 40},
+        "kind": {"enum": ["computer", "server"]},
+        "origin": {"enum": ["pairing", "adopted"]},
+        "pairedAt": {"$ref": "#/$defs/timestamp"},
+        "confirmedAt": {"anyOf": [{"$ref": "#/$defs/timestamp"}, {"type": "null"}]},
+        "replacement": {"anyOf": [{"$ref": "#/$defs/pendingCredential"}, {"type": "null"}]},
+        "conflict": {"anyOf": [{"$ref": "#/$defs/conflict"}, {"type": "null"}]},
+        "predecessor": {"description": "The node this pending node says it replaces on the same host (renamed host, recreated container: PairRequest.previous_node_id), when the owner has such a node. Confirming forgets the predecessor unless it is online at that moment (then the two are twins and both stay); either way the field clears.", "anyOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]}
+      }
+    },
+    "credentialIndex": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "owner", "credentialId", "nodeId"],
+      "properties": {
+        "version": {"const": 1},
+        "owner": {"$ref": "#/$defs/owner"},
+        "credentialId": {"type": "string", "minLength": 1, "maxLength": 128},
+        "nodeId": {"$ref": "#/$defs/id"}
+      }
+    },
+    "pairingRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "owner", "accountUserId", "tenantId", "pairingId", "expiresAt", "state", "codeDigest", "linkDigest", "redeemedBy"],
+      "properties": {
+        "version": {"const": 1},
+        "owner": {"$ref": "#/$defs/owner"},
+        "accountUserId": {"type": "string", "maxLength": 256},
+        "tenantId": {"type": ["string", "null"], "maxLength": 256},
+        "pairingId": {"type": "string", "pattern": "^pr-[0-9a-f]{32}$"},
+        "expiresAt": {"$ref": "#/$defs/timestamp"},
+        "state": {"enum": ["open", "redeemed"]},
+        "codeDigest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "linkDigest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "redeemedBy": {"anyOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]}
+      }
+    },
+    "pairingIndex": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "pairingKey"],
+      "properties": {
+        "version": {"const": 1},
+        "pairingKey": {"type": "string", "pattern": "^[0-9]+:pr-[0-9a-f]{32}$"}
+      }
+    },
+    "confirmRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 80}
+      }
+    },
+    "renameRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 80}
+      }
+    },
+    "nodeTransition": {
+      "description": "Answer of confirm / reject / rename / remove.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node_id", "state"],
+      "properties": {
+        "node_id": {"$ref": "#/$defs/id"},
+        "state": {"enum": ["active", "pending", "removed"]},
+        "revoked_credentials": {"type": "array", "items": {"type": "string"}},
+        "disconnected": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "devicesChanged": {
+      "description": "Owner-scoped push hint published on every registry change (pair, confirm, reject, rename, remove, conflict). The UI re-reads GET /api/v4/desktop/nodes; the hint carries no state.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["userId", "rev"],
+      "properties": {
+        "userId": {"type": "string"},
+        "rev": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

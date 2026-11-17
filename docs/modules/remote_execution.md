@@ -16,9 +16,10 @@ the same thing; the tool field keeps the name `device`.
 | Poll HTTP adapter | `routes/desktop.py` |
 | Device registry, command queue, streams | `lib/desktop/bridge.py` |
 | Bridge owner across the API/execution split | `lib/desktop/bridge_relay.py` over `lib/runtime/loopback_relay.py` |
-| Node ID per host (shared home directories) | `lib/desktop_agent/host_identity.py`, `lib/desktop_agent/_run.py::_ensure_agent_id` |
+| Node ID and attachments per host (shared home directories) | `lib/desktop_agent/host_identity.py`, `lib/desktop_agent/config.py::node_identity` |
 | Node status/listing/removal, pairing, distribution API | `routes/api_v1/desktop.py` |
-| Pairing authority (6-digit code + link secret, one row) | `lib/desktop/pairing.py` |
+| Pairing authority (6-digit code + link secret, one durable record) | `lib/desktop/pairing.py`, `contracts/desktop_node_registry_v1.schema.json` |
+| Home node registry: pending/active, confirmation, credential binding, conflicts, revocation | `lib/desktop/node_registry.py`, poll gate `routes/desktop.py::_node_admission` |
 | Node runtime (bridge loop, command execution) | `lib/desktop_agent/` |
 | Node links: one loop per joined server + local server | `lib/desktop_agent/links.py` |
 | Joining: redeem a pairing link, persist the attachment | `lib/desktop_agent/attachments.py`, `lib/desktop_agent/config.py` |
@@ -47,29 +48,104 @@ restart fails outstanding bridge calls honestly and durable jobs reconcile via t
 
 Problem: the node ID (`agent_id`) lived only in the agent config
 (`~/.tofu/desktop_agent.json`, or `TOFU_DESKTOP_CONFIG`). Hosts sharing one home
-directory (containers on a network home) read one file and presented one ID,
-so the server saw one node whose registry entry they overwrote poll by poll,
-and an addressed command reached whichever twin polled first.
+directory (containers on a network home) read one file and presented one ID
+and one credential, so the server saw one node whose registry entry they
+overwrote poll by poll, and an addressed command reached whichever twin polled
+first.
 
-Decision: the config keeps one ID per host in `agent_ids`, keyed by
-`host_identity.host_key()`: a digest of the platform machine identifier
-(`/etc/machine-id`, macOS `IOPlatformUUID`, Windows `MachineGuid`), plus the
-hostname on Linux because containers built from one image share
-`/etc/machine-id`. Renaming a Mac or Windows computer keeps its ID; renaming a
-Linux host (or recreating a container) yields a new node ID. Only digests are
-stored. Migration: the legacy single `agent_id` goes to the first host that
-starts with the new build and stays in the file for older builds; a second
-host that shared it gets a fresh ID. Pairing credentials are not bound to the
-node ID, so every host keeps polling with the shared attachment; removing one
-of them through its credential (`disconnect_credential`) still drops every
-node on that credential.
+Decision: `config.node_identity()` resolves this host's slot in one locked
+config transaction. The slot key is `host_identity.host_key()`: a digest of the
+platform machine identifier (`/etc/machine-id`, macOS `IOPlatformUUID`,
+Windows `MachineGuid`), on Linux plus the hostname (containers of one image
+share `/etc/machine-id`), plus the container ID when the process runs in one
+(twins on a host network namespace share even the hostname; outside a
+container the key is unchanged). Each slot holds the node ID (`agent_ids`),
+digests of those facts (`host_facts`) and its own joined servers
+(`host_attachments`; the host owning the legacy `agent_id` keeps the top-level
+`attachments` older builds read), so twins never share a credential. Only
+digests are stored.
+
+- The same container under a new hostname keeps its node and attachments.
+- A recreated container or a renamed bare Linux host gets a new node ID and
+  records the most similar known slot as its `predecessor`; its next pairing
+  sends `previous_node_id`, so the Home shows a re-pair of a known device and
+  confirming it forgets the old node (unless that node is online: then they
+  are twins and both stay).
+- Migration: the legacy single `agent_id` goes to the first host that starts
+  and stays in the file; a phase-0 slot keyed without the container ID is
+  claimed by the first container that matches it.
 
 Alternatives considered: a host-local file outside the home (`/etc`,
 `/var/lib`) is not writable by an unprivileged node and `/tmp` does not survive
-a container restart; server-side conflict detection by per-boot nonce needs a
-wire change and cannot tell which twin keeps the ID (still the remedy for a
-config file copied between machines, together with device-held keys in
-[the multi-device design](../MULTI_DEVICE_NETWORK_DESIGN.md#7-identity-trust-and-pairing)).
+a container restart; namespace inode numbers change on every container start;
+trusting the hostname alone merges twins on a host network. Twins identical in
+every fact are caught by the Home's boot check below.
+
+### Node registry, confirmation and trust
+
+Problem: a redeemed pairing link minted a working credential at once (a leaked
+link silently added a machine), pairing codes lived in one process's memory
+(a Home restart killed every link the owner had just copied, and the execution
+host could not see them), and the Home's only record of a node was the poll
+registry, which forgets an offline node and lets any holder of a credential
+poll under any node ID.
+
+Decision (design §7, owner decision 5 "confirm on join", 2026-11-17): the Home
+keeps a durable node registry in its selected storage authority
+(`lib/desktop/node_registry.py`, `contracts/desktop_node_registry_v1.schema.json`).
+
+- **Pairing is durable and one-shot.** `mint_pairing` stores one record per
+  pairing with absolute expiry and digests of the 6-digit code and link secret;
+  redemption claims it by one CAS (`open`→`redeemed`), so concurrent or replayed
+  redemptions yield one credential, and a link survives a Home restart without
+  outliving its five minutes. `pending` in the pair-code answer lists open
+  pairings without secrets; `command` is the one-line headless join
+  (`python -m lib.desktop_agent --join '<link>'`); `<url> <code>` joins too.
+- **Confirm on join.** Redemption (which requires the node's ID and `kind`:
+  `server` from `--join`, `computer` from the app) mints a credential tagged
+  `origin: desktop_pairing` and records a *pending* node with a fingerprint
+  (`XXXX-XXXX` over node ID and credential ID) that both ends show. A pending
+  node's polls get `node.state = pending_confirmation`, no commands, and it is
+  never registered with the bridge, so nothing can address it; the poll is held
+  until the owner confirms or rejects (`POST /api/v1/desktop/nodes/<id>/confirm`
+  `{name?}`, `/reject`). Re-pairing an active node ID is a pending
+  *replacement*: the old credential keeps working until confirm (revokes it)
+  or reject (revokes the new one).
+- **Credentials are bound to one node.** The poll gate (`routes/desktop.py`
+  `_node_admission`) admits only an active record bound to the presented
+  credential. Another node ID presenting it (a copied config) is refused with
+  409 `desktop_node_identity_conflict` (`credential_reused`); a credential
+  presenting another node's ID, `node_id_taken`; two live processes of one ID
+  (per-process `boot_id` in the frame: an earlier boot polling after a newer
+  one), `duplicate_boot` — a restart, whose old boot is silent, never is. The
+  record shows the conflict (`state: conflict`) until the owner confirms.
+  A pairing-issued credential without a record is `desktop_node_unregistered`.
+  Legacy credentials (minted before the registry or by the owner's
+  `POST /api/v1/desktop/token`) are adopted as active on their first poll.
+- **Revocation is one path.** `NodeRegistry.forget` (DELETE node, reject,
+  token revocation via `forget_credential`) revokes every credential of the
+  node, disconnects it and deletes the record; a node removed while offline
+  is refused on its next poll; it also drops the node's Home ceiling and
+  default marks (see "Device routing and permissions").
+- **Listing.** `GET /api/v1/desktop/nodes` lists registry records (online or
+  not) with `state`, `fingerprint`, `kind`, `paired_at`, `confirmed_at`,
+  `replacement_fingerprint`, `predecessor`, `conflict`, plus the latest admitted
+  poll's transport facts (`route`, `rtt_ms`, `running`; never stored). Every
+  registry change publishes the `devices.changed` wake hint.
+
+The node side stops a link Tofu refused for good: 401 (revoked) and 409
+conflict/unregistered end that link's loop (`stop_on_refusal`) and mark the
+attachment `revoked` / `conflict` (a refused `duplicate_boot` twin leaves the
+shared attachment active for the surviving process). Pending is a status line
+with the fingerprint, not an error.
+
+Alternatives considered: confirming by pairing with an already signed-in
+browser only (breaks headless joins, the main CodeLab/GPU case); storing codes
+in clear (a storage read would reveal live codes); keeping codes in memory and
+re-minting after restart (the copied link silently dies, and the execution
+host cannot see them); last-poller-wins on a reused credential (the silent
+alternation this replaces); device-held keys now (design §7 item 3, deferred:
+a wire change best made after confirmation exists).
 
 ## Command lifecycle
 
@@ -377,6 +453,14 @@ Run focused tests under `tests/desktop/`, desktop distribution and installer
 parity under `tests/desktop_dist/`, remote worktree routing under `tests/tasks_pkg/`
 and `tests/tools/`, and asynchronous polling under `tests/browser/`. Device waits:
 `tests/desktop/test_device_waits.py` and `tests/api/test_api_v4_device_waits.py`.
+Node registry and trust: `tests/desktop/test_desktop_node_registry.py`;
+host-scoped identity: `tests/desktop/test_desktop_node_host_identity.py`,
+`tests/desktop/test_desktop_node_identity.py`. Real-process faults (Home
+restart mid-command, execution host killed, node killed and re-joined,
+partition and heal through a proxy edge, duplicate process, twins on one home,
+recreated container, revoked reconnect, and the routing hooks: revoked default,
+offline ceiling, re-pair keeping policy): `tests/chaos/test_chaos_nodes.py`
+(`make test-chaos`).
 
 Hope large-checkpoint publication is owned by the private environment provider's
 [Worker result publication contract](../../bundles/yourprovider/environment-provider/README.md#worker-result-publication).
@@ -513,8 +597,20 @@ Decision:
   (`computer` for desktop tools, `browser` for unpinned browser tools in
   `lib/browser/dispatch.py`), else on the only online device, else is refused
   (`device_ambiguous`, `device_none`). An offline default is refused, never
-  replaced. Kinds: `computer`, `server` (headless node, `NodeKind` in the
-  node registry or the poll frame's optional `kind`), `browser`.
+  replaced. Kinds: `computer`, `server` (headless node), `browser`. A node's
+  kind is the Home registry's (`NodeKind`, declared at pairing and confirmed
+  by the owner): the poll gate writes it into the admitted frame, so the
+  frame's own optional `kind` never overrides it.
+- Identity at the routing boundary: the policy routes find a device among the
+  live bridge agents and the active records of the node registry, so the owner
+  can set an offline or just-confirmed node's ceiling and default. Removing a
+  node (DELETE, reject, token revocation: `NodeRegistry.forget`) also drops
+  its ceiling and default marks (`device_policy.forget_node`), so it leaves
+  placement; a confirmed re-pair of a known device under a new node ID
+  (`predecessor`) moves both to the new ID (`device_policy.transfer_node`),
+  while a re-pair under the same ID keeps them unchanged. These registry
+  transitions send the same `device_policy_reconcile` as the policy routes.
+  `GET /api/v4/desktop/nodes` reports `tiers` as the effective intersection.
 - Permissions (`lib/desktop/device_policy.py`): one owner-scoped record in
   portable record CAS (`desktop.device_policy.v1`) holds per-node ceilings and
   per-kind defaults; its version is the `rev`. A node without a stored ceiling
@@ -529,7 +625,7 @@ Decision:
   `PUT /api/v4/devices/defaults` commit the record, drop the API process's
   cached copy, then send the owner command control `device_policy_reconcile`
   (`contracts/command_control_v1.json`), which the execution incarnation
-  repeats on every execution shard (the `mcp_reconcile` path), and publish
+  repeats on every execution shard, and publish
   `devices.changed`. Enforcement runs in the bridge owner (the API process,
   phase 0 relay), so a running Turn's next command already sees the change;
   the reconcile keeps placement defaults and the environment listing current

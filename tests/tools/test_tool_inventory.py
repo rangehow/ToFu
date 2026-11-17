@@ -260,23 +260,19 @@ def test_connected_inline_mcp_tool_is_listed_once(monkeypatch):
     class _Bridge:
         connected = True
         server_count = 1
-        _lock = threading.RLock()
-        _tool_index = {
-            'mcp__wiki__search': {
+
+        def tool_index_rows(self):
+            return [('mcp__wiki__search', {
                 'server_name': 'wiki',
                 'tool_name': 'search',
                 'openai_def': schema,
-            },
-        }
+            }, False)]
 
         def get_openai_tool_defs(self):
             return [schema]
 
         def get_tool_safety(self):
             return {'mcp__wiki__search': True}
-
-        def _disabled_tools_for(self, _server):
-            return set()
 
         def list_servers(self):
             return [{'name': 'wiki', 'tools_count': 1}]

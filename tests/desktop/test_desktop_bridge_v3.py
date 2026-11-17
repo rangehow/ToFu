@@ -227,6 +227,10 @@ def test_poll_negotiation_emits_valid_wire_and_updates_owner_registration(queue,
     from quart import Quart
     from routes import desktop
     monkeypatch.setattr(desktop, '_resolve_bridge_caller', lambda kind: (True, 'owner', 'key'))
+    # The node-registry trust gate has its own specs (test_desktop_node_registry.py).
+    async def admitted(*args, **kwargs):
+        return None
+    monkeypatch.setattr(desktop, '_node_admission', admitted)
     monkeypatch.setattr(desktop, 'register_agent', queue.register_agent)
     monkeypatch.setattr(desktop, 'resolve_results', queue.resolve_results)
     monkeypatch.setattr(desktop, 'resolve_streams', queue.resolve_streams)

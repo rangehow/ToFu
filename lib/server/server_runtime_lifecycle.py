@@ -63,11 +63,9 @@ def register_runtime_lifecycle(
     # the checkout under it.
     boot_identity.capture_code_fingerprint()
     existing_event = app.extensions.get('tofu_shutdown_requested')
-    if shutdown_requested is None and existing_event is None:
-        # The serving loop awaits ShutdownRequest.wait_async (wait_for_shutdown_trigger).
-        from lib.server.server_shutdown import ShutdownRequest
-        existing_event = ShutdownRequest()
-    stop_event = shutdown_requested or existing_event
+    from lib.server.server_shutdown import ShutdownRequest
+    # Awaitable by the serving loop (wait_for_shutdown_trigger), like server.py's.
+    stop_event = shutdown_requested or existing_event or ShutdownRequest()
     runtime_host, runtime_port = resolve_runtime_endpoint(
         host=host, port=port, environ=environ)
 

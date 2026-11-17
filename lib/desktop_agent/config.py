@@ -19,8 +19,18 @@ _DEFAULT_CONFIG = {
     # older builds that read only this field.
     'agent_id': '',
     # {host_key: node id} (lib/desktop_agent/host_identity.py): hosts sharing
-    # this file (one network home) keep distinct node ids. _run._ensure_agent_id.
+    # this file (one network home) keep distinct node ids. ``node_identity``.
     'agent_ids': {},
+    # {host_key: {machine, hostname, container}} digests, to recognize a host
+    # whose key changed (rename, recreated container).
+    'host_facts': {},
+    # {host_key: node id} the node replaced on this host; sent once when it
+    # pairs so the Home shows a re-pair of a known device.
+    'predecessors': {},
+    # {host_key: [Attachment]}: joined servers of every host except the one
+    # owning the legacy ``agent_id`` (which keeps ``attachments``), so twins
+    # on one shared file never share a credential.
+    'host_attachments': {},
     # RWA P1: [{name, path}] — the agent's declared project worktrees;
     # project_* commands are confined to these roots (constraint ⑤).
     'share_roots': [],
@@ -39,32 +49,155 @@ _DEFAULT_CONFIG = {
 }
 
 
-def attachments():
-    """The joined servers, migrating a legacy single attachment once."""
-    from lib.desktop_wire.node_protocol import migrate_attachments
-    cfg = load_config()
-    probe = copy.deepcopy(cfg)
-    if migrate_attachments(probe):
-        def _mutate(current):
-            return current if migrate_attachments(current) else None
-        cfg = _update_config(_mutate) or load_config()
-    return [dict(a) for a in cfg.get('attachments') or [] if isinstance(a, dict)]
+def _resolve_identity(cfg, host, facts, phase0):
+    """Resolve this host's node id inside one config transaction.
+
+    Returns ``(node_id, changed)``. In order: the host's own entry; the entry
+    of a build that keyed this host without its container ID (claimed by the
+    first such host: twins on one host network both matched it); the legacy
+    single ``agent_id`` (first host claims it); the same container under a new
+    hostname (the same device: it keeps its node and attachments); otherwise
+    a new node id that records the most similar known host as its predecessor.
+    """
+    import uuid
+    ids = dict(cfg.get('agent_ids') or {})
+    known = dict(cfg.get('host_facts') or {})
+    slots = dict(cfg.get('host_attachments') or {})
+    predecessors = dict(cfg.get('predecessors') or {})
+    legacy = str(cfg.get('agent_id') or '').strip()
+    changed = False
+
+    def move(old):
+        ids[host] = ids.pop(old)
+        if old in slots:
+            slots[host] = slots.pop(old)
+        known.pop(old, None)
+
+    if ids.get(host):
+        node_id = ids[host]
+    elif phase0 != host and ids.get(phase0) and phase0 not in known:
+        move(phase0)
+        node_id, changed = ids[host], True
+    elif legacy and legacy not in ids.values():
+        ids[host] = node_id = legacy
+        changed = True
+    else:
+        renamed = [k for k, f in known.items() if facts['container'] and k in ids
+                   and f.get('container') == facts['container']
+                   and f.get('machine') == facts['machine']]
+        if renamed:
+            move(renamed[0])
+            node_id = ids[host]
+        else:
+            similar = [k for k, f in known.items() if k in ids and facts['machine']
+                       and f.get('machine') == facts['machine']]
+            similar.sort(key=lambda k: known[k].get('hostname') != facts['hostname'])
+            node_id = ids[host] = uuid.uuid4().hex
+            if similar:
+                predecessors[host] = ids[similar[0]]
+        changed = True
+    if known.get(host) != facts:
+        known[host] = dict(facts)
+        changed = True
+    if not legacy:
+        cfg['agent_id'] = node_id
+        changed = True
+    if changed:
+        cfg.update(agent_ids=ids, host_facts=known, host_attachments=slots,
+                   predecessors=predecessors)
+    return node_id, changed
 
 
-def save_attachment(record):
-    """Insert or replace one attachment by ``id`` (atomic, private file)."""
-    from lib.desktop_wire.node_protocol import migrate_attachments
-    record = dict(record)
+def _host():
+    from lib.desktop_agent import host_identity
+    return (host_identity.host_key(), host_identity.host_facts(),
+            host_identity.phase0_host_key())
+
+
+def node_identity():
+    """``{'node_id', 'predecessor'}`` of this host, resolved and persisted atomically."""
+    host, facts, phase0 = _host()
+    outcome = {}
 
     def _mutate(cfg):
-        migrate_attachments(cfg)
-        rows = [a for a in cfg.get('attachments') or []
-                if isinstance(a, dict) and a.get('id') != record['id']]
-        rows.append(record)
-        cfg['attachments'] = rows
+        node_id, changed = _resolve_identity(cfg, host, facts, phase0)
+        outcome.update(node_id=node_id,
+                       predecessor=(cfg.get('predecessors') or {}).get(host) or None)
+        return cfg if changed else None
+
+    _update_config(_mutate)
+    return outcome
+
+
+def clear_predecessor():
+    """The Home recorded the re-pair; later pairings of this host name no predecessor."""
+    host = _host()[0]
+
+    def _mutate(cfg):
+        predecessors = dict(cfg.get('predecessors') or {})
+        if predecessors.pop(host, None) is None:
+            return None
+        cfg['predecessors'] = predecessors
         return cfg
 
     _update_config(_mutate)
+
+
+def _host_rows(cfg, host):
+    """This host's attachment list inside ``cfg`` (created when absent).
+
+    The host owning the legacy ``agent_id`` keeps the top-level list that
+    older builds read; every other host has its own list.
+    """
+    if (cfg.get('agent_ids') or {}).get(host) == cfg.get('agent_id'):
+        if not isinstance(cfg.get('attachments'), list):
+            cfg['attachments'] = []
+        return cfg['attachments']
+    slots = cfg.setdefault('host_attachments', {})
+    if not isinstance(slots.get(host), list):
+        slots[host] = []
+    return slots[host]
+
+
+def _attachment_transaction(change):
+    """Run ``change(rows) -> bool`` on this host's attachments in one transaction."""
+    from lib.desktop_wire.node_protocol import migrate_attachments
+    host, facts, phase0 = _host()
+
+    def _mutate(cfg):
+        _node_id, changed = _resolve_identity(cfg, host, facts, phase0)
+        legacy_owner = (cfg.get('agent_ids') or {}).get(host) == cfg.get('agent_id')
+        if legacy_owner:
+            changed = migrate_attachments(cfg) or changed
+        rows = _host_rows(cfg, host)
+        changed = change(rows) or changed
+        return cfg if changed else None
+
+    _update_config(_mutate)
+
+
+def attachments():
+    """This host's joined servers (resolving its identity and legacy migration once)."""
+    out = []
+
+    def change(rows):
+        out.extend(dict(a) for a in rows if isinstance(a, dict))
+        return False
+
+    _attachment_transaction(change)
+    return out
+
+
+def save_attachment(record):
+    """Insert or replace one attachment of this host by ``id`` (atomic, private file)."""
+    record = dict(record)
+
+    def change(rows):
+        rows[:] = [a for a in rows if isinstance(a, dict) and a.get('id') != record['id']]
+        rows.append(record)
+        return True
+
+    _attachment_transaction(change)
     return record
 
 
@@ -72,32 +205,31 @@ def update_attachment(attachment_id, **fields):
     """Change fields of one attachment; returns it, or None when absent."""
     found = {}
 
-    def _mutate(cfg):
-        for row in cfg.get('attachments') or []:
+    def change(rows):
+        for row in rows:
             if isinstance(row, dict) and row.get('id') == attachment_id:
                 row.update(fields)
                 found['row'] = dict(row)
-                return cfg
-        return None
+                return True
+        return False
 
-    _update_config(_mutate)
+    _attachment_transaction(change)
     return found.get('row')
 
 
 def remove_attachment(attachment_id):
-    """Forget one joined server; returns whether it existed."""
+    """Forget one joined server of this host; returns whether it existed."""
     found = {}
 
-    def _mutate(cfg):
-        rows = [a for a in cfg.get('attachments') or [] if isinstance(a, dict)]
-        kept = [a for a in rows if a.get('id') != attachment_id]
+    def change(rows):
+        kept = [a for a in rows if isinstance(a, dict) and a.get('id') != attachment_id]
         if len(kept) == len(rows):
-            return None
+            return False
+        rows[:] = kept
         found['removed'] = True
-        cfg['attachments'] = kept
-        return cfg
+        return True
 
-    _update_config(_mutate)
+    _attachment_transaction(change)
     return bool(found)
 
 

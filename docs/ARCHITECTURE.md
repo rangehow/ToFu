@@ -310,7 +310,8 @@ The delivery dependencies and completion evidence are:
    on-demand `execution_shard` processes (`serverctl_pkg/execution_shards.py`):
    same generation (its frozen pins, exported once), process-bound claims of
    the same durable jobs, one job per shard, command controls fanned out from
-   the host, idle retirement after `TOFU_EXECUTOR_IDLE_SECONDS`.
+   the host, MCP servers only in the host (shards relay, `lib/mcp/bridge_relay.py`),
+   idle retirement after `TOFU_EXECUTOR_IDLE_SECONDS`.
 4. **Execution facts and read projections.** Keep committed execution facts and
    their accounting authoritative while projection/delivery can drain and
    reconstruct independently. Browser observation, reconnect and transcript

@@ -22,6 +22,7 @@ import uuid
 
 import pytest
 
+from lib.server.server_reexec import ServerReexecOutcome
 from tests.channels.conftest import OWNER_UID
 from tests.support.dx_overlay import dx_test_module
 from tests.storage.test_native_project_dispatch import _git, native_dispatch_authority as native_dispatch_authority
@@ -233,7 +234,7 @@ def test_a_router_continuation_sends_restarts_and_forwards_for_the_owner(
     monkeypatch.setattr('lib.server.server_reexec.prepare_server_reexec_frontend',
                         lambda: performed.append('prepare') or '')
     monkeypatch.setattr('lib.server.server_reexec.perform_server_reexec',
-                        lambda reason, **kwargs: performed.append(('perform', reason)) or True)
+                        lambda reason, **kwargs: performed.append(('perform', reason)) or ServerReexecOutcome(True))
     no_grant = call('restart_server', reason=REASON, idempotency_key='r4-release', source_turn_id=owner_turn)
     assert no_grant['code'] == 'owner_delegation_not_granted' and no_grant['execution_started'] is False
     gate.set_delegation(owner, True, provenance={

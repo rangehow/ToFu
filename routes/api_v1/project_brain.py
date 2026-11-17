@@ -36,13 +36,19 @@ def _safe_route_error_response(exc: Exception):
         return api_error('forbidden', status=403)
     if isinstance(exc, ValueError):
         return api_bad_request(str(exc))
+    from lib.agent_core.storage_errors import describe_storage_failure
     from lib.storage import StorageError, http_status_for_storage_error
 
     from werkzeug.exceptions import HTTPException
     if isinstance(exc, HTTPException):
         return api_error(exc.description, status=exc.code or 500)
     if isinstance(exc, StorageError):
-        return api_error(exc, status=http_status_for_storage_error(exc))
+        status = http_status_for_storage_error(exc)
+        if status >= 500:
+            # The public 500 body is redacted; without this record the failure has no trace.
+            logger.error('[ProjectBrain.v1] storage failure answered %d: %s', status,
+                         describe_storage_failure(exc), exc_info=(type(exc), exc, exc.__traceback__))
+        return api_error(exc, status=status)
     logger.exception('[ProjectBrain.v1] request failed')
     return api_internal_error(
         exc, context='project:brain', source='routes.api_v1.project_brain',
@@ -136,6 +142,19 @@ def project_lead_deliverables_read():
         return api_ok(DeliverablesPage(_owner(), request.args.get('conversationId') or '').read(
             request.args.get('cursor') or None, project_path=str(path).strip(),
             task=request.args.get('task') or None))
+    except Exception as exc:
+        return _safe_route_error_response(exc)
+
+
+@api_v1_project_brain_bp.route('/api/v1/project/coordination/report-links', methods=['POST'])
+@require_scope('conversations')
+@api_meta(summary="Link a lead's earlier reports to its board tasks by title", tags=['project'], scope='conversations')
+def project_coordinator_report_links_write():
+    data = parse_body(exact=('path', 'conversationId', 'links'))
+    try:
+        from lib.conversations.coordinator_report_links import link_reports
+        return api_ok(link_reports(_owner(), _path(data.get('path')), str(data.get('conversationId') or ''),
+                                   data.get('links')))
     except Exception as exc:
         return _safe_route_error_response(exc)
 

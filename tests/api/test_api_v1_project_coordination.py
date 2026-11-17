@@ -174,6 +174,43 @@ def test_lead_deliverables_refuse_a_foreign_owner(flask_client, chat_sidecar, mo
     assert foreign.status_code == 403, foreign.get_json()
 
 
+def test_owner_links_earlier_reports_to_tasks_by_title(flask_client, chat_sidecar, monkeypatch):
+    """Owner request 2026-11-17: reports sent before tasks could be named are linked afterwards."""
+    from lib.conversations import lead_deliverables
+    from lib.conversations.coordinator_progress import CoordinatorTaskProgress
+    from lib.conversations.coordinator_reports import CoordinatorReports
+    from lib.conversations.project_coordination import ProjectCoordinationRepository
+    from routes.api_v1 import project_brain
+    monkeypatch.setattr(lead_deliverables, 'notify', lambda *args: None)
+    path = '/test/report-links-' + uuid.uuid4().hex
+    binding = ProjectCoordinationRepository(1).create(path, folder_id='test', expected_revision=0, command_id='create')
+    lead = binding['conversationId']
+    scope = {'owner': 1, 'projectPath': path, 'coordinatorId': lead, 'bindingRevision': binding['revision']}
+    CoordinatorTaskProgress(1, path).publish(scope, {'summary': 'Two.', 'tasks': [
+        {'title': 'Resume', 'status': 'completed', 'progress': 'Done.'}, {'title': 'Deck', 'status': 'in_progress'}]})
+    report = CoordinatorReports(1, path).publish(scope, {'title': 'Both', 'message': 'Old report.', 'kind': 'progress',
+                                                         'idempotency_key': 'old'})
+    endpoint = '/api/v4/project/coordination/report-links'
+    body = {'path': path, 'conversationId': lead,
+            'links': [{'turnId': report['turnId'], 'tasks': ['resume', 'Deck', 'Interview']},
+                      {'turnId': 'not-a-turn', 'tasks': ['Deck']}]}
+    response = flask_client.post(endpoint, json=body)
+    assert response.status_code == 200, response.get_json()
+    result = response.get_json()
+    assert [task['title'] for task in result['linked'][0]['tasks']] == ['Resume', 'Deck']
+    assert result['unlinked'] == [{'turnId': report['turnId'], 'tasks': ['Interview']},
+                                  {'turnId': 'not-a-turn', 'reason': 'not a report of this lead'}]
+    assert flask_client.post(endpoint, json=body).status_code == 200  # Idempotent.
+    page = flask_client.get('/api/v4/project/coordination/deliverables',
+                            query_string={'conversationId': lead, 'path': path}).get_json()
+    [item] = [item for item in page['items'] if item['kind'] == 'report']
+    assert [task['title'] for task in item['tasks']] == ['Resume', 'Deck']
+    assert flask_client.post(endpoint, json={**body, 'links': []}).status_code == 400
+    monkeypatch.setattr(project_brain, '_owner', lambda: 2)
+    foreign = flask_client.post(endpoint, json=body)
+    assert foreign.status_code == 403, foreign.get_json()
+
+
 def test_binding_schema_and_generated_dto_are_current():
     import json
     import subprocess

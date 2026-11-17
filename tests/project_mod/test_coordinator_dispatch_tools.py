@@ -342,39 +342,34 @@ def test_create_only_receipt_points_to_current_request_delegation(runtime):
     assert not r.calls and not r.c.repo.list()
 
 
-def test_a_report_names_its_board_task_or_is_refused_before_anything_is_published(runtime, reports, monkeypatch):
-    """Owner request 2026-11-17: the board expands each task to the reports that name it."""
-    from lib.artifacts import events
-    from lib.conversations import coordinator_progress, coordinator_reports
-    from lib.tools import rich_response
+def test_a_report_names_its_board_tasks_leniently_and_is_never_refused_for_them(runtime, reports, monkeypatch):
+    """Owner request 2026-11-17: naming tasks is optional; a mismatch leaves the report unlinked, never refused."""
+    from lib.conversations import coordinator_reports, coordinator_task_history
     r = runtime
     monkeypatch.setattr(coordinator_reports, 'CoordinatorReports', reports.factory)
-    published = []
-    monkeypatch.setattr(rich_response, 'publish_file_for_task', lambda *args: published.append(args) or {})
-    monkeypatch.setattr(events, 'emit_artifact_event', lambda task, artifact: None)
-    head = {'board': {'tasks': [{'title': 'Resume', 'status': 'in_progress'},
-                                {'title': 'Deck', 'status': 'pending'}]}, 'taskKeys': ['a' * 32, 'b' * 32]}
-    scope = {'owner': 7, 'projectPath': '/project', 'coordinatorId': 'coordinator', 'bindingRevision': 1}
+    known = [{'key': 'a' * 32, 'title': 'Polish the resume', 'formerTitles': ['Resume'], 'status': 'in_progress',
+              'onBoard': True, 'changedAt': 5},
+             {'key': 'b' * 32, 'title': 'Deck', 'status': 'completed', 'onBoard': False, 'changedAt': 3}]
 
-    class Progress:
+    class History:
         def __init__(self, owner, project):
             assert (owner, project) == (7, '/project')
 
-        def current(self):
-            return scope, {}, head
-    monkeypatch.setattr(coordinator_progress, 'CoordinatorTaskProgress', Progress)
+        def tasks(self, conversation_id):
+            assert conversation_id == 'coordinator'
+            return known
+    monkeypatch.setattr(coordinator_task_history, 'CoordinatorTaskHistory', History)
 
-    refused = r.call('report_to_user', **{**reports.request, 'idempotency_key': 'off-board',
-                                          'task': 'Interview', 'files': ['out/cv.pdf']})
-    assert 'Resume; Deck' in json.dumps(refused) and not reports.turns and not published
-
-    result = r.call('report_to_user', **{**reports.request, 'task': 'Deck'})
-    assert result['task'] == {'key': 'b' * 32, 'title': 'Deck'} and result['published']
+    result = r.call('report_to_user', **{**reports.request, 'tasks': ['Resume', '  deck ', 'Interview']})
+    # A former title, then case and spacing, find the task; an unknown title is reported, not refused.
+    assert result['published'] and result['tasks'] == [{'key': 'a' * 32, 'title': 'Polish the resume'},
+                                                       {'key': 'b' * 32, 'title': 'Deck'}]
+    assert result['unlinked_tasks'] == ['Interview'] and 'unlinked_note' in result
     [turn] = reports.turns.values()
-    assert 'task' not in turn['projection']  # The receipt names the task; the Turn stays the report text.
+    assert 'tasks' not in turn['projection']  # The receipt names the tasks; the Turn stays the report text.
 
-    # A head written before task history keys each title by its first identity.
-    from lib.conversations.coordinator_task_history import title_key
-    head.pop('taskKeys')
-    assert r.call('report_to_user', **{**reports.request, 'idempotency_key': 'legacy', 'task': 'Resume'}
-                  )['task'] == {'key': title_key('Resume'), 'title': 'Resume'}
+    def broken(self, conversation_id):
+        raise RuntimeError('storage down')
+    monkeypatch.setattr(History, 'tasks', broken)
+    fallback = r.call('report_to_user', **{**reports.request, 'idempotency_key': 'down', 'tasks': ['Deck']})
+    assert fallback['published'] and fallback['unlinked_tasks'] == ['Deck'] and 'tasks' not in fallback

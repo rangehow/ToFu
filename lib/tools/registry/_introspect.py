@@ -149,22 +149,17 @@ def _mcp_rows(owner_user_id) -> list[dict]:
             safety = bridge.get_tool_safety()
         except Exception as e:
             logger.debug('[ToolInventory] mcp safety map failed: %s', e)
-        with bridge._lock:
-            index_items = sorted(bridge._tool_index.items())
-            for ns, info in index_items:
-                server = info.get('server_name', '')
-                tool_name = info.get('tool_name', '')
-                disabled = tool_name in bridge._disabled_tools_for(server)
-                odef = info.get('openai_def') or {}
-                rows.append({
-                    'name': ns,
-                    'description': _schema_description(odef)[:300],
-                    'required': _required_params(odef),
-                    'write': not safety.get(ns, False),
-                    'handler': True,
-                    'enabled': not disabled,
-                    'server': server,
-                })
+        for ns, info, disabled in bridge.tool_index_rows():
+            odef = info.get('openai_def') or {}
+            rows.append({
+                'name': ns,
+                'description': _schema_description(odef)[:300],
+                'required': _required_params(odef),
+                'write': not safety.get(ns, False),
+                'handler': True,
+                'enabled': not disabled,
+                'server': info.get('server_name', ''),
+            })
     except Exception as e:
         logger.debug('[ToolInventory] MCP enumeration failed: %s', e)
     return rows

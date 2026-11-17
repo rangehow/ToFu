@@ -122,7 +122,10 @@ the job itself. An idle shard retires itself after the existing evict-only
 `TOFU_EXECUTOR_IDLE_SECONDS`, so idle RSS returns to the single host. Measured
 on 2026-11-17: a shard is ready about 5 s after demand and holds about 210-230 MB
 while serving; 20 concurrent sessions ran 20 processes for the retention window
-(docs/HARNESS_PERFORMANCE.md, "Execution shards").
+(docs/HARNESS_PERFORMANCE.md, "Execution shards"). A shard starts no MCP
+server: it relays to the execution host's (docs/modules/tools_execution.md,
+"MCP servers run once per execution plane"). Measured 2026-11-18 with 7
+servers and 19 shards: 219 -> 19 MCP processes, 16.4 -> 4.5 GB instance RSS.
 
 **Alternatives rejected.**
 

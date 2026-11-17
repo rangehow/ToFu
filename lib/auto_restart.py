@@ -118,7 +118,7 @@ def poll_once(state: dict, *, shutdown_requested=None, is_repo=None,
     if do_restart is None:
         def do_restart(reason):
             from lib.server.server_reexec import perform_server_reexec
-            return perform_server_reexec(reason)
+            return perform_server_reexec(reason).handed_over
     try:
         if not is_repo():
             return 'no-repo'

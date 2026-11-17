@@ -108,7 +108,9 @@ def test_content_preview_of_non_text_content_is_null(storage, monkeypatch):
     assert preview['contentPreview'] is None
 
 
-@pytest.mark.parametrize('response', [{'turnId': 'turn'}, {'turnId': 'turn', 'contentPreview': 'x' * 9},
+# An absent contentPreview is a pre-preview engine, answered by the fallback
+# (test_turn_preview_pre_preview_engine.py); a present one must be bounded.
+@pytest.mark.parametrize('response', [{'turnId': 'turn', 'contentPreview': 'x' * 9},
                                       {'turnId': 'turn', 'contentPreview': {'content': 'x'}}])
 def test_content_preview_response_is_bounded_and_present(monkeypatch, response):
     reads = []

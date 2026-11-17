@@ -19,6 +19,7 @@ from lib.identity import PrincipalContext
 from lib.lifecycle_approval import DelegationRefused
 from lib.router import forwarding
 from lib.router.instructions import RouterInstructions
+from lib.server.server_reexec import ServerReexecOutcome
 from tests.router.test_standing_instructions import INSTRUCTION, OWNER, r as standing
 
 __all__ = ('standing',)
@@ -76,7 +77,7 @@ def d(standing, approvals, monkeypatch):
 
     def perform(reason, **kwargs):
         s.events.append(('perform', reason, kwargs))
-        return True
+        return ServerReexecOutcome(True)
     monkeypatch.setattr('lib.server.server_reexec.perform_server_reexec', perform)
 
     def human_gate(*args, **kwargs):  # the owner's own approval prompts are never touched

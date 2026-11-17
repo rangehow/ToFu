@@ -207,6 +207,11 @@ class RelayServer:
     def close(self, timeout: float | None = None) -> bool:
         self._closing.set()
         if self._listener is not None:
+            # close() alone does not wake a thread blocked in accept() on Linux.
+            try:
+                self._listener.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
             try:
                 self._listener.close()
             except OSError:
@@ -236,10 +241,11 @@ class RelayClient:
     """Forwards one bridge verb per connection to the published bridge owner."""
 
     def __init__(self, path: Path, *, format: str, name: str,
-                 cancel_observation_seconds: float):
+                 cancel_observation_seconds: float, owner_label: str = 'API process'):
         self._path = Path(path)
         self._format = format
         self._name = name
+        self._owner_label = owner_label
         self._cancel_observation_seconds = cancel_observation_seconds
 
     def _endpoint(self) -> dict:
@@ -247,7 +253,7 @@ class RelayClient:
             record = json.loads(self._path.read_text(encoding='utf-8'))
         except FileNotFoundError as exc:
             raise RelayUnavailable(
-                f'The {self._name} owner (API process) has not published its relay') from exc
+                f'The {self._name} owner ({self._owner_label}) has not published its relay') from exc
         except (OSError, ValueError) as exc:
             raise RelayUnavailable(f'The {self._name} relay record is unreadable') from exc
         if (not isinstance(record, dict) or record.get('format') != self._format
@@ -285,7 +291,7 @@ class RelayClient:
             return _CANCELLED
         except (OSError, ValueError, TypeError, struct.error) as exc:
             raise RelayUnavailable(
-                f'The {self._name} owner (API process) is unreachable: {type(exc).__name__}'
+                f'The {self._name} owner ({self._owner_label}) is unreachable: {type(exc).__name__}'
             ) from exc
         if (not isinstance(response, dict) or response.get('format') != self._format
                 or response.get('error') is not None):
@@ -298,15 +304,22 @@ class RelayClient:
 class OwnerSelection:
     """One bridge's owner choice for this process, from its process role.
 
-    ``api`` publishes the relay for the bridge it owns; ``execution`` and its
-    shards forward to it; ``all`` (and embedders) keep the local in-process owner.
+    By default ``api`` publishes the relay for the bridge it owns; ``execution``
+    and its shards forward to it; every other role (``all``, embedders) keeps
+    the local in-process owner. A bridge owned elsewhere names its own
+    ``owner_role`` and ``relay_roles`` (the MCP bridge: the execution host owns,
+    its shards relay, ``lib/mcp/bridge_relay.py``).
     """
 
-    def __init__(self, *, name: str, record_path, make_server, make_client):
+    def __init__(self, *, name: str, record_path, make_server, make_client,
+                 owner_role: str = 'api',
+                 relay_roles: tuple[str, ...] = ('execution', 'execution_shard')):
         self._name = name
         self._record_path = record_path
         self._make_server = make_server
         self._make_client = make_client
+        self._owner_role = owner_role
+        self._relay_roles = relay_roles
         self._lock = threading.Lock()
         self._client = None
         self._server = None
@@ -317,18 +330,18 @@ class OwnerSelection:
     def configure(self, *, process_role: str, environ) -> str:
         project = (environ.get('TOFU_PROJECT_PATH') or '').strip()
         with self._lock:
-            if process_role == 'api':
+            if process_role == self._owner_role:
                 if not project:
-                    raise RuntimeError(f'A separate API needs its explicit project to publish '
-                                       f'the {self._name} relay')
+                    raise RuntimeError(f'The {self._name} owner ({process_role}) needs its '
+                                       f'explicit project to publish its relay')
                 if self._server is None:
                     server = self._make_server(self._record_path(project))
                     server.start()
                     self._server = server
                 return 'owner'
-            if process_role in ('execution', 'execution_shard'):
+            if process_role in self._relay_roles:
                 if not project:
-                    raise RuntimeError(f'Resident execution needs its explicit project to '
+                    raise RuntimeError(f'A {process_role} process needs its explicit project to '
                                        f'reach the {self._name} owner')
                 self._client = self._make_client(self._record_path(project))
                 return 'relay'

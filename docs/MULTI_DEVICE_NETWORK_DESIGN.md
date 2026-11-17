@@ -1,10 +1,11 @@
 # Multi-device network design: one Home, equal nodes
 
 Status: **proposal, awaiting owner decisions** (section 11), written
-2026-11-17. The owner accepted all eight defaults (2026-11-17). Device
-routing and permissions (decisions 6 and 7) are implemented; their current
-behavior lives in [remote execution](modules/remote_execution.md#device-routing-and-permissions).
-Phase 0 (section 10) is done. The running node model
+2026-11-17. The owner accepted the design and all eight defaults (2026-11-17).
+Device routing and permissions (decisions 6 and 7) are implemented; their
+current behavior lives in [remote execution](modules/remote_execution.md#device-routing-and-permissions).
+Phase 0 and the identity/pairing/trust half of phase 3 (section 10) are done;
+see [node registry](modules/remote_execution.md#node-registry-confirmation-and-trust). The running node model
 is described in [remote execution](modules/remote_execution.md#nodes-and-pairing);
 when a phase below lands, its behavior moves into that authority and this
 proposal shrinks accordingly.
@@ -338,7 +339,7 @@ What happens when any node disappears:
 | **The browser extension** (worker terminated, browser closed) | Browser tools fail with typed `browser_extension_disconnected`; a pinned device never falls back to another one. | Extension poll resumes; tools wait ≤15 s for a route before enqueue (existing). |
 | **The SSO page used as relay** closed | Nodes behind that edge go offline (their only route was the page). | Shown explicitly as route "browser relay — needs an open Tofu tab"; phase 4 removes the dependency where an internal route exists. |
 | **A phone / client** | Nothing changes on the Home. | Reconnects to the projection. |
-| **Two hosts presenting one node ID** | Today: they overwrite each other's registry entry (silent). Proposed: the Home flags "identity conflict" and refuses the second until one is re-paired (phase 0). | Re-pair one host. |
+| **Two hosts presenting one node ID** | Shared home: distinct IDs and credentials per host (phase 0/3). Identical twins or a copied config: the Home refuses the earlier boot / the foreign node ID with `desktop_node_identity_conflict`, flags the node, and the refused process stops its link. | Re-pair one host; confirm clears the flag. |
 
 There is no "secondary takes over" anywhere. That is the point: by keeping
 state in exactly one place per conversation and making execution stateless
@@ -385,14 +386,16 @@ Proposed additions, in order of value:
    where containers of one image share `/etc/machine-id`), so hosts sharing
    one home get distinct IDs and an existing node keeps its own
    ([remote execution](modules/remote_execution.md#one-node-id-per-host)).
-   **Collision detection** (deferred to phase 3): the Home would record a
-   per-process boot nonce sent as a new optional poll-frame field and mark an
-   ID with two live nonces "identity conflict". It remains the remedy for a
-   config file copied between machines; it needs a wire change and cannot pick
-   which twin keeps the ID, so phase 0 removed the shared-home cause instead.
-2. **Confirm on join** (owner decision 5). Redeeming a link creates a *pending*
-   node that the owner confirms on the Devices page (name, OS, route,
-   a short fingerprint shown on both sides). A leaked link then cannot
+   **Done in phase 3:** the key also covers the container ID (twins on a host
+   network share the hostname), each host slot keeps its own credentials, a
+   recreated host names its predecessor so its re-pair replaces it, and the
+   Home binds every credential to one node ID and refuses a second live
+   process of one ID by its per-process boot ID ("identity conflict")
+   ([node registry](modules/remote_execution.md#node-registry-confirmation-and-trust)).
+2. **Confirm on join** (owner decision 5; **done**). Redeeming a link creates a
+   *pending* node that the owner confirms on the Devices page (name, OS, route,
+   a short fingerprint shown on both sides); pairings are durable across Home
+   restarts. A leaked link then cannot
    silently add a machine. VS Code Tunnels and Claude Code Trusted Devices
    both bind devices to the owner's account sign-in for the same reason.
 3. **Device-held key** (deferred). Bind the credential to a key generated on
@@ -477,7 +480,7 @@ Each phase is independently shippable and keeps all current contracts.
 | **0. Fix the substrate — done 2026-11-17** | (a) Relay the desktop bridge from the execution host to the API host's owner over the transport shared with the browser relay (`lib/runtime/loopback_relay.py`; one owner, loopback relay, per-incarnation token). (b) Host-scoped node ID (one ID per host in the shared config; the legacy ID stays with the first host). Boot-nonce collision detection moved to phase 3. | `lib/desktop/bridge.py`, `lib/desktop/bridge_relay.py`; `lib/desktop_agent/host_identity.py`, `config.py`, `_run.py` | Met: `tests/desktop/test_desktop_bridge_relay.py` lists a node from a separate owner process and round-trips a command through the desktop tool handler; `tests/desktop/test_desktop_node_identity.py` gives two hosts sharing one `desktop_agent.json` distinct stable IDs and keeps a paired node's ID |
 | **1. One device projection** | `GET /api/v1/devices`: self node, desktop/headless nodes, browser extensions, signed-in clients, each with kind, status, route, version, effective tiers. Read-only projection over existing registries. | `routes/api_v1/`, `contracts/` (new `devices_v1` schema) | contract test; owner isolation; no stored liveness |
 | **2. Devices page + wizard** | Top-level page, sidebar pill, add-device wizard over the existing pair-code API, device drawer, `page:devices` jump target; Settings → Devices links to it. Computer control returns to the frontend here. | `frontend/src/features/devices/`, `ui-nav.ts` | browser test of pairing a headless node end to end; i18n |
-| **3. Capability ceiling + confirm on join** | Durable owner-scoped Home ceiling per node; enqueue checks ceiling ∩ declared; `--allow` for headless join; pending state + confirmation; boot-nonce identity-conflict flag (section 7). | `lib/desktop/pairing.py`, `bridge._tier_enqueue_error`, storage domain, `node_protocol.py` | both ends refuse; ceiling never raises a device tier |
+| **3. Capability ceiling + confirm on join** | Durable owner-scoped Home ceiling per node; enqueue checks ceiling ∩ declared; `--allow` for headless join; pending state + confirmation; boot-nonce identity-conflict flag (section 7). **Trust half done 2026-11-17:** durable one-shot pairings, pending → confirm/reject, credential bound to one node ID, `credential_reused` / `node_id_taken` / `duplicate_boot` conflicts, replacement and predecessor re-pairs, one revocation path, nodes stop links Tofu refused (`contracts/desktop_node_registry_v1.schema.json`). Ceiling: done by the routing/permissions owner (`lib/desktop/device_policy.py`). | `lib/desktop/pairing.py`, `lib/desktop/node_registry.py`, `routes/desktop.py`, `node_protocol.py`; ceiling: `bridge._tier_enqueue_error`, storage domain | Trust half met: `tests/desktop/test_desktop_node_registry.py`, `tests/desktop/test_desktop_node_host_identity.py`, real-process `tests/chaos/test_chaos_nodes.py`. Ceiling: both ends refuse; ceiling never raises a device tier |
 | **4. Routing by tag / default; route health shown** | `tag:` selector and owner default; per-node route kind and latest round trip in the projection; `via` internal address advertised for container joins. | `resolve_device_target`, desktop tool schemas, pairing link builder | selection tests for ambiguity/any/default |
 | **5. Multi-Home switcher** | Web UI lists the owner's Homes (like Android kernels) and switches origin; no sync. "Move this Home" links to `migrate_host`. | frontend shell; `docs/ANDROID_KERNELS.md` vocabulary | — |
 | Deferred | Device-held keys; Home-to-Home relay (federation); phones as executors of another Home. | — | only on owner request |

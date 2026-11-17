@@ -35,7 +35,7 @@ from lib.swarm.integration import _active_sessions, _session_timestamps, _sessio
 from lib.tasks_pkg.command_control_transport import CommandControlServer
 from lib.tasks_pkg.command_controls import apply_command_control
 
-receipts.snapshot_receipts = lambda session, agents, specs: {{'messageReceipts': []}}
+receipts.resident_snapshot = lambda session, agents, specs: {{'messageReceipts': []}}
 
 
 class Session:

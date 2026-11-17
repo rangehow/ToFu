@@ -26,7 +26,8 @@ from serverctl_pkg import engine_certification as certification
 from serverctl_pkg import engine_precertify as precertify
 from serverctl_pkg import native_engine as engines
 from tests.server.test_engine_certification_gate import (  # noqa: F401  (project is a fixture)
-    _gate, _git, _ir_only_change_after_deployment, certify, project, subprocess_head)
+    _gate, _git, _ir_only_change_after_deployment, certify, change_engine_source, deploy, project,
+    subprocess_head)
 from tests.server.test_native_engine_update import binary
 
 pytestmark = pytest.mark.unit
@@ -40,6 +41,28 @@ def landed(project, monkeypatch):  # noqa: F811
     return project
 
 
+@pytest.fixture
+def kept(project, monkeypatch):  # noqa: F811
+    """An engine-only change landed (2026-11-17, dc9f47374c): the contract is unchanged, so a restart keeps the old engine."""
+    (project / '.gitignore').write_text('packages/tofu-db/target/\nstaging/\ndata/\nlogs/\n')
+    _git(project, 'init', '-q')
+    _git(project, 'add', '-A')
+    _git(project, 'commit', '-q', '-m', 'deployed generation')
+    contract = engines.storage_contract_sha256(project)
+    dest = deploy(project, binary(project / 'staging/old/tofu-db', engines.source_fingerprint(project)),
+                  contract=contract)
+    change_engine_source(project, 'page oversized search item records')
+    _git(project, 'commit', '-q', '-am', 'engine-only fix')
+    assert engines.storage_contract_sha256(project) == contract
+    authority = project / 'data/tofudb-authority'
+    (authority / 'payload-segments').mkdir(parents=True)
+    (authority / 'CONTROL').write_text('control')
+    monkeypatch.setenv('TOFUDB_BIN', str(dest))
+    monkeypatch.delenv('TOFU_PERSONAL_STORAGE_BACKEND', raising=False)
+    monkeypatch.delenv('TOFUDB_EXPECTED_SHA256', raising=False)
+    return project
+
+
 def _publish_heads_record(root: Path) -> None:
     _gate(root, [])(root, '', None, None)
 
@@ -48,6 +71,24 @@ def test_a_landed_engine_change_is_pending(landed):
     pending = precertify.pending_certification(landed)
     assert pending == {'commit': subprocess_head(landed), 'sourceSha256': engines.source_fingerprint(landed),
                        'contractSha256': engines.storage_contract_sha256(landed)}
+
+
+def test_an_engine_change_that_a_restart_would_only_keep_is_still_certified_ahead(kept, monkeypatch):
+    # A restart keeps the old engine without a gate, so only the background run can ever deploy HEAD's fix.
+    monkeypatch.setattr(engines, '_run_engine_gate', lambda *_a: pytest.fail('the restart path runs no gate'))
+    engines.certify_head_before_start(kept)
+    pending = precertify.pending_certification(kept)
+    assert pending == {'commit': subprocess_head(kept), 'sourceSha256': engines.source_fingerprint(kept),
+                       'contractSha256': engines.storage_contract_sha256(kept)}
+
+    ran = []
+    monkeypatch.setattr(engines, '_run_engine_gate', _gate(kept, ran))
+    assert precertify.run(kept) == 0
+    assert [commit for commit, _fixture in ran] == [subprocess_head(kept)]
+    status = engines.background_certification_status(kept)
+    assert status['ok'] is True and status['commit'] == subprocess_head(kept), status
+    assert certification.passing_record(kept, pending['sourceSha256'], pending['contractSha256'])[0] is not None
+    assert precertify.pending_certification(kept) is None
 
 
 def test_nothing_is_pending_once_heads_record_exists(landed):

@@ -184,11 +184,12 @@ class _UnfinishedBoot:
         self.status = status
 
     def snapshot(self):
+        # The BootRunner's snapshot shape: phases are records, not indexes.
         phase = {'index': 3, 'key': 'storage', 'label': 'Storage', 'status': self.status,
                  'duration_s': None, 'error': 'storage refused'}
-        return {'status': self.status, 'phaseTotal': 8, 'phases': [phase],
-                'currentPhase': phase if self.status == 'running' else None,
-                'failedPhase': phase if self.status == 'failed' else None,
+        failed = self.status == 'failed'
+        return {'status': self.status, 'phases': [phase], 'phaseTotal': 8,
+                'currentPhase': None if failed else phase, 'failedPhase': phase if failed else None,
                 'error': 'storage refused', 'retryCount': 0}
 
 

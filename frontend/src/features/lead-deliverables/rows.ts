@@ -27,6 +27,7 @@ export interface DeliverableRowOptions {
 const GLYPHS: Readonly<Record<DeliverableVisual, string>> = {
   delivery: 'checkCircle', progress: 'chart', decision: 'messageCircle', blocked: 'alertTriangle', report: 'inbox',
   deck: 'slides', pdf: 'file', sheet: 'fileSheet', image: 'image', document: 'file', file: 'fileCode', merge: 'gitMerge',
+  completion: 'checkCircle',
 };
 
 function badgeKey(item: LeadDeliverable, visual: DeliverableVisual) {

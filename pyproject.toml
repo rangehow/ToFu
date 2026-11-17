@@ -166,6 +166,10 @@ test = [
     # under-specify (currently tests/storage/test_legacy_conversation_tail_window.py).
     # Declared as a hard test dep so `@given` suites can never silently skip.
     "hypothesis>=6.0",
+    # The linear Git checkpoint gate runs ruff from the project interpreter;
+    # its specs (tests/tasks_pkg/test_linear_git_checkpoint.py) need it here,
+    # not only in `dev`.
+    "ruff",
     # In-memory Redis for exercising the redis-backed runtime-state store +
     # push bus (Epics B/C/D) against a REAL redis-py client without a live
     # server. Test-only; the runtime `redis` dep it pulls is NOT core.

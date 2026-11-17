@@ -58,12 +58,17 @@ def _follow_in_execution(owner: int) -> str:
 
 
 def _owned_node(owner: int, node_id: str) -> dict | None:
-    """The owner's node by ID: a known bridge agent, else one with a stored ceiling."""
+    """The owner's node by ID: a known bridge agent, an active node of the Home
+    registry (online or not), else one with a stored ceiling."""
     from lib.desktop import list_agents
     from lib.desktop.device_policy import policy
+    from lib.desktop.node_registry import NodeRegistry
     for agent in list_agents(user_id=str(owner)):
         if agent['agent_id'] == node_id:
             return agent
+    registered = NodeRegistry(owner).get(node_id)
+    if registered is not None and registered['state'] == 'active':
+        return {'agent_id': node_id, 'capabilities': None, 'kind': registered['kind']}
     record, _rev = policy(owner)
     return {'agent_id': node_id, 'capabilities': None} if node_id in record['ceilings'] else None
 

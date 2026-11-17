@@ -633,6 +633,15 @@ tool occurrence. Alternatives rejected: voiding the intent (it may have been
 billed), dropping the in-flight rule, or a timeout-based sweep (a slow live call
 is not proof of an ended one). `test_project_dispatch_ended_intents.py` covers it.
 
+The tool-receipt fold follows the same rule from the other side: calls settle out
+of ordinal order (a long `run_command` beside a swarm's quick calls), and a root's
+watermark folds every ordinal at or below it, so `fold_settled_tools` folds only
+terminal rows below that root's lowest open ordinal. Problem: folding past an open
+row made its completion read as already folded; the row stayed `intent` and fenced
+every later effect of the Worker as an unconfirmed prior effect. Alternative
+rejected: letting a folded-looking event update a retained row (the watermark would
+still claim it settled). `test_project_dispatch_effect_fence.py` covers it.
+
 ### An unconfirmed effect never wedges a Worker (2026-11-11 decision)
 
 Problem: a tool occurrence's intent is durable before its handler runs; its
@@ -2469,19 +2478,48 @@ apart from the work it belonged to, and duplicated the task board in the
 narrow sidebar; the owner asked to drop it and read each task's results by
 expanding that task on the board.
 
-Decision: `report_to_user` takes `task`, the exact title of a task on the
-Coordinator's board. The tool resolves it before publishing anything (an
-unknown title is refused with the board's titles) to `{key, title}`, where
-`key` is the task's history identity (`progressHistoryKey`, "Task history":
-the head's `taskKeys`, or `title_key` for a head written before history). The
-call's receipt names it, as it names the files, and the relay notice carries
-it (`Task:` line) to the Global Router. The deliverables projection gives each
-report its `task`; a page filters by `task` (a key, or `other`) and always
-summarises the conversation: `tasks` (key, latest title, count, newest time)
-and `otherCount`. Only a task of the lead's own project counts as a task:
-reports the Global Router relays from projects keep their `task` for display
-but read under `other`. `progressState.taskKeys` gives the browser each board
-task's key.
+Decision: `report_to_user` takes `tasks`, the titles of the board tasks the
+report is about; one report may cover several. Each resolves to `{key, title}`,
+where `key` is the task's history identity (`progressHistoryKey`, "Task
+history"), by its current or a former title on the board or in its history,
+then ignoring case and spacing. The call's receipt names them, as it names the
+files, and the relay notice carries them (`Tasks:` line) to the Global Router.
+The deliverables projection gives each report its `tasks`; a page filters by
+`task` (a key, or `other`) and always summarises the conversation: `tasks` (key,
+latest title, count, newest time) and `otherCount`. Only a task of the lead's
+own project counts as a task: reports the Global Router relays from projects
+keep their `tasks` for display but read under `other`. `progressState.taskKeys`
+gives the browser each board task's key.
+
+#### Automatic work reports and report links (owner request 2026-11-17)
+
+Problem: after the board change no task had anything to expand: every existing
+report predated task names, and nothing tied a completed task to its result.
+Making a final report mandatory for completion would turn a forgotten report
+into repeated tool refusals in a lead that runs for hours.
+
+Decision: naming tasks stays optional and never refuses a report. A title that
+matches no task (or a history read that fails) publishes the report unlinked
+and the receipt says which titles matched nothing (`unlinked_tasks`). Each
+completed board task that no delivery report names gets an automatic work
+report: a `completion` item projected from its task history record (final
+progress note, completion time), read at request time, so it costs the lead no
+call and cannot fail. A delivery report naming the task replaces it. Reports
+published before tasks could be named are attached afterwards by report links
+(`coordinator_report_links.py`, `reportLink`, namespace
+`reporting.linkNamespace`): durable, idempotent, one report to any number of
+tasks, never editing the report. The owner (or an agent acting for the owner)
+links them by title through `POST /api/v4/project/coordination/report-links`;
+only canonical report Turns of the lead's own conversation are linked, with the
+same lenient title rule. The main lead's earlier reports are linked this way by
+an agent's judgement over their titles and the task history.
+
+Alternatives rejected: refusing `update_task_progress` to complete a task
+without a delivery report (repeated tool failures and wasted rounds, the
+owner's concern); writing a synthetic report Turn at completion (a second
+transcript entry the lead never wrote, and a write that can fail inside the
+board CAS); matching old reports to tasks by text similarity at read time
+(silent mislinks with no way to correct them).
 
 On the board (`features/coordinator-progress.ts` with the lazily loaded
 `coordinator-task-deliverables.ts`), a task with items is a disclosure showing

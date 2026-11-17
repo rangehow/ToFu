@@ -21,8 +21,9 @@ def shared_home(tmp_path, monkeypatch):
     return path
 
 
-def _on_host(monkeypatch, machine_id, hostname):
+def _on_host(monkeypatch, machine_id, hostname, container=''):
     monkeypatch.setattr(host_identity, '_machine_id', lambda: machine_id)
+    monkeypatch.setattr(host_identity, '_container_id', lambda: container)
     monkeypatch.setattr(host_identity, '_hostname_scoped', lambda: True)
     monkeypatch.setattr(host_identity.socket, 'gethostname', lambda: hostname)
 

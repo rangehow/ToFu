@@ -100,7 +100,19 @@ def fold_settled_tools(holder, terminal_phases):
     excess = len(terminal) - _retained()
     if excess <= 0:
         return
-    folded = sorted(terminal, key=lambda row: row['tool_ordinal'])[:excess]
+    # Calls settle out of ordinal order (a long run_command beside a swarm's quick
+    # calls), and a watermark folds every ordinal at or below it: it must never
+    # pass an open row of its root, or that row's completion reads as already
+    # folded and its intent fences the Worker for good. Rows above an open one
+    # wait until it settles.
+    open_floor = {}
+    for row in attempts:
+        if row['phase'] not in terminal_phases:
+            root = row['root_task_id']
+            open_floor[root] = min(open_floor.get(root, row['tool_ordinal']), row['tool_ordinal'])
+    foldable = [row for row in terminal
+                if row['tool_ordinal'] < open_floor.get(row['root_task_id'], float('inf'))]
+    folded = sorted(foldable, key=lambda row: row['tool_ordinal'])[:excess]
     summary = holder.setdefault('settledToolUsage', {'calls': 0, 'watermarks': {}})
     for row in folded:
         summary['calls'] += 1

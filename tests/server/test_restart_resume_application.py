@@ -95,6 +95,11 @@ def test_the_next_generation_resumes_the_chat_and_wakes_the_router_once(tmp_path
         assert result['actionStatus'] == 'completed'
         assert result['notice']['conversationId'] == 'router'
         assert result['notice']['disposition'] in ('started', 'steered', 'queued')
+        # The real host's pass names every candidate with its outcome (2026-11-17
+        # 22:10:50 logged only '1 of 21 ... resumed').
+        summaries = [line for line in (tmp_path / 'logs' / 'app.log').read_text(errors='replace').splitlines()
+                     if '[RestartResume] summary:' in line]
+        assert len(summaries) == 1 and 'resumed=[chat] skipped=[]' in summaries[0], summaries
     finally:
         try:
             execution.stop()

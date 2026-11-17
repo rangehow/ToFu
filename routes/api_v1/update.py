@@ -356,20 +356,20 @@ def _deferred_reexec(delay: float = 0.3, *, frontend_prevalidated: bool = False,
     notice tells the owner's Global Router at once.
     """
     time.sleep(delay)
-    handed_over = server_reexec.perform_server_reexec(
+    outcome = server_reexec.perform_server_reexec(
         'update',
         frontend_prevalidated=frontend_prevalidated,
         requested_at=requested_at,
     )
-    if not handed_over and precedence is not None:
+    if not outcome.handed_over and precedence is not None:
         precedence.abandon()
-    if handed_over or not approval_id:
+    if outcome.handed_over or not approval_id:
         return
     from lib.server.restart_notice import deliver_restart_notice
     try:
         _lca.note_restart_notice(approval_id, failure={
             'code': 'restart_bridge_refused',
-            'detail': 'Every restart bridge refused; the server keeps running'})
+            'detail': outcome.detail})
     except Exception as e:
         logger.warning('[Update] restart refusal was not recorded on its notice: %s', e)
     deliver_restart_notice(approval_id)

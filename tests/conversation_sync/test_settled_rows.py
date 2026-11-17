@@ -24,6 +24,7 @@ from lib.conversation_sync.settled_rows import (
     json_array_text,
     memo_get,
     memo_put,
+    rows_memo,
     run_memo_get,
     run_memo_put,
     settle,
@@ -225,6 +226,29 @@ def test_run_memo_answers_only_lists_that_start_with_the_identical_run():
     assert run_memo_get(rows[:3], 'k') == (0, None)
     assert run_memo_get(rows, 'other') == (0, None)
     assert rows[0] == {'round': 0} and _encoded(rows[0]) == _encoded({'round': 0})
+
+
+def test_rows_memo_answers_exactly_the_same_settled_rows():
+    rows = [settle({'tool': index}) for index in range(3)]
+    calls = []
+
+    def compute(value):
+        return lambda: calls.append(value) or value
+
+    assert rows_memo(rows, 'k', compute('all')) == 'all'
+    assert rows_memo(list(rows), 'k', compute('again')) == 'all'
+    # A longer or shorter list, a reordered one or an equal twin is recomputed.
+    assert rows_memo([*rows, settle({'tool': 3})], 'k', compute('longer')) == 'longer'
+    assert rows_memo(rows[:2], 'k', compute('shorter')) == 'shorter'
+    assert rows_memo([rows[0], settle({'tool': 1}), rows[2]], 'k', compute('twin')) == 'twin'
+    # One settled row, falsy results and unsettled rows.
+    assert rows_memo(rows[:1], 'one', compute(0)) == 0
+    assert rows_memo(rows[:1], 'one', compute('never')) == 0
+    live = [rows[0], {'tool': 'live'}]
+    assert rows_memo(live, 'k', compute('live')) == 'live'
+    assert rows_memo(live, 'k', compute('live again')) == 'live again'
+    assert rows_memo([], 'k', compute('empty')) == 'empty'
+    assert calls == ['all', 'longer', 'shorter', 'twin', 0, 'live', 'live again', 'empty']
 
 
 def test_run_memo_needs_a_settled_first_row_and_skips_one_row_runs():

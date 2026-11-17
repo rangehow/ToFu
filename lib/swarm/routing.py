@@ -24,7 +24,6 @@ Entry points: :func:`resolve_multi_agent_backend`,
 
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Any
 
 from lib.tools.contracts import tool_schema_name
@@ -126,7 +125,7 @@ def project_multi_agent_wire_tools(
     planes, so the native projection removes the local spawn primitive.  The
     local projection makes the authority-owned schema directly visible even
     when Tool Search would otherwise defer it, without a local wave-size
-    ceiling. Its private copy preserves the authority catalog. Stage guidance stays
+    ceiling. Its copy of the edited path preserves the authority catalog. Stage guidance stays
     out of the wire surface: per-round tail text drifted the cache prefix
     (9afe2a467), and read-only authority is enforced at the dispatch
     boundary instead.
@@ -143,18 +142,25 @@ def project_multi_agent_wire_tools(
     if not isinstance(source, dict):
         return visible
 
-    # Keep a private schema copy so projecting permissions never mutates
-    # the authority catalog. Accepted work has no local wave-size quota.
-    spawn = deepcopy(source)
+    # Copy only the path this projection edits, so it never mutates the
+    # authority catalog; every later wire stage is copy-on-write. Accepted
+    # work has no local wave-size quota.
+    spawn = dict(source)
     function = spawn.get('function')
-    if not isinstance(function, dict):
+    if isinstance(function, dict):
+        function = spawn['function'] = dict(function)
+    else:
         function = spawn
     parameters = function.get('parameters')
     if isinstance(parameters, dict):
+        parameters = function['parameters'] = dict(parameters)
         properties = parameters.get('properties')
-        agents = properties.get('agents') if isinstance(properties, dict) else None
-        if isinstance(agents, dict):
-            agents.pop('maxItems', None)
+        if isinstance(properties, dict):
+            properties = parameters['properties'] = dict(properties)
+            agents = properties.get('agents')
+            if isinstance(agents, dict):
+                properties['agents'] = {
+                    key: value for key, value in agents.items() if key != 'maxItems'}
 
     out: list[dict[str, Any]] = []
     inserted = False

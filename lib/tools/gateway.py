@@ -19,6 +19,7 @@ from collections.abc import Mapping
 from functools import lru_cache
 from typing import Any, Callable
 
+from lib.conversation_sync.settled_rows import is_settled, memo_get, memo_put, rows_memo
 from lib.log import get_logger
 from lib.tools.background_guidance import (
     project_background_search_document,
@@ -251,9 +252,10 @@ def gateway_tool_schemas(*, include_search: bool = True,
 
 def tool_schema_tokens(tools: Any, *, model: str = '') -> int:
     """Count canonical schema JSON with the repository token authority."""
-    payload = json.dumps(
-        list(tools or ()), ensure_ascii=False, sort_keys=True,
-        separators=(',', ':'), default=str)
+    tools = list(tools or ())
+    payload = rows_memo(tools, ('tool-schema', 'sorted-json'), lambda: json.dumps(
+        tools, ensure_ascii=False, sort_keys=True,
+        separators=(',', ':'), default=str))
     try:
         from lib.token_counter import count_text
         return max(0, int(count_text(payload, model=model or '')))
@@ -270,10 +272,10 @@ def tool_schema_fingerprint(tools: Any) -> str:
     this diagnostic.  The full schema stays request-local; only its SHA-256 is
     persisted by Request Inspector.
     """
-    payload = json.dumps(
-        list(tools or ()), ensure_ascii=False, sort_keys=False,
-        separators=(',', ':'), default=str)
-    return hashlib.sha256(payload.encode('utf-8')).hexdigest()
+    tools = list(tools or ())
+    return rows_memo(tools, ('tool-schema', 'fingerprint'), lambda: hashlib.sha256(
+        json.dumps(tools, ensure_ascii=False, sort_keys=False,
+                   separators=(',', ':'), default=str).encode('utf-8')).hexdigest())
 
 
 _SCHEMA_ANNOTATION_KEYS = frozenset({
@@ -1475,19 +1477,28 @@ def sanitize_wire_tools(
                     detail='tool schema has no function/name field',
                 )
             else:
-                source_schema_error = _source_wire_tool_schema_error(
-                    tool, model=model)
-                if source_schema_error:
-                    keep = tool
-                    repair_paths = ()
-                    normalization_error = source_schema_error
+                # Validation is a pure function of the row and the model: a
+                # settled row that passed unchanged is not revalidated.
+                clean_key = ('wire-preflight-clean', model)
+                settled = is_settled(tool)
+                if settled and memo_get(tool, clean_key):
+                    keep, repair_paths, schema_error = tool, (), ''
                 else:
-                    keep, repair_paths, normalization_error = (
-                        _normalize_provider_tool_schema(tool, model=model)
-                    )
-                schema_error = normalization_error
-                if not schema_error and (keep is not tool or not source_validates_wire):
-                    schema_error = _wire_tool_schema_error(keep, model=model)
+                    source_schema_error = _source_wire_tool_schema_error(
+                        tool, model=model)
+                    if source_schema_error:
+                        keep = tool
+                        repair_paths = ()
+                        normalization_error = source_schema_error
+                    else:
+                        keep, repair_paths, normalization_error = (
+                            _normalize_provider_tool_schema(tool, model=model)
+                        )
+                    schema_error = normalization_error
+                    if not schema_error and (keep is not tool or not source_validates_wire):
+                        schema_error = _wire_tool_schema_error(keep, model=model)
+                    if settled and not schema_error and not repair_paths and keep is tool:
+                        memo_put(tool, clean_key, True)
                 if schema_error:
                     drop = True
                     offenders.append(

@@ -467,10 +467,31 @@ def project_tool_wire(body, *, api_protocol, base_url='', oauth='', log_prefix='
     # Gemini ("'tools' array element to be an object"); a missing ``type``
     # 400s kimi ("unknown tool type: ").  Clean arrays pass through by
     # identity, so the prompt-cache hot path is untouched.
+    #
+    # The surface is settled around it, reusing the task's previous rows
+    # wherever a schema is interchangeable with them: unchanged schemas keep
+    # their identity across rounds, so preflight verdicts, detachment and
+    # per-round encodes, counts and digests memoize on the rows
+    # (settled_rows.rows_memo). A preflight repair is settled afterwards.
+    _wire_rows = body.get('_wire_tool_rows')
+    if not isinstance(_wire_rows, dict):
+        _wire_rows = None
+    _settle_wire_rows(body, _wire_rows)
     if isinstance(body.get('tools'), list):
         from lib.tools.gateway import preflight_wire_tool_body
+        _settled_tools = body['tools']
         preflight_wire_tool_body(
             body, log_prefix=log_prefix,
             on_tool_isolated=_request_activity_sink)
+        if body.get('tools') is not _settled_tools:
+            _settle_wire_rows(body, _wire_rows)
 
     return ToolWireProjection(_budget_compacted_names, _budget_dropped_names, _executable_catalog, _final_schema_budget, _multi_agent_backend, _ptc_backend, _tool_search_backend, _name_budget)
+
+
+def _settle_wire_rows(body, wire_rows):
+    if wire_rows is None or not isinstance(body.get('tools'), list):
+        return
+    from lib.conversation_sync.settled_rows import settle_items
+    body['tools'] = wire_rows['tools'] = settle_items(
+        body['tools'], previous=wire_rows.get('tools'))

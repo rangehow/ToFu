@@ -130,6 +130,8 @@ __pycache__/
 /benchmarks/*
 !/benchmarks/AGENTS.md
 !/benchmarks/settled_turn_retention.py
+!/benchmarks/agent_round_overhead.py
+!/benchmarks/mcp_live_schema_projection.py
 !/benchmarks/verification_bundle_reuse.py
 !/benchmarks/sse_text_accumulation.py
 !/benchmarks/project_assignment_page_reads.py

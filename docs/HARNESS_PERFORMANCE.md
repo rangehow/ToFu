@@ -202,6 +202,135 @@ re-run in the same session to cancel host load.
 | idle RSS, all processes | 376 MB | ≤ 300 MB (claude-code single process) |
 | execution host cold start | 14.4 s | ≤ 2 s (opencode, the slowest reference to first request) |
 
+## Agent-loop round overhead (in-process)
+
+### Method
+
+`python3 benchmarks/agent_round_overhead.py --rounds N [--json F]`
+
+- One real storage-free `tofu_agent` session (`AgentRuntime.local`): tool
+  assembly, context composition, request building and sealing, wire
+  projection, stream parsing, argument normalization, gateway dispatch,
+  result settlement, segment mirror, event fan-out. Storage, push, the API host
+  and the execution-host boundary are not in it.
+- A loopback OpenAI-compatible provider answers at once and stamps request
+  arrival and response flush. Round k calls `read_files` on its own one-line
+  file (distinct arguments, so no loop breaker fires); round N answers text.
+- **Round gap**: response flushed to next request arrival. It is the whole
+  no-op tool round trip plus the next request's assembly: pure harness time.
+- **Prefix**: whether every request's `tools` and system prompt are
+  byte-identical to the first.
+- Arms run in fresh alternating processes (ABAB) with `PYTHONPATH` set to an
+  exported tree; the report prints `lib.__file__`.
+- Profiles: py-spy (`record -f raw|speedscope`), because cProfile sees only
+  the calling thread and the loop runs on a task worker thread.
+
+Component checks: `benchmarks/mcp_live_schema_projection.py` (gateway catalog
+projection with 150 MCP + 60 native tools) and the existing
+`benchmarks/tool_dispatch_overhead.py` (pipeline only, one call at a time).
+
+### Results (2026-11-17)
+
+Arm A: shared branch `7ac8d17f9a`. Arm B: `ee5c3be46f` (A plus the changes
+below). Same host, alternating fresh processes, every session prefix-stable.
+Values are pooled over all sessions. Artifacts and py-spy profiles:
+`output/harness_perf/abab3/` and `output/harness_perf/*.folded|*.speedscope.json`
+in the canonical checkout.
+
+| workload | arm A median / p95 (n) | arm B median / p95 (n) | change |
+|---|---|---|---|
+| round gap, 30-round session (10 pairs) | 18.92 / 21.97 ms (300) | **16.42 / 18.29 ms** (300) | −13 % / −17 % |
+| round gap, 200-round session (4 pairs) | 29.69 / 42.88 ms (800) | **26.10 / 36.06 ms** (800) | −12 % / −16 % |
+| `_executable_catalog`, 150 MCP tools (6 pairs × 2,000 calls) | 253 / 260 µs | **4.2 / 4.4 µs** | −98 % |
+| pipeline only, `read_files` p50 (6 pairs × 40) | 4.57 ms | 4.48 ms | within noise |
+
+Per-session medians did not overlap (A 18.6–20.0 ms, B 16.1–17.2 ms at 30
+rounds). Steady-state loop samples for the same 200-round session fell from
+10,820 to 8,911 before the last two changes. The pipeline-only component is
+unchanged: the gains are in round assembly and settlement around dispatch.
+
+Deployment suite (`benchmarks/harness_perf/run.py --smoke`, both hosts and
+native storage), three ABAB pairs, arm A `76fa978731`, arm B `a6b200bfb3`,
+medians of each run (n = 7 steady rounds per run):
+
+| metric | arm A runs | arm B runs |
+|---|---|---|
+| steady round overhead `noop`, ms | 68.0, 71.7, 75.0 | 67.2, 66.6, 72.6 |
+| steady round overhead `shell`, ms | 85.3, 93.0, 93.8 | 85.7, 84.9, 100.6 |
+| tool round trip `run_command true`, ms | 283.8, 281.6, 283.1 | 283.4, 284.5, 295.4 |
+| chat TTFR, ms | 93.9, 96.5, 99.2 | 187.0 (one 1.5 s outlier), 107.6, 106.7 |
+| round-0 body, bytes / growth per round | 70,084 / 312 | 70,084 / 312 |
+| prefix breaks | 0 | 0 |
+
+At the deployment level the in-process saving (about 2.5 ms per round) is
+small beside storage round trips and event delivery, so the smoke shape does
+not resolve it; request bytes are identical, as intended. The assembly-time
+settling added by changes 2 and 3 costs about 2–3 ms once per Turn (measured
+directly); the higher arm-B chat TTFR in two smoke runs is not explained by it
+and is not resolved at n = 3. Artifacts: `output/harness_perf/suite_abab/`.
+
+### Changes
+
+Each is an exact cache with explicit invalidation or a removed redundant
+copy; none adds a setting, threshold or bound.
+
+1. **Live MCP schema projection.** `tool_gateway._executable_catalog` stamps
+   `(bridge, tool-catalog generation, catalog object)` on the task and skips
+   the per-call re-projection while all three are unchanged. The bridge's
+   generation (`MCPBridge.tool_catalog_generation`) advances on every tool-index
+   or grant change; a replaced catalog list is a new key.
+2. **Prefetch occurrence identity.** It hashed the whole task config (about
+   151 KB, mostly assembled contract documents and search text) on every tool
+   call. Assembly now settles those two maps (deep-immutable, byte-identical
+   JSON; every writer already replaced them copy-on-write) and the identity
+   stands in each settled value by its canonical digest, memoized on the row and
+   tagged so it can never equal a plain value.
+3. **Settled wire tool surface.** The final `project_tool_wire` surface is
+   settled, reusing the task's previous rows wherever interchangeable
+   (`settle_items(previous=...)`), and initial assembly settles the schemas it
+   hands every round. Unchanged schemas keep their identity across rounds, so
+   `detach_input` shares them and the consumers (`seal_request` field encode,
+   `semantic_request_id`, schema token text and count, schema fingerprints,
+   wire byte region, preflight verdicts) memoize on the exact run of rows
+   through `settled_rows.rows_memo`. Wire bytes are unchanged.
+4. **Segment mirror.** Rebuilt from every tool round twice per round and then
+   deep-compared with the previous mirror. A settled round's segments are a
+   pure function of the row, its position and its batch identity; they are
+   built and settled once in the row's memo slot behind those guards.
+5. **`spawn_agents` wire schema.** The local multi-agent projection copied the
+   whole schema every round to drop one key; it now copies only that path.
+
+### Prompt-cache prefix
+
+`tests/tasks_pkg/test_request_prefix_stability.py` drives the same scripted
+session on the OpenAI and the Anthropic wire and diffs consecutive requests:
+tools and system bytes identical, every earlier message byte-identical at the
+same index (Anthropic messages compared without `cache_control`, since the
+conversation-tail breakpoint moves to the newest message by design; system and
+tool breakpoints never move). The output budget (`max_tokens`) follows the
+context left and is outside every provider's cache key. No instability was
+found.
+
+### Remaining per-round cost (steady state, arm B)
+
+Shares of loop-thread samples: token counting for admission and compaction
+about 10 %, context composer refresh (`refresh_programmatic_inputs`) about 4 %,
+messages snapshot event 4 %, `_seal_context_lineage` (a sorted digest of the
+whole wire body) 3 %, tool settlement and freshness checks around reuse 5 %.
+The deployment suite's storage round trips and event-delivery lock are outside
+this in-process measurement.
+
+### Alternatives considered
+
+- **Process-global content cache of tool schemas.** Rejected: it would need
+  the very serialization it saves to build a key. Settled rows give identity
+  that is exact by construction (any change is a copy-on-write replacement).
+- **Caching the MCP projection by time or call count.** Rejected: a knob, and
+  inexact across a server restart; the bridge generation is exact.
+- **Dropping config from the prefetch identity.** Rejected: it would change
+  which changes invalidate a prefetched read. Digesting frozen values keeps
+  identity equality exactly as before.
+
 ## Alternatives considered
 
 - **Stub `lib.llm.stream_chat` in process.** Rejected: it removes request

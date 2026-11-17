@@ -145,7 +145,11 @@ import json, sys, time
 from pathlib import Path
 from benchmarks import process_exit_memory as memory
 def paused(pid, **kwargs):
-    Path(sys.argv[2]).write_text(json.dumps({'tid':pid,'tgid':memory.status(pid)['Tgid']}))
+    row = memory.status(pid)
+    # Publish by rename: the outer kills this observer as soon as the name exists.
+    staged = Path(sys.argv[2] + '.tmp')
+    staged.write_text(json.dumps({'tid':pid,'tgid':row['Tgid'],'root':row['PPid']}))
+    staged.replace(sys.argv[2])
     time.sleep(20)
 memory.snapshot = paused
 memory.observe([sys.argv[1], sys.argv[3]], allow_threaded_children=sys.argv[3]=='threaded')
@@ -170,10 +174,15 @@ try:
             assert os.WIFSIGNALED(status) and os.WTERMSIG(status)==signal.SIGKILL
         else: time.sleep(.01)
     observed = json.loads(ready.read_text())
-    assert observed['tgid'] in reaped and len(reaped)>=2
-    try: os.kill(observed['tid'], 0)
-    except ProcessLookupError: pass
-    else: raise AssertionError('observed thread survived observer death')
+    # EXITKILL signals the newest tracees first, so the probe root, which keeps
+    # wait ownership of its children, may reap the observed child before its
+    # own SIGKILL lands. Whoever reaps it, it must be gone, zombie included,
+    # and the orphaned root must fall to this outer owner.
+    assert observed['root'] in reaped, (observed, reaped)
+    for pid in (observed['tid'], observed['tgid']):
+        try: os.kill(pid, 0)
+        except ProcessLookupError: pass
+        else: raise AssertionError('observed tracee survived observer death')
 finally:
     if child.poll() is None: child.kill(); child.wait()
     # If a broken EXITKILL path survives, clean every now-adopted direct child.
@@ -184,11 +193,12 @@ finally:
     while True:
         try: os.waitpid(-1, 0)
         except ChildProcessError: break
-print(json.dumps({'reaped': reaped}))
+print(json.dumps({'reaped': reaped, 'root': observed['root']}))
 '''
     launcher=shlex.split(os.environ.get('TOFU_BENCHMARK_PYTHON',sys.executable))
     if len(launcher)!=1:pytest.skip('probe requires one executable launcher')
     run=subprocess.run([*launcher,'-c',script,str(probe),str(tmp_path/'ready'),launcher[0],mode],
                        cwd=ROOT,capture_output=True,text=True,timeout=30)
     assert run.returncode==0,run.stdout+run.stderr
-    assert len(json.loads(run.stdout)['reaped'])>=2
+    result=json.loads(run.stdout)
+    assert result['root'] in result['reaped']

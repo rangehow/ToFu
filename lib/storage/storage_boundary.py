@@ -260,14 +260,9 @@ def _scan_python_file(path: Path, relative: str) -> list[BoundaryViolation]:
                 return True
         return False
 
-<<<<<<< HEAD
-    # Network transport modules whose ``connect`` opens a socket, not a database.
-    socket_names = {'socket', 'websockets'}
-=======
     # Network transports whose connect(address) opens a socket, never a
     # database: names bound to these modules are not database receivers.
     socket_names = {'socket'}
->>>>>>> eval/opencode-glm53-tb21
     for imported in ast.walk(tree):
         if isinstance(imported, ast.Import):
             for alias in imported.names:

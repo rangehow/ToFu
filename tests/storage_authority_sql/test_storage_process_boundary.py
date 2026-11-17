@@ -84,7 +84,7 @@ def test_marker_free_data_admits_the_same_with_or_without_rg(
                         lambda: tmp_path / 'boundary-cache.json')
     if not rg_available:
         monkeypatch.setattr(storage_boundary, '_candidate_python_files',
-                            lambda root: None)
+                            lambda root, relatives: None)
 
     assert storage_boundary.boundary_report(tmp_path)['files'] == [
         'lib/business.py']

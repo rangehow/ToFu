@@ -177,6 +177,9 @@ export function createProjectCoordinationSurface(ports: {
   }
   window.addEventListener('online', recoverBinding);
   document.addEventListener('visibilitychange', recoverBinding);
+  // Painted facts carry no language, so a switch repaints the row and the board in the new one.
+  const repaintLanguage = () => { rendered = ''; void refresh(true); };
+  window.addEventListener('tofu:language-change', repaintLanguage);
   async function refresh(force = false) {
     if (!alive) return;
     if (createControl && ports.sidebar.contains(createControl.button)) showCreateAvailability(createControl);
@@ -350,12 +353,14 @@ export function createProjectCoordinationSurface(ports: {
             ? 'projectCoordination.unbound' : 'projectCoordination.unavailable');
         }
         if (available && report?.unread && report.latest) {
-          meta.textContent = report.latest.title;
+          // The title as the conversation shows it: its display translation when it has one.
+          const reportTitle = report.latest.translatedTitle ?? report.latest.title;
+          meta.textContent = reportTitle;
           const badge = document.createElement('span'); badge.className = 'coordination-leader-unread';
           badge.textContent = '•';
           badge.setAttribute('aria-label', t('projectCoordination.report.unread'));
           leader.append(badge); row.dataset.unread = 'true';
-          row.title = `${t('projectCoordination.report.unread')} · ${report.latest.title}`;
+          row.title = `${t('projectCoordination.report.unread')} · ${reportTitle}`;
         }
         body.append(meta); row.append(mark, body);
         if (available) {
@@ -497,6 +502,7 @@ export function createProjectCoordinationSurface(ports: {
     dropBoardCard();
     window.removeEventListener('online', recoverBinding);
     document.removeEventListener('visibilitychange', recoverBinding);
+    window.removeEventListener('tofu:language-change', repaintLanguage);
     unsubscribe?.(); coordinatorByPath.clear(); settled = undefined; boardListeners.clear();
     ports.sidebar.replaceChildren(); ports.canvas.replaceChildren();
   } };

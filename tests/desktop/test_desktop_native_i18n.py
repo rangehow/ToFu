@@ -293,15 +293,15 @@ class SurfaceWiringRatchetTest(unittest.TestCase):
             self.assertIn('zh', pair)
 
     def test_tray_link_error_branch_is_keyed(self):
-        src = _src('desktop/role_window.py')
-        self.assertIn('desktop.tray.stError', src,
-                      'the link line error branch renders a raw exception '
-                      'with no localized prefix')
-        theme = _theme()
-        pair = theme.STRINGS.get('desktop.tray.stError')
-        self.assertIsNotNone(pair)
-        self.assertIn('{detail}', pair['en'])
-        self.assertIn('{detail}', pair['zh'])
+        from desktop import role_window
+        row = {'enabled': True,
+               'last_status': {'state': 'boom', 'detail': 'ECONNRESET'}}
+        self.assertEqual(role_window._link_status_text(row, 'en'),
+                         ('error', 'error — ECONNRESET'),
+                         'the link line error branch renders a raw exception '
+                         'with no localized prefix')
+        self.assertEqual(role_window._link_status_text(row, 'zh'),
+                         ('error', '出错——ECONNRESET'))
 
     def test_terminal_fallback_is_bilingual(self):
         src = _src('desktop/post_install.py')

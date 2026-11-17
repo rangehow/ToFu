@@ -665,6 +665,16 @@ def _stop_test_event_storage_workers(reason: str) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _release_retained_restart_precedence():
+    """An accepted restart retains precedence until its process exits; a test process
+    outlives it, so release it lest later landings in this worker wait forever."""
+    yield
+    from lib.runtime import protected_steps
+    if protected_steps._retained is not None:
+        protected_steps._retained.abandon()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_event_storage_workers():
     _stop_test_event_storage_workers('(test setup)')
     try:

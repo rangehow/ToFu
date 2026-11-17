@@ -309,6 +309,18 @@ function _codePendingHtml(r) {
     escapeHtml(t('update.codePending')) + '</span></div>';
 }
 
+/** The newest restart since this server started failed (e.g. a terminal
+ *  `serverctl restart` stopped at engine certification): name its stage and
+ *  show its reason verbatim instead of letting the owner guess. */
+function _restartFailureHtml(r) {
+  const failure = r && r.last_restart_failure;
+  if (!failure || !failure.stage) return '';
+  return '<div class="upd-err"><div class="upd-err-title">' +
+    escapeHtml(t('update.lastRestartFailed', { stage: failure.stage })) + '</div>' +
+    '<pre class="upd-err-reason" style="white-space:pre-wrap">' + escapeHtml(failure.reason || '') + '</pre>' +
+    '<p class="upd-err-reason">' + escapeHtml(t('update.lastRestartFailedHint')) + '</p></div>';
+}
+
 function _renderUpdateDialogBody(r) {
   const body = document.getElementById('updateModalBody');
   if (!body) return;
@@ -372,7 +384,7 @@ function _renderUpdateDialogBody(r) {
 
   body.innerHTML =
     _updateHeroHtml(r) +
-    '<div class="upd-action" id="updateActionArea">' + _codePendingHtml(r) + actionHtml + '</div>' +
+    '<div class="upd-action" id="updateActionArea">' + _restartFailureHtml(r) + _codePendingHtml(r) + actionHtml + '</div>' +
     '<div id="updateLifecycleApprovals" style="display:none"></div>';
   _renderPendingLifecycleApprovals();
 }

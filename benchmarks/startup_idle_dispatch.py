@@ -416,6 +416,133 @@ def dispatch(instance: Instance, samples: int) -> dict:
                                                    if run['submitToFirstProviderByteSeconds'] is not None])}
 
 
+_HOLD_LANDING = r'''
+import sys, time
+from lib.runtime.protected_steps import protected_step
+with protected_step('git_land', detail=sys.argv[1],
+                    on_wait=lambda message: print('waits', time.monotonic(), flush=True)):
+    print('runs', time.monotonic(), flush=True)
+    sys.stdin.readline()
+    if len(sys.argv) > 2:  # land a source change, as a real landing does
+        with open(sys.argv[2], 'a', encoding='utf-8') as handle:
+            handle.write('# landed during the restart benchmark\n')
+print('done', time.monotonic(), flush=True)
+'''
+
+
+def _scripted_turn(client, index: int) -> dict:
+    conversation = 'restart-e2e-' + uuid.uuid4().hex
+    body = {'commandId': uuid.uuid4().hex, 'inputTurn': {'content': f'restart probe {index}'},
+            'conversation': {'allowCreate': True, 'title': 'restart', 'settings': {}},
+            'config': {'modelRef': {'creator_id': 'creator', 'model_id': 'alpha'},
+                       'routing': {'preferred_provider_id': 'provider-a'}, 'maxTokens': 64,
+                       'thinkingEnabled': False, 'memoryEnabled': False, 'projectEnabled': False,
+                       'searchMode': 'off', 'tools': {'programmaticCalling': 'off'}}}
+    response = client.post(f'/api/v4/conversations/{conversation}/turns', json=body)
+    response.raise_for_status()
+    path = f'/api/v4/conversations/{conversation}/turns/' + response.json()['turn']['turnId']
+    deadline = time.monotonic() + 120
+    while True:
+        turn = client.get(path).json()['turn']
+        if turn['status'] in {'completed', 'failed', 'interrupted'}:
+            return {'conversation': conversation, 'status': turn['status']}
+        if time.monotonic() > deadline:
+            raise TimeoutError(f'turn {path} stayed {turn["status"]}')
+        time.sleep(0.05)
+
+
+def _landing(instance: Instance, name: str, edits: Path | None = None) -> tuple[subprocess.Popen, list]:
+    """A real protected step (git_land) in the instance's data root, held until released."""
+    process = subprocess.Popen([instance.python, '-c', _HOLD_LANDING, name, *([str(edits)] if edits else [])],
+                               cwd=ROOT, env=instance.env,
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    events: list = []
+    threading.Thread(target=lambda: [events.append(line.split()) for line in process.stdout],
+                     daemon=True).start()
+    return process, events
+
+
+def _until(predicate, what: str, seconds: float = 120) -> None:
+    deadline = time.monotonic() + seconds
+    while not predicate():
+        if time.monotonic() > deadline:
+            raise TimeoutError(what)
+        time.sleep(0.05)
+
+
+def restart(instance: Instance, land_source: bool = False) -> dict:
+    """A real ``serverctl.py restart`` of a running instance while landings run.
+
+    A landing runs when the restart starts; a second starts while the restart
+    is pending. The restart must wait for the first, keep the second waiting
+    until it finished, replace both hosts and serve a scripted Turn after.
+    With ``land_source`` the running landing changes application source (only
+    in an exported copy, never a Git checkout), so the execution host must be
+    replaced too; without it an unchanged execution host is kept by design.
+    """
+    if land_source and (ROOT / '.git').exists():
+        raise SystemExit('--land-source edits application source; run it from an exported copy, not a checkout')
+    import httpx
+    provider = _Provider()
+    t0 = time.monotonic()
+    cli = instance.start_cli()
+    wait_ready(instance, t0)
+    cli.wait(timeout=600)
+    before = instance.pids()
+    with httpx.Client(base_url=instance.base, trust_env=False, timeout=60) as client:
+        _install_provider(client, f'http://127.0.0.1:{provider.server_port}/v1')
+        first_turn = _scripted_turn(client, 0)
+    running, running_events = _landing(
+        instance, 'running-landing', ROOT / 'lib/runtime/protected_steps.py' if land_source else None)
+    _until(lambda: any(event[0] == 'runs' for event in running_events), 'first landing never ran')
+    output: list[str] = []
+    started = time.monotonic()
+    # TOFU_RESTART_GATE_PASSED is the operator handoff a gated caller uses (serverctl).
+    command = subprocess.Popen([instance.python, 'serverctl.py', 'restart', '--wait', '600'], cwd=ROOT,
+                               env={**instance.env, 'TOFU_RESTART_GATE_PASSED': '1'},
+                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               text=True)
+    threading.Thread(target=lambda: output.extend(command.stdout), daemon=True).start()
+    _until(lambda: any('Waiting for running protected steps' in line for line in output),
+           'restart never waited for the running landing')
+    late, late_events = _landing(instance, 'late-landing')
+    _until(lambda: any(event[0] == 'waits' for event in late_events), 'late landing did not wait')
+    running.stdin.write('\n')
+    running.stdin.flush()
+    running.wait(timeout=60)
+    returncode = command.wait(timeout=900)
+    restarted = time.monotonic()
+    _until(lambda: any(event[0] == 'runs' for event in late_events), 'late landing never resumed', 300)
+    late_ran = float(next(event[1] for event in late_events if event[0] == 'runs'))
+    late.stdin.write('\n')
+    late.stdin.flush()
+    late.wait(timeout=60)
+    after = instance.pids()
+    health = instance.health() or {}
+    with httpx.Client(base_url=instance.base, trust_env=False, timeout=60) as client:
+        second_turn = _scripted_turn(client, 1)
+    provider.shutdown()
+    result = {
+        'restartExitCode': returncode, 'restartSeconds': round(restarted - started, 1),
+        'restartOutput': [line.rstrip() for line in output][-40:],
+        'pidsBefore': before, 'pidsAfter': after,
+        'apiReplaced': bool(after.get('api')) and after.get('api') != before.get('api'),
+        'executionReplaced': bool(after.get('execution')) and after.get('execution') != before.get('execution'),
+        'executionRecord': {key: instance.execution_record().get(key) for key in ('state', 'pid', 'plan')},
+        'healthBoot': health.get('boot'),
+        'lateLandingWaitedForRestart': late_ran >= restarted - 1.0 or late_ran > started,
+        'lateLandingRanAfterRestartSeconds': round(late_ran - started, 1),
+        'turnBefore': first_turn, 'turnAfter': second_turn,
+    }
+    result['landedSource'] = land_source
+    result['ok'] = (returncode == 0 and result['apiReplaced']
+                    and result['executionReplaced'] == land_source
+                    and (health.get('boot') or {}).get('status') == 'ready'
+                    and first_turn['status'] == second_turn['status'] == 'completed')
+    instance.stop()
+    return result
+
+
 def main() -> int:
     # The provider fixture lives in tests/; a clean environment has no PYTHONPATH.
     sys.path.insert(0, str(ROOT))
@@ -428,6 +555,9 @@ def main() -> int:
     idle_parser.add_argument('--settle', type=float, default=60)
     sub.add_parser('dispatch').add_argument('--samples', type=int, default=10)
     sub.add_parser('hold', help='start one instance, print its identity, keep it until SIGTERM/SIGINT')
+    sub.add_parser('restart', help='serverctl restart of a running instance while landings run, then a Turn'
+                   ).add_argument('--land-source', action='store_true',
+                                  help='the landing changes source (exported copies only)')
     args = parser.parse_args()
     if checkout_manager_pids():
         parser.error(f'a lifecycle manager of {ROOT} is already running (pids {checkout_manager_pids()}); '
@@ -444,6 +574,8 @@ def main() -> int:
             result = idle(instance, args.seconds, args.settle)
         elif args.command == 'hold':
             result = hold(instance)
+        elif args.command == 'restart':
+            result = restart(instance, args.land_source)
         else:
             result = dispatch(instance, args.samples)
     finally:

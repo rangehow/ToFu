@@ -147,6 +147,17 @@ def _enrich_with_apply_state(payload):
     return payload
 
 
+def _enrich_with_restart_failure(payload):
+    """Project ``last_restart_failure``: the newest restart since this process
+    started, when it failed (stage + reason), e.g. a terminal ``serverctl
+    restart`` stopped by engine certification before the manager was reached."""
+    if not isinstance(payload, dict):
+        return payload
+    from lib.boot_identity import BOOT_TS
+    payload['last_restart_failure'] = _lca.latest_restart_failure(since=BOOT_TS)
+    return payload
+
+
 def _enrich_with_code_pending(payload, *, current_head=None):
     """Project "on-disk source differs from the loaded-at-boot source" onto
     the /update/check payload as ``code_pending``.
@@ -216,6 +227,10 @@ def update_check():
         payload = _enrich_with_code_pending(payload, current_head=repository.head)
     except Exception as e:
         logger.warning('[Update] code-pending enrichment failed: %s', e)
+    try:
+        payload = _enrich_with_restart_failure(payload)
+    except Exception as e:
+        logger.warning('[Update] restart-failure enrichment failed: %s', e)
     return api_ok(payload)
 
 
@@ -314,7 +329,8 @@ def update_apply():
 
 
 def _deferred_reexec(delay: float = 0.3, *, frontend_prevalidated: bool = False,
-                     requested_at: float | None = None, approval_id: str | None = None):
+                     requested_at: float | None = None, approval_id: str | None = None,
+                     precedence=None):
     """Request lifecycle-owned replacement after the HTTP response can flush.
 
     Managed workers hand the replacement to the independent Supervisor;
@@ -331,6 +347,8 @@ def _deferred_reexec(delay: float = 0.3, *, frontend_prevalidated: bool = False,
         frontend_prevalidated=frontend_prevalidated,
         requested_at=requested_at,
     )
+    if not handed_over and precedence is not None:
+        precedence.abandon()
     if handed_over or not approval_id:
         return
     from lib.server.restart_notice import deliver_restart_notice
@@ -494,6 +512,9 @@ def update_restart():
     if err is not None:
         return err
 
+    # Protected steps (landings) do not refuse here: the restart takes
+    # precedence below, waits for the running ones and holds new ones back.
+    running = [item for item in running if not item.get('protectedStep')]
     if running and not force:
         logger.warning(
             '[Update] Restart REFUSED — %d running task(s) would be killed: %s '
@@ -511,6 +532,40 @@ def update_restart():
     # before the cooldown is stamped.  A stale bundle is recoverable while the
     # old worker is still serving; it must not burn the operator's approval or
     # turn a repairable artifact error into an outage.
+    from lib.runtime.protected_steps import restart_precedence
+    with restart_precedence(f'Settings restart {approval_id[:8]}') as precedence:
+        response = _prepare_and_accept_restart(
+            approval_id, own_conv, force, running, restart_requested_at)
+        if isinstance(response, dict):
+            # Accepted: keep new landings back until this process is replaced
+            # (or until the handoff thread reports every bridge refused).
+            precedence.retain_until_exit()
+            threading.Thread(
+                target=_deferred_reexec,
+                kwargs={'frontend_prevalidated': True,
+                        'requested_at': restart_requested_at,
+                        'approval_id': approval_id,
+                        'precedence': precedence},
+                name='tofu-restart',
+                daemon=True).start()
+            return api_ok(response)
+    return response
+
+
+def _prepare_and_accept_restart(approval_id, own_conv, force, running, restart_requested_at):
+    """Preparation, a last protected-step check and acceptance, under restart precedence.
+
+    Returns the accepted response body (dict) or an error response.
+    """
+    from lib.runtime.protected_steps import active_protected_steps
+    steps = active_protected_steps()
+    if steps:
+        # Only markers this restart cannot wait for remain (another host's, unreadable).
+        markers = ', '.join(f"{step['kind']} ({step['path']})" for step in steps)
+        return api_conflict(
+            'Restart refused: a protected step is still marked in progress (%s); a restart now '
+            'would boot from a half-landed checkout. Remove a stale marker by hand, then retry.'
+            % markers, protectedSteps=[step['path'] for step in steps])
     from serverctl_pkg.native_engine import observe_preparation
     preparation_started = time.monotonic()
     phases = []
@@ -572,17 +627,9 @@ def update_restart():
                    'force=%s, running_tasks=%d, approval=%s)',
                    os.getpid(), force, len(running), approval_id[:8])
     # The in-request preflight above already built+validated the frontend
-    # artifact; hand that fact to the deferred reexec so it does not rebuild
-    # the same artifact a second time before shutting the worker down.
-    threading.Thread(
-        target=_deferred_reexec,
-        kwargs={'frontend_prevalidated': True,
-                'requested_at': restart_requested_at,
-                'approval_id': approval_id},
-        name='tofu-restart',
-        daemon=True).start()
-    return api_ok({'restarting': True, 'forced': force,
-                   'interruptedTasks': len(running)})
+    # artifact; the caller hands that fact to the deferred reexec so it does
+    # not rebuild the same artifact before shutting the worker down.
+    return {'restarting': True, 'forced': force, 'interruptedTasks': len(running)}
 
 
 def _deferred_shutdown(delay: float = 0.6):

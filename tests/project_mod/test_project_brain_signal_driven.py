@@ -197,7 +197,7 @@ def test_isolated_workspace_signal_is_wired_at_physical_worker_start(
     expected_work_id = deterministic_work_id(task['id'])
     monkeypatch.setattr(
         integration, 'has_active_workspace_for_work',
-        lambda path, work_id, *, user_id: (
+        lambda path, work_id, *, user_id, checkout_root="": (
             path == project and work_id == expected_work_id and user_id == 1),
     )
 

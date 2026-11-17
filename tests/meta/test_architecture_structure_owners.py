@@ -6,6 +6,12 @@ module-level import cycles; these rules keep both from regressing.
 """
 from __future__ import annotations
 
+# Synthetic module paths of the fixture trees below, never repository files.
+_AUDIT_SYNTHETIC_REPO_PATHS = (
+    'lib/a.py', 'lib/b.py', 'lib/c.py', 'lib/d.py', 'lib/e.py', 'lib/f.py',
+    'lib/feature/admit.py',
+)
+
 import pytest
 
 from scripts import check_architecture as architecture

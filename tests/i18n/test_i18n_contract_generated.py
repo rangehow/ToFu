@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -47,6 +48,29 @@ def test_i18n_usage_checker_has_a_missing_key_negative_control():
     result = _node('--input-type=module', '--eval', probe)
     assert result.returncode == 0, result.stderr
     assert 'undefined key contract.__missing_probe__' in result.stdout
+
+
+def test_sidebar_deliverables_and_progress_components_hold_no_hard_coded_copy():
+    """Owner request 2026-11-17: the sidebar's reports-and-files and task-board sections are fully translated."""
+    probe = """
+      import fs from 'node:fs';
+      import { inspectLiteralCopy, literalCopyFiles } from './scripts/check_i18n_usage.mjs';
+      const problems = [];
+      for (const file of literalCopyFiles) inspectLiteralCopy(file, fs.readFileSync(file, 'utf8'), problems);
+      const control = [];
+      inspectLiteralCopy('/synthetic/copy-probe.ts', "row.textContent = 'Deliverables';"
+        + " chip.setAttribute('aria-label', '进展'); createButton({ label: `Load ${n} more` });"
+        + " meta.textContent = [a, b].join(' · ');", control);
+      process.stdout.write(JSON.stringify({ files: literalCopyFiles, problems, control }));
+    """
+    result = _node('--input-type=module', '--eval', probe)
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert {'frontend/src/features/lead-deliverables/list.ts',
+            'frontend/src/features/coordinator-progress.ts'} <= set(report['files'])
+    assert report['problems'] == []
+    assert len(report['control']) == 4, report['control']
+    assert all('hard-coded copy' in line for line in report['control'])
 
 
 def test_i18n_usage_checker_sees_a_translator_received_as_tr():

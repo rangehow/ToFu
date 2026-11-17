@@ -10,6 +10,10 @@ only. Two tools:
 - ``chaos_crash()`` records the call, then exits the process mid-call without
   answering, as a crashing server does.
 
+While ``<state>/hold-initialize`` exists the server does not answer
+``initialize``: a server that is still starting while a restarted host already
+runs Turns.
+
 Usage: ``python3 mcp_server.py <state dir>``; the state dir also receives the
 server's PID per launch in ``launches.log``.
 """
@@ -19,6 +23,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 
 STATE = Path(sys.argv[1])
 
@@ -65,6 +70,8 @@ def main() -> int:
         if message_id is None:
             continue  # notifications (initialized, cancelled)
         if method == 'initialize':
+            while (STATE / 'hold-initialize').exists():
+                time.sleep(0.05)
             answer(message_id, {'protocolVersion': message['params'].get('protocolVersion', '2025-06-18'),
                                 'capabilities': {'tools': {'listChanged': False}},
                                 'serverInfo': {'name': 'chaos', 'version': schema_version()}})

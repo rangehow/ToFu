@@ -286,6 +286,47 @@ def record_restart_preparation(approval_id: str, progress: dict) -> None:
     update_json_atomic(_APPROVALS_FILE, update, default=None, strict=True)
 
 
+def record_restart_outcome(approval_id: str, outcome: dict) -> None:
+    """How a restart that ran outside the server ended: ``{ok, stage, reason}``.
+
+    ``serverctl restart`` can fail before the manager is reached (engine
+    certification, frontend build), where neither the manager log nor the
+    browser ever sees it. Settings reads it back (``latest_restart_failure``).
+    """
+    recorded = {'ok': bool(outcome.get('ok')), 'stage': str(outcome.get('stage') or ''),
+                'reason': str(outcome.get('reason') or '')[-4000:], 'at': _now()}
+
+    def update(current):
+        document = _document(current)
+        for record in document['records']:
+            if record.get('id') == approval_id and record.get('action') == 'restart':
+                record['outcome'] = recorded
+                return document
+        return None
+    update_json_atomic(_APPROVALS_FILE, update, default=None, strict=True)
+
+
+def latest_restart_failure(*, since: float) -> dict | None:
+    """The newest restart attempted after ``since`` when it failed, else None.
+
+    Only the newest consumed restart counts: a later attempt, failed or not,
+    replaces an earlier failure, and ``since`` (this process's start) hides
+    failures that a successful restart already superseded.
+    """
+    attempts = [record for record in list_records(action='restart', status='consumed')
+                if (record.get('consumed_at') or 0) >= since]
+    if not attempts:
+        return None
+    newest = max(attempts, key=lambda record: record.get('consumed_at') or 0)
+    outcome = newest.get('outcome') or {}
+    if not outcome or outcome.get('ok'):
+        return None
+    origin = newest.get('origin') or {}
+    return {'approvalId': newest.get('id'), 'stage': outcome.get('stage'), 'reason': outcome.get('reason'),
+            'failedAt': outcome.get('at'), 'requestedAt': newest.get('requested_at'),
+            'via': origin.get('kind') or newest.get('decided_by') or ''}
+
+
 def create_request(action: str, origin: dict | None = None) -> dict:
     """Register a pending approval request. Returns the record.
 

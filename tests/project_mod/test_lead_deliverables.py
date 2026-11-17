@@ -78,6 +78,18 @@ def test_every_report_kind_carries_its_kind_title_project_time_summary_and_sourc
         ('report:turn-1', 'delivery'), ('report:ask', 'decision')]
 
 
+def test_a_report_carries_its_turns_display_translation_beside_the_original():
+    translated = _report_turn('t1', 10, title='Shipped', message='All merged.')
+    translated['projection']['translatedContent'] = '已交付\n\n全部已合并。'
+    plain = _report_turn('t0', 5)
+    items = _page([plain, translated]).read()['items']
+    assert items[0]['title'] == 'Shipped' and items[0]['summary'] == 'All merged.'
+    assert items[0]['translation'] == {'title': '已交付', 'summary': '全部已合并。'}
+    assert 'translation' not in items[1]
+    from lib.conversations.lead_deliverables import _DEFS
+    assert set(_DEFS['deliverableItem']['properties']['translation']['required']) == {'title', 'summary'}
+
+
 def _report_file(artifact_id, filename='resume.pdf', kind='file'):
     return {'artifactId': artifact_id, 'filename': filename, 'kind': kind, 'sizeBytes': 10,
             'path': 'out/' + filename}

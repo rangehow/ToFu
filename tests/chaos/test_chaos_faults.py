@@ -439,11 +439,13 @@ def chaos_mcp(chaos):
 def _wait_mcp_reachable(chaos) -> None:
     """The execution host connects asynchronously after the API acknowledged."""
     deadline = time.monotonic() + SETTLE_DEADLINE_S
+    # A note of its own: an earlier probe's line must not answer this wait.
+    note = f'probe-{uuid.uuid4().hex[:8]}'
     while True:
         conversation, nonce, user_text = _mcp_turn(
-            chaos, [('mcp__chaos__chaos_record', {'note': 'probe'})], 'probe')
+            chaos, [('mcp__chaos__chaos_record', {'note': note})], 'probe')
         chaos.settle(conversation)
-        if 'record probe' in _mcp_calls(chaos):
+        if f'record {note}' in _mcp_calls(chaos):
             return
         assert time.monotonic() < deadline, _mcp_results(chaos, nonce)
 
@@ -503,3 +505,68 @@ def test_mcp_tool_disabled_in_settings_is_refused_in_execution_host_turns(chaos_
         before = list(_mcp_calls(chaos))
         assert time.monotonic() < deadline, 'the disabled MCP tool kept running in Turns'
     assert 'record forbidden' not in _mcp_calls(chaos)[len(before):]
+
+
+def test_mcp_server_connecting_after_a_restart_serves_resumed_and_new_turns(chaos_mcp):
+    """Found live 2026-11-17: after a restart the execution host resumed a
+    Turn and admitted new ones before its MCP auto-connect finished. Their
+    tool authority was assembled with the server absent, and the per-round
+    refresh only re-admitted names present at startup, so for the rest of
+    the Turn every call answered tool_not_enabled although the server was
+    enabled and connected."""
+    chaos = chaos_mcp
+    _wait_mcp_reachable(chaos)
+    state = _mcp_state(chaos)
+    harmless = fp.tool('run_command', {'command': 'echo waited-for-mcp'})
+
+    def held_then(release, note):
+        # The hold opens a model round assembled while the server is still
+        # starting; the harmless call ends it, so the MCP call that follows
+        # comes from a fresh round after the server connected.
+        return [fp.hold('Waiting for MCP. ', release, harmless),
+                fp.tool('execute_tools', {'calls': [{'name': 'mcp__chaos__chaos_record',
+                                                     'arguments': {'note': note}}]}),
+                fp.text(f'Recorded {note}. [END_TURN: done]')]
+
+    from tests.chaos.client import CHAT_CONFIG
+    config = {'tools': {**CHAT_CONFIG['tools'], 'toolSearch': 'local'}}
+
+    def start(steps, prompt):
+        nonce = chaos.provider.script(steps)
+        conversation = f'chaos{uuid.uuid4().hex[:16]}'
+        user_text = f'{prompt} [chaos turn={nonce}]'
+        chaos.client.create_turn(conversation, user_text, workspace=str(chaos.workspace), first=True,
+                                 config=config)
+        return conversation, nonce, user_text
+
+    def wait_requests(nonce, count, what):
+        deadline = time.monotonic() + SETTLE_DEADLINE_S
+        while len(chaos.provider.requests(nonce)) < count:
+            assert time.monotonic() < deadline, what
+            time.sleep(0.05)
+
+    interrupted, resumed_release, new_release = threading.Event(), threading.Event(), threading.Event()
+    resumed = start([fp.hold('Before the restart. ', interrupted, fp.text('unreachable')),
+                     *held_then(resumed_release, 'resumed')], 'Use the chaos MCP server.')
+    wait_requests(resumed[1], 1, 'the Turn to resume never reached the provider')
+    (state / 'hold-initialize').touch()
+    try:
+        try:
+            chaos.instance.recover_execution_host()
+        finally:
+            interrupted.set()
+        new = start(held_then(new_release, 'new'), 'Use the chaos MCP server.')
+        # Both Turns now run a round assembled before the server connected.
+        wait_requests(resumed[1], 2, 'the restart never resumed the interrupted Turn')
+        wait_requests(new[1], 1, 'the new Turn never reached the provider')
+        (state / 'hold-initialize').unlink()
+        _wait_mcp_reachable(chaos)
+    finally:
+        (state / 'hold-initialize').unlink(missing_ok=True)
+        resumed_release.set()
+        new_release.set()
+    for conversation, nonce, user_text in (resumed, new):
+        chaos.assert_contract(conversation, user_text, outcomes={'completed'})
+    calls = _mcp_calls(chaos)
+    assert calls.count('record resumed') == 1, _mcp_results(chaos, resumed[1])
+    assert calls.count('record new') == 1, _mcp_results(chaos, new[1])

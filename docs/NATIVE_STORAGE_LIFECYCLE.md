@@ -658,6 +658,24 @@ Alternatives rejected:
 - A larger crash limit or window: a tuned value that still latches.
 - Re-alerting on every failed post-trip attempt: one outage, one alert.
 
+## A failed first start is a failed-start event
+
+Problem: 2026-11-17 21:49, the first restart after a new certified engine
+was deployed: the resident host's first health preflight was not ready
+once, `runtime.start()` raised, and the host recorded `failed; explicit
+restart required`. Nothing retried; the API stayed unready for 17 minutes
+until the owner restarted again, when the same engine started at once.
+
+Decision: the native storage host starts through
+`StorageRuntime.start_supervised`. A failed first start counts one event in
+the existing crash window and hands the start to the same `_restart_loop`
+(backoff, refusal recheck, deferral, breaker) that a crash after readiness
+uses; a deterministic refusal is published as a refusal. A runtime without
+automatic restart keeps raising. Alternatives rejected: a retry loop in the
+host (a second budget), a longer first health deadline alone (helps a slow
+listener, not a component that is briefly unhealthy). Specification:
+`tests/storage/test_storage_runtime_first_start.py`.
+
 A child that passes the pre-spawn lease probe and then loses the flock race
 still counts as a crash. LIVENESS proposed a fix: the launcher reports a typed
 lease-held startup error on the readiness channel, and the supervisor maps it

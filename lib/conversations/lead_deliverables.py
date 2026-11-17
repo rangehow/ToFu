@@ -105,6 +105,11 @@ def report_item(turn, *, project_path, files=()):
             'source': _source(turn['conversationId'], turn), 'summary': _clip_body(message)}
     if files:
         item['files'] = list(files)
+    # The copy the conversation shows by default: the Turn's auto-translation, same layout.
+    translated_title, _, translated_message = str(
+        (turn.get('projection') or {}).get('translatedContent') or '').partition('\n\n')
+    if translated_title.strip():
+        item['translation'] = {'title': _clip(translated_title, _TITLE_MAX), 'summary': _clip_body(translated_message)}
     return item
 
 

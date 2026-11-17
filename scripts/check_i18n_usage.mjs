@@ -21,6 +21,26 @@ const frontendRoot = path.join(repositoryRoot, 'frontend/src');
 const translationCallNames = new Set([
   't', '_t', '_tt', '_tf', 'tr', 'translate', 'moduleTranslate',
 ]);
+/* Components whose every user-visible string must come from the catalogs: the
+ * lead deliverables (reports and files) section and the Coordinator task board
+ * (Progress) with its sidebar row and task history. A literal holding a letter
+ * in a copy position (text, tooltip, aria-label, placeholder, button label,
+ * disclosure summary, appended text) fails; separators and symbols such as
+ * ' · ' and '›' pass. */
+export const literalCopyFiles = [
+  'frontend/src/features/lead-deliverables/list.ts',
+  'frontend/src/features/lead-deliverables/open.ts',
+  'frontend/src/features/lead-deliverables/model.ts',
+  'frontend/src/features/coordinator-progress.ts',
+  'frontend/src/features/coordinator-task-history.ts',
+  'frontend/src/features/project-coordination-surface.ts',
+];
+const copyProperties = new Set(['textContent', 'innerText', 'title', 'placeholder', 'ariaLabel', 'label', 'alt']);
+const copyAttributes = new Set(['aria-label', 'title', 'placeholder', 'alt', 'aria-description']);
+const copyCalls = new Set([
+  'createDisclosureSummary', 'createTextNode', 'append', 'prepend', 'replaceChildren', 'before', 'after',
+]);
+const letterPattern = /\p{L}/u;
 const dataAttributePattern = /data-i18n(?:-html|-placeholder|-title)?\s*=\s*["']([^"']+)["']/g;
 const sourceExtensions = new Set(['.ts', '.js']);
 
@@ -156,6 +176,63 @@ export function inspectDataAttributes(filePath, source, definedKeys, problems) {
   }
 }
 
+function literalCopy(expression) {
+  if (!expression) return [];
+  if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) {
+    return letterPattern.test(expression.text) ? [expression.text] : [];
+  }
+  if (ts.isTemplateExpression(expression)) {
+    const parts = [expression.head.text, ...expression.templateSpans.map((span) => span.literal.text)];
+    return parts.filter((part) => letterPattern.test(part));
+  }
+  if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression)
+      || ts.isNonNullExpression(expression)) {
+    return literalCopy(expression.expression);
+  }
+  if (ts.isConditionalExpression(expression)) {
+    return [...literalCopy(expression.whenTrue), ...literalCopy(expression.whenFalse)];
+  }
+  if (ts.isBinaryExpression(expression)
+      && [ts.SyntaxKind.PlusToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken]
+        .includes(expression.operatorToken.kind)) {
+    return [...literalCopy(expression.left), ...literalCopy(expression.right)];
+  }
+  return [];
+}
+
+function propertyNameText(name) {
+  return name && (ts.isIdentifier(name) || ts.isStringLiteral(name)) ? name.text : '';
+}
+
+/** Hard-coded user-visible copy in a component that must route every string through t(). */
+export function inspectLiteralCopy(filePath, source, problems) {
+  const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const relative = relativeToRepository(filePath);
+  const report = (node, values, where) => {
+    for (const value of values) {
+      problems.push(`${relative}:${lineOf(sourceFile, node)}: hard-coded copy ${JSON.stringify(value)} in ${where}; use t()`);
+    }
+  };
+  function visit(node) {
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken
+        && ts.isPropertyAccessExpression(node.left) && copyProperties.has(node.left.name.text)) {
+      report(node, literalCopy(node.right), node.left.name.text);
+    } else if (ts.isPropertyAssignment(node) && copyProperties.has(propertyNameText(node.name))) {
+      report(node, literalCopy(node.initializer), propertyNameText(node.name));
+    } else if (ts.isCallExpression(node)) {
+      const name = callName(node.expression);
+      const [first, second] = node.arguments;
+      if (name === 'setAttribute' && first && ts.isStringLiteral(first) && copyAttributes.has(first.text)) {
+        report(node, literalCopy(second), first.text);
+      } else if (copyCalls.has(name)) {
+        for (const argument of node.arguments) report(node, literalCopy(argument), name);
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(sourceFile);
+}
+
 async function optionalHtmlFiles() {
   const files = [path.join(repositoryRoot, 'index.html'), path.join(repositoryRoot, 'static/admin.html')];
   const htmlDirectories = [
@@ -186,6 +263,10 @@ export async function checkI18nUsage() {
       problems,
       catalog.paramsByKey,
     );
+  }
+  for (const relative of literalCopyFiles) {
+    const filePath = path.join(repositoryRoot, relative);
+    inspectLiteralCopy(filePath, await fs.readFile(filePath, 'utf8'), problems);
   }
   for (const filePath of await optionalHtmlFiles()) {
     try {

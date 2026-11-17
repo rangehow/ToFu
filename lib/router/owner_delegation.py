@@ -163,12 +163,15 @@ def _live_router_attempt(task: dict, scope: dict) -> None:
         raise PermissionError('Your current reply was stopped')
 
 
-def _restart_protection(router_conversation_id: str, interrupt: bool) -> list[str]:
+def _restart_protection(router_conversation_id: str, interrupt: bool, *,
+                        steps_refuse: bool = True) -> list[str]:
     """Apply the Settings restart guard; return the conversations a restart interrupts.
 
     The signal is ``list_running_tasks`` (durable jobs, local carriers and
     protected steps), excluding the Router's own conversation as Settings
-    excludes the caller's. A protected step always refuses; other running
+    excludes the caller's. A protected step refuses once this restart holds
+    precedence (only a marker it cannot wait for remains); before that,
+    ``steps_refuse=False`` lets the restart wait for them instead. Other running
     conversations refuse unless the owner asked to interrupt them (the
     Settings force). An unreadable signal never proves idle.
     """
@@ -180,7 +183,9 @@ def _restart_protection(router_conversation_id: str, interrupt: bool) -> list[st
                        'Active execution could not be verified; the server was not restarted. Retry '
                        f'when storage answers ({type(error).__name__}).') from error
     steps = [item for item in running if item.get('protectedStep')]
-    if steps:
+    if not steps_refuse:
+        running = [item for item in running if not item.get('protectedStep')]
+    elif steps:
         markers = ', '.join(f"{item['protectedStep']} ({item.get('marker') or item['taskId']})" for item in steps)
         raise _refused('restart_protected_step',
                        f'Restart refused: a protected step is in progress ({markers}); a restart now would '
@@ -223,7 +228,8 @@ def restart_server(task: dict, scope: dict, arguments: dict) -> dict:
     trigger = None
     try:
         trigger = resolve_trigger(task, scope, arguments)
-        _restart_protection(scope['conversation_id'], interrupt)
+        # Landings in progress are waited for under precedence, not refused.
+        _restart_protection(scope['conversation_id'], interrupt, steps_refuse=False)
         if gate.restart_cooldown_remaining() > 0:
             raise _refused('restart_cooldown', 'Another restart was accepted moments ago; nothing ran')
     except gate.DelegationRefused as refusal:
@@ -289,23 +295,29 @@ def _restart_after_acceptance(owner: int, action_id: str, requester: dict, reque
     from lib import lifecycle_approval as gate
     from lib.server import server_reexec
     from lib.server.restart_notice import deliver_restart_notice
+    from lib.runtime.protected_steps import restart_precedence
     old_code = boot_identity.code_fingerprint()
     try:
-        error, preparation = _prepare(action_id)
-        if error:
-            gate.note_restart_notice(action_id, preparation=preparation, oldCode=old_code)
-            gate.settle_delegated_action(owner, action_id, status='failed',
-                                         code='restart_preparation_failed', detail=error)
-            return
-        interrupted = _restart_protection(requester['conversationId'], interrupt)
-        accepted = gate.accept_delegated_restart(owner, action_id, requester, interrupted=interrupted,
-                                                 old_code=old_code, preparation=preparation)
-        if accepted.get('status') != 'restarting':
-            return
-        if not server_reexec.perform_server_reexec(RESTART_REASON, frontend_prevalidated=True,
+        # New landings wait for this restart; running ones finish first.
+        with restart_precedence(f'Global Router restart {action_id}') as precedence:
+            error, preparation = _prepare(action_id)
+            if error:
+                gate.note_restart_notice(action_id, preparation=preparation, oldCode=old_code)
+                gate.settle_delegated_action(owner, action_id, status='failed',
+                                             code='restart_preparation_failed', detail=error)
+                return
+            interrupted = _restart_protection(requester['conversationId'], interrupt)
+            accepted = gate.accept_delegated_restart(owner, action_id, requester, interrupted=interrupted,
+                                                     old_code=old_code, preparation=preparation)
+            if accepted.get('status') != 'restarting':
+                return
+            if server_reexec.perform_server_reexec(RESTART_REASON, frontend_prevalidated=True,
                                                    requested_at=requested_at):
-            gate.settle_delegated_action(owner, action_id, status='failed', code='restart_bridge_refused',
-                                         detail='Every restart bridge refused; the server keeps running')
+                precedence.retain_until_exit()
+            else:
+                gate.settle_delegated_action(owner, action_id, status='failed',
+                                             code='restart_bridge_refused',
+                                             detail='Every restart bridge refused; the server keeps running')
     except gate.DelegationRefused as refusal:
         gate.note_restart_notice(action_id, oldCode=old_code)
         gate.settle_delegated_action(owner, action_id, status='failed', code=refusal.code,

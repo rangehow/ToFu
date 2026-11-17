@@ -27,6 +27,12 @@ export function deliverableTarget(item: LeadDeliverable): DeliverableTarget | nu
   return item.source ? { kind: 'turn', turn: item.source } : null;
 }
 
+/** The title and message as the conversation shows them: a report's display translation when it has one. */
+export function deliverableCopy(item: LeadDeliverable): { title: string; summary: string } {
+  return item.translation ? { title: item.translation.title, summary: item.translation.summary }
+    : { title: item.title, summary: item.summary || '' };
+}
+
 /** Older pages append below; a re-read first page replaces the items it covers. Ids stay unique. */
 export function appendDeliverables(current: ReadonlyArray<LeadDeliverable>, page: ReadonlyArray<LeadDeliverable>): LeadDeliverable[] {
   const seen = new Set(current.map(item => item.id));

@@ -5237,6 +5237,8 @@
   "update.checkTitle": "检查更新",
   "update.checking": "正在检查更新…",
   "update.codePending": "检测到本地代码改动 —— 当前进程仍在运行旧代码，重启后生效。",
+  "update.lastRestartFailed": "上次重启在“{stage}”阶段失败，服务器仍在运行旧代码。",
+  "update.lastRestartFailedHint": "请先解决原因，再重新重启。",
   "update.codeUnchangedHint": "新进程加载的源码与重启前完全一致 —— 你的本地改动可能没有生效（是否改了别的目录，或改动被还原？）。",
   "update.codeUnchangedTitle": "服务器已重启，但代码未改变",
   "update.copyLog": "复制日志",

@@ -146,6 +146,29 @@ def test_project_exceeds_legacy_capacity_and_point_work_is_history_independent(o
     assert c.repo.find_command('159')['id'] == rows[-1]['id']
 
 
+def test_whole_project_reads_take_one_exchange_per_index_page_not_per_row(owned):
+    c = owned
+    rows = [authorize(c, str(i)) for i in range(70)]
+    real = c.repo.client; exchanges = []
+    class Counted:
+        def query(self, operation, payload, **kw):
+            exchanges.append(operation)
+            return real().query(operation, payload, **kw)
+        def query_many(self, requests, **kw):
+            exchanges.append('batch:' + ','.join(sorted({operation for operation, _ in requests})))
+            return real().query_many(requests, **kw)
+        def command(self, *args, **kw): return real(write=True).command(*args, **kw)
+    c.repo.client = lambda **kw: Counted()
+    discovered, settled = c.repo.discover()
+    assert discovered == rows and settled == set()
+    assert 'project.dispatch.get' not in exchanges[1:]  # only the head is a point read
+    from lib.storage.generated_project_dispatch_contract import SPEC
+    assert exchanges.count('batch:project.dispatch.get') == -(-len(rows) // SPEC['limits']['pageRows'])
+    exchanges.clear()
+    assert c.repo.list() == rows
+    assert exchanges.count('project.dispatch.get') <= 2 * len(c.store.head()['value']['state']['counts'])
+
+
 def test_missing_history_index_is_an_integrity_failure_not_silent_evidence_loss(owned):
     c = owned; row = authorize(c)
     head = c.store.head(); state = head['value']['state']

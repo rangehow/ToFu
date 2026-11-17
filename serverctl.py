@@ -1607,18 +1607,19 @@ def cmd_stop(args: argparse.Namespace) -> int:
     return 0 if result.get('ok') else 1
 
 
-def _record_operator_pass(action: str, provenance: dict) -> None:
-    """Leave a distinct, audited approval record for an operator-path pass.
+def _record_operator_pass(action: str, provenance: dict) -> str | None:
+    """Leave a distinct, audited approval record for an operator-path pass; its id.
 
     Best effort: a broken approval store must not stop the owner's own
     terminal restart, so a failure is reported and the action proceeds.
     """
     try:
         from lib.lifecycle_approval import record_operator_pass
-        record_operator_pass(action, provenance)
+        return record_operator_pass(action, provenance).get('id')
     except Exception as exc:  # the operator path stays available
         print(f'Warning: the {action} approval record could not be written: {exc}',
               file=sys.stderr)
+        return None
 
 
 def _operator_provenance(kind: str, **extra) -> dict:
@@ -1644,7 +1645,7 @@ def _approve_lifecycle_if_needed(
         ('TOFU_RESTART_GATE_PASSED', '1' if action == 'restart' else None),
     ) if value is not None and os.environ.get(name) == value), '')
     if variable:
-        _record_operator_pass(action, _operator_provenance(
+        args.lifecycle_approval_id = _record_operator_pass(action, _operator_provenance(
             'environment-override', variable=variable, source=args.source))
         return True
     if sys.stdin.isatty():
@@ -1660,13 +1661,13 @@ def _approve_lifecycle_if_needed(
                 terminal = os.ttyname(sys.stdin.fileno())
             except OSError:
                 terminal = ''
-            _record_operator_pass(action, _operator_provenance(
+            args.lifecycle_approval_id = _record_operator_pass(action, _operator_provenance(
                 'interactive-terminal', tty=terminal, source=args.source,
                 confirmation='yes-flag' if args.yes else 'typed'))
         return confirmed
     try:
         from lib.lifecycle_approval import consume_any, create_request, list_records
-        ok, why, _ = consume_any(action)
+        ok, why, args.lifecycle_approval_id = consume_any(action)
     except Exception as exc:
         print(f'{action.capitalize()} approval check failed: {exc}', file=sys.stderr)
         return False
@@ -1720,7 +1721,63 @@ def _interactive_terminal() -> str | None:
         return ''
 
 
+class _RestartFailure(Exception):
+    """A restart stopped at one named stage; the running server was not stopped by this stage."""
+
+    def __init__(self, stage: str, reason: str, code: int = 1):
+        super().__init__(reason)
+        self.stage, self.reason, self.code = stage, reason, code
+
+
+def _record_restart_outcome(args: argparse.Namespace, outcome: dict) -> None:
+    """Put a CLI restart's outcome where the owner looks: server-manager.log and Settings.
+
+    A failure before the manager is reached otherwise exists only on the
+    terminal that ran the command. Recording is best effort; the command's
+    own output and exit status remain authoritative.
+    """
+    words = ('restart succeeded' if outcome['ok'] else
+             f"restart failed stage={outcome['stage']} reason="
+             + ' | '.join(line.strip() for line in outcome['reason'].splitlines() if line.strip()))
+    line = (time.strftime('%Y-%m-%d %H:%M:%S') + f',000 {"INFO" if outcome["ok"] else "ERROR"} '
+            f'[serverctl] {words} (pid={os.getpid()}, source={args.source})\n')
+    try:
+        log_dir = Path(PROJECT) / 'logs'
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with open(log_dir / 'server-manager.log', 'a', encoding='utf-8') as handle:
+            handle.write(line)
+    except OSError as exc:
+        print(f'Warning: the restart outcome could not be logged: {exc}', file=sys.stderr)
+    approval_id = getattr(args, 'lifecycle_approval_id', None)
+    if not approval_id:
+        return
+    try:
+        from lib.lifecycle_approval import record_restart_outcome
+        record_restart_outcome(approval_id, outcome)
+    except Exception as exc:  # the command's own output stays authoritative
+        print(f'Warning: the restart outcome could not be recorded for Settings: {exc}',
+              file=sys.stderr)
+
+
 def cmd_restart(args: argparse.Namespace) -> int:
+    try:
+        code = _restart_through_manager(args)
+    except _RestartFailure as failure:
+        # Before the manager is asked, the refusal stays one line (its reason
+        # names the stage); the manager's and readiness failures keep their help.
+        prefix = {'manager': 'Restart failed: ', 'new generation readiness': ''}.get(
+            failure.stage, 'Cannot restart Tofu: ')
+        print(prefix + failure.reason, file=sys.stderr)
+        if failure.stage in ('manager', 'new generation readiness'):
+            _print_start_failure_help()
+        _record_restart_outcome(args, {'ok': False, 'stage': failure.stage, 'reason': failure.reason})
+        return failure.code
+    if code == 0 and getattr(args, 'lifecycle_approval_id', None):
+        _record_restart_outcome(args, {'ok': True, 'stage': 'ready', 'reason': ''})
+    return code
+
+
+def _restart_through_manager(args: argparse.Namespace) -> int:
     forwarded = list(args.server_args or [])
     if forwarded[:1] == ['--']:
         forwarded = forwarded[1:]
@@ -1750,13 +1807,24 @@ def cmd_restart(args: argparse.Namespace) -> int:
         except (ImportError, OSError, ValueError) as exc:
             print(f'Cannot restart Tofu: {exc}', file=sys.stderr)
             return 2
+    # From here a landing would change what this restart prepares and boots;
+    # new landings wait for it (lib/runtime/protected_steps.py).
+    from lib.runtime.protected_steps import restart_precedence
+    with restart_precedence(f'serverctl restart (pid {os.getpid()})',
+                            on_wait=lambda message: print(message, file=sys.stderr, flush=True)):
+        return _prepare_and_restart(args, forwarded, server_env, reason, override)
+
+
+def _prepare_and_restart(args: argparse.Namespace, forwarded: list, server_env: dict,
+                         reason: str | None, override: dict) -> int:
     # The manager prepares the storage engine itself: only it can decide to
     # retain the serving storage host when that preparation fails.
-    repair_error = ((certify_head_engine_before('Tofu restart') if reason is None else '')
-                    or prepare_source_frontend_artifact('Tofu restart'))
-    if repair_error:
-        print(f'Cannot restart Tofu: {repair_error}', file=sys.stderr)
-        return 1
+    certification_error = certify_head_engine_before('Tofu restart') if reason is None else ''
+    if certification_error:
+        raise _RestartFailure('storage engine certification', certification_error)
+    frontend_error = prepare_source_frontend_artifact('Tofu restart')
+    if frontend_error:
+        raise _RestartFailure('frontend build', frontend_error)
     result = _post('restart', source=args.source, serverArgs=forwarded or None,
                    serverEnv=server_env, **override)
     retention = result.get('storageRetention') or {}
@@ -1767,9 +1835,7 @@ def cmd_restart(args: argparse.Namespace) -> int:
     if result.get('ok') and decision.get('message'):
         print(decision['message'], file=sys.stderr)
     if not result.get('ok'):
-        print(f"Restart failed: {result.get('message')}", file=sys.stderr)
-        _print_start_failure_help()
-        return 1
+        raise _RestartFailure('manager', str(result.get('message') or result.get('error')))
     if (result.get('waitingForMaintenance')
             or result.get('observed') == 'maintenance'):
         print('Tofu restart is queued behind offline storage maintenance.')
@@ -1794,12 +1860,12 @@ def cmd_restart(args: argparse.Namespace) -> int:
             file=sys.stderr)
     elif _startup_in_progress(status):
         _print_start_in_progress()
-    else:
-        print('Restart launched, but the server is not ready.', file=sys.stderr)
     _print_status(status or result)
-    if not _startup_in_progress(status):
-        _print_start_failure_help()
-    return 1
+    if _startup_in_progress(status):
+        return 1
+    raise _RestartFailure('new generation readiness', 'Restart launched, but the new server did not become '
+                          f"ready (observed={status.get('observed')}, pid={status.get('pid')}); "
+                          f"see {_control_command('logs')}.")
 
 
 def cmd_status(args: argparse.Namespace) -> int:

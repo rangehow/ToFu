@@ -88,6 +88,19 @@ def test_report_is_an_assistant_turn_with_durable_unread_and_explicit_read(repor
     assert len(r.notices) == 2
 
 
+def test_the_latest_report_carries_its_display_translation_title(reports):
+    r = reports
+    r.repo.publish(r.scope, r.request)
+    assert 'translatedTitle' not in r.factory().read()['latest']
+    turn = next(iter(r.turns.values()))
+    turn['projection']['translatedContent'] = '需要你决定\n\n请选择迁移时间窗口。'
+    latest = r.factory().read()['latest']
+    assert latest['translatedTitle'] == '需要你决定'
+    assert latest['title'] == 'Decision needed'
+    turn['projection']['translatedContent'] = '长' * 200 + '\n\n正文'
+    assert len(r.factory().read()['latest']['translatedTitle']) == 120
+
+
 def test_latest_reads_the_pointer_and_unread_without_the_turn_for_the_current_binding_only(reports):
     r = reports
     binding = {'conversationId': 'coordinator', 'revision': 1}

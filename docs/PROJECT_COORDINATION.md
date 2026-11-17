@@ -2414,6 +2414,16 @@ whole-conversation response bound) and the conversation's artifact rows:
   message is the oldest Turn whose tool round carries the `artifactId`. A file a
   report attached is listed under that report, never again as its own item.
 
+A report Turn the lead auto-translated also carries `translation` (its
+`translatedContent` split as `title\n\nmessage`), and the reports head's
+`latest` carries `translatedTitle`: the list row, the report dialog and the
+sidebar's unread preview show the copy the conversation shows by default, the
+row tooltip keeps the original (owner request 2026-11-17: translate the
+sidebar's Deliverables and Progress sections). Every label of those sections
+and of the task board comes from the i18n catalogs, repaints on
+`tofu:language-change`, and `scripts/check_i18n_usage.mjs` (`literalCopyFiles`)
+rejects a hard-coded lettered literal in their copy positions.
+
 Items are newest first, 64 per page (the coordination page bound); the cursor
 is the previous page's last `(createdAt, item digest)`, so a page boundary is
 stable while new deliverables arrive. Reads require the caller to own the

@@ -469,7 +469,10 @@ checkout it lives in: `cold-start` (median of N stop/start cycles, each host
 from spawn and from the CLI to ready), `idle` (CPU%, RSS and context switches
 per second of both hosts over a window, busiest threads named through py-spy),
 `dispatch` (submit to the loopback provider's first request byte, plus the
-first Turn after ready) and `hold`. It builds a scrubbed environment (private
+first Turn after ready), `hold` and `restart` (a real `serverctl.py restart`
+while one landing runs and another starts, then a scripted Turn; with
+`--land-source`, run only from an exported copy, the landing changes source so
+both hosts must be replaced). It builds a scrubbed environment (private
 manager/API ports, `TOFU_HEARTBEAT_DIR`, `TMPDIR`, in-tree `data/`) and
 refuses a checkout that already runs a server or manager, so it never reaches
 a live Tofu. Run each compared tree from its own exported checkout. Results
@@ -483,6 +486,13 @@ active, so every run repeats the same pass. Compare arms in fresh alternating
 processes with `TOFU_BENCH_CHECKOUT` (and `PYTHONPATH`) naming each tree; the
 summary prints the `lib` it measured. Dispatch recovery and coordinator
 reports are excluded. Verify `tests/meta/test_startup_recovery_batch_measure.py`.
+
+`startup_dispatch_recovery.py` runs boot's `recover_persisted_dispatch` against
+`<instance>/data/tofudb-authority`, a private authority restored from a backup
+of the store under study (`tofu-db restore --backup-dir <backups>/tofudb/closed`),
+never the live store, reporting wall time and storage exchanges by operation per
+pass. A pass changes the copy as a boot would, so warm it with one pass, then
+alternate arms (`TOFU_BENCH_CHECKOUT`) one fresh process each on the same copy.
 
 - Keep datasets, manifests, pricing inputs, random seeds, model/provider
   identity, and acceptance criteria explicit enough to reproduce a result.

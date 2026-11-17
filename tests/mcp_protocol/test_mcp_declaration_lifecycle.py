@@ -366,3 +366,89 @@ def test_text_only_turn_clears_root_mcp_recovery(monkeypatch):
     monkeypatch.setattr(prep, 'assemble_round_tools', forbidden)
     prep.refresh_root_mcp_authority(task)
     assert task['_executable_tool_catalog'] == []
+
+
+_ROOT_MCFG = dict(project_path='', project_enabled=False, search_mode='off',
+                  search_enabled=False, fetch_enabled=False, code_exec_enabled=False,
+                  browser_enabled=False, desktop_enabled=False, image_gen_enabled=False)
+
+
+def _owner_config(monkeypatch, rows):
+    import lib.mcp.config
+    monkeypatch.setattr(lib.mcp.config, 'load_mcp_config', lambda *, user_id: rows)
+
+
+def test_root_refresh_admits_an_enabled_server_that_connects_after_startup(monkeypatch):
+    """A restarted execution host runs Turns while its MCP auto-connect is
+    still starting servers (live 2026-11-17): the Turn's later rounds gain the
+    tools of servers the owner had enabled, and nothing else."""
+    from lib.tasks_pkg.orchestrator._tool_assembly_prep import (
+        assemble_round_tools, refresh_root_mcp_authority)
+    from lib.tasks_pkg.tool_dispatch._labels import _known_tool_names
+
+    rows = _large_snapshot()
+    xuecheng = [row for row in rows if row['namespaced_name'].startswith('mcp__xuecheng__')]
+    hope = [row for row in rows if row['namespaced_name'].startswith('mcp__hope__')]
+    _owner_config(monkeypatch, {'xuecheng': {'enabled': True}, 'hope': {},
+                                'other': {'enabled': False}})
+    for startup in ([], xuecheng):
+        bridge(monkeypatch, startup, connected=bool(startup))
+        cfg = {'userId': 7, 'model': 'test', 'memoryEnabled': False,
+               'schedulerEnabled': False, 'preferencesEnabled': False, 'plugins': []}
+        task = {'id': 'resumed', 'convId': 'durable', '_userId': 7,
+                'messages': [], 'config': cfg}
+        assemble_round_tools(cfg, task, dict(_ROOT_MCFG))
+        assert not {row['namespaced_name'] for row in hope} & _known_tool_names(task)
+        assert task['_rootMcpPendingServers'] == (
+            ['hope'] if startup else ['hope', 'xuecheng'])
+        other = _definition('other', 'read')
+        late = rows + [{**hope[0], 'namespaced_name': other['function']['name'],
+                        'openai_def': other}]
+        bridge(monkeypatch, late)
+        refresh_root_mcp_authority(task)
+        known = _known_tool_names(task)
+        assert {row['namespaced_name'] for row in rows} <= known
+        assert other['function']['name'] not in known
+        assert task['_executableToolNamespaceByName'][hope[0]['namespaced_name']]
+        cfg['mcpEnabled'] = False
+        refresh_root_mcp_authority(task)
+        assert not {row['namespaced_name'] for row in rows} & _known_tool_names(task)
+
+
+def test_dispatched_worker_refresh_regains_granted_mcp_tools_only(monkeypatch):
+    """The parallel Worker resumed after the 2026-11-17 restart held
+    mcp__hope__* in its grant, but its startup ran before hope connected and
+    refresh skipped every dispatched task: each later call answered
+    tool_not_enabled. Refresh now reaches it, still bounded by its grant."""
+    from lib.project_dispatch import admission
+    from lib.tasks_pkg.orchestrator._tool_assembly_prep import (
+        assemble_round_tools, refresh_root_mcp_authority)
+    from lib.tasks_pkg.tool_dispatch._labels import _known_tool_names
+
+    rows = _large_snapshot()
+    hope = [row['namespaced_name'] for row in rows
+            if row['namespaced_name'].startswith('mcp__hope__')]
+    granted, withheld = hope[:2], hope[2:]
+    profile = {'mode': 'project',
+               'tools': ['read_files', 'search_tools', 'execute_tools', *granted]}
+    monkeypatch.setattr(admission, 'is_dispatch_task', lambda task: True)
+    monkeypatch.setattr(admission, 'validate_task', lambda task, **_: {'assignmentId': 'worker'})
+    monkeypatch.setattr(admission, 'repository_for', lambda binding: SimpleNamespace(
+        read=lambda assignment_id: {'assignmentId': assignment_id}))
+    monkeypatch.setattr(admission, 'profile_for', lambda assignment: profile)
+    monkeypatch.setattr(admission, 'granted_coordinator_scope', lambda task: (False, None))
+    from lib.project_dispatch import continuation
+    monkeypatch.setattr(continuation, 'current_continuation', lambda task, **_: None)
+    _owner_config(monkeypatch, {'hope': {'enabled': True}})
+    bridge(monkeypatch, [], connected=False)
+    cfg = {'userId': 7, 'model': 'test', 'memoryEnabled': False,
+           'schedulerEnabled': False, 'preferencesEnabled': False, 'plugins': []}
+    task = {'id': 'worker', 'convId': 'worker-conversation', '_userId': 7,
+            'messages': [], 'config': cfg}
+    assemble_round_tools(cfg, task, dict(_ROOT_MCFG))
+    assert not set(hope) & _known_tool_names(task)
+    bridge(monkeypatch, rows)
+    refresh_root_mcp_authority(task)
+    known = _known_tool_names(task)
+    assert set(granted) <= known
+    assert not set(withheld) & known

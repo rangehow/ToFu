@@ -13,7 +13,7 @@ import { t } from '../../i18n';
 import { createDialog, createButton } from '../../ui';
 import { readLiveRuntimeBinding } from '../../feature-registry';
 import { createToolCardPresentation } from '../../conversation/ui/tool-cards';
-import { deliverableTarget, type LeadDeliverable, type LeadDeliverableTurn } from './model';
+import { deliverableCopy, deliverableTarget, type LeadDeliverable, type LeadDeliverableTurn } from './model';
 
 export interface DeliverableOpenPorts {
   openArtifact(artifactId: string): void;
@@ -85,12 +85,13 @@ export function runtimeOpenPorts(overrides: Partial<DeliverableOpenPorts> = {}):
 }
 
 function reportCard(item: LeadDeliverable, ports: DeliverableOpenPorts): HTMLElement {
+  const copy = deliverableCopy(item);
   const cards = createToolCardPresentation({ translate: t, markdown: source => ports.markdown(source), conversationTitle: () => undefined });
   const host = document.createElement('div');
   host.className = 'lead-deliverable-report';
   host.innerHTML = cards.renderCardHtml({
     toolName: 'report_to_user', status: 'done', roundNum: 0,
-    toolArgs: { title: item.title, message: item.summary || '', kind: item.reportKind || 'delivery' },
+    toolArgs: { title: copy.title, message: copy.summary, kind: item.reportKind || 'delivery' },
     toolContent: JSON.stringify({ conversationId: item.source?.conversationId || '', turnId: item.source?.turnId || '', published: true }),
   }, { iconHtml: '' });
   host.querySelector('details')?.setAttribute('open', '');
@@ -128,7 +129,7 @@ export function createDeliverableOpener(ports: DeliverableOpenPorts): Deliverabl
     });
     if (files) body.append(files);
     const dialog = createDialog({
-      title: item.title, body,
+      title: deliverableCopy(item).title, body,
       actions: [
         ...(item.source ? [{ id: 'source', label: t('leadDeliverables.source') }] : []),
         { id: 'close', label: t('leadDeliverables.close'), variant: 'primary' as const },

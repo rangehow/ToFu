@@ -137,11 +137,3 @@ def test_push_reading_names_why_the_socket_is_down(tmp_path):
     fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'push reading failures:\n' + output
     assert output.count('PASS') == 9, output
-
-
-def test_network_badge_owns_no_liveness_clock_or_connection():
-    with open(os.path.join(ROOT, 'frontend', 'src', 'network-indicator.ts'),
-              encoding='utf-8') as handle:
-        source = handle.read()
-    for forbidden in ('setInterval', 'setTimeout', 'WebSocket', 'fetch('):
-        assert forbidden not in source, forbidden

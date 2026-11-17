@@ -36,7 +36,7 @@ def test_open_auth_beyond_loopback_is_refused(host):
     ('0.0.0.0', 'private'), ('::', 'multi-user'),
 ])
 def test_loopback_or_credentials_are_allowed(host, auth_mode):
-    exposure.refuse_unauthenticated_network_bind(host, auth_mode)
+    assert exposure.refuse_unauthenticated_network_bind(host, auth_mode) is None
 
 
 def test_a_scratch_server_bound_to_every_interface_with_open_auth_refuses_to_start(tmp_path):

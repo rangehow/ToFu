@@ -4,6 +4,9 @@ A Worker checkout inherits the deployed engine, which refuses source it was not
 built from, so its browser and visual tests skip. Behind ``pytest -q`` that was
 one ``s`` per test (2026-11-17); the run summary now says why and how to run them.
 """
+# A synthetic report location, never a repository file.
+_AUDIT_SYNTHETIC_REPO_PATHS = ('tests/frontend/test_x_browser.py',)
+
 import sys
 
 import pytest

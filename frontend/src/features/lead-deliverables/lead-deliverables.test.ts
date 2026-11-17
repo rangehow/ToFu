@@ -5,7 +5,8 @@ import { createDeliverableOpener, type DeliverableOpenPorts } from './open';
 import { createLeadDeliverables, type LeadDeliverablesPushFrame, type LeadDeliverablesTarget } from './list';
 import { appendDeliverables, deliverableProject, reportDeliverable } from './model';
 
-vi.mock('../../i18n', () => ({ t: (key: string) => key }));
+const locale = vi.hoisted(() => ({ language: 'en' }));
+vi.mock('../../i18n', () => ({ t: (key: string) => (locale.language === 'en' ? key : `${locale.language}:${key}`) }));
 
 const NOW = Date.UTC(2026, 10, 16, 12);
 
@@ -31,7 +32,7 @@ beforeEach(() => {
     this.returnValue = value ?? ''; this.removeAttribute('open'); this.dispatchEvent(new Event('close'));
   };
 });
-afterEach(() => { document.body.replaceChildren(); });
+afterEach(() => { document.body.replaceChildren(); locale.language = 'en'; });
 
 it('opens each deliverable itself: artifact panel, report card, Worker result Turn', () => {
   const { calls, open } = ports();
@@ -188,4 +189,46 @@ it('the report dialog shows the report kind and opens attached files', () => {
   chip.click();
   expect(calls.artifact).toEqual(['md']);
   expect(dialog.hasAttribute('open')).toBe(false);
+});
+
+it('a language switch repaints every label, row and control in the new language', async () => {
+  const { view } = list(new Map([['', { conversationId: 'lead', items: [item(1, { reportKind: 'delivery', files: [
+    { artifactId: 'a', filename: 'notes.md', kind: 'document' }] })], nextCursor: 'c1' }]]));
+  view.show({ leadId: 'lead', path: '/work/tofu' });
+  await flush();
+  locale.language = 'zh';
+  document.documentElement.lang = 'zh-CN';
+  window.dispatchEvent(new CustomEvent('tofu:language-change', { detail: { language: 'zh' } }));
+  const root = view.root;
+  expect(root.querySelector('.lead-deliverables__label')!.textContent).toBe('zh:leadDeliverables.title');
+  expect(root.querySelector('.lead-deliverable__kind')!.textContent).toBe('zh:leadDeliverables.reportKind.delivery');
+  expect(root.querySelector('.lead-deliverable__source')!.textContent).toBe('zh:leadDeliverables.source');
+  expect(root.querySelector('.lead-deliverable__files')!.getAttribute('aria-label')).toBe('zh:leadDeliverables.files');
+  expect(root.querySelector('.lead-deliverable__file')!.getAttribute('aria-label')).toBe('zh:leadDeliverables.openFile');
+  expect(root.querySelector('.lead-deliverables__more')!.textContent).toBe('zh:leadDeliverables.more');
+  expect(root.querySelector('.lead-deliverables__retry')!.textContent).toBe('zh:leadDeliverables.retry');
+  // The age follows the document language: Chinese relative time, no English left.
+  expect(root.querySelector('.lead-deliverable__meta')!.textContent).toMatch(/^tofu · .*分钟前$/);
+  view.destroy();
+  document.documentElement.lang = 'en';
+  locale.language = 'en';
+  window.dispatchEvent(new CustomEvent('tofu:language-change', { detail: { language: 'en' } }));
+  expect(root.querySelector('.lead-deliverables__label')!.textContent).toBe('zh:leadDeliverables.title');
+});
+
+it("shows a report in its display translation, as the conversation does, keeping the original in the tooltip", async () => {
+  const translated = item(1, { title: 'Shipped', summary: 'All merged.', translation: { title: '已交付', summary: '全部已合并。' } });
+  const { view } = list(new Map([['', { conversationId: 'lead', items: [translated, item(2)], nextCursor: null }]]));
+  view.show({ leadId: 'lead', path: '/work/tofu' });
+  await flush();
+  const [first, second] = [...document.querySelectorAll<HTMLElement>('.lead-deliverable')];
+  expect(first.querySelector('.lead-deliverable__title')!.textContent).toBe('已交付');
+  expect(first.querySelector<HTMLButtonElement>('.lead-deliverable__open')!.title.split('\n').slice(0, 2)).toEqual(['已交付', 'Shipped']);
+  expect(second.querySelector('.lead-deliverable__title')!.textContent).toBe('Delivery 2');
+  const { open } = ports();
+  createDeliverableOpener(open).open(translated);
+  const dialog = document.querySelector<HTMLDialogElement>('dialog.lead-deliverable-dialog')!;
+  expect(dialog.textContent).toContain('已交付');
+  expect(dialog.textContent).toContain('全部已合并。');
+  expect(dialog.textContent).not.toContain('All merged.');
 });

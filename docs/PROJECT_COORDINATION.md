@@ -1294,8 +1294,9 @@ sessions and tells the human what matters.
   Markdown block quotes. Opening the visible Coordinator chat reads its latest
   message with the exact Turn ID, like any messaging app.
 - Role guidance is `COORDINATOR_ROLE_GUIDANCE` in
-  `lib/conversations/project_coordination.py`; a test pins that it fits the
-  `project_coordinator` block budget with the canonical counter.
+  `lib/conversations/project_coordination.py`; the `project_coordinator` block
+  has no token ceiling (whole or omitted under global budget pressure), and a
+  test composes the role and requires it unclipped.
 - Routers ([ROUTER.md](ROUTER.md#r1-a-router-is-a-coordinator-the-global-router-is-the-home-coordinator))
   are bound Coordinators and inherit the board and chat-card questions; the
   Router Watchdog's narrower ceiling has neither.

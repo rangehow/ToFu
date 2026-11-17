@@ -110,14 +110,20 @@ channel text as evidence) to `COORDINATOR_ROLE_GUIDANCE` for the home only.
 Problem: the context block carrying the role (`project_coordinator`) held 600
 tokens and the composer clips an oversized block from its end, which is where
 the addendum sits: the Global Router lost all of it while the Coordinator role
-was 820 tokens, and its second half after that role shrank to fit. Decision:
-the block budget holds the longest role whole (900 tokens; the router role is
-about 870), and `test_router_policy.py` composes the router role through the
-composer and requires it unclipped. Alternatives rejected: a second registered
-block for the addendum (another source, presentation and manifest row for one
-role); condensing both texts into a replacement router charter (an unreviewed
-rewrite of two prompts); a larger budget without a composed spec (the next
-addendum edit would clip silently again).
+was 820 tokens, and its second half after that role shrank to fit. The block
+was then raised to 900 and 920 tokens "to hold the longest role whole", and
+each later edit of either text (parallel paper dispatch, report files) outgrew
+the constant again (router role about 984 tokens on 2026-11-17). Decision: the
+block has no token ceiling, like `user_context`: the role is authored code,
+not variable evidence, so it is whole, or omitted whole under global budget
+pressure (`global_budget_policy='omit'`), never clipped.
+`test_router_policy.py` composes the router role through the composer and
+requires it unclipped. Alternatives rejected: a second registered block for
+the addendum (another source, presentation and manifest row for one role);
+condensing both texts into a replacement router charter (an unreviewed
+rewrite of two prompts, and the next addition would clip again); raising the
+constant again (a hand-tuned knob every prompt edit outgrows, AGENTS.md
+principle 5).
 
 **Session-free coordination.** Every router inherits the session-free
 Coordinator ([PROJECT_COORDINATION.md](PROJECT_COORDINATION.md#session-free-coordination-owner-decision-2026-11-02)):

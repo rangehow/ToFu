@@ -147,9 +147,14 @@ def test_coordinator_role_fits_its_context_block(model):
     # The composer truncates a block over its budget; a clipped role silently
     # loses its last instructions (the previous role lost about a quarter).
     from lib.conversations.project_coordination import COORDINATOR_ROLE_GUIDANCE
-    from lib.tasks_pkg.context_composer.registry import injection_spec
-    from lib.token_counter import count_text
-    assert count_text(COORDINATOR_ROLE_GUIDANCE, model=model) <= injection_spec('project_coordinator').max_tokens
+    from lib.tasks_pkg.context_composer import ComposeRequest, append_context_blocks
+    from lib.tasks_pkg.context_composer.registry import context_block
+    task, messages = {}, [{'role': 'user', 'content': 'Plan the release.'}]
+    append_context_blocks(messages, [context_block('project_coordinator', COORDINATOR_ROLE_GUIDANCE)],
+                          ComposeRequest(task=task, model=model))
+    row = {row['id']: row for row in task['_contextManifest']}['project_coordinator']
+    assert row['injected'] and row['reason'] == '', row
+    assert COORDINATOR_ROLE_GUIDANCE.rsplit('. ', 1)[-1] in messages[-1]['content'][0]['text']
 
 
 def test_historical_conversation_cannot_be_promoted(setup):

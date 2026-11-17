@@ -155,8 +155,8 @@ _SPECS = (
                   'Current owner/project-bound coordinator root task',
                   presentation=NotePresentation('systemNote.reasonProjectCoordinator', 'info', 'Coordinator', 'gitMerge'),
                   authority='workflow', stability='turn', lifecycle='task',
-                  # Holds the longest role whole (the Global Router's); role tests pin the fit.
-                  max_tokens=920, layer='objective_constraints', global_budget_policy='omit',
+                  # No ceiling: an authored role is whole or absent; a clip drops its tail rules.
+                  layer='objective_constraints', global_budget_policy='omit',
                   silent_absence_reasons=('inactive', 'provider_unavailable', 'over_block_budget')),
     InjectionSpec('project_context', 'project.brain', 'coordination_evidence',
                   'Available owner/project-bound coordinator with unseen narrative; '

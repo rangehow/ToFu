@@ -3012,7 +3012,13 @@ authorization boundary, default deny: a path must be a regular file inside the
 sending task's verified read roots, read without following symlinks
 (`lib.artifacts.file_snapshot`); an `att_media_` reference must be one of the
 owner's own attachments (owner-scoped lookup); an image must be shown in the
-sender's conversation. Anything else is refused (`attachment_refused`) before any
+sender's conversation: in one of its messages, or in an owner message steered
+into the Turn the sender is running. A steer never enters the task's messages,
+so its images are read from its records (this executor's delivered ones and
+those committed to the live Turn), and only a record whose committed author is
+the owner's own input here counts (`require_human_turn`): nonhuman steers and
+Global Router forwards add none (2026-11-17: a Coordinator could not forward the
+screenshot the owner steered into its turn). Anything else is refused (`attachment_refused`) before any
 record is written or anything is sent. An admitted file is stored once, by digest,
 through `lib.media_attachments.ingest_received_file` (origin `agent_message`), the
 same retained attachment a channel file or chat upload becomes; no size or count
@@ -3041,7 +3047,8 @@ Alternatives rejected:
 
 Verification: `tests/project_mod/test_lead_attachments.py` (real Sidecar: image,
 PDF, text and arbitrary binary delivery; refused outside, traversal, symlink,
-directory, missing, foreign-owner and unseen-image references) and
+directory, missing, foreign-owner and unseen-image references; an owner-steered
+image admitted, a nonhuman, agent-authored or forwarded steer's refused) and
 `tests/project_mod/test_lead_attachment_delivery.py` (each message path and the
 contract mirror).
 

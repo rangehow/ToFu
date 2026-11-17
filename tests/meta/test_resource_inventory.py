@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -30,7 +31,7 @@ def test_recorded_measurements_report_growth_and_owners(tmp_path, monkeypatch, c
     owner = workspaces / 'repo-key' / 'u1'
     (owner / 'project-worker-a').mkdir(parents=True)
     (owner / 'project-worker-a' / 'file').write_bytes(b'x' * 8192)
-    (owner / '.tmp-project-worker-a').mkdir()
+    (tmp / f'tofu-{os.getuid()}-tmp' / '0123456789ab').mkdir(parents=True)
     (owner / 'stray.log').write_text('agent scratch\n')
     monkeypatch.setenv('HOME', str(home))
     monkeypatch.setattr(local_placement, 'temporary_root', lambda: str(tmp))
@@ -48,7 +49,7 @@ def test_recorded_measurements_report_growth_and_owners(tmp_path, monkeypatch, c
     first, second = (record['artifacts'] for record in history)
     assert second['task checkouts']['bytes'] > first['task checkouts']['bytes']
     assert first['stray files beside task checkouts']['paths'] == 1
-    assert first['task command scratch (.tmp-<checkout>)']['paths'] == 1
+    assert first['task command scratch']['paths'] == 1
     assert all(item['owner'] for item in second.values())
     output = capsys.readouterr().out
     assert 'growth since' in output and 'task checkouts' in output

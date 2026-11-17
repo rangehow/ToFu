@@ -77,6 +77,7 @@ _EXTRA_KEEPERS = {
     'tests/evaluations/test_owner_memory_midtask.py',
     'tests/evaluations/test_owner_memory_phase1_cost.py',
     'tests/evaluations/test_owner_memory_replay.py',
+    'tests/evaluations/test_owner_memory_scale.py',
     'tests/evaluations/test_owner_memory_triggers.py',
     'tests/deploy/test_migrate_host.py',
     'tests/deploy/test_verify_checkout_view.py',

@@ -38,6 +38,10 @@ _SQLITE_CONNECT_ALLOWLIST = {
     # database, verifies WAL recovery, then removes every artifact before
     # backend selection.  Keeping the probe stdlib-only is intentional.
     'lib/storage_authority_sql/storage_capabilities.py',
+    # The SQLite adapter's WAL-coalescing VFS loader: loading an extension
+    # into this process's SQLite library and proving the VFS registered both
+    # need a raw in-memory connection; no database file is opened here.
+    'lib/storage_authority_sql/adapters/sqlite_wal_coalesce.py',
     # Reviewed offline data-layer owners.  The reader hard-enforces mode=ro
     # plus query_only.  Maintenance writes require a live ProjectLease, and
     # candidate opens first prove they are not the canonical authority.

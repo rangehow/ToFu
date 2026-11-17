@@ -51,7 +51,9 @@ def missing(python: str, root: Path) -> list[str]:
     declared = project.get('project', {}).get('optional-dependencies', {}).get(TEST_EXTRA, [])
     if not declared:
         return []
-    environment = {key: value for key, value in os.environ.items() if key != 'PYTHONPATH'}
+    from lib.tools.process_environment import inherited_child_environment
+    environment = {key: value for key, value in inherited_child_environment().items()
+                   if key != 'PYTHONPATH'}
     probe = subprocess.run([python, '-c', _MISSING_PROBE, *declared],
                            env=environment, capture_output=True, text=True, timeout=60)
     if probe.returncode:

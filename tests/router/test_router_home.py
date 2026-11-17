@@ -68,6 +68,7 @@ def test_resource_registry_seeded_from_its_documented_source_and_never_overwritt
     assert seed.startswith('# Owner resource registry')
     assert 'Never store a secret here' in seed
     assert 'how to obtain' in seed
+    # The in-tree YourProvider bundle supplies this seed (router_home/RESOURCES.md).
     # Every queue the patrol's documented seed names is in the registry; the
     # registry is names and how to obtain them, never a credential value.
     patrol = json.loads(Path('scripts/hope_patrol/queues.json').read_text())
@@ -89,6 +90,17 @@ def test_resource_registry_seeded_from_its_documented_source_and_never_overwritt
         stream.write(edited)
     router_home_path(7)
     assert read(home)['content'] == edited
+
+
+def test_resource_registry_seed_without_a_bundle_names_no_resources(root, monkeypatch):
+    from lib.router.home import owner_resources
+    monkeypatch.setattr('tofu_extensions.bundle_directories', lambda kind: [])
+    router_home_path(7)
+    seed = owner_resources(7, content=True)['content']
+    assert seed.startswith('# Owner resource registry')
+    assert 'Never store a secret here' in seed
+    assert 'No resources are recorded yet' in seed
+    assert 'hope_patrol' not in seed
 
 
 def test_home_inside_a_source_checkout_is_its_own_repository(tmp_path, monkeypatch):

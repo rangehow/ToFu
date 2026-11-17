@@ -12,12 +12,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
-import logging
 from types import MappingProxyType
 
 from lib.llm.stream_result import ProviderStreamResult, ProviderStreamState
+from lib.log import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class TurnStatus(str, Enum):

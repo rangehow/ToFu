@@ -51,6 +51,23 @@ def open_sqlite_tool_connection(
     return connection
 
 
+def copy_sqlite_database(source: str | Path, destination: str | Path) -> None:
+    """Copy a SQLite database file consistently, WAL contents included.
+
+    The source opens read-only; ``destination`` is a fresh file the caller
+    publishes (a host move copies host-local databases this way).
+    """
+    reader = open_readonly_sqlite_authority(source)
+    try:
+        writer = sqlite3.connect(destination)
+        try:
+            reader.backup(writer)
+        finally:
+            writer.close()
+    finally:
+        reader.close()
+
+
 def open_sqlite_candidate_connection(
     path: str | Path,
     *,

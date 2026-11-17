@@ -168,6 +168,7 @@ def _publication_verdict(row: Mapping, receipt: Mapping, *,
         _ASSIGNMENT_DECIDED[_row_key(row)] = (fingerprint, 'project_publication_authority_missing', cause)
         return 'project_publication_authority_missing', cause
     except Exception as failure:
+        logger.debug('publication authority check failed for task %s', row.get('task_id'), exc_info=True)
         return _authority_failure_reason(failure), failure
 
     profile = assignment['request'].get('profile') or {}
@@ -198,6 +199,8 @@ def _publication_verdict(row: Mapping, receipt: Mapping, *,
                 return ('project_publication_write_scope_exceeded',
                         PermissionError(f'refused path {refused!r}'))
     except Exception as failure:
+        logger.debug('publication checkpoint scope check failed for task %s', row.get('task_id'),
+                     exc_info=True)
         return _checkpoint_failure_reason(failure), failure
     return '', None
 

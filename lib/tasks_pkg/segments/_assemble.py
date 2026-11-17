@@ -697,7 +697,6 @@ def assemble_segments(task: dict[str, Any],
         # sidecar. See _types.is_synthetic_inbox_round.
         if is_synthetic_inbox_round(r):
             continue
-        lr = execution_llm_round(r)
         # Batch key: real tool-call rounds carry an integer llmRound
         # (tool_dispatch.py stamps round_entry['llmRound']). Rounds that BYPASS
         # that path — prefetch fetch_url (executor.py:532) and image-gen

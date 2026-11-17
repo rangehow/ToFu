@@ -15,10 +15,6 @@ import time
 
 import pytest
 
-# The create-turn command only enqueues its Attempt: this module-scoped fixture
-# owns the durable workers that claim it and the inert owner model route.
-from tests.e2e.test_e2e_smoke import _install_llm_stubs as _install_llm_stubs  # noqa: F401
-
 pytestmark = pytest.mark.visual
 
 _NARRATION = 'I will inspect the existing dropdown before changing its behavior.'

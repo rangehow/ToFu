@@ -1,12 +1,10 @@
 # Changelog
 
-## 0.12.29
+## Unreleased
 
 - Hugging Face Papers keyword search keeps the endpoint's relevance order;
   only the topic-less daily list is ranked by upvotes. Re-sorting a keyword
   search by upvotes and keeping 15 dropped the exact title match.
-
-## 0.12.28
 - `SearchConfig.skip_domains` is a source ban only and defaults to empty. The
   nine JS/social hosts it used to list by default (YouTube, X/Twitter,
   Facebook, Instagram, TikTok, LinkedIn, Discord) are now the built-in
@@ -381,7 +379,7 @@
 - Keep legacy sync handler registration with independently owned thread-affine
   browser workers. Preserve browser access, cookie isolation and rendering policy.
 
-## 0.12.29
+## Unreleased
 
 - Treat URL-derived source authority as explicitly unverified hints, match
   reference hosts at DNS label boundaries, and require query evidence before

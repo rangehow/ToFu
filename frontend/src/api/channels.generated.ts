@@ -27,7 +27,7 @@ export type EventDisposition = "command" | "candidate" | "context";
 
 export type OutboxState = "draft" | "queued" | "sending" | "unknown" | "sent" | "failed" | "discarded";
 
-export type OutboxOriginKind = "router_receipt" | "router_content" | "router_progress" | "router_reply" | "router_status" | "tool" | "draft_notice" | "robot_notice" | "attachment_notice";
+export type OutboxOriginKind = "router_receipt" | "router_content" | "router_progress" | "router_reply" | "router_status" | "tool" | "draft_notice" | "robot_notice";
 
 export type OutboxAuthority = "owner" | "merged" | "third_party" | "nonhuman";
 

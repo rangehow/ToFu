@@ -128,6 +128,19 @@ def _describe_duplicate_matches(content, search, context=1, max_show=5):
     return out
 
 
+def _common_indent(lines):
+    """Leading-whitespace prefix of the first non-blank line ('' when none).
+
+    Used by the relative-indent matching rung: the model's block and the
+    matched file block each contribute one anchor indent, and the replacement
+    is re-framed between them so relative indentation is preserved.
+    """
+    for line in lines:
+        if line.strip():
+            return line[:len(line) - len(line.lstrip())]
+    return ''
+
+
 def _uniform_indent_offset(search_lines, content_lines, *, decode=False):
     """Return one literal (removed, added) indentation prefix, or no match.
 

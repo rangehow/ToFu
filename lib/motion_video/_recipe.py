@@ -54,7 +54,7 @@ from lib.production.research import (
     summarise_current_signals,
 )
 from lib.production.llm_policy import (
-    context_abort_check,
+    abort_check_from_event,
     production_llm_dispatch_kwargs,
     production_llm_max_429_attempts,
 )
@@ -142,8 +142,16 @@ def _source_beats_agent_call(messages, **kwargs):
     return ''.join(content), result.usage
 
 
+def _context_abort_check(ctx: dict):
+    """Return the recipe's one request-level cancellation predicate."""
+    callback = ctx.get('abort_check')
+    if callable(callback):
+        return callback
+    return abort_check_from_event(ctx.get('abort_event'))
+
+
 def _raise_if_script_aborted(ctx: dict, where: str) -> None:
-    abort_check = context_abort_check(ctx)
+    abort_check = _context_abort_check(ctx)
     if abort_check is not None and abort_check():
         raise StageAborted(f'aborted {where} script dispatch')
 
@@ -507,7 +515,7 @@ def _script_critic_choice(ctx: dict, candidates: list[dict]) \
         temperature=0.0, prefer_model=ctx.get('model') or None,
         strict_model=bool(ctx.get('model')),
         **production_llm_dispatch_kwargs(
-            abort_check=context_abort_check(ctx),
+            abort_check=_context_abort_check(ctx),
             max_429_attempts=ctx.get('max_429_attempts')),
         log_prefix='[Recipe:script-critic]')
     _raise_if_script_aborted(ctx, 'after critic')
@@ -559,7 +567,7 @@ def _run_script(ctx: dict) -> dict:
                 prefer_model=ctx.get('model') or None,
                 strict_model=bool(ctx.get('model')),
                 **production_llm_dispatch_kwargs(
-                    abort_check=context_abort_check(ctx),
+                    abort_check=_context_abort_check(ctx),
                     max_429_attempts=ctx.get('max_429_attempts')),
                 log_prefix=f'[Recipe:script:{lens_name}]')
             _raise_if_script_aborted(ctx, after_label)

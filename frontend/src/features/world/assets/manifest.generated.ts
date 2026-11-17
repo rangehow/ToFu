@@ -5,14 +5,10 @@ export type WorldTheme = 'light' | 'dark';
 export type ThemedUrl = Readonly<Record<WorldTheme, string>>;
 export const THEMES: readonly WorldTheme[] = ['light', 'dark'];
 
-/** Character sheets: 4 columns x 15 rows of uniform cells; feet anchor inside every cell. */
+/** Character sheets: 4 columns x 11 rows of uniform cells; feet anchor inside every cell. */
 export const CELL = { w: 40, h: 60, feet: [20, 58], columns: 4, seatedShown: 0.58 } as const;
-export type PersonRow = "seated-down" | "seated-up" | "ask-down" | "ask-up" | "walk-down" | "walk-left" | "walk-right" | "walk-up" | "carry-down" | "carry-left" | "carry-right" | "carry-up" | "wait-up" | "ask-wait" | "cheer";
+export type PersonRow = "walk-down" | "walk-left" | "walk-right" | "walk-up" | "carry-down" | "carry-left" | "carry-right" | "carry-up" | "seated-down" | "seated-up" | "wait-up";
 export const ROWS: readonly PersonRow[] = [
-  "seated-down",
-  "seated-up",
-  "ask-down",
-  "ask-up",
   "walk-down",
   "walk-left",
   "walk-right",
@@ -21,12 +17,12 @@ export const ROWS: readonly PersonRow[] = [
   "carry-left",
   "carry-right",
   "carry-up",
+  "seated-down",
+  "seated-up",
   "wait-up",
-  "ask-wait",
-  "cheer",
 ];
 export type PersonRole = "owner" | "router" | "lead" | "watchdog" | "engineer" | "researcher" | "reviewer" | "writer" | "analyst" | "executor" | "general";
-export type PersonState = "walk-down" | "walk-left" | "walk-right" | "walk-up" | "carry-down" | "carry-left" | "carry-right" | "carry-up" | "work-down" | "idle-down" | "work-up" | "idle-up" | "wait-up" | "ask-down" | "ask-up" | "ask-wait" | "cheer";
+export type PersonState = "walk-down" | "walk-left" | "walk-right" | "walk-up" | "carry-down" | "carry-left" | "carry-right" | "carry-up" | "work-down" | "idle-down" | "work-up" | "idle-up" | "wait-up";
 /** columns: frame cells in play order; reduced: the still cell under prefers-reduced-motion; beat: two frames on
  * the scene's shared beat; fps: walk cadence; hands: per column, where the carried document's anchor goes;
  * docLayer: draw the document over (front) or under (back) the body. */
@@ -36,31 +32,31 @@ export interface StateFrames {
 }
 export const STATES: Readonly<Record<PersonState, StateFrames>> = {
   "walk-down": {
-    row: 4,
+    row: 0,
     columns: [0, 1, 2, 3],
     reduced: 1,
     fps: 9,
   },
   "walk-left": {
-    row: 5,
+    row: 1,
     columns: [0, 1, 2, 3],
     reduced: 1,
     fps: 9,
   },
   "walk-right": {
-    row: 6,
+    row: 2,
     columns: [0, 1, 2, 3],
     reduced: 1,
     fps: 9,
   },
   "walk-up": {
-    row: 7,
+    row: 3,
     columns: [0, 1, 2, 3],
     reduced: 1,
     fps: 9,
   },
   "carry-down": {
-    row: 8,
+    row: 4,
     columns: [0, 1, 2, 3],
     reduced: 1,
     fps: 9,
@@ -73,7 +69,7 @@ export const STATES: Readonly<Record<PersonState, StateFrames>> = {
     docLayer: "front",
   },
   "carry-left": {
-    row: 9,
+    row: 5,
     columns: [0, 1, 2, 3],
     reduced: 1,
     fps: 9,
@@ -86,7 +82,7 @@ export const STATES: Readonly<Record<PersonState, StateFrames>> = {
     docLayer: "front",
   },
   "carry-right": {
-    row: 10,
+    row: 6,
     columns: [0, 1, 2, 3],
     reduced: 1,
     fps: 9,
@@ -99,7 +95,7 @@ export const STATES: Readonly<Record<PersonState, StateFrames>> = {
     docLayer: "front",
   },
   "carry-up": {
-    row: 11,
+    row: 7,
     columns: [0, 1, 2, 3],
     reduced: 1,
     fps: 9,
@@ -112,29 +108,29 @@ export const STATES: Readonly<Record<PersonState, StateFrames>> = {
     docLayer: "back",
   },
   "work-down": {
-    row: 0,
+    row: 8,
     columns: [0, 1],
     reduced: 0,
     beat: true,
   },
   "idle-down": {
-    row: 0,
+    row: 8,
     columns: [2],
     reduced: 2,
   },
   "work-up": {
-    row: 1,
+    row: 9,
     columns: [0, 1],
     reduced: 0,
     beat: true,
   },
   "idle-up": {
-    row: 1,
+    row: 9,
     columns: [2],
     reduced: 2,
   },
   "wait-up": {
-    row: 12,
+    row: 10,
     columns: [0, 1],
     reduced: 0,
     beat: true,
@@ -143,34 +139,6 @@ export const STATES: Readonly<Record<PersonState, StateFrames>> = {
       [28, 41.2],
     ],
     docLayer: "front",
-  },
-  "ask-down": {
-    row: 2,
-    columns: [0, 1],
-    reduced: 0,
-    beat: true,
-  },
-  "ask-up": {
-    row: 3,
-    columns: [0, 1],
-    reduced: 0,
-    beat: true,
-  },
-  "ask-wait": {
-    row: 13,
-    columns: [0, 1],
-    reduced: 0,
-    beat: true,
-    hands: [
-      [27.5, 41.2],
-      [28, 41.2],
-    ],
-    docLayer: "front",
-  },
-  cheer: {
-    row: 14,
-    columns: [0, 1],
-    reduced: 0,
   },
 };
 /** url: the sheet as a 2x WebP (size is in scene units; the file has twice the pixels), rendered from its SVG master. */
@@ -183,7 +151,7 @@ export const PEOPLE: Readonly<Record<PersonRole, readonly PersonSheet[]>> = {
         light: new URL('./people/owner-1.light.webp', import.meta.url).href,
         dark: new URL('./people/owner-1.dark.webp', import.meta.url).href,
       },
-      size: [160, 900],
+      size: [160, 660],
     },
   ],
   router: [
@@ -192,7 +160,7 @@ export const PEOPLE: Readonly<Record<PersonRole, readonly PersonSheet[]>> = {
         light: new URL('./people/router-1.light.webp', import.meta.url).href,
         dark: new URL('./people/router-1.dark.webp', import.meta.url).href,
       },
-      size: [160, 900],
+      size: [160, 660],
     },
   ],
   lead: [
@@ -201,21 +169,14 @@ export const PEOPLE: Readonly<Record<PersonRole, readonly PersonSheet[]>> = {
         light: new URL('./people/lead-1.light.webp', import.meta.url).href,
         dark: new URL('./people/lead-1.dark.webp', import.meta.url).href,
       },
-      size: [160, 900],
+      size: [160, 660],
     },
     {
       url: {
         light: new URL('./people/lead-2.light.webp', import.meta.url).href,
         dark: new URL('./people/lead-2.dark.webp', import.meta.url).href,
       },
-      size: [160, 900],
-    },
-    {
-      url: {
-        light: new URL('./people/lead-3.light.webp', import.meta.url).href,
-        dark: new URL('./people/lead-3.dark.webp', import.meta.url).href,
-      },
-      size: [160, 900],
+      size: [160, 660],
     },
   ],
   watchdog: [
@@ -224,7 +185,7 @@ export const PEOPLE: Readonly<Record<PersonRole, readonly PersonSheet[]>> = {
         light: new URL('./people/watchdog-1.light.webp', import.meta.url).href,
         dark: new URL('./people/watchdog-1.dark.webp', import.meta.url).href,
       },
-      size: [160, 900],
+      size: [160, 660],
     },
   ],
   engineer: [
@@ -233,21 +194,14 @@ export const PEOPLE: Readonly<Record<PersonRole, readonly PersonSheet[]>> = {
         light: new URL('./people/engineer-1.light.webp', import.meta.url).href,
         dark: new URL('./people/engineer-1.dark.webp', import.meta.url).href,
       },
-      size: [160, 900],
+      size: [160, 660],
     },
     {
       url: {
         light: new URL('./people/engineer-2.light.webp', import.meta.url).href,
         dark: new URL('./people/engineer-2.dark.webp', import.meta.url).href,
       },
-      size: [160, 900],
-    },
-    {
-      url: {
-        light: new URL('./people/engineer-3.light.webp', import.meta.url).href,
-        dark: new URL('./people/engineer-3.dark.webp', import.meta.url).href,
-      },
-      size: [160, 900],
+      size: [160, 660],
     },
   ],
   researcher: [
@@ -256,21 +210,14 @@ export const PEOPLE: Readonly<Record<PersonRole, readonly PersonSheet[]>> = {
         light: new URL('./people/researcher-1.light.webp', import.meta.url).href,
         dark: new URL('./people/researcher-1.dark.webp', import.meta.url).href,
       },
-      size: [160, 900],
+      size: [160, 660],
     },
     {
       url: {
         light: new URL('./people/researcher-2.light.webp', import.meta.url).href,
         dark: new URL('./people/researcher-2.dark.webp', import.meta.url).href,
       },
-      size: [160, 900],
-    },
-    {
-      url: {
-        light: new URL('./people/researcher-3.light.webp', import.meta.url).href,
-        dark: new URL('./people/researcher-3.dark.webp', import.meta.url).href,
-      },
-      size: [160, 900],
+      size: [160, 660],
     },
   ],
   reviewer: [
@@ -279,21 +226,14 @@ export const PEOPLE: Readonly<Record<PersonRole, readonly PersonSheet[]>> = {
         light: new URL('./people/reviewer-1.light.webp', import.meta.url).href,
         dark: new URL('./people/reviewer-1.dark.webp', import.meta.url).href,
       },
-      size: [160, 900],
+      size: [160, 660],
     },
     {
       url: {
         light: new URL('./people/reviewer-2.light.webp', import.meta.url).href,
         dark: new URL('./people/reviewer-2.dark.webp', import.meta.url).href,
       },
-      size: [160, 900],
-    },
-    {
-      url: {
-        light: new URL('./people/reviewer-3.light.webp', import.meta.url).href,
-        dark: new URL('./people/reviewer-3.dark.webp', import.meta.url).href,
-      },
-      size: [160, 900],
+      size: [160, 660],
     },
   ],
   writer: [
@@ -302,21 +242,14 @@ export const PEOPLE: Readonly<Record<PersonRole, readonly PersonSheet[]>> = {
         light: new URL('./people/writer-1.light.webp', import.meta.url).href,
         dark: new URL('./people/writer-1.dark.webp', import.meta.url).href,
       },
-      size: [160, 900],
+      size: [160, 660],
     },
     {
       url: {
         light: new URL('./people/writer-2.light.webp', import.meta.url).href,
         dark: new URL('./people/writer-2.dark.webp', import.meta.url).href,
       },
-      size: [160, 900],
-    },
-    {
-      url: {
-        light: new URL('./people/writer-3.light.webp', import.meta.url).href,
-        dark: new URL('./people/writer-3.dark.webp', import.meta.url).href,
-      },
-      size: [160, 900],
+      size: [160, 660],
     },
   ],
   analyst: [
@@ -325,21 +258,14 @@ export const PEOPLE: Readonly<Record<PersonRole, readonly PersonSheet[]>> = {
         light: new URL('./people/analyst-1.light.webp', import.meta.url).href,
         dark: new URL('./people/analyst-1.dark.webp', import.meta.url).href,
       },
-      size: [160, 900],
+      size: [160, 660],
     },
     {
       url: {
         light: new URL('./people/analyst-2.light.webp', import.meta.url).href,
         dark: new URL('./people/analyst-2.dark.webp', import.meta.url).href,
       },
-      size: [160, 900],
-    },
-    {
-      url: {
-        light: new URL('./people/analyst-3.light.webp', import.meta.url).href,
-        dark: new URL('./people/analyst-3.dark.webp', import.meta.url).href,
-      },
-      size: [160, 900],
+      size: [160, 660],
     },
   ],
   executor: [
@@ -348,21 +274,14 @@ export const PEOPLE: Readonly<Record<PersonRole, readonly PersonSheet[]>> = {
         light: new URL('./people/executor-1.light.webp', import.meta.url).href,
         dark: new URL('./people/executor-1.dark.webp', import.meta.url).href,
       },
-      size: [160, 900],
+      size: [160, 660],
     },
     {
       url: {
         light: new URL('./people/executor-2.light.webp', import.meta.url).href,
         dark: new URL('./people/executor-2.dark.webp', import.meta.url).href,
       },
-      size: [160, 900],
-    },
-    {
-      url: {
-        light: new URL('./people/executor-3.light.webp', import.meta.url).href,
-        dark: new URL('./people/executor-3.dark.webp', import.meta.url).href,
-      },
-      size: [160, 900],
+      size: [160, 660],
     },
   ],
   general: [
@@ -371,21 +290,14 @@ export const PEOPLE: Readonly<Record<PersonRole, readonly PersonSheet[]>> = {
         light: new URL('./people/general-1.light.webp', import.meta.url).href,
         dark: new URL('./people/general-1.dark.webp', import.meta.url).href,
       },
-      size: [160, 900],
+      size: [160, 660],
     },
     {
       url: {
         light: new URL('./people/general-2.light.webp', import.meta.url).href,
         dark: new URL('./people/general-2.dark.webp', import.meta.url).href,
       },
-      size: [160, 900],
-    },
-    {
-      url: {
-        light: new URL('./people/general-3.light.webp', import.meta.url).href,
-        dark: new URL('./people/general-3.dark.webp', import.meta.url).href,
-      },
-      size: [160, 900],
+      size: [160, 660],
     },
   ],
 };
@@ -412,10 +324,6 @@ export const PEOPLE_MASTERS: Readonly<Record<PersonRole, readonly Readonly<Recor
       light: "people/lead-2.light.svg",
       dark: "people/lead-2.dark.svg",
     },
-    {
-      light: "people/lead-3.light.svg",
-      dark: "people/lead-3.dark.svg",
-    },
   ],
   watchdog: [
     {
@@ -432,10 +340,6 @@ export const PEOPLE_MASTERS: Readonly<Record<PersonRole, readonly Readonly<Recor
       light: "people/engineer-2.light.svg",
       dark: "people/engineer-2.dark.svg",
     },
-    {
-      light: "people/engineer-3.light.svg",
-      dark: "people/engineer-3.dark.svg",
-    },
   ],
   researcher: [
     {
@@ -445,10 +349,6 @@ export const PEOPLE_MASTERS: Readonly<Record<PersonRole, readonly Readonly<Recor
     {
       light: "people/researcher-2.light.svg",
       dark: "people/researcher-2.dark.svg",
-    },
-    {
-      light: "people/researcher-3.light.svg",
-      dark: "people/researcher-3.dark.svg",
     },
   ],
   reviewer: [
@@ -460,10 +360,6 @@ export const PEOPLE_MASTERS: Readonly<Record<PersonRole, readonly Readonly<Recor
       light: "people/reviewer-2.light.svg",
       dark: "people/reviewer-2.dark.svg",
     },
-    {
-      light: "people/reviewer-3.light.svg",
-      dark: "people/reviewer-3.dark.svg",
-    },
   ],
   writer: [
     {
@@ -473,10 +369,6 @@ export const PEOPLE_MASTERS: Readonly<Record<PersonRole, readonly Readonly<Recor
     {
       light: "people/writer-2.light.svg",
       dark: "people/writer-2.dark.svg",
-    },
-    {
-      light: "people/writer-3.light.svg",
-      dark: "people/writer-3.dark.svg",
     },
   ],
   analyst: [
@@ -488,10 +380,6 @@ export const PEOPLE_MASTERS: Readonly<Record<PersonRole, readonly Readonly<Recor
       light: "people/analyst-2.light.svg",
       dark: "people/analyst-2.dark.svg",
     },
-    {
-      light: "people/analyst-3.light.svg",
-      dark: "people/analyst-3.dark.svg",
-    },
   ],
   executor: [
     {
@@ -502,10 +390,6 @@ export const PEOPLE_MASTERS: Readonly<Record<PersonRole, readonly Readonly<Recor
       light: "people/executor-2.light.svg",
       dark: "people/executor-2.dark.svg",
     },
-    {
-      light: "people/executor-3.light.svg",
-      dark: "people/executor-3.dark.svg",
-    },
   ],
   general: [
     {
@@ -515,10 +399,6 @@ export const PEOPLE_MASTERS: Readonly<Record<PersonRole, readonly Readonly<Recor
     {
       light: "people/general-2.light.svg",
       dark: "people/general-2.dark.svg",
-    },
-    {
-      light: "people/general-3.light.svg",
-      dark: "people/general-3.dark.svg",
     },
   ],
 };
@@ -878,7 +758,7 @@ export const ATLAS = {
   scale: 2,
   size: [1024, 1212],
   url: { light: new URL('./atlas/props.light.webp', import.meta.url).href, dark: new URL('./atlas/props.dark.webp', import.meta.url).href } as ThemedUrl,
-  source: 'bc63d5cf55b6a32db6a27376c536a14b3be291bcce3858cf4ba8136091c1ac23',
+  source: '02f9205edd55009bcbdc88aa8e36afa83a95ca343766641fe6b38207b3cf04d5',
 } as const;
 export interface AtlasProp {
   readonly rect: readonly number[]; readonly size: readonly number[]; readonly anchor: readonly number[]; readonly ref: string;

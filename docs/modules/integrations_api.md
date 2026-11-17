@@ -139,10 +139,9 @@ first. Admission is default deny: an explicit allowlist entry or an explicit
 owner; only the owner runs commands (message and menu) and tool mode (now
 `projectPath`) and is persisted as a human Turn. `FEISHU_DEFAULT_OWNER_USER_ID`
 runs other admitted senders' chat under that owner's account as `virtual_user`
-input. `/project` selects only the owner's registered projects (folder roots
-and coordination bindings, `lib/router/registered_projects.py`; opening a
-project, the `/api/v1/project/recent` history, registers nothing), and access
-is rechecked on every use, so unregistering a project revokes it. File commands run as a restricted principal of the
+input. `/project` selects only the owner's registered projects
+(`/api/v1/project/recent`), and access is rechecked on every use, so removing a
+project revokes it. File commands run as a restricted principal of the
 absolute-path guard whose only registered root is the selected project; the
 guard's shared `_safe_path` now realpath-checks list/grep/read targets for
 restricted principals, so absolute, `../` and symlinked paths cannot leave the

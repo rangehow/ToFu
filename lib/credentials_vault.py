@@ -40,7 +40,6 @@ Public API
   get_entry(name)                   → str | None     (PLAINTEXT — handle with care)
   delete_entry(name)                → bool
   list_entries()                    → list[dict]     (metadata only)
-  has_entry(name)                   → bool           (exact name exists)
   bootstrap_from_legacy(secrets_dir) → list[str]     (names imported)
 
 Model-facing seam (the agent must be able to DISCOVER and USE stored
@@ -81,7 +80,6 @@ __all__ = [
     'get_entry',
     'delete_entry',
     'list_entries',
-    'has_entry',
     'bootstrap_from_legacy',
     'normalize_name',
     'env_var_name',
@@ -370,14 +368,6 @@ def list_entries() -> list[dict]:
     with _lock:
         entries = _read_store()['entries']
         return [_meta(n, r) for n, r in sorted(entries.items())]
-
-
-def has_entry(name: str) -> bool:
-    """Whether an entry named exactly ``name`` exists (no value is read)."""
-    if not name:
-        return False
-    with _lock:
-        return name in _read_store()['entries']
 
 
 # ── Model-facing seam: discovery index + subprocess env overlay ──────────

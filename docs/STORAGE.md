@@ -310,7 +310,7 @@ long authority/lock paths and read-only refresh preserving drafts/open folds.
 - Daemon and embedded launchers share `lib/storage_authority_sql/projection_paths.py`. `TOFUDB_SEARCH_PROJECTION_DIR` overrides persisted `tofudb_search_projection_dir`; custom bases receive an authority-path namespace, preventing shared-disk collisions. No authority bytes are moved or deleted.
 - Preferences are durable: hold the shared thread/advisory-process JSON lock across strict reread, field-preserving merge, private same-directory temporary write, flush → file fsync → replace → parent-directory fsync; create missing directories privately and sync parent entries. Pre-replacement failures preserve old bytes/absence. Post-replacement fsync failure raises but leaves new bytes visible; never roll back an uncertain commit or change the live index. Reread/retry reconciles it. Problem: shared `update_json_atomic(strict=True)` enforces parsing, not fsync success. Decision: reuse its locks with this local durability boundary, rather than weaken guarantees or alter all callers. Advisory coordination requires filesystem locking support.
 - Dual-path backup mirrors the authority-owned `system.backup` artifact and manifest, pruning only previously copied files. Disposable-index candidates may be ephemeral; backup candidates must exclude known ephemeral storage.
-- The daily backup thread (`lib/database_panel/maintenance.py`) is a scheduled-jobs owner of the registered background services: the serving lifespan starts it after storage and joins it on shutdown. Application assembly registers nothing for it, so importing or embedding the app starts no thread.
+- The daily backup thread (`lib/database_panel/maintenance.py`) is a scheduled-jobs owner of the registered background services: the serving lifespan starts it after storage and joins it on shutdown. Application assembly only registers the activity clock, so importing or embedding the app starts no thread.
 **Decision: separate authority acceleration from index placement.** Problem: generic static switches appeared before status, then disappeared for TofuDB while the same picker became an index picker; native Fast Path existed but lacked a panel entry. Keep independent optional Fast Path, required search index and verified backup sections with explicit configured/active/pending witnesses. Reject equating search with Fast Path, claiming an absent runtime witness is active, and silently disabling a fenced native authority. Search candidates may be ephemeral because the index is reconstructible; authority/front and backup candidates may not.
 
 ## Owners and entry points
@@ -1116,69 +1116,15 @@ reimplement the fence, restart and validation rules.
   Spec: `tests/storage_authority_sql/test_sqlite_temporary_files.py`, which
   reproduces DolphinFS with `faultfs`'s `FAULTFS_UNLINKED_ENOENT`
   ([measurement](STORAGE_PERFORMANCE_CHARTER.md#the-same-comparison-on-the-real-dolphinfs-volume-2026-11-17)).
-- **The Sidecar coalesces each commit's WAL writes.** SQLite writes every
-  WAL frame as two calls, a 24-byte header and then the page, and
-  checkpoints one call per page. On DolphinFS each call is a userspace round
-  trip of about 0.19 ms, so a 7-frame commit spends 2.7 of its 3.3 ms in
-  `pwrite`.
+- **SQLite's write calls on DolphinFS: no setting changes them; only write
+  coalescing would.** SQLite writes every WAL frame as two calls, a 24-byte
+  header and then the page, and checkpoints one call per page. On DolphinFS
+  each call is a userspace round trip of about 0.19 ms, so a 7-frame commit
+  spends 2.7 of its 3.3 ms in `pwrite`.
   Problem: the Sidecar made 119k write calls where TofuDB made 2.5k.
-  Decision: every Sidecar connection opens the authority through the VFS
-  `tofu-wal-coalesce`
-  (`lib/storage_authority_sql/adapters/sqlite_wal_coalesce.c`), a shim
-  over the default unix VFS. It keeps a transaction's contiguous WAL
-  appends in memory and hands them to the unix VFS as one `xWrite`:
-  - when the commit frame's page is written, so a failed write is the
-    commit's failure, exactly as a stock frame write;
-  - before any `xSync`, `xRead`, `xTruncate`, `xFileSize`, lock,
-    file-control or close on the WAL, and before any lock, shared-memory
-    call, sync, write or close on its database file.
-  A write below the bytes this handle already wrote (checksum rewrites)
-  goes straight through unless it lands inside the buffer, which it then
-  updates. The bytes written and their order relative to every sync are
-  stock SQLite's, so durability is unchanged. Unsynced writes may now reach
-  the file in fewer, larger calls, and any torn or partial result of that is
-  one stock SQLite already allows before a sync. The buffer is bounded by
-  the transaction itself: no size cap, no flush interval. One flush is
-  several calls only above 128 KiB - 1 bytes, the unix VFS's per-call
-  limit (`os_unix.c` masks each `pwrite` to `0x1ffff` bytes and fails a
-  larger `xWrite` with `SQLITE_FULL`).
-  `SQLiteBackend.start()` compiles the shim from the source this module
-  read at import, with `cc`/`gcc`/`clang` and the interpreter's SQLite
-  headers, into `<tmp>/tofu-sqlite-vfs-<uid>/<digest>/`. That directory is
-  0o700 and refused when foreign-owned or group/world accessible, because
-  the process loads native code from it. It loads the shim once per process
-  with `load_extension` (`SQLITE_OK_LOAD_PERMANENTLY`, never the default
-  VFS) and opens connections as `file:...?vfs=tofu-wal-coalesce`. On a host
-  that cannot build or load it (no compiler, no extension loading, not
-  POSIX, SQLite older than 3.31), connections use stock SQLite.
-  `metrics()['wal_coalescing']` reports which, with the reason, and startup
-  logs one warning.
-  Spec: `tests/storage_authority_sql/test_sqlite_wal_coalesce.py`. A
-  fault-injecting test VFS (`sqlite_fault_vfs.c`) sits below the shim and
-  checks four things. The WAL and database bytes equal stock SQLite's for
-  a seeded workload with spills, in-buffer frame rewrites, rollbacks and
-  WAL restarts. A commit is one call instead of two per frame. A simulated
-  power loss at 10 syncs and after 10 WAL writes keeps every acknowledged
-  commit and no partial one, for each of three outcomes: no unsynced write
-  survives, a torn prefix survives, or all survive (process crash). And a
-  failed WAL write fails only its own transaction. Mutants that skip the
-  pre-sync flush or drop an in-buffer rewrite fail these specs.
-  Alternatives rejected:
-  - `apsw` or a bundled `pysqlite3` build with the shim compiled in: it
-    replaces the Sidecar's `sqlite3` driver for one VFS. A loadable
-    extension uses the SQLite library the interpreter already loaded.
-  - `ctypes` registration: the `sqlite3_vfs` and `sqlite3_io_methods`
-    callbacks would run in Python, under the GIL, on every page I/O.
-  - Registering the shim as the default VFS: every SQLite file the process
-    opens (caches, indexes, other stores) would change behavior. Named
-    opt-in keeps it to the authority.
-  - A size cap or flush interval for the buffer: tuned knobs
-    (principle 5); the transaction already bounds it.
-  - Buffering every WAL write until `xSync`: with `synchronous=NORMAL` no
-    sync follows a commit, so readers in other processes could see a
-    commit header before its frames. Flushing at the commit frame keeps
-    every mode correct.
-  Other settings measured on the real volume and rejected
+  Decision: keep `page_size=4096`, no mmap, `wal_autocheckpoint=4096`, and
+  backlog-draining group commit, all unchanged.
+  Alternatives measured on the real volume and rejected
   ([SQLite write calls on DolphinFS](STORAGE_PERFORMANCE_CHARTER.md#sqlite-write-calls-on-dolphinfs-2026-11-17)):
   - `page_size=65536`, SQLite's documented maximum: the volume's 512 KiB
     block size is beyond it. It gives 41% fewer calls, but each costs more,
@@ -1190,12 +1136,14 @@ reimplement the fence, restart and validation rules.
   - A batching window or a larger batch cap: tuned knobs (principle 5). The
     writer already commits its whole backlog at once, and grouping eight jobs
     halves the calls per job.
-  `page_size=4096`, no mmap, `wal_autocheckpoint=4096` and
-  backlog-draining group commit stay unchanged. Coalescing alone turns a
-  7-frame commit from 14 calls into one: 0.97 ms instead of 3.6-3.9 ms with
-  the same `fdatasync`, and 1.2 ms instead of 12.5 ms at 30 frames. The
-  end-to-end effect is in
-  [The WAL coalescing VFS on DolphinFS](STORAGE_PERFORMANCE_CHARTER.md#the-wal-coalescing-vfs-on-dolphinfs-2026-11-17).
+  The structural fix is to coalesce a commit's contiguous frames into one
+  write call. That is one `pwrite` instead of 14 for a 7-frame commit:
+  0.97 ms instead of 3.6-3.9 ms with the same `fdatasync`, and 1.2 ms
+  instead of 12.5 ms at 30 frames. SQLite has no option for it. It needs a
+  VFS shim that buffers contiguous WAL appends and flushes them before every
+  sync, read, truncate, size query, lock change and close. Python's
+  `sqlite3` can load one only as a native extension, which makes it a new
+  native artifact on the durability path. It is proposed, not adopted.
 - Before reclamation reaches the writer, the adapter checks the observed
   authority topology. Network, generic userspace, and unknown filesystems
   return `offline_required` without executing any SQLite statement: even one
@@ -1222,10 +1170,6 @@ reimplement the fence, restart and validation rules.
   on demand. Configured sizes retain idle handles, never cap active borrowers;
   startup records server max_connections without deriving a local 80% permit
   budget. Real server refusal and connection errors keep SQLSTATE classification.
-  A refused connect while sibling leases of the same owner are live (the
-  server's own `max_connections`) waits within the caller's deadline for a
-  sibling release and reuses its connection. With no live sibling, the
-  refusal is raised at once.
   Close fences both owners, joins borrowers/preparers and releases caches after
   connection retirement. SQLite and PostgreSQL share one lease lifecycle owner.
 - Pooled JSON/JSONB loaders mark decoded strings so shared codecs never parse them twice; `"true"`, `"null"` and JSON-shaped strings retain their type. Other structured results keep their existing representation and projection byte-evidence checks. Loader configuration is connection-local and covers text/binary results.
@@ -1950,17 +1894,7 @@ owned startup control channel. Its existing parent watcher also owns one
 close-on-exec pipe from the application process; EOF releases the Sidecar and
 project lease on parent death or in-place image replacement, including when the
 numeric PID is unchanged. The pipe is bounded to one per child and adds no
-watcher thread. On POSIX the watcher also compares the PPID with the
-supervisor PID, because a `fork()` without `exec` can inherit the pipe's write
-end. On Windows the pipe EOF alone identifies the owner. A venv `python.exe`
-launcher runs the real interpreter as its own child, so there the PPID is the
-launcher and never the supervisor. Windows has no fork that could leak the
-non-inheritable write handle. Process liveness probes go through
-`runtime_guards.pid_is_alive`, which queries the process on Windows: there
-`os.kill(pid, 0)` sends `CTRL_C_EVENT` to the whole console. A refused child
-startup appends the child's exit code and its last stderr lines to the raised
-diagnostic, for example `... [exit_code=2; stderr: ...]`. The error code and
-prefix stay unchanged, so remote logs show the cause. Distributed Pods exchange startup metadata in a mode-0600
+watcher thread. Distributed Pods exchange startup metadata in a mode-0600
 Pod-local memory file and remain independently managed. DSN/Redis credentials
 come from mounted secret files and never appear in argv, repr, logs, or RPC
 payloads.

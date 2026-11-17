@@ -1,9 +1,9 @@
-import './inspector/shell.css';
-import './inspector/structure.css';
-import './inspector/drawer.css';
-import './inspector/inline.css';
-import './inspector/trace.css';
-import './inspector/responsive.css';
+import '../styles/application/02-inspector-shell.css';
+import '../styles/application/02-inspector-structure.css';
+import '../styles/application/02-inspector-drawer.css';
+import '../styles/application/02-inspector-inline.css';
+import '../styles/application/02-inspector-trace.css';
+import '../styles/application/02-inspector-responsive.css';
 /** Demand-loaded Debug and Request Inspector presentation entry. */
 import '../runtime/diagnostics-presenters.generated.js';
 import { invokeFeatureEntry, type FeatureCallable } from '../runtime-bridge';

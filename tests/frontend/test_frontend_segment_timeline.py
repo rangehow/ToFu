@@ -1015,7 +1015,9 @@ def test_command_blocks_are_flat_no_nested_card():
     # Selector heads as they appear in styles.css (tofu = pretty multi-line,
     # light = minified single-line — both end with `{` right after the name).
     for sel in ('[data-theme="tofu"] .ptool-cmd-block{',
-                '[data-theme="light"] .ptool-cmd-block{'):
+                '[data-theme="tofu"] .code-exec-block{',
+                '[data-theme="light"] .ptool-cmd-block{',
+                '[data-theme="light"] .code-exec-block{'):
         radius = _decl_value(css, sel, 'border-radius')
         assert radius is not None and radius.strip() in ('0', '0px'), (
             f'{sel} border-radius is {radius!r}; a flat command block must NOT '

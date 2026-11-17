@@ -251,8 +251,7 @@ class OrchestrationInvocationRunner:
                           'tool_complete', 'tool_compacted'}:
                 tool_event_sink(event)
 
-        from lib.swarm.routing import read_only_swarm_tools
-        from lib.tools.contracts import tool_schema_name
+        from lib.swarm.routing import read_only_swarm_tools, tool_schema_name
         tools = ([tool for tool in self._config.all_tools
                   if tool_schema_name(tool) != 'ask_human'] if conversation_worker
                  else scope_tools_for_role(role, self._config.all_tools))

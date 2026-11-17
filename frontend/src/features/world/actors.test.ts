@@ -1,8 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { actorPose, BEAT_MS, CHEER_MS, createActor, isMoving, setRest, settleActor, startErrand, stepActor, WALK_SPEED, type Actor } from './actors';
+import { actorPose, BEAT_MS, createActor, isMoving, setRest, settleActor, startErrand, stepActor, WALK_SPEED, type Actor } from './actors';
 import { layoutOffice, type OfficeLayout, type TeamShape } from './layout';
 import type { DeskDocument, Person } from './model';
-import { STATES } from './assets/manifest.generated';
 import { LEAD_SLOT, seatAt, type Place } from './routes';
 
 const TEAMS: TeamShape[] = [{ key: '/router', kind: 'router', seats: 0 }, { key: '/tofu', kind: 'project', seats: 16 }];
@@ -98,37 +97,15 @@ describe('office actors', () => {
     expect(startErrand(createActor(person('w6'), desk(5), { kind: 'seat' }, layout, 'walk'), { document, leaves: false, onDrop, onDone }, layout)).toBe(false);
   });
 
-  it('celebrates a delivery where it lands: the document is laid down, then two hops with arms thrown up, then the walk back', () => {
-    const actor = createActor(person('w7'), desk(6), { kind: 'seat' }, layout, 'instant');
-    const onDrop = vi.fn();
-    startErrand(actor, { document: { id: 'doc', kind: 'deliverable' } as DeskDocument, leaves: false, onDrop, onDone: vi.fn() }, layout);
-    while (actor.errand?.phase !== 'cheer') stepActor(actor, STEP, layout);
-    expect(onDrop).toHaveBeenCalledTimes(1);
-    for (let elapsed = 0; elapsed < CHEER_MS / 4; elapsed += STEP) stepActor(actor, STEP, layout);
-    const hop = actorPose(actor, layout, 0, false)!;
-    expect(hop).toMatchObject({ kind: 'standing', state: 'cheer', carry: null, column: 0 });
-    expect(hop.lift).toBeGreaterThan(5);
-    expect(actorPose(actor, layout, 0, true)!.lift).toBe(0);
-    expect(isMoving(actor)).toBe(true);
-    play(actor);
-    expect(actor.errand).toBeNull();
-    expect(actorPose(actor, layout, 0, false)).toMatchObject({ kind: 'seated', lift: 0 });
-  });
-
   it('takes a lead with a question to the owner\'s door and back to the head desk', () => {
     const lead: Person = { ...person('lead'), role: 'lead', emphasis: 'decision' };
     const actor = createActor(lead, { kind: 'seat', zone: '/tofu', slot: LEAD_SLOT }, { kind: 'seat' }, layout, 'instant');
     setRest(actor, { kind: 'spot', index: 0 }, layout, 'walk');
     play(actor);
-    expect(actorPose(actor, layout, 0, false)).toMatchObject({ kind: 'standing', state: 'ask-wait', carry: 'report' });
+    expect(actorPose(actor, layout, 0, false)).toMatchObject({ kind: 'standing', state: 'wait-up', carry: 'report' });
     setRest(actor, { kind: 'seat' }, layout, 'walk');
     play(actor);
-    expect(actorPose(actor, layout, 0, false)).toMatchObject({ kind: 'seated', state: 'ask-down' });
-    const waves = new Set(Array.from({ length: 12 }, (_, beat) => actorPose(actor, layout, beat, false)!.column));
-    expect(waves.size).toBe(2);
-    expect(actorPose(actor, layout, 5, true)!.column).toBe(STATES['ask-down'].reduced);
-    actor.person = { ...lead, emphasis: null };
-    expect(actorPose(actor, layout, 0, false)!.state).not.toMatch(/^ask/);
+    expect(actorPose(actor, layout, 0, false)!.kind).toBe('seated');
   });
 
   it('fades only where a person is: a walker fades out walking, a visible person walks rather than jump', () => {

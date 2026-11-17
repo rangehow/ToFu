@@ -503,23 +503,6 @@ debt (see Paper's `panel-owners.ts` below); shipping the memory fix without cras
 detection, which leaves those crashes unrecorded. Ratchet the ceiling down when a
 structural saving lands.
 
-**Total budget scope.** `scripts/frontend_budget.py` caps the total at 1026 KiB
-gzip. That total counts every file the primary entries (`main.ts`, `admin.ts`)
-load eagerly, each file once: their startup sets and every shared static chunk
-they import. **Problem:** the total used to count the whole module graph,
-including on-demand chunks. Once the feature set outgrew the budget, it reached
-1589.7 KiB on 2026-11-17, and about 430 KiB of that was pdfjs, KaTeX, CodeMirror,
-html2canvas, highlight.js and marked, all in use. Lazy-loading a feature then
-could not lower the number, so the only way to pass was to drop features.
-**Decision (owner, 2026-11-17):** the total excludes on-demand chunks.
-Each async chunk keeps its 120 KiB ceiling, and the pdf.worker keeps its
-standalone URL-asset ceiling. The startup entry, per-chunk and stylesheet
-limits stay as strict as before. A startup regression still fails both its
-entry line and the total. **Alternatives rejected:** raising the total to the
-measured size, because startup bloat could then hide inside headroom that lazy
-chunks no longer use; dropping or replacing in-use libraries to fit a number
-that users don't pay for at startup.
-
 Self-hosted font delivery uses lossless WOFF2 generated from the retained TTF
 sources: the nine converted files total 259,548 bytes instead of 771,600 bytes.
 Glyph maps, glyph order, advance widths and vertical metrics are preserved;
@@ -734,7 +717,7 @@ requesting the application preserves the waterfall. Tests: `main.test.ts`,
   storm (`tests/myday/test_myday_calendar_single_flight.py`).
   `frontend/src/features/background.ts` has no presenter import: cache-first
   digest refresh and reminders can preload without parsing the panel. The
-  board's styles are `frontend/src/features/myday-goals.css`, imported by the same chunk.
+  board's styles are the deferred `16-my-day-goals.css` of the same chunk.
   Static empty, check and delete SVG markup has one immutable typed owner in
   `frontend/src/features/myday/presentation-assets.ts`.
 - Conversation catalog instant-paint metadata lives in the typed
@@ -808,7 +791,7 @@ requesting the application preserves the waterfall. Tests: `main.test.ts`,
   conversation/mode changes release the panel and its PDF resources. Search,
   outline and logs open on demand; verified build locations can follow edits.
   See [Paper builds](PAPER_BUILDS.md#chat-preview) for bounds and verification.
-- Settings retained presenters are demand-loaded as the manifest-owned `settings-presenters` runtime. `frontend/src/features/settings.ts` evaluates the typed Settings owners before that retained island, so every declared typed service is present when the generated runtime closes its dependency boundary. The shell routes `openSettings`, `closeSettings`, `saveSettings`, `switchSettingsTab`, and onboarding's immediate `_oauthLogin` through the feature bridge. Saving keeps its busy latch until feature-toggle writes are acknowledged; a rejected, missing, or failed acknowledgement reaches the footer error and leaves Settings open for retry. Routing-authority reads are coalesced and retried before dependent speech/routing persistence. Reassignable shell state and Settings working copies cross the private registry through live accessors; a captured array, set, boolean, or cache reference is not an acceptable lazy-runtime dependency. Optional panel presentation follows the same residency boundary: the Devices tab imports `frontend/src/features/settings/devices.css`; the Database tab owner (`database.ts` with its `database.css`) and the channel tab owners (`dx-channel.ts`, `github-channel.ts`, `bot-channel.ts`, sharing `channel-settings.css` through `channel-settings-view.ts`) are separate chunks that `tab-activation.ts` demand-loads on the first visit, keeping them out of the Settings async budget; Skills and Preferences tab rules ride their lazy feature entries (`skills/skills.css`, `memory/preferences.css`); the modal shell, access matrix, MCP and system-prompt rules sit beside their Settings owners (`settings-shell.css`, `access-matrix.css`, `mcp.css`, `system-prompt-editor.css`) while shared `.stg-*` chrome the Devices panel and the update card use stays in the startup sheet; the Tools inventory owns its complete base/comfort rules in `tools-inventory.css`, and shared modal-only refinements live in `settings-comfort.css`. A manifest-generated CSS entry imports ordered base sections before those refinements; Vite waits for CSS before invocation. The project-folder remote-device picker stays eager because it can render without opening Settings.
+- Settings retained presenters are demand-loaded as the manifest-owned `settings-presenters` runtime. `frontend/src/features/settings.ts` evaluates the typed Settings owners before that retained island, so every declared typed service is present when the generated runtime closes its dependency boundary. The shell routes `openSettings`, `closeSettings`, `saveSettings`, `switchSettingsTab`, and onboarding's immediate `_oauthLogin` through the feature bridge. Saving keeps its busy latch until feature-toggle writes are acknowledged; a rejected, missing, or failed acknowledgement reaches the footer error and leaves Settings open for retry. Routing-authority reads are coalesced and retried before dependent speech/routing persistence. Reassignable shell state and Settings working copies cross the private registry through live accessors; a captured array, set, boolean, or cache reference is not an acceptable lazy-runtime dependency. Optional panel presentation follows the same residency boundary: the Devices tab imports `frontend/src/features/settings/devices.css`, the Tools inventory owns its complete base/comfort rules in `tools-inventory.css`, and shared modal-only refinements live in `settings-comfort.css`. A manifest-generated CSS entry imports ordered base sections before those refinements; Vite waits for CSS before invocation. The project-folder remote-device picker stays eager because it can render without opening Settings.
 - The composer has one compact **conversation bar**, owned by `features/conversation-bar/{project-context,context-meter,turn-navigation}.ts` and `25-conversation-bar.css`. Project location is the left segment of a content-sized project cluster: Auto stays beside the names. Idle width lives in the strip between Auto and the meter, not inside a stretched trigger. Names that fit that leftover (strip minus Auto/meter/turns/chrome) join with a middle dot; `+N` only counts names that do not. Labels are measured at `max-content` so ellipsis stretch cannot collapse a fit to `+N`. A ResizeObserver on the strip/bar (and sibling mutations) refits the list and is disconnected on destroy. A literal context meter and fixed previous/count/next follow it. There is no pet, scene, pocket, separate project card or ornamental sphere. Native buttons open shared nonmodal `disclosure.ts` panels for full paths and permissions, context counts/compaction actions, and a TurnStore jump list. Named container queries compact labels by actual pane width, not only screen width. Narrow panes move Auto/Manual into project details; the bar never wraps. Panels become fixed before anchor measurement so body flex cannot shift the UI. Escape returns focus; native outside click/focus wins, and resize/scroll/ hidden-page dismissal releases the panel's temporary listeners. Retained project/context/turn adapters inject existing command and accounting ports, not another store. Exact rank jumps hydrate stable IDs through the v3 coordinator, then the Surface mounts its bounded 80-turn window and aligns through the viewport owner. Instant alignment and one cancellable layout correction replace competing native smooth scrolling; lazy-history frames are invalidated before a jump. The directory shows the authoritative round total and mounts at most 50 rows with numeric/first/last access, not loaded-body arithmetic. Late history responses are fenced by view generation; project permission/clear completion shares the project controller's navigation generation. Manual compaction is single-flight per page and its progress is visible only in the originating conversation. UI previews cap text at 24,000 characters; durable summaries stay server-owned. Specs: `node --test tests/context_meter.test.cjs tests/turn_navigation.test.cjs tests/project_location.test.cjs`, `tests/conversation/test_conversation_bar_browser.py`, Surface window/reveal tests and `tests/visual/test_visual_turn_jump_scroll.py`.
 - Timer creation settles an immutable `timerReceipt` through ordinary tool-result metadata; typed cards describe the background handoff after reload without a waiting-task spinner or browser timer. Live panel rows distinguish code predicates, ready dispatch, fired, failed and expired states; desktop/mobile evidence lives in `tests/visual/test_visual_timer_panel.py`. Update, Timer, and Optimizer retained presenters are one demand-loaded
   `utility-panels` runtime behind `frontend/src/features/utility-panels.ts`.
@@ -1092,23 +1075,6 @@ requesting the application preserves the waterfall. Tests: `main.test.ts`,
   Composition installs line breaks and a strict-GFM delete tokenizer before
   retained rendering code runs. A tokenizer miss returns `undefined` to stop
   Marked v12 from falling through to its permissive single-tilde rule.
-- highlight.js is never in the startup graph: `vendor-runtime.ts` loads
-  `hljs-core.ts` (core plus the high-frequency chat grammars) on the first
-  settled code block and other grammars from `hljs-lazy-langs.ts`. Until the
-  core arrives code renders as plain text; `markdown/code-blocks.ts` then
-  highlights the mounted terminal blocks its renderer produced. The theme
-  stylesheet stays in the startup sheet so its cascade position is unchanged.
-- Demand-loaded features own their CSS beside the importing module (for
-  example `features/settings/settings-shell.css`, `features/myday-panel.css`,
-  `features/paper/preview-*.css`); `frontend/src/styles/application/` holds
-  only startup-composed sections. Rules move with an owner only when every
-  class they name is rendered by that owner alone. The Paper podcast/video
-  studio rules ride `features/paper-reader.css` with `paper-media-presenters`.
-- Startup code that only a user action or a later read needs is imported on
-  that demand: the inline turn editor loads on the first Edit
-  (`_editNativeTurn`; reconciliation runs only once it exists), and the Global
-  Router's Worker-model and standing-instruction settings load when a read
-  binds the router, since its header shows only then.
 - Product copy uses the generated `I18nKey`/`Translator` contract. The source
   locales named by `frontend/src/i18n/languages.json` (zh, en) are the only key
   and placeholder authority; feature-local string-key translator interfaces
@@ -1283,12 +1249,7 @@ requesting the application preserves the waterfall. Tests: `main.test.ts`,
   alternate grouping policies or browser globals.
 - Brand detection and brand badge rendering live separately in
   `frontend/src/core/model-brand-detection.ts` and
-  `frontend/src/core/model-brand-icons.ts`. The retained `_brandSvg` alias is
-  `core/model-brand-badge.ts`: it renders the sized badge at once and loads the
-  SVG registry as its own chunk on first use; the registry defines the
-  `<tofu-brand-mark>` element each early badge holds, so mounted and later
-  inserted marks upgrade in place (a MutationObserver or re-render pass was
-  rejected: cached HTML inserted after the load would stay empty). Model/provider text and natural,
+  `frontend/src/core/model-brand-icons.ts`; model/provider text and natural,
   numeric-aware ordering live in `frontend/src/core/model-display-names.ts`.
   Catalog lookups are injected and remain live, while retained `_detectBrand`,
   `_brandSvg`, and model-sort names are module-private prelude aliases only.
@@ -2995,19 +2956,15 @@ unless the chat is docked, and a turn in the hidden column has no paint opportun
   accessible `.evo-target` buttons; Enter opens, Esc closes the panel) and a camera that fits the whole
   view, so a docked panel is an inset the camera pans within.
 - `scene.ts` draws the office as one canvas frame, so the floor and everyone on it always agree:
-  procedural floor (`paint.ts`: long boards, window wall with skies by hour), team rooms as furnished
-  dioramas and the light by local time (`diorama.ts`, art direction below), furniture stamped from the art
-  atlas with each pod pre-painted as one layer, then people, lit screens, documents, the grade, then what
-  each person is doing (`life.ts`: name tags, screen glow, bubbles, raised hands, confetti), emblems, signs
-  and tooltips.
+  procedural floor and light (`paint.ts`: long boards, window wall with skies by hour, carpeted team rooms,
+  daylight, wall shade, vignette, night lamps at the head desks), furniture stamped from the art atlas with
+  each pod pre-painted as one layer, then people, lit screens, documents, emblems, signs and tooltips.
   Pods and character sheets are kept at the frame's resolution (a power of two, like mip levels), so
   everything is drawn at about one to one: resampling the full-resolution sheet for every person on every
   frame cost more than the rest of the frame together and stalled blends on a software-rasterized canvas.
-  The floor and the grade are device-pixel layers keyed by camera transform and content (the floor rebuilt
-  once a key has held for a frame; the grade always in its own layer, because the night cuts its light pools
-  out of it): a settled frame blits two layers and draws the sprites. While anyone is on the floor the
-  office is alive and draws every frame (screens flicker, bubbles think, tags breathe, dust drifts); under
-  reduced motion it sleeps and wakes once a minute for the wall clocks. Rooms never
+  The floor and the light are device-pixel layers keyed by camera transform and content, rebuilt once a key
+  has held for a frame: a settled frame blits two layers and draws the sprites, and the stage sleeps while
+  nothing moves (it wakes on the art's beat while people type, else on the hour for the skies). Rooms never
   shrink while the office is open (each team keeps the most desks it has needed), a floor plan that does
   change blends by identity (`tween.ts`: rooms by team, pods and desks by index, decor by the key of its
   place): rooms slide and resize; something leaving fades out over the first half of the blend and something
@@ -3020,8 +2977,8 @@ unless the chat is docked, and a turn in the hidden column has no paint opportun
 - `actors.ts` gives every person a desk, a rest (the desk, a spot at the owner's door, or gone) and the
   walk there along the walkways (`routes.ts`: waypoints that bend with a blending floor). A Worker who
   arrives walks in through the entrance, one who leaves walks out (and turns round where it stands when
-  its work restarts on the way), a report is carried to the owner's desk, laid down and celebrated (two
-  hops, confetti) before the walk back, a lead with a question walks to the door and raises a hand. While the first reads settle, and on the update that ends them, people fade
+  its work restarts on the way), a report is carried to the owner's desk and laid down, a lead with a
+  question walks to the door. While the first reads settle, and on the update that ends them, people fade
   in and out where they rest instead: what changes then is knowledge, not the office. Each typist keeps its
   own beat offset and tempo; reduced motion settles every move at once.
 - `art.ts` decodes the atlas, sheets and sprites once per theme; a theme change keeps the previous art
@@ -3036,87 +2993,6 @@ unless the chat is docked, and a turn in the hidden column has no paint opportun
   the owner's own existing answer command, below.
 - Owner questions (owner complaint 2026-11-16, decision below): a lead with open `ask_human` questions
   leads its panel with one compact question card; the rest of the brief folds behind "Progress".
-
-### Office art direction (2026-11-17)
-
-**Problem:** the owner found the office "still far too ugly" (11-17): flat pastel rooms that were mostly
-empty rug, small people on a uniform beige floor, no light, and names readable only by hovering. The office
-must show at a glance what every lead and Worker is doing and be a pleasure to look at.
-
-**Decision:** a lit miniature office, "diorama at golden hour". References, and what each one lends:
-- *Kairosoft (Game Dev Story, Pocket Academy)*: every staff member is visible at a desk and status reads
-  from a glance at their head (bubbles, sparks, a celebration when something ships). Here: a name tag with a
-  status light on everyone, a thought bubble while assigned work waits, a raised waving hand for an open
-  owner question, confetti and a hop when a delivery lands.
-- *Two Point Hospital / Two Point Campus*: each room is a distinct place (its own floor material, wall
-  colour, signage), with chunky saturated props, strong contact shadows and furniture that fills the room.
-  Here: rooms with back walls, glass partitions and a doorway, four floor materials, a backlit sign, framed
-  pictures, a clock, shelves, lounges in the spare floor.
-- *Stardew Valley / Eastward night lighting*: the evening darkens the world while practical lights keep warm
-  pools and screens glow. Here: one grade per local hour, light pools under pod pendants, head-desk and floor
-  lamps, the bar and the entrance, and every working screen glowing cool and flickering.
-
-The rules that keep it a status board:
-- **Palette**: materials stay warm and muted (oak, cream, team colour mixed half-way to a neutral);
-  saturation is spent only on signals. Amber `#F4B740` (question), red (exception) and gold `#E8B04A`
-  (delivery) remain reserved; ambient art never uses them. Status lights: green working, periwinkle waiting,
-  grey idle, amber question, red exception, gold delivering.
-- **Typography**: the UI font throughout. Tags are bold 8.5 units drawn in screen pixels (never below 10 CSS
-  px) and show the whole name. A desk row's tags are packed left to right, each on the innermost line where it
-  clears the tags already there (`tagLines`), so a row of short names stays on one line and lines are added
-  only where neighbours would touch; a tag wider than its desk slides along its line to stay inside the room,
-  and only a name longer than a whole pod row is cut. Worker tags are lighter than leads' (no drop shadow,
-  slightly translucent pill, full-contrast text) so a crowded floor reads as people first. Each person in the
-  line at the owner's door gets a line of their own; signs are 14-unit heavy type lit like a neon tube in the
-  team colour, painted once per content.
-- **Light**: key light from the window wall. Day: long slanting sunbeams leaning with the hour; golden hour
-  warms; dusk tints violet and darkens; night (21-5) darkens the floor and cuts pools under every practical
-  light. Contact shadows under furniture and pods, ambient occlusion along the back wall and partitions.
-  Labels, tags and signals are drawn after the grade, so they are equally legible at night.
-- **Characters and assets**: one sticker style everywhere: warm ink contour, flat fill, a highlight on the
-  side facing the window, a cel shade on the far side, a contact shadow. People (eleven role silhouettes,
-  three palette variants each, assets/README.md) were redrawn in it: a larger chibi head with brows, two-glint
-  eyes and a shaded cheek, a lit hair sheen, garments at raised saturation (people carry the colour, surfaces
-  stay muted), and new cells for a raised hand and a cheer; the scene adds a die-cut cream outline to each
-  sheet layer, which separates them from any floor in either theme. Desks (bevelled lit top, grain, drawer
-  front), teal upholstered chairs and leaf-by-leaf plants of six species are redrawn in the atlas. Rooms,
-  walls, floors, furniture (shelves, cabinets, sofas, armchairs, tables, floor lamps, credenzas, rugs), signs,
-  clocks, tags, bubbles, the alarm ring, steam and confetti are drawn procedurally in the same style. Room
-  floors are quiet (carpet tiles a 5 % tone apart, narrow boards close in tone, sparse terrazzo, faint
-  broadloom bands), so the people and signals on them carry the contrast. Every asset is original to Tofu
-  (generated by `scripts/gen_world_art.py` or drawn in code; no third-party art; no licence to record).
-- **Camera and composition**: the whole office still fits the view. A window taller than the plan gives its
-  spare height to the rooms (`layout.ts`), not to bare corridor floor, and the head desk and pods sit under
-  the sign, so a room's spare floor is its lounge. Furniture goes only where nobody walks or sits
-  (`roomFurniture`: beside the head desk under the back wall, right of the pods, under them).
-- **Motion**: only state moves. Typing (the sheets' cells) with a flickering screen; waiting: dots travel in a
-  thought bubble; question: the sheet's raised hand waving and a bobbing `?` (at the owner's door, or at the
-  desk when the line is full); exception: a red pulse on the floor and a short jolt every two seconds; idle:
-  steam over the desk; delivering: the carry walk, then two hops with arms thrown up at the top of each, a happy
-  face and confetti at the owner's desk, then the walk back.
-  Ambient: wall clocks show the local time, dust drifts in the sunbeams. Every loop is a function of time and
-  a per-person phase (no two people in step); reduced motion draws time zero and moves nothing.
-
-**Why it is eye-catching yet readable:** contrast is spent on people and signals, not on surfaces, so the
-eye lands on who is doing what; the grade makes time of day legible at once and turns the night office into
-glowing working desks; every person carries their name and state, so nothing needs hovering.
-
-**Measured** (headless Chromium 1228, software raster, 1600 x 960, DPR 1, 10 s windows, fixture preview with
-53 people of whom 44 work, after the 11-17 redraw): 60.0 fps, p99 frame 16.8 ms, no frame over 20 ms at 15:00
-and 22:00 in the light theme and 22:00 in the dark; renderer CPU 0.27-0.28 of a core (the office before the
-lit diorama, same fixture: 0.03, because it slept between typing beats; the first diorama pass: 0.25). Reduced
-motion: 60 fps, CPU 0.003. Earlier live-data runs (24 people): 60 fps, CPU 0.19-0.23; DPR 2: 0.52. A run during
-a host load average of 156 once dropped to 34 fps and recovered to 60 fps when repeated.
-The cost is the always-on animation, which is the point of the change; the stage still sleeps when the tab
-is hidden or the office is off screen. A blind vision-model comparison (output/studio-art-redraw-20261117/blind)
-preferred this version in all six pairs (day, night and a 2x close-up, against the pre-diorama office and
-against the first diorama pass).
-
-**Alternatives rejected:**
-- Isometric rebuild: new geometry, depth sorting and hit-testing for the same information (assets/README.md).
-- A darker theme only: the light theme is the owner's, and time of day carries more meaning than a theme.
-- Names only on hover: the floor must read as a status board at a glance.
-- Throttling the ambient animation to save CPU: a tuning knob; a still office is what reduced motion is for.
 
 ### Owner questions in the office (2026-11-16)
 
@@ -3191,7 +3067,6 @@ Specifications: `model.test.ts`, `events.test.ts`, `brief.test.ts`, `live.test.t
 use recorded live shapes (`testing/recorded.ts`); `attention.test.ts`, `world-dom.test.ts`; walkways
 `routes.test.ts`, floor blends `tween.test.ts`, walking, turning round, errands and tempo `actors.test.ts`,
 the scene through attempt churn, new pods, settling, sticky spots and carried reports `scene.test.ts`, the
-grade, room furniture and lights `diorama.test.ts`, the delivery's celebration `actors.test.ts`, the
 stage's spatial focus and view-fit camera `office-game/testing/engine.test.cjs`; the question
 card, answer binding, marker clearing, paging and per-lead questions `question-card.test.ts`;
 `conversation/application/question-focus.test.ts`, the question target in `conversation-viewport.test.ts`, the

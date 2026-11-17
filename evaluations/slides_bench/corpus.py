@@ -39,9 +39,11 @@ def document_ids() -> list[str]:
 def load_document(doc_id: str) -> dict:
     """Return the pinned source text plus each arm's identical input file.
 
-    Every arm reads the same ``text``; ``material_for_tofu`` is that text
-    as ``produce_slides`` material.
+    Every arm reads the same ``text``. Tofu's ``produce_slides`` contract
+    bounds ``material`` at MAX_SLIDE_MATERIAL_CHARS, so a caller must cut a
+    longer document; ``material_for_tofu`` is that caller-side cut.
     """
+    from lib.slides.contracts import MAX_SLIDE_MATERIAL_CHARS
     doc = next(d for d in manifest()['documents'] if d['id'] == doc_id)
     path = os.path.join(data_root(), doc['path'])
     with open(path, 'rb') as fh:
@@ -51,7 +53,7 @@ def load_document(doc_id: str) -> dict:
         raise ValueError(f'{doc_id}: source digest {digest} != pinned')
     text = _HTML_COMMENT_RE.sub('', raw.decode('utf-8')).strip()
     return {**doc, 'text': text,
-            'material_for_tofu': text}
+            'material_for_tofu': text[:MAX_SLIDE_MATERIAL_CHARS]}
 
 
 def write_input(doc_id: str, out_path: str) -> str:

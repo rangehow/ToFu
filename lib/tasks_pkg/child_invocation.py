@@ -82,7 +82,7 @@ def delegated_tool_discovery_policy(parent: dict, tools: list, direct_names=()) 
     it through search_tools/execute_tools, which a withheld MCP tool keeps on
     the wire.
     """
-    from lib.tools.contracts import tool_schema_name
+    from lib.swarm.routing import tool_schema_name
     from lib.tools.mcp_exposure import without_mcp_names
     names = {tool_schema_name(tool) for tool in tools}
     direct_candidates = set(without_mcp_names(names))
@@ -189,7 +189,7 @@ _CONVERSATION_TOOL_POLICY_FIELDS = frozenset({
 
 
 def _conversation_tool_policy(parent: dict, tools: list) -> dict:
-    from lib.tools.contracts import tool_schema_name
+    from lib.swarm.routing import tool_schema_name
     source = parent.get('config') or {}
     policy = {key: copy.deepcopy(source[key])
               for key in _CONVERSATION_TOOL_POLICY_FIELDS if key in source}

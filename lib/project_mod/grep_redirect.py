@@ -140,6 +140,9 @@ def _default_timeout_wrap():
 
 # Short flags that give grep an explicit binary policy; when present the
 # GNU fallback does not need to inject -I for recursion.
+_BINARY_POLICY_CHARS = frozenset('aI')
+
+
 @dataclass
 class GrepRedirectPlan:
     rewritten: object = None
@@ -159,6 +162,18 @@ def _argv_end(words, start, segment):
                 _REDIR_FUSED_RE.match(raw) or _REDIR_BARE_RE.match(raw)):
             return idx
     return len(words)
+
+
+def _has_binary_policy(words):
+    for word in words:
+        text = word.text
+        if text.startswith('--'):
+            if text.split('=', 1)[0] in ('--text', '--binary-files', '--binary'):
+                return True
+        elif text.startswith('-') and text != '-':
+            if any(ch in _BINARY_POLICY_CHARS for ch in text[1:]):
+                return True
+    return False
 
 
 def _gnu_splice_replacement(program_text, timeout_prefix):

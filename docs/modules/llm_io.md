@@ -1148,8 +1148,6 @@ Streaming dispatch accepts an explicit `model_budget_admit` port for message-lis
 
 Non-stream `chat` accepts an explicit budget admission port. Each direct/relay send has its own lease after final protocol projection; retries settle failed usage before admitting again, and learned-limit recursion retains the same account. Unknown failed usage stays unknown, while pre-send preparation can void an unsent lease. This does not yet bind discovery translation or durable goal recovery.
 
-Non-stream `dispatch_chat(max_tokens=None)` asks for the selected route's output limit, resolved per attempt by `lib.model_info.route_output_limit` (logical Model family ceiling, Deployment `max_output_tokens`, learned name/route limits). A reasoning Model's allowance covers reasoning and reply, so a caller whose reply is short but whose reasoning is not (visual review) passes `None` instead of guessing a reply size; see `docs/modules/production.md`, "Visual review on reasoning models". Spec: `tests/llm_dispatch/test_dispatch_logical_identity.py`.
-
 Non-stream `dispatch_chat` and `smart_chat` forward an explicit model budget across slot selection and direct fallback. Budget/cancellation refusal releases the selected slot and propagates without health damage or fallback. This remains a caller-owned port, not authentication or durable recovery authority.
 
 `search_budget.content_filter_budget_scope` binds an explicit owner and admission port using the existing request-local SearchConfig. A swallowed typed budget refusal is raised at scope exit; normal filtering failure behavior remains. Only the configured host adapter may be wrapped, nested replacement is refused, and workers must finish before scope closure. Task tool callers still need to enter this scope.

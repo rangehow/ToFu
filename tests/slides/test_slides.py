@@ -716,7 +716,8 @@ class TestRecipe:
                 path, theme=kwargs.get('theme'),
                 subject=kwargs.get('subject', '视频帧'),
                 model=kwargs.get('model', ''),
-                review_context=kwargs.get('review_context', ''))
+                review_context=kwargs.get('review_context', ''),
+                max_tokens=kwargs.get('max_tokens', 1500))
             return {'ok': True, 'skipped': False, 'reason': '',
                     'findings': [], 'has_blocker': False,
                     'summary': '0 finding(s)',

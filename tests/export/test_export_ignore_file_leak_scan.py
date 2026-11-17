@@ -33,17 +33,16 @@ import unittest
 from pathlib import Path
 
 import pytest
-from tests.support.export_toolchain import require_export_toolchain
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 # export.py is the maintainer's release tool; not shipped in opensource builds.
-require_export_toolchain()
+pytest.importorskip('export', reason='export.py is not shipped in opensource builds')
 
 pytestmark = pytest.mark.unit
 
 # Fragment-assembled internal markers (never contiguous literals in-file).
-_INTERNAL_HOST = 'secret-host.' + 'sankuai' + '.com'
+_INTERNAL_HOST = 'secret-host.' + 'example-corp' + '.com'
 _MNT = '/mnt/' + 'dolphin' + 'fs'
 
 
@@ -72,7 +71,7 @@ class IgnoreFileLeakScanTest(unittest.TestCase):
         import re as _re
         with tempfile.TemporaryDirectory() as tmp:
             root = self._make_tree(tmp)
-            pat = _re.escape('.' + 'sankuai' + '.com')
+            pat = _re.escape('.' + 'example-corp' + '.com')
             hits = _rg_files_with_matches(root, [pat])
         self.assertIn('section_source.js', hits,
                       'control: ordinary sources are scanned')

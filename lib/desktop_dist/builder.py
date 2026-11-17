@@ -158,7 +158,6 @@ def _pipeline(workdir: str, version: str, sha: str, log_fh) -> str:
     # 1. Clean-tree snapshot of HEAD — never the dirty working tree.
     _sh(f'git -C {_REPO_ROOT} archive HEAD | tar -x -C {src}', log_fh,
         shell=True)
-    build_frontend(src, log_fh)
 
     # 2. Clean venv + the CI's EXACT pip recipe (build-desktop.yml's
     #    "Install dependencies" step, both lines). Measured reason for NOT
@@ -339,22 +338,6 @@ def _git(*args) -> str:
     if out.returncode != 0:
         raise RuntimeError(f'git {args[0]} failed: {out.stderr[:200]!r}')
     return out.stdout.decode('utf-8', 'replace')
-
-
-def build_frontend(src: str, log_fh) -> None:
-    """Build and verify the Vite graph inside a ``git archive`` snapshot.
-
-    ``static/vite`` is generated and gitignored, so the snapshot lacks the
-    graph ``tofu.spec`` refuses to build without (ViteAssetError, measured
-    2026-11-17) — the CI's frontend-dist job builds it the same way.
-    ``node_modules`` is linked from this checkout: never ``npm install``
-    into a copy.
-    """
-    os.symlink(os.path.join(_REPO_ROOT, 'node_modules'),
-               os.path.join(src, 'node_modules'))
-    _sh('npm run build:frontend', log_fh, cwd=src)
-    _sh(f'{sys.executable} scripts/verify_frontend_dist.py', log_fh,
-        cwd=src)
 
 
 def _sh(cmd: str, log_fh, *, cwd: str | None = None, env: dict | None = None,

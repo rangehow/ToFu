@@ -29,12 +29,6 @@ _HEADING_RE = re.compile(r'^\s{0,3}#{1,6}\s+(.*?)\s*#*\s*$')
 _LIST_RE = re.compile(r'^\s*(?:[-*+•]|\d+[.)、])\s+')
 _TABLE_RE = re.compile(r'^\s*\|.*\|\s*$')
 _TABLE_RULE_RE = re.compile(r'^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)*\|?\s*$')
-#: A figure or table caption line ("Figure 5: ...", "Table 1. ...", "图 3：...").
-#: Text extracted from a PDF has no blank lines, so without this a caption
-#: and the paragraphs around it merge into one unit and the outline cannot
-#: cite a figure on its own.
-_CAPTION_RE = re.compile(
-    r'^\s*(?:Figure|Fig\.|Table|图|表)\s*\d+[a-z]?\s*[:：.]', re.IGNORECASE)
 #: Numbers as written in sources: 17,303 · 2.8 · .5 · 95.4% · −20.8 · 1e-3.
 NUMBER_RE = re.compile(
     r'(?<![A-Za-z0-9_.,])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?'
@@ -81,7 +75,7 @@ def material_cards(text: str) -> list[dict]:
                 emit(f'{table_header}\n{line.strip()}')
             continue
         table_header = ''
-        if _LIST_RE.match(line) or _CAPTION_RE.match(line):
+        if _LIST_RE.match(line):
             flush()
             paragraph.append(line)
             continue

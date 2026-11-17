@@ -48,7 +48,6 @@ from lib.log import get_logger
 from lib.storage.errors import StorageError
 from lib.storage_authority_sql import fastpath
 from lib.storage_authority_sql.durability import fsync_directory, write_json_durable
-from runtime_guards import pid_is_alive
 
 
 logger = get_logger('tofu.storage.sidecar.shipper')
@@ -448,7 +447,15 @@ class WalShipper:
 
     @staticmethod
     def _pid_is_alive(pid: int) -> bool:
-        return pid_is_alive(pid)
+        if pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except (PermissionError, OSError):
+            return True
+        return True
 
     def _cleanup_stale_artifacts(self) -> None:
         """Reclaim only exact private temp files whose creating PID is dead."""

@@ -6,42 +6,13 @@ The existing task result cache owns capacity and locking; the ordinary parser,
 gateway, executor and domain handler still own admission and final settlement.
 These process-local carriers never authorize another call or survive restore.
 """
-import hashlib
-import json
 from dataclasses import dataclass, replace
 
-from lib.conversation_sync.settled_rows import is_settled, memo_get, memo_put
 from lib.tasks_pkg.tool_dispatch._flags import (
     _call_id_signature, _discard_tool_result_cache_entry, _make_cache_key,
     _store_tool_result_cache_entry,
     _tool_receipt_lock,
 )
-
-
-_CONTENT_DIGEST_MEMO = ('prefetch-identity', 'content-sha256')
-
-
-def _content(value):
-    """An injective stand-in for ``value``: settled rows by memoized digest.
-
-    Settled rows are deep-immutable, so their canonical JSON digest is a pure
-    function of the row and is computed once per row, not once per call.
-    The tag keeps a digest from ever equalling a plain value.
-    """
-    if not is_settled(value):
-        return ['value', value]
-    digest = memo_get(value, _CONTENT_DIGEST_MEMO)
-    if digest is None:
-        digest = memo_put(value, _CONTENT_DIGEST_MEMO, hashlib.sha256(json.dumps(
-            value, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
-            default=str).encode('utf-8')).hexdigest())
-    return ['settled', digest]
-
-
-def _config_content(config):
-    if not isinstance(config, dict):
-        return _content(config)
-    return {key: _content(value) for key, value in config.items()}
 
 
 def _identity(task, name, call_id, args, row, project_path):
@@ -54,11 +25,10 @@ def _identity(task, name, call_id, args, row, project_path):
         'worldVersion': task.get('_worldVersion') or task.get('worldVersion'),
         'callId': call_id, 'arguments': args, 'caller': row.get('caller'),
         'roundNum': row.get('roundNum'), 'llmRound': row.get('llmRound'),
-        'projectPath': project_path, 'config': _config_content(task.get('config')),
+        'projectPath': project_path, 'config': task.get('config'),
         'userQuestion': task.get('lastUserQuery'),
         'toolEnvironment': id(task.get('_tool_env')),
-        'contract': _content(
-            documents.get(name) if isinstance(documents, dict) else documents),
+        'contract': documents.get(name) if isinstance(documents, dict) else documents,
     })
 
 

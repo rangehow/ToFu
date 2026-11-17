@@ -61,8 +61,6 @@ import time
 from lib.log import get_logger, log_context
 
 from . import store, wintoolchain
-# One repository reader for both platform builders (VERSION and git).
-from .builder import _git, _read_version
 
 logger = get_logger(__name__)
 
@@ -247,9 +245,6 @@ def _pipeline(workdir: str, version: str, sha: str, log_fh,
     os.makedirs(src, exist_ok=True)
     _sh(f'git -C {_REPO_ROOT} archive HEAD | tar -x -C {src}', log_fh,
         shell=True)
-    from . import builder as _linux_builder
-    _linux_builder.build_frontend(src, log_fh)
-    _build_tofudb_exe(src, log_fh)
 
     winpy = _ensure_winpython(log_fh)
     _ensure_guest_hosts(log_fh)
@@ -262,6 +257,7 @@ def _pipeline(workdir: str, version: str, sha: str, log_fh,
              f'{winpy} -m pip install --no-warn-script-location '
              f'--no-deps {_z(ts_src)}', log_fh, env=pip_env)
 
+    from . import builder as _linux_builder
     build_reqs = _linux_builder._requirements_without_tofu_search(
         os.path.join(src, 'requirements.txt'), workdir)
     extras = ' '.join(_BUILD_EXTRAS)
@@ -524,48 +520,6 @@ def _conda_tools_add(package: str, log_fh) -> None:
         timeout=1800)
 
 
-_TOFUDB_WIN_TARGET = 'x86_64-pc-windows-gnu'
-
-
-def _build_tofudb_exe(src: str, log_fh) -> None:
-    """Cross-compile the tofu-db engine that tofu.spec bundles.
-
-    The CI leg runs `cargo build` natively on Windows (MSVC). Here the
-    engine's bundled C sources (sqlite, mimalloc, zstd) need a Windows C
-    cross-compiler: zig via cargo-zigbuild targets windows-gnu with no
-    SDK (measured 2026-11-17: PE32+ x86-64, 22 MB). zig's clang turns
-    mimalloc's __DATE__ into -Werror=date-time, hence the CFLAGS. The
-    target dir lives on the toolchain's LOCAL disk so later builds reuse
-    every compiled dependency: on the FUSE cache lld-link's mmapped output
-    hung in uninterruptible sleep for 25+ minutes (measured 2026-11-17).
-    """
-    from . import builder as _linux_builder
-    tools_bin = os.path.join(wintoolchain.cache_dir(), 'tools', 'bin')
-    for package in ('zig', 'cargo-zigbuild'):
-        if not os.path.isfile(os.path.join(tools_bin, package)):
-            _conda_tools_add(package, log_fh)
-    cargo_home = os.environ.get('CARGO_HOME') or os.path.expanduser(
-        '~/.cargo')
-    target_dir = os.path.join(wintoolchain.local_root(), 'tofudb-target')
-    env = dict(os.environ,
-               PATH=os.pathsep.join([tools_bin,
-                                     os.path.join(cargo_home, 'bin'),
-                                     os.environ.get('PATH', '')]),
-               CARGO_TARGET_DIR=target_dir,
-               CFLAGS_x86_64_pc_windows_gnu='-Wno-error=date-time')
-    _linux_builder._sh(f'rustup target add {_TOFUDB_WIN_TARGET}', log_fh,
-                       env=env)
-    _linux_builder._sh(
-        f'cargo zigbuild --release --target {_TOFUDB_WIN_TARGET} '
-        '--manifest-path packages/tofu-db/Cargo.toml', log_fh,
-        cwd=src, env=env)
-    dest_dir = os.path.join(src, 'packages', 'tofu-db', 'target', 'release')
-    os.makedirs(dest_dir, exist_ok=True)
-    shutil.copy2(os.path.join(target_dir, _TOFUDB_WIN_TARGET, 'release',
-                              'tofu-db.exe'),
-                 os.path.join(dest_dir, 'tofu-db.exe'))
-
-
 def _ensure_msiextract(log_fh) -> str:
     """Locate msiextract (conda-forge msitools), provisioning if absent.
 
@@ -661,6 +615,22 @@ def _tofu_search_source(workdir: str) -> str:
     return 'tofu-search'
 
 
+def _read_version() -> str:
+    with open(os.path.join(_REPO_ROOT, 'VERSION'), encoding='utf-8') as f:
+        v = f.read().strip()
+    if not v:
+        raise RuntimeError('VERSION file is empty')
+    return v
+
+
+def _git(*args) -> str:
+    out = subprocess.run(['git', '-C', _REPO_ROOT, *args],
+                         capture_output=True, timeout=60)
+    if out.returncode != 0:
+        raise RuntimeError(f'git {args[0]} failed: {out.stderr[:200]!r}')
+    return out.stdout.decode('utf-8', 'replace')
+
+
 def _sh(cmd: str, log_fh, *, shell: bool = False,
         timeout: int = _BUILD_TIMEOUT_S):
     """A NATIVE pipeline step (git/tar/unzip) with output in the log."""
@@ -727,10 +697,7 @@ def _render_nsi(version: str, payload_dir: str, out_file: str,
     t = _NSI_TARGETS[target]
     with open(_NSI_TEMPLATE, encoding='utf-8') as f:
         text = f.read()
-    # tofu.ico is generated and gitignored (scripts/gen_desktop_icons.py
-    # runs inside the payload build), so it is taken from the payload built
-    # from the same commit, never from whatever the checkout happens to hold.
-    asset_dir = os.path.join(payload_dir, '_internal', 'static', 'icons')
+    asset_dir = os.path.join(_REPO_ROOT, 'static', 'icons')
     text = (text.replace('@APP_VERSION@', version)
                 .replace('@PAYLOAD_DIR@', payload_dir)
                 .replace('@OUT_FILE@', out_file)

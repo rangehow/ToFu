@@ -74,85 +74,6 @@ class TestParseFindings:
         assert '[minor] 对齐' in text
 
 
-# ── reasoning models: the output allowance covers reasoning ──
-
-class _OneSlotDispatcher:
-    def __init__(self, model):
-        from lib.llm_dispatch.slot import Slot
-        self._slot = Slot(key_name='k0', api_key='sk-test-1234', model=model,
-                          capabilities={'text', 'vision'},
-                          provider_id='unit-visual-qa')
-        self.slots = []
-
-    def pick_and_reserve(self, **_kwargs):
-        slot, self._slot = self._slot, None
-        if slot is not None:
-            slot.record_request()
-        return slot
-
-    def has_capable_slots(self, *_args, **_kwargs):
-        return self._slot is not None
-
-    def summarize_slots(self, *_args, **_kwargs):
-        return 'one-slot'
-
-
-class TestReasoningOutputAllowance:
-    """Reproduction: gpt-5.5 at its default effort spent a fixed 1,500-token
-    allowance on reasoning and replied ``''`` with finish_reason=length, so
-    pages went unreviewed. The allowance is the route's output limit now."""
-
-    REASONING = 3000  # more than the old fixed 1,500 allowance
-
-    def _reasoning_model(self, monkeypatch, *, reasoning):
-        import lib.llm as llm
-        from lib.llm_dispatch import api
-        sent = []
-
-        def chat(**kwargs):
-            budget = kwargs['max_tokens']
-            sent.append(budget)
-            if budget <= reasoning:
-                return '', {'finish_reason': 'length',
-                            'completion_tokens': budget,
-                            'reasoning_tokens': budget}
-            return '{"findings": []}', {'finish_reason': 'stop',
-                                        'completion_tokens': reasoning + 9,
-                                        'reasoning_tokens': reasoning}
-
-        monkeypatch.setattr(llm, 'chat', chat)
-        monkeypatch.setattr(api, 'get_dispatcher',
-                            lambda: _OneSlotDispatcher('gpt-5.5'))
-        monkeypatch.setattr(
-            'lib.model_info._capabilities.model_supports_vision',
-            lambda _model: True)
-        return sent
-
-    def test_exhausting_reasoning_no_longer_starves_the_verdict(
-            self, tmp_path, monkeypatch):
-        from lib.model_info import route_output_limit
-        img = tmp_path / 'f.png'
-        img.write_bytes(b'\x89PNG\r\n\x1a\n' + b'\0' * 100)
-        sent = self._reasoning_model(monkeypatch, reasoning=self.REASONING)
-
-        out = vqa.qa_frame(str(img), model='gpt-5.5')
-
-        assert out['ok'] and out['findings'] == []
-        assert sent == [route_output_limit('gpt-5.5')]
-
-    def test_a_cut_off_reply_is_a_budget_outage_not_a_verdict(
-            self, tmp_path, monkeypatch):
-        img = tmp_path / 'f.png'
-        img.write_bytes(b'\x89PNG\r\n\x1a\n' + b'\0' * 100)
-        self._reasoning_model(monkeypatch, reasoning=10_000_000)
-
-        out = vqa.qa_frame(str(img), model='gpt-5.5')
-
-        assert not out['ok'] and not out['skipped'] and not out['findings']
-        assert 'cut off at the output limit' in out['reason']
-        assert 'reasoning_tokens=' in out['reason']
-
-
 # ── degrade ladder ────────────────────────────────────────
 
 class TestDegrade:
@@ -516,7 +437,8 @@ class TestEngineRound:
             identity = vqa.qa_frame_input_sha256(
                 path, theme=kwargs.get('theme'),
                 subject=kwargs.get('subject', '视频帧'),
-                model=kwargs.get('model', ''))
+                model=kwargs.get('model', ''),
+                max_tokens=kwargs.get('max_tokens', 1500))
             return {
                 'ok': True, 'skipped': False, 'reason': '', 'findings': [],
                 'has_blocker': False, 'summary': '0 finding(s)',

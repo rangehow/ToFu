@@ -30,7 +30,7 @@ __all__ = ['AuthorPromptContext', 'author_page', 'author_page_input_sha256',
 
 _MAX_ROUNDS = 3
 _MAX_TOKENS = 6000
-_AUTHOR_INPUT_VERSION = 'slide-page-author-v5-coverage'
+_AUTHOR_INPUT_VERSION = 'slide-page-author-v4'
 
 _INTERNAL_COPY_RE = re.compile(
     r'(?:章节|本章|过渡|转场|承上启下)(?:引导|过渡|转场)?页'
@@ -40,9 +40,7 @@ _INTERNAL_COPY_RE = re.compile(
     r'introduc(?:e|ing)\s+the\s+next|\bTODO\b|\bTBD\b|占位|待补充)',
     re.IGNORECASE,
 )
-#: Internal evidence ids: research cards [S#], material units [M#] and
-#: coverage inventory results [H#] (``lib/slides/coverage.py``).
-_SOURCE_MARKER_RE = re.compile(r'\[[SMH]\d{1,4}\]', re.IGNORECASE)
+_SOURCE_MARKER_RE = re.compile(r'\[[SM]\d{1,4}\]', re.IGNORECASE)
 #: Smallest text that stays legible when a 1280-px-wide slide is projected
 #: or screen-shared (10.5 pt); scaled to the deck width.
 _MIN_LEGIBLE_TEXT_PX = 14
@@ -90,13 +88,8 @@ def _llm(messages, *, max_tokens: int, model: str | None = None,
             log_prefix='[Slides:author]')
 
 
-def _validate_page_text(deck, page_path: str, text: str,
-                        brief: dict | None = None) -> list:
-    """Validate ONE page's YAML in the deck's context. Findings, zero-LLM.
-
-    ``brief`` is the page's outline brief; an all-caps Latin label its
-    evidence names (a benchmark called "ACMEQA") is a fact, not decoration.
-    """
+def _validate_page_text(deck, page_path: str, text: str) -> list:
+    """Validate ONE page's YAML in the deck's context. Findings, zero-LLM."""
     import yaml
     from lib.slides.pptd import Deck, Page, validate_deck
     try:
@@ -126,23 +119,9 @@ def _validate_page_text(deck, page_path: str, text: str,
     findings = validate_deck(trial)
     findings.extend(_legibility_findings(deck, elements))
     visible_text = '\n'.join(_visible_text_values(data))
-    # Rich text has a fixed tag vocabulary; both renderings drop any other
-    # tag, so a literal "<ctx>" in copy silently vanishes from the slide.
-    from lib.slides.richtext import RICH_MARKUP_RE
-    unknown = sorted({match.group(0) for value in _visible_text_values(data)
-                      if RICH_MARKUP_RE.search(value)
-                      for match in _TAG_RE.finditer(value)
-                      if not RICH_MARKUP_RE.match(match.group(0))})
-    if unknown:
-        findings.append(
-            '富文本里有不支持的标签，渲染时会被删掉: '
-            + ', '.join(repr(tag) for tag in unknown[:3])
-            + '。若是字面文字，写成 &lt;ctx&gt; 这样的转义形式。')
     if _CJK_RE.search(deck.title or ''):
-        evidence = _brief_evidence_text(brief or {})
         labels = [value for value in _visible_text_values(data)
-                  if _LATIN_LABEL_RE.match(_TAG_RE.sub('', value).strip())
-                  and _TAG_RE.sub('', value).strip() not in evidence]
+                  if _LATIN_LABEL_RE.match(_TAG_RE.sub('', value).strip())]
         if labels:
             findings.append(
                 '中文页面出现装饰性英文大写标签: '
@@ -297,91 +276,6 @@ def _text_number_findings(brief: dict, data: dict, *, total: int) -> list[str]:
           '不要换算、四舍五入或估算出新数字。']
 
 
-def _coverage_findings(brief: dict, data: dict) -> list[str]:
-    """The page must show the numbers of the results and figures it carries.
-
-    ``brief['coverage']`` lists the headline results and figures the outline
-    placed on this page (``lib/slides/coverage.py``). A page that describes
-    such a figure or result in words without any of its values loses the
-    evidence the outline planned for it.
-    """
-    entries = [entry for entry in brief.get('coverage') or []
-               if isinstance(entry, dict) and entry.get('numbers')]
-    if not entries:
-        return []
-    from lib.slides.coverage import shows_entry
-    try:
-        from lib.slides.components import expand_page_components
-        elements = expand_page_components(data)
-    except ValueError:
-        return []
-    shown = [_TAG_RE.sub(' ', value)
-             for value in _visible_text_values({'elements': elements})]
-    for element in elements:
-        if isinstance(element, dict) and element.get('elementType') == 'chart':
-            for series in (element.get('data') or {}).get('series') or []:
-                if isinstance(series, dict):
-                    shown.extend(str(value) for value in series.get('values') or []
-                                 if isinstance(value, (int, float))
-                                 and not isinstance(value, bool))
-    planned = [str(brief.get('key_message') or ''),
-               str(brief.get('content_notes') or '')]
-    missing = []
-    for entry in entries:
-        if shows_entry(entry, shown):
-            continue
-        values = [number for number in entry['numbers']
-                  if shows_entry({**entry, 'numbers': [number]}, planned)]
-        missing.append(entry['label'] + (
-            f'（本页素材里写着: {", ".join(values)}）' if values else ''))
-    if not missing:
-        return []
-    return ['本页承载的结果/图表没有出现它的数字: ' + '; '.join(missing)
-            + '。把证据里这些结果的实际数值画成图表、表格或写进正文，'
-              '不要只用文字描述图形或趋势。']
-
-
-def _series_colour_findings(data: dict) -> list[str]:
-    """Two series of one chart drawn in the same colour cannot be told
-    apart in the plot or its legend. Uncoloured series take the shared
-    palette in order, which repeats after its last colour."""
-    from lib.slides.render_html import CHART_PALETTE_TOKENS
-    findings = []
-    for element in data.get('elements') or []:
-        if not isinstance(element, dict) or element.get('elementType') != 'chart':
-            continue
-        if str(element.get('chartType') or '') in ('pie', 'doughnut'):
-            continue
-        seen: dict = {}
-        for index, series in enumerate(
-                (element.get('data') or {}).get('series') or []):
-            if not isinstance(series, dict):
-                continue
-            colour = str(series.get('color') or CHART_PALETTE_TOKENS[
-                index % len(CHART_PALETTE_TOKENS)][0]).strip().lower()
-            name = str(series.get('name') or f'series {index + 1}')
-            if colour in seen:
-                findings.append(
-                    f'图表 {element.get("elementId")} 的系列“{seen[colour]}”和'
-                    f'“{name}”颜色相同（{colour}），读者无法区分。每个系列用不同'
-                    '颜色；系列多于可区分的颜色时，只画支撑本页判断的系列，其余'
-                    '数值放进表格或拆成两张图。')
-                break
-            seen[colour] = name
-    return findings
-
-
-def _brief_evidence_text(brief: dict) -> str:
-    """The page brief's claim, notes and cited evidence points."""
-    parts = [str(brief.get('key_message') or ''),
-             str(brief.get('content_notes') or '')]
-    for source in brief.get('sources') or []:
-        if isinstance(source, dict):
-            parts.extend((str(source.get('title') or ''),
-                          str(source.get('point') or '')))
-    return '\n'.join(parts)
-
-
 def _brief_fidelity_findings(brief: dict, text: str, *, page_index: int,
                              total: int) -> list[str]:
     """Reject invented chart and text numbers absent from the evidence."""
@@ -393,8 +287,16 @@ def _brief_fidelity_findings(brief: dict, text: str, *, page_index: int,
     if not isinstance(data, dict):
         return []
 
+    evidence_parts = [
+        str(brief.get('key_message') or ''),
+        str(brief.get('content_notes') or ''),
+    ]
+    for source in brief.get('sources') or []:
+        if isinstance(source, dict):
+            evidence_parts.extend((str(source.get('title') or ''),
+                                   str(source.get('point') or '')))
     allowed = {Decimal(token.replace(',', '')) for token in _NUMBER_RE.findall(
-        _brief_evidence_text(brief))}
+        '\n'.join(evidence_parts))}
     # Series values are measurements, including 0, 1 and values coinciding
     # with a page count. Structural labels live outside the series values.
 
@@ -411,9 +313,7 @@ def _brief_fidelity_findings(brief: dict, text: str, *, page_index: int,
                     continue
                 if Decimal(str(value)) not in allowed:
                     unsupported.append(str(value))
-    findings = (_text_number_findings(brief, data, total=total)
-                + _coverage_findings(brief, data)
-                + _series_colour_findings(data))
+    findings = _text_number_findings(brief, data, total=total)
     if not unsupported:
         return findings
     return findings + [
@@ -521,12 +421,7 @@ _CONTENT_RULES_ZH = (
     '删掉口号、抽象形容和“读法”“要点”之类的元说明。\n'
     '- 一页只讲一件事；放不下时删减次要信息，不要缩小字号。\n'
     '- 只有证据里有可比的数字时才画图表或表格；不要画不承载数据的装饰曲线、箭头、'
-    '雷达图或空框架。\n'
-    '- 不要在图表（chart）上方叠加形状或线条（圆点、引线、参考线、高亮框）：PowerPoint 和 '
-    'LibreOffice 各自排布图表绘图区，叠加物对不上数据点；参考值画成图表里的一个系列，'
-    '标注用数据标签或图表外的文字。\n'
-    '- 不要用 line 元素手绘曲线或折线来表示数据形状（如 U 型曲线）：有数字就用 chart，没有数字就用文字说明形状。\n'
-    '- 线条、箭头、圆环和形状边缘不得穿过任何文字；分隔线放在文字行之间的空白里。\n\n')
+    '雷达图或空框架。\n\n')
 _CONTENT_RULES_EN = (
     '## Content discipline (before layout)\n'
     '- The page title IS the key message: one assertion with its decisive '
@@ -538,16 +433,7 @@ _CONTENT_RULES_EN = (
     '- One point per page; cut secondary detail instead of shrinking text.\n'
     '- Draw a chart or table only for comparable numbers in the evidence; '
     'never draw decorative curves, arrows, radar shapes or empty '
-    'frameworks that encode no data.\n'
-    '- Never draw shapes or lines over a chart (dots, leader lines, '
-    'reference lines, highlight boxes): PowerPoint and LibreOffice lay out '
-    'the plot area themselves, so overlays miss the data points; draw a '
-    'reference value as a chart series, label with data labels or text '
-    'outside the chart.\n'
-    '- Never sketch a data shape (a U curve, a trend) with line elements: '
-    'plot evidence numbers as a chart, or state the shape in words.\n'
-    '- Lines, arrows, rings and shape edges never cross any text; put rules '
-    'in the empty space between text lines.\n\n')
+    'frameworks that encode no data.\n\n')
 
 
 def _without_source_markers(value) -> str:
@@ -594,18 +480,6 @@ def _build_prompt(deck, brief: dict, page_index: int, total: int,
             'significant", "single run", "estimate" exactly)\n')
         material_block = heading + '\n'.join(
             f'- {s.get("point")}' for s in material_cards) + '\n'
-    carried = [entry for entry in brief.get('coverage') or []
-               if isinstance(entry, dict) and entry.get('numbers')]
-    if carried:
-        heading = (
-            '\n## 本页必须带数字呈现的结果与图表（数值见上方证据；用图表、表格或正文'
-            '写出实际数值，不要只描述形状或趋势）\n' if lang == 'zh' else
-            '\n## Results and figures this page must show with their numbers '
-            '(values are in the evidence above; plot, tabulate or state the '
-            'actual values, never only describe a shape or trend)\n')
-        material_block += heading + '\n'.join(
-            f'- {_without_source_markers(entry.get("label"))}'
-            for entry in carried) + '\n'
     if source_cards:
         heading = (
             '\n## 本页事实来源(必须保持事实与数字一致,并用 $caption '
@@ -781,7 +655,7 @@ def author_page(deck, brief: dict, page_index: int, total: int, *,
         yaml_text = _raise_to_legibility_floor(
             deck, _extract_yaml(content or ''))
         findings = _validate_page_text(deck, f'pages/{page_index + 1:02d}.page',
-                                       yaml_text, brief)
+                                       yaml_text)
         if (usage or {}).get('finish_reason') == 'length':
             # A cut-off reply can still parse (``text: <p><``) and would
             # ship a page that silently lost its last elements.

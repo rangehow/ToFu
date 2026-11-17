@@ -45,9 +45,7 @@ from contextlib import nullcontext
 from itertools import accumulate
 from typing import Any
 
-from lib.conversation_sync.settled_rows import (
-    SettledDict, UnsettleableValue, is_settled, memo_get, memo_put, settle,
-)
+from lib.conversation_sync.settled_rows import SettledDict, settle
 from lib.log import get_logger
 from lib.tool_results.tool_round_identity import (
     execution_batch_keys,
@@ -709,17 +707,68 @@ def assemble_segments(task: dict[str, Any],
         # never be silently swallowed. Integer llmRounds still dedup correctly
         # (two tool calls in one assistant turn share llmRound → prose once).
         batch_key = ordered_batch_keys[idx]
+        # The pre-tool prose + thinking of an llmRound batch is stamped onto the
+        # FIRST entry of that batch. Emit those segments once per batch, in
+        # order (thinking before the prose it preceded).
         # Tool calls from one provider response are contiguous. Deduplicate
         # prose only within that contiguous batch, not across the whole Turn:
         # a legacy resumed attempt may restart at the same llmRound before
         # attemptId stamping existed.
         new_batch = batch_key != previous_batch_key
+        batch_emitted_prose = False
         if new_batch:
             previous_batch_key = batch_key
-        round_segments, batch_emitted_prose = _round_segments(
-            r, idx, batch_key, new_batch)
-        segments.extend(round_segments)
-        tool_segment = round_segments[-1]
+            block_suffix = _round_block_suffix(r, idx)
+            # Legacy projections had no attempt scope.  When their local round
+            # counter recurs after Continue, retain the familiar first block
+            # id and suffix later occurrences so both remain addressable.
+            if (len(batch_key) >= 2 and batch_key[-2] == 'occurrence'
+                    and batch_key[-1]):
+                block_suffix += f':occurrence-{batch_key[-1]}'
+            attempt_id, task_id = execution_identity(r)
+            identity_fields = {
+                **({'attemptId': attempt_id} if attempt_id else {}),
+                **({'taskId': task_id} if task_id else {}),
+            }
+            raw_think = r.get('thinking')
+            think = raw_think if isinstance(raw_think, str) else ''
+            if think:
+                seg: dict[str, Any] = {
+                    'type': SEG_THINKING, 'text': think,
+                    'blockId': f'thinking:{block_suffix}',
+                    'deliverable': False, 'llmRound': lr,
+                    **identity_fields,
+                }
+                raw_sig = r.get('thinkingSignature')
+                sig = raw_sig if isinstance(raw_sig, str) else ''
+                if sig:
+                    seg['signature'] = sig
+                segments.append(seg)
+            raw_ac = r.get('assistantContent')
+            raw_model_ac = r.get('assistantModelContent')
+            ac = raw_ac if isinstance(raw_ac, str) else ''
+            model_ac = (raw_model_ac if isinstance(raw_model_ac, str) else ac)
+            if model_ac and not ac:
+                segments.append({
+                    'type': SEG_TEXT, 'text': '',
+                    'blockId': f'text:{block_suffix}',
+                    'deliverable': False, 'llmRound': lr,
+                    'modelText': model_ac,
+                    **identity_fields,
+                })
+            if ac:
+                segments.append({
+                    'type': SEG_TEXT, 'text': ac,
+                    'blockId': f'text:{block_suffix}',
+                    'deliverable': False, 'llmRound': lr,
+                    **({'modelText': model_ac} if model_ac else {}),
+                    **identity_fields,
+                })
+            batch_emitted_prose = bool(think or ac)
+        # Every round entry becomes a tool_use segment with its result nested,
+        # so a tool and its output are one renderable unit.
+        tool_segment = tool_use_segment_from_round(r, idx)
+        segments.append(tool_segment)
         if new_batch:
             trailing_first_tool = tool_segment
             trailing_batch_live = False
@@ -727,107 +776,6 @@ def assemble_segments(task: dict[str, Any],
         if r.get('status') in LIVE_ROUND_STATUSES:
             trailing_batch_live = True
 
-    _place_turn_tail(task, segments, continuation_records, raw_term_content,
-                     raw_term_think, trailing_first_tool, trailing_batch_live,
-                     trailing_batch_prose)
-    return segments
-
-
-# Memo slot on a settled round row: (position, batch key, batch head, segments,
-# emitted prose). A settled row never changes, so equal guards mean equal output.
-_ROUND_SEGMENTS_MEMO = ('assemble-segments', 'round')
-
-
-def _round_segments(r: dict[str, Any], idx: int, batch_key: Any,
-                    new_batch: bool) -> tuple[Any, bool]:
-    """One round's segments: batch-head prose, then its tool block.
-
-    A settled round's segments are a pure function of the row, its position
-    and its batch identity, so they are built and settled once and then
-    shared by every later assembly: the rebuilt mirror keeps their identity.
-    """
-    settled = is_settled(r)
-    if settled:
-        held = memo_get(r, _ROUND_SEGMENTS_MEMO)
-        if (held is not None and held[0] == idx and held[1] == batch_key
-                and held[2] == new_batch):
-            return held[3], held[4]
-    produced, emitted = _build_round_segments(r, idx, batch_key, new_batch)
-    if settled:
-        try:
-            produced = tuple(settle(segment) for segment in produced)
-        except UnsettleableValue:
-            return produced, emitted
-        memo_put(r, _ROUND_SEGMENTS_MEMO,
-                 (idx, batch_key, new_batch, produced, emitted))
-    return produced, emitted
-
-
-def _build_round_segments(r: dict[str, Any], idx: int, batch_key: Any,
-                          new_batch: bool) -> tuple[list[dict[str, Any]], bool]:
-    lr = execution_llm_round(r)
-    segments: list[dict[str, Any]] = []
-    batch_emitted_prose = False
-    # The pre-tool prose + thinking of an llmRound batch is stamped onto the
-    # FIRST entry of that batch. Emit those segments once per batch, in
-    # order (thinking before the prose it preceded).
-    if new_batch:
-        block_suffix = _round_block_suffix(r, idx)
-        # Legacy projections had no attempt scope.  When their local round
-        # counter recurs after Continue, retain the familiar first block
-        # id and suffix later occurrences so both remain addressable.
-        if (len(batch_key) >= 2 and batch_key[-2] == 'occurrence'
-                and batch_key[-1]):
-            block_suffix += f':occurrence-{batch_key[-1]}'
-        attempt_id, task_id = execution_identity(r)
-        identity_fields = {
-            **({'attemptId': attempt_id} if attempt_id else {}),
-            **({'taskId': task_id} if task_id else {}),
-        }
-        raw_think = r.get('thinking')
-        think = raw_think if isinstance(raw_think, str) else ''
-        if think:
-            seg: dict[str, Any] = {
-                'type': SEG_THINKING, 'text': think,
-                'blockId': f'thinking:{block_suffix}',
-                'deliverable': False, 'llmRound': lr,
-                **identity_fields,
-            }
-            raw_sig = r.get('thinkingSignature')
-            sig = raw_sig if isinstance(raw_sig, str) else ''
-            if sig:
-                seg['signature'] = sig
-            segments.append(seg)
-        raw_ac = r.get('assistantContent')
-        raw_model_ac = r.get('assistantModelContent')
-        ac = raw_ac if isinstance(raw_ac, str) else ''
-        model_ac = (raw_model_ac if isinstance(raw_model_ac, str) else ac)
-        if model_ac and not ac:
-            segments.append({
-                'type': SEG_TEXT, 'text': '',
-                'blockId': f'text:{block_suffix}',
-                'deliverable': False, 'llmRound': lr,
-                'modelText': model_ac,
-                **identity_fields,
-            })
-        if ac:
-            segments.append({
-                'type': SEG_TEXT, 'text': ac,
-                'blockId': f'text:{block_suffix}',
-                'deliverable': False, 'llmRound': lr,
-                **({'modelText': model_ac} if model_ac else {}),
-                **identity_fields,
-            })
-        batch_emitted_prose = bool(think or ac)
-    # Every round entry becomes a tool_use segment with its result nested,
-    # so a tool and its output are one renderable unit.
-    segments.append(tool_use_segment_from_round(r, idx))
-    return segments, batch_emitted_prose
-
-
-def _place_turn_tail(task, segments, continuation_records, raw_term_content,
-                     raw_term_think, trailing_first_tool, trailing_batch_live,
-                     trailing_batch_prose) -> None:
     # ── Interrupted final answers vetoed by continuation enforcers ──
     # Ordered before any later llmRound's segments (and before the terminal
     # deliverable appended below) — the position they occupied on the wire.
@@ -890,3 +838,5 @@ def _place_turn_tail(task, segments, continuation_records, raw_term_content,
         segments[insert_at:insert_at] = terminal_segments
     else:
         segments.extend(terminal_segments)
+
+    return segments

@@ -64,13 +64,7 @@ def chat(messages, *, model: str | None = None, max_tokens: int = 4096,
 
 def _dispatch_chat(messages, *, max_tokens=4096, temperature=0,
                    prefer_model=None, **_ignored):
-    model = prefer_model or DEFAULT_MODEL
-    if max_tokens is None:
-        # Production dispatch resolves None to the selected route's output
-        # limit; the server clamps this further to its own route evidence.
-        from lib.model_info import route_output_limit
-        max_tokens = route_output_limit(model)
-    return chat(messages, model=model,
+    return chat(messages, model=prefer_model or None,
                 max_tokens=max_tokens, temperature=temperature)
 
 

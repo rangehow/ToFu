@@ -111,16 +111,9 @@ rescode=92002`, or `DX sign refresh failed`, from dx-engine
 session sat half-working: on 2026-11-09 every history read failed from 06:14,
 silently, and an accepted file could never be confirmed (C10). No later tick
 could help, because a running bridge cannot receive a new ticket.
-Uploads need the same credentials: on 2026-11-17 the first of four files of
-one message went out, and the other three came back `invalid_input`, because
-the engine's upload refreshes its sign and then re-mints from the expired
-ticket, and dx-websdk-runtime reports every upload exception as
-`invalid_input`. The outbox took them for refusals of the files; sent one by
-one after the relaunch, all three went through.
 *Decision:* the adapter checks the refusal of each history, session-list and
-download read and of each upload (`send_image`/`send_attachment`). One whose
-message matches `DX (IM token generation|sign refresh|image upload|attachment
-upload) failed: rescode=92\d{3}` ends the session: `alive()` turns false, and
+download read. One whose message matches `DX (IM token generation|sign
+refresh) failed: rescode=92\d{3}` ends the session: `alive()` turns false, and
 the supervisor's next tick stops the bridge, stores `disconnected` with the
 detail `大象 SSO ticket expired (<code>: <message>); the next tick relaunches
 the bridge for a fresh exchange`, and launches a new one. Stopping the old
@@ -131,13 +124,7 @@ the launcher exits 42 and the account stays `needs_login`: no tick relaunches
 it until the SSO adapter answers, without a login push, that the login works
 again, or the owner reconnects (Supervisor, C6), so no tick loops a login
 push. `kicked` stays down until the owner reconnects. Every other failed read
-keeps the session as above. The refused upload, and any later one of this
-session, answers a deferred receipt (`not_connected`, CHANNEL_PROTOCOL.md P4)
-without touching the file: nothing reached the IM session, so the part stays
-unsent and unattempted, the item stays `queued`, and the relaunched session's
-first outbox pass uploads each remaining file once with its fresh
-credentials (C10). That relaunch is the only refresh and the only retry: no
-second loop, no count.
+keeps the session as above.
 *Alternatives rejected:*
 - the core handing the running bridge a fresh ticket: credentials never
   travel in protocol messages (CHANNEL_PROTOCOL.md P8);
@@ -146,9 +133,6 @@ second loop, no count.
   past the launcher boundary;
 - a timer that relaunches before the ticket expires: a new knob
   (constraint 5), when the refusal itself is the signal.
-- retrying a refused upload in the same session, or an `invalid_input`
-  upload in general: the session cannot mint credentials again, and a real
-  refusal of the file (empty, unreadable) would only repeat.
 
 For an adapter on the channel protocol the core runs this catch-up itself
 (`lib/channels/protocol/catchup.py`, CHANNEL_PROTOCOL.md P3) with the same
@@ -1210,16 +1194,6 @@ the notification robot keeps posting the text.
   text stops the files it should have introduced (`not_sent`). Failed items,
   blocking unknown items and items with unconfirmed accepted parts become
   Router Watchdog signals (R7).
-- **Failure notice.** An upload refused for the session's expired ticket is
-  deferred to the relaunched session (C1), never failed. When an item still
-  settles `failed` with failed attachments, the owner reads it, not only
-  Settings: one untranslated notice (origin `attachment_notice`, idempotency
-  key `attachment-notice:<item>`) names each undelivered file with its reason
-  and code (`outbox.attachment_failure_text`). It goes to the item's own
-  thread when that is the command chat, right under what did arrive, and
-  otherwise to the command chat (a notice to other people would itself be a
-  draft). *Rejected:* only the Watchdog signal (the 2026-11-17 failure
-  reached the owner through the Router's own resend, not through Tofu).
 - **Previews for the phone.** Images go as image messages and preview
   inline; documents go as file messages, which 大象's clients open in their
   Office/PDF preview. A pptx, docx or xlsx is meant to be followed by a PDF

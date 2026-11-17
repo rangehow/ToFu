@@ -111,18 +111,11 @@ def test_admitted_occurrence_owns_failure_policy(policy, fetch_environment, obse
 
 
 @pytest.mark.parametrize('change', ['owner', 'principal_scope', 'world', 'attempt',
-                                  'task', 'conversation', 'arguments', 'browser', 'policy', 'question',
-                                  'settled_policy', 'settled_config'])
+                                  'task', 'conversation', 'arguments', 'browser', 'policy', 'question'])
 def test_changed_identity_cannot_adopt_the_prior_read(change, fetch_environment, observations):
-    from lib.conversation_sync.settled_rows import settle
     from lib.identity import PrincipalContext
     from lib.tasks_pkg.handlers.search._handlers import _handle_fetch_url
     task = recovery_task(_handle_fetch_url, 'read_only')
-    documents = task['_toolContractDocumentsByName']
-    if change.startswith('settled'):
-        # Assembly freezes these maps; the identity digests a frozen row once.
-        documents['fetch_url'] = settle(documents['fetch_url'])
-        task['config']['_executableToolSearchTextByName'] = settle({'fetch_url': 'read a page'})
     with unavailable_source() as (url, requests):
         accumulator, assistant = streamed_call(task, {'url': url})
         try:
@@ -139,14 +132,7 @@ def test_changed_identity_cannot_adopt_the_prior_read(change, fetch_environment,
             elif change == 'question':
                 task['lastUserQuery'] = 'replacement question'
             elif change == 'policy':
-                documents['fetch_url']['effectRecovery'] = 'reconcile'
-            elif change == 'settled_policy':
-                # A frozen document changes only copy-on-write.
-                documents['fetch_url'] = settle(
-                    {**documents['fetch_url'], 'effectRecovery': 'reconcile'})
-            elif change == 'settled_config':
-                task['config']['_executableToolSearchTextByName'] = settle(
-                    {'fetch_url': 'read another page'})
+                task['_toolContractDocumentsByName']['fetch_url']['effectRecovery'] = 'reconcile'
             else:
                 field = {'world': '_worldVersion', 'attempt': '_attemptId',
                          'task': 'id', 'conversation': 'convId'}[change]

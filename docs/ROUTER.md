@@ -338,11 +338,7 @@ tool round's `[SILENT]` lives only in its private provider replay
 (`assistantModelContent`), stored answers, segments and channel replies strip
 it, and a refused declaration whose only text was the token is an empty
 response that Python recovers as an empty stop and Native settles as
-`abnormal_stop`, never a raw provider instruction shown to people. Python's
-recovery request names the refusal (`REFUSED_SILENCE_RECOVERY_NOTICE`) and
-asks for a brief reply; the generic "no usable text" notice let the model
-repeat `[SILENT]` until both attempts were spent. Every refusal logs
-`[Router] silence refused: <reason>`. The native
+`abnormal_stop`, never a raw provider instruction shown to people. The native
 Turn projection takes its system-note kinds from the contract (generated
 `generated_system_note_vocabulary.rs`). Automatic review failures/interruption
 send an out-of-band command-chat warning naming the failure cause; successful
@@ -2105,13 +2101,6 @@ target execution authority. See
   and `is_router_home` compute the identity without effects;
   `owner_resources(user_id, *, content)` reads the owner's `RESOURCES.md`
   without following links (R13).
-- `lib/router/registered_projects.py` — `registered_project_roots(owner)` and
-  `registered_project(owner, requested)`: the one owner of "is this a
-  registered project root?" (a folder root or a coordination binding, never
-  the router home, the Watchdog or the recent-project navigation history).
-  Channel attachments (`{path, project}`) and the Feishu bridge's project
-  selection ask here; `scripts/check_architecture.py` rejects any other
-  module reading `get_recent_projects` to admit a project.
 - Cross-project lead messages (R13) — `lib/conversations/project_messages.py`
   (`lead_role`, `validate_sender(..., recipient=)`, the `crossProject` contract
   section) and `list_project_leads` (`lib/router/projects.py` `project_leads`,

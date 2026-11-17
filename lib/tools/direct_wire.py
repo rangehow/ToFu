@@ -7,7 +7,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from lib.tools.contracts import tool_schema_name
+
+def _name(tool: Any) -> str:
+    if not isinstance(tool, dict):
+        return ''
+    function = tool.get('function')
+    return str((function.get('name') if isinstance(function, dict) else '')
+               or tool.get('name') or '')
 
 
 def declared_direct_names(declared: Any) -> set[str]:
@@ -20,7 +26,7 @@ def declared_direct_names(declared: Any) -> set[str]:
 def live_direct_names(authority_catalog: list[dict[str, Any]],
                       declared: Any) -> set[str]:
     return declared_direct_names(declared) & {
-        tool_schema_name(tool) for tool in authority_catalog if tool_schema_name(tool)}
+        _name(tool) for tool in authority_catalog if _name(tool)}
 
 
 def preserve_direct_wire_tools(tools: list[dict[str, Any]] | None, *,
@@ -32,12 +38,12 @@ def preserve_direct_wire_tools(tools: list[dict[str, Any]] | None, *,
     order. Never use a stale provider schema to restore execution authority.
     """
     protected = declared_direct_names(declared)
-    current = {tool_schema_name(tool): tool for tool in authority_catalog
-               if tool_schema_name(tool) in protected}
+    current = {_name(tool): tool for tool in authority_catalog
+               if _name(tool) in protected}
     visible = []
     seen = set()
     for tool in tools or ():
-        name = tool_schema_name(tool)
+        name = _name(tool)
         if name not in protected:
             visible.append(tool)
         elif name in current and name not in seen:

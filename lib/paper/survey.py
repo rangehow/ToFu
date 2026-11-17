@@ -83,6 +83,8 @@ _SURVEY_PER_PAPER_CHARS = PAPER_FANIN_MAX_TEXT_CHARS
 # is summarized from the most relevant slice, not the entire shelf).
 _SURVEY_MAX_PAPERS = PAPER_SURVEY_MAX_PAPERS
 
+_SURVEY_TEMPERATURE = 0.3      # below insight's 0.45 — survey is descriptive, not divergent
+_SURVEY_MAX_TOKENS = 8000
 _SURVEY_LANG_PREFIX = 'survey'
 
 
@@ -680,6 +682,139 @@ def _normalize_gap(row):
     out['confidence'] = 'low'
     out['low_confidence'] = True
     return out
+
+
+def _synthesize_survey(paper_inputs, direction, lang, *, user_id, model=None,
+                       abort=None, on_tool_event=None, usage_meter=None):
+    """Agentic fan-in synthesis: research the frontier, then emit the survey.
+
+    Returns ``(survey_md, gap_map)`` where ``gap_map`` is the RAW (un-gated)
+    open_gaps dict the model produced; the caller runs the library gate on it.
+
+    Mirrors ``insight_engine._synthesize._research_and_synthesize``: shared
+    ``run_agent_loop`` with the narrow research profile at a low temperature.
+    The model is asked to
+    emit the markdown survey followed by a fenced ```json``` block carrying the
+    open_gaps map; we split on the last JSON object.
+    """
+    from lib.agent_loop.agent_loop import AbortSignal
+    from lib.paper.agent_loop_policy import (
+        PAPER_AGENT_ROUTE_MAX_RETRIES,
+        run_guarded_paper_agent_loop,
+    )
+    from lib.paper.agent_usage import PaperAgentUsageMeter
+    from lib.paper.prompts import date_anchor_clause
+    from lib.paper.tools import (
+        PaperToolResultBudgetV2,
+        build_research_tool_schemas,
+        freeze_paper_tool_epoch,
+        make_paper_exec_shim,
+        make_research_tool_executor,
+    )
+
+    usage_meter = usage_meter or PaperAgentUsageMeter.for_stage(
+        'survey', fallback_model=model or '')
+    system = date_anchor_clause(lang) + _survey_system_prompt(lang)
+    system += ('\nScope all conclusions to the supplied excerpts, never claim exhaustive reading. '
+               'Each gap MUST contain gap, why_open, scoped_claim, closest_work, evidence, '
+               'counterevidence, falsifier, unknowns, confidence. Preserve counterevidence even '
+               'when it undermines the gap. Cite original arxiv_id and snapshot span cards. '
+               'Source existence and a matching quote do NOT verify entailment or novelty. '
+               'Use low confidence for missing source support; identify what would close the gap.')
+    import json
+    parts = [f'## RESEARCH DIRECTION\n\n{direction[:2000]}\n',
+             '## SELECTED EXCERPTS ONLY (not full papers; not exhaustive coverage)\n']
+    for i, p in enumerate(paper_inputs[:PAPER_SURVEY_WORKING_SET_PAPERS], 1):
+        parts.append(f'### [{i}] {p["title"][:200]} (arXiv:{p["arxiv_id"]})\n'
+                     + json.dumps(p.get('evidence_cards', []), ensure_ascii=False)
+                     + ('\n' + p['content'][:1400] if not p.get('evidence_cards') else ''))
+    user_content = '\n\n---\n\n'.join(parts)[:PAPER_SURVEY_CONTEXT_CHARS]
+
+    messages = [{'role': 'system', 'content': system},
+                {'role': 'user', 'content': user_content}]
+    abort_signal = AbortSignal.from_callback(abort)
+    paper_tools, paper_contracts = freeze_paper_tool_epoch(
+        build_research_tool_schemas(), owner_user_id=user_id)
+    _exec_shim = make_paper_exec_shim(
+        task_id=('paper-survey-' + hashlib.sha256(
+            direction.encode('utf-8')).hexdigest()[:16]),
+        abort=abort_signal.is_set, owner_user_id=user_id,
+        tool_contract_documents_by_name=paper_contracts)
+    _result_budget = PaperToolResultBudgetV2(
+        owner_user_id=user_id, model=model or '')
+    contracts_by_round = {}
+    _round = {'content': ''}
+    _last = {'msg': None}
+
+    def _dispatch(rnd, tools):
+        _round['content'] = ''
+
+        def _on_content(text):
+            _round['content'] += text
+
+        effective_tools, contracts_by_round[rnd] = freeze_paper_tool_epoch(
+            tools, owner_user_id=user_id)
+        logger.info('[Paper:Survey] round %d — msgs=%d tools=%s papers=%d',
+                    rnd + 1, len(messages), 'yes' if effective_tools else 'no',
+                    len(paper_inputs))
+        from lib.llm.stream_result import ensure_provider_stream_result
+        return ensure_provider_stream_result(dispatch_stream(
+            messages, on_content=_on_content, abort_check=abort_signal.is_set,
+            prefer_model=model or None, strict_model=bool(model), capability='text',
+            tools=effective_tools, max_tokens=_SURVEY_MAX_TOKENS,
+            temperature=_SURVEY_TEMPERATURE,
+            thinking_enabled=False,
+            max_retries=PAPER_AGENT_ROUTE_MAX_RETRIES,
+            log_prefix='[Paper:Survey]'))
+
+    def _on_round_result(rnd, msg, finish, usage):
+        _last['msg'] = msg
+
+    def _begin_tool_round(rnd, msg):
+        _round['content'] = ''
+        messages.append(msg)
+
+    _execute_tool = make_research_tool_executor(
+        messages, user_question=direction[:300], abort_signal=abort_signal,
+        result_budget=_result_budget, exec_shim=_exec_shim,
+        paper_tool_executor=execute_paper_tool, on_tool_event=on_tool_event,
+        log_prefix='[Paper:Survey]',
+        contract_documents_for_round=contracts_by_round.get)
+
+    run_guarded_paper_agent_loop(
+        context='Paper Survey agent',
+        usage_meter=usage_meter,
+        abort=abort_signal,
+        round_tools=paper_tools, dispatch=_dispatch, execute_tool=_execute_tool,
+        on_round_result=_on_round_result, on_tool_round=_begin_tool_round,
+        on_round_end=_result_budget.finish_round)
+
+    content = _round['content']
+    if not content and isinstance(_last['msg'], dict):
+        content = _last['msg'].get('content') or ''
+
+    gap_map = _parse_llm_json(content) or {}
+    survey_md = _strip_trailing_json(content)
+    return survey_md, gap_map
+
+
+def _strip_trailing_json(content: str) -> str:
+    """Return the markdown prefix, dropping a trailing fenced/bare JSON block.
+
+    The model emits ``<survey markdown>`` then the open_gaps JSON; the human
+    survey is everything before that final object. Falls back to the whole
+    content if no JSON tail is found."""
+    if not content:
+        return ''
+    # Prefer a fenced ```json ... ``` block boundary.
+    fence = content.rfind('```json')
+    if fence > 0:
+        return content[:fence].rstrip()
+    # else cut at the last top-level '{' that starts the trailing object
+    brace = content.rfind('\n{')
+    if brace > 0:
+        return content[:brace].rstrip()
+    return content.strip()
 
 
 def _survey_system_prompt(lang: str) -> str:

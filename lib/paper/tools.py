@@ -45,14 +45,12 @@ from lib.tool_input_repair import parse_and_repair_tool_args
 from lib.tools.contracts import (
     ToolContractError,
     compile_execution_contract_documents,
-    tool_schema_name,
     validate_tool_arguments_from_documents,
 )
 from lib.tools.result_projection import (
     TOOL_RESULT_PRODUCER_METADATA_KEY,
     TOOL_RESULT_PROJECTION_ITEMS_KEY,
 )
-
 logger = get_logger(__name__)
 
 @dataclass(frozen=True)
@@ -160,6 +158,15 @@ def build_paper_full_tool_context(*, cfg=None, owner_user_id=0):
     )
     tools, _has_base = assemble_tool_list(context)
     return tools, context
+
+
+def _paper_schema_name(schema):
+    if not isinstance(schema, dict):
+        return ''
+    function = schema.get('function')
+    if isinstance(function, dict):
+        return str(function.get('name') or '')
+    return str(schema.get('name') or '')
 
 
 @dataclass(frozen=True)
@@ -292,7 +299,7 @@ def _build_paper_full_tool_epoch(*, owner_user_id=None, model='', cfg=None,
         else registry_wire
     )
     for schema in source_catalog:
-        name = tool_schema_name(schema)
+        name = _paper_schema_name(schema)
         if not name or name in unattended_excluded_names:
             continue
         if owner_id <= 0 and name in {
@@ -303,15 +310,15 @@ def _build_paper_full_tool_epoch(*, owner_user_id=None, model='', cfg=None,
     # owner continuation tools. Preserve that exact rollback shape when an arm
     # explicitly selects schemaBudgetTokens=0.
     if not budget and owner_id > 0:
-        known = {tool_schema_name(schema) for schema in executable}
+        known = {_paper_schema_name(schema) for schema in executable}
         for schema in ctx.executable_tool_catalog:
-            name = tool_schema_name(schema)
+            name = _paper_schema_name(schema)
             if name in {'read_tool_artifact', 'search_tool_artifact'} \
                     and name not in known:
                 executable.append(copy.deepcopy(schema))
                 known.add(name)
 
-    executable_names = [tool_schema_name(schema) for schema in executable]
+    executable_names = [_paper_schema_name(schema) for schema in executable]
     if len(executable_names) != len(set(executable_names)):
         raise ValueError('duplicate executable tool contract in paper full epoch')
     executable_name_set = set(executable_names)
@@ -331,7 +338,7 @@ def _build_paper_full_tool_epoch(*, owner_user_id=None, model='', cfg=None,
         priority_names=_PAPER_FULL_DIRECT_NAMES,
         required_names=_PAPER_FULL_DIRECT_NAMES,
     ) if budget else copy.deepcopy(executable))
-    wire_names = {tool_schema_name(schema) for schema in wire}
+    wire_names = {_paper_schema_name(schema) for schema in wire}
     hidden_names = executable_name_set - wire_names
     gateway_names = {SEARCH_TOOLS_NAME, EXECUTE_TOOLS_NAME}
     if hidden_names and not gateway_names.issubset(wire_names):
@@ -349,7 +356,7 @@ def _build_paper_full_tool_epoch(*, owner_user_id=None, model='', cfg=None,
     # executable catalog, but their outer calls still need exact validation.
     gateway_schemas = [
         schema for schema in wire
-        if tool_schema_name(schema) in gateway_names
+        if _paper_schema_name(schema) in gateway_names
     ]
     contract_schemas = [*executable, *gateway_schemas]
     documents = compile_execution_contract_documents(
@@ -481,7 +488,7 @@ def build_paper_full_tool_epoch(*, owner_user_id=None, model='', cfg=None,
 
 def apply_paper_tool_epoch_guidance(messages, epoch, *, lang='en', task=None):
     """Append gateway guidance when this arm exposes the gateway."""
-    wire_names = {tool_schema_name(schema) for schema in epoch.wire_schemas}
+    wire_names = {_paper_schema_name(schema) for schema in epoch.wire_schemas}
     if 'search_tools' not in wire_names or 'execute_tools' not in wire_names:
         return False
     if str(lang or '').lower().startswith('zh'):
@@ -634,7 +641,7 @@ def make_paper_exec_shim(*, task_id, conv_id='', abort=None, cfg=None,
         shim['_toolEpochHash'] = tool_epoch.epoch_hash
         from lib.tools.gateway import EXECUTE_TOOLS_NAME, SEARCH_TOOLS_NAME
         wire_names = {
-            tool_schema_name(schema) for schema in tool_epoch.wire_schemas}
+            _paper_schema_name(schema) for schema in tool_epoch.wire_schemas}
         shim['_tool_gateway_names'] = [
             name for name in (EXECUTE_TOOLS_NAME, SEARCH_TOOLS_NAME)
             if name in wire_names]

@@ -19,7 +19,6 @@ from pathlib import Path
 from lib.git_checkpoint_policy import git_policy_environment
 from lib.git_runtime import git_executable
 from lib.log import get_logger
-from lib.tools.process_environment import inherited_child_environment
 from lib.project_mod.workspace_lease import (
     WorkspaceBusyError, workspace_git_metadata_lease, workspace_lease_fds,
 )
@@ -148,7 +147,7 @@ _RUNNING_GUARD = threading.Lock()
 def _git_threshold(repo: Path, name: str) -> int:
     # git_policy_environment() forces gc.auto=0 for every child; read the
     # repository's and the user's own configuration instead.
-    environment = {key: value for key, value in inherited_child_environment().items()
+    environment = {key: value for key, value in os.environ.items()
                    if not key.startswith('GIT_')}
     result = subprocess.run([git_executable(), '-C', str(repo), 'config', '--int', '--get', name],
                             env=environment, text=True, capture_output=True, check=False)

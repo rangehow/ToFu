@@ -491,14 +491,7 @@ class RouteManager:
             self._executor = executor
         return executor
 
-    def _ensure_probe(self, url: str, host: str, route: Route, now: float,
-                      *, force: bool = False):
-        """Join the in-flight probe, start one if the route is due, else None.
-
-        The due decision and the submission share one lock hold: a probe that
-        settles between a separate check and submission would otherwise be
-        followed by a redundant second probe of a route it just measured.
-        """
+    def _ensure_probe(self, url: str, host: str, route: Route):
         key = (host, route.route_id)
         executor_to_shutdown = None
         submission_failed = False
@@ -507,8 +500,6 @@ class RouteManager:
                 existing = self._inflight.get(key)
                 if existing is not None:
                     return existing
-                if not self._due(host, route, now, force=force):
-                    return None
                 state = self._health.get(key)
                 snapshot = (self._generation,
                             state.request_revision if state else 0)
@@ -622,9 +613,8 @@ class RouteManager:
         healthy = self._healthy(host, routes, now)
         futures = []
         for route in routes:
-            future = self._ensure_probe(url, host, route, now, force=force_probe)
-            if future is not None:
-                futures.append(future)
+            if self._due(host, route, now, force=force_probe):
+                futures.append(self._ensure_probe(url, host, route))
         if healthy:
             return self._rank(host, healthy)
 

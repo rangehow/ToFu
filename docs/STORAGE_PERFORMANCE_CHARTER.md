@@ -49,14 +49,7 @@ The existing `storage_performance_charter_v1.json` and
 `tofudb_charter_assess.py` own numerical acceptance. Their history-scaling,
 distracted-host and reader/writer-scaling gaps remain visible until matching
 evidence exists. The nightly `check_perf_regression.py` job measures task replay;
-it is not the native-versus-SQLite certification. Its baseline
-(`benchmarks/perf_baseline.json`) was re-recorded 2026-11-15 in the locked
-`uv sync --extra test` environment CI uses: the previous file did not
-reproduce at its own commit (91b4c7e205 measured the same 800/203/363 KiB
-peaks as HEAD, on this host and on GitHub), so it gated every run red. The
-same change stopped the per-task abort watcher from copying the whole process
-environment (`task_abort_signal._distributed_mode` reads only the mode),
-which halved `short_conversation`'s peak (95.6 → 28.7 KiB). Focused comparison-harness
+it is not the native-versus-SQLite certification. Focused comparison-harness
 tests run in the ordinary unit suite. Full native/SQLite, actual-volume and
 process-crash receipts remain explicit verification work; no new background
 benchmark service or automatic production restart is introduced.
@@ -2268,9 +2261,11 @@ reused WAL, each followed by `fdatasync`; 300 alternating commits per run):
 The split 7-frame case reproduces the SQLite base commit (3.2-3.3 ms p50).
 One call per commit would cut it 3.7x, and the 30-frame settlement-sized
 commit 10x. That is the only structural lever found. SQLite has no setting
-for it, so the Sidecar now loads a VFS shim that does it
-([STORAGE.md](STORAGE.md), "The Sidecar coalesces each commit's WAL
-writes"; end-to-end effect in the next section).
+for it. It needs a VFS shim, loaded into Python's `sqlite3` as a native
+extension, that buffers contiguous WAL appends and flushes them before every
+sync, read, truncate, size query, lock change and close. This adds a native
+artifact on the durability path, so it is proposed and not adopted here
+([STORAGE.md](STORAGE.md), "SQLite's write calls on DolphinFS").
 
 Reproduce (`S` is a fresh directory on the volume; run from a shell carrying
 production's `LD_PRELOAD`/`LIBBGFS_*`):
@@ -2283,105 +2278,6 @@ for v in base page64k mmap group8 nockpt; do
 done
 for f in 7 30; do
   .venv/bin/python3 benchmarks/sqlite_write_pattern.py --root $S --variant frames --frames $f --jobs 300
-done
-```
-
-### The WAL coalescing VFS on DolphinFS (2026-11-17)
-
-**Problem:** does writing each commit's WAL frames in one call
-([STORAGE.md](STORAGE.md), "The Sidecar coalesces each commit's WAL
-writes") close the Sidecar's write-bound gap end to end?
-
-**Method.** Same harness, host, volume and shape as "The same comparison on
-the real DolphinFS volume" above: `scripts/tofudb_load_test.py --backend
-sqlite --seed-scale 0.2 --scales 1,3,5 --duration 90`, a fresh root per leg,
-production's preload client, and `faultfs` with `FAULTFS_FSYNC_US=0
-FAULTFS_COUNT_IO=1`, which counts calls but injects nothing. The legs ran
-ABAB: stock r1, coalescing r1, stock r2, coalescing r2. Stock is the parent
-revision (`600c5bb559`) exported to a host-local directory; coalescing is the
-revision that adds the shim. Nothing else differs. The scratch directory
-`FMG/your-username/tofu-sqlite-coalesce-scratch-20261117/` sat outside every
-checkout and was removed. Host load (1-minute, median) was 4.5 · 7.2 for
-the stock legs and 6.2 · 10.1 for the coalescing legs, so the coalescing
-legs ran on the busier host. No TofuDB legs ran (no engine on production's
-volume); its columns are the TofuDB strict numbers above, from the same host
-and volume earlier the same day. All four legs had 0 failed requests.
-
-p50/p99 ms, r1 · r2:
-
-| op | scale | Sidecar stock | Sidecar coalescing | TofuDB strict (above) |
-|---|---|---|---|---|
-| turn.event.record | 1x | 11.3/223 · 11.1/199 | 2.82/149 · 2.82/156 | 1.46/62 · 1.60/64 |
-| | 3x | 12.5/730 · 12.3/771 | 3.00/329 · 3.07/250 | 1.48/66 · 1.52/122 |
-| | 5x | 22.5/1,003 · 25.7/878 | 3.51/528 · 4.02/597 | 1.58/98 · 1.59/129 |
-| worker_job.complete | 1x | 1,688/2,667 · 92/4,480 | 24/1,863 · 35/1,915 | 12/15 · 13/17 |
-| | 3x | 234/5,285 · 192/5,779 | 82/2,297 · 1,978/1,997 | 63/73 · 129/159 |
-| | 5x | 4,168/14,035 · 3,223/10,004 | 2,468/5,462 · 1,739/9,090 | 111/124 · 94/119 |
-| phase-stop settlement herd | 1x | 1,176/2,795 · 4,532/4,539 | 816/1,930 · 1,951/1,971 | 44/65 · 46/58 |
-| | 3x | 11,129/11,158 · 11,627/11,655 | 2,518/4,795 · 2,481/4,390 | 115/136 · 112/249 |
-| | 5x | 14,844/18,861 · 10,395/18,150 | 4,652/8,082 · 9,269/11,010 | 202/254 · 290/345 |
-| worker_job.claim_next | 1x | 106/110 · 118/125 | 28/35 · 23/29 | 8.8/14 · 6.9/9.1 |
-| | 5x | 420/434 · 391/402 | 121/136 · 138/173 | 29/295 · 41/63 |
-| worker_job.heartbeat | 5x | 47/945 · 59/7,892 | 2.4/162 · 3.4/312 | 0.70/11 · 0.71/17 |
-| turn.create_pair | 1x | 106/155 · 154/165 | 444/471 · 517/539 | 21/24 · 20/23 |
-| | 5x | 569/742 · 326/529 | 133/208 · 186/236 | 67/95 · 77/97 |
-| record.get | 5x | 0.28/3.3 · 0.29/3.4 | 0.28/2.9 · 0.32/4.5 | 0.25/0.93 · 0.25/0.99 |
-| completed ops/s | 1x / 3x / 5x | 334/973/1,509 · 332/967/1,537 | 335/995/1,619 · 336/993/1,595 | 341/1,017/1,686 · 340/1,016/1,689 |
-| events · Turns (5x) | | 6,402 · 108; 6,365 · 108 | 6,789 · 108; 6,756 · 108 | 6,961 · 109; 6,962 · 109 |
-| seed (229 MB) | | 95 s · 98 s | 36 s · 38 s | 6.9 s · 4.8 s |
-| in-scope write calls (whole leg) | | 1,303,443 · 1,306,057 | 477,607 · 485,081 | |
-| time in write calls | | 257 s · 263 s | 104 s · 110 s | |
-
-The settlement herd is `turn.event.record:terminal:phase_stop`, the same
-row as "phase-stop settlement herd" above.
-
-Verdict:
-
-- **Coalescing is a large, structural win for the Sidecar on DolphinFS.**
-  Streamed events are 4-6x faster at p50 (2.8-4.0 against 11-26 ms) with
-  p99 roughly halved. `claim_next` is 2.8-5x faster, heartbeats at 5x
-  14-25x, and the 3x/5x settlement herd 1.1-4.7x. Seeding is 2.6x faster. Write calls fall
-  2.7x and the time inside them 2.4x. What remains is mostly checkpoint
-  writes, which copy scattered pages into the database file one call each,
-  and frame writes split by reads that spill back. The shim leaves both to
-  stock SQLite on purpose.
-- **Throughput:** +2-3% at 3x and +4-7% at 5x, with about 6% more events at
-  5x. That is 98% of TofuDB's throughput at 3x and 94-96% at 5x, against
-  95% and 89-91% stock.
-- **`worker_job.complete` is still bimodal.** p50 improves at 1x and 5x but
-  is 1,978 ms in coalescing r2 at 3x (stock 192-234 ms). Its p99 improves at
-  every scale but stays at seconds. These commits queue behind the herd, so
-  their spread follows where the herd lands.
-- **One regression: `turn.create_pair` at 1x**, 444-517 against 106-154 ms
-  p50 in both rounds; it is better at 3x and 5x. All 21 Turns start at once
-  at the first phase, right after the faster seed. The likeliest cause is
-  that the seed's WAL is still being checkpointed when they start. That is
-  not verified.
-- **TofuDB still wins every write-bound operation.** At p50 it is 1.9-2.5x
-  faster for events, 1.3-30x for `complete`, 3-5x for `claim_next` and
-  16-45x for the settlement herd. The remaining Sidecar gap is SQLite's
-  single writer, which also runs the inline checkpoints and the per-page
-  checkpoint writes. Coalescing narrows that gap but does not change the
-  ranking.
-
-Not covered: the legs shared the volume (not the directory) with the live
-production engine. One production `conversation.search` query was already
-retrying `database_unavailable` before the first leg started (15:23, first
-leg 15:26) and kept retrying through the legs. No other storage error
-appeared in production's `app.log` during the window.
-
-Reproduce (from a checkout; `S` is a fresh directory on the volume, `A` a
-host-local export of the parent revision with the checkout's `.venv`
-linked; run from a shell carrying production's `LD_PRELOAD`/`LIBBGFS_*`):
-
-```sh
-cc -O2 -shared -fPIC -o $TMPDIR/faultfs.so benchmarks/agent_storage/faultfs.c -ldl
-for C in $A $PWD $A $PWD; do
-  R=$S/leg-$(date +%s); (cd $C && LD_PRELOAD="$TMPDIR/faultfs.so $LD_PRELOAD" FAULTFS_ROOT=$R \
-    FAULTFS_FSYNC_US=0 FAULTFS_COUNT_IO=1 FAULTFS_STATS=$TMPDIR/$(basename $R).stats PYTHONPATH=$C \
-    .venv/bin/python3 scripts/tofudb_load_test.py --root $R --backend sqlite --seed-scale 0.2 \
-    --scales 1,3,5 --duration 90 --run-id dfs)
-  cp -r $R/results $TMPDIR/$(basename $R)-results && rm -rf -- "$R"
 done
 ```
 

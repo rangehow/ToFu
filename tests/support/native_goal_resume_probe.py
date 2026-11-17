@@ -27,7 +27,7 @@ async def resume(*, task, seed, inputs, claim, storage, runs, principal, directo
     from lib.orchestration.prepared_recipients import prepare_flow_recipients
     from lib.orchestration.runtime_service import execute_flow
     from lib.resource_control.runtime import launch_policy
-    from lib.tools.contracts import tool_schema_name
+    from lib.swarm.routing import tool_schema_name
     from lib.tasks_pkg.invocation_registration import owned_child_record
     from lib.tasks_pkg.native_checkpoint import NativeCheckpointPolicy
     from lib.tasks_pkg.native_file_recovery import NativeFileToolRecovery

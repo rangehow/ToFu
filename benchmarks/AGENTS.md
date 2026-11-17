@@ -6,22 +6,6 @@ This directory contains retained, executable measurement contracts. Local run
 outputs and candidate result payloads are reconstructible artifacts and remain
 untracked according to `.gitignore`.
 
-`agent_round_overhead.py` drives one real storage-free `tofu_agent` session
-(`--rounds` distinct `read_files` rounds, then a text answer) against a loopback
-provider that answers instantly and stamps request arrival and response flush.
-Each gap between a flushed response and the next request is pure harness time:
-stream parsing, argument normalization, tool dispatch and settlement, event
-fan-out and next-request assembly. It also reports whether the tools and system
-prompt were byte-identical in every request. Compare arms in fresh alternating
-processes with `PYTHONPATH` set to an exported tree (it prints `lib.__file__`);
-py-spy, not cProfile, sees the loop thread. Storage, push and real providers are
-excluded. Verify `tests/meta/test_agent_round_overhead_measure.py`; method and
-measurements live in `docs/HARNESS_PERFORMANCE.md`.
-
-`mcp_live_schema_projection.py` times the gateway's `_executable_catalog` on a
-task whose catalog holds `--mcp-tools` MCP entries served unchanged by a real
-`MCPBridge` index (the steady state). Arms must report the same catalog digest.
-
 `verification_bundle_reuse.py` runs real Vite builds over identical private
 checkouts and independent collector views. Freeze each implementation, require
 complete JS/CSS artifact digests and executable exports, and compare alternating
@@ -451,17 +435,6 @@ Measurements: `docs/RESOURCE_CONTROL.md`, "Settled task retention".
 `token_cold_start.py` measures one encoding's first operation in each fresh
 process using token_ingress_measure --cold-only. Verify distinct PIDs, zero warm
 calls, both clocks, identical fixtures/instrumentation and unchanged sources.
-
-`harness_perf/run.py` boots the engine, execution host and API host in a
-private root against `stub_provider.py` (zero-latency scripted Chat/Responses/
-Anthropic faces) and drives v4 Turns: TTFR, per-round and tool round-trip
-overhead, settle, request bytes and prefix stability, idle/concurrent RSS and
-CPU, cold start, py-spy profiles. `--references all` runs the same scripts on
-codex, claude-code, opencode and pi (`references.py`). Scripts vary tool
-arguments per round so no loop breaker fires; a run with interventions or extra
-requests is not a clean measurement. `--smoke` is the CI size (under 2 min).
-Verify `tests/meta/test_harness_perf_measure.py`; baseline, hotspots and
-targets live in `docs/HARNESS_PERFORMANCE.md`.
 
 - Keep datasets, manifests, pricing inputs, random seeds, model/provider
   identity, and acceptance criteria explicit enough to reproduce a result.

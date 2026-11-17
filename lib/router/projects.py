@@ -11,8 +11,7 @@ and on the first page the owner's resource registry. Nothing here starts,
 resumes or wakes work. Pages follow the project dispatch history page bound,
 the get_project_workers convention; cursors are opaque.
 
-Entry points: router_projects(owner, arguments, *, client=None); binding_page(owner, cursor, client)
-(one page of bound project paths, also read by router.registered_projects); router_projects_wire(page),
+Entry points: router_projects(owner, arguments, *, client=None); router_projects_wire(page),
 the page in its /api/v4/router/projects wire form (routerProjectsPage);
 project_leads(owner, caller, arguments, *, client=None).
 Dependencies: project_coordination, project_dispatch (history, continuation
@@ -58,7 +57,7 @@ def _last_report(owner: int, project: str) -> dict | None:
             'created_at': latest['createdAt'], 'unread': state['unread']}
 
 
-def binding_page(owner: int, cursor: str | None, client):
+def _binding_page(owner: int, cursor: str | None, client):
     """``(repository, project paths, next cursor)`` of one page of the owner's bindings."""
     from lib.conversations.project_coordination import NAMESPACE, ProjectCoordinationRepository
     from lib.project_dispatch.history import PAGE_ROWS
@@ -89,7 +88,7 @@ def router_projects(owner: int, arguments: dict, *, client=None) -> dict:
     if client is None:
         from lib.storage import get_storage_client
         client = get_storage_client
-    bindings, paths, next_cursor = binding_page(owner, arguments.get('after_id'), client)
+    bindings, paths, next_cursor = _binding_page(owner, arguments.get('after_id'), client)
     projects = []
     for project in paths:
         if is_router_home(bindings.user_id, project) or is_watchdog_location(bindings.user_id, project):
@@ -140,7 +139,7 @@ def project_leads(owner: int, caller: str, arguments: dict, *, client=None) -> d
     if client is None:
         from lib.storage import get_storage_client
         client = get_storage_client
-    bindings, paths, next_cursor = binding_page(owner, arguments.get('after_id'), client)
+    bindings, paths, next_cursor = _binding_page(owner, arguments.get('after_id'), client)
     leads = []
     for project in paths:
         if is_watchdog_location(bindings.user_id, project):
@@ -225,4 +224,4 @@ def router_projects_wire(page: dict) -> dict:
     return {'projects': projects, 'nextCursor': page['next_cursor']}
 
 
-__all__ = ['binding_page', 'project_leads', 'router_projects', 'router_projects_wire']
+__all__ = ['project_leads', 'router_projects', 'router_projects_wire']

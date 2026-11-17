@@ -166,16 +166,6 @@ def _clamp_max_tokens(model: str, max_tokens: int) -> int:
     return limit
 
 
-def _family_output_limit(model: str) -> int:
-    """Maintained family output ceiling; unknown families get the
-    conservative default so a first request never over-asks into a 400."""
-    for _name, (check_fn, family_limit) in _MODEL_MAX_OUTPUT.items():
-        if check_fn(model):
-            # family_limit can be an int or a callable(model) → int
-            return family_limit(model) if callable(family_limit) else family_limit
-    return _DEFAULT_UNKNOWN_MAX_OUTPUT
-
-
 def _clamp_family_max_tokens(model: str, max_tokens: int) -> int:
     """Family (or unknown-family) output ceiling, without learned evidence."""
     # Defense-in-depth: a caller that passes a missing/None/invalid max_tokens
@@ -185,27 +175,21 @@ def _clamp_family_max_tokens(model: str, max_tokens: int) -> int:
     # this keeps every clamp total for every caller.
     if not isinstance(max_tokens, int) or max_tokens <= 0:
         max_tokens = _DEFAULT_UNKNOWN_MAX_OUTPUT
-    return min(max_tokens, _family_output_limit(model))
-
-
-def route_output_limit(
-    model: str,
-    *,
-    route_key: str = '',
-    declared_limit: int = 0,
-    wire_model: str = '',
-) -> int:
-    """The most output one request may ask of this route.
-
-    For a reasoning model the output allowance covers reasoning AND the
-    visible reply, so a caller whose reply is short but whose reasoning is
-    not (a review verdict) asks for this rather than a guessed reply size;
-    a smaller number only lets reasoning starve the reply. Same evidence as
-    :func:`_clamp_route_max_tokens`.
-    """
-    return _clamp_route_max_tokens(
-        model, _family_output_limit(model), route_key=route_key,
-        declared_limit=declared_limit, wire_model=wire_model)
+    limit = max_tokens
+    matched_family = False
+    # Check family-level limits
+    for _name, (check_fn, family_limit) in _MODEL_MAX_OUTPUT.items():
+        if check_fn(model):
+            # family_limit can be an int or a callable(model) → int
+            effective_limit = family_limit(model) if callable(family_limit) else family_limit
+            limit = min(limit, effective_limit)
+            matched_family = True
+            break
+    # Unknown family — apply the conservative default ceiling so we don't ship
+    # an over-large max_tokens and eat a guaranteed 400 on the first call.
+    if not matched_family:
+        limit = min(limit, _DEFAULT_UNKNOWN_MAX_OUTPUT)
+    return limit
 
 
 def _clamp_route_max_tokens(

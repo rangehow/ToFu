@@ -97,7 +97,7 @@ def test_fhe_protocol_gives_each_arm_its_face_task_budgets_and_the_shared_allowl
     routing = envelope["model_routing"]
     assert envelope["model"] == {"creator_id": "moonshot", "model_id": KIMI}
     assert routing["connections"][0]["protocol"] == "anthropic"
-    assert routing["providers"][0]["provider_id"] == harness.TOFU_RUN_ROUTES[KIMI]["provider_id"]
+    assert routing["providers"][0]["provider_id"] == "example-corp"
     assert routing["deployments"][0]["wire_model_id"] == KIMI
     assert routing["deployments"][0]["max_output_tokens"] == 32768
     assert routing["offerings"][0]["context_window"] == 1_000_000
@@ -213,7 +213,7 @@ def test_relay_reveals_only_credentials_with_the_selected_key_suffix(monkeypatch
             credentials = [{"credential_id": name, "provider_access_id": "a", "enabled": True, "kind": "api_key",
                             "key_hint": "sk-..." + name} for name in ("5409", "0733", "4861")]
             return Reply({"data": {"model_routing": {
-                "provider_accesses": [{"provider_access_id": "a", "provider_id": "sankuai"}],
+                "provider_accesses": [{"provider_access_id": "a", "provider_id": "example-corp"}],
                 "credentials": credentials}}})
 
         def post(self, path):
@@ -222,10 +222,10 @@ def test_relay_reveals_only_credentials_with_the_selected_key_suffix(monkeypatch
             return Reply({"data": {"secret": "secret-" + name}})
 
     monkeypatch.setattr(httpx, "Client", Client)
-    assert relay.load_keys("http://origin", "sankuai", ["0733"]) == [("0733", "secret-0733")]
+    assert relay.load_keys("http://origin", "example-corp", ["0733"]) == [("0733", "secret-0733")]
     assert revealed == ["0733"]
     with pytest.raises(SystemExit, match="1111"):
-        relay.load_keys("http://origin", "sankuai", ["1111"])
+        relay.load_keys("http://origin", "example-corp", ["1111"])
     assert revealed == ["0733"]
 
 

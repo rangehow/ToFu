@@ -284,6 +284,10 @@ def resolve_publication_mode(project_path: str | Path) -> dict[str, Any]:
     return decision(True, True, retiring + 'Unowned refs permit initial linear baseline activation')
 
 
+def _configured_gate_command(root: Path) -> str:
+    return select_gate_commands(root).linear
+
+
 def _valid_source_ref(value: str) -> bool:
     if value == 'HEAD' or re.fullmatch(r'[0-9a-fA-F]{40,64}', value):
         return True
@@ -467,6 +471,22 @@ def _release_checkpoint_lock(handle: BinaryIO) -> None:
                      error)
     with contextlib.suppress(Exception):
         _unlock_os(handle)
+
+
+def _working_tree_status(root: Path) -> list[str]:
+    process = _git(root, [
+        'status', '--porcelain=v1', '-z', '--untracked-files=all',
+    ], timeout=60.0, check=True)
+    entries: list[str] = []
+    tokens = [token for token in process.stdout.split('\0') if token]
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        status = token[:2]
+        path = token[3:] if len(token) > 3 else token
+        entries.append(path)
+        index += 2 if status[:1] in {'R', 'C'} else 1
+    return entries
 
 
 def _ensure_checkpoint_baseline(root: Path, head_sha: str) -> str:

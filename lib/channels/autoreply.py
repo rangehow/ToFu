@@ -241,6 +241,10 @@ def _terminal_outcome(task: dict[str, Any]) -> str:
     return 'error'
 
 
+def _verified_notice_turn(owner: int, conversation_id: str, turn_id: str) -> dict | None:
+    return _verified_notice_turns(owner, conversation_id, turn_id)[1]
+
+
 def _verified_notice_turns(owner: int, conversation_id: str, turn_id: str) -> tuple[dict | None, dict | None]:
     from lib.turn_initiation import INITIATOR_CHANNEL, INITIATOR_PEER, resolve_turn_initiator
     from lib.turn_lifecycle import get_turn

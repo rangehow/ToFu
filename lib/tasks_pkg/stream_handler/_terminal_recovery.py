@@ -10,26 +10,6 @@ unresolved control sequence in usage; this module does not parse model prose.
 from lib.agent_core.events import Phase, emit_phase
 
 ABNORMAL_TERMINAL_RECOVERY_MAX = 2
-TERMINAL_RESPONSE_RECOVERY_NOTICE = (
-    '[SYSTEM: TERMINAL RESPONSE RECOVERY]\n'
-    'Your last response ended without usable assistant text '
-    'or a tool call. Continue the current authorized task from '
-    'the preserved tool results. If more work is needed, use '
-    'the native tool schema. Otherwise provide a final answer, '
-    'or state the specific blocker or required user input. '
-    'Do not repeat operations with execution receipts.'
-)
-# The model wrote [SILENT]; a generic "no usable text" notice reads to it as
-# confirmation, so it repeated the declaration until the budget was exhausted.
-REFUSED_SILENCE_RECOVERY_NOTICE = (
-    '[SYSTEM: TERMINAL RESPONSE RECOVERY]\n'
-    'Your last response was the [SILENT] declaration, and it was refused: '
-    'this Turn may not end silently. Only a Global Router reply to a nonhuman '
-    'notice, with no owner message steered into its Turn, may end with [SILENT]. '
-    'Write a brief reply now, or continue with the native tool schema if more '
-    'work is needed. Do not answer [SILENT] again, and do not repeat operations '
-    'with execution receipts.'
-)
 OUTPUT_LIMIT_FINISH_REASONS = {'length', 'max_tokens'}
 OUTPUT_LIMIT_RECOVERY_NOTICE = (
     '[SYSTEM: OUTPUT LIMIT RECOVERY]\n'
@@ -90,8 +70,7 @@ def abnormal_terminal_kind(assistant_msg, finish_reason, task, usage=None):
 
 
 def recover_abnormal_terminal(assistant_msg, finish_reason, task, *,
-                              round_num, model, result, usage=None, messages=None,
-                              silence_refused=False):
+                              round_num, model, result, usage=None, messages=None):
     """Return a retry/failure directive or None; at most two retries per task.
 
     The counter deliberately does not use phase/round retry counters, which can
@@ -135,10 +114,16 @@ def recover_abnormal_terminal(assistant_msg, finish_reason, task, *,
                 'using the provided native tool schema, not XML tags. Do not '
                 'repeat operations that already have execution receipts.'
             )
-            if kind == 'empty_stop' and silence_refused:
-                text = REFUSED_SILENCE_RECOVERY_NOTICE
-            elif kind != 'unresolved_tool_marker':
-                text = TERMINAL_RESPONSE_RECOVERY_NOTICE
+            if kind != 'unresolved_tool_marker':
+                text = (
+                    '[SYSTEM: TERMINAL RESPONSE RECOVERY]\n'
+                    'Your last response ended without usable assistant text '
+                    'or a tool call. Continue the current authorized task from '
+                    'the preserved tool results. If more work is needed, use '
+                    'the native tool schema. Otherwise provide a final answer, '
+                    'or state the specific blocker or required user input. '
+                    'Do not repeat operations with execution receipts.'
+                )
             from lib.tasks_pkg.context_composer import append_injection
             append_injection(
                 messages, 'terminal_recovery', text, task=task,

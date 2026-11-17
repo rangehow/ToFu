@@ -9,8 +9,7 @@ requirements into the environment that owns the interpreter's packages: a task
 worktree's bridged `.venv` (workspace_runtime) resolves to its source environment,
 so one install serves every worktree of that checkout.
 
-Dependencies: standard library, lib.tools.process_environment (the child
-environment); `packaging` inside the checked interpreter.
+Dependencies: standard library; `packaging` inside the checked interpreter.
 """
 from __future__ import annotations
 
@@ -52,9 +51,7 @@ def missing(python: str, root: Path) -> list[str]:
     declared = project.get('project', {}).get('optional-dependencies', {}).get(TEST_EXTRA, [])
     if not declared:
         return []
-    from lib.tools.process_environment import inherited_child_environment
-    environment = {key: value for key, value in inherited_child_environment().items()
-                   if key != 'PYTHONPATH'}
+    environment = {key: value for key, value in os.environ.items() if key != 'PYTHONPATH'}
     probe = subprocess.run([python, '-c', _MISSING_PROBE, *declared],
                            env=environment, capture_output=True, text=True, timeout=60)
     if probe.returncode:

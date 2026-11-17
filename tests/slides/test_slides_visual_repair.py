@@ -93,8 +93,7 @@ def repair_case(tmp_path, monkeypatch):
         if improved and state['abort_during_recheck']:
             ctx['abort_event'].set()
         return {'ok': not improved or state['repair_review_ok'],
-                'findings': [finding] * state.get('page_majors', 1)
-                if (not improved and not state.get('only_global'))
+                'findings': [finding] if (not improved and not state.get('only_global'))
                 or state['remaining'] else []}
 
     monkeypatch.setattr(vqa, 'qa_frame', review)
@@ -146,63 +145,6 @@ def test_whole_deck_regression_rolls_back_verified_local_repair(repair_case):
     assert preview.read_bytes() == b'original'
 
 
-def test_page_fixes_outweighing_a_new_coherence_finding_are_kept(repair_case):
-    """Deck plus pages: two page majors fixed, one coherence major drawn."""
-    ctx, state, source, preview, seed, candidate = repair_case
-    state['worsen_deck'] = True
-    state['page_majors'] = 2
-    result = recipe._run_visual_qa(ctx)
-    assert result['repairedPages'] == [1]
-    assert source.read_text() == candidate
-    # The coherence finding still blocks export.
-    assert len(result['remaining']) == 1
-
-
-def test_visual_repair_continues_while_the_page_improves(repair_case, monkeypatch):
-    """Fixed point: 2 majors -> 1 -> 0, then nothing left to repair."""
-    import lib.design_sys.visual_qa as vqa
-    ctx, state, source, preview, seed, candidate = repair_case
-    versions = [candidate.replace('Improved', f'Improved-{n}') for n in ('a', 'b')]
-    seeds = []
-
-    def author(deck, brief, index, total, **kwargs):
-        seeds.append(kwargs['seed_yaml'])
-        return {'mode': 'authored', 'yaml': versions[len(seeds) - 1]}
-
-    def render(deck, index, output, **kwargs):
-        Path(output).write_bytes(
-            deck.pages[0].raw['elements'][0]['content']['text'].encode())
-
-    finding = {'check': 'typography', 'element': 'title', 'issue': 'Widow',
-               'severity': 'major', 'fix': 'Rebreak'}
-
-    def review(path, **kwargs):
-        if kwargs['label'] == 'deck-coherence':
-            return {'ok': True, 'findings': []}
-        pixels = Path(path).read_bytes()
-        majors = {b'Improved-a': 1, b'Improved-b': 0}.get(pixels, 2)
-        return {'ok': True, 'findings': [finding] * majors}
-
-    monkeypatch.setattr('lib.slides.author.author_page', author)
-    monkeypatch.setattr('lib.slides.render_png.render_page_png', render)
-    monkeypatch.setattr('lib.slides.layout_qa.inspect_deck_layout',
-                        lambda deck, **kwargs: {'ran': True, 'ok': True,
-                                                'findings': [], 'line_breaks': []})
-    monkeypatch.setattr(vqa, 'qa_frame', review)
-    result = recipe._run_visual_qa(ctx)
-    assert seeds == [seed, versions[0]]
-    assert source.read_text() == versions[1]
-    assert result['repairedPages'] == [1] and result['remaining'] == []
-
-
-def test_rejected_visual_repair_is_not_retried(repair_case):
-    ctx, state, source, preview, seed, candidate = repair_case
-    state['repair_review_ok'] = False
-    result = recipe._run_visual_qa(ctx)
-    assert state['author_calls'] == 1
-    assert result['rejectedPages'] == [1]
-
-
 def test_abort_during_visual_recheck_preserves_original(repair_case):
     ctx, state, source, preview, seed, candidate = repair_case
     state['abort_during_recheck'] = True
@@ -219,85 +161,3 @@ def test_global_coherence_findings_enter_repair_even_without_page_defects(repair
     assert state['author_calls'] == 1
     assert result['repairedPages'] == [1]
     assert result['coherence'] == result['remaining'] == []
-
-
-@pytest.mark.parametrize('second,blocks', [
-    ({'ok': True, 'findings': []}, False),        # not reproduced: cleared
-    ('same', True),                               # reproduced: still refuses
-    ({'ok': False, 'reason': 'budget'}, True),    # unreadable: never clears
-])
-def test_a_refusal_must_reproduce_on_the_identical_page(repair_case, monkeypatch,
-                                                        second, blocks):
-    import lib.design_sys.visual_qa as vqa
-    ctx, state, source, preview, seed, candidate = repair_case
-    state['repair_review_ok'] = False     # the repair is rejected; page stays
-    finding = {'check': 'hierarchy', 'element': 'title', 'issue': 'Unreadable',
-               'severity': 'major', 'fix': 'Bigger'}
-    calls = []
-
-    def review(path, **kwargs):
-        if kwargs['label'] == 'deck-coherence':
-            return {'ok': True, 'findings': []}
-        pixels = Path(path).read_bytes()
-        if pixels == b'improved':
-            return {'ok': False, 'reason': 'rejected candidate'}
-        calls.append(pixels)
-        if len(calls) == 1 or second == 'same':
-            return {'ok': True, 'findings': [finding]}
-        return second
-
-    monkeypatch.setattr(vqa, 'qa_frame', review)
-    result = recipe._run_visual_qa(ctx)
-    # The page review ran twice on the retained original pixels.
-    assert calls == [b'original', b'original']
-    assert bool(recipe._gate_visual_qa(ctx, result)) is blocks
-    assert result['unconfirmed'] == ([] if blocks else [1])
-    assert source.read_text() == seed
-
-
-def test_a_clean_deck_is_reviewed_once(repair_case, monkeypatch):
-    import lib.design_sys.visual_qa as vqa
-    ctx, state, *_ = repair_case
-    labels = []
-
-    def review(path, **kwargs):
-        labels.append(kwargs['label'])
-        return {'ok': True, 'findings': []}
-
-    monkeypatch.setattr(vqa, 'qa_frame', review)
-    result = recipe._run_visual_qa(ctx)
-    assert sorted(labels) == ['deck-coherence', 'page-01']
-    assert result['unconfirmed'] == [] and result['remaining'] == []
-
-
-def _numbered_page(text):
-    return yaml.safe_dump({'elements': [{
-        'elementId': 'body', 'elementType': 'text', 'bounds': [80, 80, 900, 160],
-        'content': {'text': f'<p>{text}</p>'}}]}, allow_unicode=True)
-
-
-def test_a_repair_never_drops_a_number_the_reviewer_did_not_dispute():
-    seed = _numbered_page('240 分钟跑 30 轮，每轮 8.4 万到 11 万 token')
-    cut = _numbered_page('跑 30 轮')
-    assert {str(n) for n in recipe._dropped_numbers(seed, cut, 'Too dense')} == {
-        '240', '8.4', '11'}
-    # A number the finding names may go (the reviewer disputed it).
-    assert {str(n) for n in recipe._dropped_numbers(
-        seed, cut, 'page says 240 minutes; source says 24.0')} == {'8.4', '11'}
-    assert recipe._dropped_numbers(seed, seed + ' ', '') == set()
-
-
-def test_a_visual_repair_that_drops_a_number_is_rejected(repair_case, monkeypatch):
-    ctx, state, source, preview, seed, candidate = repair_case
-    numbered = _numbered_page('方案 A 41 题，方案 B 38 题')
-    source.write_text(numbered)
-
-    def author(deck, brief, index, total, **kwargs):
-        state['author_calls'] += 1
-        return {'mode': 'authored', 'yaml': _numbered_page('方案 A 41 题')}
-
-    monkeypatch.setattr('lib.slides.author.author_page', author)
-    result = recipe._run_visual_qa(ctx)
-    assert state['author_calls'] == 1
-    assert result['rejectedPages'] == [1] and result['repaired'] == 0
-    assert source.read_text() == numbered

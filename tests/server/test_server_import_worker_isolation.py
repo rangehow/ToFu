@@ -8,7 +8,7 @@ import inspect
 
 import pytest
 
-from tests.support.overlay import requires_private_overlay
+from tests.support.overlay import requires_yourprovider_overlay
 
 from tests.support.dx_overlay import requires_dx
 
@@ -255,7 +255,7 @@ def test_background_service_start_is_per_app_idempotent(monkeypatch):
     ]
 
 
-@requires_private_overlay
+@requires_yourprovider_overlay
 def test_background_service_shutdown_is_paired_and_idempotent(monkeypatch):
     import lib.channels.bots.supervisor as bot_supervisor
     import tofu_yourprovider.dx.supervisor as channel_supervisor

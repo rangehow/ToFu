@@ -1,13 +1,14 @@
 /** Tofu office art: Canvas2D painters for the floor under the people. Everything here draws at the positions it
  * is given, so the scene can redraw the floor every frame while rooms slide (tween.ts) and the floor and its
  * people always agree. Procedural surfaces: a seamless plank tile (filled as a pattern, so the floor has no
- * size) and the window wall with skies by local hour; team rooms and the light are diorama.ts. Furniture is
+ * size), the window wall with skies by local hour, team carpets in their team colour, and the light over the
+ * whole room (daylight from the windows, wall shade, vignette, night lamps at the lead desks). Furniture is
  * stamped from the theme's art atlas (assets/manifest.generated.ts PROPS: rect, size, anchor); a pod's desks
  * and chairs are painted once into a layer that moves as one piece. Clutter is seeded by desk identity, so a
  * desk keeps its mug wherever its room moves.
- * Pure drawing, no DOM or state. Entry points: paintFloorTile, drawFloor, drawWall, windowSlots, paintWindow,
- * paintPod, drawFurniture, stamp, drawInside. */
-import { podDivider, type DecorItem, type OfficeLayout, type Pod, type Rect, type Seat } from './layout';
+ * Pure drawing, no DOM or state. Entry points: paintFloorTile, paintNoiseTile, drawFloor, drawWall,
+ * windowSlots, paintWindow, drawRug, paintPod, drawFurniture, drawLighting, stamp, drawInside. */
+import { podDivider, type DecorItem, type OfficeLayout, type Pod, type Rect, type Seat, type ZoneLayout } from './layout';
 
 export type Ctx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 export type ArtTheme = 'light' | 'dark';
@@ -34,6 +35,7 @@ export type Palette = typeof PALETTE[ArtTheme];
 
 /** The plank tile: 16 rows of 18-unit boards, long enough that its repeat is not read as a pattern. */
 export const FLOOR_TILE = { w: 960, h: 288, plank: 18 } as const;
+const NOISE_TILE = 64;
 /** A pod layer reaches this far past the pod's box: chairs and desk fronts overhang it. */
 export const POD_BLEED = 24;
 const CLUTTER = ['clutter-mug', 'clutter-papers', 'clutter-books', 'clutter-mini-plant'] as const;
@@ -50,6 +52,7 @@ export function rr(ctx: Ctx, x: number, y: number, w: number, h: number, r: numb
   ctx.beginPath(); ctx.moveTo(x + k, y); ctx.arcTo(x + w, y, x + w, y + h, k); ctx.arcTo(x + w, y + h, x, y + h, k);
   ctx.arcTo(x, y + h, x, y, k); ctx.arcTo(x, y, x + w, y, k); ctx.closePath();
 }
+function fillRR(ctx: Ctx, x: number, y: number, w: number, h: number, r: number, color: string) { rr(ctx, x, y, w, h, r); ctx.fillStyle = color; ctx.fill(); }
 function hexRgb(hex: string): [number, number, number] {
   const value = parseInt(hex.replace('#', '').padEnd(6, '0').slice(0, 6), 16);
   return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
@@ -59,6 +62,7 @@ export function mix(a: string, b: string, t: number): string {
   const c = (x: number, y: number) => Math.round(x + (y - x) * t).toString(16).padStart(2, '0');
   return `#${c(ar, br)}${c(ag, bg)}${c(ab, bb)}`;
 }
+const rgba = (rgb: string, alpha: number) => `rgba(${rgb}, ${alpha})`;
 
 /** Draws prop `name` with its anchor on (x, y), in scene units. */
 export function stamp(ctx: Ctx, atlas: Atlas, name: string, x: number, y: number) {
@@ -95,11 +99,30 @@ export function paintFloorTile(ctx: Ctx, palette: Palette) {
   }
 }
 
-/** The floor below the wall, filled with the plank pattern (already scaled to scene units). */
-export function drawFloor(ctx: Ctx, layout: OfficeLayout, planks: CanvasPattern | null, palette: Palette) {
+/** Carpet pile: a sparse speckle that repeats under every team's carpet. */
+export function paintNoiseTile(ctx: Ctx, palette: Palette) {
+  const random = seeded(7);
+  ctx.clearRect(0, 0, NOISE_TILE, NOISE_TILE);
+  ctx.fillStyle = rgba(palette.shade, 0.05);
+  for (let i = 0; i < 22; i += 1) ctx.fillRect(Math.floor(random() * NOISE_TILE), Math.floor(random() * NOISE_TILE), 1.5, 1.5);
+}
+export const NOISE_SIZE = NOISE_TILE;
+
+/** The floor below the wall, filled with the plank pattern (already scaled to scene units), plus daylight. */
+export function drawFloor(ctx: Ctx, layout: OfficeLayout, planks: CanvasPattern | null, palette: Palette, hour: number, windows: ReadonlyArray<Rect>) {
   const { width, height, wall } = layout;
   ctx.fillStyle = planks ?? palette.wood;
   ctx.fillRect(0, wall, width, height - wall);
+  if (!palette.daylight || hour < 7 || hour >= 18) return;
+  // A light shaft from each window onto the floor, slanting away from the morning or afternoon sun.
+  const lean = hour < 12 ? 70 : -70;
+  const light = ctx.createLinearGradient(0, wall, 0, wall + 150);
+  light.addColorStop(0, 'rgba(255, 238, 190, 0.20)'); light.addColorStop(1, 'rgba(255, 238, 190, 0)');
+  ctx.fillStyle = light;
+  for (const glass of windows) {
+    ctx.beginPath(); ctx.moveTo(glass.x, wall); ctx.lineTo(glass.x + glass.w, wall);
+    ctx.lineTo(glass.x + glass.w + lean, wall + 150); ctx.lineTo(glass.x + lean, wall + 150); ctx.fill();
+  }
 }
 
 /** Where the window wall's glass panes go for a floor this wide (the window prop's glass slot). */
@@ -163,6 +186,34 @@ export function paintWindow(ctx: Ctx, atlas: Atlas, hour: number, index: number)
   stamp(ctx, atlas, 'window', prop.anchor[0], prop.anchor[1]);
 }
 
+/** A team's room: a low-pile carpet in a muted tint of the team colour with a soft drop shadow, a header band
+ * in the team colour where its sign hangs, and a woven inner border. */
+export function drawRug(ctx: Ctx, zone: Rect, color: string, palette: Palette, pile: CanvasPattern | null) {
+  const { x, y, w, h } = zone;
+  for (const [grow, alpha] of [[8, 0.05], [5, 0.07], [2, 0.10]] as const) {
+    rr(ctx, x - grow / 2, y - grow / 4 + 3, w + grow, h + grow / 2, 12 + grow / 2); ctx.fillStyle = rgba(palette.shade, alpha); ctx.fill();
+  }
+  fillRR(ctx, x, y, w, h, 12, mix(color, palette.rugEdge, palette.daylight ? 0.30 : 0.62));
+  const base = mix(color, palette.rugBase, palette.daylight ? 0.80 : 0.84);
+  fillRR(ctx, x + 4, y + 4, w - 8, h - 8, 9, base);
+  ctx.save();
+  rr(ctx, x + 4, y + 4, w - 8, h - 8, 9); ctx.clip();
+  if (pile) { ctx.fillStyle = pile; ctx.fillRect(x, y, w, h); }
+  const band = ctx.createLinearGradient(0, y, 0, y + 44);
+  band.addColorStop(0, mix(color, base, 0.35)); band.addColorStop(1, mix(color, base, 0.75));
+  ctx.fillStyle = band; ctx.fillRect(x, y, w, 44);
+  ctx.fillStyle = rgba(palette.shade, 0.10); ctx.fillRect(x, y + 44, w, 1);
+  const sheen = ctx.createLinearGradient(0, y + 45, 0, y + h);
+  sheen.addColorStop(0, rgba(palette.glow, palette.daylight ? 0.10 : 0.03)); sheen.addColorStop(1, rgba(palette.shade, 0.06));
+  ctx.fillStyle = sheen; ctx.fillRect(x, y + 45, w, h - 45);
+  ctx.restore();
+  ctx.strokeStyle = mix(color, palette.rugLine, palette.daylight ? 0.55 : 0.25); ctx.lineWidth = 1;
+  const alpha = ctx.globalAlpha;
+  ctx.globalAlpha = alpha * 0.55;
+  rr(ctx, x + 9.5, y + 9.5, w - 19, h - 19, 6); ctx.stroke();
+  ctx.globalAlpha = alpha;
+}
+
 /** One pod, back to front, into a layer whose origin is (pod.x - POD_BLEED, pod.y - POD_BLEED): chairs behind
  * the top row, its desks, the partition, the bottom row's desks, then the chairs in front of them. `clutter`
  * picks a desk's item (index into the clutter props, or none) from the desk's identity. */
@@ -217,6 +268,38 @@ export function drawFurniture(ctx: Ctx, atlas: Atlas, layout: OfficeLayout, rout
     else if (item.kind === 'cooler' || item.kind === 'printer') stamp(ctx, atlas, item.kind, item.x, item.y);
   });
   ctx.globalAlpha = base;
+}
+
+/** Light over the whole room, people included: the window wall's daylight and contact shade, the side walls'
+ * shade, the falloff toward the edges; at night the room cools and every head desk (and the owner's and the
+ * Watchdog's) keeps a warm pool of lamp light. */
+export function drawLighting(ctx: Ctx, layout: OfficeLayout, palette: Palette, night: boolean, zones: ReadonlyArray<ZoneLayout>) {
+  const { width, height, wall } = layout;
+  const day = ctx.createLinearGradient(0, wall, 0, wall + 320);
+  day.addColorStop(0, rgba(palette.glow, night ? 0.04 : 0.20)); day.addColorStop(1, rgba(palette.glow, 0));
+  ctx.fillStyle = day; ctx.fillRect(0, wall, width, 320);
+  const shade = ctx.createLinearGradient(0, wall, 0, wall + 30);
+  shade.addColorStop(0, rgba(palette.shade, 0.28)); shade.addColorStop(1, rgba(palette.shade, 0));
+  ctx.fillStyle = shade; ctx.fillRect(0, wall, width, 30);
+  for (const [from, to] of [[12, 40], [width - 12, width - 40]]) {
+    const side = ctx.createLinearGradient(from, 0, to, 0);
+    side.addColorStop(0, rgba(palette.shade, 0.22)); side.addColorStop(1, rgba(palette.shade, 0));
+    ctx.fillStyle = side; ctx.fillRect(Math.min(from, to), wall, 28, height - wall);
+  }
+  const radius = Math.hypot(width, height) / 2;
+  const vignette = ctx.createRadialGradient(width / 2, height * 0.45, radius * 0.45, width / 2, height * 0.45, radius);
+  vignette.addColorStop(0, rgba(palette.shade, 0)); vignette.addColorStop(1, rgba(palette.shade, palette.daylight ? 0.20 : 0.42));
+  ctx.fillStyle = vignette; ctx.fillRect(0, 0, width, height);
+  if (!night) return;
+  ctx.fillStyle = palette.daylight ? 'rgba(20, 24, 56, 0.14)' : 'rgba(14, 18, 44, 0.20)'; ctx.fillRect(0, 0, width, height);
+  const lamps: Rect[] = [layout.owner.desk, ...zones.map(zone => zone.lead.desk)];
+  if (layout.watchdog) lamps.push(layout.watchdog.seat.desk);
+  for (const desk of lamps) {
+    const x = desk.x + desk.w / 2, y = desk.y + desk.h / 2;
+    const pool = ctx.createRadialGradient(x, y, 10, x, y, 190);
+    pool.addColorStop(0, rgba(palette.glow, palette.daylight ? 0.16 : 0.12)); pool.addColorStop(1, rgba(palette.glow, 0));
+    ctx.fillStyle = pool; ctx.fillRect(x - 190, y - 190, 380, 380);
+  }
 }
 
 /** Draws source box (sx, sy, sw, sh) of `image` to destination box (dx, dy, dw, dh), only the part inside `box` when

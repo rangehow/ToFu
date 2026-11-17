@@ -21,6 +21,7 @@ ALLOWED_SLIDE_SIZES = (
     (720, 540),
 )
 MAX_SLIDE_TOPIC_CHARS = 4000
+MAX_SLIDE_MATERIAL_CHARS = 20000
 MAX_SLIDE_STYLE_CHARS = 2000
 MAX_SLIDE_MODEL_CHARS = 256
 MAX_SLIDE_IMAGE_REFERENCES = 64
@@ -50,6 +51,7 @@ __all__ = [
     'MAX_SLIDE_IMAGE_REFERENCES',
     'MAX_SLIDE_STYLE_CHARS',
     'MAX_SLIDE_TOPIC_CHARS',
+    'MAX_SLIDE_MATERIAL_CHARS',
     'MIN_SLIDE_PAGES',
     'normalise_slide_page_count',
     'normalise_slide_briefs',
@@ -113,13 +115,9 @@ def normalise_slide_topic(value) -> str:
 
 
 def normalise_slide_material(value) -> str:
-    """Caller-supplied evidence a deck must be grounded in, whole.
-
-    No character cap: a cut source loses the results the deck is judged on
-    (a paper's later experiments, its appendix tables). The bound is the
-    model's context window, enforced by dispatch prompt admission.
-    """
-    return str(value or '').strip()
+    """Caller-supplied evidence a deck must be grounded in (bounded text)."""
+    return _bounded_request_text(
+        value, name='material', maximum=MAX_SLIDE_MATERIAL_CHARS)
 
 
 def normalise_slide_style(value) -> str:

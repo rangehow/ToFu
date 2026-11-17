@@ -40,9 +40,6 @@ class CwdChange:
 
 
 _UNRESOLVED_CHANGE = CwdChange(None, False)
-# Git's system-level configuration (prefix /usr); a host may register
-# callbacks there, e.g. the git-lfs filter some CI images install.
-_SYSTEM_GIT_CONFIG = '/etc/gitconfig'
 _CD_OPTION = re.compile(r'-[LPe@]+\Z')
 _LOOP_HEADS = frozenset({'for', 'while', 'until', 'select'})
 _FUNCTION_DEFINITION = re.compile(
@@ -492,7 +489,7 @@ def _git_executable_helpers(paths, configs, environment, subcommand, *, read=Fal
                   'reference-transaction', 'post-checkout', 'post-merge',
                   'pre-rebase', 'applypatch-msg', 'pre-applypatch', 'post-applypatch',
                   'post-rewrite', 'post-index-change', 'pre-auto-gc', 'post-update')
-    configuration = {_SYSTEM_GIT_CONFIG}
+    configuration = {'/etc/gitconfig'}
     home = environment.get('HOME')
     if home:
         configuration.update({os.path.join(home, '.gitconfig'), os.path.join(
@@ -771,7 +768,7 @@ def _git_lease_effects(words, cwd, subcommand, position, paths, ambiguous, envir
         if _git_config_injected(environment):
             metadata_only = False
         home = environment.get('HOME', '')
-        config_paths = [_SYSTEM_GIT_CONFIG]
+        config_paths = ['/etc/gitconfig']
         if home:
             config_paths.extend([os.path.join(home, '.gitconfig'), os.path.join(
                 environment.get('XDG_CONFIG_HOME') or os.path.join(home, '.config'), 'git', 'config')])
@@ -861,7 +858,7 @@ def _git_help_viewer_configured(cwd, environment):
 
     ``git help`` discovers the repository, so its local configuration counts.
     """
-    sources = {_SYSTEM_GIT_CONFIG}
+    sources = {'/etc/gitconfig'}
     home = environment.get('HOME')
     if home:
         sources.update({os.path.join(home, '.gitconfig'), os.path.join(

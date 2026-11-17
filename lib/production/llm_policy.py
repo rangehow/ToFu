@@ -20,7 +20,6 @@ __all__ = [
     'PRODUCTION_LLM_HARD_ERROR_ATTEMPTS',
     'PRODUCTION_LLM_MAX_429_ATTEMPTS',
     'abort_check_from_event',
-    'context_abort_check',
     'optional_llm_dispatch_kwargs',
     'optional_llm_max_429_attempts',
     'production_llm_dispatch_kwargs',
@@ -78,14 +77,6 @@ def abort_check_from_event(event) -> Callable[[], bool] | None:
     if event is None:
         return None
     return lambda: bool(event.is_set())
-
-
-def context_abort_check(ctx: dict) -> Callable[[], bool] | None:
-    """A recipe context's one request-level cancellation predicate (``abort_check`` or ``abort_event``)."""
-    callback = ctx.get('abort_check')
-    if callable(callback):
-        return callback
-    return abort_check_from_event(ctx.get('abort_event'))
 
 
 def production_llm_dispatch_kwargs(

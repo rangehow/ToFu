@@ -266,19 +266,6 @@ class ToolContractV2:
         return validated
 
 
-def tool_schema_name(tool: Any) -> str:
-    """The name of a provider tool schema in either wire dialect (``function.name`` or ``name``).
-
-    The one reader of a schema's name: catalog filters (Swarm routing, paper
-    and research executors, MCP exposure, direct-call retention, background
-    guidance) all ask here instead of re-deciding the dialect.
-    """
-    if not isinstance(tool, Mapping):
-        return ''
-    function = tool.get('function')
-    return str((function.get('name') if isinstance(function, Mapping) else '') or tool.get('name') or '')
-
-
 def json_type_name(value: Any) -> str:
     """JSON Schema type name of a decoded argument, for type refusals."""
     if isinstance(value, bool):

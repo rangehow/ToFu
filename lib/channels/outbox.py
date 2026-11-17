@@ -854,8 +854,6 @@ def _settle(store: ChannelStore, item_id: str) -> OutboxItem:
     if unconfirmed:
         logger.warning('[Channels] outbox item=%s unconfirmed after its confirmation point: %s; reported, '
                        'never resent, read again every pass', item.id, item.error)
-    if moved and item.state == 'failed':
-        _announce_attachment_failure(store, item)
     if item.state == 'failed' or (item.state == 'unknown' and _blocks(item)) or unconfirmed:
         # Failed and unknown sends become Router Watchdog signals (docs/ROUTER.md R7). An item
         # that only awaits confirmation of accepted parts becomes one when its next pass cannot
@@ -863,56 +861,6 @@ def _settle(store: ChannelStore, item_id: str) -> OutboxItem:
         from lib.router.watchdog.signals import report_outbox_fault
         report_outbox_fault(store.owner, item)
     return item
-
-
-# Why a part failed, in the owner's words (C10). Codes without an entry are named as they are.
-_PART_FAILURE_REASONS = {
-    'invalid_input': '大象拒绝了这次上传',
-    'attachment_rejected': '大象拒收了这条文件消息',
-    'attachment_changed': '排队后文件被改动了，未发送改动后的版本',
-    'attachment_unavailable': '发送时读不到这个文件',
-    'preview_unavailable': '预览副本做不出来了',
-    _NOT_DELIVERED: '大象接收了但聊天里没有出现',
-    _NOT_SENT: '它所属的文字没发出去，文件也没有发',
-}
-
-
-def attachment_failure_text(item: OutboxItem, thread_title: str) -> str:
-    """The owner's notice of an item's files that were not delivered: each name and why."""
-    lines = [f'[附件未送达] 发往「{thread_title or item.thread}」的消息里，以下文件没有发出：']
-    for record in item.extra.get('attachments') or ():
-        if record.get('state') == 'failed':
-            code = str(record.get('error') or 'failed')
-            reason = _PART_FAILURE_REASONS.get(code)
-            lines.append(f'- {record["name"]}：{reason}（{code}）' if reason else f'- {record["name"]}：{code}')
-    lines.append('可以让 Tofu 重新发送这些文件；发件箱里也能看到这条消息的每个附件状态。')
-    return '\n'.join(lines)
-
-
-def _announce_attachment_failure(store: ChannelStore, item: OutboxItem) -> None:
-    """Tell the owner which files of a failed item were not delivered, once per item (C10).
-
-    In the command chat the notice goes to the same thread, right under what
-    did arrive; an item for other people is announced in the command chat
-    instead (a notice to them would itself be a draft). Untranslated, like a
-    draft notice: it names the exact files.
-    """
-    if not any(record.get('state') == 'failed' for record in item.extra.get('attachments') or ()):
-        return
-    key = ThreadKey.parse(item.thread)
-    from lib.channels.assistant import notice_command_chat
-    target = item.thread if is_command_chat(key, store.account(key.channel)) \
-        else notice_command_chat(store, key.channel)
-    if not target:
-        return
-    title = (store.thread(key) or {}).get('title') or ''
-    try:
-        enqueue(store.owner, target, attachment_failure_text(item, title),
-                idempotency_key='attachment-notice:' + item.id, store=store, authority='nonhuman',
-                origin={'kind': 'attachment_notice', 'conversationId': str(item.origin.get('conversationId') or ''),
-                        'turnId': str(item.origin.get('turnId') or '')})
-    except ChannelError as error:
-        logger.warning('[Channels] attachment failure notice not enqueued item=%s: %s', item.id, error.code)
 
 
 def _confirm_part(store: ChannelStore, marker: str, *, external_id: str, client_id: str) -> bool:

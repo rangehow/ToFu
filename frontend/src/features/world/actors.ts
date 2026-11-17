@@ -1,8 +1,8 @@
 /** People in the office as actors. Each has a desk (`home`), a place it should rest (its desk, a spot at the
  * owner's door, or gone) and the walk that takes it there, so nobody pops in or out: a person who starts work
  * walks in through the entrance to their desk, one whose work ended stands and walks out, a change of mind
- * mid-walk turns them round where they stand (routes.ts), and a report is carried to the owner's desk, laid down,
- * celebrated with two hops, arms thrown up, and followed by the walk back (or out, when that person's work is done). While the office's first reads
+ * mid-walk turns them round where they stand (routes.ts), and a report is carried to the owner's desk, laid down
+ * and followed by the walk back (or out, when that person's work is done). While the office's first reads
  * settle, and under reduced motion, people fade in and out where they rest instead, or simply are there.
  * The pose says what to draw now: a seated cell cropped at the desk line, or a standing/walking cell at the
  * feet, with its opacity and the document in hand; looping cells run on each person's own beat offset and
@@ -23,10 +23,8 @@ export interface Errand {
   document: DeskDocument;
   /** After laying the document down: out of the office instead of back to the desk. */
   leaves: boolean;
-  /** carry to the owner's desk, drop it there, cheer (a short celebration), then return. */
-  phase: 'carry' | 'drop' | 'cheer' | 'return';
+  phase: 'carry' | 'drop' | 'return';
   dropLeft: number;
-  cheerLeft: number;
   onDrop(): void;
   onDone(): void;
 }
@@ -63,8 +61,6 @@ export interface Pose {
   carry: DeskDocument['kind'] | null;
   /** Top-left of the carried document inside the cell, and whether it is drawn over the body. */
   hand: Point | null; front: boolean;
-  /** Units the figure is lifted off its feet (a celebratory hop); its shadow stays on the floor. */
-  lift: number;
 }
 
 /** Walking pace in scene units per second. */
@@ -74,13 +70,9 @@ export const BEAT_MS = 125;
 const FADE_MS = 320;
 const SCREEN_MS = 240;
 const DROP_MS = 650;
-/** Two hops after a document lands on the owner's desk, before the walk back (presentation). */
-export const CHEER_MS = 900;
 /** Walkers fade in and out over this distance through the entrance door. */
 const DOOR_FADE = 48;
 const WAIT_BEATS = 6;
-/** Beats per cell of a raised hand waving for the owner's attention. */
-const WAVE_BEATS = 3;
 
 const OUTSIDE: Place = { kind: 'outside' };
 const DROP: Place = { kind: 'drop' };
@@ -171,11 +163,11 @@ export function settleActor(actor: Actor) {
 
 /** The actor carries a document from its desk to the owner's desk. False when it is not sitting at its desk
  * (walking, waiting at the door, fading), so the caller lays the document down without a walk. */
-export function startErrand(actor: Actor, errand: Omit<Errand, 'phase' | 'dropLeft' | 'cheerLeft'>, layout: OfficeLayout): boolean {
+export function startErrand(actor: Actor, errand: Omit<Errand, 'phase' | 'dropLeft'>, layout: OfficeLayout): boolean {
   if (actor.errand || actor.walk || !actor.at || !samePlace(actor.at, actor.home) || actor.alpha < 1 || actor.fadeTo < 1) return false;
   const route = routeBetween(actor.home, DROP, layout);
   if (!route) return false;
-  actor.errand = { ...errand, phase: 'carry', dropLeft: DROP_MS, cheerLeft: CHEER_MS };
+  actor.errand = { ...errand, phase: 'carry', dropLeft: DROP_MS };
   actor.walk = { route, to: DROP, travelled: 0, points: [] };
   actor.at = null;
   return true;
@@ -191,13 +183,8 @@ export function stepActor(actor: Actor, dt: number, layout: OfficeLayout) {
   if (errand?.phase === 'drop') {
     errand.dropLeft -= dt;
     if (errand.dropLeft <= 0) {
-      errand.phase = 'cheer';
-      errand.onDrop();
-    }
-  } else if (errand?.phase === 'cheer') {
-    errand.cheerLeft -= dt;
-    if (errand.cheerLeft <= 0) {
       errand.phase = 'return';
+      errand.onDrop();
       if (errand.leaves) actor.rest = { kind: 'gone' };
       travel(actor, layout, 'walk');
       if (!actor.walk) finishErrand(actor);
@@ -228,7 +215,7 @@ function finishErrand(actor: Actor) {
 /** True while the actor changes anything on screen by itself (walking, fading, lighting up, laying a document down). */
 export function isMoving(actor: Actor): boolean {
   const lit = !actor.walk && actor.at !== null && samePlace(actor.at, actor.home) && actor.person.state === 'working' ? 1 : 0;
-  return Boolean(actor.walk) || actor.alpha !== actor.fadeTo || actor.errand?.phase === 'drop' || actor.errand?.phase === 'cheer' || actor.screen !== lit;
+  return Boolean(actor.walk) || actor.alpha !== actor.fadeTo || actor.errand?.phase === 'drop' || actor.screen !== lit;
 }
 
 const heading = (dx: number, dy: number): Direction => (Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : dy < 0 ? 'up' : 'down');
@@ -244,7 +231,7 @@ function handOf(state: PersonState, index: number): Point | null {
 
 /** What to draw for the actor at `beat` (BEAT_MS ticks); `still` shows every state's named still cell. */
 export function actorPose(actor: Actor, layout: OfficeLayout, beat: number, still: boolean): Pose | null {
-  const carry = actor.errand && (actor.errand.phase === 'carry' || actor.errand.phase === 'drop') ? actor.errand.document.kind : null;
+  const carry = actor.errand && actor.errand.phase !== 'return' ? actor.errand.document.kind : null;
   if (actor.walk) {
     const points = actor.walk.points.length ? actor.walk.points : resolve(actor.walk.route, layout);
     const { point, dx, dy } = pointAlong(points, actor.walk.travelled);
@@ -254,7 +241,7 @@ export function actorPose(actor: Actor, layout: OfficeLayout, beat: number, stil
     const door = Math.hypot(point.x - layout.entrance.x, point.y - layout.entrance.y);
     return {
       kind: 'standing', x: point.x, y: point.y, state, column: frames.columns[index], alpha: actor.alpha * Math.min(1, door / DOOR_FADE),
-      carry, hand: carry ? handOf(state, index) : null, front: frames.docLayer !== 'back', lift: 0,
+      carry, hand: carry ? handOf(state, index) : null, front: frames.docLayer !== 'back',
     };
   }
   const at = actor.at;
@@ -262,26 +249,18 @@ export function actorPose(actor: Actor, layout: OfficeLayout, beat: number, stil
   if (at.kind === 'spot' || at.kind === 'drop') {
     const spot = at.kind === 'spot' ? waitingSpots(layout)[at.index] : layout.owner.drop;
     if (!spot) return null;
-    const cheering = at.kind === 'drop' && actor.errand?.phase === 'cheer';
-    const asking = actor.person.emphasis === 'decision';
-    const state: PersonState = at.kind === 'spot' ? (asking ? 'ask-wait' : 'wait-up') : cheering ? 'cheer' : 'carry-up';
+    const state: PersonState = at.kind === 'spot' ? 'wait-up' : 'carry-up';
     const frames = STATES[state];
-    const hop = cheering && !still ? Math.abs(Math.sin((2 * Math.PI * (CHEER_MS - actor.errand!.cheerLeft)) / CHEER_MS)) * 7 : 0;
-    // A cheer throws the arms up at the top of each hop.
-    const index = still ? frames.columns.indexOf(frames.reduced) : cheering ? (hop > 3.5 ? 0 : 1)
-      : at.kind === 'drop' ? frames.columns.indexOf(frames.reduced) : Math.floor((beat + actor.phase) / (asking ? WAVE_BEATS : WAIT_BEATS)) % frames.columns.length;
+    const index = still || at.kind === 'drop' ? frames.columns.indexOf(frames.reduced) : Math.floor((beat + actor.phase) / WAIT_BEATS) % frames.columns.length;
     const held = at.kind === 'spot' ? 'report' : carry;
     return { kind: 'standing', x: spot.x, y: spot.y, state, column: frames.columns[index], alpha: actor.alpha, carry: held,
-      hand: held ? handOf(state, index) : null, front: frames.docLayer !== 'back', lift: hop };
+      hand: held ? handOf(state, index) : null, front: frames.docLayer !== 'back' };
   }
   const seat = seatAt(layout, at);
   if (!seat) return null;
   const typing = actor.person.state === 'working';
-  // An open question for the owner raises a hand at the desk (when the line at the owner's door is full).
-  const asking = actor.person.emphasis === 'decision';
-  const state = `${asking ? 'ask' : typing ? 'work' : 'idle'}-${seat.facing}` as PersonState;
+  const state = `${typing ? 'work' : 'idle'}-${seat.facing}` as PersonState;
   const frames = STATES[state];
-  const index = (!typing && !asking) || still ? frames.columns.indexOf(frames.reduced)
-    : Math.floor((beat + actor.phase) / (asking ? WAVE_BEATS : actor.rhythm)) % frames.columns.length;
-  return { kind: 'seated', x: seat.x, y: seat.cut, state, column: frames.columns[Math.max(0, index)], alpha: actor.alpha, carry: null, hand: null, front: true, lift: 0 };
+  const index = !typing || still ? frames.columns.indexOf(frames.reduced) : Math.floor((beat + actor.phase) / actor.rhythm) % frames.columns.length;
+  return { kind: 'seated', x: seat.x, y: seat.cut, state, column: frames.columns[Math.max(0, index)], alpha: actor.alpha, carry: null, hand: null, front: true };
 }

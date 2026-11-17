@@ -235,10 +235,7 @@ sent.
   shortest documented window (descriptor `rateLimits`, a platform fact: the
   first moment a retry can be accepted; a further refusal defers again);
   with no documented window, and for `not_connected`, the next pass tries
-  again. A session that can no longer authenticate uploads (大象's expired
-  launch ticket, CHANNELS.md C1) answers `not_connected` for a file it could
-  not upload, never `failed`: the platform's refusal of the credentials is no
-  verdict on the file, and the relaunched session sends it. Rejected: retrying at the next tick inside a documented window, and
+  again. Rejected: retrying at the next tick inside a documented window, and
   each adapter deriving that time from its own documentation.
 - An unknown intent, and one found `sending` after a restart, is reconciled
   down this ladder, first applicable rung only: (1) `lookup` by idempotency key

@@ -11,11 +11,6 @@ as ``produce_slides`` does, with two benchmark-only substitutions recorded in
   the vision-slot probe answers with the bridged model instead;
 - web research and image generation are disabled, because the competitor arms
   receive no web or image service either and the inputs are the authority.
-
-The authored deck, as it stood before the layout and visual repair stages
-edited it, is copied to the sibling arm ``tofu-authored/<doc>/deck``
-(``run_arm_all.sh`` exports and renders it), so every generation yields a
-paired repair-off / repair-on comparison from the same authored pages.
 """
 
 from __future__ import annotations
@@ -63,25 +58,6 @@ def _vision_through_bridge() -> None:
     vqa._vision_model = lambda: llm_bridge.DEFAULT_MODEL
 
 
-def _snapshot_authored_deck(out_dir: str) -> None:
-    import shutil
-
-    import lib.slides.recipe as recipe
-    original = recipe._run_layout_qa
-    run_dir = os.path.dirname(os.path.dirname(os.path.abspath(out_dir)))
-    target = os.path.join(run_dir, 'tofu-authored', os.path.basename(
-        os.path.abspath(out_dir)), 'deck')
-
-    def run_layout_qa(ctx):
-        # A stage retry starts from already repaired pages: keep the first copy.
-        if not os.path.isdir(target):
-            shutil.copytree(ctx['deck_dir'], target,
-                            ignore=shutil.ignore_patterns('preview', '.tofu-qa'))
-        return original(ctx)
-
-    recipe._run_layout_qa = run_layout_qa
-
-
 def build(doc_id: str, out_dir: str) -> dict:
     doc = load_document(doc_id)
     llm_bridge.install()
@@ -92,7 +68,6 @@ def build(doc_id: str, out_dir: str) -> dict:
     import lib.image_gen as image_gen
     research.research_topic = _no_research
     image_gen.generate_image = _no_image
-    _snapshot_authored_deck(out_dir)
     from lib.slides.recipe import build_deck_from_topic
     os.makedirs(out_dir, exist_ok=True)
     started = time.time()

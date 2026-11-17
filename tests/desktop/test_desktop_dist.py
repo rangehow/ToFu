@@ -289,23 +289,6 @@ def test_refresh_downloads_every_matching_asset_once(tmp_store, fake_net):
 
 
 @pytest.mark.unit
-def test_refresh_never_replaces_a_built_artifact_of_the_same_name(
-        tmp_store, fake_net):
-    """The on-server Windows build writes Tofu-Setup-<ver>-win64.exe, the
-    release asset's own name; a mirror sync must not download over it."""
-    fake_net['probe'] = _release()
-    win = next(a['name'] for a in fake_net['probe']['assets']
-               if a['name'].endswith('-win64.exe'))
-    _seed(tmp_store, win, content=b'built' * 100, source='built',
-          version='0.14.2')
-    assert mirror.refresh_now() is True
-    assert win not in fake_net['downloads']
-    assert len(fake_net['downloads']) == 3
-    assert (tmp_store / win).read_bytes() == b'built' * 100
-    assert store.artifacts()[win]['source'] == 'built'
-
-
-@pytest.mark.unit
 def test_refresh_rejects_a_path_bearing_release_asset(tmp_store, fake_net,
                                                       tmp_path):
     outside = tmp_path.parent / 'Tofu-Setup-9.9.9-win64.exe'

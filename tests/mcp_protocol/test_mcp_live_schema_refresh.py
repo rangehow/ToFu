@@ -150,34 +150,6 @@ def test_task_calls_after_a_server_upgrade_use_the_live_schema(upgraded_server):
     assert bridge.call_tool(READ_DOC, call['_normalized_arguments']) == 'doc 42 @new'
 
 
-def test_projection_is_reused_until_the_bridge_catalog_changes(upgraded_server, monkeypatch):
-    """Exact cache: an unchanged generation skips the projection; a change redoes it."""
-    import lib.mcp.live_schemas as live_schemas
-    from lib.tasks_pkg.handlers.tool_gateway import _executable_catalog
-
-    bridge, task = upgraded_server
-    projections = []
-    real = live_schemas.project_live_mcp_schemas
-    monkeypatch.setattr(live_schemas, 'project_live_mcp_schemas',
-                        lambda *args: projections.append(1) or real(*args))
-    first = _executable_catalog(task)
-    assert set(_parameters(task, READ_DOC)['properties']) == {'doc'}
-    assert _executable_catalog(task) == first
-    assert _executable_catalog(task) is not task['_executable_tool_catalog']
-    assert len(projections) == 1
-
-    # A disconnect withdraws the live rows: the generation advances, the task
-    # projects again and keeps its last schema for names no longer indexed.
-    bridge.disconnect_all()
-    assert _executable_catalog(task) == first
-    assert len(projections) == 2
-
-    # A replaced catalog list is a different authority: project it afresh.
-    task['_executable_tool_catalog'] = list(task['_executable_tool_catalog'])
-    _executable_catalog(task)
-    assert len(projections) == 3
-
-
 def test_task_search_discloses_the_live_schema_after_a_server_upgrade(upgraded_server):
     from lib.tasks_pkg.handlers.tool_gateway import _executable_catalog
     from lib.tools.gateway import search_executable_catalog

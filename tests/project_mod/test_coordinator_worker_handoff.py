@@ -138,16 +138,13 @@ def test_automatic_continuation_reviews_and_cancels_another_requests_workers_of_
 
 def _as_another_coordinators(r, monkeypatch, assignment_id):
     """Reads of ``assignment_id`` return it as another Coordinator's Worker."""
-    def reassigned(original):
-        def read(identity, *args, **kwargs):
-            row = original(identity, *args, **kwargs)
+    for name in ('read', 'read_point'):
+        def read(identity, *args, _original=getattr(r.c.repo, name), **kwargs):
+            row = _original(identity, *args, **kwargs)
             if identity == assignment_id:
                 row = {**row, 'request': {**row['request'], 'coordinatorId': 'other-coordinator'}}
             return row
-        return read
-
-    for name in ('read', 'read_point'):
-        monkeypatch.setattr(r.c.repo, name, reassigned(getattr(r.c.repo, name)))
+        monkeypatch.setattr(r.c.repo, name, read)
 
 
 @pytest.mark.parametrize('tool', ['review_project_work', 'cancel_project_work'])

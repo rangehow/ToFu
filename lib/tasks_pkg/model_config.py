@@ -449,16 +449,9 @@ def _assemble_tool_list(cfg, project_path, project_enabled, task_id,
         ctx.discovery_policy_by_name)
     cfg['_toolScriptSafeByName'] = dict(ctx.script_safe_by_name)
     cfg['_executableToolNamespaceByName'] = dict(ctx.tool_namespace_by_name)
-    # Settled (deep-immutable, byte-identical JSON): readers replace these
-    # maps copy-on-write, and per-call identities digest each once per
-    # assembly instead of re-encoding them on every tool call.
-    from lib.conversation_sync.settled_rows import settle_or_none
-    for _key, _value in (
-            ('_executableToolSearchTextByName', ctx.search_text_by_name),
-            ('_toolContractDocumentsByName', ctx.tool_contract_documents_by_name)):
-        _value = dict(_value)
-        _settled = settle_or_none(_value)
-        cfg[_key] = _value if _settled is None else _settled
+    cfg['_executableToolSearchTextByName'] = dict(ctx.search_text_by_name)
+    cfg['_toolContractDocumentsByName'] = dict(
+        ctx.tool_contract_documents_by_name)
 
     # Request-local routing telemetry describes this assembly's live surface.
     try:

@@ -100,19 +100,6 @@ describe('open-plan floor', () => {
     expect(new Set(tofu.pods.map(pod => pod.x)).size).toBe(1);
   });
 
-  it('gives a window taller than the plan to the rooms, not to bare floor, keeping the sign and head desk at the top', () => {
-    const short = layoutOffice(1920, TEAMS, 0, 1);
-    const tall = layoutOffice(1920, TEAMS, 1600, 1);
-    expect(tall.height).toBe(1600);
-    const bottomStrip = short.height - (short.corridors[short.corridors.length - 1] + 22);
-    expect(tall.corridors[tall.corridors.length - 1] + 22).toBeCloseTo(tall.height - bottomStrip, 5);
-    for (const zone of tall.zones) {
-      const before = short.zones.find(each => each.key === zone.key)!;
-      expect(zone.h).toBeGreaterThan(before.h);
-      expect(zone.lead.desk.y - zone.y).toBeCloseTo(before.lead.desk.y - before.y, 5);
-    }
-  });
-
   it('keeps every seat while its person stays and fills the lowest vacancy', () => {
     const first = allocateSlots(new Map(), ['a', 'b', 'c']);
     const second = allocateSlots(first, ['c', 'd']);

@@ -42,21 +42,22 @@ def _start_running_turn(flask_client, monkeypatch):
     import lib.conversation_sync.task_start as task_start_runtime
     from tests.support.chat_tasks import register_local_executor
 
-    # Admission only enqueues durable worker work (docs/STORAGE.md, worker
-    # publication); the API process never enters physical execution itself.
-    monkeypatch.setattr(task_start_runtime, 'start_conversation_attempt_executor',
-                        lambda *args, **kwargs: pytest.fail('API entered physical execution'))
+    def fake_start(conv_id, config, **kwargs):
+        # generation_attempts.task_id is UNIQUE — every start needs its own.
+        task_id = f'steer-quotes-{uuid.uuid4().hex[:8]}'
+        # The stub executor is this process's executor of the accepted attempt,
+        # so the steer publishes its wakeup into this process's inbox.
+        register_local_executor(task_id, conv_id=conv_id, attempt_id=config['_attemptId'],
+                                turn_id=config['_turnId'])
+        kwargs['on_task_registered'](task_id)
+        return task_id, None
+
+    monkeypatch.setattr(task_start_runtime, 'start_conversation_attempt_executor', fake_start)
     ack = flask_client.post(
         f'/api/v4/conversations/{CONV}/turns',
         json={'commandId': f'cmd-first-{uuid.uuid4().hex[:8]}', 'inputTurn': {'content': 'first'},
               'config': {'model': 'gpt-4o'}})
     assert ack.status_code == 200
-    body = ack.get_json()
-    # Model this process's worker as the claimed executor of the accepted
-    # attempt, so the steer publishes its wakeup into this process's inbox.
-    register_local_executor(body['attempt']['taskId'], conv_id=CONV,
-                            attempt_id=body['attempt']['attemptId'],
-                            turn_id=body['turn']['turnId'])
 
 
 @pytest.mark.parametrize('quotes, expected', [

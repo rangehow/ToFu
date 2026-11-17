@@ -2108,15 +2108,6 @@ class MCPBridge:
         with self._lock:
             return self._tool_index.get(namespaced_name)
 
-    def tool_catalog_generation(self) -> int:
-        """Generation that advances on every ``_tool_index`` or grant change.
-
-        Equal generations guarantee ``get_tool_info`` returns the same rows,
-        so a caller may reuse anything it derived from them.
-        """
-        with self._lock:
-            return self._tool_catalog_generation
-
     def is_mcp_tool(self, fn_name: str) -> bool:
         """Check if a function name is a registered MCP tool."""
         with self._lock:

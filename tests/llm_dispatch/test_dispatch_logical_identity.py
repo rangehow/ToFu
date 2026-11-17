@@ -97,40 +97,6 @@ class TestDispatchProducersStampLogicalModel:
         assert usage['_dispatch']['model'] == WIRE
         assert usage['_dispatch']['logical_model'] == LOGICAL
 
-    def test_nonstream_none_budget_resolves_selected_route_output_limit(
-            self, monkeypatch):
-        """``max_tokens=None`` asks for the slot's own output limit (family
-        knowledge of the logical Model, narrowed by the Deployment)."""
-        import lib.llm as llm
-        from lib.llm_dispatch import api
-        from lib.model_info import route_output_limit
-
-        seen = []
-
-        def _fake_chat(**kwargs):
-            seen.append(kwargs['max_tokens'])
-            return 'ok', {'completion_tokens': 2}
-
-        monkeypatch.setattr(llm, 'chat', _fake_chat)
-        monkeypatch.setattr(api, 'get_dispatcher',
-                            lambda: _FakeDispatcher([_slot()]))
-        api.dispatch_chat([{'role': 'user', 'content': 'hi'}],
-                          max_tokens=None, log_prefix='[t]')
-        family_limit = route_output_limit(LOGICAL)
-        assert seen == [family_limit] and family_limit > 4096
-
-        monkeypatch.setattr(api, 'get_dispatcher', lambda: _FakeDispatcher(
-            [_slot(max_output_tokens=8192)]))
-        api.dispatch_chat([{'role': 'user', 'content': 'hi'}],
-                          max_tokens=None, log_prefix='[t]')
-        assert seen[-1] == 8192
-
-        monkeypatch.setattr(api, 'get_dispatcher', lambda: _FakeDispatcher(
-            [_slot(max_output_tokens=8192)]))
-        api.dispatch_chat([{'role': 'user', 'content': 'hi'}],
-                          max_tokens=777, log_prefix='[t]')
-        assert seen[-1] == 777
-
     def test_nonstream_request_settlement_prices_logical_model(
             self, monkeypatch):
         """Real dispatch_chat → chat → sealed request → wallet attempt.

@@ -12,30 +12,20 @@ production. ART_DIRECTION.md rev 1 is the art authority."). This file is that ag
 - **View**: 3/4 top-down, orthographic (the view `layout.ts` already uses). Floors seen from above; furniture
   shows its top plus a short front face; no side faces, no vanishing point. Isometric was rejected: it needs new
   geometry, depth sorting and hit-testing and breaks the scene's DOM-order painting (the 62 -> 7 layer fix).
-- **People** (redrawn 2026-11-17 in the scene's sticker style, docs/FRONTEND_ARCHITECTURE.md "Office art
-  direction"): chibi, the head drawn 1.1x its design size (`HEAD_SCALE`) with the chin over the collar, standing
-  height 52 u (`PERSON_H`). Faces carry brows, two-glint eyes and a cel shade on the side away from the window;
-  hair has a lit sheen. Garments and accents are drawn at raised saturation (`vivid`): people carry the scene's
-  colour, surfaces stay muted. Front (down), back (up) and profile (left/right, walking) views, plus a raised
-  hand (seated either way, and standing in the owner's line) and a cheer (arms up, happy face). 1 u = 1 CSS px
-  at scene scale 1.
+- **People**: chibi, 2.5 heads, standing height 52 u (`PERSON_H`). Front (down), back (up) and profile
+  (left/right, walking) views. 1 u = 1 CSS px at scene scale 1.
 - **Silhouettes** (readable at 18 px seated height, also in grayscale): owner side-parted hair and navy suit;
   Global Router headset with boom mic and teal vest; lead tie, rolled sleeves and lanyard; Watchdog peaked
   guard cap and navy uniform; engineer hood and over-ear headphones; researcher top bun, round glasses and lab
   coat; reviewer flat cap and cardigan; writer beret and scarf; analyst green eyeshade visor and sweater vest;
-  executor knit beanie and utility vest; general ponytail and cardigan. Worker kinds and leads have three palette
+  executor knit beanie and utility vest; general ponytail and cardigan. Worker kinds and leads have two palette
   variants (skin, hair, garment) so a crowd is not a row of clones.
 - **Palette**: warm oak/cream day theme (`light`), walnut/navy night theme (`dark`). The scene picks by
   `[data-theme]`: dark and missing -> dark; light and tofu -> light. Ambient colours stay muted.
 - **Signals are reserved**: amber `#F4B740` with a "?" is a decision, red `#B8322A` with a "!" is an exception,
   the gold `#E8B04A` folder with a green star seal is a deliverable. No ambient asset uses these hues.
-- **Furniture** (redrawn 2026-11-17): desks have a bevelled top lit along its back edge, wood grain and a drawer
-  front; task chairs are upholstered in deep teal with a headrest, armrests and a quilted seam; plants are built
-  leaf by leaf (dark far leaves, mid, lit near leaves with a midrib) in glazed pots with soil, as distinct species
-  per variant (pothos, snake plant, fern; monstera, fiddle-leaf fig, palm).
-- **Emphasis** only for decisions, exceptions and deliverables. Files here hold no motion: the scene swaps cells
-  (typing on each person's own beat, a waving hand, the cheer) and draws all other life itself (`life.ts`, `diorama.ts`; the scene-level
-  art direction is docs/FRONTEND_ARCHITECTURE.md, "Office art direction").
+- **Emphasis** only for decisions, exceptions and deliverables. Ambient motion is limited to the scene's shared
+  typing beat (two cells per seated state), lit static screens and real walk-ins. Nothing idles or fidgets.
 - **Light and line**: key light from the window wall (top of the plan); contact shadows are baked into the
   sprites (the scene no longer needs a CSS drop-shadow filter). Character contour 1.25 u, prop contour 1 u, warm
   ink, never pure black. In the night theme every character carries a 1.2 u rim light so it separates from the
@@ -45,18 +35,14 @@ production. ART_DIRECTION.md rev 1 is the art authority."). This file is that ag
 
 ## Contract (what `manifest.generated.ts` promises)
 
-- `CELL`: character sheets are 4 x 15 cells of 40 x 60 u; the feet anchor is (20, 58) in every cell. Seated
+- `CELL`: character sheets are 4 x 11 cells of 40 x 60 u; the feet anchor is (20, 58) in every cell. Seated
   cells are drawn so the scene's 58 % cut (`seatedShown`) lands at the desk edge.
-- `ROWS` (sheet rows, in order): `seated-down`, `seated-up`, `ask-down`, `ask-up`, `walk-{down,left,right,up}`,
-  `carry-{down,left,right,up}`, `wait-up`, `ask-wait`, `cheer`. Walk and carry columns are walk, stand, walk,
-  stand. Cells are not clipped, so the seated rows come first: their empty lower halves take any hat or bun that
-  reaches above the row below.
+- `ROWS` (sheet rows, in order): `walk-{down,left,right,up}`, `carry-{down,left,right,up}`, `seated-down`,
+  `seated-up`, `wait-up`. Walk and carry columns are walk, stand, walk, stand.
 - `STATES` names the scene states: `walk-*`, `carry-*` (with a per-column `hands` anchor for the carried document
   and `docLayer` front/back; documents are not baked in), `work-down|up` (two cells on the shared `beat`),
-  `idle-down|up`, `wait-up` (at the owner's door, holding the document, two cells on the beat), `ask-down|up`
-  (an open owner question at the desk: a hand raised, waving over two cells), `ask-wait` (the same in the owner's
-  line, holding the document in the other hand) and `cheer` (arms up at the top of each hop, then lowered). Every
-  state names its `reduced` cell for `prefers-reduced-motion`.
+  `idle-down|up`, `wait-up` (at the owner's door, holding the document, two cells on the beat). Every state names
+  its `reduced` cell for `prefers-reduced-motion`.
 - `PEOPLE[role]`: one sheet per palette variant, each with a light and a dark URL. The scene loads a 2x lossless
   WebP rendered from the sheet's SVG master (`PEOPLE_MASTERS`); see "People ship as raster" below.
 - `DOCS['report-pile']`: three stacked reports for the scene's in-tray pile (desk box 21 x 26 u).

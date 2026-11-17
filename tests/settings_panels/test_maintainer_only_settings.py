@@ -34,7 +34,6 @@ import os
 import sys
 
 import pytest
-from tests.support.export_toolchain import require_export_toolchain
 
 pytestmark = pytest.mark.unit
 
@@ -162,12 +161,14 @@ def test_strip_is_loud_when_index_drifts(monkeypatch, caplog):
 # ── Export pipeline: exclusion + flag bake + forced sanitize candidates ───
 
 def test_export_excludes_experiments_fragment_in_opensource():
-    export = require_export_toolchain()
+    export = pytest.importorskip(
+        'export', reason='export.py is not shipped in opensource builds')
     assert 'experiments.html' in export.OPENSOURCE_EXTRA_EXCLUDE_FILES
 
 
 def test_export_bakes_opensource_flag_in_settings_panels():
-    export = require_export_toolchain()
+    export = pytest.importorskip(
+        'export', reason='export.py is not shipped in opensource builds')
     src = _read(os.path.join(PROJECT_ROOT, 'lib', 'settings_panels.py'))
     out = export._sanitize_source_opensource(src, 'lib/settings_panels.py')
     assert "TOFU_OPENSOURCE_BUILD', '1'" in out, (
@@ -181,7 +182,8 @@ def test_opensource_fixed_candidates_cover_flag_bake_files():
     """The flag bake is filepath-gated but the sanitize pass is rg-trigger
     driven — these files contain NO trigger substring, so they MUST be
     force-listed or the bake silently never runs in the exported tree."""
-    export = require_export_toolchain()
+    export = pytest.importorskip(
+        'export', reason='export.py is not shipped in opensource builds')
     for rel in ('lib/mcp/registry.py', 'lib/settings_panels.py'):
         assert rel in export._OPENSOURCE_FIXED_CANDIDATES, rel
         content = _read(os.path.join(PROJECT_ROOT, *rel.split('/')))

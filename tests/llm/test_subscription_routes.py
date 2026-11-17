@@ -175,34 +175,6 @@ def test_probe_singleflight_is_per_host_and_route():
         manager.close()
 
 
-def test_a_probe_settling_during_a_burst_is_never_repeated():
-    """Callers that saw the route due while its probe settled reuse that
-    measurement; none submits a second probe of the route it just measured."""
-    route = _route('direct')
-    for _attempt in range(100):
-        calls = 0
-        calls_lock = threading.Lock()
-
-        def probe(_url, _route):
-            nonlocal calls
-            with calls_lock:
-                calls += 1
-            return ProbeResult('ok', 12.0, 401)
-
-        manager = RouteManager(probe=probe, jitter=lambda value: value)
-        threads = [threading.Thread(target=manager.candidates, args=(
-            'https://chatgpt.com/backend-api/codex/responses', [route]),
-            kwargs={'wait_timeout': 1}) for _ in range(6)]
-        try:
-            for thread in threads:
-                thread.start()
-            for thread in threads:
-                thread.join(5)
-            assert calls == 1
-        finally:
-            manager.close()
-
-
 def test_max_pool_plus_direct_and_env_all_enter_same_cold_race():
     release = threading.Event()
     all_entered = threading.Event()

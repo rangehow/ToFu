@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from tests.support.overlay import requires_private_overlay
+from tests.support.overlay import requires_yourprovider_overlay
 
 from lib.llm.body import build_body
 from lib.model_routing.inference import resolve_inference_profile
@@ -54,7 +54,7 @@ def test_explicit_none_and_ladderless_dialects_are_not_rebound():
 
 @pytest.mark.parametrize('depth,effort', [('xhigh', 'xhigh'), ('max', 'max'),
                                           ('default', 'medium'), ('off', 'low')])
-@requires_private_overlay
+@requires_yourprovider_overlay
 def test_shipped_tokrouter_claude_route_prepares_a_responses_request(monkeypatch, depth, effort):
     from lib.llm._sse_core import prepare_request
     from lib.model_routing import compile_candidates

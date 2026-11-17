@@ -28,7 +28,7 @@ enqueued.
 
 Entry points: ``settle``, ``is_settled``, ``settled_retained_bytes``,
 ``detach_sharing_settled``, ``detach_frame_sharing_settled``, ``derive_rows``,
-``memo_get`` / ``memo_put``, ``run_memo_get`` / ``run_memo_put``, ``rows_memo``.
+``memo_get`` / ``memo_put``, ``run_memo_get`` / ``run_memo_put``.
 
 Dependencies: standard library only. This is a sidecar-shared contract module
 (``scripts/check_architecture.py``): the storage sidecar imports projection
@@ -49,7 +49,7 @@ __all__ = [
     'UnsettleableValue', 'compact_json_bytes', 'derive_rows',
     'detach_frame_sharing_settled', 'detach_sharing_settled', 'interchangeable',
     'is_settled', 'json_array_text', 'memo_get',
-    'memo_put', 'rows_memo', 'run_memo_get', 'run_memo_put', 'settle', 'settle_items',
+    'memo_put', 'run_memo_get', 'run_memo_put', 'settle', 'settle_items',
     'settle_or_none', 'settle_unless_same', 'settled_retained_bytes',
 ]
 
@@ -339,26 +339,6 @@ def run_memo_put(rows: Any, length: int, key: Any, value: Any) -> Any:
     if length > 1:
         memo_put(rows[0], key, _RunMemo(tuple(islice(rows, 1, length)), value))
     return value
-
-
-def rows_memo(rows: Any, key: Any, compute: Any) -> Any:
-    """``compute()``, memoized while ``rows`` holds exactly the same settled rows.
-
-    ``compute`` must be a pure function of those rows; anything else it reads
-    belongs in ``key``. Rows that are not all settled are never memoized.
-    """
-    rows = tuple(rows)
-    if not rows or not all(map(is_settled, rows)):
-        return compute()
-    if len(rows) == 1:
-        held = memo_get(rows[0], (key, 'single'))
-        if held is None:
-            held = memo_put(rows[0], (key, 'single'), (compute(),))
-        return held[0]
-    length, held = run_memo_get(rows, key)
-    if length != len(rows):
-        held = run_memo_put(rows, len(rows), key, (compute(),))
-    return held[0]
 
 
 def settled_retained_bytes(row: Any) -> int:

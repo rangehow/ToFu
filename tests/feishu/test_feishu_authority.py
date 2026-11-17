@@ -25,16 +25,6 @@ GUEST = 'ou_guest'
 STRANGER = 'ou_stranger'
 
 
-class _NoBindings:
-    """A storage client holding no project coordination bindings."""
-
-    def __call__(self, write=False):
-        return self
-
-    def query(self, operation, payload, deadline=None):
-        return [] if operation == 'record.list' else None
-
-
 @pytest.fixture
 def bridge(monkeypatch, tmp_path):
     """Owner 7 has one registered project; the guest is only allowlisted."""
@@ -50,17 +40,9 @@ def bridge(monkeypatch, tmp_path):
     monkeypatch.setattr(feishu_state, 'ALLOWED_USERS', {GUEST})
     monkeypatch.setattr(feishu_state, 'DEFAULT_PROJECT_PATH', str(tmp_path / 'unregistered-default'))
     monkeypatch.setattr(conversation, 'feishu_user_sessions', FeishuUserSessionStore(capacity=16))
-    folders = tmp_path / 'folders.json'
-    monkeypatch.setattr('lib.conversations.folders.folder_store_path', lambda: str(folders))
-    monkeypatch.setattr('lib.storage.get_storage_client', _NoBindings())
-
-    def register(*paths):
-        """The owner's project folders: registration, unlike opening a project (recent history)."""
-        folders.write_text(json.dumps([{'id': f'f{index}', 'name': os.path.basename(path), 'ownerUserId': 7,
-                                        'projectPaths': [path]} for index, path in enumerate(paths)]))
-    register(str(project))
+    registered = {7: [{'path': str(project)}]}
     monkeypatch.setattr('lib.project_mod.config.get_recent_projects',
-                        lambda *, user_id: [{'path': str(outside)}])
+                        lambda *, user_id: list(registered.get(user_id, [])))
     events._processed_msgs.clear()
     sent = []
     monkeypatch.setattr(events, 'send_text', lambda message_id, text, **kw: sent.append(text))
@@ -75,7 +57,7 @@ def bridge(monkeypatch, tmp_path):
     monkeypatch.setattr(pipeline, 'persist_exchange',
                         lambda sender, user, answer: persisted.append((sender, user)) or True)
     return mock.Mock(project=project, outside=outside, sent=sent, runs=runs, persisted=persisted,
-                     register=register)
+                     registered=registered)
 
 
 def _message(text, open_id, message_id):
@@ -155,7 +137,7 @@ def test_file_commands_require_a_registered_project(bridge):
     execute.assert_not_called()
     assert '/project' in reply
     commands.dispatch_command(owner, '/project proj')
-    bridge.register()  # Unregistering revokes access to the selection.
+    bridge.registered[7] = []  # Unregistering revokes access to the selection.
     with mock.patch('lib.project_mod.tools.execute_tool') as execute:
         commands.dispatch_command(owner, '/ls .')
     execute.assert_not_called()
@@ -186,13 +168,13 @@ def test_tool_mode_binds_the_registered_project_for_the_owner_only(bridge, monke
     pipeline.run_task_pipeline(owner, 'run the tests', source_message_id='m-tool')
     config = bridge.runs[-1]['config']
     assert config['projectPath'] == str(bridge.project) and 'project_path' not in config
-    bridge.register()
+    bridge.registered[7] = []
     pipeline.run_task_pipeline(owner, 'again', source_message_id='m-tool-2')
     assert 'projectPath' not in bridge.runs[-1]['config']
     monkeypatch.setenv('FEISHU_DEFAULT_OWNER_USER_ID', '7')
     conversation.set_mode(GUEST, 'tool')
     conversation.set_project(GUEST, str(bridge.project))
-    bridge.register(str(bridge.project))
+    bridge.registered[7] = [{'path': str(bridge.project)}]
     pipeline.run_task_pipeline(resolve_sender(GUEST), 'read secrets', source_message_id='m-guest')
     assert 'projectPath' not in bridge.runs[-1]['config']
     assert bridge.runs[-1]['execution_profile'] == THIRD_PARTY_TEXT

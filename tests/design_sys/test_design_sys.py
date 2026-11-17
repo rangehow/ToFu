@@ -156,24 +156,6 @@ class TestThemes:
                 assert fonts.get_font(fid), f'{t.id}.{role} → unknown {fid}'
             assert t.scenario in themes.SCENARIOS
 
-    def test_text_colors_meet_wcag_aa_against_the_background(self):
-        """Captions are set in ``muted`` at 14px: WCAG 2.x AA requires 4.5:1
-        for text that size (https://www.w3.org/TR/WCAG21/#contrast-minimum).
-        Ten themes were below it and the visual review refused their pages."""
-        def luminance(hex_color):
-            channels = [int(hex_color[i:i + 2], 16) / 255 for i in (1, 3, 5)]
-            r, g, b = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
-                       for c in channels]
-            return 0.2126 * r + 0.7152 * g + 0.0722 * b
-
-        def ratio(a, b):
-            high, low = sorted((luminance(a), luminance(b)), reverse=True)
-            return (high + 0.05) / (low + 0.05)
-
-        for t in themes.THEMES:
-            for role in ('ink', 'muted'):
-                assert ratio(t.colors[role], t.colors['bg']) >= 4.5, (t.id, role)
-
     def test_every_scenario_has_a_default_theme(self):
         for sid in themes.SCENARIOS:
             t = themes.get_theme(themes.default_theme_id(sid))

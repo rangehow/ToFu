@@ -379,6 +379,10 @@ def try_path_lock(session_dir, path):
                 _release(directory, key, owner_pid)
 
 
+def holds_path(session_dir, path):
+    return (os.path.abspath(session_dir), path_key(path)) in _thread_holds()
+
+
 def held_paths(session_dir):
     """Lock keys this thread holds in ``session_dir``."""
     directory = os.path.abspath(session_dir)

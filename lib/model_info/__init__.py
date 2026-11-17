@@ -102,7 +102,6 @@ from lib.model_info._limits import (  # noqa: E402,F401
     _parse_token_limit_from_error,
     _parse_token_limit_evidence,
     _route_output_limit_key,
-    route_output_limit,
     TokenLimitEvidence,
 )
 
@@ -159,7 +158,7 @@ __all__ = [
     '_clamp_max_tokens', '_clamp_route_max_tokens', '_learn_model_limit',
     '_load_learned_limits',
     '_parse_token_limit_from_error', '_parse_token_limit_evidence',
-    '_route_output_limit_key', 'route_output_limit',
+    '_route_output_limit_key',
     'TokenLimitEvidence', '_LEARNED_MODEL_LIMITS',
     '_LEARNED_ROUTE_LIMITS', '_limits_lock',
     # video frame budget

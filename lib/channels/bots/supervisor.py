@@ -90,8 +90,11 @@ def bridge_state(owner: int, channel: str) -> str:
 
 
 def _credential_present(account: dict) -> bool:
-    from lib.credentials_vault import has_entry
-    return has_entry(str((account.get('credential') or {}).get('name') or ''))
+    name = str((account.get('credential') or {}).get('name') or '')
+    if not name:
+        return False
+    from lib.credentials_vault import list_entries
+    return any(entry.get('name') == name for entry in list_entries())
 
 
 def reconcile_owner(owner: int, channel: str, *, store: ChannelStore | None = None,

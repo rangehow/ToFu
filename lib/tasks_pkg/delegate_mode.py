@@ -117,7 +117,7 @@ def delegate_mode_active(task: Mapping | None) -> bool:
 
 
 def _tool_name(tool: Any) -> str:
-    from lib.tools.contracts import tool_schema_name
+    from lib.swarm.routing import tool_schema_name
     return tool_schema_name(tool)
 
 

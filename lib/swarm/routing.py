@@ -24,9 +24,8 @@ Entry points: :func:`resolve_multi_agent_backend`,
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
-
-from lib.tools.contracts import tool_schema_name
 
 
 
@@ -46,6 +45,16 @@ READ_ONLY_AGENT_EXTRA_BAN = frozenset({
     # root; poll there could wait on another lane and deadlock the root.
     'poll', 'kill',
 })
+
+
+def tool_schema_name(tool: Any) -> str:
+    """Return a function tool's name without assuming one wire dialect."""
+    if not isinstance(tool, dict):
+        return ''
+    function = tool.get('function')
+    if isinstance(function, dict):
+        return str(function.get('name') or '')
+    return str(tool.get('name') or '')
 
 
 def catalog_has_spawn_agents(catalog: Any) -> bool:
@@ -125,7 +134,7 @@ def project_multi_agent_wire_tools(
     planes, so the native projection removes the local spawn primitive.  The
     local projection makes the authority-owned schema directly visible even
     when Tool Search would otherwise defer it, without a local wave-size
-    ceiling. Its copy of the edited path preserves the authority catalog. Stage guidance stays
+    ceiling. Its private copy preserves the authority catalog. Stage guidance stays
     out of the wire surface: per-round tail text drifted the cache prefix
     (9afe2a467), and read-only authority is enforced at the dispatch
     boundary instead.
@@ -142,25 +151,18 @@ def project_multi_agent_wire_tools(
     if not isinstance(source, dict):
         return visible
 
-    # Copy only the path this projection edits, so it never mutates the
-    # authority catalog; every later wire stage is copy-on-write. Accepted
-    # work has no local wave-size quota.
-    spawn = dict(source)
+    # Keep a private schema copy so projecting permissions never mutates
+    # the authority catalog. Accepted work has no local wave-size quota.
+    spawn = deepcopy(source)
     function = spawn.get('function')
-    if isinstance(function, dict):
-        function = spawn['function'] = dict(function)
-    else:
+    if not isinstance(function, dict):
         function = spawn
     parameters = function.get('parameters')
     if isinstance(parameters, dict):
-        parameters = function['parameters'] = dict(parameters)
         properties = parameters.get('properties')
-        if isinstance(properties, dict):
-            properties = parameters['properties'] = dict(properties)
-            agents = properties.get('agents')
-            if isinstance(agents, dict):
-                properties['agents'] = {
-                    key: value for key, value in agents.items() if key != 'maxItems'}
+        agents = properties.get('agents') if isinstance(properties, dict) else None
+        if isinstance(agents, dict):
+            agents.pop('maxItems', None)
 
     out: list[dict[str, Any]] = []
     inserted = False

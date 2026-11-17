@@ -7865,7 +7865,7 @@
         );
         assert_eq!(
             execute(&mut database, &changed_replay, 5_000).unwrap_err(),
-            SemanticExecutionError::Conflict
+            SemanticExecutionError::ConflictFence(crate::semantic_executor::COMMAND_ID_REUSED)
         );
 
         let conversation_get = request(
@@ -11107,7 +11107,7 @@
         );
         assert_eq!(
             execute(&mut database, &reused, 3_000).unwrap_err(),
-            SemanticExecutionError::Conflict
+            SemanticExecutionError::ConflictFence(crate::semantic_executor::COMMAND_ID_REUSED)
         );
     }
 

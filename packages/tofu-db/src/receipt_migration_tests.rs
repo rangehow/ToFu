@@ -66,7 +66,7 @@ fn scoped_receipt_snapshot_reopens_replays_exact_response_and_fences_reuse() {
             db.receipt_lookup(&mut tx, "historical-command", "record.put", [4; 32])
                 .unwrap_err()
                 .kind(),
-            io::ErrorKind::WouldBlock
+            io::ErrorKind::AlreadyExists
         );
         for (tenant, owner) in [(7, 12), (8, 11)] {
             let mut foreign = db.begin(tenant, owner).unwrap();
@@ -252,7 +252,7 @@ fn large_plain_receipt_restores_reopens_and_replays_complete_owner_scoped_bytes(
         db.receipt_lookup(&mut tx, "large-plain-command", "record.put", [4; 32])
             .unwrap_err()
             .kind(),
-        io::ErrorKind::WouldBlock
+        io::ErrorKind::AlreadyExists
     );
     let mut foreign = db.begin(7, 12).unwrap();
     assert!(db

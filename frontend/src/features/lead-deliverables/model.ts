@@ -1,4 +1,4 @@
-/** Lead deliverables: the one item model the classic sidebar list and the studio office share.
+/** Lead deliverables: the one item model the conversation's right-hand panel and the studio office share.
  *
  * Items come from the server projection (GET /api/v4/project/coordination/deliverables,
  * `deliverableItem` in contracts/project_coordination_v1.schema.json; docs/PROJECT_COORDINATION.md
@@ -6,7 +6,8 @@
  * same identities (`report:<turn>`, `merge:<assignment>:<turn>`), so `reportDeliverable` and
  * `mergeDeliverable` build the server's item from what the office already read.
  * Pure. Entry points: appendDeliverables, reportDeliverable, mergeDeliverable, deliverableTarget,
- * deliverableProject, deliverableAge. Dependencies: the generated wire types.
+ * deliverableProject, deliverableAge, deliverableVisual, deliverableDays, deliverableDayLabel,
+ * deliverablePreview. Dependencies: the generated wire types.
  */
 import type { LeadDeliverable, LeadDeliverableKind, LeadDeliverablePage, LeadDeliverableTurn } from '../../api/project-coordination.generated';
 
@@ -62,7 +63,7 @@ export function mergeDeliverable(result: {
   };
 }
 
-/** The project's folder name: the sidebar is narrow and the full path is the tooltip. */
+/** The project's folder name: the panel is narrow and the full path is the tooltip. */
 export function deliverableProject(path: string): string {
   const parts = path.replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean);
   return parts[parts.length - 1] || path;
@@ -77,4 +78,70 @@ export function deliverableAge(createdAt: number, now: number, locale?: string):
   const difference = createdAt - now;
   const [unit, divisor] = UNITS.find(([, size]) => Math.abs(difference) >= size) || UNITS[UNITS.length - 1];
   return new Intl.RelativeTimeFormat(locale || undefined, { numeric: 'auto' }).format(Math.trunc(difference / divisor), unit);
+}
+
+/** What a row looks like: a report by its own kind, a file by its format. */
+export type DeliverableVisual =
+  | 'delivery' | 'progress' | 'decision' | 'blocked' | 'report'
+  | 'deck' | 'pdf' | 'sheet' | 'image' | 'document' | 'file' | 'merge';
+
+const SHEET_FORMATS = new Set(['xlsx', 'xls', 'csv', 'tsv']);
+const IMAGE_FORMATS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg']);
+
+export function deliverableVisual(item: LeadDeliverable): DeliverableVisual {
+  if (item.kind === 'report') return item.reportKind || 'report';
+  if (item.kind !== 'file') return item.kind;
+  const format = (item.format || /\.([a-z0-9]+)$/i.exec(item.title)?.[1] || '').toLowerCase();
+  if (format === 'pdf') return 'pdf';
+  if (SHEET_FORMATS.has(format)) return 'sheet';
+  if (IMAGE_FORMATS.has(format)) return 'image';
+  return 'file';
+}
+
+export interface DeliverableDay { key: string; start: number; items: LeadDeliverable[] }
+
+function dayStart(time: number): number {
+  const day = new Date(time);
+  day.setHours(0, 0, 0, 0);
+  return day.getTime();
+}
+
+/** Consecutive items by local calendar day, in list order (newest first). */
+export function deliverableDays(items: ReadonlyArray<LeadDeliverable>): DeliverableDay[] {
+  const days: DeliverableDay[] = [];
+  for (const item of items) {
+    const start = item.createdAt ? dayStart(item.createdAt) : 0;
+    const key = String(start);
+    const last = days[days.length - 1];
+    if (last && last.key === key) last.items.push(item);
+    else days.push({ key, start, items: [item] });
+  }
+  return days;
+}
+
+/** "Today", "Yesterday", then the weekday and date (with the year once it differs). */
+export function deliverableDayLabel(start: number, now: number, locale?: string): string {
+  if (!start) return '';
+  const days = Math.round((dayStart(now) - start) / 86_400_000);
+  if (days >= 0 && days < 2) {
+    const word = new Intl.RelativeTimeFormat(locale || undefined, { numeric: 'auto' }).format(-days, 'day');
+    return word.charAt(0).toLocaleUpperCase(locale || undefined) + word.slice(1);
+  }
+  const sameYear = new Date(start).getFullYear() === new Date(now).getFullYear();
+  return new Intl.DateTimeFormat(locale || undefined, {
+    weekday: 'short', month: 'short', day: 'numeric', ...(sameYear ? {} : { year: 'numeric' }),
+  }).format(start);
+}
+
+/** The hover preview: the whole (displayed) title, the exact time and the report's opening paragraph as plain text. */
+export function deliverablePreview(item: LeadDeliverable, locale?: string): string {
+  const copy = deliverableCopy(item);
+  // A translated title keeps the original as written right below it.
+  const lines = copy.title === item.title ? [item.title] : [copy.title, item.title];
+  if (item.createdAt) lines.push(new Date(item.createdAt).toLocaleString(locale || undefined));
+  const opening = copy.summary.trim().split(/\n\s*\n/)[0]
+    .replace(/^#+\s*/gm, '').replace(/^\s*[-*]\s+/gm, '• ').replace(/(\*\*|__|`)/g, '').trim();
+  if (opening) lines.push('', opening);
+  if (item.files?.length) lines.push('', ...item.files.map(file => `↗ ${file.filename}`));
+  return lines.join('\n');
 }

@@ -5,11 +5,14 @@ import pushSource from '../runtime/sections/push.js?raw';
 import { createProjectCoordinationSurface } from './project-coordination-surface';
 import { createSameTaskReadJoin } from './project-coordination-read-join';
 import { createCoordinatorConversationGroups } from './coordinator-conversation-group';
+import { backgroundAgentContextHost } from '../agent-sidebar-dock';
 import type { ProjectCoordinationPorts } from './project-coordination';
 
 import { createProjectConversationNavigation } from './project-conversation-navigation';
 import { LANDING_STORAGE_KEY, rememberLanding } from '../application-shell/landing';
 vi.mock('../i18n', () => ({ t: (key: string) => key }));
+// The composed runtime's prelude import every presence.js harness below resolves as a free identifier.
+Object.assign(globalThis, { backgroundAgentContextHost });
 const passiveReads = { coordinatorReports: async () => undefined, coordinatorBudget: async () => null, coordinatorProgress: async () => null,
   workerConversations: async () => ({ conversations: [], nextCursor: null, coverage: 'complete' }) };
 // presence.js also bridges the Global Router, its owner delegation and the Watchdog entries; these coordination specs stub them.
@@ -35,10 +38,8 @@ it('mounts the leader above date groups using explicit binding without promoting
     );
     await vi.waitFor(() => expect(document.querySelector('[data-coordinator-id="leader"]')).not.toBeNull());
     const entry = document.getElementById('projectCoordinatorEntry')!;
-    // The entry's deliverables slot follows it, then the list.
-    const deliverablesSlot = entry.nextElementSibling as HTMLElement;
-    expect(deliverablesSlot.className).toBe('lead-deliverables-slot');
-    expect(deliverablesSlot.nextElementSibling?.id).toBe('convList');
+    // The list follows the entry; reports and files live in the lead's conversation, not here.
+    expect(entry.nextElementSibling?.id).toBe('convList');
     const row = entry.querySelector<HTMLElement>('.coordination-leader')!;
     expect([...row.querySelectorAll('button')].map(button => button.getAttribute('aria-label'))).toEqual(['sidebar.copyConvId']);
     row.click();
@@ -203,10 +204,8 @@ it('bridges the main coordinator card and health checks to their typed owners an
     // No pinned rows above New Chat: the main coordinator takes the leader slot of the list.
     expect(document.querySelector('#sidebar .sidebar-header')!.nextElementSibling!.className).toBe('sidebar-action-row');
     const slot = document.getElementById('globalRouterEntry')!;
-    // The main coordinator's card is followed by its deliverables slot, then the project entry.
-    const routerDeliverables = slot.nextElementSibling as HTMLElement;
-    expect(routerDeliverables.className).toBe('lead-deliverables-slot');
-    expect(routerDeliverables.nextElementSibling!.id).toBe('projectCoordinatorEntry');
+    // The main coordinator's card is followed by the project entry.
+    expect(slot.nextElementSibling!.id).toBe('projectCoordinatorEntry');
     expect(slot.parentElement!.className).toBe('coordination-conversation-column');
     const card = slot.querySelector<HTMLElement>('.coordination-leader.global-router-card')!;
     expect(card.querySelector('.coordination-leader-label')!.textContent).toBe('globalRouter.entry');
@@ -354,7 +353,7 @@ function presencePorts(project: Record<string, unknown>): ProjectCoordinationPor
     'openProjectCoordinationWorkspace', 'getActiveConv', 'Api', 'getFolders', 'getActiveFolderId',
     'loadConversation', '_projectConversationNavigation', 'createCoordinatorConversationGroups', 'const conversations = [];\n' + routerStub + 'const mergeConversationCatalogRows = () => 0; const renderConversationList = () => {};\n' + source)(
     {}, vi.fn(), vi.fn(), (ports: { scope(): ProjectCoordinationPorts | null }) => {
-      mounted.push(ports); return { refresh() {}, destroy() {} };
+      mounted.push(ports); return { refresh() {}, destroy() {}, coordinatorId() { return ''; } };
     }, createSameTaskReadJoin, vi.fn(), () => ({ id: 'leader', projectPath: '/project' }), { project },
     () => [{ id: 'folder', projectPaths: ['/project'] }], () => 'folder', vi.fn(), createProjectConversationNavigation(), createCoordinatorConversationGroups,
   );
@@ -462,8 +461,9 @@ it.each([
 
 /** presence.js over a mutable folder list, with the main coordinator card and the folder settings opener. */
 function mountFolderView(folders: { id: string; name: string; projectPaths: string[] }[], selected: () => string,
-  reads: Record<string, unknown>, conversations: unknown[] = [], loadLeadDeliverables?: () => Promise<unknown>) {
-  document.body.innerHTML = '<div id="convList"></div><div id="presenceStrip"></div>';
+  reads: Record<string, unknown>, conversations: unknown[] = [], loadLeadDeliverables?: () => Promise<unknown>,
+  active: () => unknown = () => null, chatHtml = '') {
+  document.body.innerHTML = '<div id="convList"></div><div id="presenceStrip"></div>' + chatHtml;
   const runtime: Record<string, any> = {}, settings = vi.fn();
   const stub = 'const createGlobalRouterEntry = () => ({ refresh() {}, destroy() {}, home() { return "/data/router/1"; }, conversationId() { return "coordinator-router"; } });\n'
     + 'const createRouterWatchdogEntry = () => ({ refresh() {}, destroy() {}, location() { return ""; }, conversationId() { return ""; } });\n'
@@ -471,11 +471,11 @@ function mountFolderView(folders: { id: string; name: string; projectPaths: stri
   new Function('runtimeScope', 'pushSubscribe', 'pushUnsubscribe', 'createProjectCoordinationSurface', 'createSameTaskReadJoin',
     'openProjectCoordinationWorkspace', 'getActiveConv', 'Api', 'getFolders', 'getActiveFolderId',
     'loadConversation', '_projectConversationNavigation', 'createCoordinatorConversationGroups', '_promptRenameFolder', 'conversations',
-    'loadLeadDeliverables',
+    'loadLeadDeliverables', 'backgroundAgentContextHost',
     stub + 'const mergeConversationCatalogRows = () => 0; const renderConversationList = () => {};\n' + source)(
-    runtime, vi.fn(), vi.fn(), createProjectCoordinationSurface, createSameTaskReadJoin, vi.fn(), () => null, { project: reads },
+    runtime, vi.fn(), vi.fn(), createProjectCoordinationSurface, createSameTaskReadJoin, vi.fn(), active, { project: reads },
     () => folders, selected, vi.fn(), createProjectConversationNavigation(), createCoordinatorConversationGroups, settings, conversations,
-    loadLeadDeliverables,
+    loadLeadDeliverables, backgroundAgentContextHost,
   );
   return { runtime, settings };
 }
@@ -527,8 +527,8 @@ it.each(['/srv/测试项目', '/srv/プロジェクト'.normalize('NFD'), '/srv/
       await vi.waitFor(() => expect(document.querySelector('#projectCoordinatorEntry [data-coordinator-id="leader"]')).not.toBeNull());
       runtime.presenceRefresh();
       await vi.waitFor(() => expect(reads.workerConversations).toHaveBeenCalledWith(root, undefined, expect.any(AbortSignal)));
-      // The archive group follows the entry's deliverables slot.
-      const group = document.querySelector<HTMLElement>('#projectCoordinatorEntry + .lead-deliverables-slot + .coordinator-conversations-host .coordinator-conversations');
+      // The archive group follows the entry.
+      const group = document.querySelector<HTMLElement>('#projectCoordinatorEntry + .coordinator-conversations-host .coordinator-conversations');
       await vi.waitFor(() => expect(group?.hidden).toBe(false));
       expect(group!.dataset.coordinatorId).toBe('leader');
       expect(group!.querySelector('.coordinator-conversations-count')!.textContent).toBe('1');
@@ -542,45 +542,87 @@ it.each(['chat', 'world'] as const)('shows a lead\'s work as plain rows in the s
   localStorage.setItem(LANDING_STORAGE_KEY, landing);
   const reads = coordinatorReads();
   const worker = { id: 'worker', title: 'Worker', projectPath: '/project', folderId: 'folder', _coordinatorSource: 'leader', updatedAt: 2 };
-  let deliverablesLead = '';
-  const deliverables = {
-    root: Object.assign(document.createElement('section'), { className: 'lead-deliverables' }),
-    show: vi.fn((target: { leadId: string }) => { deliverablesLead = target.leadId; }),
-    hide: vi.fn(() => { deliverablesLead = ''; }),
-    leadId: () => deliverablesLead, destroy: vi.fn(),
-  };
-  const opener = { open: vi.fn(), openSource: vi.fn() };
-  const loadLeadDeliverables = vi.fn(async () => ({
-    createLeadDeliverables: () => deliverables, createDeliverableOpener: () => opener, runtimeOpenPorts: () => ({}),
-  }));
+  const { deliverables, loadLeadDeliverables } = deliverablesStub();
   const { runtime } = mountFolderView([{ id: 'folder', name: 'Project', projectPaths: ['/project'] }], () => 'folder', reads, [worker],
     loadLeadDeliverables);
-  const deliverablesSlot = () => document.querySelector<HTMLElement>('#projectCoordinatorEntry + .lead-deliverables-slot')!;
   try {
     await vi.waitFor(() => expect(document.querySelector('#projectCoordinatorEntry [data-coordinator-id="leader"]')).not.toBeNull());
     await vi.waitFor(() => expect(reads.coordinatorProgress).toHaveBeenCalled());
     runtime.presenceRefresh();
     await nextTask();
-    // The Coordinator row, its 成果 list and its Worker list with their running tally; no office slot, scene or reads.
-    const group = document.querySelector<HTMLElement>('#projectCoordinatorEntry + .lead-deliverables-slot + .coordinator-conversations-host .coordinator-conversations');
+    // The Coordinator row and its Worker list with their running tally; no office slot, scene, reads or deliverables.
+    const group = document.querySelector<HTMLElement>('#projectCoordinatorEntry + .coordinator-conversations-host .coordinator-conversations');
     await vi.waitFor(() => expect(group?.hidden).toBe(false));
     expect(group!.querySelector('.coordinator-conversations-count')!.textContent).toBe('1');
     expect(document.querySelector('.lead-office-slot, .lead-office')).toBeNull();
     expect(reads.coordinationAssignments).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(deliverables.show).toHaveBeenCalledWith({ leadId: 'leader', path: '/project' }));
-    expect(deliverablesSlot().hidden).toBe(false);
-    expect(deliverables.root.parentElement).toBe(deliverablesSlot());
+    expect(document.querySelector('.lead-deliverables, .lead-deliverables-slot')).toBeNull();
     // Switching the stored mode either way changes nothing in the sidebar.
     rememberLanding(landing === 'chat' ? 'world' : 'chat');
     runtime.presenceRefresh();
     await nextTask();
     expect(document.querySelector('.lead-office-slot, .lead-office')).toBeNull();
-    expect(deliverablesSlot().hidden).toBe(false);
-    expect(deliverablesLead).toBe('leader');
+    expect(document.querySelector('.lead-deliverables, .lead-deliverables-slot')).toBeNull();
     expect(group!.hidden).toBe(false);
   } finally { window.dispatchEvent(new Event('pagehide')); localStorage.removeItem(LANDING_STORAGE_KEY); }
+  // No lead conversation was open, so the section module never loaded.
+  expect(loadLeadDeliverables).not.toHaveBeenCalled();
+});
+
+function deliverablesStub() {
+  let lead = '';
+  const deliverables = {
+    root: Object.assign(document.createElement('section'), { className: 'lead-deliverables' }),
+    show: vi.fn((target: { leadId: string }) => { lead = target.leadId; }),
+    place: vi.fn(),
+    hide: vi.fn(() => { lead = ''; }),
+    leadId: () => lead, destroy: vi.fn(),
+  };
+  const opener = { open: vi.fn(), openSource: vi.fn() };
+  const loadLeadDeliverables = vi.fn(async () => ({
+    createLeadDeliverables: () => deliverables, createDeliverableOpener: () => opener, runtimeOpenPorts: () => ({}),
+  }));
+  return { deliverables, loadLeadDeliverables };
+}
+
+// Owner request 2026-11-17: a lead's reports and files sit in the right-hand panel of its own
+// conversation (the round's context card; its fold on a narrow pane), not in the left sidebar.
+it('mounts the reports and files in the open lead conversation\'s context panel, never in the sidebar', async () => {
+  const reads = coordinatorReads();
+  const { deliverables, loadLeadDeliverables } = deliverablesStub();
+  let active = { id: 'leader' };
+  const chat = '<div id="chatInner"><div class="conversation-surface" data-conversation-id="leader">'
+    + '<div class="conversation-turn" data-lane-id="main" data-turn-role="user" data-turn-id="t1">'
+    + '<div class="conversation-block--context"></div>'
+    + '<div data-conversation-part="turn-context-rail"><div data-conversation-part="turn-context-card"><div class="tctx-head"></div>'
+    + '<section class="agent-dock"></section></div></div></div></div></div>';
+  const { runtime } = mountFolderView([{ id: 'folder', name: 'Project', projectPaths: ['/project'] }], () => 'folder', reads, [],
+    loadLeadDeliverables, () => active, chat);
+  const card = document.querySelector<HTMLElement>('[data-conversation-part="turn-context-card"]')!;
+  try {
+    await vi.waitFor(() => expect(document.querySelector('#projectCoordinatorEntry [data-coordinator-id="leader"]')).not.toBeNull());
+    runtime.presenceRefresh();
+    await vi.waitFor(() => expect(deliverables.show).toHaveBeenCalledWith({ leadId: 'leader', path: '/project' }));
+    // After the round's facts, ahead of the background agents section; the rail track pass reaches the same mount.
+    expect(deliverables.root.parentElement).toBe(card);
+    expect(deliverables.root.nextElementSibling!.className).toBe('agent-dock');
+    expect(deliverables.place).toHaveBeenLastCalledWith('rail');
+    expect(runtime.mountLeadDeliverables).toEqual(expect.any(Function));
+    expect(document.querySelector('.coordination-conversation-column .lead-deliverables')).toBeNull();
+    // A pane without a rail track: the round's in-flow fold.
+    (card.parentElement as HTMLElement).hidden = true;
+    runtime.mountLeadDeliverables();
+    expect(deliverables.root.parentElement!.className).toBe('conversation-block--context');
+    expect(deliverables.place).toHaveBeenLastCalledWith('fold');
+    // Another conversation: the section leaves.
+    active = { id: 'ordinary' };
+    runtime.presenceRefresh();
+    expect(deliverables.hide).toHaveBeenCalled();
+    expect(deliverables.root.isConnected).toBe(false);
+  } finally { window.dispatchEvent(new Event('pagehide')); }
   expect(deliverables.destroy).toHaveBeenCalled();
   expect(loadLeadDeliverables).toHaveBeenCalledTimes(1);
+  expect(runtime.mountLeadDeliverables).toBeUndefined();
 });
 
 it('issues each coordination read once per push frame for the canvas and sidebar together', async () => {

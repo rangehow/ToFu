@@ -22257,43 +22257,39 @@ let backgroundConversationActivity = new Map();
   });
   }
   /* Narrow bridge to the typed lead deliverables (features/lead-deliverables/list.ts),
-   * loaded when a lead first shows in the sidebar; delete with the retained presence
-   * adapter. A lead's 成果 list sits right after its sidebar entry, above the archive
-   * of conversations it started. The sidebar is the classic view's alone (the studio,
-   * #/world, hides it and opens the same deliverables from its own office), so it
-   * holds plain rows only: no office scene is ever mounted here. */
-  var projectDeliverablesSlot = document.createElement('div');
-  projectDeliverablesSlot.className = 'lead-deliverables-slot';
-  projectDeliverablesSlot.hidden = true;
-  sidebar.after(projectDeliverablesSlot);
-  var routerDeliverablesSlot = document.createElement('div');
-  routerDeliverablesSlot.className = 'lead-deliverables-slot';
-  routerDeliverablesSlot.hidden = true;
-  var leadDeliverablesModule = null, leadDeliverablesLoading = null, leadDeliverableLists = {};
+   * loaded when a lead's conversation is first open; delete with the retained presence
+   * adapter. Owner request 2026-11-17: a lead's reports and files sit in the right-hand
+   * panel of its own conversation (the context rail's card of the latest round, the
+   * same host as the background agents section; its in-flow fold on a narrow pane),
+   * never in the left sidebar. The rail track pass (info-rail.js) and every sidebar
+   * render call placeLeadDeliverables, so the section follows re-rendered rounds. The
+   * studio (#/world) opens the same deliverables from its own office. */
+  var leadDeliverablesModule = null, leadDeliverablesLoading = null, leadDeliverablesList = null;
   var leadDeliverablesExpanded = new Map();
-  function placeLeadDeliverables() {
-    var headquarters = !routerEntryHost.hidden;
-    var routerId = globalRouter ? globalRouter.conversationId() : '';
-    var projectLead = sidebar.querySelector('[data-coordinator-id]')?.dataset.coordinatorId || '';
-    var targets = {
-      project: !headquarters && projectLead ? { leadId: projectLead, path: sidebarPath() || '' } : null,
-      router: headquarters && routerId ? { leadId: routerId, path: globalRouter.home() || '' } : null,
-    };
-    if ((targets.project || targets.router) && !leadDeliverablesModule) { loadLeadDeliverablesModule(); return; }
-    [['project', projectDeliverablesSlot], ['router', routerDeliverablesSlot]].forEach(function (entry) {
-      var key = entry[0], slot = entry[1], target = targets[key];
-      var list = leadDeliverableLists[key];
-      if (!target) {
-        list?.hide();
-        if (!slot.hidden) slot.hidden = true;
-        return;
-      }
-      if (!list) list = leadDeliverableLists[key] = leadDeliverablesModule.createLeadDeliverables(leadDeliverablesPorts);
-      if (list.root.parentNode !== slot) slot.append(list.root);
-      if (slot.hidden) slot.hidden = false;
-      list.show(target);
-    });
+  function activeLeadDeliverablesTarget() {
+    var id = activeRouterConversationId();
+    if (!id) return null;
+    if (globalRouter && id === globalRouter.conversationId()) return { leadId: id, path: globalRouter.home() || '' };
+    if (id === surface.coordinatorId()) return { leadId: id, path: projectPath() || '' };
+    if (id === sidebarSurface.coordinatorId()) return { leadId: id, path: sidebarPath() || '' };
+    return null;
   }
+  function placeLeadDeliverables() {
+    var target = activeLeadDeliverablesTarget();
+    var host = target ? backgroundAgentContextHost(document.getElementById('chatInner'), target.leadId) : null;
+    if (!target || !host) {
+      if (leadDeliverablesList) { leadDeliverablesList.hide(); leadDeliverablesList.root.remove(); }
+      return;
+    }
+    if (!leadDeliverablesModule) { loadLeadDeliverablesModule(); return; }
+    var list = leadDeliverablesList || (leadDeliverablesList = leadDeliverablesModule.createLeadDeliverables(leadDeliverablesPorts));
+    // After the round's facts, ahead of the background agents section.
+    var dock = Array.from(host.children).find(function (node) { return node.classList.contains('agent-dock'); });
+    if (list.root.parentNode !== host || (dock && list.root.nextElementSibling !== dock)) host.insertBefore(list.root, dock || null);
+    list.place(host.dataset.conversationPart === 'turn-context-card' ? 'rail' : 'fold');
+    list.show(target);
+  }
+  runtimeScope.mountLeadDeliverables = placeLeadDeliverables;
   function loadLeadDeliverablesModule() {
     if (leadDeliverablesLoading || typeof loadLeadDeliverables !== 'function') return;
     leadDeliverablesLoading = loadLeadDeliverables().then(function (module) {
@@ -22301,7 +22297,7 @@ let backgroundConversationActivity = new Map();
       leadDeliverablesPorts.opener = module.createDeliverableOpener(module.runtimeOpenPorts());
       placeLeadDeliverables();
     }).catch(function (error) {
-      // The lead entries stay fully usable; the next sidebar paint retries the import.
+      // The conversation stays fully usable; the next placement retries the import.
       leadDeliverablesLoading = null;
       console.warn('[LeadDeliverables] load failed', error);
     });
@@ -22328,7 +22324,6 @@ let backgroundConversationActivity = new Map();
   var routerEntryHost = document.createElement('div');
   routerEntryHost.id = 'globalRouterEntry';
   column.insertBefore(routerEntryHost, sidebar);
-  routerEntryHost.after(routerDeliverablesSlot);
   var routerHeaderHost = document.createElement('div');
   var watchdogHeaderHost = document.createElement('div');
   host.before(routerHeaderHost, watchdogHeaderHost);
@@ -22414,7 +22409,7 @@ let backgroundConversationActivity = new Map();
     var projectBarHidden = isRouterManaged(projectPath());
     if (projectBar && projectBar.hidden !== projectBarHidden) projectBar.hidden = projectBarHidden;
     surface.refresh(); sidebarSurface.refresh(); globalRouter.refresh(); routerWatchdog.refresh();
-    // Which entry the sidebar shows may have changed without either lead's facts changing.
+    // Which conversation is a lead may have changed without either lead's facts changing.
     placeLeadDeliverables();
   };
   // Remove with the retained catalog bridge; grouping policy, rendering and
@@ -22423,16 +22418,16 @@ let backgroundConversationActivity = new Map();
     listHost: list,
     pinned: function () {
       var pins = [];
-      // Each group follows its entry's deliverables slot: the archive sits under the 成果 list.
+      // Each group follows its lead's entry.
       var project = sidebar.querySelector('[data-coordinator-id]')?.dataset.coordinatorId;
-      if (project) pins.push({ id: project, path: sidebarPath(), host: projectDeliverablesSlot });
+      if (project) pins.push({ id: project, path: sidebarPath(), host: sidebar });
       // Both router conversations stay reserved, so neither becomes a replaced
       // Coordinator's row. Only the main coordinator groups its work, and only
       // beneath its card while the card is shown; the Watchdog never delegates.
       if (globalRouter.conversationId()) pins.push({
-        id: globalRouter.conversationId(), path: routerEntryHost.hidden ? '' : globalRouter.home() || '', host: routerDeliverablesSlot,
+        id: globalRouter.conversationId(), path: routerEntryHost.hidden ? '' : globalRouter.home() || '', host: routerEntryHost,
       });
-      if (routerWatchdog.conversationId()) pins.push({ id: routerWatchdog.conversationId(), path: '', host: routerDeliverablesSlot });
+      if (routerWatchdog.conversationId()) pins.push({ id: routerWatchdog.conversationId(), path: '', host: routerEntryHost });
       return pins;
     },
     historySettled: function () { return !sidebar.querySelector('.coordination-leader[aria-busy="true"]'); },
@@ -22490,7 +22485,8 @@ let backgroundConversationActivity = new Map();
       delete runtimeScope.recoverProjectCoordination;
       surface.destroy(); sidebarSurface.destroy(); globalRouter.destroy(); routerWatchdog.destroy();
       coordinatorConversationGroups.destroy();
-      Object.values(leadDeliverableLists).forEach(function (list) { list.destroy(); });
+      leadDeliverablesList?.destroy();
+      delete runtimeScope.mountLeadDeliverables;
     }
   });
   runtimeScope.presenceRefresh();
@@ -22923,6 +22919,7 @@ let backgroundConversationActivity = new Map();
     if (typeof document === 'undefined'
         || typeof document.querySelectorAll !== 'function') return;
     runtimeScope.mountBackgroundAgents?.();
+    runtimeScope.mountLeadDeliverables?.();
     _measureRailTracks();
     _observeRailTrackLayout();
   }

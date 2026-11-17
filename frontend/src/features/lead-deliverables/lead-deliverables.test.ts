@@ -3,7 +3,9 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { LeadDeliverable, LeadDeliverablePage } from './model';
 import { createDeliverableOpener, type DeliverableOpenPorts } from './open';
 import { createLeadDeliverables, type LeadDeliverablesPushFrame, type LeadDeliverablesTarget } from './list';
-import { appendDeliverables, deliverableProject, reportDeliverable } from './model';
+import {
+  appendDeliverables, deliverableDayLabel, deliverableDays, deliverablePreview, deliverableProject, deliverableVisual, reportDeliverable,
+} from './model';
 
 const locale = vi.hoisted(() => ({ language: 'en' }));
 vi.mock('../../i18n', () => ({ t: (key: string) => (locale.language === 'en' ? key : `${locale.language}:${key}`) }));
@@ -103,7 +105,10 @@ it('pages the whole list newest first without truncation and shows title, kind, 
   const row = document.querySelector<HTMLElement>('.lead-deliverable')!;
   expect(row.querySelector('.lead-deliverable__kind')!.textContent).toBe('leadDeliverables.kind.report');
   expect(row.querySelector('.lead-deliverable__title')!.textContent).toBe('Delivery 0');
-  expect(row.querySelector('.lead-deliverable__meta')!.textContent).toMatch(/^tofu · /);
+  // Every item is in one project: the heading names it once and the rows show their age.
+  expect(document.querySelector('.lead-deliverables__scope')!.textContent).toBe('tofu');
+  expect(document.querySelector('.lead-deliverables')!.getAttribute('data-shared-project')).toBe('true');
+  expect(row.querySelector('.lead-deliverable__age')!.textContent).not.toBe('');
   const more = document.querySelector<HTMLButtonElement>('.lead-deliverables__more')!;
   expect(more.hidden).toBe(false);
   more.click();
@@ -167,6 +172,84 @@ it('names each report by its kind and opens its attached files from chips', asyn
   expect(opened).toEqual(['artifact:deck']);
 });
 
+it('is open by default in the rail, folded by default in the narrow fold, and an owner choice wins over both', async () => {
+  const choices = new Map<string, boolean>();
+  const view = createLeadDeliverables({
+    read: async () => ({ conversationId: 'lead', items: [item(1)], nextCursor: null }),
+    subscribe: () => () => {}, onReconnect: () => () => {},
+    opener: { open: () => true, openSource: () => true },
+    readExpanded: id => choices.get(id) ?? null, writeExpanded: (id, value) => { choices.set(id, value); },
+  });
+  document.body.append(view.root);
+  const toggle = view.root.querySelector<HTMLButtonElement>('.lead-deliverables__toggle')!;
+  view.place('fold');
+  view.show({ leadId: 'lead', path: '' });
+  await flush();
+  expect(view.root.dataset.placement).toBe('fold');
+  expect(toggle.getAttribute('aria-expanded')).toBe('false');
+  view.place('rail');
+  expect(toggle.getAttribute('aria-expanded')).toBe('true');
+  toggle.click();
+  expect(toggle.getAttribute('aria-expanded')).toBe('false');
+  view.place('fold');
+  view.place('rail');
+  expect(toggle.getAttribute('aria-expanded')).toBe('false');
+});
+
+it('gives each row a type glyph and kind badge, the whole title, and a hover preview of the report', async () => {
+  const { view } = list(new Map([['', { conversationId: 'lead', nextCursor: null, items: [
+    item(1, { reportKind: 'progress', summary: '**Outcome**: merged.\n- one\n\nSecond paragraph' }),
+    item(2, { id: 'artifact:p', kind: 'file', title: 'resume.pdf', artifactId: 'p', summary: undefined }),
+    item(3, { id: 'artifact:d', kind: 'deck', title: 'Q4 review.pptx', artifactId: 'd', summary: undefined }),
+  ] }]]));
+  view.show({ leadId: 'lead', path: '/work/tofu' });
+  await flush();
+  const [progress, pdf, deck] = [...document.querySelectorAll<HTMLElement>('.lead-deliverable')];
+  expect([progress, pdf, deck].map(row => row.dataset.visual)).toEqual(['progress', 'pdf', 'deck']);
+  expect([progress, pdf, deck].every(row => row.querySelector('.lead-deliverable__icon svg'))).toBe(true);
+  expect(pdf.querySelector('.lead-deliverable__kind')!.textContent).toBe('leadDeliverables.kind.pdf');
+  expect(deck.querySelector('.lead-deliverable__kind')!.textContent).toBe('leadDeliverables.kind.deck');
+  const preview = progress.querySelector<HTMLButtonElement>('.lead-deliverable__open')!.title;
+  expect(preview.split('\n')[0]).toBe('Delivery 1');
+  expect(preview).toContain('Outcome: merged.');
+  expect(preview).not.toContain('Second paragraph');
+  expect(progress.querySelector<HTMLButtonElement>('.lead-deliverable__source')!.getAttribute('aria-label')).toBe('leadDeliverables.source');
+});
+
+it('groups rows under day headings once the list spans more than one day', async () => {
+  const day = 86_400_000;
+  const pages = new Map([['', { conversationId: 'lead', nextCursor: null, items: [item(1), item(2)] }]]);
+  const { view } = list(pages);
+  view.show({ leadId: 'lead', path: '' });
+  await flush();
+  expect(document.querySelectorAll('.lead-deliverables__day-label')).toHaveLength(0);
+  view.hide();
+  const spread = list(new Map([['', { conversationId: 'lead', nextCursor: null, items: [
+    item(1), item(2, { createdAt: NOW - day }), item(3, { createdAt: NOW - 3 * day })] }]]));
+  document.body.replaceChildren(spread.view.root);
+  spread.view.show({ leadId: 'other', path: '' });
+  await flush();
+  const labels = [...document.querySelectorAll('.lead-deliverables__day-label')].map(node => node.textContent);
+  expect(labels).toHaveLength(3);
+  expect(labels.slice(0, 2)).toEqual(['Today', 'Yesterday']);
+});
+
+it('the presentation model: visual types, days, labels and previews', () => {
+  expect(deliverableVisual(item(1))).toBe('report');
+  expect(deliverableVisual(item(1, { reportKind: 'blocked' }))).toBe('blocked');
+  expect(deliverableVisual(item(1, { kind: 'file', title: 'x', format: 'PDF' }))).toBe('pdf');
+  expect(deliverableVisual(item(1, { kind: 'file', title: 'table.csv' }))).toBe('sheet');
+  expect(deliverableVisual(item(1, { kind: 'file', title: 'notes.md' }))).toBe('file');
+  expect(deliverableVisual(item(1, { kind: 'document' }))).toBe('document');
+  expect(deliverableVisual(item(1, { kind: 'merge' }))).toBe('merge');
+  const days = deliverableDays([item(1), item(2), item(3, { createdAt: NOW - 2 * 86_400_000 })]);
+  expect(days.map(entry => entry.items.length)).toEqual([2, 1]);
+  expect(deliverableDayLabel(days[0].start, NOW, 'zh-CN')).toBe('今天');
+  expect(deliverableDayLabel(days[1].start, NOW, 'en')).toMatch(/Nov/);
+  expect(deliverablePreview(item(4, { summary: '# Head\n\nrest', files: [{ artifactId: 'a', filename: 'a.md', kind: 'document' }] }), 'en'))
+    .toMatch(/^Delivery 4\n.+\n\nHead\n\n↗ a\.md$/);
+});
+
 it('is open by default and remembers a fold', async () => {
   const view = createLeadDeliverables({
     read: async () => ({ conversationId: 'lead', items: [], nextCursor: null }),
@@ -202,13 +285,13 @@ it('a language switch repaints every label, row and control in the new language'
   const root = view.root;
   expect(root.querySelector('.lead-deliverables__label')!.textContent).toBe('zh:leadDeliverables.title');
   expect(root.querySelector('.lead-deliverable__kind')!.textContent).toBe('zh:leadDeliverables.reportKind.delivery');
-  expect(root.querySelector('.lead-deliverable__source')!.textContent).toBe('zh:leadDeliverables.source');
+  expect(root.querySelector('.lead-deliverable__source')!.getAttribute('aria-label')).toBe('zh:leadDeliverables.source');
   expect(root.querySelector('.lead-deliverable__files')!.getAttribute('aria-label')).toBe('zh:leadDeliverables.files');
   expect(root.querySelector('.lead-deliverable__file')!.getAttribute('aria-label')).toBe('zh:leadDeliverables.openFile');
   expect(root.querySelector('.lead-deliverables__more')!.textContent).toBe('zh:leadDeliverables.more');
   expect(root.querySelector('.lead-deliverables__retry')!.textContent).toBe('zh:leadDeliverables.retry');
   // The age follows the document language: Chinese relative time, no English left.
-  expect(root.querySelector('.lead-deliverable__meta')!.textContent).toMatch(/^tofu · .*分钟前$/);
+  expect(root.querySelector('.lead-deliverable__age')!.textContent).toMatch(/分钟前$/);
   view.destroy();
   document.documentElement.lang = 'en';
   locale.language = 'en';
@@ -231,4 +314,15 @@ it("shows a report in its display translation, as the conversation does, keeping
   expect(dialog.textContent).toContain('已交付');
   expect(dialog.textContent).toContain('全部已合并。');
   expect(dialog.textContent).not.toContain('All merged.');
+});
+
+it('names each row\'s project only while the list spans more than one project', async () => {
+  const { view } = list(new Map([['', { conversationId: 'lead', nextCursor: null, items: [
+    item(1, { projectPath: '/work/tofu' }), item(2, { projectPath: '/work/parallel' })] }]]));
+  view.show({ leadId: 'router', path: '' });
+  await flush();
+  const root = view.root;
+  expect(root.dataset.sharedProject).toBe('false');
+  expect(root.querySelector<HTMLElement>('.lead-deliverables__scope')!.hidden).toBe(true);
+  expect([...root.querySelectorAll('.lead-deliverable__project')].map(node => node.textContent)).toEqual(['tofu', 'parallel']);
 });

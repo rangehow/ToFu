@@ -1,67 +1,149 @@
-/* Lead deliverables (features/lead-deliverables/list.ts): the 成果 section beneath
- * a lead's sidebar entry in the classic mode, above the archive of conversations
- * it started. Its toggle reads like that archive's toggle; a long list scrolls
- * inside the section so the conversation list keeps its share of the sidebar. */
-.lead-deliverables-slot { flex-shrink: 0; margin: var(--space-0) var(--space-2) var(--space-1); }
-.lead-deliverables-slot[hidden], .lead-deliverables[hidden] { display: none; }
-.lead-deliverables { display: flex; flex-direction: column; min-height: 0; }
-.lead-deliverables__toggle {
-  display: flex; width: 100%; min-width: 0; align-items: center; gap: var(--space-2);
-  padding: var(--space-2) var(--space-3); color: var(--text-secondary);
-  border: var(--control-edge-inset) solid transparent; border-radius: var(--radius-sm);
-  background: transparent; font-size: var(--font-size-sm); font-weight: var(--weight-medium);
-  cursor: pointer;
+/* Lead deliverables (features/lead-deliverables/list.ts): the reports and files
+ * section of a lead conversation's right-hand panel. In the rail it is one more
+ * section of the per-turn context card (23-reading-context-rail.css owns the
+ * card, its scroll and the --tctx-* vocabulary this file speaks); on a pane too
+ * narrow for the rail it sits in flow in the round's context fold, as a framed
+ * panel that scrolls inside itself. Each row: a tinted type tile, the whole
+ * title (wrapped, never clipped), then the kind in the tile's ink, project and
+ * age; the project moves to the heading when every item shares it. */
+.lead-deliverables[hidden], .lead-deliverables__body[hidden], .lead-deliverables__count[hidden],
+.lead-deliverables__status[hidden], .lead-deliverables__more[hidden], .lead-deliverables__retry[hidden] { display: none; }
+.conversation-turn.user-msg:has(> .turn-ctx .lead-deliverables:not([hidden])) { z-index: var(--z-turn-context); }
+.lead-deliverables {
+  --ld-tile: 26px;
+  display: flex; flex-direction: column; gap: var(--tctx-stack-gap); min-width: 0;
+  color: var(--tctx-ink-soft); font-family: var(--font-ui); font-size: var(--font-size-sm); line-height: 1.45;
 }
-.lead-deliverables__toggle:hover { background: var(--bg-hover); color: var(--text-primary); }
+.lead-deliverables[data-placement="fold"] {
+  margin-block: var(--space-2) var(--space-3); padding: var(--space-2);
+  border: var(--control-edge-inset) solid var(--tctx-rule); border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+.lead-deliverables[data-placement="fold"] .lead-deliverables__body { max-height: 50dvh; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+
+/* ── Heading: the rail's section voice (label, count pill, disclosure) ── */
+.lead-deliverables__heading { display: flex; min-width: 0; }
+.lead-deliverables__toggle {
+  display: flex; flex: 1; min-width: 0; min-height: var(--tctx-line-h); align-items: center; gap: var(--space-2);
+  padding: var(--space-0) var(--space-1); color: var(--tctx-ink-faint); border: none; border-radius: var(--tctx-radius);
+  background: transparent; font: inherit; cursor: pointer; pointer-events: auto;
+}
+.lead-deliverables__toggle:hover { background: var(--tctx-fill-hover); color: var(--tctx-ink-soft); }
 .lead-deliverables__toggle:focus-visible { outline: var(--control-edge-inset) solid var(--accent); outline-offset: var(--control-edge-inset); }
-/* The archive toggle's chevron, turned to point right while collapsed. */
-.lead-deliverables__chevron { flex-shrink: 0; color: var(--text-tertiary); transform: rotate(-90deg); transition: transform var(--motion-fast) var(--ease-standard); }
-.lead-deliverables__toggle[aria-expanded="true"] .lead-deliverables__chevron { transform: none; }
-.lead-deliverables__label { flex: 1; min-width: 0; text-align: start; }
-.lead-deliverables__count { color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
-.lead-deliverables__body { display: flex; flex-direction: column; max-height: 40vh; overflow-y: auto; overscroll-behavior: contain; }
-.lead-deliverables__body[hidden] { display: none; }
-.lead-deliverables__list { margin: 0; padding: 0; list-style: none; }
-.lead-deliverable { position: relative; display: flex; align-items: flex-start; border-radius: var(--radius-sm); }
-.lead-deliverable:hover { background: var(--bg-hover); }
-.lead-deliverable:has(> .lead-deliverable__files) { flex-wrap: wrap; }
+.lead-deliverables__glyph { display: inline-flex; flex: 0 0 auto; color: var(--accent); font-size: var(--font-size-sm); }
+.lead-deliverables__label {
+  min-width: 0; overflow: hidden; color: var(--tctx-ink-faint); font-size: var(--font-size-xs); font-weight: var(--weight-semibold);
+  letter-spacing: .05em; line-height: 1.2; text-align: start; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap;
+}
+.lead-deliverables__count {
+  min-width: 18px; padding: var(--control-edge-inset) var(--space-1); border-radius: var(--radius-pill);
+  background: var(--tctx-accent-fill); color: var(--tctx-ink); font-size: var(--font-size-xs); font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-medium); line-height: 1.2; text-align: center;
+}
+.lead-deliverables__scope {
+  display: inline-flex; align-items: center; gap: var(--space-1);
+  min-width: 0; overflow: hidden; color: var(--tctx-ink-soft); font-size: var(--font-size-xs);
+  line-height: 1.2; text-overflow: ellipsis; white-space: nowrap;
+}
+.lead-deliverables__scope[hidden] { display: none; }
+.lead-deliverables__scope > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.lead-deliverables__caret {
+  flex: 0 0 auto; color: var(--tctx-ink-soft); width: var(--space-1); height: var(--space-1); margin-inline: auto var(--space-1);
+  border-inline-end: 1.5px solid currentColor; border-block-end: 1.5px solid currentColor;
+  transform: translateY(-25%) rotate(45deg); transition: transform var(--motion-fast) var(--ease-standard);
+}
+.lead-deliverables__toggle[aria-expanded="true"] .lead-deliverables__caret { transform: translateY(25%) rotate(-135deg); }
+
+/* ── Days and rows ── */
+.lead-deliverables__body { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.lead-deliverables__days { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.lead-deliverables__day { display: flex; flex-direction: column; gap: var(--space-0); min-width: 0; }
+.lead-deliverables__day-label {
+  margin: 0; padding: var(--space-1) var(--space-1) var(--space-0); color: var(--tctx-ink-faint);
+  font-size: var(--font-size-xs); font-weight: var(--weight-medium); line-height: 1.3;
+}
+.lead-deliverables__list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.lead-deliverable { --ld-tone: var(--tctx-ink-soft); position: relative; min-width: 0; border-radius: var(--tctx-radius); }
+.lead-deliverable[data-visual="delivery"], .lead-deliverable[data-visual="sheet"], .lead-deliverable[data-visual="merge"] { --ld-tone: var(--success-text); }
+.lead-deliverable[data-visual="progress"], .lead-deliverable[data-visual="document"], .lead-deliverable[data-visual="image"] { --ld-tone: var(--info-text); }
+.lead-deliverable[data-visual="decision"] { --ld-tone: var(--warning-text); }
+.lead-deliverable[data-visual="blocked"], .lead-deliverable[data-visual="pdf"] { --ld-tone: var(--error-text); }
+.lead-deliverable[data-visual="report"], .lead-deliverable[data-visual="deck"] { --ld-tone: var(--accent); }
+/* One even rhythm: the same block padding on every row and a hairline between rows,
+ * so a wrapped title lengthens its own row without crowding its neighbours. */
+.lead-deliverable + .lead-deliverable { border-block-start: var(--control-edge-inset) solid var(--tctx-rule); }
+.lead-deliverable:hover { background: var(--tctx-fill); }
 .lead-deliverable__open {
-  display: grid; flex: 1; min-width: 0; grid-template-columns: auto 1fr; column-gap: var(--space-2);
-  padding: var(--space-1) var(--space-3); color: var(--text-primary); text-align: start;
-  border: var(--control-edge-inset) solid transparent; border-radius: var(--radius-sm); background: transparent; cursor: pointer;
+  display: grid; width: 100%; min-width: 0; grid-template-columns: var(--ld-tile) minmax(0, 1fr); align-items: start; column-gap: var(--space-2);
+  padding: var(--space-2) var(--space-1); color: var(--tctx-ink); text-align: start; border: none; border-radius: var(--tctx-radius);
+  background: transparent; font: inherit; cursor: pointer; pointer-events: auto;
 }
 .lead-deliverable__open:focus-visible { outline: var(--control-edge-inset) solid var(--accent); outline-offset: calc(-1 * var(--control-edge-inset)); }
-.lead-deliverable__kind {
-  grid-row: span 2; align-self: start; padding: 0 var(--space-1);
-  color: var(--text-secondary); border: var(--control-edge-inset) solid var(--border); border-radius: var(--radius-sm);
-  font-size: var(--font-size-xs); line-height: 1.5;
+.lead-deliverable__icon {
+  display: inline-flex; width: var(--ld-tile); height: var(--ld-tile); align-items: center; justify-content: center; border-radius: var(--tctx-radius);
+  background: color-mix(in srgb, var(--ld-tone) 22%, transparent); color: var(--ld-tone); font-size: var(--font-size-sm);
 }
-.lead-deliverable[data-kind="report"] .lead-deliverable__kind,
-.lead-deliverable[data-kind="merge"] .lead-deliverable__kind { color: var(--accent); border-color: currentColor; }
-.lead-deliverable[data-report-kind="progress"] .lead-deliverable__kind { color: var(--text-secondary); border-color: var(--border); }
-.lead-deliverable[data-report-kind="decision"] .lead-deliverable__kind,
-.lead-deliverable[data-report-kind="blocked"] .lead-deliverable__kind { color: var(--warning-text); border-color: var(--warning-border); background: var(--warning-bg); }
-.lead-deliverable__title { min-width: 0; overflow: hidden; font-size: var(--font-size-sm); text-overflow: ellipsis; white-space: nowrap; }
-/* A report's attached files: chips under its row, each opening the file itself. */
-.lead-deliverable__files { display: flex; flex-basis: 100%; flex-wrap: wrap; gap: var(--space-1); padding: 0 var(--space-3) var(--space-1); }
+.lead-deliverable__text { display: flex; flex-direction: column; gap: var(--control-edge-inset); min-width: 0; }
+/* The whole title, wrapped at word boundaries; only an unbreakable run may break inside. */
+.lead-deliverable__title {
+  color: var(--tctx-ink); font-size: var(--font-size-sm); font-weight: var(--weight-medium); line-height: 1.4;
+  overflow-wrap: break-word; word-break: normal; hyphens: manual;
+}
+.lead-deliverable__open:hover .lead-deliverable__title { color: var(--accent); }
+.lead-deliverable__meta {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--control-edge-inset) var(--space-1); min-width: 0;
+  margin-block-start: var(--control-edge-inset); color: var(--tctx-ink-faint); font-size: var(--font-size-xs); line-height: 1.4;
+}
+.lead-deliverable__meta > * + *::before { margin-inline-end: var(--space-1); color: var(--tctx-ink-faint); content: '\00B7'; }
+.lead-deliverable__project[hidden], .lead-deliverables[data-shared-project="true"] .lead-deliverable__project { display: none; }
+/* The kind reads as the first word of the meta line in the tile's ink: the tile is the
+ * glance, the word the name, with no second pill competing with the title. */
+.lead-deliverable__kind { flex: 0 0 auto; color: var(--ld-tone); font-weight: var(--weight-semibold); }
+.lead-deliverable__project { min-width: 0; overflow-wrap: anywhere; }
+/* "Go to message": a quiet control on the row's top end, shown on hover/focus. */
+.lead-deliverable__source {
+  position: absolute; inset-block-start: var(--space-1); inset-inline-end: var(--space-1);
+  display: inline-flex; width: 24px; height: 24px; align-items: center; justify-content: center; padding: 0;
+  color: var(--tctx-ink-soft); border: var(--control-edge-inset) solid var(--tctx-rule); border-radius: var(--tctx-radius);
+  background: var(--bg-primary); box-shadow: var(--shadow-sm); font-size: var(--font-size-xs); cursor: pointer;
+  opacity: 0; pointer-events: auto; transition: opacity var(--motion-fast) var(--ease-standard);
+}
+.lead-deliverable:is(:hover, :focus-within) .lead-deliverable__source { opacity: 1; }
+.lead-deliverable__source:hover { color: var(--accent); border-color: var(--accent); }
+.lead-deliverable__source:focus-visible { outline: var(--control-edge-inset) solid var(--accent); outline-offset: var(--control-edge-inset); }
+@media (hover: none) { .lead-deliverable__source { opacity: 1; } }
+/* A report's attached files: chips under its title, each opening the file itself. */
+.lead-deliverable__files {
+  display: flex; flex-wrap: wrap; gap: var(--space-1);
+  padding: 0 var(--space-1) var(--space-1) calc(var(--space-1) + var(--ld-tile) + var(--space-2));
+}
 .lead-deliverable__file {
-  max-width: 100%; overflow: hidden; padding: 0 var(--space-2); color: var(--text-primary);
-  border: var(--control-edge-inset) solid var(--border); border-radius: var(--radius-sm); background: var(--bg-primary);
-  font-size: var(--font-size-xs); line-height: 1.6; text-overflow: ellipsis; white-space: nowrap; cursor: pointer;
+  display: inline-flex; max-width: 100%; min-width: 0; align-items: center; gap: var(--space-1); padding: 0 var(--space-2);
+  color: var(--tctx-ink-soft); border: var(--control-edge-inset) solid var(--tctx-rule); border-radius: var(--tctx-radius);
+  background: var(--bg-primary); font-size: var(--font-size-xs); line-height: 1.7; cursor: pointer; pointer-events: auto;
 }
+.lead-deliverable__file > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lead-deliverable__file:hover { border-color: var(--accent); color: var(--accent); }
 .lead-deliverable__file:focus-visible { outline: var(--control-edge-inset) solid var(--accent); outline-offset: var(--control-edge-inset); }
-.lead-deliverable__meta { min-width: 0; overflow: hidden; color: var(--text-tertiary); font-size: var(--font-size-xs); text-overflow: ellipsis; white-space: nowrap; }
-/* Overlaid on hover/focus so the title keeps the row's whole width the rest of the time. */
-.lead-deliverable__source {
-  position: absolute; inset-block: 0; inset-inline-end: 0; height: fit-content; margin-block: auto;
-  background: var(--bg-hover); font-size: var(--font-size-xs); opacity: 0;
+
+/* ── States ── */
+.lead-deliverables__status {
+  display: flex; align-items: center; gap: var(--space-2); margin: 0; padding: var(--space-2) var(--space-1);
+  color: var(--tctx-ink-faint); font-size: var(--font-size-xs);
 }
-.lead-deliverable:hover .lead-deliverable__source, .lead-deliverable__source:focus-visible { opacity: 1; }
-@media (hover: none) { .lead-deliverable__source { opacity: 1; } }
-.lead-deliverables__status { margin: 0; padding: var(--space-1) var(--space-3); color: var(--text-tertiary); font-size: var(--font-size-xs); }
-.lead-deliverables__status[hidden], .lead-deliverables__more[hidden], .lead-deliverables__retry[hidden] { display: none; }
-.lead-deliverables__more, .lead-deliverables__retry { align-self: flex-start; margin: var(--space-0) var(--space-2) var(--space-1); }
+.lead-deliverables__status[data-tone="quiet"] {
+  justify-content: center; padding: var(--space-3) var(--space-2);
+  border: var(--control-edge-inset) dashed var(--tctx-rule); border-radius: var(--tctx-radius);
+}
+.lead-deliverables__status[data-tone="error"] { color: var(--error-text); }
+.lead-deliverables__status[data-tone="loading"]::before {
+  flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); content: '';
+  animation: agentPulse 1.5s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) { .lead-deliverables__status[data-tone="loading"]::before { animation: none; } }
+.lead-deliverables__more, .lead-deliverables__retry { align-self: flex-start; pointer-events: auto; }
+
+/* ── The report reader the opener shows ── */
 .lead-deliverable-dialog .ui-dialog__body { max-height: 70vh; overflow-y: auto; }
 .lead-deliverable-report .ptool-coord-card { margin: 0; }
 .lead-deliverable-report__files { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-block-start: var(--space-3); }

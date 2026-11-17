@@ -2444,13 +2444,28 @@ One item model and one opener serve both modes
 deliverable itself: an artifact in the artifact panel (file preview, deck
 viewer), a report as the conversation's own `report_to_user` card in a dialog,
 a merge at its Worker's result Turn. The secondary action ("Go to message")
-opens the lead's message at that exact Turn. In the classic view, presence
-places a reports-and-files section (汇报与文件, open until the owner folds it;
-each report row names its kind and opens its attached files from chips) after each shown lead's office slot (the Global Router's
-card, a project's Coordinator row), above the archive of conversations it
-started; older pages load on demand, so lists of any length are complete. A
-`lead_deliverable` push for the shown lead and a push reconnect re-read the first
-page. In the studio, a delivery on the desk and a trophy on the shelf build the
+opens the lead's message at that exact Turn. In the classic view the
+reports-and-files section (汇报与文件) sits in the right-hand panel of the lead's
+own conversation (the Global Router's or a project Coordinator's), never in the
+left sidebar (owner request 2026-11-17): presence mounts it in the context card
+of the conversation's latest input round, after that round's model, tools and
+workspace and ahead of the background agents section (the same host,
+`backgroundAgentContextHost`); that card is sticky over the rest of the
+transcript, so the list stays beside the newest rounds and scrolls inside the
+card. On a pane too narrow for the rail it joins the round's in-flow context
+fold as a framed panel, folded until the owner opens it, so it never overlaps
+the chat. Each row shows a type glyph (report kind, deck, PDF, document,
+sheet, image, file, merge), its kind badge, the whole title wrapped at word
+boundaries, project and relative time, previews the report's opening paragraph
+on hover, and opens its attached files from chips; rows group under day
+headings once the list spans more than one day. Older pages load on demand, so
+lists of any length are complete. A `lead_deliverable` push for the shown lead
+and a push reconnect re-read the first page. The list is shown only while a
+lead's conversation is open: the sidebar keeps the lead's entry and the archive
+of conversations it started. Rejected: a fixed conversation-wide column (a
+second right-hand track beside the per-turn rail would split the pane's width
+and duplicate its sticky and narrow-fold policy); keeping the sidebar list
+(the owner found it cramped there, titles cut mid-word). In the studio, a delivery on the desk and a trophy on the shelf build the
 same item (same identity) and call the same opener, whose Turn port docks the
 office's conversation column; other desk documents still open their author's brief.
 

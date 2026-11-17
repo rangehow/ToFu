@@ -4,7 +4,7 @@ Owner report 2026-11-17: the classic view's sidebar embedded the animated lead
 office (one office room per Worker) because the office followed the stored
 landing choice, which is the studio by default. The studio (#/world) hides the
 classic sidebar, so the sidebar never mounts an office scene: a lead's entry
-row, its 成果 list and the archive of the conversations it started are plain
+row and the archive of the conversations it started are plain
 rows in every stored mode (docs/PROJECT_COORDINATION.md "Lead office"). Folders,
 bindings and Worker conversations are real server records. No model runs.
 """
@@ -45,7 +45,7 @@ def test_classic_sidebar_shows_lead_work_as_plain_rows_in_either_stored_mode(pag
                       messages=[{'role': 'user', 'content': 'My own notes'}])
 
     entry = page.locator(f'#projectCoordinatorEntry .coordination-leader[data-coordinator-id="{leader}"]')
-    archive = page.locator('#projectCoordinatorEntry + .lead-deliverables-slot + .coordinator-conversations-host .coordinator-conversations')
+    archive = page.locator('#projectCoordinatorEntry + .coordinator-conversations-host .coordinator-conversations')
     page.set_viewport_size({'width': 1440, 'height': 960})
     # 'world' is the default stored landing and the one the owner hit; 'chat' is the explicit classic choice.
     for landing in ('world', 'chat'):

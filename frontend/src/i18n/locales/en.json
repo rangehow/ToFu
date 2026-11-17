@@ -6700,6 +6700,7 @@
   "leadDeliverables.kind.deck": "Deck",
   "leadDeliverables.kind.document": "Document",
   "leadDeliverables.kind.merge": "Merged",
+  "leadDeliverables.kind.pdf": "PDF",
   "leadDeliverables.reportKind.delivery": "Delivered",
   "leadDeliverables.reportKind.progress": "Progress",
   "leadDeliverables.reportKind.decision": "Decide",

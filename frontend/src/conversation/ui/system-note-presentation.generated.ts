@@ -45,7 +45,9 @@ export const SYSTEM_NOTE_REASON_PRESENTATION: Readonly<
   "modified_files": { labelKey: "systemNote.reasonModifiedFiles", tone: "warn", fallback: "Modified files", glyph: "edit" },
   "output_contract": { labelKey: "systemNote.reasonOutputContract", tone: "warn", fallback: "Output contract", glyph: "alertTriangle" },
   "output_limit_recovery": { labelKey: "systemNote.reasonTerminalRecovery", tone: "info", fallback: "Terminal recovery", glyph: "refreshCw" },
+  "paper_length_continuation": { labelKey: "systemNote.reasonTerminalRecovery", tone: "info", fallback: "Terminal recovery", glyph: "refreshCw" },
   "paper_output_repair": { labelKey: "systemNote.reasonOutputContract", tone: "warn", fallback: "Output contract", glyph: "alertTriangle" },
+  "paper_section_repair": { labelKey: "systemNote.reasonOutputContract", tone: "warn", fallback: "Output contract", glyph: "alertTriangle" },
   "paper_tool_guidance": { labelKey: "systemNote.reasonPaperTools", tone: "info", fallback: "Paper tools", glyph: "file" },
   "parallel_execution": { labelKey: "systemNote.reasonParallelExecution", tone: "info", fallback: "Parallel agents", glyph: "users" },
   "partial_stream_retry": { labelKey: "systemNote.reasonStreamRetry", tone: "info", fallback: "Stream retry", glyph: "refreshCw" },
@@ -217,7 +219,19 @@ export const SYSTEM_NOTE_DISPLAY_POLICY: Readonly<Record<string, SystemNoteDispl
     "noteKind": "system-intervention",
     "provenanceField": ""
   },
+  "paper_length_continuation": {
+    "authority": "workflow",
+    "groupContext": true,
+    "noteKind": "context-injection",
+    "provenanceField": ""
+  },
   "paper_output_repair": {
+    "authority": "workflow",
+    "groupContext": true,
+    "noteKind": "context-injection",
+    "provenanceField": ""
+  },
+  "paper_section_repair": {
     "authority": "workflow",
     "groupContext": true,
     "noteKind": "context-injection",

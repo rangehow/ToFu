@@ -142,8 +142,9 @@ def _repair_missing_sections(task, messages, body, lang, *, usage_meter,
     if abort_signal.is_set():
         raise AbortedError('Paper report stopped before section repair')
     messages.append({'role': 'assistant', 'content': body.text})
-    messages.append({'role': 'user',
-                     'content': build_section_repair_request(missing, lang)})
+    from lib.tasks_pkg.context_composer import append_injection
+    append_injection(messages, 'paper_section_repair',
+                     build_section_repair_request(missing, lang))
     reply = {}
 
     def _record_repair(_rnd, msg, _finish, usage):

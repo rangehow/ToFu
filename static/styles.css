@@ -3375,7 +3375,9 @@ body.paper-mode-active #presenceStrip{display:none !important}
 /* Paper correction, progressive recommendation, and first-open placeholders.
  * This late section intentionally follows the main paper surface: it reuses
  * its layout/keyframes while keeping the source modules below the 100 KiB
- * model-readable ownership budget. */
+ * model-readable ownership budget. Recommendation rules load with their
+ * owner (features/paper/recommend.css); paperRecShimmer stays here because
+ * the startup chat skeleton uses it. */
 
 /* ── Correction banner (false-premise) ── */
 .paper-correction{display:flex;gap:var(--space-3);padding:14px var(--space-4);border:1px solid var(--warn,#d9922e);border-radius:14px;background:color-mix(in srgb,var(--warn,#d9922e) 8%,transparent)}
@@ -3386,42 +3388,6 @@ body.paper-mode-active #presenceStrip{display:none !important}
 .paper-correction-offer{margin-top:6px;background:var(--bg-tertiary)}
 .paper-correction-offer-label{font-size:var(--font-size-xs);font-weight:600;color:var(--warn,#d9922e);text-transform:uppercase;letter-spacing:.03em}
 
-/* ── Streaming describe-to-recommend (progressive reveal, aligned with chatInner) ── */
-/* Status line above the list: interpreting → grounding progress. */
-.paper-rec-status{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2);font-size:12.5px;color:var(--text-tertiary);min-height:18px}
-.paper-rec-status[hidden]{display:none}
-.paper-rec-status-text{display:flex;align-items:center;gap:var(--space-2);flex:1 1 auto;min-width:0;border-radius:var(--radius-xs)}
-.paper-rec-status-text:focus{outline:none}
-.paper-rec-status-text:focus-visible{box-shadow:var(--focus-ring)}
-.paper-rec-stop{flex:0 0 auto;margin-inline-start:auto}
-/* Research log follows the results as one folded line ("Searched N times");
-   it stays open while research is the only visible progress. */
-.paper-rec-research[hidden]{display:none}
-.paper-rec-research-summary{display:flex;align-items:center;gap:var(--space-1);min-height:28px;padding:var(--space-1) 0;font-size:12.5px;color:var(--text-tertiary);border-radius:var(--radius-xs)}
-.paper-rec-research-summary:hover{color:var(--text-secondary)}
-.paper-rec-research-summary:focus{outline:none}
-.paper-rec-research-summary:focus-visible{box-shadow:var(--focus-ring)}
-.paper-rec-research[open]>.paper-rec-tools{margin-top:var(--space-2)}
-/* Research tool timeline in the recommend view reuses .paper-report-tools
-   (chatInner's unified panel), but the recommend shell is a centered flex
-   column with its own gap/padding — neutralize the report-flex insets so the
-   panel aligns with the status line + cards. */
-.paper-rec-tools{padding:0;flex-shrink:1}
-.paper-rec-tools:empty,.paper-rec-tools[hidden]{display:none}
-.paper-rec-spin{flex:0 0 auto;width:13px;height:13px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:paperSpin .8s linear infinite}
-.paper-rec-banner:empty{display:none}
-/* A card streams in: opacity+translateY only (compositor-only, no reflow),
-   staggered by its --i index. animation-fill-mode:both prevents a pre-flash. */
-.paper-rec-card[data-status="grounded"]{animation:paperRecIn .34s cubic-bezier(.2,.9,.3,1.1) both;animation-delay:calc(var(--i,0) * 55ms)}
-@keyframes paperRecIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
-/* Skeleton placeholder — same box as a real card so the swap causes zero CLS. */
-.paper-rec-skeleton{cursor:default;pointer-events:none;border-style:dashed}
-.paper-rec-skeleton:hover{border-color:var(--border);transform:none;box-shadow:none}
-.paper-rec-sk-num{background:var(--bg-hover)}
-.paper-rec-sk-line{height:11px;border-radius:6px;background:linear-gradient(90deg,var(--bg-hover) 25%,var(--border) 37%,var(--bg-hover) 63%);background-size:200% 100%;animation:paperRecShimmer 1.3s ease-in-out infinite}
-.paper-rec-sk-title{width:70%;height:13px}
-.paper-rec-sk-why{width:88%}
-.paper-rec-sk-meta{width:40%;margin-top:3px}
 @keyframes paperRecShimmer{to{background-position:-200% 0}}
 /* First-open chat skeleton (epic ②) — placeholder bubbles shown INSTANTLY when
    opening a not-yet-loaded conversation, swapped out zero-CLS when the real
@@ -3430,11 +3396,8 @@ body.paper-mode-active #presenceStrip{display:none !important}
    swap causes no layout jump. */
 .chat-sk-line{height:12px;margin:7px 0;border-radius:6px;background:linear-gradient(90deg,var(--bg-hover) 25%,var(--border) 37%,var(--bg-hover) 63%);background-size:200% 100%;animation:paperRecShimmer 1.3s ease-in-out infinite}
 @media (prefers-reduced-motion:reduce){.chat-sk-line{animation:none}}
-/* Respect reduced-motion: no shimmer, no stagger, no slide — reveal instantly. */
+/* Respect reduced-motion. */
 @media (prefers-reduced-motion:reduce){
-  .paper-rec-card[data-status="grounded"]{animation:none}
-  .paper-rec-sk-line{animation:none}
-  .paper-rec-spin{animation-duration:1.6s}
   /* Reading surface: kill decorative motion but keep the (instant) progress
    * fill legible — the read-time bar still conveys position, just without the
    * animated width tween; the section chips stop pulsing; the landing icon

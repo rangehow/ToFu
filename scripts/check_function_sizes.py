@@ -52,7 +52,7 @@ FUNCTION_LINE_BUDGETS = _unique_budgets(
     ('evaluations/long_agent_release/tofu_projection.py', 'project_tofu_trial', 630),
     ('lib/cost_experiments/cost_experiments.py', 'aggregate_cost_experiment_rows', 634),
     ('lib/llm/chat.py', 'chat', 590),
-    ('lib/paper/report_engine/worker.py', 'run_report_task', 414),
+    ('lib/paper/report_engine/worker.py', 'run_report_task', 412),
     ('lib/tasks_pkg/compaction/_layer2/_compact.py', 'execute_compact_tool', 431),
     ('lib/tasks_pkg/compaction/_layer2/_summary.py', '_generate_query_aware_summary', 482),
     ('lib/tasks_pkg/handlers/project.py', '_handle_project_tool', 508),

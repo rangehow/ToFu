@@ -14,7 +14,7 @@ import re
 import time
 
 import lib as _lib
-from lib.agent_loop.agent_loop import AbortSignal
+from lib.agent_loop.agent_loop import AbortSignal, LoopDirective
 from lib.llm_dispatch.api import dispatch_stream
 from lib.llm.llm_errors import AbortedError
 from lib.log import get_logger
@@ -31,6 +31,12 @@ from lib.paper.agent_loop_policy import run_guarded_paper_agent_loop
 from lib.paper.agent_usage import PaperAgentUsageMeter
 from lib.paper.report_engine._body import ReportBodyProjection
 from lib.paper.report_engine._publication import publish_report
+from lib.paper.report_engine._sections import (
+    build_section_repair_request,
+    find_missing_sections,
+    insert_repaired_sections,
+    required_sections,
+)
 from lib.paper.review._lang import (
     is_rebuttal_lang,
     is_review_family,
@@ -65,6 +71,93 @@ from lib.paper.report_engine._hooks import (
 )
 
 logger = get_logger(__name__)
+
+
+def _strip_report_preamble(body):
+    # Strip LLM preamble before the first heading. Models often emit
+    # "Now I have enough information..." / "Let me compile..." / multi-
+    # paragraph "I'll research..." before the actual Markdown report
+    # starts at the first `## ` or `# `. Strip aggressively — any text
+    # before the first heading is non-report chatter regardless of length.
+    _heading_start = re.search(r'^#{1,6}\s', body.text, re.MULTILINE)
+    if _heading_start and _heading_start.start() > 0:
+        preamble = body.text[:_heading_start.start()].strip()
+        if preamble:
+            logger.info('[Paper:Report] Stripping %d-char preamble: %.120s',
+                        len(preamble), preamble.replace('\n', ' '))
+            body.text = body.text[_heading_start.start():]
+
+
+def _repair_missing_sections(task, messages, body, lang, *, usage_meter,
+                             abort_signal, round_tools, initial_round,
+                             call_model, record_usage):
+    """Ask once for the required sections the adopted body lacks.
+
+    Returns the ``sectionRepair`` meta record, or ``None`` when nothing is
+    missing. Exactly ONE repair round is a correctness boundary, not a
+    tunable: it asks for a finite, named set of sections with all research
+    already in context, so a model that still omits one would only be re-asked
+    the same question — a retry count would be a tuning knob (AGENTS.md
+    principle 5). A body with no recognizable required section is not a
+    truncated report; requesting every section would append a second report,
+    so it is left as written. A failed repair publishes the original body;
+    only the user's Stop propagates.
+    """
+    missing = find_missing_sections(body.text, lang)
+    if not missing or len(missing) == len(required_sections(lang)):
+        return None
+    record = {'missing': [s.heading for s in missing], 'repaired': []}
+    logger.info('[Paper:Report] Task %s — repairing %d missing section(s): %s',
+                task['task_id'], len(missing), record['missing'])
+    if abort_signal.is_set():
+        raise AbortedError('Paper report stopped before section repair')
+    messages.append({'role': 'assistant', 'content': body.text})
+    messages.append({'role': 'user',
+                     'content': build_section_repair_request(missing, lang)})
+    reply = {}
+
+    def _record_repair(_rnd, msg, _finish, usage):
+        reply['content'] = (msg or {}).get('content') or ''
+        record_usage(usage)
+
+    def _single_round(_rnd, msg, _finish, _usage):
+        # The request asks for no tools; a tool call in the reply is ignored
+        # rather than starting another round.
+        if isinstance(msg, dict) and msg.get('tool_calls'):
+            return LoopDirective.complete('section_repair_tool_calls_ignored')
+        return None
+
+    try:
+        # The same tool catalog is declared: the history carries tool calls,
+        # which some providers reject without tool definitions.
+        outcome = run_guarded_paper_agent_loop(
+            context='Paper report section repair',
+            allow_aborted_outcome=True,
+            usage_meter=usage_meter,
+            abort=abort_signal,
+            round_tools=round_tools,
+            initial_round=initial_round,
+            dispatch=lambda rnd, tools: call_model(rnd, tools, lambda _text: None),
+            on_round_result=_record_repair,
+            decide_round=_single_round,
+        )
+        if outcome.aborted or abort_signal.is_set():
+            raise AbortedError('Paper report stopped during section repair')
+        repaired_body, repaired = insert_repaired_sections(
+            body.text, reply.get('content', ''), missing, lang)
+    except AbortedError:
+        raise
+    except Exception as e:
+        logger.warning('[Paper:Report] Task %s section repair failed '
+                       '(non-fatal, publishing original): %s',
+                       task['task_id'], e, exc_info=True)
+        return record
+    if repaired:
+        body.replace_text(repaired_body)
+        record['repaired'] = [s.heading for s in repaired]
+    logger.info('[Paper:Report] Task %s — section repair inserted %d/%d',
+                task['task_id'], len(repaired), len(missing))
+    return record
 
 
 def run_report_task(task, messages, images):
@@ -160,10 +253,9 @@ def run_report_task(task, messages, images):
 
     def _dispatch(rnd, tools):
         body.begin_round()
+        return _call_model(rnd, tools, lambda text: body.append_delta(text, rnd))
 
-        def _on_content(text):
-            body.append_delta(text, rnd)
-
+    def _call_model(rnd, tools, on_content):
         def _on_thinking(text):
             _append_report_event(task, {'type': 'thinking', 'delta': text,
                                         'llmRound': rnd})
@@ -178,7 +270,7 @@ def run_report_task(task, messages, images):
         from lib.llm.stream_result import ensure_provider_stream_result
         return ensure_provider_stream_result(dispatch_stream(
             messages,
-            on_content=_on_content,
+            on_content=on_content,
             on_thinking=_on_thinking,
             abort_check=_abort_check,
             prefer_model=model_name if model else None,
@@ -191,11 +283,14 @@ def run_report_task(task, messages, images):
         ))
 
     def _accumulate_usage(rnd, msg, finish, usage):
+        body.observe_response(msg)
+        _record_round_usage(usage)
+
+    def _record_round_usage(usage):
         # Accumulate token usage + capture the resolved model/provider (the
         # dispatcher may fall back to a different model than asked).
         nonlocal _round_count, _resolved_model, _provider_id
         _round_count += 1
-        body.observe_response(msg)
         if isinstance(usage, dict):
             from lib.cost import normalize_usage as _normalize_usage
             _nu = _normalize_usage(usage)
@@ -263,18 +358,12 @@ def run_report_task(task, messages, images):
 
         body.adopt_terminal_response()
 
-        # Strip LLM preamble before the first heading. Models often emit
-        # "Now I have enough information..." / "Let me compile..." / multi-
-        # paragraph "I'll research..." before the actual Markdown report
-        # starts at the first `## ` or `# `. Strip aggressively — any text
-        # before the first heading is non-report chatter regardless of length.
-        _heading_start = re.search(r'^#{1,6}\s', body.text, re.MULTILINE)
-        if _heading_start and _heading_start.start() > 0:
-            preamble = body.text[:_heading_start.start()].strip()
-            if preamble:
-                logger.info('[Paper:Report] Stripping %d-char preamble: %.120s',
-                            len(preamble), preamble.replace('\n', ' '))
-                body.text = body.text[_heading_start.start():]
+        _strip_report_preamble(body)
+        section_repair = None if _is_review_family else _repair_missing_sections(
+            task, messages, body, inj_lang, usage_meter=_agent_usage,
+            abort_signal=abort_signal, round_tools=paper_tools,
+            initial_round=_round_count, call_model=_call_model,
+            record_usage=_record_round_usage)
 
         # Resolve the best title from three sources, in priority order:
         #   1. A non-placeholder stored title (user-renamed or already-resolved
@@ -371,6 +460,8 @@ def run_report_task(task, messages, images):
             report_model, _provider_id, _usage_total, _round_count,
             time.time() - t0)
         report_meta['agentUsageV1'] = _agent_usage.snapshot()
+        if section_repair:
+            report_meta['sectionRepair'] = section_repair
         request_policy = dict(task.get('requestPolicyV1') or {})
         cache_isolated = request_policy.get('cacheMode') == 'request_local'
         if request_policy:

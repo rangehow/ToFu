@@ -70,6 +70,13 @@ passes. The worker admits only published canonical reports; individual hooks
 own their gates and artifact/usage updates. Verify postpass order, isolated
 phase failures and process-control propagation in `test_paper_report_postpass_order.py`.
 
+`report_engine/_sections.py` derives the required explainer sections from the
+`---`-delimited `## ` headings of `_REPORT_PROMPT_EN/_ZH` (never a second
+list) and splices repaired sections at their canonical positions. The worker
+runs one non-fatal repair round through the guarded loop for non-review
+reports and records `sectionRepair` in the report meta. Verify
+`test_paper_report_section_repair.py`.
+
 `report_metadata.py` is the dependency-free usage/recorded-cost projection
 shared with SQL merge/accumulation operations and failed-write hook projection. It owns no pricing lookup,
 identity, lock, storage or replay state. Verify metadata projection and

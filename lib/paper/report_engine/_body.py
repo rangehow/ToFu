@@ -81,10 +81,14 @@ class ReportBodyProjection:
                 '%d-char terminal returned content (deltas were display-only; '
                 'likely a mid-stream re-stream)',
                 self._task['task_id'], len(self.text), len(canonical_body))
-            self.text = canonical_body
-            self._task['full_text'] = self.text
-            self._append_event(self._task, {'type': 'delta_reset'})
-            self._append_event(self._task, {'type': 'delta', 'delta': self.text})
+            self.replace_text(canonical_body)
+
+    def replace_text(self, text):
+        """Adopt a revised whole body and converge live pollers onto it."""
+        self.text = text
+        self._task['full_text'] = self.text
+        self._append_event(self._task, {'type': 'delta_reset'})
+        self._append_event(self._task, {'type': 'delta', 'delta': self.text})
 
 
 __all__ = ["ReportBodyProjection", "resolve_canonical_report_body"]

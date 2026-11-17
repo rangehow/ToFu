@@ -60,7 +60,11 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
 
     Args:
         messages: List of chat messages
-        max_tokens: Max output tokens
+        max_tokens: Max output tokens. ``None`` asks for the selected
+            route's output limit (``lib.model_info.route_output_limit``),
+            resolved per attempt: on a reasoning model the allowance covers
+            reasoning and reply, so a short-reply caller must not guess a
+            reply size.
         temperature: Sampling temperature
         thinking_enabled: Enable extended thinking
         preset/effort: Thinking effort level
@@ -232,7 +236,7 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
                 route_trace.note_cause('route_rescore')
             route_trace.start(slot)
             from lib.llm_dispatch.context_policy import slot_context_window
-            from lib.model_info import _route_output_limit_key
+            from lib.model_info import _route_output_limit_key, route_output_limit
             # Same Deployment identity the stream adapter stamps, so learned
             # request facts carry across stream and non-stream dispatch.
             route_limit_key = _route_output_limit_key(
@@ -243,6 +247,11 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
                 protocol=str(slot.protocol or 'openai'),
                 model=str(slot.model or ''),
             )
+            logical_model = getattr(slot, 'logical_model', '') or slot.model
+            attempt_max_tokens = max_tokens if max_tokens is not None else route_output_limit(
+                logical_model, route_key=route_limit_key,
+                declared_limit=int(getattr(slot, 'max_output_tokens', 0) or 0),
+                wire_model=slot.model if slot.model != logical_model else '')
             content, usage = _paced_call(state, timed_call_with_fields, 'provider_call', {
                 'model': slot.model,
                 'provider_id': getattr(slot, 'routing_provider_id', '') or slot.provider_id,
@@ -250,9 +259,9 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
             }, chat,
                 context_window=slot_context_window(slot),
                 model=slot.model, messages=messages,
-                knowledge_model=getattr(slot, 'logical_model', '') or slot.model,
+                knowledge_model=logical_model,
                 route_output_limit_key=route_limit_key,
-                max_tokens=max_tokens, temperature=temperature,
+                max_tokens=attempt_max_tokens, temperature=temperature,
                 thinking_enabled=thinking_enabled,
                 thinking_depth=thinking_depth,
                 effort=effort, preset=preset,

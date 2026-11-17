@@ -22,6 +22,12 @@ for doc in $DOCS; do
           > "$out/stdout.log" 2>&1 ;;
   esac
   rc=$?
+  authored=$SLIDES_BENCH_DATA/runs/$RUN/tofu-authored/$doc
+  if [ "$ARM" = tofu ] && [ -f "$authored/deck/deck.pptd" ]; then
+    (cd "$REPO" && $PY -m evaluations.slides_bench.force_export "$authored" \
+       && $PY -m evaluations.slides_bench.render "$authored/forced.pptx" "$authored/render_forced") \
+       > "$authored/render.log" 2>&1 || echo "AUTHORED-EXPORT-FAIL $doc"
+  fi
   pptx=$(ls "$out"/deck.pptx "$out"/deck/*.pptx 2>/dev/null | head -1)
   if [ $rc -ne 0 ] || [ -z "$pptx" ]; then
     if [ -d "$out/deck/preview/pages" ]; then

@@ -137,3 +137,28 @@ def test_overflow_is_measured_on_line_boxes_not_font_content_areas():
     lower['rects'][0].update(top=113, bottom=142)
     assert _page_findings([upper, lower], 0, tolerance=1.0)[0]['type'] in (
         'text_overflow', 'text_collision')
+
+
+def test_a_latin_caps_label_the_evidence_names_is_a_fact_not_decoration():
+    text = yaml.safe_dump({'elements': [
+        {'elementId': 'k', 'elementType': 'text', 'bounds': [0, 0, 400, 40],
+         'content': {'fontSize': 16, 'text': 'ACMEQA'}}]})
+    brief = {'sources': [{'point': '第二个 benchmark 是 ACMEQA，测长文档问答。'}]}
+    assert not any('英文' in f for f in author._validate_page_text(
+        _deck(), 'pages/01.page', text, brief))
+    assert any('英文' in f for f in author._validate_page_text(
+        _deck(), 'pages/01.page', text))
+
+
+def test_a_tag_outside_the_rich_text_vocabulary_is_an_author_finding():
+    def page(text):
+        return yaml.safe_dump({'elements': [
+            {'elementId': 'k', 'elementType': 'text', 'bounds': [0, 0, 600, 80],
+             'content': {'fontSize': 18, 'text': text}}]})
+    dropped = author._validate_page_text(
+        _deck(), 'pages/01.page',
+        page('<p>把配置写进提示词的 <ctx> 块</p>'))
+    assert any("'<ctx>'" in f for f in dropped)
+    assert not any('标签' in f for f in author._validate_page_text(
+        _deck(), 'pages/01.page',
+        page('<p>把配置写进 <strong>提示词</strong> 的 &lt;ctx&gt; 块<br/>次行</p>')))

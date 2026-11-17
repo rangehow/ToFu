@@ -67,6 +67,39 @@ def test_horizontal_categories_and_series_remain_inside_plot(
         assert 0 <= float(label.attrib['y']) <= height
 
 
+def test_a_wide_legend_wraps_inside_the_chart_and_lines_label_categories(
+        tmp_path, monkeypatch):
+    deck = _deck(tmp_path, width=500, height=400, categories=5, series=7)
+    chart = deck.pages[0].elements[0]
+    chart['chartType'] = 'line'
+    for series in chart['data']['series']:
+        series['name'] = 'GPT-3.5-Turbo (16K) ' + series['name']
+    svg = _svg(deck, monkeypatch)
+    swatches = svg.findall('rect')
+    assert len(swatches) == 7
+    assert len({s.attrib['y'] for s in swatches}) > 1
+    assert all(0 <= float(s.attrib['x']) < 500 for s in swatches)
+    texts = [t.text for t in svg.findall('text')]
+    for category in chart['data']['categories']:
+        assert category in texts
+    lowest_legend = max(float(s.attrib['y']) + 12 for s in swatches)
+    for point in svg.findall('circle'):
+        assert float(point.attrib['cy']) > lowest_legend
+
+
+def test_bar_categories_label_their_bars_from_the_left(tmp_path, monkeypatch):
+    deck = _deck(tmp_path, width=640, height=340, categories=3, series=1)
+    deck.pages[0].elements[0]['options']['dataLabels'] = False
+    svg = _svg(deck, monkeypatch)
+    bars = svg.findall('rect')[1:]
+    labels = [t for t in svg.findall('text') if t.text.startswith('条件')]
+    assert len(labels) == 3
+    left_of_bars = min(float(bar.attrib['x']) for bar in bars)
+    for label in labels:
+        assert label.attrib['text-anchor'] == 'end'
+        assert float(label.attrib['x']) <= left_of_bars
+
+
 def test_chart_preview_uses_canonical_body_font(tmp_path, monkeypatch):
     svg = _svg(_deck(tmp_path), monkeypatch)
     assert svg.attrib.get('font-family') == 'Noto Sans SC'

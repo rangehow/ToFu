@@ -63,7 +63,7 @@ _MIN_PAGES = MIN_SLIDE_PAGES
 _MAX_PAGES = MAX_SLIDE_PAGES
 _RESEARCH_RESUME_TTL_S = RESEARCH_RESUME_TTL_S
 _RESEARCH_CHECKPOINT_VERSION = (
-    evidence_checkpoint_version(freshness='month') + '-material-units-v1')
+    evidence_checkpoint_version(freshness='month') + '-material-units-v2')
 _AUTHOR_CACHE_NAME = '.tofu-slide-author.json'
 _AUTHOR_CACHE_VERSION = 'slide-page-cache-v1'
 _MAX_AUTHOR_CACHE_BYTES = 256 * 1024
@@ -84,7 +84,7 @@ _VISUAL_QA_CACHE_NAME = '.tofu-slide-visual-qa.json'
 _VISUAL_QA_CACHE_VERSION = 'slide-visual-qa-v1'
 _MAX_VISUAL_QA_CACHE_BYTES = 512 * 1024
 _MAX_VISUAL_QA_FINDINGS = 64
-_OUTLINE_CHECKPOINT_VERSION = 'slide-outline-v5-evidence-units'
+_OUTLINE_CHECKPOINT_VERSION = 'slide-outline-v6-source-coverage'
 _DIRECTOR_LENSES = (
     ('evidence-editorial',
      'Prioritize concrete evidence, native charts/diagrams, annotated imagery, '
@@ -186,7 +186,7 @@ _OUTLINE_MAX_TOKENS = 16384
 def _build_outline_prompt(topic: str, *, lang: str, max_pages: int,
                           scenarios_doc: str, style_hint: str,
                           research_doc: str = '', research_as_of: str = '',
-                          material: str = '') -> str:
+                          material: str = '', coverage: str = '') -> str:
     from lib.design_sys.themes import (
         classify_scenario,
         design_bible_text,
@@ -218,7 +218,7 @@ def _build_outline_prompt(topic: str, *, lang: str, max_pages: int,
             'significant, single run, estimate, component-level, unverified). '
             'Where the material marks a team result, keep that attribution; '
             'where a number is absent, use a qualitative statement.\n'
-            + material + '\n\n')
+            + material + '\n\n' + (coverage + '\n' if coverage else ''))
     research_block += (
         '## Audience and evidence guidance\n'
         'The following scenario is a provisional hint; the actual user request '
@@ -389,6 +389,9 @@ def _outline_errors(ctx: dict, artifact: dict) -> list:
                 f'content pages {uncited} cite no supplied-material evidence '
                 '[M#]; every content page must carry the exact facts it '
                 'presents from the material')
+    if artifact.get('coverage'):
+        from lib.slides.coverage import assign_coverage
+        errors.extend(assign_coverage(artifact['coverage'], pages)[1])
     cards = research.get('cards') or []
     if not cards:
         return errors
@@ -484,6 +487,110 @@ def _material_prompt_text(research: dict) -> str:
     return str(research.get('supplied_material') or '')
 
 
+def _source_coverage(ctx: dict, research: dict) -> dict:
+    """The material's figure index and headline inventory (one model call).
+
+    Computed once per stage run: a retried or second director candidate is
+    checked against the same inventory.
+    """
+    cards = research.get('material_cards') or []
+    if not cards:
+        return {}
+    if ctx.get('_source_coverage') is not None:
+        return ctx['_source_coverage']
+    from lib.slides.coverage import (
+        content_page_capacity, figure_index, inventory_prompt, parse_inventory)
+    figures = figure_index(cards)
+    capacity = content_page_capacity(ctx.get('max_pages', _DEFAULT_PAGES))
+    _raise_if_aborted(ctx, 'coverage inventory')
+    content, _usage = _llm_chat(
+        [{'role': 'user', 'content': inventory_prompt(
+            _material_prompt_text(research), figures,
+            lang=ctx.get('lang', 'zh'), capacity=capacity)}],
+        max_tokens=None, temperature=0.0,
+        prefer_model=ctx.get('model') or None,
+        strict_model=bool(ctx.get('model')),
+        owner_user_id=ctx.get('owner_user_id'),
+        **production_llm_dispatch_kwargs(
+            abort_check=_context_abort_check(ctx),
+            max_429_attempts=ctx.get('max_429_attempts')),
+        log_prefix='[Slides:coverage]')
+    _raise_if_aborted(ctx, 'coverage inventory')
+    coverage = {'figures': figures,
+                'inventory': parse_inventory(content, cards, figures,
+                                             capacity=capacity)}
+    logger.info('[Slides:coverage] %d headline results, %d figures with values',
+                len(coverage['inventory']), len(figures))
+    ctx['_source_coverage'] = coverage
+    return coverage
+
+
+def _coverage_prompt_block(coverage: dict) -> str:
+    if not coverage.get('inventory') and not coverage.get('figures'):
+        return ''
+    lines = ['## Source coverage (binding)',
+             'The deck must carry every headline result below with its '
+             'numbers: some page cites its [M#] units and writes the values '
+             'in content_notes. A page that presents a figure or table must '
+             'write the values that figure shows (from the units listed for '
+             'it) so the page can plot or tabulate them; never describe a '
+             'figure in words when its values are in the material. The [H#] '
+             'ids are bookkeeping: never write them into key_message.',
+             'Headline results:']
+    for entry in coverage.get('inventory') or []:
+        values = ', '.join(entry['numbers']) or 'qualitative'
+        lines.append(f'- [{entry["id"]}] {entry["claim"]} '
+                     f'[{", ".join(entry["units"])}] values: {values}')
+    if coverage.get('figures'):
+        lines.append('Figures and tables with values in the material:')
+        lines.extend(f'- {key}: [{", ".join(entry["units"])}]'
+                     for key, entry in coverage['figures'].items())
+    return '\n'.join(lines) + '\n'
+
+
+def _fill_coverage_gaps(ctx: dict, candidate: dict, gaps: list[str], *,
+                        research: dict) -> dict:
+    """One revision of a candidate that leaves headline results or figure
+    values out; the revised plan is re-checked by the same gate."""
+    current = json.dumps({
+        'title': candidate.get('title'), 'scenario': candidate.get('scenario'),
+        'theme_id': candidate.get('theme_id'),
+        'pages': [{key: value for key, value in page.items()
+                   if key not in ('sources', 'deck_evidence_numbers')}
+                  for page in candidate.get('pages') or []]},
+        ensure_ascii=False)
+    prompt = (
+        'This slide-deck outline leaves out source results. Revise it so '
+        'every gap below is closed: put each missing result and figure '
+        'value on the page where it belongs (or replace a weaker page), cite '
+        'its [M#] units in content_notes and write its values there exactly '
+        'as the material states them. Keep everything else, the page limit '
+        f'({ctx.get("max_pages", _DEFAULT_PAGES)}) and the JSON structure; '
+        'output ONLY the full revised JSON.\n\n## Gaps\n- '
+        + '\n- '.join(gaps)
+        + '\n\n## Current outline\n' + current
+        + '\n\n' + _coverage_prompt_block(candidate.get('coverage') or {})
+        + '\n## Source material\n' + _material_prompt_text(research))
+    _raise_if_aborted(ctx, 'outline coverage fill')
+    content, usage = _llm_chat(
+        [{'role': 'user', 'content': prompt}],
+        max_tokens=_OUTLINE_MAX_TOKENS, temperature=0.0,
+        prefer_model=ctx.get('model') or None,
+        strict_model=bool(ctx.get('model')),
+        owner_user_id=ctx.get('owner_user_id'),
+        **production_llm_dispatch_kwargs(
+            abort_check=_context_abort_check(ctx),
+            max_429_attempts=ctx.get('max_429_attempts')),
+        log_prefix='[Slides:outline-coverage]')
+    _raise_if_aborted(ctx, 'outline coverage fill')
+    revised = _outline_candidate(
+        content, topic=ctx['topic'], research=research,
+        maximum=ctx.get('max_pages', _DEFAULT_PAGES), usage=usage)
+    revised['coverage'] = candidate.get('coverage')
+    revised['coverage_filled'] = list(gaps)
+    return revised
+
+
 def _run_outline(ctx: dict) -> dict:
     topic = ctx['topic']
     lang = ctx.get('lang', 'zh')
@@ -495,6 +602,7 @@ def _run_outline(ctx: dict) -> dict:
                               for scenario_id, meta in SCENARIOS.items())
     research = ctx.get('artifacts', {}).get('research') or {}
     cards = research.get('cards') or []
+    coverage = _source_coverage(ctx, research)
     from lib.production.research import (
         format_research_cards,
         summarise_current_signals,
@@ -516,7 +624,8 @@ def _run_outline(ctx: dict) -> dict:
         scenarios_doc=scenarios_doc, style_hint=ctx.get('style') or '',
         research_doc=signal_doc + format_research_cards(research),
         research_as_of=str(research.get('as_of') or ''),
-        material=_material_prompt_text(research))
+        material=_material_prompt_text(research),
+        coverage=_coverage_prompt_block(coverage))
     lenses = _DIRECTOR_LENSES if mode == 'director' else (('standard', ''),)
     candidates: list[dict] = []
     rejected: list[str] = []
@@ -544,6 +653,15 @@ def _run_outline(ctx: dict) -> dict:
             candidate = _outline_candidate(
                 content, topic=topic, research=research,
                 maximum=ctx.get('max_pages', _DEFAULT_PAGES), usage=usage)
+            if coverage:
+                candidate['coverage'] = coverage
+                from lib.slides.coverage import assign_coverage
+                gaps = assign_coverage(coverage, candidate['pages'])[1]
+                if gaps:
+                    logger.info('[Slides:outline] %s: filling %d coverage '
+                                'gap(s)', lens_name, len(gaps))
+                    candidate = _fill_coverage_gaps(
+                        ctx, candidate, gaps, research=research)
             errors = _outline_errors(ctx, candidate)
             if errors:
                 candidate_attempts.append({
@@ -686,6 +804,8 @@ def _revise_outline_with_feedback(ctx: dict, outline: dict,
             content, topic=ctx['topic'], research=research,
             maximum=ctx.get('max_pages', _DEFAULT_PAGES),
             usage=usage if isinstance(usage, dict) else {})
+        if outline.get('coverage'):
+            revised['coverage'] = outline['coverage']
         errors = _outline_errors(ctx, revised)
         if errors:
             logger.warning('[Slides:outline-gate] revision failed validation '
@@ -882,7 +1002,7 @@ def _cached_author_result(deck, brief: dict, index: int, total: int, name: str,
         _brief_fidelity_findings,
         _validate_page_text,
     )
-    if (_validate_page_text(deck, name, yaml_text)
+    if (_validate_page_text(deck, name, yaml_text, brief)
             or _brief_fidelity_findings(
                 brief, yaml_text, page_index=index,
                 total=total)):
@@ -965,8 +1085,10 @@ def _author_briefs(ctx: dict, outline: dict) -> list[dict]:
     numbers = sorted(str(number) for number in evidence_numbers(
         [card.get('point') for card in research.get('material_cards') or []]
         + [card.get('point') for card in research.get('cards') or []]))
-    return [dict(page, deck_evidence_numbers=numbers)
-            for page in outline['pages']]
+    from lib.slides.coverage import assign_coverage
+    assigned, _gaps = assign_coverage(outline.get('coverage'), outline['pages'])
+    return [dict(page, deck_evidence_numbers=numbers, coverage=entries)
+            for page, entries in zip(outline['pages'], assigned)]
 
 
 def _run_author(ctx: dict) -> dict:
@@ -1532,13 +1654,13 @@ def _run_layout_qa(ctx: dict) -> dict:
     manifest = os.path.join(ctx['deck_dir'], 'deck.pptd')
     deck = parse_deck(manifest)
     measured = inspect_deck_layout(deck)
-    if not measured.get('ran') or measured.get('ok'):
+    if not measured.get('ran'):
         return {**measured,
                 'initialFindings': len(measured.get('findings') or []),
                 'repaired': 0}
     initial_finding_count = len(measured.get('findings') or [])
     repaired: set = set()
-    while True:
+    while not measured.get('ok'):
         kept = _relayout_pages(ctx, deck, measured)
         if not kept:
             kept = _tighten_pages(ctx, deck, measured)
@@ -1552,6 +1674,10 @@ def _run_layout_qa(ctx: dict) -> dict:
         measured = remeasured
         if measured.get('ok'):
             break
+    rebroken = _repair_line_breaks(ctx, deck, measured)
+    if rebroken:
+        repaired |= rebroken
+        deck = parse_deck(manifest)
     _refresh_previews(ctx, deck, repaired)
     logger.info('[Slides:layout-qa] %d initial, %d repaired page(s), %d remain',
                 initial_finding_count, len(repaired),
@@ -1559,6 +1685,32 @@ def _run_layout_qa(ctx: dict) -> dict:
     return {**measured, 'initialFindings': initial_finding_count,
             'repaired': len(repaired),
             'repairedPages': [i + 1 for i in sorted(repaired)]}
+
+
+def _repair_line_breaks(ctx: dict, deck, measured: dict) -> set:
+    """Zero-LLM line-break repair on every page that has a widow or split
+    word; returns kept pages.
+
+    Line breaks never gate the deck; this removes the defects geometry can
+    before the visual review sees the pages.
+    """
+    from lib.json_store import write_text_atomic
+    pages = sorted({int(flaw['page']) - 1
+                    for flaw in measured.get('line_breaks') or []})
+    kept = set()
+    for index in pages:
+        _raise_if_aborted(ctx, 'layout QA')
+        path = os.path.join(ctx['deck_dir'], deck.pages[index].path)
+        with open(path, encoding='utf-8') as fh:
+            original = fh.read()
+        text, _trial = _repair_page_line_breaks(
+            deck, index, original, abort_check=_context_abort_check(ctx))
+        if text != original:
+            write_text_atomic(path, text)
+            kept.add(index)
+    logger.info('[Slides:layout-qa] re-broke lines on %d of %d page(s)',
+                len(kept), len(pages))
+    return kept
 
 
 def _findings_by_page(measured: dict) -> dict:
@@ -1713,6 +1865,13 @@ def _tighten_pages(ctx: dict, deck, measured: dict) -> set:
         _raise_if_aborted(ctx, 'layout QA')
         if fix.get('mode') != 'authored':
             continue
+        dropped = _dropped_numbers(seed, fix['yaml'], findings_text(
+            findings, page_data if isinstance(page_data, dict) else None))
+        if dropped:
+            logger.info('[Slides:layout-qa] page %d tightening rejected: '
+                        'drops number(s) %s', index + 1,
+                        sorted(map(str, dropped)))
+            continue
         relaid, _trial, _remaining = _relayout_page_text(
             deck, index, fix['yaml'], abort_check=abort_check)
         write_text_atomic(page_path, relaid)
@@ -1780,6 +1939,80 @@ def _remember_visual_result(cache: dict, path: str, key: str,
         max_findings=_MAX_VISUAL_QA_FINDINGS)
 
 
+def _page_review_evidence(ctx: dict, outline: dict, page_index: int,
+                          page_text: str, *, total: int) -> dict:
+    """Page data the reviewer checks pixels against (``build_review_context``
+    keyword arguments).
+
+    - ``page_texts``: the page's authored visible text. The reviewer read
+      decimals off downscaled pixels as missing ("1.15" as "115") and refused
+      the arithmetic it misread; numbers and wording are now read exactly,
+      while legibility is still judged from pixels.
+    - ``number_sources``: the author gate admits a number found anywhere in
+      the deck's evidence, while the reviewer saw only the cited excerpts and
+      refused true numbers it could not see. For each visible number the
+      cited excerpts lack, the first unit stating it (structure integers up
+      to the page count excepted, as in the author gate).
+    """
+    import yaml
+    from lib.slides.author import _TAG_RE, _visible_text_values
+    from lib.slides.components import expand_page_components
+    from lib.slides.material import evidence_numbers
+    try:
+        data = yaml.safe_load(page_text)
+        elements = expand_page_components(data) if isinstance(data, dict) else []
+    except (yaml.YAMLError, ValueError):
+        return {}
+    texts = [text for text in (
+        re.sub(r'\s+', ' ', _TAG_RE.sub(' ', value)).strip()
+        for value in _visible_text_values({'elements': elements})) if text]
+    research = ctx['artifacts'].get('research') or {}
+    cards = [card for card in (research.get('material_cards') or [])
+             + (research.get('cards') or []) if isinstance(card, dict)]
+    pages = outline.get('pages') or []
+    page = pages[page_index] if 0 <= page_index < len(pages) else {}
+    cited = evidence_numbers(
+        [source.get('point') for source in (page.get('sources') or [])
+         if isinstance(source, dict)])
+    wanted = sorted(number for number in evidence_numbers(texts) - cited
+                    if not (number == number.to_integral_value()
+                            and 0 <= number <= total))
+    units: list = []
+    for number in wanted:
+        for card in cards:
+            if number in evidence_numbers([card.get('point')]):
+                if card not in units:
+                    units.append(card)
+                break
+    return {'page_texts': texts, 'number_sources': units}
+
+
+def _page_numbers(page_text: str) -> set:
+    import yaml
+    from lib.slides.author import _TAG_RE, _visible_text_values
+    from lib.slides.components import expand_page_components
+    from lib.slides.material import evidence_numbers
+    try:
+        data = yaml.safe_load(page_text)
+        elements = expand_page_components(data) if isinstance(data, dict) else []
+    except (yaml.YAMLError, ValueError):
+        return set()
+    return evidence_numbers(_TAG_RE.sub(' ', value) for value in
+                            _visible_text_values({'elements': elements}))
+
+
+def _dropped_numbers(seed: str, candidate: str, feedback: str) -> set:
+    """Numbers the seed page shows that a repair candidate no longer does.
+
+    Repairs fix presentation; the page's facts are the outline's evidence.
+    A repair may drop a number only when its feedback names that number
+    (the reviewer disputed it).
+    """
+    from lib.slides.material import evidence_numbers
+    return (_page_numbers(seed) - _page_numbers(candidate)
+            - evidence_numbers([feedback]))
+
+
 def _run_page_visual_reviews(ctx: dict, previews: list, *, theme, vqa,
                              qa_model: str, cache: dict,
                              cache_path: str) -> list:
@@ -1788,11 +2021,19 @@ def _run_page_visual_reviews(ctx: dict, previews: list, *, theme, vqa,
         return []
     abort_check = _context_abort_check(ctx)
     max_429_attempts = ctx.get('max_429_attempts')
+    from lib.slides.pptd import parse_deck
     from lib.slides.review_context import build_review_context
     outline = _effective_outline(ctx['artifacts'])
-    review_contexts = [build_review_context(
-        outline, page_index=index, request=ctx.get('topic') or '')
-        for index in range(len(previews))]
+    deck = parse_deck(os.path.join(ctx['deck_dir'], 'deck.pptd'))
+    review_contexts = []
+    for index in range(len(previews)):
+        with open(os.path.join(ctx['deck_dir'], deck.pages[index].path),
+                  encoding='utf-8') as handle:
+            page_text = handle.read(_MAX_PAGE_YAML_BYTES + 1)
+        review_contexts.append(build_review_context(
+            outline, page_index=index, request=ctx.get('topic') or '',
+            **_page_review_evidence(
+                ctx, outline, index, page_text, total=len(previews))))
     results: list[dict | None] = [None] * len(previews)
     identities: list[str | None] = [None] * len(previews)
     pending_items = []
@@ -1906,10 +2147,13 @@ def _run_visual_qa(ctx: dict) -> dict:
     qa_directory = os.path.join(ctx['deck_dir'], '.tofu-qa')
     os.makedirs(qa_directory, exist_ok=True)
 
-    def review(path, *, key, label, subject, page_index=None):
+    def review(path, *, key, label, subject, page_index=None, page_text=''):
         _raise_if_aborted(ctx, 'visual QA')
         review_context = build_review_context(
-            outline, page_index=page_index, request=ctx.get('topic') or '')
+            outline, page_index=page_index, request=ctx.get('topic') or '',
+            **(_page_review_evidence(
+                ctx, outline, page_index, page_text, total=len(previews))
+                if page_index is not None else {}))
         try:
             identity = vqa.qa_frame_input_sha256(
                 path, theme=theme, subject=subject, model=qa_model,
@@ -1952,21 +2196,21 @@ def _run_visual_qa(ctx: dict) -> dict:
         cache=cache, cache_path=cache_path)
     repaired = []
     rejected = []
+    reviewed_results = list(results)
+
+    def deck_score(deck_review_findings, page_results):
+        return _visual_score(deck_review_findings + [
+            finding for result in page_results
+            for finding in _actionable_visual_findings(result)])
+
     with VisualRepairTransaction(ctx['deck_dir']) as visual_repair:
         scratch = str(visual_repair.scratch)
         originals = visual_repair.rows
         rollback = visual_repair.rollback
         try:
-            for index, result in enumerate(results):
-                _raise_if_aborted(ctx, 'visual QA')
-                page_pattern = re.compile(
-                    rf'(?:\bpage\s*{index + 1}\b|第\s*{index + 1}\s*页|页面\s*{index + 1}(?!\d))',
-                    re.IGNORECASE)
-                coherence = [f for f in deck_findings
-                             if page_pattern.search(str(f.get('element') or ''))]
-                actionable = _actionable_visual_findings(result) + coherence + global_findings
-                if not result.get('ok') or not actionable:
-                    continue
+            def attempt(index: int, actionable: list) -> bool:
+                """One measured repair of one page; True when adopted."""
+                nonlocal deck
                 page_path = os.path.join(ctx['deck_dir'], deck.pages[index].path)
                 with open(page_path, encoding='utf-8') as handle:
                     seed = handle.read(_MAX_PAGE_YAML_BYTES + 1)
@@ -1987,33 +2231,51 @@ def _run_visual_qa(ctx: dict) -> dict:
                 yaml_text = candidate.get('yaml') or ''
                 if (candidate.get('mode') != 'authored' or yaml_text == seed
                         or len(yaml_text.encode('utf-8')) > _MAX_PAGE_YAML_BYTES
-                        or _validate_page_text(deck, deck.pages[index].path, yaml_text)):
-                    rejected.append(index + 1)
-                    continue
+                        or _validate_page_text(deck, deck.pages[index].path, yaml_text,
+                                               briefs[index])):
+                    logger.info('[Slides:qa] page %d repair rejected: no valid '
+                                'authored change (mode=%s)', index + 1,
+                                candidate.get('mode'))
+                    return False
+                dropped = _dropped_numbers(seed, yaml_text,
+                                           vqa.findings_text(actionable))
+                if dropped:
+                    logger.info('[Slides:qa] page %d repair rejected: drops '
+                                'number(s) %s', index + 1,
+                                sorted(map(str, dropped)))
+                    return False
                 fitted = _relaid_out_candidate(deck, index, yaml_text,
                                                abort_check=abort_check)
                 if fitted is None:
-                    rejected.append(index + 1)
-                    continue
+                    logger.info('[Slides:qa] page %d repair rejected: layout '
+                                'findings remain after re-layout', index + 1)
+                    return False
                 yaml_text, trial = fitted
                 trial_png = os.path.join(scratch, f'candidate-{index}.png')
                 try:
                     render_page_png(trial, index, trial_png, scale=2.0)
                     checked = review(trial_png, key=f'page:{index}',
                                      label=f'page-{index + 1:02d}', subject='幻灯片页面',
-                                     page_index=index)
+                                     page_index=index, page_text=yaml_text)
                 except StageAborted:
                     raise
                 except Exception as exc:
                     logger.warning('[Slides:qa] page %d repair unverified: %s', index + 1, exc)
-                    rejected.append(index + 1)
-                    continue
+                    return False
                 if (not checked.get('ok')
                         or _visual_score(_actionable_visual_findings(checked))
                         >= _visual_score(actionable)):
-                    rejected.append(index + 1)
-                    continue
-                visual_repair.remember(index, page_path, previews[index], seed)
+                    logger.info(
+                        '[Slides:qa] page %d repair rejected: re-review %s, '
+                        '(blockers, majors) %s -> %s: %s', index + 1,
+                        'ok' if checked.get('ok') else checked.get('reason'),
+                        _visual_score(actionable),
+                        _visual_score(_actionable_visual_findings(checked)),
+                        '; '.join(str(f.get('issue'))[:120] for f in
+                                  _actionable_visual_findings(checked)))
+                    return False
+                if index not in originals:
+                    visual_repair.remember(index, page_path, previews[index], seed)
                 try:
                     _raise_if_aborted(ctx, 'visual QA')
                     write_text_atomic(page_path, yaml_text)
@@ -2023,15 +2285,62 @@ def _run_visual_qa(ctx: dict) -> dict:
                     raise
                 deck = trial
                 results[index] = checked
-                repaired.append(index + 1)
+                if index + 1 not in repaired:
+                    repaired.append(index + 1)
+                logger.info('[Slides:qa] page %d repair adopted: (blockers, '
+                            'majors) %s -> %s', index + 1,
+                            _visual_score(actionable),
+                            _visual_score(_actionable_visual_findings(checked)))
+                return True
+
+            # Repair to a fixed point, like the layout stage: a page whose
+            # repair was adopted is tried again from its new state while its
+            # (blockers, majors) score keeps falling; a round that adopts
+            # nothing ends. Rejected pages are not retried blindly.
+            pending = list(range(len(results)))
+            first_round = True
+            while pending:
+                adopted = []
+                for index in pending:
+                    _raise_if_aborted(ctx, 'visual QA')
+                    result = results[index]
+                    page_pattern = re.compile(
+                        rf'(?:\bpage\s*{index + 1}\b|第\s*{index + 1}\s*页|页面\s*{index + 1}(?!\d))',
+                        re.IGNORECASE)
+                    # Deck findings are judged again by the final deck
+                    # review; later rounds compare page findings only.
+                    coherence = ([f for f in deck_findings
+                                  if page_pattern.search(str(f.get('element') or ''))]
+                                 + global_findings) if first_round else []
+                    actionable = _actionable_visual_findings(result) + coherence
+                    if not result.get('ok') or not actionable:
+                        continue
+                    if attempt(index, actionable):
+                        adopted.append(index)
+                    elif index + 1 not in repaired:
+                        rejected.append(index + 1)
+                first_round = False
+                pending = [index for index in adopted
+                           if _actionable_visual_findings(results[index])]
 
             if repaired:
                 final_deck_review = review_deck()
                 final_findings = _actionable_visual_findings(final_deck_review)
-                # An unreviewable or worsened whole-deck result cannot certify
-                # changes made to otherwise valid retained pages.
+                # An unreviewable whole-deck result cannot certify the
+                # changed pages, and repairs are kept only when the deck as
+                # a whole (coherence plus pages) strictly improves, like each
+                # page. A coherence-only comparison discarded verified page
+                # fixes whenever the deck re-review drew one new finding.
                 if (not final_deck_review.get('ok')
-                        or _visual_score(final_findings) > _visual_score(deck_findings)):
+                        or deck_score(final_findings, results)
+                        >= deck_score(deck_findings, reviewed_results)):
+                    logger.info(
+                        '[Slides:qa] %d page repair(s) rolled back: deck '
+                        're-review %s, deck+pages (blockers, majors) %s -> %s',
+                        len(repaired), 'ok' if final_deck_review.get('ok')
+                        else final_deck_review.get('reason'),
+                        deck_score(deck_findings, reviewed_results),
+                        deck_score(final_findings, results))
                     for index in originals:
                         rollback(index)
                     rejected.extend(repaired)
@@ -2050,9 +2359,58 @@ def _run_visual_qa(ctx: dict) -> dict:
             # The transaction restores every retained YAML/preview pair.
             raise
 
+    # A refusal must reproduce. Pixel review is a sampled verdict: replayed
+    # unchanged, refused decks shipped on a second sample. Each review that
+    # would refuse is repeated once on the identical input, uncached; its
+    # findings stand unless that independent review reports the input clean.
+    # An unreadable confirmation never clears a finding.
+    unconfirmed = []
+
+    def reproduced(path, *, label, subject, page_index=None) -> bool:
+        page_text = ''
+        if page_index is not None:
+            with open(os.path.join(ctx['deck_dir'], deck.pages[page_index].path),
+                      encoding='utf-8') as handle:
+                page_text = handle.read(_MAX_PAGE_YAML_BYTES + 1)
+        _raise_if_aborted(ctx, 'visual QA')
+        second = vqa.qa_frame(
+            path, theme=theme, label=label, subject=subject,
+            model=qa_model,
+            review_context=build_review_context(
+                outline, page_index=page_index, request=ctx.get('topic') or '',
+                **(_page_review_evidence(ctx, outline, page_index, page_text,
+                                         total=len(previews))
+                   if page_index is not None else {})),
+            abort_check=abort_check,
+            max_429_attempts=ctx.get('max_429_attempts'),
+            owner_user_id=ctx.get('owner_user_id'),
+            provider_pin_id=ctx.get('provider_pin_id') or '')
+        _raise_if_aborted(ctx, 'visual QA')
+        return not (second.get('ok') and not _actionable_visual_findings(second))
+
+    if deck_findings:
+        contact = os.path.join(qa_directory, 'deck-contact.png')
+        build_contact_sheet(previews, contact, label_prefix='Page')
+        if not reproduced(contact, label='deck-coherence',
+                          subject='整套幻灯片接触表（按页码从左到右、从上到下）'):
+            unconfirmed.append('deck')
+            deck_findings = []
+    for index, result in enumerate(results):
+        if _actionable_visual_findings(result) and not reproduced(
+                previews[index], label=f'page-{index + 1:02d}',
+                subject='幻灯片页面', page_index=index):
+            unconfirmed.append(index + 1)
+            results[index] = {**result, 'findings': [
+                f for f in result.get('findings') or []
+                if f not in _actionable_visual_findings(result)]}
+    if unconfirmed:
+        logger.info('[Slides:qa] refusal not reproduced on identical input, '
+                    'cleared: %s', unconfirmed)
+
     remaining = deck_findings + [finding for result in results
                                 for finding in _actionable_visual_findings(result)]
     return {'ran': True,
+            'unconfirmed': unconfirmed,
             'clean': sum(bool(r.get('ok')) and not _actionable_visual_findings(r) for r in results),
             'repaired': len(repaired), 'repairedPages': repaired,
             'rejectedPages': sorted(set(rejected)),
@@ -2109,13 +2467,58 @@ def _relayout_page_text(deck, index: int, yaml_text: str, *, abort_check):
     return yaml_text, trial, findings
 
 
+def _repair_page_line_breaks(deck, index: int, yaml_text: str, *, abort_check):
+    """Narrow badly broken text boxes (widows, split words), to a fixed point.
+
+    A change is kept only when the page has fewer line-break defects and no
+    more layout findings. Returns ``(yaml_text, trial_deck)``; ``trial_deck`` is ``None``
+    when the page could not be measured.
+    """
+    from dataclasses import replace
+
+    import yaml
+    from lib.slides.layout_qa import (apply_relayout, inspect_deck_layout,
+                                      line_break_repairs)
+    from lib.slides.pptd import parse_page_text
+
+    def measure(text):
+        trial = replace(deck, pages=list(deck.pages))
+        trial.pages[index] = parse_page_text(text, path=deck.pages[index].path)
+        layout = inspect_deck_layout(trial, page_indexes=[index],
+                                     abort_check=abort_check)
+        if not layout.get('ran'):
+            return trial, None, None
+        return trial, layout.get('findings') or [], layout.get('line_breaks') or []
+
+    trial, findings, breaks = measure(yaml_text)
+    if findings is None:
+        return yaml_text, None
+    while breaks:
+        data = yaml.safe_load(yaml_text)
+        repairs = line_break_repairs(data, breaks)
+        if not repairs:
+            break
+        apply_relayout(data, repairs)
+        text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+        variant, remaining, left = measure(text)
+        if (remaining is None or len(remaining) > len(findings)
+                or len(left) >= len(breaks)):
+            break
+        yaml_text, trial, findings, breaks = text, variant, remaining, left
+    return yaml_text, trial
+
+
 def _relaid_out_candidate(deck, index: int, yaml_text: str, *, abort_check):
-    """A visual-repair candidate that passes layout QA after exact re-layout,
-    as ``(yaml_text, trial_deck)``, or ``None``."""
+    """A visual-repair candidate that passes layout QA after exact re-layout
+    and line-break repair, as ``(yaml_text, trial_deck)``, or ``None``."""
     yaml_text, trial, findings = _relayout_page_text(
         deck, index, yaml_text, abort_check=abort_check)
     if findings is None or findings:
         return None
+    balanced, balanced_trial = _repair_page_line_breaks(
+        deck, index, yaml_text, abort_check=abort_check)
+    if balanced_trial is not None:
+        return balanced, balanced_trial
     return yaml_text, trial
 
 
@@ -2174,7 +2577,7 @@ def slides_workflow(creative_mode: str = 'director') -> AgentToolWorkflow:
             Stage('design', _run_design),
             Stage('outline_gate', _run_outline_gate),
             Stage('author', _run_author, gate=_gate_author, retry=1,
-                  checkpoint_version='slide-author-evidence-v2'),
+                  checkpoint_version='slide-author-coverage-v3'),
             Stage('assets', _run_assets),
             Stage('render', _run_render, gate=_gate_render, retry=1),
             Stage('layout_qa', _run_layout_qa, gate=_gate_layout_qa,

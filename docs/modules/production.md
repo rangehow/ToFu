@@ -289,7 +289,7 @@ Heavy media is referenced by path/artifact identity, never embedded in stage JSO
 Long-form report starts atomically join identical live work. Their depth profile fixes 3/5/8 unique headings; a start naming any other `depth` (or a non-string `lang`) is refused as a field-named `BadRequest` before a task exists, as are the slide starter's unsupported `size`, over-long `topic`/`style`/`model` and unknown `creative_mode`. Research checkpoints expire after six hours; section checkpoints bind every prompt input, and assembly checkpoints bind every Markdown input. One section batch constructs its immutable report/evidence/instruction prefix once and appends only the heading-specific task; the prompt-layout revision invalidates older section checkpoints. This preserves independent quality gates and resume while exposing the full research packet as a provider-cache prefix instead of diverging before it. A conversation-scoped report settles only after its artifact ID is confirmed. Independent judge/section calls use the launch-probed 1..2 personal per-job fan-out (distributed 4, hard ceiling 8); task admission bounds the process-wide multiplier. Section calls overlap without increasing their logical count, so N sequential model waits become a work-conserving bounded batch. Reconstructible enrichment uses strict billing-stop admission, a launch-probed finite 429 allowance, and immediate yield to known shared contention; durable background production instead caps actual upstream 429s at 4..8 on personal machines (distributed 16, hard ceiling 64) with two hard-error slot attempts, while interactive chat retains its separate retry policy. Slide outlines, page authors, and QA repairs use it. Independent pages overlap behind the 1..2 personal LLM fan-out and checkpoint immediately by exact prompt/model/round policy plus bounded YAML hash and zero-LLM validation; only authored pages are reusable, so a restart or one corrupt/changed page does not repay for the rest of the deck and a transient fallback gets another chance.
 Slide publication is strict at semantic boundaries: every page must pass the author contract after one missing-page retry, every page must render a preview, and deterministic layout QA must clear all remaining overflow/collision findings. Fallback YAML remains only as a valid retry diagnostic; it cannot produce a successful PPTX. Visible text rejects internal planning phrases and research IDs, while chart values absent from the page evidence are returned to the author instead of shipping invented benchmark scores. Generated-asset or optional VLM outages remain explicit `artifact_quality` degradation evidence. Page-author prompts place the immutable deck/theme/text-style/grounding/design-bible/PPTD contract before page number, brief, assets, and sources. Each page remains independently hashed, cached, repaired, and checkpointed; an input version change invalidates pages authored under an older prompt layout. One frozen batch context reads and formats the theme, bible, and cheatsheet once; cache preflight and owned page workers share it without retaining full prompts.
 
-Slides accept an optional bounded `material` input (≤ 20000 chars) alongside the short `topic`. Problem: a deck that must reflect the user's own work (an interview/work retrospective, a project report) could only be driven by a ≤4000-char `topic` plus public web research, so a full curated evidence brief was rejected by `normalise_slide_topic` and the pipeline would have invented or web-substituted the numbers. Decision: `normalise_slide_material` bounds the new input, `start_slides_job` persists it in the manifest and includes it in the dedup key, `build_deck_from_topic` carries it into the recipe context, the research stage attaches it as `supplied_material`, and `_build_outline_prompt` injects it as an AUTHORITATIVE block before the audience/evidence guidance, instructing the author to reproduce its facts, figures, dates and attributions faithfully, never to replace them with web-card or remembered values, and to keep team-result attribution. Omitting `material` leaves the previous topic-only behavior byte-identical. Alternatives rejected: raising the `topic` limit (would change its short-title semantics and dedup identity for every existing deck) and letting callers paste a long brief into `topic` (rejected by the existing bound). Verify with `tests/slides/test_slides_material_input.py`.
+Slides accept an optional `material` input, taken whole (no character cap; see "Source coverage at the outline and authoring stage"), alongside the short `topic`. Problem: a deck that must reflect the user's own work (an interview/work retrospective, a project report) could only be driven by a ≤4000-char `topic` plus public web research, so a full curated evidence brief was rejected by `normalise_slide_topic` and the pipeline would have invented or web-substituted the numbers. Decision: `normalise_slide_material` normalises the new input, `start_slides_job` persists it in the manifest and includes it in the dedup key, `build_deck_from_topic` carries it into the recipe context, the research stage attaches it as `supplied_material`, and `_build_outline_prompt` injects it as an AUTHORITATIVE block before the audience/evidence guidance, instructing the author to reproduce its facts, figures, dates and attributions faithfully, never to replace them with web-card or remembered values, and to keep team-result attribution. Omitting `material` leaves the previous topic-only behavior byte-identical. Alternatives rejected: raising the `topic` limit (would change its short-title semantics and dedup identity for every existing deck) and letting callers paste a long brief into `topic` (rejected by the existing bound). Verify with `tests/slides/test_slides_material_input.py`.
 
 Slides and topic-driven motion video accept `creative_mode=director|standard`. `standard` is the one-plan A/B control. `director` sequentially drafts two contrasting plans, screens each through the existing deterministic fact/current-state gate, then spends at most one bounded critic call to select the stronger valid candidate. The selected plan records candidate count, winning lens, reason, fallback scores, critic scores, and usage; failed critics fall back to a deterministic richness/diversity score. Creative mode is part of dedup and outline/script checkpoint identity, so switching an experiment arm cannot reuse the other arm's plan. Direct legacy/internal calls that omit the field retain one-plan behavior, while public production defaults to `director`.
 
@@ -560,6 +560,247 @@ benchmark, see [`SLIDES_BENCHMARK.md`](../SLIDES_BENCHMARK.md)). A reply cut off
 by the output budget (`finish_reason == 'length'`) is an author finding: it
 can still parse and would ship a page missing its last elements.
 Verify with `tests/slides/test_slides_layout_repair.py`.
+
+### Visual review on reasoning models
+
+**Problem:** with layout repaired, the shared visual review
+(`lib/design_sys/visual_qa.py`, also motion video's) was the main delivery
+loss: 5-10 of its replies per gpt-5.5 deck were empty. It asked for a fixed
+1,500 output tokens while the model reasons at its declared default effort
+(medium), and that allowance covers reasoning plus reply: one page spent all
+1,500 on reasoning (`finish_reason == 'length'`, no content). Unreviewed pages
+still shipped, but a visual-repair candidate is adopted only after a clean
+re-review, so repairs were rejected and their findings blocked export. One
+recurring refusal was a rule bug: the reviewer compared a page's `02 / 12`
+pagination with the source document's own page count.
+**Decision:** `dispatch_chat(max_tokens=None)` asks for the selected route's
+output limit (`lib.model_info.route_output_limit`: the logical Model's
+maintained family ceiling narrowed by the Deployment's declared and learned
+limits), resolved per attempt; visual QA uses it and has no budget of its
+own (its parameter and the 4,096 ceiling are deleted; the cache input
+version records the change). A reply cut off with no verdict is reported as
+a budget outage, never as findings. The slide review context carries
+`deck_page_count` and says page markers number this deck; source-fidelity
+checks of real claims are unchanged. Live, the review of one page used
+516-1,312 completion tokens (up to 1,034 of them reasoning).
+Once every page was actually reviewed, the refusals exposed three more rule
+bugs and one missing repair:
+- The deck contact sheet (pages at about a quarter of their size) drew
+  major `typography` findings for small, dense text on every benchmark
+  deck, although the same pages passed their full-size reviews. Its
+  context now scopes it to deck-level properties (coherence, repetition,
+  argument flow, cross-page claims). Legibility stays judged per page at
+  full size and by the author gate's legibility floor.
+- The reviewer saw only a page's cited excerpts, while the author gate
+  admits any number stated anywhere in the deck evidence. It refused a true
+  1.96% (paper abstract) against a cited 1.97 (table). For each other
+  visible number, the page review now also receives the first evidence unit
+  stating it.
+- The reviewer read decimals off downscaled pixels as missing ("1.15" as
+  "115") and then refused the arithmetic it had misread. The page review
+  now also receives the page's authored visible text, to read numbers and
+  wording from; a mark not legible in the image is still a legibility
+  defect (`recipe._page_review_evidence` builds both).
+- After page repairs, a deck re-review that drew one new coherence finding
+  rolled back every verified page fix. Repairs are now kept when deck plus
+  pages strictly improve. That is still strict like each page, so a page
+  fix exactly offset by a new coherence finding still rolls back, and any
+  remaining finding still blocks export.
+- Bad line breaks were the most frequent residual refusal, and LLM repair
+  often traded one for another: widows (a paragraph whose last line holds
+  one word) and, in CJK titles, words split across lines (严/格, 实/验化管理).
+  Words come from the browser's `Intl.Segmenter`. Layout QA reports both
+  as advisory `line_breaks`, never gate findings. The layout stage and
+  visual-repair candidates narrow the box at its alignment edge
+  (`layout_qa.line_break_repairs`) to the widest text width at which the
+  line count holds with no widow and no split. That width is measured
+  pixel by pixel down to the browser's `text-wrap: balance` width; failing
+  that, a widow alone takes the balanced width. A change is kept only when
+  defects drop and layout findings do not rise. Painted or justified text
+  is left to the author.
+- Text running past the card it sits in was refused by the reviewer, and
+  the collision repair had itself moved text out of its card, because
+  layout QA never saw containers. `text_outside_container` is now a layout
+  finding: the container is the innermost shape painted below the text
+  that spans its first line and holds its top. An accent bar beside a
+  heading never qualifies. On 18 benchmark decks it found 7 cases (three
+  were the reviewer's refusals) and no false positives. Strokes through
+  text are measured on glyph ink (next section).
+- `muted` (the 14px caption colour) was below WCAG AA 4.5:1 against the
+  background in ten themes (swiss-lab 3.16:1), a recurring contrast
+  refusal. Each failing `muted` moves toward its theme's ink just far
+  enough; `tests/design_sys/test_design_sys.py` pins 4.5:1 for `ink` and
+  `muted` in every theme. Themes are shared, so motion video captions
+  improve too.
+
+Each visual repair adoption, rejection reason and rollback is logged
+(`[Slides:qa]`), since a refused deck keeps no visual-QA artifact.
+**Alternatives considered:** a larger fixed review budget (a knob that the
+next model's reasoning outgrows); lowering reasoning effort for review
+(weakens the check the gate relies on and still leaves a guessed reply
+size); retrying an empty reply (a retry count, and the same budget fails
+again); counting unreviewed pages as clean (hides the outage); a widow
+gate finding (stricter than the review it duplicates, and CJK words
+without a dictionary cannot all be repaired by geometry); CSS
+`text-wrap: balance` in the preview only (the export would not follow, so
+the review would judge a page the user never receives); requiring two
+reviews to agree before any finding is acted on (halves the findings that
+drive repairs; the reproduction rule below applies only to a refusal).
+Verify with `tests/visual/test_visual_qa.py::TestReasoningOutputAllowance`,
+`tests/llm_dispatch/test_dispatch_logical_identity.py`,
+`tests/slides/test_slides_evidence_review.py`,
+`tests/slides/test_slides_visual_repair.py` and
+`tests/slides/test_slides_layout_repair.py` (widow cases run real Chromium).
+
+### Drawn geometry, fact-keeping repairs and reproducible refusals
+
+**Problem:** with every page reviewed, the remaining refusals were real
+defects in what the author drew: a rule or ring stroked through text, dots
+and leader lines placed over a native chart's points, hand-sketched curves
+whose smoothing put the peak beside its marker, pale text on light
+backgrounds. The reviewer found them only sometimes, and a refused deck
+replayed unchanged shipped 3 of 7 times, so single samples decided
+delivery. A visual repair once replaced a cited counter-example (three numbers)
+while fixing a title. An earlier crossing check
+measured font content areas, whose empty space above and below the glyphs
+made every rule placed beside a line a hit, and it was dropped.
+**Decision:**
+- Layout QA measures drawn geometry in the preview's own DOM.
+  - Each shape and line outline is sampled along its SVG path, one sample
+    per rendered pixel. Text is measured as glyph ink, which canvas
+    `measureText` gives about each run's baseline.
+  - `stroke_through_text`: a stroke, or the edge of a fill painted over
+    the text or opaque beneath it, runs through a glyph line. The text's
+    own card is left to `text_outside_container`.
+  - `graphic_over_chart`: a shape or line painted over a chart. PowerPoint
+    and LibreOffice lay out the plot area themselves, so an overlay cannot
+    land on a data point in every rendering.
+  - `sketched_plot`: a line of three or more points with a slanted segment
+    and no arrowhead plots a shape without values.
+  - `arrow_to_nothing`: along its own direction, an arrowhead reaches no
+    other element within one arrowhead length (`render_html.ARROWHEAD_LENGTH`
+    stroke widths). A panel holding the whole arrow is its background, not
+    a target.
+  - `text_contrast`: a text box's own colour is below the WCAG 1.4.3
+    minimum (4.5:1, or 3:1 for large text) on the solid colour it sits on.
+    Inline emphasis colours are theme accents and are left to the theme
+    palette.
+- `relayout_repairs` fixes what geometry can, and the existing measured
+  loop keeps a change only when it lowers the page's findings.
+  - A straight rule moves to the nearer edge of the text's line boxes. A
+    tick or leader that ends inside the text moves along itself.
+  - Low-contrast box text takes `$ink`, or `$bg` on a dark fill. Both
+    variants are measured.
+  - Anything else goes to the author with an instruction. The author prompt
+    also states the chart, sketch and crossing rules.
+- Every repair keeps the page's facts. A layout tightening or visual
+  repair candidate that drops a number the seed page showed is rejected,
+  unless the repair's feedback names that number
+  (`recipe._dropped_numbers`).
+- A refusal must reproduce. When the visual review would refuse, each
+  refusing review (page or deck sheet) runs once more on the identical,
+  uncached input. Its findings stand unless that independent review reports
+  the input clean; an unreadable confirmation never clears a finding. Clean
+  decks cost no extra review, and repairs still act on the first sample.
+**Alternatives considered:**
+- A pixel tolerance for strokes near text: a knob, and the ink measurement
+  removes the false hits it would hide.
+- Deleting rules that cross text: loses the separator, where moving it
+  keeps the design.
+- Extending a short arrow along itself to the first element it reaches:
+  measured on the benchmark, it ran one arrow 330px into the wrong list
+  item. Where an arrow points is the author's meaning, so the author fixes
+  it.
+- Majority voting over N reviews: N is a knob, and it costs N reviews on
+  every page.
+- Pinning sampling (temperature or seed): not a determinism guarantee the
+  provider contract for reasoning models makes, so the variance would
+  remain, unmeasured.
+- Accepting reviewer findings only for categories layout QA cannot
+  measure: discards real findings that layout QA misses.
+
+Results: [`SLIDES_BENCHMARK.md`](../SLIDES_BENCHMARK.md), "Drawn geometry
+and reproducible refusals". Verify with
+`tests/slides/test_slides_layout_repair.py` and
+`tests/slides/test_slides_visual_repair.py`.
+
+### Source coverage at the outline and authoring stage
+
+**Problem:** blind content scores trailed the previous accepted decks by
+0.15, concentrated in one paper deck that described its main figure in
+words and left out a whole experiment's numbers. Two causes: the material
+contract cut every document at 20,000 characters, so a 65,000-character
+paper reached the deck without its later experiments and appendix tables
+(the judge and the competitor arms read all of it); and nothing compared
+the outline with what the source actually reports, so an outline could
+skip a headline result, or present a figure with none of its values, and
+the page author had nothing to show but a description.
+**Decision:**
+- Material is taken whole (`normalise_slide_material` has no character
+  cap). Its bound is the model's context window, which dispatch prompt
+  admission enforces.
+- Caption lines (`Figure 5:`, `Table 1.`, `图 3：`) start their own evidence
+  unit, so a figure is citable in PDF text that has no blank lines.
+- `coverage.figure_index` (zero LLM) lists every captioned figure or table
+  with the units that name it and state measured values (percentages or
+  numbers with a fraction; a version joined by a hyphen, such as GPT-3.5,
+  is not a value). One inventory call per outline stage lists the
+  source's headline results with their units and numbers, most important
+  first and no more than the deck has content pages
+  (`content_page_capacity`: the requested page count less the cover and
+  final page the outline contract requires, one claim per page);
+  `parse_inventory` keeps only existing units and numbers written in them.
+  An uncapped inventory listed 25-47 results for the 9-12 page private
+  decks; carrying them all crammed several results onto each page and
+  the blind judge's layout score fell (cov2: visual -0.29 against the
+  previous decks, 95% CI -0.50 to -0.08).
+- `coverage.assign_coverage` is part of the outline gate. A result is
+  carried by a page whose brief cites one of the result's own units and
+  states one of its numbers written there (a qualitative result: cites one
+  of its units). Matching against any cited material was measured to fail:
+  a page sharing a small integer with ten other results was assigned all
+  of them, and its author could not show them. Each result is held to one
+  page, the one presenting it (a content page over the closing summary,
+  then the page stating most of its numbers). A page whose brief names a
+  figure with values must carry one of them.
+  Each candidate with gaps gets one revision naming every gap, and is
+  then judged by the same gate; a gap left after that rejects it, and the
+  stage retry sees the gaps as feedback.
+- Each page brief carries the results and figures assigned to it. The
+  author prompt names them, and the author gate rejects a page, or a
+  repair of it, that shows none of an assigned entry's numbers in text,
+  table cells or chart values (`author._coverage_findings`). Inventory ids
+  are written `[H#]` and stripped from author input like `[M#]`, so they
+  never reach a slide.
+- Pages that now plot a figure's values exposed preview defects the
+  review refused: a multi-series legend ran off the chart's left edge in
+  one row, line charts had no category labels, and bar categories sat at
+  the far right, away from their bars. The preview now wraps the legend
+  inside the chart, labels line categories, and puts bar categories on
+  the left axis, as the native chart does. A table whose rendered rows run
+  past its box (they painted over a footnote) is a layout finding,
+  `table_overflow`, and so is text painted across a table's rendered
+  rows (`text_table_collision`); both go to the author like text
+  overflow. Two series of one chart in the same colour (an explicit
+  repeat, or a fifth uncoloured series wrapping the four-colour palette)
+  are an author finding: the legend cannot map them.
+**Alternatives considered:**
+- A larger character cap: still a knob, and any value cuts some paper.
+- Summarising long material before the outline: replaces the verbatim
+  values the grounding checks rely on with paraphrase.
+- Requiring every captioned figure on some page: appendix token-count
+  tables are not results, and a fixed share of figures would be a knob;
+  the inventory names what the source presents as results, and a figure
+  is held to its values only where the deck presents it.
+- Deterministic headline detection (abstract sentences with numbers):
+  misses results stated only in the results section or in a figure, and
+  write-ups without an abstract.
+- A fixed cap on inventory entries: a knob. The bound used is the deck's
+  own content-page count, which the request sets.
+Verify with `tests/slides/test_slides_source_coverage.py`,
+`tests/slides/test_slides_material_input.py`,
+`tests/slides/test_chart_preview_portability.py` and
+`tests/slides/test_slides_layout_repair.py`.
 
 ## Stage contract
 

@@ -318,6 +318,10 @@ def _shape_div(el: dict, deck: Deck, theme: dict, idx: int) -> str:
 
 # ── Line ──────────────────────────────────────────────────
 
+#: Preview arrowhead length in stroke widths; its tip is the line's end.
+ARROWHEAD_LENGTH = 8
+
+
 def _line_path(points: list, curve: str) -> str:
     if len(points) < 2:
         return ''
@@ -361,9 +365,10 @@ def _line_div(el: dict, deck: Deck, theme: dict, idx: int) -> str:
     arrow = el.get('arrow') or [None, None]
     if any(arrow):
         markers = (f'<defs><marker id="ah{idx}" markerWidth="10" '
-                   f'markerHeight="10" refX="8" refY="3" orient="auto" '
-                   f'markerUnits="strokeWidth">'
-                   f'<path d="M0,0 L8,3 L0,6 Z" fill="{color}"/></marker>'
+                   f'markerHeight="10" refX="{ARROWHEAD_LENGTH}" refY="3" '
+                   f'orient="auto" markerUnits="strokeWidth">'
+                   f'<path d="M0,0 L{ARROWHEAD_LENGTH},3 L0,6 Z" '
+                   f'fill="{color}"/></marker>'
                    f'</defs>')
         if len(arrow) > 0 and arrow[0]:
             attrs += f' marker-start="url(#ah{idx})"'
@@ -620,10 +625,16 @@ def _table_div(el: dict, deck: Deck, theme: dict) -> str:
 
 # ── Chart (parametric SVG preview; native/editable in PPTX) ───────────
 
+#: Series colours, in order, for series without their own colour (preview
+#: and native export alike).
+CHART_PALETTE_TOKENS = (('$primary', '#16283C'), ('$accent', '#C0652B'),
+                        ('$muted', '#6B7280'), ('$ink', '#1B2430'))
+
+
 def _chart_palette(theme: dict) -> list:
     from lib.slides.pptd import resolve_color as _rc
-    return [_rc('$primary', theme, '#16283C'), _rc('$accent', theme, '#C0652B'),
-            _rc('$muted', theme, '#6B7280'), _rc('$ink', theme, '#1B2430')]
+    return [_rc(token, theme, fallback)
+            for token, fallback in CHART_PALETTE_TOKENS]
 
 
 def _chart_div(el: dict, deck: Deck, theme: dict) -> str:
@@ -647,26 +658,38 @@ def _chart_div(el: dict, deck: Deck, theme: dict) -> str:
     labels = bool(opts.get('dataLabels', False))
     fs_cat = max(10.0, h * 0.042)
     fs_val = max(9.0, h * 0.036)
-    top_pad = 30.0 if legend else 12.0
-    family = _html.escape(chart_font_family(theme), quote=True)
-    svg = [f'<svg width="{w}" height="{h}" viewBox="0 0 {w} {h}" '
-           f'font-family="{family}">']
+    legend_rows: list[list[tuple[int, str, float]]] = []
     if legend:
         from unicodedata import east_asian_width
 
-        lx = w - 8
-        for i, s in reversed(list(enumerate(series))):
+        # Entries pack right-aligned into rows no wider than the chart, as
+        # PowerPoint and LibreOffice wrap a top legend; one row that runs
+        # past the chart's left edge clips the first series names.
+        for i, s in enumerate(series):
             raw_name = str(s.get('name') or f'S{i + 1}')
-            name = _html.escape(raw_name)
             tw = sum(1.0 if east_asian_width(c) in ('W', 'F') else 0.65
                      for c in raw_name) * fs_cat + 26
+            row = legend_rows[-1] if legend_rows else None
+            used = sum(item[2] + 18 for item in row) if row else 0.0
+            if row is None or (row and used + tw > w - 8):
+                legend_rows.append([])
+            legend_rows[-1].append((i, raw_name, tw))
+    legend_row_h = fs_cat * 1.9
+    top_pad = (30.0 + legend_row_h * (len(legend_rows) - 1)) if legend else 12.0
+    family = _html.escape(chart_font_family(theme), quote=True)
+    svg = [f'<svg width="{w}" height="{h}" viewBox="0 0 {w} {h}" '
+           f'font-family="{family}">']
+    for r, row in enumerate(legend_rows):
+        lx = w - 8
+        top = 8 + r * legend_row_h
+        for i, raw_name, tw in reversed(row):
             lx -= tw
             svg.append(
-                f'<rect x="{lx:.1f}" y="8" width="12" height="12" '
+                f'<rect x="{lx:.1f}" y="{top:.1f}" width="12" height="12" '
                 f'fill="{colors[i]}"/>'
-                f'<text x="{lx + tw:.1f}" y="18" text-anchor="end" '
+                f'<text x="{lx + 18:.1f}" y="{top + 10:.1f}" '
                 f'font-size="{fs_cat:.0f}" '
-                f'fill="{muted}">{name}</text>')
+                f'fill="{muted}">{_html.escape(raw_name)}</text>')
             lx -= 18
     if ctype in ('pie', 'doughnut'):
         import math
@@ -776,9 +799,25 @@ def _chart_div(el: dict, deck: Deck, theme: dict) -> str:
                             f'font-size="{fs_val:.0f}" fill="{ink}" '
                             f'text-anchor="middle">'
                             f'{_fmt_num(vals[i])}</text>')
+            # The native line chart labels its category axis; so does the
+            # preview the review judges.
+            for i, c in enumerate(cats):
+                svg.append(
+                    f'<text x="{slot * (i + 0.5):.1f}" '
+                    f'y="{h - fs_cat * 0.7:.1f}" font-size="{fs_cat:.0f}" '
+                    f'fill="{muted}" text-anchor="middle">'
+                    f'{_html.escape(c)}</text>')
         else:
             horizontal = ctype == 'bar'
             ns = len(series)
+            # A native bar chart labels its categories on the left axis, next
+            # to their bars; the preview reserves that column the same way.
+            label_w = 0.0
+            if horizontal:
+                from unicodedata import east_asian_width
+                label_w = max(
+                    sum(1.0 if east_asian_width(ch) in ('W', 'F') else 0.65
+                        for ch in c) * fs_cat for c in cats) + 12
             for i, c in enumerate(cats):
                 for si, s in enumerate(series):
                     vals = [float(v) for v in (s.get('values') or [])]
@@ -786,13 +825,13 @@ def _chart_div(el: dict, deck: Deck, theme: dict) -> str:
                     if horizontal:
                         bh = min(26.0, slot * 0.72 / ns)
                         y0 = plot_top + slot * i + (slot - bh * ns) / 2 + si * bh
-                        bw = (v / vmax) * (w - 90)
+                        bw = (v / vmax) * max(0.0, w - label_w - 90)
                         svg.append(
-                            f'<rect x="0" y="{y0:.1f}" width="{bw:.1f}" '
+                            f'<rect x="{label_w:.1f}" y="{y0:.1f}" width="{bw:.1f}" '
                             f'height="{bh - 3:.1f}" fill="{colors[si]}"/>')
                         if labels:
                             svg.append(
-                                f'<text x="{bw + 6:.1f}" y="{y0 + bh - 6:.1f}" '
+                                f'<text x="{label_w + bw + 6:.1f}" y="{y0 + bh - 6:.1f}" '
                                 f'font-size="{fs_val:.0f}" fill="{ink}">'
                                 f'{_fmt_num(v)}</text>')
                     else:
@@ -820,7 +859,7 @@ def _chart_div(el: dict, deck: Deck, theme: dict) -> str:
             if horizontal:
                 for i, c in enumerate(cats):
                     svg.append(
-                        f'<text x="{w - 4:.1f}" '
+                        f'<text x="{label_w - 6:.1f}" '
                         f'y="{plot_top + slot * (i + 0.5):.1f}" '
                         f'dominant-baseline="middle" '
                         f'font-size="{fs_cat:.0f}" fill="{muted}" '

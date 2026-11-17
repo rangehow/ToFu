@@ -43,9 +43,13 @@ __all__ = ['QA_CHECKLIST', 'visual_qa_available', 'screenshot_composition',
            'remember_visual_qa_result', 'findings_text']
 
 _MAX_QA_IMAGE_BYTES = 16 * 1024 * 1024
-_MAX_QA_OUTPUT_TOKENS = 4096
 _MAX_REVIEW_CONTEXT_CHARS = 12000
-_QA_INPUT_VERSION = 'visual-qa-input-v1'
+_QA_INPUT_VERSION = 'visual-qa-input-v2'
+# The reply is a short JSON verdict, but a reasoning model spends its output
+# allowance on reasoning first (gpt-5.5 at its default effort used all of a
+# fixed 1,500 and returned nothing). The allowance is therefore the selected
+# route's own output limit, resolved by dispatch (``max_tokens=None``).
+_QA_OUTPUT_ALLOWANCE = 'route_output_limit'
 
 #: The designer's checklist, one row per item. ``id`` is stable for telemetry.
 QA_CHECKLIST: tuple = (
@@ -159,20 +163,12 @@ def _qa_prompt(theme, subject: str, review_context: str = '') -> str:
                                 checklist=checklist, review_context=context)
 
 
-def _qa_output_tokens(max_tokens) -> int:
-    try:
-        return max(128, min(_MAX_QA_OUTPUT_TOKENS, int(max_tokens)))
-    except (TypeError, ValueError, OverflowError):
-        return 1500
-
-
-def _qa_input_sha256(prompt: str, model: str, output_tokens: int,
-                     raw_image: bytes) -> str:
+def _qa_input_sha256(prompt: str, model: str, raw_image: bytes) -> str:
     payload = json.dumps({
         'version': _QA_INPUT_VERSION,
         'prompt': prompt,
         'model': model,
-        'max_tokens': output_tokens,
+        'output_allowance': _QA_OUTPUT_ALLOWANCE,
         'temperature': 0.1,
         'strict_model': True,
         'image_bytes': len(raw_image),
@@ -183,8 +179,7 @@ def _qa_input_sha256(prompt: str, model: str, output_tokens: int,
 
 def qa_frame_input_sha256(image_path: str, *, theme=None,
                           subject: str = '视频帧', model: str = '',
-                          review_context: str = '',
-                          max_tokens: int = 1500) -> str:
+                          review_context: str = '') -> str:
     """Hash every semantic VLM input using the same builders as dispatch."""
     resolved_model = resolve_visual_qa_model(model)
     if not resolved_model:
@@ -196,8 +191,7 @@ def qa_frame_input_sha256(image_path: str, *, theme=None,
             or len(raw_image) != file_size):
         raise ValueError('frame image is empty, oversized, or changed during read')
     return _qa_input_sha256(
-        _qa_prompt(theme, subject, review_context), resolved_model,
-        _qa_output_tokens(max_tokens), raw_image)
+        _qa_prompt(theme, subject, review_context), resolved_model, raw_image)
 
 
 def screenshot_composition(scene_dir: str, out_path: str, *,
@@ -250,8 +244,7 @@ def screenshot_composition(scene_dir: str, out_path: str, *,
 
 def qa_frame(image_path: str, *, theme=None, label: str = '',
              subject: str = '视频帧', model: str = '',
-             review_context: str = '',
-             max_tokens: int = 1500, abort_check=None,
+             review_context: str = '', abort_check=None,
              max_429_attempts: int | None = None,
              owner_user_id: int | None = None,
              provider_pin_id: str = '') -> dict:
@@ -315,9 +308,7 @@ def qa_frame(image_path: str, *, theme=None, label: str = '',
         out['skipped'] = True
         out['reason'] = 'frame image is empty'
         return out
-    output_tokens = _qa_output_tokens(max_tokens)
-    out['input_sha256'] = _qa_input_sha256(
-        prompt, model, output_tokens, raw_image)
+    out['input_sha256'] = _qa_input_sha256(prompt, model, raw_image)
     data_uri = ('data:image/png;base64,'
                 + base64.b64encode(raw_image).decode('ascii'))
 
@@ -326,12 +317,12 @@ def qa_frame(image_path: str, *, theme=None, label: str = '',
         from lib.llm_dispatch.provider_pin import provider_pin
         from lib.production.llm_policy import production_llm_dispatch_kwargs
         with provider_pin(provider_pin_id):
-            content, _usage = dispatch_chat(
+            content, usage = dispatch_chat(
                 [{'role': 'user', 'content': [
                     {'type': 'text', 'text': prompt},
                     {'type': 'image_url', 'image_url': {'url': data_uri}},
                 ]}],
-                max_tokens=output_tokens, temperature=0.1, prefer_model=model,
+                max_tokens=None, temperature=0.1, prefer_model=model,
                 strict_model=True, owner_user_id=owner_user_id,
                 **production_llm_dispatch_kwargs(
                     abort_check=abort_check,
@@ -351,6 +342,17 @@ def qa_frame(image_path: str, *, theme=None, label: str = '',
         return out
 
     findings = _parse_findings(content or '')
+    usage = usage if isinstance(usage, dict) else {}
+    if findings is None and usage.get('finish_reason') == 'length':
+        # No verdict was given, so this is a QA outage, never a defect charged
+        # to the frame (and distinct from a reply the model got wrong).
+        details = usage.get('completion_tokens_details') or {}
+        out['reason'] = (
+            'QA reply cut off at the output limit before a verdict '
+            f'(completion_tokens={usage.get("completion_tokens")}, '
+            f'reasoning_tokens={usage.get("reasoning_tokens", details.get("reasoning_tokens"))})')
+        logger.warning('[VisualQA] %s %s', label, out['reason'])
+        return out
     if findings is None:
         out['reason'] = 'unparseable QA reply'
         logger.warning('[VisualQA] %s reply not parseable: %.200s',

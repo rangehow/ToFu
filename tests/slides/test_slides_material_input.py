@@ -4,7 +4,6 @@ from __future__ import annotations
 import pytest
 
 from lib.slides.contracts import (
-    MAX_SLIDE_MATERIAL_CHARS,
     normalise_slide_material,
     normalise_slide_topic,
 )
@@ -14,11 +13,10 @@ from lib.error_envelope import BadRequest
 pytestmark = pytest.mark.unit
 
 
-def test_material_is_bounded_but_admits_a_full_brief():
-    brief = '本项目真实数据：困惑度 34.40 vs 基线 38.68。' * 100
-    assert normalise_slide_material(brief) == brief
-    with pytest.raises(BadRequest):
-        normalise_slide_material('x' * (MAX_SLIDE_MATERIAL_CHARS + 1))
+def test_material_is_taken_whole_however_long():
+    # A 65k-character paper keeps its later experiments and appendix tables.
+    paper = '§3 key-value retrieval: worst case 45.6%. ' * 2000
+    assert normalise_slide_material(paper) == paper.strip()
 
 
 def test_material_is_optional_and_defaults_to_empty():

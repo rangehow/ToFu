@@ -196,7 +196,7 @@ PRODUCE_SLIDES_TOOL = {
                 "material": {
                     "type": "string",
                     "description": "Optional caller-supplied source material "
-                                   "(up to 20000 chars) the deck MUST be "
+                                   "(the whole document) the deck MUST be "
                                    "grounded in — a content brief, resume, "
                                    "project report or notes. Use this whenever "
                                    "the deck must reflect the user's OWN work, "

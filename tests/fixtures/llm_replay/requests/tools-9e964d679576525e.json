@@ -1293,7 +1293,7 @@
       "type": "string"
      },
      "material": {
-      "description": "Optional caller-supplied source material (up to 20000 chars) the deck MUST be grounded in — a content brief, resume, project report or notes. Use this whenever the deck must reflect the user's OWN work, numbers and attributions rather than public web research: its facts and figures are treated as authoritative and are never replaced by web results or invented values. Keep 'topic' as the short deck title.",
+      "description": "Optional caller-supplied source material (the whole document) the deck MUST be grounded in — a content brief, resume, project report or notes. Use this whenever the deck must reflect the user's OWN work, numbers and attributions rather than public web research: its facts and figures are treated as authoritative and are never replaced by web results or invented values. Keep 'topic' as the short deck title.",
       "type": "string"
      },
      "max_pages": {

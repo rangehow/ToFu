@@ -53,13 +53,70 @@ def test_evidence_context_matches_dispatched_digest(tmp_path, monkeypatch):
         str(image), model='vlm-test', review_context=changed) != identity
 
 
+def test_deck_pagination_is_not_a_source_claim():
+    """A reviewer refused "N / 12" page chrome against the source's own
+    page count; the context names the deck's count and that chrome."""
+    outline = _outline()
+    outline['pages'] = outline['pages'] * 3
+    for page_index in (None, 1):
+        context = json.loads(build_review_context(outline, page_index=page_index))
+        assert context['deck_page_count'] == 3
+        assert 'not claims about the source' in context['deck_pagination']
+
+
+def test_contact_sheet_review_is_scoped_to_deck_level_properties():
+    """Thumbnails cannot show legibility; pages are reviewed at full size."""
+    deck = json.loads(build_review_context(_outline()))
+    page = json.loads(build_review_context(_outline(), page_index=0))
+    assert 'Do not report text size' in deck['contact_sheet_scope']
+    assert 'contact_sheet_scope' not in page
+
+
+def _one_page_deck(tmp_path, title):
+    import yaml
+    root = tmp_path / 'deck'
+    (root / 'pages').mkdir(parents=True)
+    (root / 'pages' / '01.page').write_text(yaml.safe_dump({
+        'pageType': 'content', 'elements': [{
+            'elementId': 'title', 'elementType': 'text',
+            'bounds': [80, 80, 900, 160], 'content': {'text': title}}]}))
+    (root / 'deck.pptd').write_text(yaml.safe_dump({
+        'version': 'v2', 'title': 't', 'size': [1280, 720], 'theme': {},
+        'pages': ['pages/01.page']}))
+    return str(root)
+
+
+def test_review_sees_the_source_units_stating_the_pages_numbers(tmp_path):
+    """A reviewer shown only the cited table (1.97) refused the abstract's
+    true 1.96%; the author gate admits any number in the deck evidence, so
+    the review receives the unit stating each other visible number."""
+    outline = _outline('| model | % Resolved |\n| Claude 2 | 1.97 |')
+    ctx = {'artifacts': {'research': {'material_cards': [
+        {'id': 'M1', 'section': 'Abstract', 'point': 'Claude 2 solves a mere 1.96% of issues.'},
+        {'id': 'M2', 'section': 'Results', 'point': 'Claude 2 resolves 1.96% again.'},
+        {'id': 'M13', 'section': 'Table', 'point': '| Claude 2 | 1.97 |'}]}}}
+    page = ('elements:\n- elementId: t\n  elementType: text\n  bounds: [0, 0, 100, 40]\n'
+            '  content: {text: "Best model resolves 1.96% (1.97 in Table 5), page 1 of 3"}\n')
+    evidence = recipe._page_review_evidence(ctx, outline, 0, page, total=3)
+    assert [unit['id'] for unit in evidence['number_sources']] == ['M1']
+    context = json.loads(build_review_context(outline, page_index=0, **evidence))
+    assert '1.96%' in context['source_units_stating_other_visible_numbers'][0]['point']
+    # The reviewer reads the page's numbers exactly, not off downscaled pixels.
+    assert context['authored_page_text']['texts'] == [
+        'Best model resolves 1.96% (1.97 in Table 5), page 1 of 3']
+    assert 'source_units_stating_other_visible_numbers' not in json.loads(
+        build_review_context(outline, page_index=0))
+
+
 def test_page_cache_reuses_only_the_same_effective_evidence(tmp_path, monkeypatch):
     image = tmp_path / 'page.png'
     image.write_bytes(b'unchanged-pixels')
     calls = []
     approved = _outline('Owner-corrected result: 79%.')
-    ctx = {'topic': 'Present the supplied study', 'artifacts': {
-        'outline': _outline(), 'outline_gate': {'outline': approved}}}
+    deck_dir = _one_page_deck(tmp_path, 'Accuracy 79%')
+    ctx = {'topic': 'Present the supplied study', 'deck_dir': deck_dir,
+           'artifacts': {'outline': _outline(),
+                         'outline_gate': {'outline': approved}}}
 
     def review(path, **kwargs):
         calls.append(kwargs['review_context'])
@@ -95,9 +152,14 @@ def test_repaired_page_keeps_the_effective_source_context(repair_case, monkeypat
     monkeypatch.setattr(vqa, 'qa_frame', review)
     result = recipe._run_visual_qa(ctx)
     assert result['repairedPages'] == [1] and source.read_text() == candidate
-    pages = [context for label, context in contexts if label == 'page-01']
-    assert len(pages) == 2 and pages[0] == pages[1]
-    assert 'held-out data' in pages[0]
+    pages = [json.loads(context) for label, context in contexts if label == 'page-01']
+    assert len(pages) == 2
+    # Same source evidence for the original and the repair; each review reads
+    # its own page's authored text.
+    texts = [page.pop('authored_page_text')['texts'] for page in pages]
+    assert texts == [['Original'], ['Improved']]
+    assert pages[0] == pages[1]
+    assert 'held-out data' in json.dumps(pages[0])
     decks = [json.loads(context) for label, context in contexts
              if label == 'deck-coherence']
     assert len(decks) == 2 and decks[0] == decks[1]
@@ -131,3 +193,11 @@ def test_context_truncation_is_shared_by_cache_and_dispatch(tmp_path, monkeypatc
     result = vqa.qa_frame(str(image), model='vlm-test', review_context=context)
     assert identity == result['input_sha256']
     assert len(prompts[0]) < 20000 and '已截断' in prompts[0]
+
+
+def test_review_context_does_not_blame_a_page_for_conflicting_sources():
+    import json
+    from lib.slides.review_context import build_review_context
+    context = json.loads(build_review_context(
+        {'title': 't', 'pages': [{'key_message': 'm'}]}, page_index=0))
+    assert 'never a major or blocker' in context['source_conflicts']

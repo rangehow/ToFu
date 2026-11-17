@@ -314,3 +314,383 @@ def test_last_measured_candidate_is_returned_for_the_caller_to_compare(
         layout_findings=lambda text: ['still 20px short'])
     assert result['mode'] == 'authored' and result['yaml'] == still_long.strip()
     assert result['findings'] == ['still 20px short']
+
+
+# ── Line breaks: widows and words split across lines ──
+
+def _break(element_id, inner, balanced, clean=0, painted=False, widow=True):
+    return {'type': 'text_line_break', 'elements': [element_id],
+            'widow': widow, 'split': not widow, 'painted': painted,
+            'innerWidth': inner, 'balancedWidth': balanced, 'cleanWidth': clean}
+
+
+def test_line_break_repair_narrows_the_box_and_keeps_its_alignment_edge():
+    from lib.slides.layout_qa import line_break_repairs
+
+    def text(element_id, halign):
+        return {'elementId': element_id, 'elementType': 'text',
+                'bounds': [100, 50, 800, 120],
+                'content': {'align': [halign, 'bottom'], 'text': 'x'}}
+
+    page = {'elements': [text(eid, halign) for eid, halign in (
+        ('l', 'left'), ('c', 'center'), ('r', 'right'), ('j', 'justify'),
+        ('p', 'left'), ('clean', 'left'), ('split', 'left'))]}
+    breaks = [_break('l', 800, 401.2), _break('c', 800, 400),
+              _break('r', 800, 400), _break('j', 800, 400),
+              _break('p', 800, 400, painted=True),
+              # A clean width (no widow, no split) wins over the balanced one.
+              _break('clean', 800, 400, clean=759),
+              # A split word with no clean width has no geometric answer.
+              _break('split', 800, 400, widow=False)]
+    repairs = line_break_repairs(page, breaks)
+    assert repairs['l'] == {'bounds': [100.0, 50.0, 402.0, 120.0],
+                            'valign': 'bottom'}
+    assert repairs['c']['bounds'] == [300.0, 50.0, 400.0, 120.0]
+    assert repairs['r']['bounds'] == [500.0, 50.0, 400.0, 120.0]
+    assert repairs['clean']['bounds'] == [100.0, 50.0, 759.0, 120.0]
+    # Justified or painted text would visibly change: left to the author.
+    assert set(repairs) == {'l', 'c', 'r', 'clean'}
+
+
+def _one_title_deck(tmp_path, title):
+    from lib.slides.pptd import Deck, parse_page_text
+    page_yaml = yaml.safe_dump({'elements': [{
+        'elementId': 'title', 'elementType': 'text',
+        'bounds': [40, 40, 19 * 40, 200],
+        'content': {'text': title, 'fontSize': 40, 'lineHeight': 1.2,
+                    'align': ['left', 'top']}}]}, allow_unicode=True)
+    page = parse_page_text(page_yaml, path='pages/01.page')
+    return page_yaml, Deck(title='t', size=(1280, 720), theme={},
+                           pages=[page], root=str(tmp_path))
+
+
+@pytest.mark.parametrize('title,kind', [
+    # 40px glyphs in a box 19 glyphs wide: the 20th wraps alone.
+    ('模型数据集判定器固定只换框架结果仍然显著领先一'[:20], 'widow'),
+    # The word 管理 straddles the wrap after the 19th glyph.
+    ('一二三四五六七八九十一二三四五六七的管理团队负责交付', 'split'),
+])
+def test_measured_line_break_is_repaired_without_new_findings(tmp_path, title, kind):
+    pytest.importorskip('playwright.sync_api')
+    from lib.slides.layout_qa import inspect_deck_layout
+    page_yaml, deck = _one_title_deck(tmp_path, title)
+    before = inspect_deck_layout(deck)
+    if not before.get('ran'):
+        pytest.skip(f'no browser: {before.get("reason")}')
+    assert [(b['elements'], b[kind]) for b in before['line_breaks']] == [
+        (['title'], True)]
+    assert before['findings'] == []
+
+    text, trial = recipe._repair_page_line_breaks(deck, 0, page_yaml,
+                                                  abort_check=None)
+    after = inspect_deck_layout(trial)
+    assert after['line_breaks'] == [] and after['findings'] == []
+    narrowed = yaml.safe_load(text)['elements'][0]['bounds']
+    assert narrowed[0] == 40 and narrowed[2] < 19 * 40
+
+
+# ── Containers: text placed in a card stays in it ──
+
+def _record(element_id, z, top, bottom, left=100, right=300):
+    return {'id': element_id, 'visible': True, 'z': z, 'fontSize': 16,
+            'lineHeight': 0, 'outer': {'left': left, 'top': top,
+                                       'right': right, 'bottom': bottom + 12},
+            'rects': [{'left': left, 'top': top, 'right': right,
+                       'bottom': top + 20, 'width': right - left,
+                       'height': 20},
+                      {'left': left, 'top': top + 20, 'right': right,
+                       'bottom': bottom, 'width': right - left,
+                       'height': bottom - top - 20}]}
+
+
+def _shape(element_id, z, left, top, right, bottom):
+    return {'id': element_id, 'z': z, 'visible': True,
+            'outer': {'left': left, 'top': top, 'right': right,
+                      'bottom': bottom}}
+
+
+def test_text_running_past_its_card_is_a_layout_finding():
+    card = _shape('card', 0, 80, 80, 320, 140)
+    bar = _shape('accent-bar', 1, 96, 90, 100, 200)
+    page_bg = _shape('page-bg', -1, 0, 0, 1280, 720)
+    spill = _record('note', 2, 100, 150)       # starts in the card, ends 10px below
+    inside = _record('ok', 3, 84, 124, left=80, right=96)
+    findings = _page_findings([spill, inside], 0, tolerance=1.5,
+                              shapes=[page_bg, card, bar])
+    assert [(f['type'], f['elements'], f['outside']) for f in findings] == [
+        ('text_outside_container', ['note', 'card'], {'bottom': 10.0})]
+    page = {'elements': [_text('note', [100, 100, 200, 62], text='x' * 50)]}
+    instruction = findings_text(findings, page)
+    assert '"card" spans x=80..320, y=80..140' in instruction
+    assert 'cut this text to about 40 characters (now 50)' in instruction
+    # A shape painted above the text is not its container.
+    above = _shape('card', 9, 80, 80, 320, 140)
+    assert _page_findings([spill], 0, tolerance=1.5, shapes=[above]) == []
+
+
+# ── Drawn geometry: strokes through glyphs, overlays on charts ──
+
+def _ink_record(element_id, z, left, top, right, bottom):
+    rect = {'left': left, 'top': top, 'right': right, 'bottom': bottom,
+            'width': right - left, 'height': bottom - top}
+    return {'id': element_id, 'visible': True, 'z': z, 'fontSize': 16,
+            'lineHeight': 0, 'rects': [rect], 'ink': [dict(rect)],
+            'outer': {'left': left, 'top': top, 'right': right,
+                      'bottom': bottom}}
+
+
+def _graphic(element_id, z, points, *, kind='line', stroked=True,
+             filled=False, opaque=False):
+    xs = [x for x, _ in points]
+    ys = [y for _, y in points]
+    return {'id': element_id, 'kind': kind, 'z': z, 'visible': True,
+            'stroked': stroked, 'filled': filled, 'opaque': opaque,
+            'strokeWidth': 2 if stroked else 0, 'points': points,
+            'outer': {'left': min(xs), 'top': min(ys), 'right': max(xs),
+                      'bottom': max(ys)}}
+
+
+def test_a_stroke_through_glyphs_is_a_finding_and_a_rule_beside_them_is_not():
+    text = _ink_record('label', 1, 100, 100, 300, 120)
+    through = _graphic('rule', 0, [(x, 110) for x in range(80, 320)])
+    beside = _graphic('gap-rule', 0, [(x, 124) for x in range(80, 320)])
+    # A faint fill edge below the text does not cut it; one painted above does.
+    under = _graphic('wash', 0, [(200, y) for y in range(90, 130)],
+                     kind='shape', stroked=False, filled=True)
+    over = _graphic('badge', 2, [(250, y) for y in range(90, 130)],
+                    kind='shape', stroked=False, filled=True)
+    findings = _page_findings([text], 0, tolerance=1.5,
+                              graphics=[through, beside, under, over])
+    assert [(f['type'], f['elements']) for f in findings] == [
+        ('stroke_through_text', ['label', 'rule']),
+        ('stroke_through_text', ['label', 'badge'])]
+    assert findings[0]['crossing'] == {'left': 101.5, 'top': 110,
+                                       'right': 298.5, 'bottom': 110} or \
+        findings[0]['crossing']['top'] == findings[0]['crossing']['bottom'] == 110
+    assert 'Move or resize "rule"' in findings_text(findings[:1])
+
+
+def test_any_drawing_over_a_chart_is_a_finding():
+    chart = {'id': 'chart', 'z': 1, 'visible': True,
+             'outer': {'left': 100, 'top': 100, 'right': 500, 'bottom': 400}}
+    dot = _graphic('anno-dot', 2, [(300, 250), (305, 255)], kind='shape',
+                   filled=True)
+    below = _graphic('card', 0, [(90, 90), (510, 410)], kind='shape')
+    outside = _graphic('rule', 3, [(x, 420) for x in range(100, 500)])
+    findings = _page_findings([], 0, tolerance=1.5, charts=[chart],
+                              graphics=[dot, below, outside])
+    assert [(f['type'], f['elements']) for f in findings] == [
+        ('graphic_over_chart', ['anno-dot', 'chart'])]
+    assert 'series for a reference value' in findings_text(findings)
+
+
+def _line(element_id, bounds):
+    return {'elementId': element_id, 'elementType': 'line', 'bounds': bounds,
+            'viewBox': [bounds[2], bounds[3]], 'points': '0,1 100,1'}
+
+
+def _crossing(text_id, line_id, crossing, lines):
+    return {'type': 'stroke_through_text', 'elements': [text_id, line_id],
+            'crossing': crossing, 'strokeWidth': 2,
+            'measured': {text_id: {'lines': lines}}}
+
+
+def test_rules_through_text_move_off_the_glyphs_and_the_text_stays():
+    lines = {'left': 100, 'top': 100, 'right': 300, 'bottom': 140}
+    page = {'elements': [
+        _text('label', [100, 100, 200, 40]),
+        _line('top-rule', [80, 103, 240, 2]),       # crosses near the top
+        _line('low-rule', [80, 131, 240, 2]),       # crosses near the bottom
+        _line('divider', [180, 60, 2, 120]),        # passes through vertically
+        _line('tick', [120, 80, 2, 30])]}           # ends inside the text
+    findings = [
+        _crossing('label', 'top-rule', {'left': 100, 'right': 300,
+                                        'top': 104, 'bottom': 104}, lines),
+        _crossing('label', 'low-rule', {'left': 100, 'right': 300,
+                                        'top': 132, 'bottom': 132}, lines),
+        _crossing('label', 'divider', {'left': 181, 'right': 181,
+                                       'top': 102, 'bottom': 138}, lines),
+        _crossing('label', 'tick', {'left': 121, 'right': 121,
+                                    'top': 102, 'bottom': 109}, lines)]
+    repairs = relayout_repairs(page, findings, page_height=720)
+    assert repairs == {
+        'top-rule': {'bounds': [80.0, 98, 240.0, 2.0]},     # 104 -> 99
+        'low-rule': {'bounds': [80.0, 140, 240.0, 2.0]},    # 132 -> 141
+        'divider': {'bounds': [98, 60.0, 2.0, 120.0]},      # x 181 -> 99
+        'tick': {'bounds': [120.0, 70, 2.0, 30.0]}}         # ends at y=99
+    apply_relayout(page, repairs)
+    assert page['elements'][0]['bounds'] == [100, 100, 200, 40]
+    assert page['elements'][1]['bounds'] == [80.0, 98, 240.0, 2.0]
+
+
+def test_a_real_rule_through_a_heading_is_measured_and_moved_clear(tmp_path):
+    pytest.importorskip('playwright.sync_api')
+    from lib.slides.layout_qa import inspect_deck_layout
+    from lib.slides.pptd import Deck, parse_page_text
+    page_yaml = yaml.safe_dump({'elements': [
+        {'elementId': 'heading', 'elementType': 'text',
+         'bounds': [100, 100, 600, 60],
+         'content': {'text': '模型与数据集固定只换框架', 'fontSize': 40,
+                     'lineHeight': 1.2, 'align': ['left', 'top']}},
+        {'elementId': 'rule', 'elementType': 'line',
+         'bounds': [100, 120, 600, 2], 'viewBox': [600, 2],
+         'points': '0,1 600,1', 'border': {'width': 2, 'color': '#000000'}}]},
+        allow_unicode=True)
+    deck = Deck(title='t', size=(1280, 720), theme={},
+                pages=[parse_page_text(page_yaml, path='pages/01.page')],
+                root=str(tmp_path))
+    before = inspect_deck_layout(deck)
+    if not before.get('ran'):
+        pytest.skip(f'no browser: {before.get("reason")}')
+    assert [(f['type'], f['elements']) for f in before['findings']] == [
+        ('stroke_through_text', ['heading', 'rule'])]
+    text, _trial, remaining = recipe._relayout_page_text(
+        deck, 0, page_yaml, abort_check=None)
+    assert remaining == []
+    moved = {e['elementId']: e['bounds']
+             for e in yaml.safe_load(text)['elements']}
+    assert moved['heading'] == [100, 100, 600, 60]
+    assert moved['rule'][1] != 120
+
+
+def test_a_hand_sketched_curve_is_a_finding_and_connectors_are_not():
+    from lib.slides.layout_qa import _sketched_plots
+    page = {'elements': [
+        {'elementId': 'u-curve', 'elementType': 'line',
+         'points': '0,32 120,34 246,216 380,254', 'curve': 'smooth'},
+        {'elementId': 'elbow', 'elementType': 'line',
+         'points': '0,0 0,40 80,40'},
+        {'elementId': 'leader', 'elementType': 'line',
+         'points': '0,0 40,30 80,30', 'arrow': [None, 'triangle']},
+        {'elementId': 'rule', 'elementType': 'line', 'points': '0,1 600,1'}]}
+    findings = _sketched_plots(page, 3)
+    assert [(f['type'], f['page'], f['elements']) for f in findings] == [
+        ('sketched_plot', 4, ['u-curve'])]
+    assert 'chart element built from the evidence numbers' in findings_text(
+        findings)
+
+
+def test_box_text_below_wcag_contrast_is_a_finding_and_takes_the_theme_ink():
+    def coloured(element_id, colour, size, z=1, spans=(), top=100):
+        record = _ink_record(element_id, z, 100, top, 300, top + 20)
+        record['color'] = colour
+        record['colors'] = [{'color': colour, 'size': size, 'bold': False},
+                            *({'color': c, 'size': size, 'bold': False}
+                              for c in spans)]
+        return record
+
+    pale = coloured('note', 'rgb(170, 170, 170)', 16)          # 2.2:1
+    large = coloured('title', 'rgb(192, 101, 43)', 40,
+                     top=200)                                  # 3.8:1, large
+    accent = coloured('body', 'rgb(27, 36, 48)', 16, top=300,
+                      spans=['rgb(192, 101, 43)'])             # inline accent
+    findings = _page_findings([pale, large, accent], 0, tolerance=1.5,
+                              page_background='rgb(247, 247, 245)')
+    assert [(f['type'], f['elements'], f['required']) for f in findings] == [
+        ('text_contrast', ['note'], 4.5)]
+    # On an opaque dark card the same pale text passes 4.5:1 (5.5:1).
+    card = _graphic('card', 0, [(90, 90), (310, 130)], kind='shape',
+                    stroked=False, filled=True, opaque=True)
+    card['fill'] = 'rgb(40, 40, 40)'
+    card['outer'] = {'left': 90, 'top': 90, 'right': 310, 'bottom': 130}
+    assert _page_findings([pale], 0, tolerance=1.5, graphics=[card],
+                          page_background='rgb(247, 247, 245)') == []
+    page = {'elements': [_text('note', [100, 100, 200, 20])]}
+    assert relayout_repairs(page, findings, page_height=720) == {
+        'note': {'color': '$ink'}}
+    assert relayout_repairs(page, findings, page_height=720,
+                            move='upper') == {'note': {'color': '$bg'}}
+    apply_relayout(page, {'note': {'color': '$ink'}})
+    assert page['elements'][0]['content']['color'] == '$ink'
+    assert page['elements'][0]['bounds'] == [100, 100, 200, 20]
+
+
+def test_an_arrow_must_point_at_an_element():
+    target = _ink_record('next-step', 1, 300, 100, 400, 120)
+    panel = _graphic('panel', 0, [(0, 0), (600, 400)], kind='shape',
+                     stroked=False, filled=True)
+    panel['outer'] = {'left': 0, 'top': 0, 'right': 600, 'bottom': 400}
+
+    def arrow(element_id, start, end):
+        line = _graphic(element_id, 2, [start, end])
+        line['arrows'] = [False, True]
+        return line
+
+    short = arrow('short', (100, 110), (260, 110))      # 40px short of the text
+    touching = arrow('touching', (100, 112), (290, 112))  # within 8 x 2px
+    astray = arrow('astray', (100, 300), (260, 300))    # nothing ahead
+    findings = _page_findings([target], 0, tolerance=1.5,
+                              graphics=[panel, short, touching, astray])
+    arrows = [f for f in findings if f['type'] == 'arrow_to_nothing']
+    assert [f['elements'] for f in arrows] == [['short'], ['astray']]
+    # The geometry is not guessed: the author ends it or drops its head.
+    page = {'elements': [{'elementId': 'short', 'elementType': 'line',
+                          'bounds': [100, 109, 160, 2], 'points': '0,1 160,1'}]}
+    assert relayout_repairs(page, arrows, page_height=720) == {}
+    assert 'drop its arrowhead' in findings_text(arrows[1:])
+
+
+def test_table_cell_text_below_wcag_contrast_on_its_own_fill_is_a_finding():
+    from lib.slides.layout_qa import _cell_contrast
+    cells = [
+        {'table': 'results', 'color': 'rgb(255, 255, 255)',
+         'background': 'rgb(176, 196, 186)', 'size': 16, 'bold': True,
+         'text': 'Model'},                                   # 1.8:1
+        {'table': 'results', 'color': 'rgb(27, 36, 48)',
+         'background': 'rgb(247, 247, 245)', 'size': 16, 'bold': False,
+         'text': '1.96%'},
+        {'table': 'plain', 'color': 'rgb(150, 150, 150)',
+         'background': 'rgba(0, 0, 0, 0)', 'size': 16, 'bold': False,
+         'text': 'unknown fill'}]
+    findings = _cell_contrast(cells, 2)
+    assert [(f['type'], f['page'], f['elements']) for f in findings] == [
+        ('text_contrast', 3, ['results'])]
+    assert '"Model"' in findings[0]['message']
+
+
+def test_a_table_whose_rows_run_past_its_box_is_a_finding(tmp_path):
+    from lib.slides.layout_qa import inspect_deck_layout
+    from lib.slides.pptd import Deck, parse_page_text
+    rows = [[{'text': 'Model'}, {'text': 'Before'}, {'text': 'After'}]] + [
+        [{'text': f'model {i}'}, {'text': '4.87'}, {'text': '4.23'}]
+        for i in range(8)]
+
+    def deck(height):
+        page_yaml = yaml.safe_dump({'elements': [
+            {'elementId': 'grid', 'elementType': 'table',
+             'bounds': [100, 100, 600, height], 'rows': rows}]})
+        return Deck(title='t', size=(1280, 720), theme={},
+                    pages=[parse_page_text(page_yaml, path='pages/01.page')],
+                    root=str(tmp_path))
+
+    cramped = inspect_deck_layout(deck(120))
+    if not cramped.get('ran'):
+        pytest.skip(f'no browser: {cramped.get("reason")}')
+    assert [(f['type'], f['elements']) for f in cramped['findings']] == [
+        ('table_overflow', ['grid'])]
+    assert inspect_deck_layout(deck(560))['findings'] == []
+
+
+def test_a_caption_painted_over_a_table_is_a_finding(tmp_path):
+    from lib.slides.layout_qa import inspect_deck_layout
+    from lib.slides.pptd import Deck, parse_page_text
+    rows = [[{'text': 'Model'}, {'text': 'Score'}],
+            [{'text': 'A'}, {'text': '4.87'}]]
+
+    def deck(caption_top):
+        page_yaml = yaml.safe_dump({'elements': [
+            {'elementId': 'grid', 'elementType': 'table',
+             'bounds': [100, 100, 600, 200], 'rows': rows},
+            {'elementId': 'note', 'elementType': 'text',
+             'bounds': [100, caption_top, 600, 30],
+             'content': {'text': 'Oracle retrieval', 'fontSize': 18}}]})
+        return Deck(title='t', size=(1280, 720), theme={},
+                    pages=[parse_page_text(page_yaml, path='pages/01.page')],
+                    root=str(tmp_path))
+
+    over = inspect_deck_layout(deck(110))
+    if not over.get('ran'):
+        pytest.skip(f'no browser: {over.get("reason")}')
+    assert ('text_table_collision', ['note', 'grid']) in [
+        (f['type'], f['elements']) for f in over['findings']]
+    assert inspect_deck_layout(deck(400))['findings'] == []

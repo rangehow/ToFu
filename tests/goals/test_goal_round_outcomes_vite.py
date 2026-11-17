@@ -41,6 +41,7 @@ import {{ createToolHeaderPresentation }} from {json.dumps(str(ROOT / 'frontend/
 import {{ createToolResultPresentation }} from {json.dumps(str(ROOT / 'frontend/src/conversation/presentation/tool-result-presentation.ts'))};
 import {{ createToolImagePresentation }} from {json.dumps(str(ROOT / 'frontend/src/conversation/presentation/tool-image-presentation.ts'))};
 import {{ createToolCommandExecutionPresentation }} from {json.dumps(str(ROOT / 'frontend/src/conversation/presentation/tool-command-execution-presentation.ts'))};
+import {{ createToolCardPresentation }} from {json.dumps(str(ROOT / 'frontend/src/conversation/ui/tool-cards/index.ts'))};
 
 import {{ EXPLICIT_TOOL_ROUND_DISPLAY_NAMES, explicitToolRoundDisplay, toolRoundDisplay, isProjectToolRound, isBrowserToolRound }} from {json.dumps(str(ROOT / 'frontend/src/conversation/presentation/tool-round-presentation.ts'))};
 import {{ TOOL_ROUND_CHEVRON_RIGHT_SVG, toolRoundSvg }} from {json.dumps(str(ROOT / 'frontend/src/conversation/presentation/tool-round-icons.ts'))};
@@ -83,6 +84,9 @@ const command = createToolCommandExecutionPresentation({{translate}});
 (globalThis as any).renderRunningToolCommandHtml = command.renderRunningCommandHtml;
 (globalThis as any).renderSettledToolCommandHtml = command.renderSettledCommandHtml;
 (globalThis as any).toolHeaderQueryText = header.queryText;
+(globalThis as any).toolCardPresentation = createToolCardPresentation({{
+  translate, markdown:(source:string) => source, conversationTitle:() => undefined,
+}});
 
 (globalThis as any).renderToolArtifactHeaderHtml = header.artifactHeaderHtml;
 (globalThis as any).renderRepoMapHeaderHtml = header.repoMapHeaderHtml;

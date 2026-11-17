@@ -22,7 +22,28 @@ def _git(root, *args):
 def root(tmp_path, monkeypatch):
     path = tmp_path / 'data' / 'router'
     monkeypatch.setattr('lib.router.home.router_home_root', lambda: str(path))
+    # The registry seed lists the vault's entries; never read the real vault.
+    monkeypatch.setattr('lib.credentials_vault.list_entries', lambda: [])
     return path
+
+
+def test_resource_seed_lists_vault_entries_by_name_and_note_only(root, monkeypatch):
+    from lib.router.home import owner_resources
+
+    monkeypatch.setattr('lib.credentials_vault.list_entries', lambda: [
+        {'name': 'code_host_token', 'hint': 'ab**yz', 'note': 'Code host PAT (HTTPS | clone)'},
+        {'name': 'plain_key', 'hint': 'cd**wx', 'note': ''},
+        {'name': 'skill.demo.api_key', 'hint': 'ef**uv', 'note': 'skill-owned'},
+        {'name': 'channel.u7.github.token', 'hint': 'gh**st', 'note': 'channel-owned'},
+    ])
+    router_home_path(7)
+    seed = owner_resources(7, content=True)['content']
+    assert ("| `code_host_token` | Code host PAT (HTTPS / clone), in the owner's "
+            'Tofu credential vault |') in seed
+    assert "| `plain_key` | In the owner's Tofu credential vault |" in seed
+    assert 'skill.demo' not in seed and 'channel.u7' not in seed
+    assert not any(hint in seed for hint in ('ab**yz', 'cd**wx'))
+    assert '<!-- vault-rows -->' not in seed
 
 
 def test_location_is_owner_scoped_and_creates_nothing(root):
@@ -47,10 +68,8 @@ def test_creation_is_an_idempotent_committed_repository(root):
     assert _git(home, 'rev-parse', 'HEAD') == head
 
 
-def test_resource_registry_seeded_from_its_documented_source_and_never_overwritten(root):
+def test_resource_registry_seeded_once_and_never_overwritten(root):
     from lib.router.home import owner_resources, router_home_location
-    import json
-    from pathlib import Path
 
     def read(home):
         return owner_resources(7, content=True)
@@ -68,14 +87,10 @@ def test_resource_registry_seeded_from_its_documented_source_and_never_overwritt
     assert seed.startswith('# Owner resource registry')
     assert 'Never store a secret here' in seed
     assert 'how to obtain' in seed
-    # Every queue the patrol's documented seed names is in the registry; the
-    # registry is names and how to obtain them, never a credential value.
-    patrol = json.loads(Path('scripts/hope_patrol/queues.json').read_text())
-    for queue in patrol['queues']:
-        assert f'`{queue}`' in seed
-    for source in ('scripts/hope_patrol/queues.json', 'references/queues.md',
-                   'references/rsi-queues-2026q4.md'):
-        assert source in seed
+    # The registry is names and how to obtain them, never a credential value.
+    # (Its agreement with the private Hope patrol's queue list is
+    # tests/router/test_router_home_hope_seed.py, which stays private with
+    # scripts/hope_patrol/.)
     for forbidden in ('ghp_', 'github_pat_', 'pypi-', 'BEGIN', 'Bearer '):
         assert forbidden not in seed
     # The seed matches the committed baseline byte for byte, so a home left at

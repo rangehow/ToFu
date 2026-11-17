@@ -121,21 +121,6 @@
   border-radius: 4px; background: var(--error-bg);
   color: var(--error-text); vertical-align: 1px;
 }
-.pm-hint {
-  display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-2);
-  padding: var(--space-2) calc(var(--space-2) + var(--space-1) / 2); font-size: var(--font-size-sm); border-radius: var(--radius-xs);
-  border: 1px solid var(--border);
-  background: var(--bg-hover);
-}
-.pm-hint-text { flex: 1; word-break: break-all; }
-.pm-hint-btn {
-  flex: none; padding: calc(var(--space-1) - var(--control-edge-inset)) calc(var(--space-2) + var(--space-1) / 2); font-size: var(--font-size-sm); cursor: pointer;
-  border-radius: var(--radius-xs); border: 1px solid var(--border);
-  background: transparent; color: inherit;
-}
-.pm-hint-btn-primary {
-  background: var(--accent); color: var(--text-on-accent); border-color: transparent;
-}
 .recent-path-full {
   font-size: 10.5px;
   color: var(--text-tertiary);

@@ -50,6 +50,7 @@ import uuid
 
 from lib.json_store import read_json, write_json_atomic
 from lib.log import get_logger
+from lib.storage_authority_sql.durability import fsync_directory
 from lib.storage.generated_v2_semantics import (
     MAX_NATIVE_FASTPATH_FSYNC_REGRESSION,
     MIN_NATIVE_FASTPATH_FSYNC_SPEEDUP,
@@ -515,7 +516,8 @@ def plan_launch(
     durable_fsync, local_fsync = fsync_probe(authority), fsync_probe(base)
     durable_lookup = chosen.source_latency_us or lookup_probe(str(authority))
     local_lookup = chosen.target_latency_us or lookup_probe(str(base))
-    if None in (durable_fsync, local_fsync, durable_lookup, local_lookup):
+    if (durable_fsync is None or local_fsync is None
+            or durable_lookup is None or local_lookup is None):
         checks.add('speedup', False, 'unmeasured')
         return decline('speedup-unmeasured', 'fsync or lookup latency could not be measured')
     detail = (f'fsync {durable_fsync:.0f}->{local_fsync:.0f}us, '
@@ -628,7 +630,7 @@ def headroom_status(front: Path, front_bytes: int, front_files: int = 0, *,
     pressure = max(MIN_PRESSURE_HEADROOM_BYTES, int(front_bytes * PRESSURE_HEADROOM_RATIO))
     critical = max(MIN_CRITICAL_HEADROOM_BYTES, int(front_bytes * CRITICAL_HEADROOM_RATIO))
     state = 'critical' if headroom < critical else 'pressure' if headroom < pressure else 'ok'
-    status = {'freeBytes': free, 'totalBytes': total, 'headroomBytes': headroom,
+    status: dict[str, object] = {'freeBytes': free, 'totalBytes': total, 'headroomBytes': headroom,
               'frontBytes': front_bytes, 'pressureBelowBytes': pressure,
               'criticalBelowBytes': critical}
     try:
@@ -1190,14 +1192,6 @@ def _exit_reason(state: Mapping[str, object], authority: Path,
     return None
 
 
-def _sync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
 def complete_planned_exit(data_dir: Path, binary: str, environ: Mapping[str, str], *,
                           timeout: float, now: float | None = None,
                           run: Callable[..., subprocess.CompletedProcess] = subprocess.run
@@ -1272,10 +1266,10 @@ def complete_planned_exit(data_dir: Path, binary: str, environ: Mapping[str, str
             if os.path.lexists(retired_seed):
                 raise RuntimeError(f'native fastpath exit cannot retire the seed: {retired_seed} exists')
             authority.rename(retired_seed)
-            _sync_directory(data_dir)
+            fsync_directory(data_dir)
         if os.path.lexists(target) and not os.path.lexists(authority):
             target.rename(authority)
-            _sync_directory(data_dir)
+            fsync_directory(data_dir)
         if not authority.is_dir() or os.path.lexists(authority / FASTPATH_MARKER):
             raise RuntimeError('native fastpath exit could not install the exported authority')
         stamp = journal['stamp']

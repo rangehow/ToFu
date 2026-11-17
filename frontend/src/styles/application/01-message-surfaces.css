@@ -116,21 +116,14 @@ summary.thinking-header::-webkit-details-marker{display:none}
  * bilingual block. Tinted with the same accent (139,92,246) as
  * .bilingual-* so the transition is seamless; colors lean on CSS
  * variables / low-alpha accent so they hold up on light/tofu themes. */
-.translate-loading{margin-top:10px;border:1px solid var(--accent-subtle);border-radius:var(--radius-sm);background:linear-gradient(180deg,rgba(110,86,207,0.07),rgba(110,86,207,0.02));overflow:hidden;position:relative;contain:layout style}
-.translate-loading::before{content:"";position:absolute;top:0;left:-40%;width:40%;height:2px;background:linear-gradient(90deg,transparent,var(--accent),transparent);animation:translate-sheen 1.8s ease-in-out infinite;opacity:.7}
 @keyframes translate-sheen{0%{left:-40%}100%{left:100%}}
-.translate-loading-head{display:flex;align-items:center;gap:var(--space-2);padding:9px 13px}
-.translate-loading.has-preview .translate-loading-head{border-bottom:1px solid var(--accent-subtle)}
 .translate-loading-label{font-size:var(--font-size-sm);font-weight:600;letter-spacing:.02em;color:var(--accent);background:linear-gradient(90deg,var(--accent) 0%,var(--text-secondary) 50%,var(--accent) 100%);background-size:200% 100%;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;animation:translate-shimmer 2.4s linear infinite}
-@keyframes translate-shimmer{to{background-position:-200% 0}}
-.translate-spinner{width:13px;height:13px;border:2px solid var(--accent-subtle);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;flex-shrink:0}@keyframes spin{to{transform:rotate(360deg)}}
-.translate-status-sub{font-size:var(--font-size-xs);color:var(--thinking-text);display:flex;align-items:center;gap:var(--space-1);padding:2px 13px var(--space-2)}
+@keyframes translate-shimmer{to{background-position:-200% 0}}@keyframes spin{to{transform:rotate(360deg)}}
 .translate-preview{padding:10px 14px var(--space-3);max-height:440px;overflow-y:auto;overscroll-behavior:contain;contain:content;animation:translate-fade-in .25s ease}
 .translate-preview::-webkit-scrollbar{width:6px}.translate-preview::-webkit-scrollbar-track{background:transparent}.translate-preview::-webkit-scrollbar-thumb{background:transparent;border-radius:3px}.translate-preview:hover::-webkit-scrollbar-thumb{background:var(--border)}
 @keyframes translate-fade-in{from{opacity:0;transform:translateY(-2px)}to{opacity:1;transform:none}}
 .translate-preview .md-content{font-size:13.5px;color:var(--text-primary);line-height:1.7}
 .translate-preview .md-content>:first-child{margin-top:0}.translate-preview .md-content>:last-child{margin-bottom:0}
-.translate-caret{display:inline-block;width:7px;height:14px;margin-left:3px;vertical-align:text-bottom;background:var(--accent);border-radius:2px;animation:translate-blink 1s step-end infinite;box-shadow:0 0 6px var(--accent-subtle)}
 @keyframes translate-blink{0%,100%{opacity:1}50%{opacity:0}}
 
 /* ── Streaming auto-translate render UNIFICATION (2026-07-07) ──
@@ -159,12 +152,6 @@ summary.thinking-header::-webkit-details-marker{display:none}
 
 /* Send-path auto-translate failed → original text was sent. Quiet amber pill
    under the user bubble; clicking it retranslates just that message. */
-.translate-failed-notice{display:inline-flex;align-items:center;gap:7px;margin-top:var(--space-2);padding:5px 11px;font-size:11.5px;line-height:1.3;color:#fbbf24;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.22);border-radius:999px;cursor:pointer;user-select:none;transition:background .2s ease,border-color .2s ease}
-.translate-failed-notice:hover{background:rgba(245,158,11,0.14);border-color:rgba(245,158,11,0.4)}
-.translate-failed-notice .tfn-icon{flex-shrink:0;opacity:.9}
-.translate-failed-notice .tfn-text{opacity:.92}
-.translate-failed-notice .tfn-retry{margin-left:2px;padding-left:var(--space-2);border-left:1px solid rgba(245,158,11,0.3);font-weight:600;opacity:.85}
-.translate-failed-notice:hover .tfn-retry{opacity:1;text-decoration:underline}
 /* Display-translation terminal failure (assistant / critic / VU bubble): a
    quiet borderless inline retry line — no filled pill, no box, matching the
    "just typographic weight" understatement of the translate family. Muted
@@ -173,10 +160,6 @@ summary.thinking-header::-webkit-details-marker{display:none}
    quota etc.) sits on the title tooltip. */
 .translate-retry-line{display:inline-flex;align-items:center;gap:6px;margin-top:7px;font-size:11.5px;line-height:1.3;color:var(--text-tertiary);cursor:pointer;user-select:none;border-radius:var(--radius-sm);transition:color .18s ease}
 .translate-retry-line:hover,.translate-retry-line:focus-visible{color:var(--accent);outline:none}
-.translate-retry-line .trl-icon{flex-shrink:0;display:block;opacity:.75;transition:opacity .18s ease,transform .5s ease}
-.translate-retry-line:hover .trl-icon,.translate-retry-line:focus-visible .trl-icon{opacity:1;transform:rotate(-180deg)}
-.translate-retry-line .trl-text{opacity:.9}
-.translate-retry-line:hover .trl-text{text-decoration:underline;text-underline-offset:2px}
 /* Subtle inline translating indicator on user message — replaces the old separate ✨ bubble */
 @keyframes translatePulse{0%,100%{opacity:.4}50%{opacity:1}}
 /* ★ Perf: content-visibility:auto on search blocks — off-screen blocks skip layout/paint.

@@ -60,10 +60,12 @@ class EventStorage:
             raise RuntimeError("Injected source read failure")
         rows = [
             deepcopy(r)
-            for r in self.rows
-            if r["sequence"] > payload["after_sequence"]
-            and (not payload.get("types") or r["event"]["type"] in payload["types"])
-        ][: payload["limit"]]
+            for r in [
+                r
+                for r in self.rows[payload["after_sequence"] + 1:]
+                if not payload.get("types") or r["event"]["type"] in payload["types"]
+            ][: payload["limit"]]
+        ]
         if self.on_page:
             self.on_page(self)
         return rows

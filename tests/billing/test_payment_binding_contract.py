@@ -7,6 +7,8 @@ from lib.storage.errors import StorageError
 from tests.support import billing_storage
 
 pytestmark = pytest.mark.api
+# The PostgreSQL lane uses the suite-owned cluster when no external DSN file is set.
+pytest_plugins = ('tests.support.postgres_cluster',)
 
 application_storage = billing_storage.application_storage
 application_storage_owner_id = billing_storage.application_storage_owner_id

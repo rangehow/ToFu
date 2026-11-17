@@ -72,6 +72,32 @@ def test_contract_limits_match_runtime():
     assert contract['limits']['sqliteAcceleratorVmSteps'] == ACCELERATOR_VM_STEPS
 
 
+def test_search_functions_are_registered_once_per_connection(search_db):
+    # Redefinition expires prepared statements and, before SQLite 3.53, fails
+    # with SQLITE_BUSY while an open transaction holds pending FTS5 writes.
+    from lib.storage_authority_sql.adapters.search_support import simple_fold_column
+    defined = []
+
+    class Counting(sqlite3.Connection):
+        def create_function(self, name, *args, **kwargs):
+            defined.append(name)
+            return super().create_function(name, *args, **kwargs)
+
+    connection = sqlite3.connect(':memory:', factory=Counting)
+    connection.row_factory = sqlite3.Row
+    connection.executescript(
+        ''.join(row[0] + ';' for row in search_db[0].execute(
+            "SELECT sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE '%fts_%'")))
+    db = (connection, search_db[1])
+    seed(db, 'c1', 'needle')
+    assert connection.in_transaction
+    for _ in range(2):
+        assert [item['id'] for item in page(db, 'needle')['items']] == ['c1']
+        simple_fold_column(SQLiteSession(connection), 'title')
+    assert sorted(defined) == ['tofu_search_lower', 'tofu_simple_fold']
+    connection.close()
+
+
 def test_paged_history_has_no_5000_conversation_cutoff(search_db):
     for i in range(5002):
         seed(search_db, f'c{i:05}', 'oldunique' if i == 0 else 'other', updated=i)

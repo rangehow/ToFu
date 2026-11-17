@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 import hashlib
 import json
 import os
@@ -61,6 +62,10 @@ _MAX_RPC_DEADLINE_S = 120.0
 # cannot allocate unbounded memory through an unterminated line.
 _MAX_ENGINE_STDERR_LINE_CHARS = 16 * 1024
 _ENGINE_LINE_TRUNCATED_MARKER = '…[truncated]'
+# A refused startup names the child's exit code and its last stderr lines, so
+# a remote log (CI, a user's report) shows why without the full child stream.
+_STARTUP_FAILURE_STDERR_LINES = 8
+_STARTUP_FAILURE_STDERR_LINE_CHARS = 400
 # Engine JSON line contract (packages/tofu-db/src/engine_log.rs):
 # {"source":"tofu-db","timestamp":...,"level":...,"target":...,"message":...};
 # timestamp is the engine's RFC 3339 UTC emit instant.
@@ -156,6 +161,7 @@ def _mirror_engine_stderr_line(line: str, *, pid: int) -> None:
 
 def _drain_child_stderr(stream, *, pid: int,
                         forward: Callable[[str], None] = _forward_raw_stderr_line,
+                        tail: 'deque[str] | None' = None,
                         ) -> None:
     """Continuously drain one managed child's stderr pipe until EOF.
 
@@ -192,6 +198,8 @@ def _drain_child_stderr(stream, *, pid: int,
             line = truncated + _ENGINE_LINE_TRUNCATED_MARKER + '\n'
         forward(line)
         _mirror_engine_stderr_line(line, pid=pid)
+        if tail is not None and line.strip():
+            tail.append(line.rstrip()[:_STARTUP_FAILURE_STDERR_LINE_CHARS])
 
 
 def rpc_deadline_seconds() -> float:
@@ -1057,6 +1065,7 @@ class StorageSupervisor:
         self._unreaped_child: subprocess.Popen[str] | None = None
         self._process_started_at: float | None = None
         self._stderr_drainer: threading.Thread | None = None
+        self._stderr_tail: deque[str] = deque(maxlen=_STARTUP_FAILURE_STDERR_LINES)
         self._client: StorageClient | None = None
         self._token = ''
         self._intentional_stop = False
@@ -1284,7 +1293,7 @@ class StorageSupervisor:
         A child started now could only fail on the lease and count as a failed
         start; the restart worker retries on its existing backoff instead.
         """
-        from server_manager import read_storage_lease_status
+        from lib.storage.lease_status import read_storage_lease_status
         if self._project_root is not None:
             data_dir = self._project_root / 'data'
         else:
@@ -1421,7 +1430,12 @@ class StorageSupervisor:
                     # stderr=None inheritance lost every respawned child's
                     # output and kept engine errors out of app.log/incident.
                     stderr=subprocess.PIPE,
-                    text=True,
+                    # Never decode with the locale codec (cp1252 on Windows):
+                    # one undecodable child byte raised UnicodeDecodeError,
+                    # which ended the stderr drainer, lost the failure tail
+                    # and left the pipe to fill until the child blocked.
+                    encoding='utf-8',
+                    errors='replace',
                     bufsize=1,
                     close_fds=(os.name != 'nt'),
                     creationflags=creationflags,
@@ -1455,6 +1469,7 @@ class StorageSupervisor:
                 code = str(ready.get('code') or 'database_unavailable')[:80]
                 diagnostic = str(
                     ready.get('diagnostic') or 'startup was refused')[:500]
+                diagnostic += self._startup_failure_context(process)
                 if code == 'storage_full':
                     # A full volume or exhausted quota: starting again cannot
                     # succeed until space returns, and it is not crash pressure.
@@ -1631,6 +1646,10 @@ class StorageSupervisor:
                 except subprocess.TimeoutExpired:
                     code = process.poll()
                 suffix = f' (exit {code})' if code is not None else ''
+                if code is not None:
+                    self._join_stderr_drainer()
+                if self._stderr_tail:
+                    suffix += ' [stderr: ' + ' | '.join(self._stderr_tail) + ']'
                 raise RuntimeError(
                     'storage sidecar closed its readiness channel before startup'
                     + suffix)
@@ -2420,18 +2439,35 @@ class StorageSupervisor:
                     'next spawn; the previous child pipe never reached EOF',
                     previous.name)
         self._stderr_drainer = None
+        self._stderr_tail = deque(maxlen=_STARTUP_FAILURE_STDERR_LINES)
         stream = process.stderr
         if stream is None:
             return
         drainer = threading.Thread(
             target=_drain_child_stderr,
             args=(stream,),
-            kwargs={'pid': process.pid, 'forward': self._child_stderr_forward},
+            kwargs={'pid': process.pid, 'forward': self._child_stderr_forward,
+                    'tail': self._stderr_tail},
             name=f'storage-stderr-drainer-{process.pid}',
             daemon=True,
         )
         drainer.start()
         self._stderr_drainer = drainer
+
+    def _startup_failure_context(self, process: subprocess.Popen[str]) -> str:
+        """Describe a failed child's exit code and its last stderr lines."""
+        try:
+            code = process.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            code = process.poll()
+        if code is not None:
+            # The exited child's stderr reaches EOF; collect its last lines.
+            self._join_stderr_drainer()
+        parts = [f'exit_code={code if code is not None else "running"}']
+        lines = list(self._stderr_tail)
+        if lines:
+            parts.append('stderr: ' + ' | '.join(lines))
+        return ' [' + '; '.join(parts) + ']'
 
     def _join_stderr_drainer(self, *, timeout: float = 2.0) -> None:
         """Bounded wait for the current child's drainer after its EOF."""

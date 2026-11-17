@@ -32,7 +32,7 @@ def _repo(path):
 
 @pytest.fixture()
 def holder(tmp_path):
-    """Hold one checkout write lease for the whole test body."""
+    """Hold one checkout write lease until the test calls the yielded release."""
     from lib.project_mod.workspace_lease import workspace_write_lease
 
     repo = _repo(tmp_path / 'repo')
@@ -51,13 +51,14 @@ def holder(tmp_path):
     worker = threading.Thread(target=hold)
     worker.start()
     assert entered.wait(5)
-    yield repo
+    yield repo, release.set
     release.set()
     worker.join(5)
     assert not errors
 
 
 def test_waiter_publishes_admission_while_queued(holder):
+    repo, release_holder = holder
     from lib.project_mod.tool_admission import (
         Cancellation, WORKSPACE_ADMISSION_KEY, tool_admission_scope,
     )
@@ -70,7 +71,7 @@ def test_waiter_publishes_admission_while_queued(holder):
 
     def wait():
         with tool_admission_scope(task=task), workspace_write_lease(
-                str(holder), timeout=None, cancel_event=Cancellation(task)):
+                str(repo), timeout=None, cancel_event=Cancellation(task)):
             observed['after'] = task.get(WORKSPACE_ADMISSION_KEY)
 
     worker = threading.Thread(target=wait)
@@ -80,6 +81,7 @@ def test_waiter_publishes_admission_while_queued(holder):
     assert explained_wait(task) == 'workspace-admission'
     assert isinstance(task[WORKSPACE_ADMISSION_KEY]['since'], float)
     assert observed == {}
+    release_holder()
     worker.join(10)
     assert not worker.is_alive()
     # Admission only — execution owns the ordinary process clock again.

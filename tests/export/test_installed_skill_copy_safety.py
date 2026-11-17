@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import pytest
 
+from tests.support.export_toolchain import require_export_toolchain
+
 pytestmark = pytest.mark.unit
+require_export_toolchain()
 
 
 @pytest.mark.parametrize('kind', ['file', 'directory', 'broken', 'root'])

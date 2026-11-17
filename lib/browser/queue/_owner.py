@@ -7,6 +7,8 @@ These wrappers are the only public spelling of the verbs task code uses, so
 tool calls, availability evidence and connection waits read one registry.
 """
 
+from typing import Any
+
 from . import _dispatch, _registry
 
 
@@ -15,7 +17,7 @@ def _relay():
     return selected_relay()
 
 
-def get_connected_clients(*, owner_user_id: str | None):
+def get_connected_clients(*, owner_user_id: str | None) -> list[dict[str, Any]]:
     relay = _relay()
     if relay is None:
         return _registry.get_connected_clients(owner_user_id=owner_user_id)

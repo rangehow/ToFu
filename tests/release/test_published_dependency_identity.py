@@ -84,7 +84,7 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 _REQUIREMENTS = _ROOT / 'requirements.txt'
 
 _PACKAGE = 'tofu-search'
-_PINNED_VERSION = '0.12.25'
+_PINNED_VERSION = '0.12.28'
 
 # Measured 2026-08-21 from the artifacts built off tofu-search e2cbcfc (tag
 # v0.10.3) via clean `git archive HEAD` + `python -m build --no-isolation`,
@@ -93,18 +93,20 @@ _PINNED_VERSION = '0.12.25'
 # __file__ asserted inside the probe dir and all 37 facade __all__ symbols
 # resolving; the digests below are PyPI's own /pypi/tofu-search/0.10.3/json
 # values AND match the local sha256 of the uploaded files byte-for-byte.
-# 0.12.25 digests are PyPI's own /pypi/tofu-search/0.12.25/json values, read
-# back after the trusted-publisher upload (tag search-v0.12.25, workflow run
-# 39758603792 attempt 2). The local clean-checkout artifacts were NOT used for
-# these numbers: this build is content-deterministic but not byte-reproducible,
-# because the wheel/sdist record file mtimes. Two clean builds produced zero
-# differing members yet different sha256 digests, so pinning a local hash would
-# have recorded bytes PyPI never served.
+# 0.12.28 digests are the sha256 values https://pypi.org/simple/tofu-search/
+# serves, read back 2026-11-17 after `uv publish` of artifacts built from the
+# public export's packages/tofu-search with build_search_wheel's pinned
+# SOURCE_DATE_EPOCH. That pin makes the wheel byte-reproducible (earlier builds
+# recorded file mtimes, so equal sources gave different digests), and the
+# export's vendor/ wheel equals the published one byte for byte. Before
+# upload: twine check PASSED, all 90 package files present in the wheel, and a
+# fresh non-editable install from the index imported 0.12.28 from
+# site-packages.
 _EXPECTED_DIGESTS = {
-    'tofu_search-0.12.25-py3-none-any.whl':
-        'bc4ee3cfda6678e8e3ccc9ed3ec4b48302c73b5be10def4be3bbec03f09756c1',
-    'tofu_search-0.12.25.tar.gz':
-        'e55e590dd691445c02fb9691d657fcda753d718ca8fa4183873277d0c48e1aae',
+    'tofu_search-0.12.28-py3-none-any.whl':
+        'bfceadbde71374c8f2079bfe66891800ebbb461bee78ce0718c7e58053079795',
+    'tofu_search-0.12.28.tar.gz':
+        '7197b5b4dd966702c97eea5b20c641bc2cb5e709fd7f0961c54cd9348778c5fc',
 }
 
 _PYPI_VERSION_JSON = 'https://pypi.org/pypi/{name}/{version}/json'

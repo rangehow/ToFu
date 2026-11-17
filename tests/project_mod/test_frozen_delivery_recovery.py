@@ -148,21 +148,39 @@ def test_failed_release_validation_no_longer_prevents_workspace_delivery(repo, m
     assert (root / 'task.txt').read_text() == 'task\n'
 
 
+def intercept_git_spawns(patch, decide):
+    """Route every Git spawn through DECIDE: both the deadline and the stall-supervised runner.
+
+    Capture runs its Git under the stall supervisor (no total deadline), so a
+    seam on ``subprocess.run`` alone would never see it. DECIDE returns a
+    replacement result, raises a spawn error, or returns None to run Git.
+    """
+    from lib.project_mod import activity_supervised_process as supervised
+    run, supervised_run = subprocess.run, supervised.run_activity_supervised
+
+    def deadline_run(argv, *args, **kwargs):
+        return decide(argv) or run(argv, *args, **kwargs)
+
+    def stall_supervised_run(argv, *args, **kwargs):
+        return decide(argv) or supervised_run(argv, *args, **kwargs)
+
+    patch.setattr(ic.subprocess, 'run', deadline_run)
+    patch.setattr(supervised, 'run_activity_supervised', stall_supervised_run)
+
+
 @pytest.mark.parametrize('error_number', [errno.EAGAIN, errno.EINTR, errno.ENOMEM])
 def test_transient_git_spawn_failure_during_capture_resumes_pending_delivery(
         repo, monkeypatch, error_number):
     root, _, _ = repo
     work = automatic_workspace(repo, monkeypatch)
     (work / 'task.txt').write_text('completed task bytes\n')
-    run = subprocess.run
 
-    def fail_git_diff_spawn(argv, *args, **kwargs):
+    def fail_git_diff_spawn(argv):
         if 'diff' in argv:
             raise OSError(error_number, errno.errorcode[error_number])
-        return run(argv, *args, **kwargs)
 
     with monkeypatch.context() as patch:
-        patch.setattr(ic.subprocess, 'run', fail_git_diff_spawn)
+        intercept_git_spawns(patch, fail_git_diff_spawn)
         first = automatic_settle(repo)
     assert first['state'] == 'pending', first['reason']
     assert 'Errno %d' % error_number in first['reason']
@@ -176,26 +194,23 @@ def test_deterministic_git_failure_during_capture_stays_blocked(repo, monkeypatc
     root, _, _ = repo
     work = automatic_workspace(repo, monkeypatch)
     (work / 'task.txt').write_text('unpublishable task bytes\n')
-    run = subprocess.run
 
-    def reject_git_diff(argv, *args, **kwargs):
+    def reject_git_diff(argv):
         if 'diff' in argv:
             return subprocess.CompletedProcess(argv, 128, '', 'invalid object name')
-        return run(argv, *args, **kwargs)
 
     with monkeypatch.context() as patch:
-        patch.setattr(ic.subprocess, 'run', reject_git_diff)
+        intercept_git_spawns(patch, reject_git_diff)
         first = automatic_settle(repo)
     assert first['state'] == 'blocked', first
     assert 'invalid object name' in first['reason']
-    checkpoint = first['checkpointSha']
     with monkeypatch.context() as patch:
         def unexpected_capture(*args, **kwargs):
             raise AssertionError('a blocked deterministic capture must not be recaptured')
         patch.setattr(ic, 'checkpoint_workspace', unexpected_capture)
         assert automatic_settle(repo) == first
     assert not (root / 'task.txt').exists()
-    assert receipt(root)['checkpointSha'] == checkpoint
+    assert receipt(root) == first
 
 
 def test_legacy_transient_capture_receipt_recovers_through_resume_queue(repo, monkeypatch):

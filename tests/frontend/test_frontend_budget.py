@@ -166,3 +166,70 @@ def test_frontend_legacy_debt_is_a_monotonic_zero_target_ratchet():
     assert {item['metric'] for item in debts} == {
         'file_count', 'byte_count', 'regex_count',
     }
+
+
+def _run_budget(monkeypatch, tmp_path, manifest, sizes, env=()):
+    import sys
+    from lib import vite_assets
+    from scripts import frontend_budget
+
+    for name in ('TOFU_BUDGET_VITE_MAIN_KIB', 'TOFU_BUDGET_VITE_ADMIN_KIB',
+                 'TOFU_BUDGET_VITE_CHUNK_KIB', 'TOFU_BUDGET_FRONTEND_TOTAL_KIB'):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env:
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(sys, 'argv', ['frontend_budget.py'])
+    monkeypatch.setattr(frontend_budget, 'ROOT', tmp_path)
+    monkeypatch.setattr(frontend_budget, '_check_source_shape', lambda _: None)
+    monkeypatch.setattr(frontend_budget, '_gzip_size', lambda path: sizes[path.name] * 1024)
+    monkeypatch.setattr(vite_assets, 'validate_vite_artifact', lambda: manifest)
+    return frontend_budget.main()
+
+
+def _lazy_heavy_manifest(features):
+    manifest = {
+        # main.ts is a startup-dynamic entry: application.ts loads at startup.
+        'frontend/src/main.ts': {
+            'file': 'assets/main.js', 'isEntry': True, 'isDynamicEntry': True,
+            'imports': ['shared'], 'dynamicImports': ['frontend/src/application.ts'],
+        },
+        'frontend/src/application.ts': {
+            'file': 'assets/application.js', 'isDynamicEntry': True,
+            'imports': ['shared'],
+            'dynamicImports': [f'feature{index}' for index in range(features)],
+        },
+        'frontend/src/admin.ts': {'file': 'assets/admin.js', 'isEntry': True},
+        'shared': {'file': 'assets/shared.js'},
+        'lazy-shared': {'file': 'assets/lazy-shared.js'},
+    }
+    for index in range(features):
+        manifest[f'feature{index}'] = {
+            'file': f'assets/feature{index}.js', 'isDynamicEntry': True,
+            'imports': ['lazy-shared'],
+        }
+    return manifest
+
+
+def test_total_counts_eager_startup_bytes_and_excludes_on_demand_chunks(
+        monkeypatch, tmp_path, capsys):
+    # 12 x 110 KiB of on-demand features plus a 400 KiB chunk only they import
+    # exceed the old whole-graph total; each feature keeps its 120 KiB ceiling.
+    manifest = _lazy_heavy_manifest(12)
+    sizes = {'main.js': 100, 'application.js': 300, 'admin.js': 1, 'shared.js': 150,
+             'lazy-shared.js': 400,
+             **{f'feature{index}.js': 110 for index in range(12)}}
+    assert _run_budget(monkeypatch, tmp_path, manifest, sizes) == 0
+    assert 'total startup Vite JavaScript: 551.0 KiB' in capsys.readouterr().out
+
+    sizes['feature3.js'] = 121
+    assert _run_budget(monkeypatch, tmp_path, manifest, sizes) == 1
+
+
+def test_startup_growth_still_fails_the_total_when_an_entry_limit_is_raised(
+        monkeypatch, tmp_path, capsys):
+    manifest = _lazy_heavy_manifest(1)
+    sizes = {'main.js': 900, 'application.js': 1, 'admin.js': 1, 'shared.js': 200,
+             'lazy-shared.js': 1, 'feature0.js': 1}
+    raised = [('TOFU_BUDGET_VITE_MAIN_KIB', '4000')]
+    assert _run_budget(monkeypatch, tmp_path, manifest, sizes, raised) == 1
+    assert 'total startup Vite JavaScript' in capsys.readouterr().err

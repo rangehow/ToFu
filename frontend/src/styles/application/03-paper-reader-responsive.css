@@ -48,7 +48,6 @@
   .paper-sidebar-current{padding:14px var(--space-4)}
   .paper-sidebar-new-inline-btn{width:32px;height:32px}
   .research-sidebar-current{padding:14px var(--space-4)}
-  .research-sidebar-new-inline-btn{width:32px;height:32px}
   .paper-lib-item{padding:var(--space-3);min-height:48px}
   .paper-lib-item-del{display:flex;width:32px;height:32px}
   .paper-tab-btn{padding:10px 6px;font-size:var(--font-size-sm);gap:var(--space-1)}
@@ -62,9 +61,7 @@
   .paper-arxiv-input .paper-arxiv-search-icon{display:none}
   .paper-arxiv-input input{padding-left:14px}
   .paper-arxiv-btn{width:100%}
-  .research-landing{padding:var(--space-8) var(--space-4)}
   .research-landing-row{flex-direction:column}
-  .research-landing-btn{width:100%}
   .paper-search{padding:var(--space-4) var(--space-3)}
   .paper-result-card{padding:var(--space-3)}
 }

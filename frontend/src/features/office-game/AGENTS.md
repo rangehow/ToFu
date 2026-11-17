@@ -21,8 +21,8 @@ fits the whole view, so insets (a docked panel) crop the world and the camera
 pans instead of shrinking it. `navigation: 'targets'` makes arrow keys move
 focus to the nearest target in that direction (`targets.ts`) instead of held
 movement. A scene that paints every pixel declares `opaque` and the stage skips
-its backdrop. Hosts style the stage classes themselves (`36-lead-office.css`,
-`27-world-office.css`).
+its backdrop. Hosts style the stage classes themselves
+(`features/lead-office/office.css`, `features/world/world-office.css`).
 
 `office-character.ts` maps free-form roles to eight character models.
 

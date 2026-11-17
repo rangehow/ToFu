@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import queue
 import threading
 import time
+from typing import Any
 
 from lib.storage.errors import StorageError
 
@@ -54,12 +55,21 @@ class _IdleSlots:
 
 @dataclass(slots=True)
 class ConnectionSlot:
-    connection: object
+    connection: Any
     created_at: float
     last_used_at: float
     leased: bool = False
     owner: object | None = None
     releasing: bool = False
+
+
+class _ConnectRefused(Exception):
+    """A driver refused to open a new connection for this lease."""
+
+    def __init__(self, error, released):
+        super().__init__(type(error).__name__)
+        self.error = error
+        self.released = released
 
 
 class DemandConnectionPool:
@@ -75,6 +85,7 @@ class DemandConnectionPool:
         self.idle = _IdleSlots()
         self.condition = threading.Condition()
         self.active = self.peak = self.rotations = self.connections_created = 0
+        self._released = 0
         self.closed = False
         self._close_lock = threading.RLock()
 
@@ -83,7 +94,35 @@ class DemandConnectionPool:
             raise self.classify_error(error, deadline_at) from error
         raise error
 
+    def _await_sibling_release(self, deadline_at, observed):
+        """Wait for a live sibling lease to return its connection.
+
+        A server refuses a new connection at its own connection limit
+        (PostgreSQL ``max_connections``) while this pool's siblings are still
+        connected. Their release hands back a reusable connection, so a
+        refused connect waits for one within the caller's deadline instead of
+        failing a command the server could serve. With no live sibling the
+        refusal is the authority's real state and is raised. ``observed`` is
+        the release count when the refused lease began, so a sibling that
+        released while the connect was being refused still counts.
+        """
+        with self.condition:
+            while not self.closed and self.active and self._released == observed:
+                remaining = deadline_at - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self.condition.wait(remaining)
+            return not self.closed and self._released != observed
+
     def acquire(self, deadline_at):
+        while True:
+            try:
+                return self._acquire_once(deadline_at)
+            except _ConnectRefused as refused:
+                if not self._await_sibling_release(deadline_at, refused.released):
+                    self._raise_error(refused.error, deadline_at)
+
+    def _acquire_once(self, deadline_at):
         with self.condition:
             if self.closed:
                 raise StorageError('database_unavailable', 'Storage connection is not available')
@@ -97,16 +136,18 @@ class DemandConnectionPool:
                 raise RuntimeError('Storage idle connection belongs to another lease owner')
             self.active += 1
             self.peak = max(self.peak, self.active)
+            released = self._released
         try:
             now = time.monotonic()
             if slot is None:
-                slot = ConnectionSlot(self.connect(deadline_at), now, now)
+                slot = ConnectionSlot(self._connect_or_refuse(deadline_at, released), now, now)
                 with self.condition:
                     self.connections_created += 1
             elif (now - slot.created_at >= self.max_lifetime_s
                     or now - slot.last_used_at >= self.idle_lifetime_s):
                 slot.connection.close()
-                slot = ConnectionSlot(self.connect(deadline_at), now, now)
+                slot = None
+                slot = ConnectionSlot(self._connect_or_refuse(deadline_at, released), now, now)
                 with self.condition:
                     self.connections_created += 1
                     self.rotations += 1
@@ -123,7 +164,15 @@ class DemandConnectionPool:
                 with self.condition:
                     self.active -= 1
                     self.condition.notify_all()
+            if isinstance(error, _ConnectRefused):
+                raise
             self._raise_error(error, deadline_at)
+
+    def _connect_or_refuse(self, deadline_at, released):
+        try:
+            return self.connect(deadline_at)
+        except self.driver_errors as error:
+            raise _ConnectRefused(error, released) from error
 
     def release(self, slot, *, retire=False):
         with self.condition:
@@ -163,6 +212,7 @@ class DemandConnectionPool:
                 self.rotations += len(expired)
                 if not expired:
                     self.active -= 1
+                    self._released += 1
                     self.condition.notify_all()
                     return
         if expired:
@@ -177,6 +227,7 @@ class DemandConnectionPool:
             finally:
                 with self.condition:
                     self.active -= 1
+                    self._released += 1
                     self.condition.notify_all()
             return
         try:
@@ -186,6 +237,7 @@ class DemandConnectionPool:
                 slot.leased = False
                 slot.releasing = False
                 self.active -= 1
+                self._released += 1
                 self.condition.notify_all()
         if cleanup_error is not None:
             self._raise_error(cleanup_error, float('inf'))

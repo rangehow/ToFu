@@ -61,6 +61,6 @@ def test_a_results_wake_of_a_budgeted_request_with_two_workers_is_admitted(segme
 
     [wake] = controls(r)
     assert wake['request']['coordinatorWake']['reason'] == 'results'
-    assert first['id'] + ': completed' in wake['request']['brief']
-    assert second['id'] + ': completed' in wake['request']['brief']
+    # Worker states are read from the task board, not enumerated in the brief.
+    assert first['id'] not in wake['request']['brief']
     assert r.wake() == [] and len(controls(r)) == 1

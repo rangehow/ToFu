@@ -29,6 +29,7 @@ import sys
 import zipfile
 
 import pytest
+from tests.support.export_toolchain import require_export_toolchain
 
 pytestmark = pytest.mark.unit
 
@@ -759,7 +760,7 @@ def test_chromium_env_survives_the_export():
     """
     sys.path.insert(0, ROOT)
     import importlib
-    pytest.importorskip('export', reason='export.py not shipped in opensource')
+    require_export_toolchain()
     export = importlib.import_module('export')
 
     target = 'chromium_env.py'

@@ -1,6 +1,7 @@
 /** Lazy My Day composition and feature entry. */
 import '../runtime/myday-presenters.generated.js';
-import '../styles/application/16-my-day-goals.css';
+import './myday-panel.css';
+import './myday-goals.css';
 import { featureRegistry } from '../feature-registry';
 import { t } from '../i18n';
 import { invokeFeatureEntry, type FeatureCallable } from '../runtime-bridge';

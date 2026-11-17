@@ -26,7 +26,7 @@ def test_coordinator_graph_pages_reach_old_workers_with_bounded_dom(frontend_vis
     entry.write_text(f"export {{ openProjectCoordination }} from '{ROOT}/frontend/src/features/project-coordination';\nexport {{ ready }} from '{ROOT}/frontend/src/i18n';\n")
     page.add_script_tag(path=native_module_path('.native/coordinator-history.js', entry))
     page.evaluate('async () => { await ready(); }')
-    page.add_style_tag(path=str(ROOT / 'frontend/src/styles/application/33-project-coordination.css'))
+    page.add_style_tag(path=str(ROOT / 'frontend/src/features/project-coordination.css'))
     page.evaluate('''async () => {
       document.body.innerHTML='<aside id="sidebar"></aside><main id="canvas"></main>';
       document.body.style.display='block';
@@ -116,7 +116,7 @@ def test_project_workspace_attention_team_and_conversation_navigation(frontend_v
     entry.write_text(f"export {{ openProjectCoordination }} from '{ROOT}/frontend/src/features/project-coordination';\nexport {{ ready }} from '{ROOT}/frontend/src/i18n';\n")
     page.add_script_tag(path=native_module_path('.native/project-coordination.js', entry))
     page.evaluate('async () => { await ready(); }')
-    page.add_style_tag(path=str(ROOT / 'frontend/src/styles/application/33-project-coordination.css'))
+    page.add_style_tag(path=str(ROOT / 'frontend/src/features/project-coordination.css'))
     page.evaluate('''() => {
       window.navigation = []; window.subscriptions = 0;
 
@@ -278,7 +278,7 @@ def test_large_coordinator_graph_keeps_dom_and_viewport_bounded(frontend_visual_
     entry.write_text(f"export {{ createCoordinationBoard }} from '{ROOT}/frontend/src/features/project-coordination-board';\n"
                      f"export {{ ready }} from '{ROOT}/frontend/src/i18n';\n")
     page.add_script_tag(path=native_module_path('.native/coordinator-large-graph.js', entry))
-    page.add_style_tag(path=str(ROOT / 'frontend/src/styles/application/33-project-coordination.css'))
+    page.add_style_tag(path=str(ROOT / 'frontend/src/features/project-coordination.css'))
     result = page.evaluate('''async () => {
       await ready();
       const assignments = Array.from({length:128}, (_,i) => ({assignmentId:String(i),
@@ -320,7 +320,7 @@ def test_coordinator_shell_reference_and_replacement_consent(frontend_visual_pag
     entry.write_text(f"export {{ openProjectCoordination }} from '{ROOT}/frontend/src/features/project-coordination';\n"
                      f"export {{ ready, setLanguage }} from '{ROOT}/frontend/src/i18n';\n")
     page.add_script_tag(path=native_module_path('.native/coordinator-consent.js', entry))
-    page.add_style_tag(path=str(ROOT / 'frontend/src/styles/application/33-project-coordination.css'))
+    page.add_style_tag(path=str(ROOT / 'frontend/src/features/project-coordination.css'))
     page.evaluate('async language => { await ready(); await setLanguage(language); }', language)
     page.evaluate('''() => {
       window.replacements=[];

@@ -23,7 +23,7 @@ import uuid
 from lib.conversations.project_identity import normalize_project_path
 from lib.identity import PrincipalContext, require_user_id
 from lib.log import get_logger
-from lib.storage.model_continuation import model_context_revision
+from lib.agent_core.model_context_revision import model_context_revision
 from lib.agent_core.storage_errors import StorageError
 from lib.utils import sha256_holding_gil
 

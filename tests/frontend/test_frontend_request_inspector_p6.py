@@ -385,7 +385,7 @@ def test_anchor_is_wired_at_the_single_render_chokepoint():
     assert "'ri.toolAnchorTip'" in inspector
     css = open(os.path.join(ROOT, 'static', 'styles.css'), encoding='utf-8').read()
     assert '.ri-tool-anchor' in css
-    responsive = Path(PROJECT_ROOT) / 'frontend/src/styles/application/02-inspector-responsive.css'
+    responsive = Path(PROJECT_ROOT) / 'frontend/src/features/inspector/responsive.css'
     assert 'body.ri-open .chat-container,' in responsive.read_text()
     assert 'body.ri-open .input-area{margin-right:var(--inspector-panel-width)' in responsive.read_text()
     html = open(os.path.join(ROOT, 'index.html'), encoding='utf-8').read()

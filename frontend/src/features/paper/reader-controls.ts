@@ -1,9 +1,9 @@
 /** Shared reader controls. Adapters own compilation, source selection and layout;
  * navigation, search and outline use the same PDF core and accessible controls.
  */
-import '../../styles/application/24-paper-preview-shell.css';
-import '../../styles/application/24-paper-preview-controls.css';
-import '../../styles/application/24-paper-preview-responsive.css';
+import './preview-shell.css';
+import './preview-controls.css';
+import './preview-responsive.css';
 
 import type { Translator } from '../../i18n';
 import type { PdfReader, ReaderState } from './pdf-reader';

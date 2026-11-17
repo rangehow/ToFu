@@ -40,7 +40,7 @@
       "sha256": "3a661b8af9950a5cf4fffb2d0bc86196e5600f0b4281b95eb09f93391ca9bec1"
     },
     {
-      "path": "frontend/src/styles/application/02-inspector-shell.css",
+      "path": "frontend/src/features/inspector/shell.css",
       "sha256": "73e4a6d47939781371bc28a8d89c34c7423f4317d9b2a31c96e48d73a49c5b1b"
     }
   ]

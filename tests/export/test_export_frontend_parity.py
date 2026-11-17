@@ -17,11 +17,13 @@ so the shipped i18n dead-key gate stays green.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
+from tests.support.export_toolchain import require_export_toolchain
 
-pytest.importorskip('export', reason='export.py is not shipped in opensource builds')
+require_export_toolchain()
 
 pytestmark = pytest.mark.unit
 
@@ -47,11 +49,18 @@ def test_open_catalog_drops_keys_only_an_excluded_fragment_used(tmp_path, monkey
                           'settings.public': 'U'})
     shipped = dest / 'frontend/src/app.ts'
     shipped.write_text("t('settings.shared'); t('settings.public');", encoding='utf-8')
+    # The translation ledger lists every key; it must not count as a consumer.
+    ledger = dest / 'frontend/src/i18n/translation-sources.json'
+    ledger.write_text(json.dumps({'responsibility': 'r', 'fingerprints': {
+        'settings.privateOnly': 'a', 'settings.shared': 'b', 'settings.public': 'c'}},
+        indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
     monkeypatch.setattr(_export_core, 'ROOT', source)
 
     removed = _export_core._prune_open_catalog_of_excluded_fragments(dest)
 
     assert removed == ['settings.privateOnly']
+    assert json.loads(ledger.read_text(encoding='utf-8'))['fingerprints'] == {
+        'settings.shared': 'b', 'settings.public': 'c'}
     for language in ('en', 'zh'):
         text = (dest / f'frontend/src/i18n/locales/{language}.json').read_text(encoding='utf-8')
         assert json.loads(text) == {'settings.shared': 'S', 'settings.public': 'U'}
@@ -60,7 +69,11 @@ def test_open_catalog_drops_keys_only_an_excluded_fragment_used(tmp_path, monkey
 
 
 def test_exported_frontend_is_built_from_the_exported_sources(tmp_path, monkeypatch):
+    import subprocess
+
     from export_pkg import _export_core
+
+    real_run = subprocess.run
 
     dest = tmp_path / 'dest'
     (dest / 'scripts').mkdir(parents=True)
@@ -92,6 +105,15 @@ def test_exported_frontend_is_built_from_the_exported_sources(tmp_path, monkeypa
     ignore = (dest / '.gitignore').read_text(encoding='utf-8')
     assert '!/static/vite/' in ignore.split('static/vite/\n', 1)[1], (
         'the built graph must be publishable despite the source .gitignore')
+    # A CI rebuild over the published graph writes previous-manifest.json;
+    # it must stay ignored so the clean-checkout gate sees an unchanged tree.
+    monkeypatch.undo()
+    (dest / 'static/vite/previous-manifest.json').write_text('{}', encoding='utf-8')
+    real_run(['git', 'init', '-q', str(dest)], check=True)
+    ignored = real_run(
+        ['git', '-C', str(dest), 'check-ignore', 'static/vite/manifest.json',
+         'static/vite/previous-manifest.json'], capture_output=True, text=True)
+    assert ignored.stdout.split() == ['static/vite/previous-manifest.json']
 
 
 def test_exported_frontend_never_embeds_the_export_host_path(tmp_path, monkeypatch):
@@ -129,6 +151,44 @@ def test_exported_frontend_never_embeds_the_export_host_path(tmp_path, monkeypat
     assert not (dest / 'node_modules').exists(), 'the temporary toolchain copy must not ship'
 
 
+def test_worktree_toolchain_links_into_a_shared_checkout_are_copied_into_the_tree(tmp_path, monkeypatch):
+    """A task worktree's node_modules links each package into the shared
+    checkout; the in-tree toolchain must not keep those escaping links."""
+    from export_pkg import _export_core
+
+    shared = tmp_path / 'shared' / 'node_modules'
+    (shared / 'vite' / 'bin').mkdir(parents=True)
+    (shared / 'vite' / 'bin' / 'vite.js').write_text('// cli', encoding='utf-8')
+    source = tmp_path / 'source'
+    (source / 'node_modules' / '.bin').mkdir(parents=True)
+    (source / 'node_modules' / 'vite').symlink_to(shared / 'vite')
+    (source / 'node_modules' / '.bin' / 'vite').symlink_to('../vite/bin/vite.js')
+    dest = tmp_path / 'dest'
+    (dest / 'scripts').mkdir(parents=True)
+    (dest / 'scripts/build_frontend.mjs').write_text('// build', encoding='utf-8')
+    monkeypatch.setattr(_export_core, 'ROOT', source)
+    monkeypatch.setattr(_export_core.shutil, 'which', lambda name: '/usr/bin/node')
+    observed = []
+
+    def fake_run(command, **kwargs):
+        toolchain = (dest / 'node_modules').resolve()
+        vite = dest / 'node_modules' / 'vite'
+        launcher = dest / 'node_modules' / '.bin' / 'vite'
+        observed.append((vite.is_symlink(), launcher.is_symlink(),
+                         launcher.resolve().is_relative_to(toolchain),
+                         launcher.read_text(encoding='utf-8')))
+
+        class Done:
+            returncode = 0
+            stdout = stderr = ''
+        return Done()
+
+    monkeypatch.setattr(_export_core.subprocess, 'run', fake_run)
+    _export_core._build_exported_frontend(dest)
+    assert observed[0] == (False, True, True, '// cli')
+    assert not (dest / 'node_modules').exists()
+
+
 def test_export_without_node_fails_closed(tmp_path, monkeypatch):
     from export_pkg import _export_core
 
@@ -138,3 +198,42 @@ def test_export_without_node_fails_closed(tmp_path, monkeypatch):
     monkeypatch.setattr(_export_core.shutil, 'which', lambda name: None)
     with pytest.raises(_export_core.ExportIntegrityError, match='Node'):
         _export_core._build_exported_frontend(dest)
+
+
+def test_toolchain_materialization_drops_a_link_to_its_own_ancestor(tmp_path):
+    """A worktree link farm's ``node_modules`` entry into the shared self-link is dropped.
+
+    Copied, it became a second full toolchain at ``node_modules/node_modules``
+    that Node's upward lookup prefers from inside every package, so the
+    published frontend was built against duplicate package instances and
+    differed from CI's clean ``npm ci`` build.
+    """
+    from export_pkg import _export_core
+
+    shared = tmp_path / 'shared' / 'node_modules'
+    (shared / 'pkg').mkdir(parents=True)
+    (shared / 'pkg' / 'index.js').write_text('export default 1;\n')
+    (shared / 'node_modules').symlink_to(shared)
+    tree = tmp_path / 'export' / 'node_modules'
+    tree.mkdir(parents=True)
+    for entry in ('pkg', 'node_modules'):
+        (tree / entry).symlink_to(shared / entry)
+
+    _export_core._materialize_escaping_links(tree)
+
+    assert (tree / 'pkg' / 'index.js').read_text() == 'export default 1;\n'
+    assert not (tree / 'pkg').is_symlink()
+    assert not os.path.lexists(tree / 'node_modules')
+
+
+def test_toolchain_materialization_drops_nested_node_modules_link_inside_the_tree(tmp_path):
+    from export_pkg import _export_core
+
+    tree = tmp_path / 'export' / 'node_modules'
+    (tree / 'pkg').mkdir(parents=True)
+    (tree / 'node_modules').symlink_to(tree)
+
+    _export_core._materialize_escaping_links(tree)
+
+    assert (tree / 'pkg').is_dir()
+    assert not os.path.lexists(tree / 'node_modules')

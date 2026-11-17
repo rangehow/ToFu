@@ -58,11 +58,21 @@ then be permanently red for a legitimate reason, and a permanently-red guard
 gets muted, which is how a suite goes blind. Add such a file only with a
 transform-then-compare variant.
 
-WHY BOTH REMOTES
-----------------
-``export.py::_GIT_REPOS['opensource']`` pushes to TWO remotes: ``rangehow/ToFu``
-and ``NiuTrans/ToFu``. Both were measured at the same stale ``59bc8254``. A guard
-covering only the first would call the fleet clean while half of it was stale.
+WHY EVERY CONFIGURED REMOTE, AND ONLY THOSE
+-------------------------------------------
+The compared repositories are read from the publication authority itself,
+``export_pkg._publish._GIT_REPOS['opensource']['remotes']``. Every repository an
+opensource push targets is checked: when two remotes were configured, both sat
+at the same stale ``59bc8254``, and a guard covering one would have called the
+fleet clean. A repository the pipeline no longer publishes is not checked; its
+drift is not this pipeline's to fix.
+
+WHERE IT RUNS
+-------------
+This is a pre-publication check of the private source. The published tree is
+the export's output and ships no ``export_pkg``, so there the comparison has no
+subject and the drift test skips with that reason, like the export transform
+tests below.
 
 WHY A SKIP (AND NOT A PASS) WHEN OFFLINE
 -----------------------------------------
@@ -75,6 +85,7 @@ from __future__ import annotations
 
 import difflib
 import os
+import re
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -83,12 +94,24 @@ import pytest
 
 _ROOT = Path(__file__).resolve().parent.parent.parent
 
-# Repos that `export.py --push` publishes the opensource tree to, mirroring
-# _GIT_REPOS['opensource']['remotes'] (tokens stripped — this is a public read).
-_PUBLISHED_REPOS = (
-    ('rangehow/ToFu', 'main'),
-    ('NiuTrans/ToFu', 'main'),
-)
+_PUBLISHED_BRANCH = 'main'
+_GITHUB_REMOTE = re.compile(r'^https://github\.com/(?P<repo>[^/]+/[^/]+?)(?:\.git)?$')
+
+
+def _published_repos() -> tuple[tuple[str, str], ...]:
+    """GitHub repositories an opensource push targets, from the export authority."""
+    if not (_ROOT / 'export_pkg').is_dir():
+        return ()
+    from export_pkg._publish import _GIT_REPOS
+    repos = []
+    for remote in _GIT_REPOS['opensource']['remotes']:
+        match = _GITHUB_REMOTE.match(remote['url'])
+        assert match, f'opensource remote {remote["name"]} is not a GitHub HTTPS URL'
+        repos.append((match['repo'], _PUBLISHED_BRANCH))
+    return tuple(repos)
+
+
+_PUBLISHED_REPOS = _published_repos()
 
 # Files whose published copy must be byte-identical to the local source.
 # Every entry must survive export.py's sanitizer unchanged — see the module
@@ -124,16 +147,21 @@ def _network():
     """Skip the module unless raw.githubusercontent is actually reachable."""
     if os.environ.get('TOFU_SKIP_NETWORK_TESTS'):
         pytest.skip('TOFU_SKIP_NETWORK_TESTS set')
+    repo, branch = _PUBLISHED_REPOS[0]
     try:
         urllib.request.urlopen(
-            'https://raw.githubusercontent.com/rangehow/ToFu/main/VERSION',
+            f'https://raw.githubusercontent.com/{repo}/{branch}/VERSION',
             timeout=_FETCH_TIMEOUT).read()
     except Exception as e:
         pytest.skip(f'raw.githubusercontent unreachable ({type(e).__name__}: {e}) '
                     '— drift NOT checked, which is not the same as no drift')
 
 
-@pytest.mark.parametrize('repo,branch', _PUBLISHED_REPOS)
+@pytest.mark.skipif(
+    not _PUBLISHED_REPOS,
+    reason='no export_pkg: this tree is the export output itself, so there is no '
+           'private source to compare with its publication')
+@pytest.mark.parametrize('repo,branch', _PUBLISHED_REPOS or (('', ''),))
 @pytest.mark.parametrize('path', _GUARDED_PATHS)
 @pytest.mark.slow
 def test_published_release_pipeline_matches_local_source(_network, repo, branch, path):

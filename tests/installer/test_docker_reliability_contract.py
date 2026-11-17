@@ -96,7 +96,7 @@ def test_image_healthcheck_uses_liveness_endpoint():
 def test_worker_image_installs_cjk_fonts():
     text = (ROOT / 'Dockerfile').read_text(encoding='utf-8')
     worker = text.split('FROM runtime-base AS worker', 1)[1].split('\nFROM ', 1)[0]
-    assert 'fonts-noto-cjk' in worker
+    assert 'font-noto-cjk' in worker.split()
 
 
 def test_empty_optional_provider_environment_never_reads_legacy_provider_rows(

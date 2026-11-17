@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 import pytest
 
-from tests.support.overlay import requires_yourprovider_overlay
+from tests.support.overlay import requires_private_overlay
 
 from lib.model_catalog._creator_identity import merge_keys
 from lib.model_routing import OwnerBoundary, empty_document
@@ -43,7 +43,7 @@ def _has_model(document: dict, model_id: str) -> bool:
         for row in document['models'])
 
 
-@requires_yourprovider_overlay
+@requires_private_overlay
 def test_newly_shipped_models_land_in_empty_authority():
     repository = InMemoryModelRoutingRepository()
     boundary = _boundary()

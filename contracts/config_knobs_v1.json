@@ -4466,6 +4466,51 @@
       "description": "Test-only, not a tuning knob: a local checkout of the FrontierHarness eval repository at its pinned commit; the native adapter's live-corpus spec skips without it (and without node).",
       "owner": "tests/evaluations/test_frontier_harness_native.py",
       "status": "documented"
+    },
+    "OPENAI_API_BASE": {
+      "description": "Benchmark-only: the OpenAI-compatible base URL handed to a competitor tool run in its own venv (points at the local Tofu gateway).",
+      "owner": "evaluations/slides_bench/competitors/",
+      "status": "documented"
+    },
+    "SLIDES_BENCH_MODEL": {
+      "description": "Benchmark-only: model name competitor tools generate slides with.",
+      "owner": "evaluations/slides_bench/competitors/",
+      "status": "documented"
+    },
+    "SLIDES_BENCH_DATA": {
+      "description": "Benchmark-only: data root for slides-benchmark inputs, competitor environments and renders, outside git (docs/SLIDES_BENCHMARK.md).",
+      "owner": "evaluations/slides_bench/",
+      "status": "documented"
+    },
+    "SLIDES_BENCH_ENDPOINT": {
+      "description": "Benchmark-only: chat-completions endpoint the slides benchmark LLM bridge calls.",
+      "owner": "evaluations/slides_bench/llm_bridge.py",
+      "status": "documented"
+    },
+    "SLIDES_BENCH_SOFFICE": {
+      "description": "Benchmark-only: path of the LibreOffice binary used to render decks for scoring.",
+      "owner": "evaluations/slides_bench/render.py",
+      "status": "documented"
+    },
+    "SLIDES_BENCH_TOFU_BASELINE": {
+      "description": "Benchmark-only: 1 runs the Tofu baseline arm of the slides benchmark.",
+      "owner": "evaluations/slides_bench/run_tofu.py",
+      "status": "documented"
+    },
+    "SLIDES_BENCH_JUDGE_MODEL": {
+      "description": "Benchmark-only: model that judges rendered decks.",
+      "owner": "evaluations/slides_bench/score.py",
+      "status": "documented"
+    },
+    "TOFU_TEST_CRASH_PROBE_SOURCES": {
+      "description": "Test-only, not a tuning knob: os.pathsep-separated drill sources for the engine-certify crash probe; the spec skips without them.",
+      "owner": "tests/deploy/test_engine_certify_crash_probe.py",
+      "status": "documented"
+    },
+    "LEAD_DELIVERABLES_SHOT_LABEL": {
+      "description": "Test-only, not a tuning knob: label of the before/after screenshots the lead-deliverables browser spec writes (default \"after\").",
+      "owner": "tests/frontend/test_lead_deliverables_browser.py",
+      "status": "documented"
     }
   },
   "legacy_count": 580,

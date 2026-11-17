@@ -153,13 +153,19 @@ export const MODEL_BRAND_COLORS: Readonly<Record<string, string>> = Object.freez
   generic: '#888',
 });
 
-/** Render one brand badge without reading DOM or runtime catalog state. */
-export function brandIconHtml(brand: unknown, size = 20): string {
+/** Resolve one brand's SVG mark and color; unknown brands use the generic mark. */
+export function brandMark(brand: unknown): { svg: string; color: string } {
   const key = typeof brand === 'string' ? brand : 'generic';
-  const safeSize = Number.isFinite(size) && size > 0 ? size : 20;
   const hasBrand = Object.prototype.hasOwnProperty.call(MODEL_BRAND_ICONS, key);
   const svg = hasBrand ? MODEL_BRAND_ICONS[key] : MODEL_BRAND_ICONS.generic;
   const color = hasBrand && Object.prototype.hasOwnProperty.call(MODEL_BRAND_COLORS, key)
     ? MODEL_BRAND_COLORS[key] : MODEL_BRAND_COLORS.generic;
+  return { svg, color };
+}
+
+/** Render one brand badge without reading DOM or runtime catalog state. */
+export function brandIconHtml(brand: unknown, size = 20): string {
+  const safeSize = Number.isFinite(size) && size > 0 ? size : 20;
+  const { svg, color } = brandMark(brand);
   return `<span class="stg-brand-icon" style="width:${safeSize}px;height:${safeSize}px;color:${color}">${svg}</span>`;
 }

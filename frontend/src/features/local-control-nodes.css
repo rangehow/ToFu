@@ -1,6 +1,6 @@
 /* Local Control — node list and pairing link (contracts/desktop_node_v1.schema.json).
    Markup: frontend/src/runtime/sections/local-control.js (_lcNodeListHtml,
-   _lcPairActionHtml). Token-only: the legacy 14-local-control.css stays frozen. */
+   _lcPairActionHtml). Token-only: the legacy local-control.css stays frozen. */
 
 .lc-nodes{list-style:none;margin:0 0 var(--space-3);padding:0;display:flex;flex-direction:column;gap:var(--space-2)}
 .lc-node{display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) var(--space-3);border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-tertiary)}

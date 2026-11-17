@@ -231,24 +231,11 @@
   transform:none;
   background:var(--bg-active)
 }
-
-[data-theme="tofu"] .msg-delete-btn:hover{
-  color:#D4533B!important;
-  background:rgba(212,83,59,0.08)!important;
-  border-color:rgba(212,83,59,0.3)
-}
 [data-theme="tofu"] .delete-turn-popup{
   background:#FFFEFA;
   border:1px solid var(--border);
   box-shadow:var(--clay-lg)
 }
-[data-theme="tofu"] .delete-popup-btn{
-  border-radius:var(--radius-xs);
-  font-family:var(--sans-body);
-  font-size:var(--font-size-xs)
-}
-[data-theme="tofu"] .delete-popup-turn:hover{color:#D4533B;background:rgba(212,83,59,0.08)}
-[data-theme="tofu"] .delete-popup-single:hover{color:#8F5126;background:rgba(143,81,38,0.1)}
 
 /* ── Stream elapsed timer — quiet chip ── */
 [data-theme="tofu"] .stream-elapsed-timer{
@@ -562,9 +549,6 @@
 /* ── Tofu theme: sidebar action row ── */
 [data-theme="tofu"] .sidebar-action-row{padding:10px 10px 6px}
 [data-theme="tofu"] .folder-dialog{background:#FDF8F3;border-color:#E3CFAD}
-[data-theme="tofu"] .folder-dialog-input{background:#FFF9F4;border-color:#D8B98A;color:#5C4A38}
-[data-theme="tofu"] .folder-dialog-input:focus{border-color:#8F5126}
-[data-theme="tofu"] .folder-dialog-cancel{background:#F0E3D5;border-color:#D8B98A;color:#8A7458}
 [data-theme="tofu"] .folder-dialog-ok{background:linear-gradient(180deg,#8F5126 0%,#7A441F 100%)}
 [data-theme="tofu"] .conv-rename-card{background:#FDF8F3;border-color:#E3CFAD}
 [data-theme="tofu"] .conv-rename-input{background:#FFF9F4;border-color:#D8B98A;color:#5C4A38}

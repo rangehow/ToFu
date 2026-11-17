@@ -1689,6 +1689,7 @@ def test_restart_wait_expiry_reports_running_recovery_without_claiming_failure(
     monkeypatch.setattr(serverctl, '_remote_status', lambda: {'running': False})
     monkeypatch.setattr(serverctl, 'read_lock_status', lambda _: {'running': False})
     monkeypatch.setattr(serverctl, '_forwarded_server_env', lambda: {})
+    monkeypatch.setattr(serverctl, '_repair_source_frontend_artifact', lambda _: '')
     monkeypatch.setattr(serverctl, 'prepare_source_frontend_artifact', lambda _: '')
     monkeypatch.setattr(serverctl, '_post', lambda *a, **k: {'ok': True})
     monkeypatch.setattr(serverctl, '_wait_ready', lambda *a, **k: {

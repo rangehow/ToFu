@@ -62,13 +62,13 @@ def test_diff_revision_quote_and_send_rollback(browser, live_server, tmp_path, t
         # Preserve a pre-existing request while selecting code in the transcript.
         page.evaluate("document.getElementById('userInput').value='Add a retry limit.'")
         action.click()
-        expect(page.locator('.reply-quote-chip')).to_have_count(1)
-        expect(page.locator('.reply-quote-chip-label')).to_contain_text('src/retry.ts')
+        expect(page.locator('.reply-quote-preview')).to_have_count(1)
+        expect(page.locator('.reply-quote-preview-text')).to_contain_text('src/retry.ts')
         assert draft.input_value() == 'Add a retry limit.'
         assert draft.evaluate('node => node===document.activeElement')
         assert draft.evaluate('node => node.selectionStart===node.value.length')
         # Removing context never clears the typed requirement.
-        page.locator('.reply-quote-chip-close').click()
+        page.locator('.reply-quote-preview').get_by_role('button', name='移除引用', exact=True).click()
         expect(page.locator('#reply-quote-container')).to_be_hidden()
         assert draft.input_value() == 'Add a retry limit.'
         code.evaluate("""node => {
@@ -76,20 +76,22 @@ def test_diff_revision_quote_and_send_rollback(browser, live_server, tmp_path, t
             getSelection().removeAllRanges();getSelection().addRange(range);
         }""")
         action.click()
-        expect(page.locator('.reply-quote-chip')).to_have_count(1)
+        expect(page.locator('.reply-quote-preview')).to_have_count(1)
         # Native keyboard activation exercises the whole-change fallback too.
         action.focus()
         action.press('Enter')
-        expect(page.locator('.reply-quote-chip')).to_have_count(2)
+        expect(page.locator('.reply-quote-preview')).to_have_count(2)
         action.press('Enter')
-        expect(page.locator('.reply-quote-chip')).to_have_count(2)
+        expect(page.locator('.reply-quote-preview')).to_have_count(2)
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth + 1')
         page.screenshot(path=str(tmp_path / f'diff-review-{theme}-{width}.png'), full_page=True, animations='disabled')
         submissions = []
 
         def fail_submission(route):
             submissions.append(route.request.post_data_json)
-            route.fulfill(status=503, json={'ok': False, 'error': 'controlled_transport_failure',
+            # A definitive rejection: send startup keeps retrying transient
+            # 408/429/5xx answers, and only a final refusal restores the draft.
+            route.fulfill(status=422, json={'ok': False, 'error': 'controlled_rejection',
                                            'message': 'Controlled test failure'})
 
         page.route(f'**/api/v4/conversations/{cid}/turns', fail_submission)
@@ -97,7 +99,7 @@ def test_diff_revision_quote_and_send_rollback(browser, live_server, tmp_path, t
                                  and request.url.endswith(f'/api/v4/conversations/{cid}/turns')):
             page.locator('#sendBtn').click()
         page.wait_for_function("document.getElementById('userInput').value==='Add a retry limit.'")
-        expect(page.locator('.reply-quote-chip')).to_have_count(2)
+        expect(page.locator('.reply-quote-preview')).to_have_count(2)
         assert submissions
         assert len({body['commandId'] for body in submissions}) == 1
         quote = submissions[0]['message']['replyQuotes'][0]

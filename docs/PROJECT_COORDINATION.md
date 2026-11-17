@@ -1539,7 +1539,7 @@ did; they now show read-only, and their removal is an owner decision.
   visible rows, loads the next page when the list end comes into view and,
   while open, re-reads in place on a newer board revision, rewriting only the
   rows whose content changed. The drawer and its stylesheet
-  (`34-coordinator-task-history.css`, a deferred section) load on its first
+  (`frontend/src/features/coordinator-task-history.css`, imported beside it) load on its first
   open; its rows use the board's glyphs and status inks.
 
 Alternatives rejected: keeping every board revision and deriving the history
@@ -2506,7 +2506,9 @@ state machine of its own.
       no conversation, so the API host's own `project` hint (a Push Hub
       publication listener) refreshes that lead.
     - a pending `kind=report` project message in a lead's mailbox, cleared once
-      the lead's round confirms it.
+      the lead's round confirms it. A send never writes the mailbox head, so the
+      read includes arrivals the lead has not absorbed (`ProjectMailbox.observe`),
+      and its version changes with each newly readable arrival as well as the head.
     - a Worker's completed, unreviewed assignment result, found on a busy-to-idle
       edge through the attempt's assignment association, and at the baseline on
       each lead's newest history page (`coverage.reports: newest_page`). It is

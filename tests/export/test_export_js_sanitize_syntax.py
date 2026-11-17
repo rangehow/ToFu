@@ -35,6 +35,7 @@ import subprocess
 import sys
 
 import pytest
+from tests.support.export_toolchain import require_export_toolchain
 
 pytestmark = pytest.mark.unit
 
@@ -43,7 +44,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # export.py is the maintainer's release tool; not shipped in opensource builds.
-pytest.importorskip('export', reason='export.py is not shipped in opensource builds')
+require_export_toolchain()
 
 _NODE = shutil.which('node')
 
@@ -236,3 +237,11 @@ def test_public_settings_remove_only_the_maintainer_range_helper():
         '  _syncRangeOutput,\n  initSidebarSearch,\n',
         'frontend/src/runtime/sections/_epilogue.js')
     assert epilogue == '  initSidebarSearch,\n'
+
+
+def test_the_export_stamps_the_mascot_token_and_its_static_tags_alike():
+    """index.html's ?v= mascot tags must equal brand_logo.js LOGO_VER after export."""
+    logo = _sanitize('frontend/src/runtime/sections/core/brand_logo.js')
+    html = _sanitize('index.html')
+    assert re.findall(r"var LOGO_VER = '([^']+)';", logo) == ['0.5.0']
+    assert set(re.findall(r'\?v=([^"\'&\s]+)', html)) <= {'0.5.0'}

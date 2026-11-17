@@ -1,5 +1,5 @@
 /* World workspace shell layout (application-shell/page-host.ts). The office HUD spans the top; below it the
- * scene fills the window (27-world-office.css spans it over both columns) and the application's own
+ * scene fills the window (features/world/world-office.css spans it over both columns) and the application's own
  * conversation column docks over its right side: `head` holds the world's person panel header and `body`
  * either the brief or the classic transcript with its composer.
  * page-host sets data-conversation-dock; this sheet places the column and shows it only when docked. Every

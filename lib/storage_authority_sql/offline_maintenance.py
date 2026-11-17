@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
+import os
 from pathlib import Path
+import shutil
 import sqlite3
 import time
 from typing import Any, Callable, TypeVar
@@ -28,6 +30,32 @@ from lib.task_replay.task_event_contract import (
 
 logger = get_logger(__name__)
 _T = TypeVar('_T')
+
+
+def copy_sqlite_file(source: Path, destination: Path) -> None:
+    """Copy one SQLite database file consistently, WAL contents included.
+
+    The online backup API reads a live database without its -wal/-shm files;
+    a file that is not a readable SQLite database is copied byte for byte.
+    """
+    temporary = destination.with_name(destination.name + '.copy-tmp')
+    temporary.unlink(missing_ok=True)
+    try:
+        reader = sqlite3.connect(f'file:{source}?mode=ro', uri=True)
+        try:
+            writer = sqlite3.connect(temporary)
+            try:
+                reader.backup(writer)
+            finally:
+                writer.close()
+        finally:
+            reader.close()
+    except sqlite3.Error:
+        temporary.unlink(missing_ok=True)
+        shutil.copy2(source, destination)
+        return
+    os.replace(temporary, destination)
+    shutil.copystat(source, destination)
 
 
 def open_sqlite_tool_connection(

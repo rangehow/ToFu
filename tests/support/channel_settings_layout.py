@@ -1,7 +1,7 @@
 """Geometry checks for the channel Settings panels (大象, GitHub) in real Chromium.
 
 The panels share one presentation (frontend/src/features/settings/
-channel-settings-view.ts, styles/settings/13-dx-channel.css); these checks
+channel-settings-view.ts and its channel-settings.css); these checks
 state its alignment contract over a Playwright locator of a panel.
 """
 from __future__ import annotations

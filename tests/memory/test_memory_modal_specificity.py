@@ -33,7 +33,6 @@ resolved by the same engine as the baseline; no source writes or subprocesses.
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import sys
@@ -45,7 +44,6 @@ pytestmark = pytest.mark.unit
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, '..', '..'))
 CSS = os.path.join(ROOT, 'static', 'styles.css')
-STYLE_ROOT = os.path.join(ROOT, 'frontend', 'src', 'styles', 'application')
 MEMORY_FEATURE_ENTRY = 'frontend/src/features/memory/panel.ts'
 
 
@@ -307,13 +305,14 @@ def _memory_modal_css():
     """The cascade an open Memory modal runs under: the critical sheet, then
     the deferred sheets its feature entry imports (the panel body moved out of
     the critical sheet in e7f266f04; Vite admits it before the panel shows)."""
-    with open(os.path.join(STYLE_ROOT, 'manifest.json'), encoding='utf-8') as f:
-        manifest = json.load(f)
+    entry = os.path.join(ROOT, MEMORY_FEATURE_ENTRY)
+    with open(entry, encoding='utf-8') as f:
+        imports = re.findall(r"^import '(\./[^']+\.css)';", f.read(), re.M)
     sheets = [_css()]
-    for row in manifest['deferredSections']:
-        if row.get('featureEntry') == MEMORY_FEATURE_ENTRY:
-            with open(os.path.join(STYLE_ROOT, row['path']), encoding='utf-8') as f:
-                sheets.append(f.read())
+    for name in imports:
+        with open(os.path.join(os.path.dirname(entry), name), encoding='utf-8') as f:
+            sheets.append(f.read())
+    assert len(sheets) > 1, f'no feature sheet is imported by {MEMORY_FEATURE_ENTRY}'
     return '\n'.join(sheets)
 
 

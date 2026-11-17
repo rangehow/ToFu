@@ -310,8 +310,8 @@ def _offline_sqlite_backup(config: SidecarConfig, deadline_at: float) -> dict:
         pruned = prune_verified_backups(backups, preserve=target)
         return {
             'ok': True,
-            'backup': str(target.relative_to(config.project_root)),
-            'manifest': str(manifest_path.relative_to(config.project_root)),
+            'backup': target.relative_to(config.project_root).as_posix(),
+            'manifest': manifest_path.relative_to(config.project_root).as_posix(),
             'bytes': size, 'sha256': checksum,
             'estimated_bytes': capacity['estimated_bytes'],
             'recovery_copy_budget_bytes': capacity[
@@ -367,7 +367,7 @@ def _offline_sqlite_maintenance(
                 'captured_at': result['captured_at'],
                 'database_bytes': result['database_bytes'],
                 'index_count': len(result['indexes']),
-                'report': str(path.relative_to(config.project_root)),
+                'report': path.relative_to(config.project_root).as_posix(),
                 'row_count': sum(table['rows'] for table in result['tables']),
                 'schema_sha256': result['schema_sha256'],
                 'schema_version': result['schema_version'],
@@ -382,7 +382,7 @@ def _offline_sqlite_maintenance(
             stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
             path = reports / f'integrity-sqlite-{stamp}-{uuid.uuid4().hex[:8]}.json'
             write_json_durable(path, result)
-            result['report'] = str(path.relative_to(config.project_root))
+            result['report'] = path.relative_to(config.project_root).as_posix()
             return result
         if command == 'backup':
             return _offline_sqlite_backup(config, deadline_at)
@@ -401,11 +401,6 @@ def _validated_backup(config: SidecarConfig, requested: Path) -> Path:
     if not path.exists():
         raise RuntimeError('backup does not exist')
     return path
-
-
-def _fsync_file(path: Path) -> None:
-    with path.open('rb') as stream:
-        os.fsync(stream.fileno())
 
 
 def _restore_sqlite(config: SidecarConfig, backup: Path) -> dict:
@@ -431,7 +426,7 @@ def _restore_sqlite(config: SidecarConfig, backup: Path) -> dict:
     candidate = config.data_dir / f'.tofu-restore-{stamp}.new'
     previous = config.data_dir / 'backups' / f'pre-restore-{stamp}.sqlite3'
     shutil.copy2(backup, candidate)
-    _fsync_file(candidate)
+    fsync_file(candidate)
     moved_current = False
     moved_sidecars: list[tuple[Path, Path]] = []
     try:
@@ -446,7 +441,7 @@ def _restore_sqlite(config: SidecarConfig, backup: Path) -> dict:
                 os.replace(active_sidecar, archived_sidecar)
                 moved_sidecars.append((active_sidecar, archived_sidecar))
         os.replace(candidate, config.sqlite_path)
-        _fsync_file(config.sqlite_path)
+        fsync_file(config.sqlite_path)
         fsync_directory(config.data_dir)
         fsync_directory(previous.parent)
     except BaseException:
@@ -459,8 +454,8 @@ def _restore_sqlite(config: SidecarConfig, backup: Path) -> dict:
         raise
     return {
         'ok': True,
-        'restored': str(backup.relative_to(config.project_root)),
-        'previous': str(previous.relative_to(config.project_root)) if moved_current else None,
+        'restored': backup.relative_to(config.project_root).as_posix(),
+        'previous': previous.relative_to(config.project_root).as_posix() if moved_current else None,
     }
 
 
@@ -638,14 +633,14 @@ def _retire_fastpath_sqlite(config: SidecarConfig) -> dict:
 
     return {
         'ok': True,
-        'authority': str(config.sqlite_path.relative_to(config.project_root)),
+        'authority': config.sqlite_path.relative_to(config.project_root).as_posix(),
         'authority_uuid': str(manifest.get('authority_uuid') or ''),
         'generation': manifest.get('generation'),
         'source': source_kind,
         'previous': (
-            str(previous.relative_to(config.project_root))
+            previous.relative_to(config.project_root).as_posix()
             if moved_previous else None),
-        'retired_shadow': str(retired_shadow.relative_to(config.project_root)),
+        'retired_shadow': retired_shadow.relative_to(config.project_root).as_posix(),
         'reclaimed_private_bytes': reclaimed_private_bytes,
         'reclaimed_private_files': reclaimed_private_files,
         'next_step': 'set TOFU_STORAGE_FASTPATH=off before starting Tofu',

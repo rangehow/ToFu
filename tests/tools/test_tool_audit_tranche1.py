@@ -86,7 +86,7 @@ def test_merge_memories_reports_failed_deletes(tmp_path, monkeypatch):
     y_path = str(tmp_path / 'y.md')
 
     def fake_create(name, description='', body='', tags=None, scope='project',
-                    project_path=None, *, provenance=None):
+                    project_path=None, *, provenance=None, trigger=''):
         m = {'id': 'merged1', 'name': name, 'scope': scope}
         created['m'] = m
         return m

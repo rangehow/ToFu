@@ -203,6 +203,7 @@ __pycache__/
 !/benchmarks/event_append_congestion.py
 !/benchmarks/event_schema.py
 !/benchmarks/ocr_gil_ticks.py
+!/benchmarks/native_workspace_compare.py
 
 !/benchmarks/conversation_snapshot_cpu.py
 !/benchmarks/conversation_change_page_stall.py

@@ -1,0 +1,102 @@
+/* System prompt editor window presentation. */
+.sysprompt-summary.has-value{ color: var(--s-ink)}
+.sysprompt-preview-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+}
+.sysprompt-blocks-mode-label {
+  opacity: 0.65;
+}
+.sysprompt-block {
+  position: relative;
+  border: 1px solid var(--border-color, rgba(128,128,128,0.2));
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-elevated, var(--bg-secondary, rgba(128,128,128,0.03)));
+  transition: border-color .12s, background .12s;
+}
+.sysprompt-block::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: var(--accent, #4caf50);
+  transition: background .12s;
+}
+.sysprompt-block.is-off{ background: transparent}
+.sysprompt-block.is-off::before{ background: var(--border-color, rgba(128,128,128,0.25))}
+.sysprompt-block-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px var(--space-3) 9px 14px;
+  cursor: pointer;
+}
+.sysprompt-block-head:hover{ background: rgba(128,128,128,0.06)}
+.sysprompt-block-chevron {
+  flex: 0 0 auto;
+  width: 14px; height: 14px;
+  color: var(--text-tertiary);
+  transition: transform .15s;
+}
+.sysprompt-block.is-open .sysprompt-block-chevron{ transform: rotate(90deg)}
+.sysprompt-block-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  min-width: 0;
+  flex: 1;
+}
+.sysprompt-block-title > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sysprompt-block.is-off .sysprompt-block-title{ color: var(--text-tertiary)}
+.sysprompt-block-badge {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--accent-soft, rgba(120,120,200,0.16));
+  color: var(--text-secondary);
+  flex: 0 0 auto;
+}
+.sysprompt-block-badge.is-project-badge {
+  background: var(--accent-amber-soft, rgba(212, 160, 23, 0.18));
+  color: var(--accent-amber, #c79100);
+  cursor: help;
+}
+.sysprompt-block.is-project:not(.is-off)::before {
+  width: 4px;
+  background: var(--accent-amber, #d4a017);
+}
+.sysprompt-block.is-project:not(.is-off) {
+  border-color: var(--accent-amber-soft, rgba(212, 160, 23, 0.35));
+}
+.sysprompt-block-toggle {
+  flex: 0 0 auto;
+}
+.sysprompt-block-text {
+  margin: 0;
+  padding: 2px 14px var(--space-3) 14px;
+  max-height: 220px;
+  overflow: auto;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-secondary);
+  border-top: 1px solid var(--border-color, rgba(128,128,128,0.12));
+}
+.sysprompt-block:not(.is-open) .sysprompt-block-text{ display: none}

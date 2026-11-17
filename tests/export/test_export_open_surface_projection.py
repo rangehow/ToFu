@@ -16,8 +16,9 @@ from pathlib import Path
 import subprocess
 
 import pytest
+from tests.support.export_toolchain import require_export_toolchain
 
-pytest.importorskip('export', reason='export.py is not shipped in opensource builds')
+require_export_toolchain()
 
 pytestmark = pytest.mark.unit
 

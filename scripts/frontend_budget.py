@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Check frontend authoring shape and the complete compressed delivery graph.
 
-Responsibility: enforce existing source, entry, async-module and total-graph
-budgets without hiding shared static imports. Immediate startup dynamic roots
+Responsibility: enforce existing source, entry, async-module and eager-startup
+total budgets without hiding shared static imports. Immediate startup dynamic roots
 come from frontend/authoring-inputs.json. Standalone URL workers are counted
 separately under an explicit asset whitelist, never silently omitted.
 
@@ -285,9 +285,12 @@ def main() -> int:
                _gzip_size(ROOT / 'static' / 'vite' / path),
                _limit('TOFU_BUDGET_VITE_URL_ASSET_KIB', 410), failures)
 
+    startup_paths: set[str] = set()
     for entry_name, entry_key in VITE_PRIMARY_ENTRIES:
+        entry_paths = _startup_assets(manifest, entry_key)
+        startup_paths |= entry_paths
         _check(f'Vite {entry_name} startup',
-               sum(vite_sizes[path] for path in _startup_assets(manifest, entry_key)),
+               sum(vite_sizes[path] for path in entry_paths),
                _limit(f'TOFU_BUDGET_VITE_{entry_name.upper()}_KIB',
                       561 if entry_name == 'main' else 16), failures)
 
@@ -302,12 +305,14 @@ def main() -> int:
         _check(f'Vite async {key}', chunk_size,
                _limit('TOFU_BUDGET_VITE_CHUNK_KIB', 120), failures)
 
-    # Total means every byte of the module GRAPH, not just named
-    # entry/dynamic rows. Rollup creates shared static chunks (for example
-    # event-format) that are referenced through ``imports`` and were
-    # previously invisible here. Standalone ``?url`` binaries (the
-    # pdf.worker) are ratcheted by their own line above, not hidden here.
-    _check('total Vite JavaScript', sum(vite_sizes.values()),
+    # Total means every byte the primary entries load eagerly, each file once:
+    # their startup owners plus every shared static chunk they import (Rollup
+    # shared chunks such as event-format count here, not only named rows).
+    # On-demand chunks are bounded by the async per-chunk line above and
+    # standalone ``?url`` binaries by their own line (owner decision
+    # 2026-11-17, docs/FRONTEND_ARCHITECTURE.md "Total budget scope").
+    _check('total startup Vite JavaScript',
+           sum(vite_sizes[path] for path in startup_paths),
            _limit('TOFU_BUDGET_FRONTEND_TOTAL_KIB', 1026), failures)
     if failures:
         print('frontend-budget: FAILED', file=sys.stderr)

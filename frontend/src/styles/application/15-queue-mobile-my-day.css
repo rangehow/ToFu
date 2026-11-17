@@ -53,36 +53,7 @@
   flex: 1 1 auto;
   white-space: nowrap;
 }
-.pending-queue-bar.queue-collapsed .queue-header .queue-header-label {
-  flex: 0 1 auto;
-}
 /* ── Collapse toggle (chevron) ── */
-.pending-queue-bar .queue-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-tertiary);
-  cursor: pointer;
-  flex-shrink: 0;
-  padding: 0;
-  transition: background-color 0.15s ease, color 0.15s ease;
-}
-.pending-queue-bar .queue-toggle:hover {
-  background: var(--bg-tertiary);
-  color: var(--accent);
-}
-.pending-queue-bar .queue-toggle svg {
-  display: block;
-  transition: transform 0.2s ease;
-}
-.pending-queue-bar.queue-collapsed .queue-toggle svg {
-  transform: rotate(-90deg);
-}
 /* ── Collapsed state: the item list folds away, leaving a one-line bar
    (count + next-up preview + clear-all) so a flooded queue can never bury
    the transcript. The next-up preview + autopilot chip are expanded-only
@@ -92,33 +63,9 @@
   flex-direction: column;
   gap: 5px;
 }
-.pending-queue-bar.queue-collapsed {
-  max-height: none;
-  overflow: visible;
-}
-.pending-queue-bar.queue-collapsed .queue-items {
-  display: none;
-}
 .pending-queue-bar .queue-next-preview,
 .pending-queue-bar .queue-header .queue-header-ap {
   display: none;
-}
-.pending-queue-bar.queue-collapsed .queue-next-preview {
-  display: block;
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-tertiary);
-  font-weight: 400;
-  letter-spacing: 0;
-}
-.pending-queue-bar.queue-collapsed .queue-header .queue-header-ap {
-  display: inline-flex;
-  align-items: center;
-  color: #818cf8;
-  flex-shrink: 0;
 }
 .pending-queue-bar .queue-header .queue-header-ap svg {
   display: block;
@@ -211,40 +158,9 @@
   color: #ef4444;
 }
 /* Server-synced indicator */
-.pending-queue-item .queue-item-synced {
-  font-size: 10px;
-  color: var(--text-tertiary);
-  opacity: 0.6;
-  flex-shrink: 0;
-  margin-left: 2px;
-  margin-right: -2px;
-}
 /* Clear all button */
-.queue-clear-all {
-  margin-left: auto;
-  padding: 2px var(--space-2);
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-tertiary);
-  font-size: 10px;
-  cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease;
-  font-family: inherit;
-  white-space: nowrap;
-}
-.queue-clear-all:hover {
-  background: rgba(239,68,68,0.1);
-  color: #ef4444;
-}
 
 /* ── Item body + source attribution line ── */
-.pending-queue-item .queue-item-body {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
 .pending-queue-item .queue-item-src {
   display: flex;
   align-items: center;
@@ -315,8 +231,7 @@
   box-shadow: none;
 }
 /* SVG glyphs inside the cancel / synced affordances. */
-.pending-queue-item .queue-item-cancel > svg,
-.pending-queue-item .queue-item-synced > svg {
+.pending-queue-item .queue-item-cancel > svg {
   display: block;
 }
 
@@ -632,10 +547,7 @@
   .topbar{height:calc(48px + env(safe-area-inset-top,0px));padding:env(safe-area-inset-top,0px) 10px 0;gap:var(--space-2);overflow:hidden!important;flex-wrap:nowrap}
   .topbar-title{font-size:var(--font-size-lg);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   /* Hide ALL badges and action buttons — not enough room on 360px screens */
-  .search-badge,.project-badge,.code-exec-badge,.browser-badge,
-  .memory-badge,.scheduler-badge,.timer-trigger,
-  #debugToggle,
-  .topbar .action-btn{display:none!important}
+  .project-badge,.scheduler-badge,.timer-trigger,#debugToggle,.topbar .action-btn{display:none!important}
   /* Model badge: keep it, right-aligned, compact */
   .model-badge{font-size:10px;padding:3px var(--space-2);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0;margin-left:auto}
   /* Coarse phones no longer inherit the (now pointer:fine) ≤1080 label hide, so
@@ -866,19 +778,7 @@
   /* Settings panel — stack tabs on top for mobile */
   .settings-panel{width:100%;max-width:100%;max-height:var(--vh100,100dvh);height:var(--vh100,100dvh);box-shadow:none;border-width:0;padding-bottom:env(safe-area-inset-bottom,0px)}
   .settings-body{flex-direction:column}
-  .settings-tabs{flex-direction:row;width:100%;min-width:0;border-right:none;border-bottom:1px solid var(--s-line);padding:var(--space-2);overflow-x:auto;overflow-y:hidden}
-  .settings-tab-group{display:none}
-  .settings-tab{padding:7px 10px;font-size:var(--font-size-xs)}
-  .settings-tab span{display:none}
-  .settings-tab svg{margin:0}
-  .settings-content{padding:var(--space-4)}
-  .settings-panel .theme-picker{grid-template-columns:repeat(3,1fr)}
-    .stg-field-grid{grid-template-columns:1fr}
-  .stg-edit-grid{grid-template-columns:1fr}
   .stg-mcard{flex-wrap:wrap;gap:6px}
-  .stg-mcard-actions{flex-direction:row;align-self:flex-end}
-    .stg-provider-badges{flex-wrap:wrap}
-  .stg-provider-body textarea{min-height:60px}
   
   /* Project modal — tabbed single-pane layout (one full-height pane at a time) */
   .project-modal{max-width:100%}
@@ -1238,22 +1138,6 @@
   min-height: 0;
 }
 .myday-progress:empty { display: none; }
-.myday-prog-track {
-  flex: 1;
-  height: 14px;
-  background: var(--tf-skin);
-  border: var(--tf-border-sm);
-  box-shadow: var(--tf-shadow-xs);
-  overflow: hidden;
-  position: relative;
-}
-.myday-prog-fill {
-  height: 100%;
-  width: 0;
-  background: var(--tf-done);
-  border-right: 2px solid var(--tf-ink);
-  transition: width 0.5s ease;
-}
 .myday-prog-label {
   font-size: var(--font-size-md);
   font-weight: 800;
@@ -1275,30 +1159,3 @@
 }
 
 /* ── Section labels — stamped ── */
-.myday-section-label {
-  font-size: var(--font-size-xs);
-  font-weight: 900;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--tf-ink-soft);
-  padding: 0 2px;
-  margin: var(--space-5) 0 var(--space-2);
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-.myday-section-label:first-child { margin-top: 0; }
-.myday-section-label .myday-accountability-bar { margin-left: var(--space-1); }
-.myday-section-count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 6px;
-  font-size: var(--font-size-xs);
-  font-weight: 800;
-  background: var(--tf-ink);
-  color: var(--tf-white);
-  border: none;
-}

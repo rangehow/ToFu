@@ -89,10 +89,13 @@ def scratch_root() -> Path:
 def _scratch_path(checkout: Path) -> Path | None:
     checkout = Path(checkout)
     owner = checkout.parent
+    # The layout test runs first: only a pooled checkout needs the server's
+    # placement, which the storage-free agent wheel does not ship.
+    if not owner.name.startswith('u') or not owner.name[1:].isdigit():
+        return None
     from lib import integration_control as ic
     local = ic._placed_local_root()
-    if (local is None or not owner.name.startswith('u') or not owner.name[1:].isdigit()
-            or os.path.realpath(owner.parent.parent) != os.path.realpath(local)):
+    if local is None or os.path.realpath(owner.parent.parent) != os.path.realpath(local):
         return None
     identity = os.path.join(os.path.realpath(owner), checkout.name)
     return scratch_root() / hashlib.sha256(identity.encode('utf-8')).hexdigest()[:12]

@@ -58,7 +58,6 @@ def start(state, perms, log, *, remote=True, on_revoked=None):
         from lib.desktop_agent import run_agent
         stop_event = threading.Event()
         state['stop'] = stop_event
-        state['error'] = None
 
         def on_status(status):
             state['last_status'] = status
@@ -97,7 +96,6 @@ def start(state, perms, log, *, remote=True, on_revoked=None):
                           route_repair=route_repair if remote else None,
                           browser_relay=state.get('browser_relay') if remote else None)
             except Exception as exc:
-                state['error'] = str(exc)
                 on_status({'state': 'error', 'detail': str(exc)})
                 log('Agent loop crashed: %s' % exc)
             finally:

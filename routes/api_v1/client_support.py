@@ -191,7 +191,7 @@ async def _bounded_body() -> bytes | None:
     declared = request.content_length
     if declared is not None and declared > _MAX_BODY_BYTES:
         return None
-    data = await request.get_data()
+    data = await request.get_data(as_text=False)
     return None if len(data) > _MAX_BODY_BYTES else data
 
 

@@ -237,7 +237,8 @@ const longLabelHtml = presentation.renderGuidanceHtml({
 check('oversized_original_label_cannot_submit_a_truncated_value',
   longLabelHtml.includes('content-limit:1024')
   && longLabelHtml.includes('hg-option-unavailable')
-  && !longLabelHtml.includes('data-tofu-action')
+  && !longLabelHtml.includes('submitHumanGuidanceChoice')
+  && longLabelHtml.includes('submitHumanGuidanceFreeText')
   && !longLabelHtml.includes('LABEL_TAIL'));
 
 const tooLongIdHtml = presentation.renderGuidanceHtml({

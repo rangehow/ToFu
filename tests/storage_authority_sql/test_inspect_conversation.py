@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.support.export_toolchain import export_toolchain_present, require_export_toolchain
+
 pytestmark = pytest.mark.unit
 
 
@@ -24,8 +26,8 @@ def test_inspector_is_declared_in_every_source_delivery_boundary():
         root / '.gitignore').read_text(encoding='utf-8')
     assert '!debug/inspect_conversation.py' in (
         root / '.dockerignore').read_text(encoding='utf-8')
-    assert "'debug/inspect_conversation.py'" in (
-        root / 'export.py').read_text(encoding='utf-8')
+    if export_toolchain_present():
+        assert 'debug/inspect_conversation.py' in require_export_toolchain()._OPENSOURCE_KEEP_FILES
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SCRIPT = REPO_ROOT / 'debug' / 'inspect_conversation.py'

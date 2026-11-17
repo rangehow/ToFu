@@ -20,10 +20,10 @@ def test_preview_split_reading_controls_and_mobile_teardown(reader_page, tmp_pat
     subprocess.run(['node','scripts/vite_test_bundle.mjs','frontend/src/features/paper/preview-controller.ts',
                     '--bundle','--format=iife','--platform=browser','--global-name=Preview',
                     '--outfile='+str(tmp_path/'preview.js')],cwd=ROOT,check=True,capture_output=True)
-    style_root=ROOT/'frontend/src/styles/application'
-    manifest=json.loads((style_root/'manifest.json').read_text())
-    preview_css=''.join((style_root/row['path']).read_text() for row in manifest['deferredSections']
-                        if row['path'].startswith('24-paper-preview-'))
+    style_root=ROOT/'frontend/src/features/paper'
+    preview_css=''.join((style_root/f'preview-{name}.css').read_text() for name in
+                        ['shell','controls','responsive','sources','problems','layout',
+                         'editor','selection','error-assist','proposal'])
     (tmp_path/'preview.css').write_text(preview_css)
     labels=json.loads((ROOT/'frontend/src/i18n/locales/zh.json').read_text())
     labels={key:value for key,value in labels.items() if key.startswith('preview.') or key in ['paper.zoomOut','paper.zoomIn','paper.fitWidth','common.close','common.loading']}

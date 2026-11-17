@@ -58,17 +58,6 @@
 .ptool-cmd-output-wrap {
   border-top: none;
 }
-.ptool-cmd-toggle {
-  padding: var(--space-1) 0;
-  font-size: 10.5px;
-  color: var(--text-tertiary);
-  cursor: pointer;
-  user-select: none;
-  transition: color .15s;
-}
-.ptool-cmd-toggle:hover {
-  color: var(--accent-hover);
-}
 .ptool-cmd-output {
   display: none;
   margin: 0;

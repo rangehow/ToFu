@@ -1,3 +1,4 @@
+import './preferences.css';
 import { featureRegistry } from '../../feature-registry';
 import { escapeHtmlText as escape } from '../../html-safety';
 import { createLifecycleScope, type LifecycleScope } from '../../lifecycle';

@@ -110,6 +110,10 @@ def test_declared_members_describe_their_tracked_pyproject():
     from lib.runtime.checkout_distributions import CHECKOUT_DISTRIBUTIONS, _CheckoutDistribution
     assert {'tofu-environments', 'tofu-yourprovider-environments'} <= set(CHECKOUT_DISTRIBUTIONS)
     for name, relative in CHECKOUT_DISTRIBUTIONS.items():
+        if not (ROOT / relative).is_dir():
+            # Only a release-tier overlay bundle may be absent (public core).
+            assert relative.startswith('bundles/'), relative
+            continue
         project = tomllib.loads((ROOT / relative / 'pyproject.toml').read_text())['project']
         distribution = _CheckoutDistribution(str(ROOT / relative), name)
         assert distribution.version == project['version']

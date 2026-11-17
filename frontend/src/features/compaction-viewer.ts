@@ -1,4 +1,5 @@
 /** Demand-loaded compaction snapshot drawer presentation entry. */
+import './compaction-viewer.css';
 import '../runtime/compaction-viewer-presenters.generated.js';
 import { invokeFeatureEntry, type FeatureCallable } from '../runtime-bridge';
 

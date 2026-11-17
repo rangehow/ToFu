@@ -48,6 +48,7 @@ import subprocess
 import sys
 
 import pytest
+from tests.support.export_toolchain import require_export_toolchain
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -68,10 +69,19 @@ _EXTRA_KEEPERS = {
     # Tests of other opensource-excluded private modules
     # (export_pkg._lists._OPENSOURCE_EXCLUDE_PATHS) stay private with them.
     'tests/router/test_watchdog_compute_patrol.py',
+    'tests/router/test_router_home_hope_seed.py',
     'tests/export/test_export_git_reads.py',
     'tests/evaluations/test_yourprovider_sandbox_score.py',
     'tests/evaluations/test_owner_memory_benchmark.py',
+    'tests/evaluations/test_owner_memory_replay.py',
+    'tests/evaluations/test_owner_memory_phase1_cost.py',
+    'tests/evaluations/test_owner_memory_failure_selection.py',
+    'tests/evaluations/test_owner_memory_midtask.py',
+    'tests/evaluations/test_owner_memory_triggers.py',
     'tests/deploy/test_migrate_host.py',
+    'tests/deploy/test_verify_checkout_view.py',
+    # Verifies the internal-only bundles/yourprovider/skills source, absent publicly.
+    'tests/skills/test_internal_platform_bundle.py',
     # Portable diagnostic dependencies are owned by the public keep-list;
     # this set contains only deliberately private source.
     'export.py',                                 # export infra (sanitization patterns)
@@ -134,6 +144,7 @@ _EXTRA_KEEPERS = {
     'scripts/benchmark_verification.py',
     'scripts/lane.py',
     'scripts/migrate_host.py',  # names this site's proxy hosts; private with its test
+    'scripts/verify_checkout_view.py',  # host-move FUSE checkout audit; private with its test
     'scripts/inspect_context.py',
     'scripts/gen_command_control.py',
     # It path-loads scripts/lane.py above, a shared-checkout development
@@ -291,8 +302,7 @@ def test_no_tracked_file_is_opensource_excluded():
     left tracked, so a direct ``git push`` of the working repo would leak it.
     """
     _require_git_repo()
-    export = pytest.importorskip(
-        'export', reason='export.py not shipped in opensource tree')
+    export = require_export_toolchain()
     tracked = _tracked_files()
     assert tracked, 'git ls-files returned nothing — not a real checkout?'
 
@@ -314,7 +324,7 @@ def test_keepers_are_actually_tracked_and_excluded():
     keeps the allow-list honest so it can't quietly grow into a blanket bypass.
     """
     _require_git_repo()
-    export = pytest.importorskip('export', reason='export.py not shipped')
+    export = require_export_toolchain()
     tracked = set(_tracked_files())
     stale = []
     for k in _keeper_set(export):
@@ -339,7 +349,7 @@ def test_keeper_prefixes_are_live_and_narrow():
     shippable territory).
     """
     _require_git_repo()
-    export = pytest.importorskip('export', reason='export.py not shipped')
+    export = require_export_toolchain()
     tracked = _tracked_files()
     for p in _KEEPER_PREFIXES:
         assert p.endswith('/'), (
@@ -367,7 +377,7 @@ def test_neuter_guard_has_teeth():
     run comes back green for the wrong reason.
     """
     _require_git_repo()
-    export = pytest.importorskip('export', reason='export.py not shipped')
+    export = require_export_toolchain()
     tracked = _tracked_files()
 
     real_extra = _EXTRA_KEEPERS.copy()
@@ -402,7 +412,7 @@ def test_neuter_keeper_prefix_is_load_bearing():
     subtrees — anything else means the exact-path keepers drifted.
     """
     _require_git_repo()
-    export = pytest.importorskip('export', reason='export.py not shipped')
+    export = require_export_toolchain()
     tracked = _tracked_files()
 
     real_prefixes = tuple(_KEEPER_PREFIXES)

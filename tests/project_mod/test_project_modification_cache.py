@@ -21,16 +21,18 @@ def test_undo_cache_evicts_lru_and_reloads_from_authority(
 
     def load(session_dir):
         loads.append(session_dir)
-        return [{'session': session_dir}]
+        return modifications._History(
+            [], [{'session': session_dir}], modifications._journal_identity(session_dir),
+            (), set(), 0)
 
     monkeypatch.setattr(modifications, '_MODS_CACHE_CAPACITY', 2)
-    monkeypatch.setattr(modifications, '_load_from_disk', load)
+    monkeypatch.setattr(modifications, '_read_history', load)
     monkeypatch.setattr(modifications, '_clean_stale_tmp', lambda _path: None)
     from collections import OrderedDict
     monkeypatch.setattr(modifications, '_mods_cache', OrderedDict())
     monkeypatch.setattr(modifications, '_mods_cache_identity', {})
     for directory in directories:
-        modifications._cache_get(str(directory))
+        modifications._committed_rows(str(directory))
 
     assert list(modifications._mods_cache) == [
         str(directories[1]), str(directories[2]),
@@ -42,7 +44,7 @@ def test_undo_cache_evicts_lru_and_reloads_from_authority(
     }
 
     # The evicted record is reconstructed from disk and becomes newest.
-    modifications._cache_get(str(directories[0]))
+    modifications._committed_rows(str(directories[0]))
     assert loads.count(str(directories[0])) == 2
     assert list(modifications._mods_cache) == [
         str(directories[2]), str(directories[0]),

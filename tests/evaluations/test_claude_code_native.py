@@ -142,7 +142,7 @@ def test_frozen_config_requires_the_bridge_and_defaults_old_runs_unguarded(tmp_p
     args = parser.parse_args(["run", "--work-dir", str(tmp_path / "new"), "--concurrency", "1",
                               "--arms", "claude-code", "--tasks-dir", str(tmp_path), "--relay-url", "http://r",
                               "--artifacts-manifest", str(tmp_path / "m"), "--endpoint", "http://e/system/857",
-                              "--image", "i", "--proxy", "p"])
+                              "--image", "i", "--proxy", "p", "--branch", "b"])
     with pytest.raises(SystemExit, match="anthropic-url"):
         frozen_config(args)
     (tmp_path / "old").mkdir()

@@ -12,11 +12,11 @@
  */
 import type { RouterState } from '../api/router.generated';
 import { t } from '../i18n';
-import { createRouterInstructions, type RouterInstructionPorts } from './router-instructions';
-import { createRouterWorkerModel, type RouterWorkerModelControl, type RouterWorkerModelPorts } from './router-worker-model';
+import type { RouterInstructionPorts } from './router-instructions';
+import type { RouterWorkerModelControl, RouterWorkerModelPorts } from './router-worker-model';
 import { createCoordinatorConversationId } from './coordinator-conversation-id';
 import { setStableAttribute, setStableHidden } from '../conversation/ui/renderers/stable-dom';
-import '../styles/application/33-project-coordination.css';
+import './project-coordination.css';
 
 export interface GlobalRouterPorts {
   /** GET /api/v4/router: passive, never creates the router. */
@@ -41,6 +41,11 @@ export interface GlobalRouterHosts {
   header: HTMLElement;
   /** Settings other owners contribute to the header, kept after the router's own. */
   controls?: readonly HTMLElement[];
+}
+
+interface RouterSettings {
+  createRouterWorkerModel: typeof import('./router-worker-model').createRouterWorkerModel;
+  createRouterInstructions: typeof import('./router-instructions').createRouterInstructions;
 }
 
 type StaticLabel = 'globalRouter.entry' | 'globalRouter.entryMeta' | 'globalRouter.headerSubtitle';
@@ -74,7 +79,10 @@ export function createGlobalRouterEntry(ports: GlobalRouterPorts, hosts: GlobalR
   // The router home path, known from any read (also while unbound).
   let home = '';
   let workerModel: RouterWorkerModelControl | null = null;
-  let instructions: ReturnType<typeof createRouterInstructions> | null = null;
+  let instructions: ReturnType<RouterSettings['createRouterInstructions']> | null = null;
+  // The router's own settings show only once a read binds the router, so they load then.
+  let settings: RouterSettings | null = null;
+  let settingsLoading: Promise<void> | null = null;
   const reading = new AbortController();
 
   // The project coordinator card's shape and classes: one kind of thing, two scopes.
@@ -114,20 +122,38 @@ export function createGlobalRouterEntry(ports: GlobalRouterPorts, hosts: GlobalR
       || (next.availability === 'available' ? next.conversationId : '') !== (state?.conversationId ?? '');
     home = next.projectPath;
     state = next.availability === 'available' ? next : null;
+    if (state && !settings) loadSettings();
+    placeSettings();
+    refresh();
+    if (identityChanged) ports.changed?.();
+  }
+
+  function loadSettings() {
+    settingsLoading ??= Promise.all([import('./router-worker-model'), import('./router-instructions')])
+      .then(([worker, instruction]) => {
+        settings = { createRouterWorkerModel: worker.createRouterWorkerModel,
+          createRouterInstructions: instruction.createRouterInstructions };
+        if (alive) placeSettings();
+      }, (error) => {
+        // The card and header stay usable; the next read retries the import.
+        settingsLoading = null;
+        console.warn('[GlobalRouter] settings failed to load', error);
+      });
+  }
+
+  function placeSettings() {
     if (state && workerModel?.path === state.projectPath) workerModel.update(state);
     else {
       workerModel?.destroy(); workerModel = null;
-      if (state) {
-        workerModel = createRouterWorkerModel(ports.workerModel, state.projectPath, state);
+      if (state && settings) {
+        workerModel = settings.createRouterWorkerModel(ports.workerModel, state.projectPath, state);
         header.insertBefore(workerModel.el, instructions?.el ?? contributed);
       }
     }
-    if (state && !instructions) {
-      instructions = createRouterInstructions(ports.instructions);
+    if (state && settings && !instructions) {
+      instructions = settings.createRouterInstructions(ports.instructions);
       header.insertBefore(instructions.el, contributed);
     } else if (!state) { instructions?.destroy(); instructions = null; }
-    refresh();
-    if (identityChanged) ports.changed?.();
   }
 
   // Runs on every sidebar render: write only what changed.

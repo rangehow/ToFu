@@ -1673,11 +1673,20 @@ def _close_coro_loop(loop, drive):
 def _run_coro_on_private_loop(coro):
     import asyncio
 
+    from lib.agent_core.push import hub
+
     loop = asyncio.new_event_loop()
+    # Synchronous views resolve request bodies on the serving loop
+    # (lib.quart_sync.resolve). Bind this request's loop the way production
+    # binds its serving loop; otherwise a body still streaming in is awaited
+    # from a foreign loop whose selector is never woken, and the view hangs.
+    previous_loop = hub._loop
+    hub._loop = loop
     try:
         task = asyncio.ensure_future(coro, loop=loop)
         return _run_coro_with_alarm(loop, task)
     finally:
+        hub._loop = previous_loop
         if not loop.is_closed():
             loop.close()
 

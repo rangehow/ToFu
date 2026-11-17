@@ -57,8 +57,7 @@ from _runtime_sections import runtime_section_path  # noqa: E402
 
 KNOWLEDGE = runtime_section_path('knowledge.js')
 STYLES = os.path.join(
-    ROOT, 'frontend', 'src', 'styles', 'application',
-    '21-local-knowledge-plan-mode.css',
+    ROOT, 'frontend', 'src', 'features', 'settings', 'settings-shell.css',
 )
 
 

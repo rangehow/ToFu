@@ -27,10 +27,11 @@ import sys
 import unittest
 
 import pytest
+from tests.support.export_toolchain import require_export_toolchain
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-pytest.importorskip('export', reason='export.py is not shipped in opensource builds')
+require_export_toolchain()
 
 pytestmark = pytest.mark.unit
 
@@ -83,6 +84,44 @@ class SanitizeTriggerCompletenessTest(unittest.TestCase):
                              f'identifier {ident!r} survived _sanitize_source_opensource')
             self.assertIn(replacement, out,
                           f'replacement {replacement!r} not present after scrub of {ident!r}')
+
+    def test_brand_only_file_gets_the_same_rename_as_its_callers(self):
+        """A file naming the provider brand and no other trigger is still
+        opened: otherwise it keeps the brand while renamed callers (its tests)
+        ask for the replacement key."""
+        import tempfile
+        from pathlib import Path
+        from export_pkg._sanitize import (
+            _collect_opensource_candidates, _sanitize_source_opensource)
+        brand = 'mei' + 'tuan'
+        with tempfile.TemporaryDirectory() as root:
+            registry = Path(root) / 'model-group.ts'
+            registry.write_text(f'export const NAMES = {{ {brand}: 1 }};\n')
+            self.assertIn('model-group.ts', _collect_opensource_candidates(Path(root)))
+        renamed = _sanitize_source_opensource(f'{brand}: 1', 'frontend/src/core/model-group.ts')
+        self.assertNotIn(brand, renamed)
+
+    def test_a_fixture_provider_id_and_its_assertion_get_one_rename(self):
+        """A test that builds a slot with the corp provider ID and asserts it
+        back must still agree after export: every quoted occurrence gets the
+        same replacement, whatever syntax surrounds it."""
+        from export import _sanitize_source_opensource
+        corp, brand = 'san' + 'kuai', 'Mei' + 'tuan'
+        path = 'tests/providers/test_x.py'
+        corp_token = _sanitize_source_opensource(f"'{corp}'", path)
+        brand_token = _sanitize_source_opensource(f"'{brand}'", path)
+        source = (f"# the {brand}-keyed operator slot\n"
+                  f"slot = Slot(provider_id='{corp}', routing_provider_id='{corp}')\n"
+                  f"def f(provider_id: str = '{corp}'): pass\n"
+                  f"face = {{'id': '{corp}', 'name': '{brand}'}}\n"
+                  f"pid = provider.get('id', '{corp}') or m.get('provider_id', '{corp}')\n"
+                  f"assert slot.provider_id == '{corp}' and face['name'] == '{brand}'\n")
+        expected = (source.replace(f"'{corp}'", corp_token)
+                    .replace(f"'{brand}'", brand_token))
+        out = _sanitize_source_opensource(source, path)
+        self.assertEqual(out.split('\n', 1)[1], expected.split('\n', 1)[1])
+        self.assertNotIn(corp, out)
+        self.assertNotIn(brand, out)
 
     def test_scrub_and_trigger_share_one_source(self):
         """Structural: the scrub and trigger paths draw the plain-substring

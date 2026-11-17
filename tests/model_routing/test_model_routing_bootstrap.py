@@ -178,13 +178,13 @@ def test_active_oauth_authority_recovers_missing_legacy_provider_without_loss(
     monkeypatch.setattr(
         bootstrap_module, '_legacy_sources', lambda _boundary: ({
             'providers': [{
-                'id': 'example-corp',
-                'name': 'YourProvider',
-                'brand': 'yourprovider',
-                'base_url': 'https://api.openai.com/v1',
+                'id': 'acme',
+                'name': 'Acme',
+                'brand': 'acme',
+                'base_url': 'https://gateway.acme.test/v1/openai/native',
                 'faces': {
                     'anthropic': {
-                        'base_url': 'https://api.openai.com/v1/anthropic',
+                        'base_url': 'https://gateway.acme.test/v1/anthropic',
                         'protocol': 'anthropic',
                     },
                 },
@@ -205,13 +205,13 @@ def test_active_oauth_authority_recovers_missing_legacy_provider_without_loss(
     assert result['status'] == 'recovered_legacy'
     authority = repository.get(boundary)
     assert {row['provider_id'] for row in authority.document['providers']} == {
-        'oauth_codex', 'example-corp',
+        'oauth_codex', 'acme',
     }
-    yourprovider_connections = [
+    legacy_connections = [
         row for row in authority.document['connections']
-        if 'your-llm-gateway.example.com' in row['base_url']
+        if 'gateway.acme.test' in row['base_url']
     ]
-    assert {row['protocol'] for row in yourprovider_connections} == {
+    assert {row['protocol'] for row in legacy_connections} == {
         'openai', 'anthropic',
     }
 

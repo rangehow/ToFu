@@ -182,18 +182,32 @@ def assemble_round_tools(cfg, task, mcfg):
     """
     result = _assemble_round_tools(cfg, task, mcfg)
     if '_rootToolAssemblyConfig' in task:
-        task['_rootMcpPendingServers'] = _pending_mcp_servers(
-            cfg, task['_rootMcpToolNames'])
+        from lib.mcp.types import parse_namespaced_name
+        assembled = {(parse_namespaced_name(name) or ('',))[0] for name in task['_rootMcpToolNames']}
+        task['_rootMcpPendingServers'] = [
+            server for server in _owner_enabled_mcp_servers(cfg, task) if server not in assembled]
     return result
 
 
-def _pending_mcp_servers(cfg, assembled_names):
-    """Servers the owner enabled whose tools this assembly could not see."""
+_OWNER_ENABLED_MCP_SERVERS_KEY = '_ownerEnabledMcpServers'
+
+
+def _owner_enabled_mcp_servers(cfg, task):
+    """The MCP servers the owner enabled for this Turn, read once per Turn.
+
+    A shadow assembly (``refresh_root_mcp_authority``) copies the task and so
+    reuses the Turn's read.
+    """
+    if _OWNER_ENABLED_MCP_SERVERS_KEY not in task:
+        task[_OWNER_ENABLED_MCP_SERVERS_KEY] = _read_owner_enabled_mcp_servers(cfg)
+    return list(task[_OWNER_ENABLED_MCP_SERVERS_KEY])
+
+
+def _read_owner_enabled_mcp_servers(cfg):
     owner = int(cfg.get('userId') or cfg.get('_turnOwnerUserId') or 0)
     if owner < 1 or not cfg.get('mcpEnabled', True):
         return []
     from lib.mcp.config import load_mcp_config
-    from lib.mcp.types import parse_namespaced_name
     try:
         config = load_mcp_config(user_id=owner)
     except Exception as error:
@@ -203,10 +217,8 @@ def _pending_mcp_servers(cfg, assembled_names):
                        'late-connecting servers stay unavailable this turn: %s',
                        type(error).__name__)
         return []
-    assembled = {(parse_namespaced_name(name) or ('',))[0] for name in assembled_names}
-    return sorted(
-        server for server, row in config.items()
-        if isinstance(row, dict) and row.get('enabled', True) and server not in assembled)
+    return sorted(server for server, row in config.items()
+                  if isinstance(row, dict) and row.get('enabled', True))
 
 
 def _assemble_round_tools(cfg, task, mcfg):
@@ -286,7 +298,10 @@ def _assemble_round_tools(cfg, task, mcfg):
         )
         if coordinator:
             from lib.project_dispatch.delegation import capture_worker_policy
-            capture_worker_policy(task, cfg, cfg.get('_executableToolCatalog') or tool_list, mcfg['model'])
+            # Workers are granted the owner's enabled servers even when this
+            # Turn started before they connected (a restarted execution host).
+            capture_worker_policy(task, cfg, cfg.get('_executableToolCatalog') or tool_list, mcfg['model'],
+                                  enabled_mcp_servers=_owner_enabled_mcp_servers(cfg, task))
             from lib.tasks_pkg.coordinator_policy import (
                 coordinator_tool_settings, prepare_coordinator_tool_surface)
             if not is_dispatch_task(task):

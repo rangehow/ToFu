@@ -439,3 +439,132 @@ def test_no_conversation_or_grant_setting_names_mcp_exposure():
     # A headless caller may still withhold MCP (``mcp: false``); nothing selects exposure.
     assert [key for key in TofuOptions.openapi_schema()['properties']
             if 'mcp' in key.lower()] == ['mcpEnabled']
+
+
+# ── Worker grants name MCP servers, not only the tools connected at delegation ──
+
+HOPE_NAMES = [name for name in MCP_NAMES if name.startswith('mcp__hope__')]
+
+
+def _owner_mcp_config(monkeypatch, rows):
+    import lib.mcp.config
+    monkeypatch.setattr(lib.mcp.config, 'load_mcp_config', lambda *, user_id: rows)
+
+
+def _coordinator_policy(bridge, coordination, *, connected, cfg_extra=None):
+    from lib.tasks_pkg.orchestrator._tool_assembly_prep import assemble_round_tools
+    bridge.connected = connected
+    path = coordination['coordinator']
+    cfg = {'projectPath': path, '_turnOwnerUserId': OWNER, 'userId': OWNER,
+           'memoryEnabled': False, 'plugins': [], **(cfg_extra or {})}
+    task = _task('coordinator-' + uuid_hex(), cfg, conv_id='coordinator', content='继续')
+    assemble_round_tools(cfg, task, {**_mcfg(path), 'code_exec_enabled': True})
+    return task['_coordinatorWorkerPolicy']
+
+
+def uuid_hex():
+    import uuid
+    return uuid.uuid4().hex[:8]
+
+
+def _granted_worker(monkeypatch, workspace, profile):
+    from lib.project_dispatch import admission
+    from lib.project_dispatch.scope import validate_profile
+    profile = validate_profile({'profile': profile})
+    monkeypatch.setattr(admission, 'is_dispatch_task',
+                        lambda task: task.get('id', '').startswith('granted-worker'))
+    monkeypatch.setattr(admission, 'granted_coordinator_scope', lambda task: (True, None))
+    monkeypatch.setattr(admission, 'validate_task',
+                        lambda task, **_: {'assignmentId': 'grant'})
+    monkeypatch.setattr(admission, 'repository_for',
+                        lambda binding: SimpleNamespace(read=lambda assignment: {}))
+    monkeypatch.setattr(admission, 'profile_for', lambda assignment: profile)
+    from lib.project_dispatch import continuation
+    monkeypatch.setattr(continuation, 'current_continuation', lambda task, **_: None)
+    cfg = {'userId': OWNER, 'projectPath': str(workspace), 'plugins': [],
+           'memoryEnabled': False, 'schedulerEnabled': False}
+    return _task('granted-worker-' + uuid_hex(), cfg, conv_id='granted-worker-conv')
+
+
+def test_coordinator_started_before_mcp_connected_grants_its_workers_the_enabled_servers(
+        bridge, coordination, workspace, monkeypatch):
+    """Found 2026-11-17 after a restart: a Coordinator whose Turn was assembled
+    before MCP auto-connect finished issued a Worker grant of tool names
+    without one MCP tool, so its Workers never reached the Hope connector the
+    owner had enabled. The grant now names the servers the Coordinator is
+    entitled to; a disabled server never joins it."""
+    from lib.project_dispatch.delegation import worker_profile
+    from lib.tasks_pkg.orchestrator._tool_assembly_prep import (
+        assemble_round_tools, refresh_root_mcp_authority)
+    _owner_mcp_config(monkeypatch, {'hope': {'enabled': True}, 'docs': {'enabled': False}})
+    policy = _coordinator_policy(bridge, coordination, connected=False)
+    assert _mcp(policy.tools) == []
+    profile = worker_profile(policy)
+
+    # The Worker starts while MCP is still connecting, then the servers connect:
+    # a later round of the same Turn gains the enabled server, never the disabled one.
+    worker = _granted_worker(monkeypatch, workspace, profile)
+    bridge.connected = False
+    assemble_round_tools(worker['config'], worker, _mcfg(str(workspace)))
+    assert _mcp(_names(worker['_executable_tool_catalog'])) == []
+    bridge.connected = True
+    refresh_root_mcp_authority(worker)
+    assert _mcp(_names(worker['_executable_tool_catalog'])) == HOPE_NAMES
+
+    # A Worker Turn that starts after the servers connected holds them directly.
+    later = _granted_worker(monkeypatch, workspace, profile)
+    tools, available = assemble_round_tools(later['config'], later, _mcfg(str(workspace)))
+    assert available
+    assert _mcp(_names(later['_executable_tool_catalog'])) == HOPE_NAMES
+    assert _mcp(_names(tools)) == []
+
+
+def test_worker_grant_names_connected_and_enabled_servers_only(
+        bridge, coordination, monkeypatch):
+    from lib.project_dispatch.delegation import worker_profile
+    _owner_mcp_config(monkeypatch, {'hope': {'enabled': True}, 'docs': {}})
+    connected = worker_profile(_coordinator_policy(bridge, coordination, connected=True))
+    assert connected['mcpServers'] == ['docs', 'hope']
+    _owner_mcp_config(monkeypatch, {'hope': {'enabled': False}, 'docs': {'enabled': False},
+                                    'late': {'enabled': True}})
+    disabled = worker_profile(_coordinator_policy(bridge, coordination, connected=False))
+    assert disabled['mcpServers'] == ['late']
+    # The Coordinator's own conversation withholding MCP grants no server.
+    withheld = worker_profile(_coordinator_policy(
+        bridge, coordination, connected=False, cfg_extra={'mcpEnabled': False}))
+    assert 'mcpServers' not in withheld
+
+
+def test_granted_mcp_servers_admit_only_their_own_namespaced_tools():
+    from lib.project_dispatch.scope import granted_tools, validate_profile
+    profile = validate_profile({'profile': {
+        'mode': 'project', 'tools': ['read_files'], 'readPaths': ['.'], 'writePaths': ['.'],
+        'mcpServers': ['hope']}})
+    granted = granted_tools(profile)
+    assert 'read_files' in granted and 'mcp__hope__submit_job' in granted
+    for refused in ('mcp__docs__read_page', 'mcp__hope', 'mcp__hope__', 'mcp__hopeful__x',
+                    'run_command', 'hope'):
+        assert refused not in granted, refused
+    # Only a project Worker's grant names servers.
+    for mode, tools in (('files', ['read_files']), ('coordinator', ['report_to_user'])):
+        with pytest.raises(Exception):
+            validate_profile({'profile': {'mode': mode, 'tools': tools, 'readPaths': ['.'],
+                                          'writePaths': [], 'maxToolCalls': 1,
+                                          'mcpServers': ['hope']}})
+
+
+def test_a_coordinator_continuation_issues_its_original_mcp_servers(monkeypatch):
+    """Workers delegated by an automatic continuation keep the servers the
+    original request recorded; a grant recorded before servers had none."""
+    from lib.project_dispatch import continuation
+    from lib.project_dispatch.delegation import capture_worker_policy, worker_profile
+    for recorded, expected in ((['hope'], ['hope']), (None, None)):
+        controls = {'version': 1, 'model': 'model-a', 'workerModel': 'model-a',
+                    'workerTools': ['read_files'], 'tools': ['report_to_user']}
+        if recorded is not None:
+            controls['workerMcpServers'] = recorded
+        monkeypatch.setattr(continuation, 'current_continuation', lambda task, **_: {
+            'request': {'delegation': {'policy': {'config': {}, 'continuation': controls}}}})
+        task = {'id': 'continuation', 'config': {}}
+        capture_worker_policy(task, {}, [{'function': {'name': 'mcp__docs__read_page'}}], 'model-a')
+        assert worker_profile(task['_coordinatorWorkerPolicy']).get('mcpServers') == expected

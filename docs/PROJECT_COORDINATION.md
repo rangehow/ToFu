@@ -87,7 +87,10 @@ capability boundary of an ordinary conversation of that human, inside its
 isolated workspace. Request ingress keeps the human's submitted tool settings
 beside the role's (`_coordinatorSubmittedToolSettings`);
 `delegation.capture_worker_policy` grants those settings and the gateway's
-`execute_program`. Admission fences a Worker's `tools` to exactly that policy.
+`execute_program`. Admission fences a Worker's `tools` to exactly that policy,
+plus every tool of the MCP servers its profile's `mcpServers` names
+(`scope.GrantedTools`; decision "A Worker grant names its MCP servers" in
+[tools_execution](modules/tools_execution.md)).
 `workerDeniedTools` keeps only the Coordinator/Router/Watchdog role tools and
 deferred wakes (timers, `await_device`, `create_conversation`,
 `integration_submit`), which would start work outside the grant and its Stop

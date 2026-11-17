@@ -608,14 +608,14 @@ mnt )` — the exact shape of every background command — invisible to the
 cd-tracking rule, and substitution bodies were never parsed at all.
 
 Decision (2026-10-26): `command_structure.py` owns a bounded recursive
-shell-structure parse; the guard judges the operands of every rm/rmdir/unlink
+shell-structure parse; the guard judges the operands of every rm/unlink
 simple command a shell would run — in the command itself, each `( … )` group,
 command/process substitution bodies, a stdin heredoc read by a shell
 (`bash <<'EOF'`, `cat <<'EOF' | sh`) and a literal `sh -c` string — and treats
 heredoc bodies, quoted strings, pathspec magic and arithmetic text as data.
 Pipeline stages and `&`-backgrounded commands run in forked state (their
 bindings and `cd` hops never reach the outer shell); an unparseable fragment
-refuses only when it could name rm/rmdir/unlink; the cwd's checkout Git
+never refuses ("Catastrophic-delete guard precision"); the cwd's checkout Git
 metadata (`.git` marker, git dir, common dir — `workspace_lease` owns the
 discovery) joins the home/workspace anchors. Wrapper dequoting (`nice`,
 `stdbuf`, `\rm`, `r''m`) and the bash-only `$'…'`/`$"…'` operand forms follow
@@ -673,8 +673,7 @@ success or failure state; at most one `if`/`case` branch runs, none without
 an `else` or a `*` pattern; `;&`/`;;&` carry state into later clauses. A loop's
 head is the fixpoint of its iterations, and `break`/`continue`/`return` carry
 their state to where they lead. A function body runs on the caller's state
-where it is called (`local` names restored) and is also judged where it is
-defined; a recursive function is refused only when the command could delete.
+where it is called (`local` names restored); a recursive call is not followed.
 A value set holds `_DYNAMIC` ("or unproven") beside its literals and keeps the
 empty collapse of a derived value (`_Collapsed`), so a literal from one path
 is judged as itself and `E="$D/x"` as `/x`. A set that outgrows its bound
@@ -758,17 +757,17 @@ of unknown length like any unknown unquoted value.
 - A program word with expansions (`_expanding_program_word`: the command word
   or the program a wrapper runs) is expanded like an operand, and each field
   list it may make is judged as the command it makes, with the item's
-  heredocs and redirects. A pattern is judged as each delete command it
-  matches. Where the program may be one the guard cannot name, the command
-  also refuses when its text could run a delete, the policy for a wrapper
-  option it does not understand.
+  heredocs and redirects. A pattern makes the files it matches here (the
+  first is the program). A value the guard cannot know names no program,
+  and a wrapper option it does not understand leaves the text's first
+  delete word as the program.
 - `alias` records the texts an alias may hold. A command word that may be an
   alias (dash and `bash --posix` expand aliases in scripts) is judged as the
   alias text, a value ending in a blank expanding the next word too, and as
   the word itself. An alias is never expanded inside its own text.
 - What `echo` or `printf` prints into a pipeline stage that may be a shell
-  reading its stdin (a program word with an expansion may name one) is that
-  shell's script, run with the environment of the shell's own stage.
+  reading its stdin is that shell's script, run with the environment of the
+  shell's own stage.
 
 The dangerous-command guard judges an alias value where it is defined, as it
 does a trap action.
@@ -805,14 +804,91 @@ commands, every fifth a program word, took 24 ms against 16 ms without
 program-word expansion, on a loaded host.
 
 Known limits: a program word whose value the guard cannot know (`X=$(command
--v rm); $X -rf /`) is not judged as `rm` unless the command's text names a
-delete; the output of other programs is unknown, so `cat script | sh` is not
+-v rm); $X -rf /`) is not judged as `rm`; the output of other programs is unknown, so `cat script | sh` is not
 judged; a sourced file is not read; the guard does not know when the shell
 reads a line, so an alias also counts on the line that defines it and in
 plain bash, which expands none; a brace word with more variants than
-`_DELETE_BINDING_CAP` is refused as unproven; the dangerous-command guard
+`_DELETE_BINDING_CAP` is not judged; the dangerous-command guard
 binds no variables, so `X=reboot; $X` and wrapper functions pass it; a
 configured `SHELL_PREFIX` may change the environment before the command.
+
+## Catastrophic-delete guard precision
+
+Problem (2026-11-17): with control flow and shell semantics followed, the
+guard still refused whatever it could not prove safe. A value it could not
+know (output it does not model, `read`, a `cd` it cannot follow, an
+overflowing value set) counted as possibly empty, unparseable text or a
+recursive call refused when the command named a delete, and a function body
+was also judged where it was defined, with an empty `$1`. The shared-branch
+guard refused 12 of the 42 everyday deletes in the precision list below and
+14 commands of the NL2Bash corpus, none of them a protected path a shell
+would delete, and judging that corpus took 1.11 s of CPU against 0.63 s
+before the control-flow work.
+
+Decision (owner decision 2026-11-17: no false refusal and no slowdown, at the
+price of missing some dangerous deletes): the guard refuses only a delete
+that names a protected path it can resolve.
+
+- A protected path has fewer than `_MIN_DELETE_DEPTH` components and names
+  something on the guard's host (or the delete runs through `ssh`, `chroot`,
+  `nsenter`, `unshare`, `docker`, `podman` or `kubectl`, which see other
+  files); or it is the home directory, the directory the command starts in
+  (not one a `cd` reaches) or an ancestor of either; or the Git metadata of
+  the checkout holding that directory; or, for a restricted principal, any
+  path outside the workspace. `.` and `..` resolve like any other operand.
+- A value the guard cannot know is neither empty nor dangerous, unparseable
+  text passes, a program word it cannot know names no program, and a
+  recursive call is not followed. The shared resolver
+  (`resolve_delete_targets`) still reports each of these, so the desktop
+  agent's share-root containment refuses them.
+- A command without a standalone `rm`, `rmdir` or `unlink` word
+  (`_could_run_delete`) is not parsed. `rmdir` removes only empty
+  directories: its operands are resolved, not judged.
+- A function body is judged where the function is called. bash's
+  `command_not_found_handle` (zsh `command_not_found_handler`), which the
+  shell calls by itself, is also judged where it is defined.
+- The host's directories decide what the shell does: a `cd` into directories
+  that all exist succeeds; one that may fail keeps both outcomes for the rest
+  of its `&&`/`||` list (`!` swaps them), where `exit`, `return`, `break` or
+  `continue` ends its path; `$CDPATH` is searched; a pattern program word
+  makes the files it matches.
+
+The run_command trash shim refuses a `.` or `..` operand with rm's message
+and exit status instead of handing it to `mv` and `cp -a`, which copied the
+tree into the bin and reported success.
+
+Alternatives rejected: refusing what the guard cannot prove (the `/gh_hdr`
+class, 11 of the 12 false refusals); skipping `.` and `..` operands because
+POSIX `rm` refuses them (the trash shim copied them, PowerShell's `rm` on a
+Windows desktop agent deletes them, and no legitimate command deletes
+either); passing an `rm` without `-r` whose operand is a directory (the
+trash shim ignores rm's flags and deletes an outside operand with
+`rm -rf`); a strictness setting (a knob that trades one failure for the
+other).
+
+Known limits, accepted with the decision: a delete whose program the text
+does not spell as a word (`$(printf '\162\155')`, `r''m`, `/bin/r?`, `$RM`
+from the environment) is not read; a delete whose operand rests on a value
+the guard cannot know is not refused, even when that value is empty at run
+time; a top-level path that exists only where the command runs passes unless
+a known runner says it runs elsewhere; an `if cd DIR; then` condition still
+joins both outcomes, so a delete in its body may be refused.
+
+Measurement (load average 30-90; before the control-flow work, the shared
+branch, this change): the precision list refuses 11, 12 and 0 of its 42
+legitimate deletes and misses 7, 0 and 0 of its 28 catastrophic ones.
+NL2Bash (12,607 commands, 719 naming a delete) is refused 18, 14 and 6
+times in 0.63, 1.11 and 0.06 s of CPU; the six still refused delete the
+starting directory's contents (four), `"${TMP}/"` with `$TMP` unset, and
+`/tmp` in a malformed line. Per judgement: `git status && git log` 35, 65
+and 0.7 µs; `rm -rf build dist *.egg-info` 70, 111 and 56 µs; the `/gh_hdr`
+report 168, 302 and 213 µs; a 100-line script of conditional deletes 9.3,
+23.7 and 16.0 ms.
+
+Verification: `tests/project_mod/test_delete_guard_precision.py` (both
+lists, existence, the unread command and the resolver's reports),
+`TestRmTrashWrap::test_dot_operands_are_refused_like_rm`, and the
+control-flow, shell-semantics, oracle and run_command neighbours.
 
 ## Dangerous-command guard structure
 

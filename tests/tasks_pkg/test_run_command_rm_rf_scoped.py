@@ -117,7 +117,6 @@ class TestCatastrophicDeleteMatrix:
         f'{_RM} -rf /data/',
         f'{_RM} /mnt -r -f',          # flag order can't smuggle
         f'{_RM} -rf /mnt/*',          # wildcard tail stripped
-        'rmdir /usr',
         f'sudo {_RM} -rf /',
         f'sudo -E {_RM} -rf /mnt',
         f'sudo -u root {_RM} -rf /',
@@ -133,6 +132,7 @@ class TestCatastrophicDeleteMatrix:
         f'{_RM} -rf /mnt/team/your-username/build',    # deep shared path
         f'sudo {_RM} -rf /tmp/wt_fill',               # scoped sudo delete
         f'{_RM} -rf ~/old_build',                     # deep home subpath
+        'rmdir /usr',                                 # removes only an empty directory
         'echo sudo rm -rf /',                         # printed, not executed
         'find . -name "*.pyc" | head',               # no delete at all
     ])

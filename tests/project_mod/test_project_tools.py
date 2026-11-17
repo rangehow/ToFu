@@ -578,8 +578,8 @@ class TestIsCatastrophicDelete:
     def test_wildcard_on_toplevel_blocked(self):
         assert _is_catastrophic_delete('rm -rf /mnt/*') is not None
 
-    def test_rmdir_toplevel_blocked(self):
-        assert _is_catastrophic_delete('rmdir /usr') is not None
+    def test_rmdir_removes_only_empty_directories(self):
+        assert _is_catastrophic_delete('rmdir /usr') is None
 
     def test_blocked_in_pipeline_segment(self):
         # A safe command chained with a catastrophic one is still caught.

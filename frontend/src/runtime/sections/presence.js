@@ -330,7 +330,6 @@
   var routerWatchdog = createRouterWatchdogEntry({
     read: function (signal) { return Api.project.routerWatchdog(signal); },
     ensure: function () { return Api.project.ensureRouterWatchdog(); },
-    configureReview: function (request) { return Api.project.configureRouterWatchdogReview(request); },
     open: openRouterConversation,
     back: function () { if (globalRouter.conversationId()) openRouterConversation(globalRouter.conversationId()); },
     activeConversationId: activeRouterConversationId,
@@ -342,11 +341,6 @@
     read: function (signal) { return Api.project.routerOwnerDelegation(signal); },
     set: function (granted) { return Api.project.setRouterOwnerDelegation(granted); },
   });
-  // Portfolio ownership: the visible stop/pause switch for proactive work (docs/ROUTER.md R10).
-  var routerPortfolio = createRouterPortfolio({
-    read: function (signal) { return Api.project.routerPortfolio(signal); },
-    setEnabled: function (enabled) { return Api.project.setRouterPortfolioReview(enabled); },
-  });
   var globalRouter = createGlobalRouterEntry({
     read: function (signal) { return Api.project.globalRouter(signal); },
     ensure: function () { return Api.project.ensureGlobalRouter(); },
@@ -354,6 +348,8 @@
     activeConversationId: activeRouterConversationId,
     notifyError: notifyRouterError,
     changed: routerIdentityChanged,
+    // Ensuring the main coordinator also turns its health checks on (docs/ROUTER.md R7).
+    ensured: function () { routerWatchdog.reload(); },
     workerModel: routerWorkerModelPorts,
     instructions: {
       list: function (cursor, signal) { return Api.project.routerInstructions(cursor, signal); },
@@ -362,7 +358,7 @@
       cancel: function (id) { return Api.project.cancelRouterInstruction(id); },
     },
   }, { sidebar: routerEntryHost, header: routerHeaderHost,
-    controls: [routerOwnerDelegation.settings, routerWatchdog.settings, routerPortfolio.settings] });
+    controls: [routerOwnerDelegation.settings, routerWatchdog.settings] });
   // Other surfaces (the studio's compute-stall dialog) ensure the Watchdog through its
   // owner, so the header and composer steering adopt the binding they open.
   runtimeScope.ensureRouterWatchdogConversation = function () { return routerWatchdog.ensure(); };

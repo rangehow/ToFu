@@ -7,7 +7,15 @@ events; ``resolve_canonical_report_body`` is the pure selection boundary.
 The worker supplies task/event/log ports and retains post-processing,
 publication and terminal task settlement. Its later edits to ``text`` remain
 available to the worker's partial-result error/abort paths.
+
+When a no-tool round stops at the output-token cap, the worker asks the model
+to continue. The terminal body is then the joined partial responses plus the
+final continuation (``lib.paper.length_continuation``), not the last message
+alone.
 """
+
+from lib.paper.length_continuation import LengthContinuation
+
 
 
 def resolve_canonical_report_body(
@@ -31,7 +39,8 @@ class ReportBodyProjection:
     def __init__(self, task, *, append_event, logger):
         self.text = ''
         self._round_text = ''
-        self._terminal_text = None
+        # Terminal response, joined across output-cap continuations.
+        self.continuation = LengthContinuation()
         self._task = task
         self._append_event = append_event
         self._logger = logger
@@ -48,10 +57,9 @@ class ReportBodyProjection:
         })
 
     def observe_response(self, message):
-        # A tool round's prose is provisional. A supplied empty terminal body
-        # is authoritative too; it must not promote an earlier streamed draft.
-        if isinstance(message, dict) and not message.get('tool_calls'):
-            self._terminal_text = message.get('content') or ''
+        # A supplied empty terminal body is authoritative too; it must not
+        # promote an earlier streamed draft.
+        self.continuation.observe_response(message)
 
     def discard_tool_draft(self, round_index):
         # A model can draft before requesting tools, then rewrite after their
@@ -72,7 +80,7 @@ class ReportBodyProjection:
         # the returned terminal response before enrichment or persistence and
         # converge pollers only when their projection actually differs.
         canonical_body, needs_reset = resolve_canonical_report_body(
-            self.text, self._terminal_text)
+            self.text, self.continuation.terminal_text)
         if not (canonical_body or '').strip():
             raise ValueError('Paper report completed without a non-empty body')
         if needs_reset:
@@ -81,10 +89,17 @@ class ReportBodyProjection:
                 '%d-char terminal returned content (deltas were display-only; '
                 'likely a mid-stream re-stream)',
                 self._task['task_id'], len(self.text), len(canonical_body))
-            self.text = canonical_body
-            self._task['full_text'] = self.text
-            self._append_event(self._task, {'type': 'delta_reset'})
-            self._append_event(self._task, {'type': 'delta', 'delta': self.text})
+            self.replace_text(canonical_body)
+
+    def replace_text(self, text):
+        """Adopt a revised whole body and converge live pollers onto it."""
+        self.text = text
+        self._task['full_text'] = self.text
+        self._append_event(self._task, {'type': 'delta_reset'})
+        self._append_event(self._task, {'type': 'delta', 'delta': self.text})
 
 
-__all__ = ["ReportBodyProjection", "resolve_canonical_report_body"]
+__all__ = [
+    "ReportBodyProjection",
+    "resolve_canonical_report_body",
+]

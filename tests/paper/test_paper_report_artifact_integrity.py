@@ -6,10 +6,12 @@ import uuid
 
 import pytest
 
+from tests.support.paper_report import complete_report_body
+
 
 pytestmark = pytest.mark.unit
 TEST_OWNER_USER_ID = 1
-REPORT_BODY = '# Durable Report\n\n## ⚡ TL;DR\nA complete grounded report.'
+REPORT_BODY = '# Durable Report\n\n' + complete_report_body().rstrip()
 
 
 @pytest.fixture(autouse=True)

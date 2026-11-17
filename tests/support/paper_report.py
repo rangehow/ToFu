@@ -60,3 +60,11 @@ def isolated_report_case(monkeypatch):
         # The caller owns synchronous dispatch and joins any test executor.
         # Retire even a task whose test fails before dispatch or settlement.
         runtime.discard(task['task_id'])
+
+
+def complete_report_body(lang='en'):
+    """Every required report section, so no section-repair round is due."""
+    from lib.paper.report_engine._sections import required_sections
+
+    return ''.join(f'## {section.heading}\nSection {section.index} body.\n\n'
+                   for section in required_sections(lang))

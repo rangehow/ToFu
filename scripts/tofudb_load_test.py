@@ -24,8 +24,10 @@ code against the SQL Sidecar's SQLite authority (WAL, ``synchronous=FULL``),
 so both production stores are compared on one workload; it needs no engine.
 
 Safety: DIR is created 0700 and may not lie inside a live Tofu data directory.
-The measuring child runs with a scrubbed environment whose data root, HOME and
-TMPDIR all live under DIR, so it reads and writes no production state; the
+The measuring child runs with a scrubbed environment whose data root and HOME
+live under DIR and whose TMPDIR is a private host-local directory removed after
+the run (production's temporary files are local too), so it reads and writes
+no production state; the
 engine binary is pinned by copy and SHA-256. The harness starts the authority
 through ``lib.storage.StorageSupervisor`` and stops it on exit. Before the
 engine opens, its backup store gets a current generation, as production's has
@@ -192,7 +194,7 @@ def _seed_backup_generation(data_dir: Path, engine: Path) -> str:
     return 'seeded'
 
 
-def _child_environment(root: Path, engine: Path | None, digest: str, durability: str,
+def _child_environment(root: Path, scratch: Path, engine: Path | None, digest: str, durability: str,
                        backend: str = 'tofudb', request_profile: bool = False) -> dict[str, str]:
     keep = ('PATH', 'LANG', 'LC_ALL', 'TERM', 'TZ')
     env = {key: os.environ[key] for key in keep if key in os.environ}
@@ -202,10 +204,15 @@ def _child_environment(root: Path, engine: Path | None, digest: str, durability:
     # through FAULTFS_*. Dropping them silently measured kernel FUSE instead.
     env.update({key: value for key, value in os.environ.items()
                 if key == 'LD_PRELOAD' or key.startswith(('LIBBGFS_', 'FAULTFS_'))})
-    for name in ('home', 'tmp', 'data', 'project'):
+    for name in ('home', 'data', 'project'):
         (root / name).mkdir(parents=True, exist_ok=True, mode=0o700)
     env.update({
-        'HOME': str(root / 'home'), 'TMPDIR': str(root / 'tmp'),
+        # TMPDIR is host-local scratch, as in production (no TMPDIR: /tmp), never
+        # the measured medium: SQLite opens its temporary files and unlinks them
+        # at once, and DolphinFS fails I/O on an unlinked open file (ENOENT), so a
+        # TMPDIR under a DolphinFS root failed Sidecar batches with
+        # SQLITE_IOERR_WRITE (docs/STORAGE_PERFORMANCE_CHARTER.md, 2026-11-17).
+        'HOME': str(root / 'home'), 'TMPDIR': str(scratch),
         'XDG_CACHE_HOME': str(root / 'home' / '.cache'),
         'PYTHONPATH': str(PROJECT_ROOT), 'PYTHONUNBUFFERED': '1', 'PYTHONNOUSERSITE': '1',
         'TOFU_DATA_DIR': str(root / 'data'), 'TOFU_PROJECT_PATH': str(root / 'project'),
@@ -836,9 +843,15 @@ def main(argv=None) -> int:
                '--random-seed', str(args.random_seed), '--startup-timeout', str(args.startup_timeout),
                '--run-id', run_id] + (['--engine', str(engine)] if engine else []) + (
                    ['--reuse-seed'] if args.reuse_seed else [])
-    environment = _child_environment(root.resolve(), engine, digest, args.durability, args.backend,
-                                     args.request_profile)
-    return subprocess.run(command, env=environment, cwd=str(root.resolve())).returncode
+    import tempfile
+    from serverctl_pkg.local_placement import temporary_root
+    scratch = Path(tempfile.mkdtemp(prefix='tofudb-load-test-', dir=temporary_root()))
+    try:
+        environment = _child_environment(root.resolve(), scratch, engine, digest, args.durability,
+                                         args.backend, args.request_profile)
+        return subprocess.run(command, env=environment, cwd=str(root.resolve())).returncode
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 if __name__ == '__main__':

@@ -759,22 +759,57 @@ def test_a_delegated_set_model_the_command_refuses_settles_failed_and_reads_fail
     validate(record, 'ownerDelegatedAction')
 
 
-def test_only_the_global_router_holds_the_owner_delegation(d):
+def test_a_project_lead_restarts_under_the_full_grant_on_its_own_judgment(d):
+    """Owner decision 2026-11-18: the owner's full grant reaches every lead. A Project
+    Router restarts with under_delegation (no owner message asks); the record names it
+    as project_lead, and revocation refuses the next call at once."""
+    from lib.router.owner_delegation import LEAD_DELEGATION_WORDS, restart_server
+    lead_scope = {**d.scope, 'project_path': d.project, 'conversation_id': 'coordinator-project'}
+    call = {'reason': 'Merged fixes are live only after a restart', 'under_delegation': True,
+            'idempotency_key': 'lead-restart-1'}
+    with pytest.raises(DelegationRefused) as refused:
+        restart_server(d.task, lead_scope, call)
+    assert refused.value.code == 'owner_delegation_not_granted'
     d.grant()
-    from lib.router.tools import execute_router_tool
-    with pytest.raises(PermissionError):
-        execute_router_tool(d.task, {**d.scope, 'project_path': '/work/project'}, 'restart_server',
-                            {'reason': 'x', 'source_turn_id': 'owner-turn', 'idempotency_key': 'k'})
-    assert d.events == []
+    accepted = restart_server(d.task, lead_scope, call)
+    assert accepted['status'] == 'accepted' and len(d.detached) == 1
+    [record] = d.audit()
+    assert record['requester']['kind'] == 'project_lead'
+    assert record['requester']['conversationId'] == 'coordinator-project'
+    assert record['trigger'] == {'kind': 'owner_delegation', 'turnId': 'router-turn',
+                                 'text': LEAD_DELEGATION_WORDS}
+    from lib.router.contract import validate
+    validate(record, 'ownerDelegatedAction')
+    d.revoke()
+    with pytest.raises(DelegationRefused) as refused:
+        restart_server(d.task, lead_scope, {**call, 'idempotency_key': 'lead-restart-2'})
+    assert refused.value.code == 'owner_delegation_not_granted'
 
 
-def test_workers_never_receive_the_owner_delegation_tools():
+def test_under_delegation_is_a_trigger_alone(d):
+    d.grant()
+    with pytest.raises(DelegationRefused) as refused:
+        d.restart(under_delegation=True)  # with source_turn_id
+    assert refused.value.code == 'owner_delegation_trigger_malformed'
+
+
+def test_every_lead_holds_restart_and_workers_never_do():
     from lib.project_dispatch.contract import CONTRACT
     from lib.router.policy import ROUTER_ONLY_TOOLS, ROUTER_TOOLS
     from lib.tasks_pkg.coordinator_policy import COORDINATOR_TOOLS
-    assert 'restart_server' in ROUTER_ONLY_TOOLS and 'restart_server' not in COORDINATOR_TOOLS
+    # Owner decision 2026-11-18 (docs/ROUTER.md R9): restart moved from the Router-only
+    # ceiling to every lead's; the gate still refuses without the owner's grant.
+    assert 'restart_server' in COORDINATOR_TOOLS and 'restart_server' not in ROUTER_ONLY_TOOLS
     assert 'restart_server' in CONTRACT['workerDeniedTools']
     assert not {name for name in ROUTER_TOOLS if 'grant' in name or 'delegation' in name}
+
+
+def test_workers_submit_their_own_checkpoint():
+    """A Worker's integration_submit only checkpoints its isolated task workspace for the
+    automatic delivery; it starts nothing outside its grant (owner decision 2026-11-18)."""
+    from lib.project_dispatch.contract import CONTRACT
+    assert 'integration_submit' not in CONTRACT['workerDeniedTools']
+    assert 'integration_checkpoint' not in CONTRACT['workerDeniedTools']
 
 
 # -- The boundary: the grant lets the Router act as the owner, never speak as the owner. --

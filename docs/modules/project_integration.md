@@ -604,15 +604,51 @@ is what the user sees and edits); leaving entangled deltas in the working tree (
 Problem: a Worker that lands its own work with `git_land` can name the resulting merge as its
 immutable delivery checkpoint. The shared branch already contains that commit and may have
 advanced with overlapping edits, but publication still replayed the task-input-to-checkpoint
-delta and reported a false `task_delta_conflict`. Decision: under repository admission, after
-rechecking terminal publication authority, test the selected checkpoint against live canonical
-`HEAD` with `merge-base --is-ancestor`. An exact ancestry result settles as `delivered` /
+delta and reported a false `task_delta_conflict`. Decision: under repository admission, test the
+selected checkpoint against live canonical `HEAD` with `merge-base --is-ancestor`
+(`task_delta_delivery.checkpoint_contained`, answered once per checkpoint and branch tip). A
+contained checkpoint publishes nothing, so no publication authority is needed to acknowledge it:
+an assignment superseded by another that merged its checkpoint, or landed by `git_land`, settles
+even when it was never accepted (`_publication_hold`, the receiver's `hold`, and a refusal
+remembered by `_held_by_its_assignment` all yield once the pass's branch tip contains it). An exact ancestry result settles as `delivered` /
 `no_changes` / `publicationMode=committed`, records the containing HEAD in `targetSha`, and skips
 canonical capture, merge and patch application. The existing recovery pass therefore re-evaluates
 and settles an old blocked receipt whose checkpoint is now contained. Alternatives rejected:
 tree/path similarity or accepting a cleanly reapplied patch cannot distinguish later rewrites from
 actual task ownership; accepting a checkpoint merely because its ref exists does not prove it was
 published; manually closing receipts or forcing retries bypasses durable delivery authority.
+
+**Landings in sequence keep both insertions.** Problem (owner request 2026-11-18, audit
+ff3cc232): 66 of 135 accepted checkpoints were held at least once; 13 as
+`task_delta_conflict`, 3 as `task_delta_entangled`, and 21 of 162 delegations (11-15..17) were
+"Merge-repair"/"Re-land" Workers the lead wrote by hand. Most of the remaining text conflicts
+were two concurrent tasks adding a section at the same place of a shared document
+(`docs/PROJECT_COORDINATION.md` was shared by 21 concurrently running pairs that both landed);
+the lead's repair brief was always "keep both sides". Landings are already serialized per
+project (receiver lanes; `git_land` holds the index lock) and each merges onto the tip its
+predecessor published, but Git reports two insertions at one base position as a conflict.
+Decision: after the three-way merge, `lib/project_mod/insertion_conflicts.py` resolves each
+unmerged text path whose every conflict hunk has an empty base (both sides only inserted lines
+there): the earlier landing's lines, already on the branch, then the later landing's. A hunk in
+which both sides changed the same base lines, binary content, symlinks, add/add, deletes and
+mode clashes stay unmerged and held. Reviewed deliveries (`_merge_workspace_delta`) and
+`scripts/git_land.py` (`_merge_in`) share it, before generated outputs are rebuilt from the
+merged sources. A real conflict reaches the lead as `delivery.conflict` (exact paths, count,
+the canonical tip it met, and a complete `delegate_project_work` brief to merge the held
+checkpoint and resolve those files). A reviewed delivery that lands records its checkpoint as
+the commit's second parent whenever its delta base is the true merge base
+(`_lineage_parent`; never for a baseline holding borrowed uncommitted bytes), so whatever the
+checkpoint merged, including the held original of such a rework, becomes an ancestor of the
+branch and settles by containment (above) instead of staying blocked. Replay: of the 14 held
+checkpoints in the lead's transcript, merged onto the first-parent branch tip at their first hold
+from their merge base, today's code without this rule still holds 2; with it, 1
+(`frontend/src/features/world.ts`, a real rewrite on both sides). Alternatives rejected: Git's
+`union` merge driver (also concatenates rewrites of the same lines, silently keeping both
+versions); an ordering queue keyed by path sets (landings are already serial; the conflict is a
+merge rule, not an ordering); rebasing the Worker's commits one by one (a merge resolution inside
+the worktree belongs to the delivered bytes); holding and asking the lead (the 21 repair Workers
+above). Verify `tests/project_mod/test_delivery_landing_queue.py` and
+`test_a_section_added_where_the_branch_added_one_lands_after_it` in `test_git_land_script.py`.
 
 **A Worker that merged the branch delivers from the merge base.** Problem: Workers merge the
 shared branch into their worktree before saving (AGENTS.md), but the delta was always diffed

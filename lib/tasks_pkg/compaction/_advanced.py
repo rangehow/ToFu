@@ -78,6 +78,9 @@ def _make_summarize_fn(conv_id: str, task: dict | None):
                       'file paths, identifiers, error messages, and concrete '
                       'conclusions. Drop filler. Output only the summary.')
         tag = f'[AdvSummary conv={conv_id if conv_id else "?"}]'
+        from lib.tasks_pkg.persistence_wait import settle_deferred_ready_events
+        # Ready receipts precede every paid request of this task.
+        settle_deferred_ready_events(task)
         try:
             from lib.tasks_pkg.manager import task_user_id
             owner_user_id = task_user_id(task)

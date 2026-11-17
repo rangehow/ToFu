@@ -702,7 +702,10 @@ class _RootLoopHooks:
         from lib.tasks_pkg.persistence_wait import checkpoint_invocation
         phase = self.task.get('_invocationCheckpointPhase') or 'ready'
         checkpoint_round = round_num if phase == 'tools_in_flight' else round_num + 1
-        checkpoint_invocation(self.task, self.messages, checkpoint_round, phase=phase)
+        # A ready round end's events persist while the next round prepares;
+        # the pre-request boundary awaits them before the paid request.
+        checkpoint_invocation(self.task, self.messages, checkpoint_round, phase=phase,
+                              defer_events=phase == 'ready')
         run_round_checkpoint_and_close(
             self.task, round_num=round_num, tid=self.request.tid)
 

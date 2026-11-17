@@ -273,13 +273,19 @@ class PinnedImportSource:
         with self._lock:
             pins = {path: pin.exported() for path, pin in self._pins.items()}
             packages = sorted(self._packages)
-        # The application modules this process has imported so far: a shard
-        # imports the same set before it admits work, so its first job pays
-        # no import the primary's jobs no longer pay.
-        loaded = sorted(name for name, module in list(sys.modules.items())
-                        if getattr(getattr(module, '__spec__', None), 'origin', None) in pins)
         return {'format': SNAPSHOT_FORMAT, 'roots': sorted(self._roots),
-                'packages': packages, 'pins': pins, 'loaded': loaded}
+                'packages': packages, 'pins': pins, 'loaded': self.loaded_module_names()}
+
+    def loaded_module_names(self) -> list[str]:
+        """The application modules this process has imported so far.
+
+        A shard imports the same set before it admits work, so its first job
+        pays no import the primary's jobs no longer pay.
+        """
+        with self._lock:
+            pins = set(self._pins)
+        return sorted(name for name, module in list(sys.modules.items())
+                      if getattr(getattr(module, '__spec__', None), 'origin', None) in pins)
 
     @classmethod
     def from_snapshot(cls, snapshot: dict) -> 'PinnedImportSource':

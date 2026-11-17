@@ -37,6 +37,70 @@ def round_evidence_turn(task: dict, round_num: int | None) -> str:
     return str(task.get('_flow_phase') or '')
 
 
+_SNAPSHOT_ROW_KEY = ('round-evidence', 'snapshot-row')
+# Fields the snapshot projection removes (``_strip_base64_for_snapshot``).
+_SNAPSHOT_DROPPED_FIELDS = ('_responses_items', '_anthropic_content_blocks', '_tofuSameRoleSeam')
+
+
+def _projects_to_itself(message) -> bool:
+    """Whether the snapshot projection of a settled row equals the row.
+
+    True when nothing the projection rewrites is present: no dropped sidecar,
+    no image block, no text over its 100,000-character cut and no tool-call
+    arguments over their 50,000-character cut. The projection then copies
+    the containers without changing a value.
+    """
+    if any(field in message for field in _SNAPSHOT_DROPPED_FIELDS):
+        return False
+    content = message.get('content')
+    if isinstance(content, str):
+        if len(content) > 100000:
+            return False
+    elif isinstance(content, list):
+        if any(isinstance(block, dict) and block.get('type') == 'image_url'
+               for block in content):
+            return False
+    calls = message.get('tool_calls')
+    if calls is not None:
+        if not isinstance(calls, list):
+            return False
+        for call in calls:
+            if not isinstance(call, dict):
+                return False
+            arguments = (call.get('function') or {}).get('arguments', '')
+            if isinstance(arguments, str) and len(arguments) > 50000:
+                return False
+    return True
+
+
+def _snapshot_rows(wire: list, project) -> list:
+    """``project(wire)``; a settled request row projects once into a settled twin.
+
+    The snapshot projection of one message is a pure function of it, so a
+    settled row of the canonical request (``build_round_request``) keeps its
+    settled projection in its memo slot and unchanged history is not copied.
+    """
+    from lib.conversation_sync.settled_rows import is_settled, memo_get, memo_put, settle_or_none
+    rows = []
+    for message in wire:
+        if not is_settled(message):
+            rows.extend(project([message]))
+            continue
+        if _projects_to_itself(message):
+            rows.append(message)
+            continue
+        held = memo_get(message, _SNAPSHOT_ROW_KEY)
+        if held is None:
+            projected = project([message])[0]
+            settled = settle_or_none(projected)
+            if settled is None:
+                rows.append(projected)
+                continue
+            held = memo_put(message, _SNAPSHOT_ROW_KEY, settled)
+        rows.append(held)
+    return rows
+
+
 def build_round_evidence(task: dict, messages: list, *, ref: dict,
                          kind: str, model: str, prepared_messages=None,
                          params=None, tools=None, prepared_lineage=None) -> dict:
@@ -52,7 +116,7 @@ def build_round_evidence(task: dict, messages: list, *, ref: dict,
     # Snapshot messages are settled and an unchanged message keeps the previous
     # snapshot's twin, whose memoized digest the event-log delta projector
     # (snapshot_delta) reuses instead of re-encoding the whole history.
-    snapshot = settle_items(_strip_base64_for_snapshot(wire),
+    snapshot = settle_items(_snapshot_rows(wire, _strip_base64_for_snapshot),
                             previous=task.get('_snapshotMessages'))
     task['_snapshotMessages'] = snapshot
     label = '请求前' if kind == 'request' else '工具结果后'
@@ -62,9 +126,8 @@ def build_round_evidence(task: dict, messages: list, *, ref: dict,
         label=f'Round {ref["roundNum"]} {label} · {len(snapshot)}条',
         messages=snapshot, contextManifest=list(task.get('_contextManifest') or []))
     if lineage and lineage.get('sources'):
-        from copy import deepcopy
-        from lib.llm_sanitize.lineage import verify_lineage
-        event['contextLineage'] = deepcopy(lineage)
+        from lib.llm_sanitize.lineage import copy_trace, verify_lineage
+        event['contextLineage'] = copy_trace(lineage)
         verify_lineage(event['contextLineage'], {'messages': snapshot}, 'snapshot_projection')
     if params is not None:
         event['params'] = params

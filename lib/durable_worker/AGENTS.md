@@ -13,7 +13,9 @@ accounting and Turn settlement; this package never replays an unknown effect.
   retains the existing timing and idle-reuse policy.
 - `service.py` composes claim horizons, the shared demand executor, typed
   registrations and one injected wake source. An idle worker count is reuse
-  policy, never an admission ceiling.
+  policy, never an admission ceiling. A claim gate with ``place`` may hand an
+  owned claim back (deferred, available now) before any handler effect, under
+  that claim's lease monitor; it never refuses or caps work.
 - `lib/storage/worker_wake.py` owns the remote hint transport. A hint only
   requests a new authority proof; it cannot cancel or authorize an effect.
 - State and transport semantics live in

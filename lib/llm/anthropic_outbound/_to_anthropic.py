@@ -10,6 +10,7 @@ from lib.llm.conversion import (
     checked_conversion, conversion_report, object_arguments, stop_sequences, validate_request,
 )
 from lib.llm.conversion import ProtocolConversionError
+from lib.conversation_sync.settled_rows import is_settled
 from lib.llm.route_features import body_route_profile
 from lib.llm.tool_call_ids import tool_call_id_contract, wire_tool_call_ids
 from lib.llm_sanitize.text_blocks import normalize_text_blocks
@@ -144,23 +145,47 @@ def _convert_content_blocks(content) -> list:
 
 def _convert_tools(tools) -> list:
     """OpenAI function tools → Anthropic tools (cache_control hoisted out of
-    the nested ``function`` object)."""
+    the nested ``function`` object).
+
+    A settled source row converts once: its settled Anthropic twin keeps one
+    identity across rounds, so the sealed encode and byte fingerprints that
+    memoize per row reuse it. Writers replace converted rows copy-on-write.
+    """
+    from lib.conversation_sync.settled_rows import is_settled, memo_get, memo_put, settle
     out = []
     for tool in tools or []:
-        fn = tool.get('function') if isinstance(tool, dict) else None
-        if not fn:
+        if is_settled(tool):
+            converted = memo_get(tool, _ANTHROPIC_TOOL_KEY)
+            if converted is None:
+                converted = memo_put(tool, _ANTHROPIC_TOOL_KEY, _converted_tool(tool))
+            if converted is not _NOT_A_FUNCTION:
+                out.append(converted)
             continue
-        at = {
-            'name': fn.get('name', ''),
-            'description': fn.get('description', ''),
-            'input_schema': fn.get('parameters', {'type': 'object', 'properties': {}}),
-        }
-        if 'strict' in fn:
-            at['strict'] = fn['strict']
-        if fn.get('cache_control'):
-            at['cache_control'] = fn['cache_control']
-        out.append(at)
+        converted = _converted_tool(tool)
+        if converted is not _NOT_A_FUNCTION:
+            out.append(converted)
     return out
+
+
+_ANTHROPIC_TOOL_KEY = ('anthropic-outbound', 'tool')
+_NOT_A_FUNCTION = ('not-a-function-tool',)
+
+
+def _converted_tool(tool):
+    from lib.conversation_sync.settled_rows import is_settled, settle
+    fn = tool.get('function') if isinstance(tool, dict) else None
+    if not fn:
+        return _NOT_A_FUNCTION
+    at = {
+        'name': fn.get('name', ''),
+        'description': fn.get('description', ''),
+        'input_schema': fn.get('parameters', {'type': 'object', 'properties': {}}),
+    }
+    if 'strict' in fn:
+        at['strict'] = fn['strict']
+    if fn.get('cache_control'):
+        at['cache_control'] = fn['cache_control']
+    return settle(at) if is_settled(tool) else at
 
 
 def _key_sorted_copy(value):
@@ -283,6 +308,104 @@ def _assistant_blocks(msg: dict, *, replay_unsigned_reasoning=False,
     return blocks
 
 
+class _ToolBatch(list):
+    """Consecutive tool_result blocks that become one Anthropic user turn."""
+
+
+_SYSTEM_BLOCKS_KEY = ('anthropic-outbound', 'system-blocks')
+_TOOL_RESULT_KEY = ('anthropic-outbound', 'tool-result')
+_ASSISTANT_KEY = ('anthropic-outbound', 'assistant')
+_USER_KEY = ('anthropic-outbound', 'user')
+_TOOL_BATCH_KEY = ('anthropic-outbound', 'tool-batch')
+_CALL_IDS_KEY = ('anthropic-outbound', 'call-ids')
+
+
+def _memoized(row, key, convert, *args):
+    """``settle(convert(row, *args))`` once per settled row and ``key``."""
+    from lib.conversation_sync.settled_rows import memo_get, memo_put, settle
+    held = memo_get(row, key)
+    if held is None:
+        held = memo_put(row, key, settle(convert(row, *args)))
+    return held
+
+
+def _row_call_ids(msg):
+    from lib.llm.tool_call_ids import correlation_ids
+    from lib.conversation_sync.settled_rows import is_settled, memo_get, memo_put
+    if not is_settled(msg):
+        return tuple(correlation_ids(msg))
+    held = memo_get(msg, _CALL_IDS_KEY)
+    if held is None:
+        held = memo_put(msg, _CALL_IDS_KEY, tuple(correlation_ids(msg)))
+    return held
+
+
+def _content_blocks(msg):
+    return _convert_content_blocks(msg.get('content') or '')
+
+
+def _tool_result_block(msg, wire_id):
+    _tool_content = (msg.get('content') if isinstance(msg.get('content'), str)
+                     else (_convert_content_blocks(msg.get('content')) or ''))
+    # Carry the cache breakpoint onto the tool_result block itself.
+    #   add_cache_breakpoints stamps the tail marker on the (wrapped)
+    #   tool message content; Anthropic reads cache_control on the
+    #   tool_result block, NOT on a text block nested inside it. Without
+    #   this hoist the tail breakpoint is silently lost on every
+    #   tool-ending round → cache_read pins at the system floor. Strip
+    #   the inner marker first so we place EXACTLY ONE (else 2 markers
+    #   for one message overflows Anthropic's 4-marker ceiling).
+    _cc = _block_cache_control(msg.get('content'))
+    if _cc and isinstance(_tool_content, list):
+        _tool_content = _strip_cc(_tool_content)
+    block = {
+        'type': 'tool_result',
+        'tool_use_id': wire_id,
+        'content': _tool_content,
+    }
+    if _cc:
+        block['cache_control'] = _cc
+    return block
+
+
+def _tool_batch_message(blocks):
+    from lib.conversation_sync.settled_rows import is_settled, rows_memo, settle
+    if all(map(is_settled, blocks)):
+        return rows_memo(blocks, _TOOL_BATCH_KEY,
+                         lambda: settle({'role': 'user', 'content': list(blocks)}))
+    return {'role': 'user', 'content': list(blocks)}
+
+
+def _assistant_message(msg, replay_unsigned_reasoning, wire_ids, tool_input):
+    blocks = _assistant_blocks(
+        msg, replay_unsigned_reasoning=replay_unsigned_reasoning,
+        wire_ids=wire_ids, tool_input=tool_input)
+    if not blocks:
+        # Ghost assistant (no signed thinking, no content, no
+        # tool_calls) — a caller bypassed build_body's
+        # _drop_empty_assistant_messages. A phantom '' text block
+        # hard-400s upstream; a placeholder keeps the turn AND the
+        # user/assistant alternation (dropping the message would
+        # make two same-role turns adjacent — also a 400).
+        logger.warning('[AnthropicOut] Ghost assistant reached the '
+                       'boundary with no blocks — emitting placeholder '
+                       '(upstream healer bypassed)')
+        blocks = [{'type': 'text', 'text': '[empty response]'}]
+    return {'role': 'assistant', 'content': blocks}
+
+
+def _user_message(msg):
+    blocks = _convert_content_blocks(msg.get('content') or '')
+    if not blocks:
+        # Same class on the user side; placeholder vocabulary matches
+        # _fix_empty_user_messages on the OpenAI wire.
+        logger.warning('[AnthropicOut] User message reached the '
+                       'boundary with no content — emitting placeholder '
+                       '(upstream healer bypassed)')
+        blocks = [{'type': 'text', 'text': '[empty message]'}]
+    return {'role': 'user', 'content': blocks}
+
+
 def openai_body_to_anthropic_checked(body: dict):
     return checked_conversion(_convert_body_to_anthropic, body)
 
@@ -380,71 +503,53 @@ def _convert_body_to_anthropic(body: dict) -> dict:
     messages = []
     from lib.llm_sanitize.lineage import ProjectionLineage
     lineage = ProjectionLineage(body, 'anthropic_projection')
+    # A settled canonical message (lib/llm/request.py ``detach_input``)
+    # translates once: its settled Anthropic twin is memoized on the row under
+    # a key naming every other input of its translation, so it keeps one
+    # identity across requests and per-row memos after translation (sealed
+    # encode, content digest, recount, lineage spans) reuse it.
     for index, msg in enumerate(body.get('messages', [])):
         role = msg.get('role')
+        settled = is_settled(msg)
         if role in ('system', 'developer'):
-            blocks = _convert_content_blocks(msg.get('content') or '')
+            blocks = (_memoized(msg, (_SYSTEM_BLOCKS_KEY,), _content_blocks)
+                      if settled else _content_blocks(msg))
             lineage.emit(index, msg.get('content'), blocks,
                          region='system', part_offset=len(system_blocks))
             system_blocks.extend(blocks)
         elif role == 'tool':
-            _tool_content = (msg.get('content') if isinstance(msg.get('content'), str)
-                             else (_convert_content_blocks(msg.get('content')) or ''))
-            # Carry the cache breakpoint onto the tool_result block itself.
-            #   add_cache_breakpoints stamps the tail marker on the (wrapped)
-            #   tool message content; Anthropic reads cache_control on the
-            #   tool_result block, NOT on a text block nested inside it. Without
-            #   this hoist the tail breakpoint is silently lost on every
-            #   tool-ending round → cache_read pins at the system floor. Strip
-            #   the inner marker first so we place EXACTLY ONE (else 2 markers
-            #   for one message overflows Anthropic's 4-marker ceiling).
-            _cc = _block_cache_control(msg.get('content'))
-            if _cc and isinstance(_tool_content, list):
-                _tool_content = _strip_cc(_tool_content)
-            block = {
-                'type': 'tool_result',
-                'tool_use_id': wire_ids.get(msg.get('tool_call_id', ''),
-                                            msg.get('tool_call_id', '')),
-                'content': _tool_content,
-            }
-            if _cc:
-                block['cache_control'] = _cc
+            wire_id = wire_ids.get(msg.get('tool_call_id', ''),
+                                   msg.get('tool_call_id', ''))
+            block = (_memoized(msg, (_TOOL_RESULT_KEY, wire_id),
+                               _tool_result_block, wire_id)
+                     if settled else _tool_result_block(msg, wire_id))
             # Merge into the preceding user turn when it's a tool_result batch.
-            if (messages and messages[-1]['role'] == 'user'
-                    and isinstance(messages[-1]['content'], list)
-                    and messages[-1]['content']
-                    and messages[-1]['content'][0].get('type') == 'tool_result'):
-                messages[-1]['content'].append(block)
+            # Only a tool batch starts with a tool_result: user turns convert
+            # to text/image blocks, and system turns emit no message.
+            if messages and type(messages[-1]) is _ToolBatch:
+                messages[-1].append(block)
             else:
-                messages.append({'role': 'user', 'content': [block]})
+                messages.append(_ToolBatch((block,)))
         elif role == 'assistant':
-            blocks = _assistant_blocks(
-                msg, replay_unsigned_reasoning=replay_unsigned_reasoning,
-                wire_ids=wire_ids, tool_input=tool_inputs or object_arguments)
-            if not blocks:
-                # Ghost assistant (no signed thinking, no content, no
-                # tool_calls) — a caller bypassed build_body's
-                # _drop_empty_assistant_messages. A phantom '' text block
-                # hard-400s upstream; a placeholder keeps the turn AND the
-                # user/assistant alternation (dropping the message would
-                # make two same-role turns adjacent — also a 400).
-                logger.warning('[AnthropicOut] Ghost assistant reached the '
-                               'boundary with no blocks — emitting placeholder '
-                               '(upstream healer bypassed)')
-                blocks = [{'type': 'text', 'text': '[empty response]'}]
-            messages.append({'role': 'assistant', 'content': blocks})
-            lineage.emit(index, msg.get('content'), blocks, message=len(messages) - 1)
+            local_ids = (tuple((key, wire_ids[key]) for key in _row_call_ids(msg)
+                               if key in wire_ids) if wire_ids else ())
+            message = (_memoized(msg, (_ASSISTANT_KEY, replay_unsigned_reasoning, local_ids),
+                                 _assistant_message, replay_unsigned_reasoning,
+                                 wire_ids, object_arguments)
+                       if settled else _assistant_message(
+                           msg, replay_unsigned_reasoning, wire_ids,
+                           tool_inputs or object_arguments))
+            messages.append(message)
+            lineage.emit(index, msg.get('content'), message['content'],
+                         message=len(messages) - 1)
         elif role == 'user':
-            blocks = _convert_content_blocks(msg.get('content') or '')
-            if not blocks:
-                # Same class on the user side; placeholder vocabulary matches
-                # _fix_empty_user_messages on the OpenAI wire.
-                logger.warning('[AnthropicOut] User message reached the '
-                               'boundary with no content — emitting placeholder '
-                               '(upstream healer bypassed)')
-                blocks = [{'type': 'text', 'text': '[empty message]'}]
-            messages.append({'role': 'user', 'content': blocks})
-            lineage.emit(index, msg.get('content'), blocks, message=len(messages) - 1)
+            message = (_memoized(msg, (_USER_KEY,), _user_message)
+                       if settled else _user_message(msg))
+            messages.append(message)
+            lineage.emit(index, msg.get('content'), message['content'],
+                         message=len(messages) - 1)
+    messages = [_tool_batch_message(entry) if type(entry) is _ToolBatch else entry
+                for entry in messages]
 
     if system_blocks:
         # A single plain-text system block can stay a string; keep the block

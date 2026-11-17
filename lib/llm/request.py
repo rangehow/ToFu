@@ -23,7 +23,8 @@ import threading
 from types import MappingProxyType
 
 from lib.conversation_sync.settled_rows import (
-    SettledDict, SettledList, is_settled, memo_get, memo_put, rows_memo,
+    SettledDict, SettledList, interchangeable, is_exact_json, is_settled,
+    memo_get, memo_put, rows_memo, settle,
 )
 from lib.utils import sha256_holding_gil, update_holding_gil
 
@@ -43,7 +44,6 @@ _SORTED_ENCODER = json.JSONEncoder(
 _ITEM_LIST_FIELDS = frozenset({'messages', 'input'})
 _JSON_LISTS = (list, SettledList)
 # Memo keys on settled rows; values are pure functions of the immutable row.
-_EXACT_JSON_MEMO = ('request-json', 'exact')
 _SEMANTIC_CHAIN_MEMO = ('request-json', 'semantic-chain')
 _WIRE_ITEM_MEMO = ('request-json', 'wire-item')
 _TOOL_INPUT_TEXT_MEMO = ('request-json', 'tool-input-text')
@@ -129,32 +129,10 @@ def _detached_json(value):
         return detached
     if kind in _SHARED_JSON_TYPES or (kind is float and math.isfinite(value)):
         return value
-    if (kind is SettledDict or kind is SettledList) and _exact_settled_json(value):
+    if (kind is SettledDict or kind is SettledList) and is_exact_json(value):
         # Immutable and equal to its JSON round trip: nothing to detach.
         return value
     return json.loads(_encode(value))
-
-
-def _exact_settled_json(row):
-    """Whether a settled tree equals its JSON round trip; memoized on the row."""
-    exact = memo_get(row, _EXACT_JSON_MEMO)
-    if exact is None:
-        try:
-            exact = _is_exact_json(row)
-        except RecursionError:
-            return False
-        memo_put(row, _EXACT_JSON_MEMO, exact)
-    return exact
-
-
-def _is_exact_json(value):
-    kind = type(value)
-    if kind is SettledDict:
-        return all(type(key) is str and _is_exact_json(item)
-                   for key, item in value.items())
-    if kind is SettledList:
-        return all(map(_is_exact_json, value))
-    return kind in _SHARED_JSON_TYPES or (kind is float and math.isfinite(value))
 
 
 def detach_input(body):
@@ -164,15 +142,60 @@ def detach_input(body):
     Settled rows equal to their round trip are shared: they cannot change.
     Shared strings and integers are validated by the semantic identity's
     encode, which callers run before counting.
+
+    A body may carry its owner's holder of the previous request's settled
+    messages (``WIRE_MESSAGE_ROWS_KEY``, a dict). Each detached message is
+    then settled, and a message interchangeable with the settled row at the
+    same position of the previous request is that row. Unchanged history
+    keeps its identity from request to request, so every later stage that
+    memoizes per settled row (identity chain, translation, recount, sealed
+    encode, content digest, lineage span hashes, transport diagnostics)
+    computes only the rows that changed. Any change to a message (compaction,
+    an injection, an edit, a moved cache marker) fails the interchangeable
+    check, so the row and everything derived from it is computed afresh.
     """
+    message_rows = body.get(WIRE_MESSAGE_ROWS_KEY)
+    if not isinstance(message_rows, dict):
+        message_rows = None
     for key in ('messages', 'system', 'tools'):
         if key in body:
             try:
-                body[key] = _detached_json(body[key])
+                if (key == 'messages' and message_rows is not None
+                        and type(body[key]) is list):
+                    body[key] = message_rows['messages'] = _settled_messages(
+                        body[key], message_rows.get('messages'))
+                else:
+                    body[key] = _detached_json(body[key])
             except RecursionError:
                 # Cycles and nesting beyond Python's frame limit keep the
                 # reference outcome: a deep decode or the unsent JSON error.
                 body[key] = json.loads(_encode(body[key]))
+
+
+WIRE_MESSAGE_ROWS_KEY = '_wire_message_rows'
+"""A request owner's ``{'messages': [...]}`` holder; never a wire field."""
+
+
+def _settled_messages(messages, previous):
+    """``_detached_json(messages)`` with every message a settled row.
+
+    A message interchangeable with the previous request's settled row at its
+    position is that row (settled rows are their own JSON round trip, and an
+    interchangeable value encodes to the same bytes); any other message is
+    detached and settled.
+    """
+    if type(previous) is not list:
+        previous = ()
+    settled = []
+    for index, message in enumerate(messages):
+        prior = previous[index] if index < len(previous) else None
+        if prior is not None and (prior is message or interchangeable(prior, message)):
+            settled.append(prior)
+        elif is_settled(message) and is_exact_json(message):
+            settled.append(message)
+        else:
+            settled.append(settle(_detached_json(message)))
+    return settled
 
 
 # Digest state after ``{"messages":[``; only ever copied, never updated.
@@ -422,15 +445,69 @@ def seal_request(body, *, model, provider_id='', protocol='openai',
 def _seal_context_lineage(body, wire, payload):
     if not body.get('_context_lineage'):
         return b''
-    from copy import deepcopy
-    from lib.llm_sanitize.lineage import verify_lineage
-    trace = deepcopy(body['_context_lineage'])
+    from lib.llm_sanitize.lineage import copy_trace, verify_lineage
+    trace = copy_trace(body['_context_lineage'])
     verify_lineage(trace, wire, 'request_sealing')
     # Archives normalize JSON key order. Keep an exact transport digest AND
     # an order-independent artifact digest; never call the latter wire bytes.
     return _encode({**trace,
                     'wireBodyHash': hashlib.sha256(payload).hexdigest(),
-                    'requestContentHash': _digest(wire, sorted_keys=True)})
+                    'requestContentHash': _content_digest(wire)})
+
+
+# Digest-chain link on a settled wire item: (previous link, state after it).
+_CONTENT_CHAIN_MEMO = ('request-json', 'content-chain')
+
+
+def _content_digest(wire):
+    """``_digest(wire, sorted_keys=True)`` resuming over settled wire items.
+
+    The sorted-key encode of ``wire`` is its sorted members in order; a
+    ``messages``/``input`` list is hashed item by item. Each settled item
+    keeps the digest state after itself with the link it extended: the
+    previous item's state object, or for the first item the digest of the
+    bytes before it. A link held by the exact predecessor state continues the
+    same chain, so a later request over the same settled prefix hashes only
+    the bytes from its first new item on.
+    """
+    if not any(key in _ITEM_LIST_FIELDS and type(value) in _JSON_LISTS
+               and any(map(is_settled, value)) for key, value in wire.items()):
+        return _digest(wire, sorted_keys=True)
+    hasher = hashlib.sha256()
+    pending = [b'{']
+    for index, key in enumerate(sorted(wire)):
+        value = wire[key]
+        pending.append((b',' if index else b'') + _encode(key) + b':')
+        if not (key in _ITEM_LIST_FIELDS and type(value) in _JSON_LISTS):
+            pending.append(_encode_field(value, sorted_keys=True))
+            continue
+        pending.append(b'[')
+        update_holding_gil(hasher, b''.join(pending))
+        # A memoized state is shared: continue on a copy.
+        hasher = _chained_items(hasher, value).copy()
+        pending = [b']']
+    pending.append(b'}')
+    update_holding_gil(hasher, b''.join(pending))
+    return hasher.hexdigest()
+
+
+def _chained_items(state, items):
+    """``state`` advanced over the comma-joined sorted encodes of ``items``."""
+    link = state.digest()
+    for index, item in enumerate(items):
+        settled = is_settled(item)
+        if settled:
+            held = memo_get(item, _CONTENT_CHAIN_MEMO)
+            if held is not None and (held[0] is link if index else held[0] == link):
+                state = link = held[1]
+                continue
+        extended = state.copy()
+        update_holding_gil(extended, (b',' if index else b'')
+                           + _encode(item, sorted_keys=True))
+        if settled:
+            memo_put(item, _CONTENT_CHAIN_MEMO, (link, extended))
+        state = link = extended
+    return state
 
 
 def _append_items(chunks, values, start):
@@ -545,24 +622,15 @@ def recount_anthropic_input(body, *, model, provider_id='', text_count_view=None
         view = view.sibling('provider:anthropic')
     messages = []
     for message in body.get('messages') or ():
-        projected = dict(message)
-        content = message.get('content')
-        if isinstance(content, list):
-            blocks, calls, thinking = [], [], []
-            for block in content:
-                kind = block.get('type') if isinstance(block, dict) else None
-                if kind == 'tool_use':
-                    calls.append({'function': {
-                        'name': block.get('name', ''),
-                        'arguments': tool_input_text(block.get('input', {}), view)}})
-                elif kind == 'image':
-                    blocks.append({'type': 'image_url'})
-                elif kind == 'thinking':
-                    thinking.append({'text': block.get('thinking', '')})
-                else:
-                    blocks.append(block)
-            projected.update(content=blocks, tool_calls=calls,
-                             reasoning_content=thinking)
+        if is_settled(message):
+            # The projection is a pure function of the settled wire row; its
+            # settled twin keeps the counter's per-row token slot across rounds.
+            projected = memo_get(message, _RECOUNT_PROJECTION_KEY)
+            if projected is None:
+                projected = memo_put(message, _RECOUNT_PROJECTION_KEY,
+                                     settle(_recount_projection(message, view)))
+        else:
+            projected = _recount_projection(message, view)
         messages.append(projected)
     canonical = {'messages': messages, 'system': body.get('system'),
                  'tools': body.get('tools')}
@@ -573,6 +641,31 @@ def recount_anthropic_input(body, *, model, provider_id='', text_count_view=None
     return enforce_body_input_limit(
         canonical, model=model, provider_id=provider_id,
         logical_model=logical_model)
+
+
+_RECOUNT_PROJECTION_KEY = ('request-json', 'anthropic-recount')
+
+
+def _recount_projection(message, view):
+    projected = dict(message)
+    content = message.get('content')
+    if isinstance(content, list):
+        blocks, calls, thinking = [], [], []
+        for block in content:
+            kind = block.get('type') if isinstance(block, dict) else None
+            if kind == 'tool_use':
+                calls.append({'function': {
+                    'name': block.get('name', ''),
+                    'arguments': tool_input_text(block.get('input', {}), view)}})
+            elif kind == 'image':
+                blocks.append({'type': 'image_url'})
+            elif kind == 'thinking':
+                thinking.append({'text': block.get('thinking', '')})
+            else:
+                blocks.append(block)
+        projected.update(content=blocks, tool_calls=calls,
+                         reasoning_content=thinking)
+    return projected
 
 
 def canonical_admission_evidence(body):

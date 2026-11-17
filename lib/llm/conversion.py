@@ -6,6 +6,8 @@ import hashlib
 import json
 import math
 
+from lib.conversation_sync.settled_rows import is_settled, memo_get, memo_put
+
 from lib.llm.llm_errors import LocalRequestPreparationError
 from lib.llm.responses_replay import REPLAY_ORDER_TYPE
 from lib.llm.responses_state_origin import STATE_ORIGIN_TYPE
@@ -172,63 +174,77 @@ def validate_request(body, protocol):
     if 'output_config' in body and not isinstance(body['output_config'], dict):
         raise ProtocolConversionError('output_config_object_required')
     for msg in messages:
-        if not isinstance(msg, dict):
-            raise ProtocolConversionError('message_object_required')
-        if (not isinstance(msg.get('role'), str)
-                or msg['role'] not in {'system', 'developer', 'user', 'assistant', 'tool'}):
-            raise ProtocolConversionError('unsupported_role')
-        if msg.get('tool_calls') and msg.get('role') != 'assistant':
-            raise ProtocolConversionError('tool_call_role_invalid')
-        if msg.get('_anthropic_content_blocks') and msg.get('role') != 'assistant':
-            raise ProtocolConversionError('native_content_role_invalid')
-        if msg.get('_responses_items') and msg.get('role') != 'assistant':
-            raise ProtocolConversionError('native_content_role_invalid')
-        if msg.get('thinking_signature') and not isinstance(msg.get('reasoning_content'), str):
-            raise ProtocolConversionError('native_content_invalid')
-        if '_responses_items' in msg:
-            items = msg['_responses_items']
-            if not isinstance(items, list):
-                raise ProtocolConversionError('native_content_list_required')
-            if any(not isinstance(item, dict) or not isinstance(item.get('type'), str)
-                   for item in items):
-                raise ProtocolConversionError('native_content_object_required')
-        native = msg.get('_anthropic_content_blocks')
-        if native is not None:
-            validate_native_blocks(native)
-            if protocol == 'anthropic' and native:
-                continue  # Original native blocks, not their lossy projection, are authority.
-        content = msg.get('content')
-        if content is not None and not isinstance(content, (str, list)):
-            raise ProtocolConversionError('unsupported_content')
-        for block in content if isinstance(content, list) else []:
-            if not isinstance(block, dict):
-                raise ProtocolConversionError('content_object_required')
-            kind = block.get('type')
-            if kind == 'text' and isinstance(block.get('text'), str):
+        if is_settled(msg):
+            # Validation is a pure function of the immutable row and protocol.
+            key = (_VALID_MESSAGE_KEY, protocol)
+            if memo_get(msg, key) is None:
+                _validate_message(msg, protocol)
+                memo_put(msg, key, True)
+        else:
+            _validate_message(msg, protocol)
+
+
+_VALID_MESSAGE_KEY = ('conversion', 'valid-message')
+
+
+def _validate_message(msg, protocol):
+    if not isinstance(msg, dict):
+        raise ProtocolConversionError('message_object_required')
+    if (not isinstance(msg.get('role'), str)
+            or msg['role'] not in {'system', 'developer', 'user', 'assistant', 'tool'}):
+        raise ProtocolConversionError('unsupported_role')
+    if msg.get('tool_calls') and msg.get('role') != 'assistant':
+        raise ProtocolConversionError('tool_call_role_invalid')
+    if msg.get('_anthropic_content_blocks') and msg.get('role') != 'assistant':
+        raise ProtocolConversionError('native_content_role_invalid')
+    if msg.get('_responses_items') and msg.get('role') != 'assistant':
+        raise ProtocolConversionError('native_content_role_invalid')
+    if msg.get('thinking_signature') and not isinstance(msg.get('reasoning_content'), str):
+        raise ProtocolConversionError('native_content_invalid')
+    if '_responses_items' in msg:
+        items = msg['_responses_items']
+        if not isinstance(items, list):
+            raise ProtocolConversionError('native_content_list_required')
+        if any(not isinstance(item, dict) or not isinstance(item.get('type'), str)
+               for item in items):
+            raise ProtocolConversionError('native_content_object_required')
+    native = msg.get('_anthropic_content_blocks')
+    if native is not None:
+        validate_native_blocks(native)
+        if protocol == 'anthropic' and native:
+            return  # Original native blocks, not their lossy projection, are authority.
+    content = msg.get('content')
+    if content is not None and not isinstance(content, (str, list)):
+        raise ProtocolConversionError('unsupported_content')
+    for block in content if isinstance(content, list) else []:
+        if not isinstance(block, dict):
+            raise ProtocolConversionError('content_object_required')
+        kind = block.get('type')
+        if kind == 'text' and isinstance(block.get('text'), str):
+            continue
+        if kind == 'image_url' and (msg['role'] == 'user' or (
+                protocol == 'responses' and msg['role'] == 'tool') or (
+                protocol == 'anthropic' and msg['role'] in {'assistant', 'tool'})):
+            image = block.get('image_url')
+            if isinstance(image, dict) and isinstance(image.get('url'), str) and image['url']:
                 continue
-            if kind == 'image_url' and (msg['role'] == 'user' or (
-                    protocol == 'responses' and msg['role'] == 'tool') or (
-                    protocol == 'anthropic' and msg['role'] in {'assistant', 'tool'})):
-                image = block.get('image_url')
-                if isinstance(image, dict) and isinstance(image.get('url'), str) and image['url']:
-                    continue
-                if protocol == 'responses' and isinstance(image, str) and image:
-                    continue
-            raise ProtocolConversionError('unsupported_content')
-        calls = msg.get('tool_calls')
-        if calls is None:
-            calls = []
-        if not isinstance(calls, list):
-            raise ProtocolConversionError('tool_calls_list_required')
-        for call in calls:
-            if not isinstance(call, dict) or call.get('type', 'function') != 'function':
-                raise ProtocolConversionError('unsupported_tool_call')
-            fn = call.get('function')
-            if not isinstance(fn, dict):
-                raise ProtocolConversionError('function_object_required')
-            if not isinstance(fn.get('name'), str) or not fn['name']:
-                raise ProtocolConversionError('tool_name_invalid')
-            object_arguments(fn.get('arguments'))
+            if protocol == 'responses' and isinstance(image, str) and image:
+                continue
+        raise ProtocolConversionError('unsupported_content')
+    calls = msg.get('tool_calls')
+    if calls is None:
+        calls = []
+    if not isinstance(calls, list):
+        raise ProtocolConversionError('tool_calls_list_required')
+    for call in calls:
+        if not isinstance(call, dict) or call.get('type', 'function') != 'function':
+            raise ProtocolConversionError('unsupported_tool_call')
+        fn = call.get('function')
+        if not isinstance(fn, dict):
+            raise ProtocolConversionError('function_object_required')
+        if not isinstance(fn.get('name'), str) or not fn['name']:
+            raise ProtocolConversionError('tool_name_invalid')
+        object_arguments(fn.get('arguments'))
 
 
 def stop_sequences(body):

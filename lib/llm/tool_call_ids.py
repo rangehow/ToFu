@@ -18,7 +18,8 @@ IDs its destination would reject; valid IDs reach the wire byte-identical.
 A respelling depends only on the original ID and the contract, so a growing
 conversation keeps a stable wire prefix; a call and its result are respelled
 by one map; a collision check keeps every wire ID of a request unique.
-Pure; the only dependency is creator-family attribution in ``lib.model_catalog``.
+Pure; dependencies are creator-family attribution in ``lib.model_catalog`` and
+the settled-row memo slot (``lib.conversation_sync.settled_rows``).
 """
 
 from __future__ import annotations
@@ -27,7 +28,10 @@ import hashlib
 import re
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, replace
+from itertools import repeat
 from typing import Any
+
+from lib.conversation_sync.settled_rows import is_settled, memo_get, memo_put
 
 _DIGEST_ALPHABET = ('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
                     'abcdefghijklmnopqrstuvwxyz')
@@ -148,7 +152,7 @@ def _respelled(original: str, contract: ToolCallIdContract, attempt: int) -> str
     return f'{stem}_{digest}' if stem else digest
 
 
-def _ids(message: Mapping[str, Any]) -> Iterator[str]:
+def correlation_ids(message: Mapping[str, Any]) -> Iterator[str]:
     """Correlation IDs an adapter emits for one canonical message."""
     calls = message.get('tool_calls')
     for call in calls if isinstance(calls, list) else ():
@@ -186,13 +190,18 @@ def wire_tool_call_ids(messages: Iterable[Any],
     IDs the contract accepts are absent (emit them unchanged); so is ``''``,
     which ``lib.llm_sanitize`` heals by position. Callers apply the one map to
     every call and every result, so pairing is preserved.
+
+    A settled message keeps whether it holds an ID the contract rejects in its
+    memo slot, so a request whose IDs are all accepted (the usual case) reads
+    one flag per unchanged message.
     """
+    messages = [message for message in messages if isinstance(message, Mapping)]
+    if not any(map(_rejects_an_id, messages, repeat(contract))):
+        return {}
     originals: dict[str, None] = {}
     taken: set[str] = set()
     for message in messages:
-        if not isinstance(message, Mapping):
-            continue
-        for value in _ids(message):
+        for value in correlation_ids(message):
             originals.setdefault(value, None)
         taken.update(_opaque_ids(message))
     rejected = [value for value in originals
@@ -210,6 +219,22 @@ def wire_tool_call_ids(messages: Iterable[Any],
         taken.add(candidate)
         spelled[original] = candidate
     return spelled
+
+
+def _rejects_an_id(message: Mapping[str, Any], contract: ToolCallIdContract) -> bool:
+    if not is_settled(message):
+        return any(value and not contract.accepts(value)
+                   for value in correlation_ids(message))
+    key = (_REJECTS_KEY, contract)
+    held = memo_get(message, key)
+    if held is None:
+        held = memo_put(message, key, any(
+            value and not contract.accepts(value)
+            for value in correlation_ids(message)))
+    return held
+
+
+_REJECTS_KEY = ('tool-call-ids', 'rejects')
 
 
 def respell_chat_message(message: dict, wire_ids: Mapping[str, str]) -> dict:

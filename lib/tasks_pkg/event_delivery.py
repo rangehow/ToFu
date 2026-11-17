@@ -537,23 +537,28 @@ class EventDeliveryCoordinator:
             return EventBacklog(max(0, lane.accepted - lane.completed), lane.error is not None)
 
     def flush(self, lane, *, timeout=30.0, recover=True, cancel_check=None,
-              slow_after=None, on_slow=None, on_release=None):
+              slow_after=None, on_slow=None, on_release=None, through=None):
         if self.profiler is None:
             return self._flush(lane, timeout=timeout, recover=recover, cancel_check=cancel_check,
-                               slow_after=slow_after, on_slow=on_slow, on_release=on_release)
+                               slow_after=slow_after, on_slow=on_slow, on_release=on_release,
+                               through=through)
         start = self.profiler.observe('clock_ns')
         failed = True
         try:
             result = self._flush(lane, timeout=timeout, recover=recover, cancel_check=cancel_check,
-                                 slow_after=slow_after, on_slow=on_slow, on_release=on_release)
+                                 slow_after=slow_after, on_slow=on_slow, on_release=on_release,
+                                 through=through)
             failed = False
             return result
         finally:
             self.profiler.observe('barrier', start, failed)
 
     def _flush(self, lane, *, timeout=30.0, recover=True, cancel_check=None,
-               slow_after=None, on_slow=None, on_release=None):
+               slow_after=None, on_slow=None, on_release=None, through=None):
         """Wait until every event accepted before this call is committed.
+
+        ``through`` (an earlier ``accepted`` position, see
+        ``task_event_position``) narrows that to the events accepted before it.
 
         Returns how many of those events were still unacknowledged at entry.
         ``on_slow(pending)`` observes a barrier still waiting after
@@ -567,11 +572,18 @@ class EventDeliveryCoordinator:
         owed = 0
         with self.condition:
             lane_condition = self._lane_condition(lane)
-            target = lane.accepted
+            target = lane.accepted if through is None else min(through, lane.accepted)
             awaited = max(0, target - lane.completed)
-            # The awaited items are exactly those pending now; keep only their
+            # The awaited items are the oldest pending ones; keep only their
             # timing records, never their callbacks or detached inputs.
-            timings = None if on_release is None else [item.timing for item in lane.pending]
+            timings = None
+            if on_release is not None:
+                timings, counted = [], 0
+                for item in lane.pending:
+                    if counted >= awaited:
+                        break
+                    timings.append(item.timing)
+                    counted += item.event_count
             if recover and lane.error is not None:
                 lane.error = None
                 lane.head_ready_at = time.monotonic()
@@ -1015,8 +1027,11 @@ def advance_event_visibility(task, sequence):
 
 
 def flush_task_events(task, *, timeout=None, cancel_check=None, slow_after=None, on_slow=None,
-                      on_release=None):
+                      on_release=None, through=None):
     """Barrier over this task's accepted events; returns how many it awaited.
+
+    ``through`` limits it to the events accepted before that earlier
+    ``task_event_position``.
 
     ``slow_after``/``on_slow`` only observe a slow barrier and ``on_release``
     its awaited events' ``BarrierCost`` (see ``EventDeliveryCoordinator._flush``);
@@ -1026,7 +1041,8 @@ def flush_task_events(task, *, timeout=None, cancel_check=None, slow_after=None,
     if lane is None:
         return 0
     awaited = coordinator().flush(lane, timeout=timeout, cancel_check=cancel_check,
-                                  slow_after=slow_after, on_slow=on_slow, on_release=on_release)
+                                  slow_after=slow_after, on_slow=on_slow, on_release=on_release,
+                                  through=through)
     task['_eventDeliveryReceipt'] = {
         'contract': 'tofu.task-event-delivery/v1',
         'accepted': lane.accepted, 'completed': lane.completed,
@@ -1034,6 +1050,15 @@ def flush_task_events(task, *, timeout=None, cancel_check=None, slow_after=None,
         'visibleCursor': int(task.get('_eventVisibilityCursor') or 0),
     }
     return awaited
+
+
+def task_event_position(task) -> int:
+    """How many events this task's lane has accepted so far (0 without a lane)."""
+    lane = _ordered_lane(task)
+    if lane is None:
+        return 0
+    with coordinator().condition:
+        return lane.accepted
 
 
 def task_event_backlog(task) -> EventBacklog:

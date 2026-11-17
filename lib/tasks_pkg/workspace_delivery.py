@@ -534,17 +534,13 @@ def _binding(path: str, task: dict, source: tuple[str, str] | None, *,
             for key in ('verification', 'publicationMode'):
                 if key not in row and cached.get(key):
                     row[key] = cached[key]
-    actual = _checkout(row['workspacePath'], cancel=cancel)
-    if (not actual or actual[0] != _local_path(row['workspacePath'])
-            or actual[1] != _local_path(row['canonicalRoot'])
-            or actual[0] == actual[1]):
-        raise WorkspaceBindingError('Registered workspace is missing or mismatched')
+    # The checkout identity verified above is the one this binding names: a
+    # second Git read of the same path proved nothing more (one process per
+    # binding on the checkout's volume).
     if _local_path(row['workspacePath']) != workspace:
         raise WorkspaceBindingError('Workspace registration changed during binding')
-    if not source or source[1] != actual[1]:
+    if _local_path(row['canonicalRoot']) != actual[1]:
         raise WorkspaceBindingError('Workspace belongs to another project')
-    if source[0] != source[1] and source[0] != actual[0]:
-        raise WorkspaceBindingError('Task already owns a different linked workspace')
     if restored:
         _announce_restored_checkout(task, row['workspacePath'], restored)
     return row

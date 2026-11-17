@@ -9,6 +9,7 @@ ids remain an internal bridge to the model/tool executor.
 from __future__ import annotations
 
 import hashlib
+import os
 import threading
 import time
 import uuid
@@ -161,6 +162,16 @@ _TURN_SEARCH_BACKFILL_INITIAL_DELAY_SECONDS = 60.0
 # a fresh identity; boot recovery settles claims left by its predecessor
 # instead of silently repeating billable work.
 _ATTEMPT_DISPATCH_OWNER_ID = uuid.uuid4().hex
+
+
+def _new_dispatch_owner_after_fork():
+    # A forked process (an execution shard) must never replay its parent's claims.
+    global _ATTEMPT_DISPATCH_OWNER_ID
+    _ATTEMPT_DISPATCH_OWNER_ID = uuid.uuid4().hex
+
+
+if hasattr(os, 'register_at_fork'):
+    os.register_at_fork(after_in_child=_new_dispatch_owner_after_fork)
 _ATTEMPT_CLAIM_MAX_ATTEMPTS = 4
 _ATTEMPT_CLAIM_RPC_DEADLINE_SECONDS = 2.0
 # Every in-process dispatch entry point serializes one attempt from claim

@@ -35,6 +35,7 @@ from lib.tasks_pkg.manager._registry import (
     task_user_id,
 )
 from lib.tasks_pkg.manager._sync import refresh_segment_mirror
+from lib.tasks_pkg.persistence_wait import settle_deferred_ready_events
 from lib.tasks_pkg.round_prep_timing import finish_round_prep
 
 logger = get_logger(__name__)
@@ -606,6 +607,8 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None,
     a server crash with minimal data loss.
     """
     pfx = f'[Task {task_log_tag(task["id"])}][{tag}]'
+    # Ready receipts precede every paid request of this task.
+    settle_deferred_ready_events(task)
     policy = task.get('_invocationPolicy')
     allowance = getattr(policy, 'max_429_attempts', None)
     if allowance is not None:
@@ -628,9 +631,7 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None,
     _attempt_token = str(
         task.get('_attemptId') or task.get('attemptId') or task.get('id') or 'task'
     )[:80]
-    _model_request_span = (
-        f'model:{_attempt_token}:{_model_request_ordinal}'
-    )
+    _model_request_span = f'model:{_attempt_token}:{_model_request_ordinal}'
     _tag_digits = ''.join(character for character in str(tag) if character.isdigit())
     _activity_round_num = int(_tag_digits) if _tag_digits else None
     from lib.tasks_pkg.round_evidence import round_evidence_turn

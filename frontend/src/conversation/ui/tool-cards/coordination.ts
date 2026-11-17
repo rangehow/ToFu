@@ -449,7 +449,8 @@ const pollWorkers: ToolPresenter = {
     const finished = workers.filter((worker) => !ACTIVE_EXECUTION.has(text(worker.status))).map((worker) => {
       const status = labelled(EXECUTION_STATUS, text(worker.status), t);
       const delivery = labelled(DELIVERY_STATUS, worker.canonical_delivery === true ? 'delivered' : text(record(worker.delivery).status), t);
-      const excerpt = text(worker.result_excerpt);
+      // Rounds stored before 2026-11-18 carry the cut `result_excerpt`.
+      const excerpt = text(worker.result ?? worker.result_excerpt);
       return `<li class="ptool-coord-worker"><span class="ptool-coord-worker-title">${escape(workerTitle(worker, context))}</span>${chipsHtml(chips(status, delivery))}`
         + `${markdownSection(context, t('toolCard.poll.result'), excerpt)}</li>`;
     });

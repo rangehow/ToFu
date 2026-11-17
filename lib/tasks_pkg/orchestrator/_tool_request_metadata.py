@@ -172,6 +172,10 @@ def attach_tool_request_metadata(task, body, messages, tool_list, *, model, roun
     body['_tool_wire_catalog'] = list(_tools_this_round or [])
     # Task-owned rows of the last final wire surface (lib/llm/tool_wire.py).
     body['_wire_tool_rows'] = task.setdefault('_wireToolRows', {})
+    # Task-owned settled messages of the last request (lib/llm/request.py
+    # ``detach_input``): unchanged history keeps its row identity per round.
+    from lib.llm.request import WIRE_MESSAGE_ROWS_KEY
+    body[WIRE_MESSAGE_ROWS_KEY] = task.setdefault('_wireMessageRows', {})
     body['_tool_discovery_policy_by_name'] = dict(
         task.get('_toolDiscoveryPolicyByName') or {})
     _tool_search_catalog_size = task.get('_toolSearchCatalogSize')

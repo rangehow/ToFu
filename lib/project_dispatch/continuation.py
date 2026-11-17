@@ -685,7 +685,7 @@ def request_decision(repository, task, arguments):
     """Keep the request open; adopt the recommendation if the human stays silent."""
     _validate_schema(arguments, 'requestUserDecision')
     from .delegation import source_for_task, policy_for_task
-    _, _, attempt = source_for_task(repository, task)
+    _, _, attempt = source_for_task(repository, task, delegated=True)
     origin = original_delegation(task, policy_for_task(repository, task, attempt), repository=repository)
     identity = origin['policy'].get('requestBudgetId')
     if not identity:
@@ -721,7 +721,7 @@ def request_decision(repository, task, arguments):
 def finish_request(repository, task, arguments):
     _validate_schema(arguments, 'finishProjectRequest')
     from .delegation import source_for_task, policy_for_task
-    _, _, attempt = source_for_task(repository, task)
+    _, _, attempt = source_for_task(repository, task, delegated=True)
     origin = original_delegation(task, policy_for_task(repository, task, attempt), repository=repository)
     report = repository.turn_get(task['convId'], arguments['report_turn_id'], user_id=repository.owner)
     kinds = {'coordinator_report.delivery'} if arguments['outcome'] == 'complete' else {'coordinator_report.decision', 'coordinator_report.blocked'}
@@ -731,7 +731,7 @@ def finish_request(repository, task, arguments):
             or report.get('kind') not in kinds or report.get('createdAt', 0) < attempt.get('createdAt', 0)):
         raise ProjectDispatchError('Finish requires a durable report for the human in this request')
     def check(value):
-        source_for_task(repository, task)
+        source_for_task(repository, task, delegated=True)
         rows = _group(value, origin['attemptId'])
         if not rows:
             raise ProjectDispatchError('Finish requires an existing delegated request')

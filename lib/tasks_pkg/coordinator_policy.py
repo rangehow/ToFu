@@ -42,6 +42,9 @@ COORDINATOR_TOOLS = frozenset({
     # report bound to its Turn and role (lib/tasks_pkg/handlers/memory.py).
     # Correcting, deleting and merging lessons stay with Workers.
     'create_memory',
+    # Every lead restarts under the owner's full delegation (docs/ROUTER.md R9,
+    # owner decision 2026-11-18); the gate refuses without it.
+    'restart_server',
 })
 # The Project Coordinator's direct core: its role tools in recorded-use order until
 # core plus the discovery pair fill the Sankuai Claude tool-name budget. Recorded
@@ -111,9 +114,19 @@ def coordinator_scope(task: dict, project_path: str | None = None) -> dict | Non
     from lib.tasks_pkg.manager import task_user_id
     owner = task_user_id(task)
     path = normalize_project_path(path)
+    # The role is fixed for a Turn in both directions: a positive answer is
+    # pinned above, and a negative one is remembered for the exact (owner,
+    # conversation, project) it read. A binding made while the Turn runs takes
+    # effect from the next Turn, as an unbinding already does.
+    identity = (owner, task['convId'], path)
+    unbound = task.get('_coordinatorUnboundScopes')
+    if isinstance(unbound, tuple) and identity in unbound:
+        return None
     binding = ProjectCoordinationRepository(owner).read(path)
     if (binding.get('availability') != 'available'
             or binding.get('conversationId') != task['convId']):
+        task['_coordinatorUnboundScopes'] = (
+            unbound if isinstance(unbound, tuple) else ()) + (identity,)
         return None
     result = {'project_path': path, 'binding_revision': binding['revision'],
               'conversation_id': task['convId'], 'user_id': owner}

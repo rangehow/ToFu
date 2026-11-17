@@ -92,9 +92,13 @@ plus every tool of the MCP servers its profile's `mcpServers` names
 (`scope.GrantedTools`; decision "A Worker grant names its MCP servers" in
 [tools_execution](modules/tools_execution.md)).
 `workerDeniedTools` keeps only the Coordinator/Router/Watchdog role tools and
-deferred wakes (timers, `await_device`, `create_conversation`,
-`integration_submit`), which would start work outside the grant and its Stop
-fence. Alternative rejected: a separate Worker toggle, which would reintroduce a
+deferred wakes (timers, `await_device`, `create_conversation`), which would
+start work outside the grant and its Stop fence. A Worker submits its own
+checkpoint for review (owner decision 2026-11-18): in its isolated task
+workspace `integration_submit` only saves the final checkpoint for the automatic
+task delivery the Coordinator's accepting review publishes, and starts nothing.
+Problem: Workers told to "submit when done" were refused and their leads
+re-ran the step by hand. Alternative rejected: a separate Worker toggle, which would reintroduce a
 second capability ceiling diverging from ordinary conversations.
 
 Scheduling is governed, not denied (owner request 2026-11-10;
@@ -351,10 +355,11 @@ read only the assignment row itself (no policy rows or prerequisites), attempt
 status, Turn metadata and delivery receipt
 (`view_for_coordinator(settlement_only=True)`), and each poll observes the
 coordination binding once for all its Workers (one `one_decision`; each Worker's
-view formerly read it twice per poll); excerpts and settled causes are read once,
+view formerly read it twice per poll); results and settled causes are read once,
 for the news only, under one binding observation as well. It creates no polling model request, new pool
 or idle daemon. At most the existing 128 assignment references are observed per
-call; excerpts are capped at 4,000 characters with explicit truncation. A
+call; a news row carries the Worker's whole final answer (`result`), never
+an excerpt ("A lead reads each result once" below). A
 timeout preserves running workers. The same ordinary Coordinator loop then
 reviews evidence and arranges further work under the original request.
 Problem: a valid 1,800 s wait could outlast the task's silent-progress window
@@ -410,7 +415,7 @@ News ends a wait at once whenever it happened, and any Worker of the request
 ends it, named or not, so nothing settled waits behind a pending Worker and a
 settlement wakes a poll blocked on other IDs. Execution and publication are
 separate pending phases; review-needed, held and delivered are separate settled
-phases. A poll reads excerpts only for its news. Publication of an accepted
+phases. A poll reads results only for its news. Publication of an accepted
 result already starts at the review itself (`review_for_coordinator` wakes the
 receiver), so the Coordinator's next turn is never on the publication path; its
 held or canonical receipt is reported once, like any settlement. What the
@@ -449,7 +454,7 @@ Parallel polls (2026-11-15): two `poll` calls of one tool batch share the
 attempt's reported-settlement record. Problem: both could read the same
 settlement as news and both report it, or one could overwrite the other's
 claim. Decision: the record carries a lock; a poll computes its news and claims
-it in one critical section, then reads excerpts outside it, and puts its claims
+it in one critical section, then reads results outside it, and puts its claims
 back if that read fails, so each settlement is reported by exactly one poll.
 The one seeding read of the request's pending Workers runs under the same lock.
 Alternatives rejected: a compare-and-swap retry loop over an immutable record
@@ -462,6 +467,98 @@ Verify `test_a_settlement_wakes_a_wait_on_other_workers_and_waits_behind_none`,
 `test_a_settlement_reported_once_never_ends_a_later_wait_early` and
 `test_a_coordinators_own_review_is_no_news_and_a_delivered_worker_stops_reappearing`
 in `tests/project_mod/test_coordinator_workers.py`.
+
+#### A lead reads each result once (owner request 2026-11-18)
+
+Problem: the lead's own context, not its Workers, was the costliest part of a
+request. Measured on `coordinator-4950501b927a581b666a974cb9ce21b5`
+(2026-11-15 15:58 to 11-18 02:03, 73 assistant Turns): 950 model rounds, 1,383
+tool calls, 326 M prompt tokens (about 344 K per round), USD 567, 8 compaction
+archives (5 window, 3 checkpoint). Of its tool results, `poll` was 436 calls /
+2.8 MB, `get_conversation` 58 calls / 1.7 MB (about 23 KB each, every one a
+read of a Worker conversation's last Turn) and `get_project_assignment` 24
+calls. Each `get_project_assignment` produced 0.6 to 23 MB raw (median 3 MB):
+the view copied the Worker Turn's whole projection (tool rounds, API rounds,
+timing traces), and its 12 KB model view held only the brief and the frozen
+`request.delegation` policy (every Worker and Coordinator tool name), never
+reaching the execution, review or delivery it was read for. Polls cut results
+at 4,000 characters (306 of 405 news rows), and the tool description told the
+lead to follow a nonexistent `target_conversation_id` with `get_conversation`
+for outcomes: so a lead learned each result three times, partially each time.
+The poll instruction also repeated every ID its structured fields listed
+(297 KB of the 2.8 MB).
+
+Decision: a lead's view is a projection fixed in the contract.
+`coordinatorRequest` keeps what was asked, of whom and under which checks
+(brief, acceptance, model, budget, dependencies, rework, attachments,
+authorization source); the frozen grant (`profile`, `delegation`) is admission
+authority the lead never acts on and is omitted. `coordinatorResult` keeps the
+Worker's final answer and the background output delivered into its Turn
+(`content`, `_bgCommandInjects`); telemetry stays in the Worker conversation.
+Every `view_for_coordinator` (assignment reads, review and cancel receipts,
+poll news) uses both, so the view no longer grows with the Worker's rounds
+(specification: 3,526 B at 1 round and at 500; 1,073,166 B at 500 before). A
+poll's news row carries the whole `result`, since it is reported exactly once;
+the instruction names fields (`workers`, `pending.running`,
+`pending.delivering`, `unchanged`, phase `held`) instead of IDs (replayed over
+the 429 polls: 296,219 to 171,617 instruction bytes).
+
+Alternatives rejected: a larger excerpt or a per-call `max_chars` (a tuned
+size, principle 5, and still a second read for long answers); returning the
+result by artifact reference only (a mandatory second round for the one thing
+the lead polled for); dropping `result` from news and keeping
+`get_project_assignment` as the only reader (every settlement would cost a
+round). Human-facing history pages keep their own `historyRow` projection;
+exact human lookups keep the complete view.
+
+Remaining measured bottlenecks, ranked by lead time lost, with their owner:
+1. Publication blocks. 66 of 135 checkpointed accepts were reported held at
+   least once: `project_publication_authority_missing` 56 rows (the
+   delivery-registry defect, owned by its own assignment), `task_delta_conflict`
+   13, `task_delta_entangled` 3, `git checkout-index failed` 3, `workspace_busy`
+   2. Accept to canonical as the lead saw it: p50 50 s, p90 923 s, max 2,467 s.
+   Fixed (follow-up e11fb172): landings were already serial per project, so
+   each merges onto its predecessor's result; insertions both sides made at one
+   place now keep both, the earlier landing's first, and a real conflict reaches
+   the lead as `delivery.conflict` with its exact files and a ready rework brief.
+   A landed delivery records its checkpoint as a second parent, so a superseded
+   assignment whose checkpoint another landing (or `git_land`) contains settles
+   as delivered without review. Decision and replay: "Landings in sequence keep
+   both insertions" in `docs/modules/project_integration.md`.
+2. Worker startup. `worker_entry` for Workers: p50 2.1 s, p95 44.5 s, max
+   131 s (153 starts, `[TaskStartupTiming]` in app.log 11-17..18), nearly all
+   `workspace_root_binding`; a fresh materialize took 129 s once
+   (`workspace_metadata` 126 s), resumed bindings 21 to 26 s, of which
+   `workspace_bind` about 12 s and two untimed checkout identity reads. The
+   same reads take 14 to 70 ms in a fresh process on this host (load average
+   64 to 145 during the measurement), so this is host contention, which
+   principle 3 forbids gating. Removed (e11fb172): the second `_checkout` of
+   the bound workspace, a Git process that re-read the identity the first read
+   had verified; the binding compares its own fields instead. Fixture medians
+   (8 binds each, load 10 to 12): resumed 58 to 46 ms, fresh 253 to 240 ms; one
+   identity read costs 15.5 ms on this host at load 11 (live gain under the
+   measured load 64 to 145 not measured;
+   `test_binding_reads_the_task_checkouts_identity_once_fresh_or_resumed`).
+3. Waiting. Polls spent 40.3 of 41.9 tool-wall hours; 22 timeouts of 1,500 s
+   (nothing settled) and 44 `pending_input` returns (p50 122 s) on 11-17..18.
+   These are idle waits on Workers, not lost lead work.
+4. Duplicated work (measured e11fb172 over the lead's 162 delegations,
+   11-15..17, against delivery commits on the shared branch): 21 were
+   "Merge-repair"/"Re-land" Workers redoing a held landing by hand (10 on
+   11-15, 4 on 11-16, 7 on 11-17); the causes were the delta-base and
+   generated-output defects (fixed 11-15/16), publication-authority holds
+   (sibling assignment) and same-place insertions (fixed by the landing rule
+   above). Of 95 assignments with a landed delivery, 57 concurrently running
+   pairs touched the same non-generated file, 32 of them a code file (most
+   shared: `docs/PROJECT_COORDINATION.md` 21 pairs,
+   `frontend/src/runtime/app-runtime.js` 6). Same-goal duplicates by title
+   while both ran: 2 pairs of the same re-land started twice (9b1975d4 /
+   c210a6c9, 8cc1d672 / 1b432251) and 1 overlapping goal split across two
+   Workers (cdc1c942 / 4abd0466, the ▶ chevron replacement). File overlap
+   between concurrent Workers is ordinary and now lands by itself; the
+   re-land duplicates disappear with the repair Workers they duplicated.
+
+Verify `tests/project_mod/test_coordinator_evidence_envelope.py`.
 
 Decision (2026-11-12): `poll` absorbed `await_project_workers`. Problem: two
 blocking waits answered one question (block on handles; end early on Stop, input
@@ -1101,7 +1198,29 @@ account (an account covers its request from the first model call, which came
 before the message), its Worker objectives quote the steered words, and the
 Global Router forwards it only by `source_steer_id`. Without such a message the
 refusal is `NonhumanRequest` (`code: nonhuman_request`, `execution_started:
-false`), whose recovery says that repeating the call fails the same way.
+false`), whose recovery says that repeating the call fails the same way,
+unless the owner's delegation reaches the lead (below).
+
+**Lead Turns act under the owner's delegation (owner decision 2026-11-18).**
+Problem: wake, relay and notice Turns of every lead could only read Workers;
+the owner's commitment wakes, restart notices and keepalives stalled on
+`nonhuman_request` and waited for an owner sentence. Decision: under the
+owner's full grant ([ROUTER.md R9](ROUTER.md), "The delegation reaches every
+lead", scope `lead_authority`) `source_for_task(delegated=True)` takes, after the
+Turn's own human input and a steered owner message, the delegation itself as
+the source: `{conversationId, turnId: <the lead reply>, projectionRevision: 1,
+ownerDelegation: <gate action id>}` (`$defs.source`). The callers that act on
+Workers pass `delegated=True`: delegation and its birth
+(`authorize_from_coordinator`), `worker_control`, session control, review,
+cancel, `finish_project_request` and `request_user_decision`. Request accounts,
+forwarding, standing instructions and the Watchdog's review switch keep needing
+the owner's words. The gate records one audit action per lead Attempt before
+any effect; a Worker's birth re-checks that record and the live grant, so a
+revocation refuses at once; an admitted grant's live gate reads only the reply
+Turn's metadata. Such a request opens no request account (as a steered one), and
+its Worker objective links the reply and the audit record instead of quoting
+owner words. Specification: `tests/router/test_lead_delegation.py`.
+
 Alternatives rejected: queuing the owner's message behind such a Turn (it
 reaches the model only after that Turn ends, and the Global Router could no
 longer forward owner messages steered into its relay replies); counting a steer
@@ -1606,8 +1725,9 @@ project report relay, a Watchdog notice: most Global Router Turns) has no
 request of its own until the owner's own message reaches it ("The owner's
 message steered into a Turn without a request"). It reads its binding's project page (`scope=project`,
 `source_attempt_id: null`, every row `current_request: false`, no
-`request_usage`) once the project, binding and attempt fences pass, and it still
-authorizes no Worker or finish. Problem: on 2026-11-11 every such read on the
+`request_usage`) once the project, binding and attempt fences pass; it authorizes
+Workers only under the owner's delegation ("Lead Turns act under the owner's
+delegation"). Problem: on 2026-11-11 every such read on the
 Router's wakes failed with "Synthetic authorization origin denied" because
 the read resolved the wake's input as a request source. Alternatives rejected:
 accepting a nonhuman source as a request (it would authorize delegation);

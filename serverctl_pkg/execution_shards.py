@@ -14,27 +14,32 @@ so a shard's death is proved by the kernel and its jobs are taken over exactly
 as a crashed primary's would be.
 
 - One generation. A shard runs the bytes its primary's frozen
-  ``PinnedImportSource`` retained, exported once to a private snapshot and
-  served by ``execution_shard_boot.py`` (spawned from ``PinnedHelperSource``):
-  a merge that rewrote the checkout after the primary booted never mixes
-  revisions across processes. Its plan must equal the primary's.
-- Demand. Every job the primary claims while it already runs one (no shard
-  was idle) starts one shard for that concurrency. No count is configured:
-  the processes follow the concurrent jobs. Jobs never migrate: a burst that
-  arrives before its shards are ready runs on the primary; later turns of
-  those sessions find the shards idle.
-- Placement. Each process's ``DurableWorkerService`` asks its claim gate before
-  a probe. A shard probes only while it runs nothing (one job per shard); the
-  primary probes while it runs nothing or no shard is idle, so a job is never
-  left waiting for capacity that does not exist. Shards report idle/busy over
-  a private pipe; its EOF is the shard's exit.
-- Warm. The snapshot names the application modules the primary had imported;
-  a shard imports them before it admits work, so its first job is as warm as
-  the primary's (measured: second-Turn TTFR at 20 sessions 2.7 s -> 0.46 s).
-  The export runs outside the pool lock the coordinator takes on every pass.
-- Overflow is literal: a next Turn claimed while the previous job's tail
-  (receipts after settlement) still runs counts too. The extra shard serves
-  later arrivals and retires when idle; no window or delay filters it.
+  ``PinnedImportSource`` retained, exported to a private snapshot that one
+  fork server (``execution_shard_boot.py --fork-server``, spawned from
+  ``PinnedHelperSource``) loads whole: a merge that rewrote the checkout after
+  the primary booted never mixes revisions across processes. Its plan must
+  equal the primary's (checked against the launch environment as it was
+  before the image's imports changed ``os.environ``).
+- Fast boot. The fork server is single-threaded: it imports the application
+  and the modules the primary has imported (``preload_shard_image``), refuses
+  to fork if anything started a thread, and forks one shard per request,
+  passing the shard's lease, manager and report descriptors over SCM_RIGHTS.
+  A forked shard skips interpreter start, imports and warm-up (boot measured
+  about 3-6 s under host load instead of 9-15 s). The primary's first job
+  starts the fork server, so it is ready before a second concurrent job needs
+  a shard; it retires after ``TOFU_EXECUTOR_IDLE_SECONDS`` without work.
+- Placement at the claim boundary. A shard probes only while it runs nothing
+  (one job per shard); the primary probes while it runs nothing or no shard
+  is idle. A claim the primary owns while it already runs a job is placed
+  before any handler effect (``place``): the primary enters it at once only
+  when its own job has ended meanwhile; otherwise the claim stays parked
+  under its lease and one shard is started for it, and the first shard to
+  report idle is reserved for it while the unentered claim is handed back to
+  the queue (``WorkerJobSuspension``, available now), where that shard claims
+  it. A refused or stopping pool enters parked claims itself, so no job waits
+  for capacity that cannot exist. No count, window or delay is configured.
+- Warm. A shard forked after the primary imported more modules imports those
+  in the fork server first, so later shards share them too.
 - Retention. A shard idle for ``TOFU_EXECUTOR_IDLE_SECONDS`` (the existing
   retention of idle executor capacity) closes its gate and exits by itself,
   so retirement never races a claim.
@@ -52,25 +57,33 @@ as a crashed primary's would be.
 
 Alternatives considered: sizing a worker pool from the CPU count (forbidden:
 hardware never limits work, docs/RESOURCE_CONTROL.md); forking the multi-
-threaded primary (inherits held locks); shards importing the checkout (a later
-merge splits one generation across processes); moving only persistence off
-the interpreter (at most 1.3x, measured).
+threaded primary (inherits held locks; the fork server is a separate
+single-threaded image); a prewarmed pool of idle shards (a count knob);
+running a burst's extra claims on the primary (the 2026-11-17 behavior: ~2 s
+per round while shards boot); migrating a running job between processes (its
+entered effects are owned by one process); shards importing the checkout (a
+later merge splits one generation across processes); moving only persistence
+off the interpreter (at most 1.3x, measured).
 
 Entry points: ShardPool (primary), ShardGate (shard), ExecutionShardService.
 """
 from __future__ import annotations
 
 import logging
+from collections import deque
+import json
 import marshal
 import os
 from pathlib import Path
 import shutil
 import signal
+import socket
+import subprocess
 import threading
 import time
 import uuid
 
-from serverctl_pkg.resident_service import ResidentService
+from serverctl_pkg.resident_service import ResidentService, process_matches
 
 logger = logging.getLogger(__name__)
 
@@ -80,25 +93,83 @@ HOST_MODULE = 'serverctl_pkg.execution_host'
 # One byte per state transition, shard to primary.
 REPORT_IDLE, REPORT_BUSY, REPORT_RETIRING = b'i', b'b', b'r'
 _SNAPSHOT_PREFIX = 'source-'
+# execution_shard_boot.FORK_SERVER_FLAG; that file stays standard-library only.
+FORK_SERVER_FLAG = '--fork-server'
+# The descriptors ResidentService passes a host, in its pass_fds order.
+_DESCRIPTOR_ARGUMENTS = ('--lease-fd', '--manager-fd', '--report-fd')
 
 
-def live_shard_pids(primary: int) -> list[int]:
-    """Running shard hosts of one primary: its children that run the host module as shards."""
-    children = []
-    for listing in Path(f'/proc/{primary}/task').glob('*/children'):
+def import_primary_modules(names) -> None:
+    """Import what the primary's jobs had imported, before a shard admits one."""
+    import importlib
+    import logging
+    failed = 0
+    for name in names:
+        if name in ('__main__', HOST_MODULE):
+            continue  # The host module runs as __main__ in a shard; never load a second copy.
         try:
-            children.extend(int(pid) for pid in listing.read_text().split())
+            importlib.import_module(name)
+        except Exception:
+            failed += 1  # As in the primary, a lazy import fails on use, not here.
+    if failed:
+        logging.getLogger(__name__).info('execution shard: %d of %d primary modules did not import',
+                                         failed, len(names))
+
+
+_image_environment: dict[str, str] | None = None
+
+
+def image_environment() -> dict[str, str] | None:
+    """The launch environment of a shard forked from the preloaded image, else None.
+
+    Importing the application changes ``os.environ`` (e.g. the Chromium
+    library paths), and a shard checks its launch policy against the primary's
+    as it was before any import.
+    """
+    return None if _image_environment is None else dict(_image_environment)
+
+
+def preload_shard_image(source) -> None:
+    """The fork server's image: the application and the primary's modules, no threads."""
+    global _image_environment
+    _image_environment = dict(os.environ)
+    from runtime_guards import load_deployment_configuration
+    if load_deployment_configuration().process_role != SHARD_ROLE:
+        raise RuntimeError('An execution shard fork server requires the execution_shard process role')
+    import server  # noqa: F401
+    import_primary_modules(source.loaded_modules)
+
+
+def _children(pid: int) -> list[int]:
+    children = []
+    for listing in Path(f'/proc/{pid}/task').glob('*/children'):
+        try:
+            children.extend(int(child) for child in listing.read_text().split())
         except (OSError, ValueError):
-            continue  # A thread or the primary exited while listed.
-    shards = []
-    for pid in children:
+            continue  # A thread or the process exited while listed.
+    return children
+
+
+def fork_server_pids(primary: int) -> list[int]:
+    """The primary's running shard fork server (at most one)."""
+    servers = []
+    for pid in _children(primary):
         try:
             argv = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
         except OSError:
             continue  # Exited since it was listed.
-        if HOST_MODULE.encode() in argv and b'--report-fd' in argv:
-            shards.append(pid)
-    return shards
+        if HOST_MODULE.encode() in argv and FORK_SERVER_FLAG.encode() in argv:
+            servers.append(pid)
+    return servers
+
+
+def live_shard_pids(primary: int) -> list[int]:
+    """Running shard hosts of one primary: every child of its fork server.
+
+    A forked shard keeps the fork server's command line, so it is named by
+    ancestry, not argv.
+    """
+    return [pid for server in fork_server_pids(primary) for pid in _children(server)]
 
 
 class ExecutionShardService(ResidentService):
@@ -108,13 +179,30 @@ class ExecutionShardService(ResidentService):
     record_format = RECORD_FORMAT
     host_module = HOST_MODULE
 
-    def __init__(self, checkout: Path, python: str, directory: Path, *, boot: str, snapshot: Path):
+    def __init__(self, checkout: Path, python: str, directory: Path, *, fork=None):
         super().__init__(str(checkout), python)
         self.directory = Path(directory)
         self.state_path = self.directory / f'{self.state_name}.json'
         self.lock_path = self.directory / f'.{self.state_name}.lock'
-        self._boot, self._snapshot = boot, snapshot
+        self._fork = fork
         self.report_read: int | None = None
+
+    def spawn(self, argv, *, cwd, env, log, pass_fds) -> int:
+        # The fork server already is ``launch_command``'s image; it receives
+        # only the host arguments and this host's descriptors.
+        return self._fork(argv[argv.index(self.host_module) + 1:], pass_fds)
+
+    def host_matches(self, record: dict) -> bool:
+        """A forked shard keeps its fork server's command line; pid and start time name it."""
+        if record.get('host') != socket.gethostname():
+            return False
+        if not process_matches(record.get('pid'), record.get('processStartTime')):
+            return False
+        try:
+            argv = Path(f'/proc/{record["pid"]}/cmdline').read_bytes().split(b'\0')
+        except OSError:
+            return False
+        return self.host_module.encode() in argv and FORK_SERVER_FLAG.encode() in argv
 
     def process_environment(self, environment: dict[str, str]) -> dict[str, str]:
         env = dict(environment)
@@ -126,7 +214,8 @@ class ExecutionShardService(ResidentService):
         return plan.get('python') or self.python
 
     def launch_command(self, plan: dict) -> list[str]:
-        return [self._boot, str(self._snapshot), self.host_module]
+        # Never executed: spawn() hands the host arguments to the fork server.
+        return [self.host_module]
 
     def launch_extras(self) -> tuple[list[str], tuple[int, ...]]:
         read, write = os.pipe()
@@ -143,13 +232,87 @@ class _Shard:
         self.reaped = False
         self.reap_lock = threading.Lock()
         self.threads: list[threading.Thread] = []
+        # A parked claim was handed back for this idle shard to claim.
+        self.reserved = False
+
+
+class _ForkServer:
+    """The primary's end of one fork server (execution_shard_boot ``--fork-server``)."""
+
+    def __init__(self, argv: list[str], *, cwd: Path, env: dict[str, str], log: Path):
+        ours, theirs = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        try:
+            log.parent.mkdir(parents=True, exist_ok=True)
+            with log.open('ab') as output:
+                self._process = subprocess.Popen(
+                    [*argv, FORK_SERVER_FLAG, str(theirs.fileno())], cwd=cwd, env=env,
+                    stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
+                    start_new_session=True, close_fds=True, pass_fds=(theirs.fileno(),))
+        except BaseException:
+            ours.close()
+            raise
+        finally:
+            theirs.close()
+        self._channel = ours
+        self.pid = self._process.pid
+
+    def await_ready(self) -> None:
+        reply = self._receive()
+        if reply.get('ready') is not True:
+            raise RuntimeError(f"shard fork server refused: {reply.get('error') or reply}")
+
+    def fork(self, arguments: list[str], descriptors: tuple[int, ...], flags: tuple[str, ...],
+             modules: list[str] = ()) -> int:
+        """Fork one host; each descriptor replaces the value of its flag in ``arguments``."""
+        request = {'argv': list(arguments), 'fdArguments': list(flags), 'modules': list(modules)}
+        socket.send_fds(self._channel, [json.dumps(request).encode()], list(descriptors))
+        reply = self._receive()
+        if type(reply.get('pid')) is not int:
+            raise RuntimeError(f"shard fork refused: {reply.get('error') or reply}")
+        return reply['pid']
+
+    def _receive(self) -> dict:
+        data = self._channel.recv(1 << 16)
+        if not data:
+            raise RuntimeError('the shard fork server exited')
+        return json.loads(data)
+
+    def running(self) -> bool:
+        return self._process.poll() is None
+
+    def abort(self) -> None:
+        """Any thread: wake a receive blocked on this server; it exits on the EOF."""
+        try:
+            self._channel.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass  # Already shut down or closed.
+
+    def close(self) -> None:
+        from serverctl_pkg.restart_budget import NATIVE_SERVICE_STOP_SECONDS
+        self.abort()
+        self._channel.close()
+        try:
+            self._process.wait(NATIVE_SERVICE_STOP_SECONDS)
+        except subprocess.TimeoutExpired:
+            self._process.kill()
+            self._process.wait()
+
+
+class _Placement:
+    """One owned claim's placement: entered here, or released for a shard."""
+
+    def __init__(self):
+        self.entered = False
+        self.released = False
+        self.decided = threading.Event()
 
 
 class ShardPool:
     """The primary's claim gate, command-control fan-out and shard lifecycle."""
 
     def __init__(self, *, source, plan: dict, checkout: Path, python: str,
-                 launch_environment: dict[str, str], directory: Path):
+                 launch_environment: dict[str, str], directory: Path, idle_seconds: int = 0,
+                 clock=time.monotonic):
         from lib.runtime.pinned_helper_source import PinnedHelperSource
         # Read at the primary's boot, like every helper spawned from loaded source.
         self._boot = PinnedHelperSource(Path(__file__).with_name('execution_shard_boot.py'))
@@ -157,13 +320,21 @@ class ShardPool:
         self._checkout, self._python = Path(checkout), python
         self._environment = dict(launch_environment)
         self._directory = Path(directory)
-        self._snapshot: Path | None = None
         self._lock = threading.Lock()
-        self._snapshot_lock = threading.Lock()
         self._shards: list[_Shard] = []
         self._closed = False
         self._refusal = ''
-        self._running = 0
+        # Claims this primary entered, and claims parked until a shard is idle.
+        self._entered = 0
+        self._parked: deque[_Placement] = deque()
+        self._interrupted = False
+        # One fork server while shards exist; it holds the preloaded image.
+        self._fork_lock = threading.Lock()
+        self._fork_server: _ForkServer | None = None
+        self._warming: threading.Thread | None = None
+        self._retiring: threading.Thread | None = None
+        self._idle_seconds, self._clock = idle_seconds, clock
+        self._idle_since: float | None = None
         self._wake = lambda: None
         self._retire_orphans()
 
@@ -173,20 +344,116 @@ class ShardPool:
 
     def admit(self, *, running: int, inflight: int) -> tuple[bool, float | None]:
         with self._lock:
-            idle = sum(1 for shard in self._shards if shard.state == 'idle')
-            # A job the primary claimed beside another found no idle shard:
-            # that concurrency gets a shard of its own for the next arrival.
-            overflow = running - max(1, self._running)
-            self._running = running
-            if overflow > 0 and not self._closed and not self._refusal:
-                for _ in range(overflow):
-                    shard = _Shard(self._new_service())
-                    self._shards.append(shard)
-                    # Started under the lock, so join() always finds the launch thread.
-                    self._start_thread(shard, self._launch,
-                                       f'tofu-execution-shard-launch-{shard.service.directory.name}')
-            admitted = running == 0 or idle == 0
-        return admitted, None
+            # A free primary claims at once; a busy one leaves arrivals to an
+            # idle shard. Every claim it takes beside its own job is placed.
+            idle = any(shard.state == 'idle' for shard in self._shards)
+            return self._entered == 0 or not idle, self._retire_wait_locked()
+
+    def _retire_wait_locked(self) -> float | None:
+        """Seconds until the idle fork server retires; retires it once due.
+
+        It lives while this host has work, plus the executor idle retention
+        (``TOFU_EXECUTOR_IDLE_SECONDS``, zero keeps it), like the shards it forks.
+        """
+        if self._fork_server is None or not self._idle_seconds or self._retiring is not None:
+            self._idle_since = None
+            return None
+        if self._shards or self._entered or self._parked:
+            self._idle_since = None
+            return None
+        now = self._clock()
+        if self._idle_since is None:
+            self._idle_since = now
+        remaining = self._idle_since + self._idle_seconds - now
+        if remaining > 0:
+            return remaining
+        self._idle_since = None
+        self._retiring = threading.Thread(target=self._retire_fork_server, daemon=True,
+                                          name='tofu-execution-fork-server-retire')
+        self._retiring.start()
+        return None
+
+    def place(self, context, *, stopping) -> _Placement:
+        """Decide where one owned, unentered claim runs; blocks until decided.
+
+        The primary enters a claim while it runs no other (or no shard can
+        exist). Otherwise the claim is parked under its lease and one shard is
+        started for it; the first of three ends the wait: a shard reports idle
+        (the claim is handed back to the queue, which that shard claims from),
+        the primary's own job ends (it enters the claim), or shards are refused.
+        """
+        ticket = _Placement()
+        with self._lock:
+            if stopping.is_set() or self._interrupted:
+                ticket.released = True
+                ticket.decided.set()
+            elif self._entered == 0 or self._refusal or self._closed:
+                self._enter_locked(ticket)
+            else:
+                self._parked.append(ticket)
+                self._idle_since = None
+                self._provision_locked()
+                self._dispatch_locked()
+        ticket.decided.wait()
+        return ticket
+
+    def leave(self, ticket: _Placement) -> None:
+        """A claim this process entered has ended; a parked one may enter."""
+        if not ticket.entered:
+            return
+        with self._lock:
+            self._entered -= 1
+            self._dispatch_locked()
+
+    def interrupt(self) -> None:
+        """The claim coordinator is stopping: every parked claim returns to the queue."""
+        with self._lock:
+            self._interrupted = True
+            self._dispatch_locked()
+
+    def _enter_locked(self, ticket: _Placement) -> None:
+        ticket.entered = True
+        self._entered += 1
+        self._idle_since = None
+        ticket.decided.set()
+        if (self._fork_server is None and self._warming is None
+                and not self._closed and not self._refusal and not self._interrupted):
+            self._warming = threading.Thread(target=self._warm_fork_server, daemon=True,
+                                             name='tofu-execution-fork-server-warm')
+            self._warming.start()
+
+    def _dispatch_locked(self) -> None:
+        while self._parked:
+            if self._interrupted:
+                ticket = self._parked.popleft()
+                ticket.released = True
+                ticket.decided.set()
+                continue
+            if self._entered == 0 or self._refusal or self._closed:
+                self._enter_locked(self._parked.popleft())
+                continue
+            shard = next((shard for shard in self._shards
+                          if shard.state == 'idle' and not shard.reserved), None)
+            if shard is None:
+                return
+            # Handed back: the idle shard's coordinator claims from the queue.
+            shard.reserved = True
+            ticket = self._parked.popleft()
+            ticket.released = True
+            ticket.decided.set()
+
+    def _provision_locked(self) -> None:
+        """One shard starting or idle-unreserved for every parked claim."""
+        if self._closed or self._refusal:
+            return
+        available = sum(1 for shard in self._shards if shard.state == 'starting'
+                        or (shard.state == 'idle' and not shard.reserved))
+        for _ in range(len(self._parked) - available):
+            shard = _Shard(self._new_service())
+            self._shards.append(shard)
+            # Started under the lock, so join() always finds the launch thread.
+            self._start_thread(shard, self._launch,
+                               f'tofu-execution-shard-launch-{shard.service.directory.name}')
 
     # ── command controls ───────────────────────────────────────────────────
     def apply_command_control(self, method, task_id, *, user_id, deadline_unix_ms=None, **params):
@@ -259,6 +526,10 @@ class ShardPool:
         with self._lock:
             self._closed = True
             shards = list(self._shards)
+            self._dispatch_locked()
+        server = self._fork_server
+        if server is not None:
+            server.abort()  # A launch waiting for its image fails at once.
         for shard in shards:
             self._signal(shard, signal.SIGTERM)
 
@@ -281,47 +552,113 @@ class ShardPool:
         for reaper in reapers:
             reaper.join()
         with self._lock:
-            snapshot, self._snapshot = self._snapshot, None
-        if snapshot is not None:
-            snapshot.unlink(missing_ok=True)
+            helpers = [thread for thread in (self._warming, self._retiring) if thread is not None]
+        for thread in helpers:
+            thread.join()
+        with self._fork_lock:
+            server, self._fork_server = self._fork_server, None
+        if server is not None:
+            server.close()
 
     def _new_service(self) -> ExecutionShardService:
         directory = self._directory / uuid.uuid4().hex
-        return ExecutionShardService(self._checkout, self._python, directory,
-                                     boot='', snapshot=Path())
+        return ExecutionShardService(self._checkout, self._python, directory, fork=self._fork)
+
+    def _fork(self, arguments: list[str], descriptors: tuple[int, ...]) -> int:
+        """Fork one shard host from the preloaded image."""
+        with self._fork_lock:
+            server = self._ensure_fork_server_locked()
+            return server.fork(arguments, descriptors, _DESCRIPTOR_ARGUMENTS,
+                               self._source.loaded_module_names())
+
+    def _ensure_fork_server_locked(self) -> _ForkServer:
+        server = self._fork_server
+        if server is not None and server.running():
+            return server
+        if server is not None:
+            server.close()
+            self._fork_server = None
+        with self._lock:
+            if self._closed:
+                raise RuntimeError('execution shards are stopping')
+        # A fresh export names every module the primary has imported by now.
+        snapshot = self._export_snapshot()
+        try:
+            service = self._new_service()
+            server = _ForkServer(
+                [service.launch_python(self._plan), self._boot.path(), str(snapshot), HOST_MODULE],
+                cwd=self._checkout, env=service.process_environment(self._environment),
+                log=self._checkout / 'logs' / 'server-console.log')
+            self._fork_server = server
+            started = time.monotonic()
+            server.await_ready()
+        except BaseException:
+            if self._fork_server is not None:
+                self._fork_server.close()
+                self._fork_server = None
+            raise
+        finally:
+            # The server loaded it whole; forked shards never read it.
+            snapshot.unlink(missing_ok=True)
+        logger.info('[ExecutionShards] fork server pid=%s ready after %.1fs',
+                    server.pid, time.monotonic() - started)
+        return server
+
+    def _warm_fork_server(self) -> None:
+        """Boot the image while this host's first job runs, before a second one needs a shard."""
+        try:
+            with self._fork_lock:
+                self._ensure_fork_server_locked()
+            with self._lock:
+                self._warming = None
+        except Exception as exc:
+            with self._lock:
+                if not self._closed and not self._refusal:
+                    self._refusal = f'fork server failed: {type(exc).__name__}: {exc}'[:300]
+                    logger.error('[ExecutionShards] %s; this execution host now serves every job '
+                                 'itself until it restarts', self._refusal)
+                self._warming = None
+                self._dispatch_locked()
+            self._wake()
+
+    def _retire_fork_server(self) -> None:
+        """Idle past the executor idle retention with no shard: the image goes."""
+        try:
+            with self._fork_lock:
+                with self._lock:
+                    if self._shards or self._entered or self._parked:
+                        return  # Work arrived meanwhile; the next idle period retires it.
+                    server, self._fork_server = self._fork_server, None
+                if server is not None:
+                    server.close()
+                    logger.info('[ExecutionShards] fork server pid=%s retired', server.pid)
+        finally:
+            with self._lock:
+                self._retiring = None
 
     def _start_thread(self, shard, target, name):
         thread = threading.Thread(target=target, args=(shard,), name=name, daemon=True)
         shard.threads.append(thread)
         thread.start()
 
-    def _snapshot_path(self) -> Path:
-        # Its own lock: exporting the generation (tens of MB) never holds the
-        # pool lock the claim coordinator takes on every pass.
-        with self._snapshot_lock:
-            with self._lock:
-                if self._snapshot is not None:
-                    return self._snapshot
-            self._directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-            target = self._directory / f'{_SNAPSHOT_PREFIX}{uuid.uuid4().hex}.marshal'
-            staged = target.with_suffix('.staging')
-            descriptor = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            try:
-                with os.fdopen(descriptor, 'wb') as stream:
-                    marshal.dump(self._source.snapshot(), stream)
-                os.replace(staged, target)
-            except BaseException:
-                staged.unlink(missing_ok=True)
-                raise
-            with self._lock:
-                self._snapshot = target
-            return target
+    def _export_snapshot(self) -> Path:
+        """Write the retained generation (tens of MB) to a private file for one fork server."""
+        self._directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        target = self._directory / f'{_SNAPSHOT_PREFIX}{uuid.uuid4().hex}.marshal'
+        staged = target.with_suffix('.staging')
+        descriptor = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(descriptor, 'wb') as stream:
+                marshal.dump(self._source.snapshot(), stream)
+            os.replace(staged, target)
+        except BaseException:
+            staged.unlink(missing_ok=True)
+            raise
+        return target
 
     def _launch(self, shard: _Shard) -> None:
         service = shard.service
         try:
-            service._snapshot = self._snapshot_path()
-            service._boot = self._boot.path()
             service.directory.mkdir(mode=0o700, parents=True)
             environment = dict(self._environment)
             with self._lock:
@@ -359,10 +696,7 @@ class ShardPool:
                         logger.info('[ExecutionShards] shard pid=%s ready after %.1fs', record.get('pid'),
                                     time.monotonic() - shard.launched)
                 retiring = retiring or state == 'retiring'
-                with self._lock:
-                    if shard.state != 'exited':
-                        shard.state = state
-                self._wake()
+                self._reported(shard, state)
         except OSError as exc:
             logger.warning('[ExecutionShards] report channel failed: %s', exc)
         finally:
@@ -375,8 +709,35 @@ class ShardPool:
             if not closed:
                 logger.warning('[ExecutionShards] shard exited while serving; its claims '
                                'are taken over once its exit is proved')
+            # Its foreground commands can no longer deliver output: retire their
+            # groups now, as boot does for a dead execution host, before its
+            # claims are taken over.
+            self._retire_foreground_commands_of_dead_shards()
         self._exited(shard, ready=ready,
                      reason='exited before it was ready' + (f' ({failure})' if failure else ''))
+
+    @staticmethod
+    def _retire_foreground_commands_of_dead_shards() -> None:
+        from lib.project_mod.foreground_command_records import retire_orphaned_foreground_commands
+        try:
+            counts = retire_orphaned_foreground_commands()
+        except Exception as exc:
+            # The next execution-host boot sweep retries every kept record.
+            logger.warning('[ExecutionShards] command retirement after a shard exit failed: %s', exc)
+            return
+        if counts.get('retired') or counts.get('kept'):
+            logger.warning('[ExecutionShards] after a shard exit: %s', counts)
+
+    def _reported(self, shard: _Shard, state: str) -> None:
+        with self._lock:
+            if shard.state != 'exited':
+                shard.state = state
+                if state != 'idle':
+                    # It claimed (or stopped claiming): its reservation is spent.
+                    shard.reserved = False
+                self._dispatch_locked()
+                self._provision_locked()
+        self._wake()
 
     def _exited(self, shard: _Shard, *, ready: bool, reason: str) -> None:
         with self._lock:
@@ -387,6 +748,8 @@ class ShardPool:
                 self._refusal = reason
                 logger.error('[ExecutionShards] a shard %s; this execution host now serves '
                              'every job itself until it restarts', reason)
+            self._provision_locked()
+            self._dispatch_locked()
         self._wake()
 
     def _signal(self, shard: _Shard, number: int) -> None:
@@ -423,7 +786,7 @@ class ShardPool:
         live = False
         for entry in self._directory.iterdir():
             if entry.is_dir():
-                service = ExecutionShardService(self._checkout, self._python, entry, boot='', snapshot=Path())
+                service = ExecutionShardService(self._checkout, self._python, entry)
                 record = service.record()
                 if record and service.host_matches(record):
                     live = True

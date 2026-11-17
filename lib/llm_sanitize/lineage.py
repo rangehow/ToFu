@@ -8,6 +8,7 @@ No registry policy, provider I/O, persistence, cache verdict or global state.
 from copy import deepcopy
 import hashlib
 
+from lib.conversation_sync.settled_rows import is_settled, memo_get, memo_put
 from lib.llm_sanitize.context_sections import context_sections
 
 SPAN_FIELD = '_contextLineageSpans'
@@ -60,13 +61,66 @@ def observed_span(document, location):
     return text[start:end] if isinstance(text, str) and end <= len(text) else None
 
 
+def observed_span_hash(document, location):
+    """``span_hash(observed_span(document, location))``, or None when unknown.
+
+    A range inside a settled carrier (a settled message, or a settled block of
+    a system/instructions list) is hashed once per carrier: the carrier is
+    immutable, so the hash of its range is too, and a request over unchanged
+    history re-hashes only ranges in changed carriers.
+    """
+    carrier, key = _settled_carrier(document, location)
+    if carrier is None:
+        text = observed_span(document, location)
+        return None if text is None else span_hash(text)
+    held = memo_get(carrier, key)
+    if held is None:
+        text = observed_span(document, location)
+        held = memo_put(carrier, key, (None if text is None else span_hash(text),))
+    return held[0]
+
+
+_SPAN_HASH_KEY = 'lineage-span-hash'
+
+
+def _settled_carrier(document, location):
+    """The settled row a well-formed range reads from, and its memo key."""
+    if not isinstance(location, dict):
+        return None, None
+    region = location.get('region')
+    part, start, end = (location.get(key) for key in ('part', 'start', 'end'))
+    if any(type(value) is not int for value in (part, start, end)):
+        return None, None
+    if region in ('messages', 'input'):
+        index, messages = location.get('message'), document.get(region)
+        if (type(index) is int and isinstance(messages, list)
+                and 0 <= index < len(messages) and is_settled(messages[index])):
+            return messages[index], (_SPAN_HASH_KEY, part, start, end)
+    elif region in ('system', 'instructions'):
+        content = document.get(region)
+        if isinstance(content, list) and 0 <= part < len(content) and is_settled(content[part]):
+            return content[part], (_SPAN_HASH_KEY, start, end)
+    return None, None
+
+
+def copy_trace(trace):
+    """A detached copy of a JSON lineage trace (``deepcopy`` for JSON trees)."""
+    if type(trace) is dict:
+        return {key: copy_trace(value) for key, value in trace.items()}
+    if type(trace) is list:
+        return [copy_trace(value) for value in trace]
+    if type(trace) in (str, int, float, bool, type(None)):
+        return trace
+    return deepcopy(trace)
+
+
 def verify_lineage(trace, document, stage):
     """A transformation witness cannot survive an unobserved intervening edit."""
     for source in trace.get('sources', ()):
         if source.get('status') != 'located':
             continue
-        text = observed_span(document, source.get('output'))
-        if text is None or span_hash(text) != source.get('spanHash'):
+        digest = observed_span_hash(document, source.get('output'))
+        if digest is None or digest != source.get('spanHash'):
             source.update(status='unmapped', lostAt=stage)
             source.pop('output', None)
 
@@ -166,7 +220,7 @@ class MessageLineage:
         self.observe(stage, messages)
         for message in messages:
             message.pop(SPAN_FIELD, None)
-        return {'version': 1, 'stage': stage, 'sources': deepcopy(self.sources)}
+        return {'version': 1, 'stage': stage, 'sources': copy_trace(self.sources)}
 
 
 def merge_spans(left, right, old_content, new_content):
@@ -212,7 +266,7 @@ class ProjectionLineage:
     """Protocol emitters map one known source message to its emitted content."""
 
     def __init__(self, body, stage):
-        self.trace = deepcopy(body.get(BODY_FIELD) or {})
+        self.trace = copy_trace(body.get(BODY_FIELD) or {})
         verify_lineage(self.trace, body, 'canonical_ingress')
         self.stage = stage
         self.by_message = {}

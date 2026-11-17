@@ -197,7 +197,7 @@ def worker_control(repository, task, row, *, session=False):
     on its original request's Workers, unless an owner message, his own or a
     Global Router forward of it, was steered into this reply and reached its model.
     """
-    principal, source, _ = source_for_task(repository, task)
+    principal, source, _ = source_for_task(repository, task, delegated=True)
     from .continuation import original_delegation, current_continuation
     origin = original_delegation(task, {}, repository=repository)
     request = row['request']; delegation = request.get('delegation') or {}
@@ -207,7 +207,7 @@ def worker_control(repository, task, row, *, session=False):
     repository.validate_grant_binding(row)
     if not session and current_continuation(task, require_account=True) is not None and (
             delegation.get('attemptId') != origin['attemptId'] or delegation.get('taskId') != origin['taskId']
-            or request['authorizationSource'] != source) and _steered_owner_source(
+            or request['authorizationSource'] != source) and 'ownerDelegation' not in source and _steered_owner_source(
                 repository, task, {'conversationId': source['conversationId'], 'turnId': task.get('_turnId')}) is None:
         raise PermissionError('Automatic continuation may control only its original request workers')
     return origin
@@ -358,19 +358,25 @@ def origin_attempt(repository, task):
     return attempt
 
 
-def source_for_task(repository, task, *, for_budget=False, issued=False):
+def source_for_task(repository, task, *, for_budget=False, issued=False, delegated=False):
     """Resolve the current physical Coordinator, never a model-supplied Turn ID.
 
     ``issued``: a delegation this attempt issued while it ran completes on its
     own thread, so the attempt may have completed since; a Stop, failure or
     supersession still refuses it.
+
+    ``delegated``: the caller acts on Workers (delegate, follow up, control,
+    review, cancel, finish), so a lead's Turn without an owner message of its
+    own acts under the owner's delegation (``lead_source``). Callers that need
+    the owner's own words (forwarding, standing instructions, request accounts,
+    Watchdog review changes) leave it False.
     """
     from .repository import one_decision
     with one_decision():
-        return _source_for_task(repository, task, for_budget=for_budget, issued=issued)
+        return _source_for_task(repository, task, for_budget=for_budget, issued=issued, delegated=delegated)
 
 
-def _source_for_task(repository, task, *, for_budget, issued):
+def _source_for_task(repository, task, *, for_budget, issued, delegated=False):
     scope = _active_scope(repository, task, for_budget=for_budget)
     principal = PrincipalContext.from_payload(task.get('_principalContext') or {})
     from .continuation import current_continuation
@@ -403,6 +409,8 @@ def _source_for_task(repository, task, *, for_budget, issued):
         repository.validate_human_source(source)
     except SyntheticSource as refusal:
         source = _steered_owner_source(repository, task, turn)
+        if source is None and delegated:
+            source = lead_source(repository, task, scope, turn, attempt)
         if source is None:
             raise _nonhuman_request(human, refusal) from refusal
     from .repository import stopped_after
@@ -443,6 +451,46 @@ def _steered_owner_source(repository, task, turn):
     return None
 
 
+LEAD_AUTHORITY = 'lead_authority'
+
+
+def lead_source(repository, task, scope, turn, attempt):
+    """The owner's delegation as the source of a lead Turn without an owner message of its own.
+
+    Owner decision 2026-11-18 (docs/ROUTER.md R9): 「我的权限要全部下放给负责人们」.
+    Under the owner's full grant (``lifecycle_approval``, scope ``lead_authority``)
+    a wake, relay or notice Turn of the Global Router or a Project Router acts on
+    Workers on its own judgment. The gate re-checks the live grant on every call
+    (revocation refuses at once) and records one audit action per lead Attempt
+    (the idempotency key), before any effect. Returns ``None`` without a grant
+    (the caller keeps its nonhuman refusal; ``audit.log`` records it), and for
+    the Watchdog, which is not a lead.
+    """
+    from lib import lifecycle_approval as gate
+    from lib.router.watchdog.binding import is_watchdog_scope
+    from lib.router.owner_delegation import LEAD_DELEGATION_WORDS, router_requester
+    if is_watchdog_scope(scope):
+        return None
+    requester = router_requester(task, scope)
+    try:
+        gate.check_delegation(repository.owner, requester, LEAD_AUTHORITY)
+    except gate.DelegationRefused:
+        return None
+    target = {'kind': 'project_request', 'conversationId': turn['conversationId'], 'turnId': turn['turnId'],
+              'attemptId': attempt['attemptId'], 'path': repository.project}
+    try:
+        record, _ = gate.begin_delegated_action(
+            repository.owner, requester, scope=LEAD_AUTHORITY, key='lead-turn:' + attempt['attemptId'],
+            reason='A lead Turn without an owner message of its own acts on Workers under the owner\u2019s '
+                   'delegation to every lead.',
+            trigger={'kind': 'owner_delegation', 'turnId': turn['turnId'], 'text': LEAD_DELEGATION_WORDS},
+            target=target)
+    except gate.DelegationRefused:
+        return None
+    return {'conversationId': turn['conversationId'], 'turnId': turn['turnId'], 'projectionRevision': 1,
+            'ownerDelegation': record['id']}
+
+
 def _nonhuman_request(human, refusal):
     from lib.turn_initiation import INITIATOR_HUMAN, INITIATOR_UNKNOWN, resolve_turn_initiator
     from .repository import NonhumanRequest
@@ -450,9 +498,10 @@ def _nonhuman_request(human, refusal):
     kind = ('nonhuman ' + initiator + ' input' if initiator not in (INITIATOR_HUMAN, INITIATOR_UNKNOWN)
             else 'not the owner\u2019s own message')
     return NonhumanRequest(
-        f'This turn has no request of its own: its input is {kind} ({refusal}), and no owner message '
-        'has reached it. It can read Workers, report, ask and update the board, but it cannot '
-        'delegate, continue, stop or cancel Workers.')
+        f'This turn has no request of its own: its input is {kind} ({refusal}), no owner message '
+        'has reached it, and the owner\u2019s delegation to every lead ("Act for me") is not granted. It '
+        'can read Workers, report, ask and update the board, but it cannot delegate, continue, stop or '
+        'cancel Workers.')
 
 
 def policy_for_task(repository, task, attempt):
@@ -503,7 +552,8 @@ def validate_source(repository, request, *, value=None):
     attempt = repository.get_attempt(delegation['attemptId'])
     # A human input Turn is the delegating reply's parent; a steered owner
     # message is inside that reply itself.
-    authorized = (source.get('turnId') if 'steerId' in request['authorizationSource']
+    inside_reply = {'steerId', 'ownerDelegation'} & set(request['authorizationSource'])
+    authorized = (source.get('turnId') if inside_reply
                   else source.get('parentTurnId')) if isinstance(source, dict) else None
     if (not isinstance(source, dict) or source.get('actor') != 'assistant'
             or source.get('conversationId') != request['coordinatorId']
@@ -557,6 +607,13 @@ def worker_input_source(repository, request):
         except ValueError as error:
             raise PermissionError('Original worker objective changed before dispatch') from error
         where += ' (message ' + source['steerId'] + ' the owner sent while that reply ran)'
+    elif 'ownerDelegation' in source:
+        turn = repository.turn_get(source['conversationId'], source['turnId'], user_id=repository.owner,
+                                   include_projection=False)
+        if not turn or turn.get('actor') != 'assistant' or turn.get('turnId') != source['turnId']:
+            raise PermissionError('Original worker objective changed before dispatch')
+        where += (' (the lead acted under the owner\u2019s delegation to every lead, audit record '
+                  + source['ownerDelegation'] + ')')
     else:
         turn = repository.turn_get(source['conversationId'], source['turnId'], user_id=repository.owner)
         if (not turn or turn.get('actor') != 'human' or turn.get('turnId') != source['turnId']

@@ -273,6 +273,10 @@ def run_workload(directory, *, split):
                 for pid in (execution_pid, *live_shard_pids(execution_pid)):
                     os.kill(pid, signal.SIGKILL)
 
+                # The manager recovers only a host it observed gone; SIGKILL lands asynchronously.
+                eventually(lambda: execution.host_matches(execution.record()), lambda alive: not alive,
+                           seconds=NATIVE_SERVICE_STOP_SECONDS)
+
                 def released():
                     # Recover like the manager (ExecutionService.recover): only a
                     # departed host is stopped, then only after its lease is free.

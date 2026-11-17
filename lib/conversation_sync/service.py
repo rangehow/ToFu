@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from lib.boot_identity import BOOT_ID
+from lib import boot_identity
 from lib.conversation_sync.settings_policy import public_conversation_settings
 from lib.conversation_sync.cursor import (
     ConversationCursorError,
@@ -344,7 +344,7 @@ class ConversationSyncService:
             "syncSeq": sequence,
             "cursor": encode_cursor(
                 conversation_id, user_id, ReplayPosition(sequence, epoch, head_digest)),
-            "serverBootId": BOOT_ID,
+            "serverBootId": boot_identity.BOOT_ID,
             "heartbeatIntervalMs": self.heartbeat_interval_ms,
             "settings": public_conversation_settings(stored.get("settings") or {}),
             "turns": public_value_with_stable_segments(
@@ -709,7 +709,7 @@ class ConversationSyncService:
             "type": "sync.heartbeat",
             "conversationId": conversation_id,
             "cursor": cursor,
-            "serverBootId": BOOT_ID,
+            "serverBootId": boot_identity.BOOT_ID,
             "degraded": bool(degraded),
             # Always explicit: the post-wedge heartbeat is what clears the
             # client's wedge status back to the normal phase row.

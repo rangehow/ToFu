@@ -536,3 +536,19 @@ def test_a_landing_holds_a_restart_protected_step_and_check_mode_does_not(monkey
     assert land.main(['feature/x', '--check']) == 0
     assert seen == [(False, ['git_land']), (True, [])]
     assert protected_steps.active_protected_steps() == []
+
+
+def test_a_section_added_where_the_branch_added_one_lands_after_it(shared, feature):
+    """Both sides only inserted at one place: the landed lines follow HEAD's."""
+    with open(feature / 'notes.txt', 'a', encoding='utf-8') as notes:
+        notes.write('## Feature section\n')
+    commit_all(feature, 'feature section')
+    with open(shared / 'notes.txt', 'a', encoding='utf-8') as notes:
+        notes.write('## Section landed meanwhile\n')
+    git(shared, 'commit', '-qam', 'concurrent section')
+
+    land.land('feature', cwd=shared)
+
+    landed = git(shared, 'show', 'HEAD:notes.txt')
+    assert landed.endswith('## Section landed meanwhile\n## Feature section\n'), landed
+    assert git(shared, 'status', '--porcelain') == ''

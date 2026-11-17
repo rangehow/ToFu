@@ -141,6 +141,46 @@ rejected:** fuzzy text reconstruction (identical events are ambiguous), a second
 cache classifier (the current detector remains authoritative), and another
 trace store (existing Inspector/transport evidence owns retention).
 
+**Incremental request sealing — Problem:** every provider request re-walked
+the whole history: translation, the lineage deep copy and verification, the
+request-id and content digests, the recount, the sealed encodes and the
+transport fingerprints all grew with the conversation (about 34 µs per message
+per request; `docs/HARNESS_PERFORMANCE.md`, "Incremental request building").
+**Decision:** the request and its evidence are still a pure function of the
+canonical body, but unchanged history is the *same immutable rows* from round
+to round. `build_round_request` settles the canonical messages against the
+task's previous round (`settle_items`: a message interchangeable with the row
+at its position is that row) and ingress detachment does the same for the
+post-cache-marker rows (`lib/llm/request.py` `detach_input`, holder
+`_wire_message_rows`). Each later stage memoizes its pure result on the
+settled row, keyed by every other input it reads: the Request Inspector
+snapshot row, the cache-marker rewrite (marker values in the key), the
+Anthropic message (replay policy and respelled tool-call IDs in the key), the
+recount projection and its token slot, conversion validation, the sealed
+encode and transport fingerprints, and the hash of each lineage range
+(`observed_span_hash`, per settled carrier). The order-independent
+`requestContentHash` resumes a SHA-256 chain per settled wire item whose link
+names the exact predecessor state, so it hashes only from the first changed
+item on. Lineage traces are copied as JSON, never deep-copied. Invalidation is
+exact by construction: a compaction, an injection, an in-place edit of a loop
+message, a moved cache marker or a changed system prompt produces a message
+that is not interchangeable with the previous row, so that row and everything
+derived from it is computed afresh; immutability makes a stale memo
+unrepresentable rather than detected. Every byte of the sealed payload, both
+request identities, the sealed lineage, the transport fingerprints, the raw
+archive request and the Inspector snapshot equal a full rebuild
+(`tests/llm/test_incremental_request_build.py`, over long histories with
+compaction, mid-history injection, in-place edits, system changes, native
+blocks and respelled IDs on all three wires). The holder dies with the task, so
+the first request of each Turn builds from scratch. **Alternatives rejected:**
+a delta request against the previous sealed request (it would make sealed
+evidence depend on request history and need its own invalidation protocol,
+while the provider still needs the full body); content-hash keyed caches
+(computing the key costs the encode being saved); identity memos on the
+loop's own message dicts (they are mutable and edited in place, so identity
+proves nothing without the comparison done here); a process-wide row cache
+shared across Turns (it needs a retention bound with no owner-defined value).
+
 For a conversation ID, start with `debug/inspect_conversation.py <id>`.
 For already-exported requests, use the read-only JSON investigation entry point:
 

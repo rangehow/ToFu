@@ -445,7 +445,7 @@ def test_background_completion_continues_same_assignment_and_moves_result_to_new
         return row
     r.c.repo._change(add_policy)
     outcome = r.call('poll', ids=[assignment['id']], wait_s=0)
-    assert outcome['wait'] == 'settled' and outcome['workers'][0]['result_excerpt'] == 'Consolidated result'
+    assert outcome['wait'] == 'settled' and outcome['workers'][0]['result'] == 'Consolidated result'
     assert outcome['workers'][0]['turn_id'] == old['turnId']
     from lib.project_dispatch import continuation
     original = continuation.recover_coordinator
@@ -1256,7 +1256,7 @@ def test_wait_uses_terminal_notification_and_removes_subscription(runtime):
         admission.fire_terminal_callbacks(worker['task_id'])
         thread.join(2)
     assert not thread.is_alive() and result[0]['wait'] == 'settled', result
-    assert result[0]['workers'][0]['result_excerpt'] == 'Verified result'
+    assert result[0]['workers'][0]['result'] == 'Verified result'
     assert worker['task_id'] not in admission._term_callbacks
     assert len(r.calls) == 1
 
@@ -2030,7 +2030,7 @@ def test_a_restart_cut_call_of_unknown_effect_is_a_needs_decision_settlement_rep
     phases = {row['assignment_id']: row['phase'] for row in result['workers']}
     assert phases == {decide['id']: 'needs_decision', resuming['id']: 'resuming'}, result
     assert 'needs_decision' in result['instruction'] and 'checkpoint_resume' in result['instruction']
-    assert 'resuming from its checkpoint by itself' in result['instruction']
+    assert 'resumes from its checkpoint by itself' in result['instruction']
     again = r.call('poll', ids=[decide['id'], resuming['id']], wait_s=0)
     assert again['workers'] == [] and set(again['unchanged']) == {decide['id'], resuming['id']}, again
 
@@ -2126,9 +2126,9 @@ def test_wait_returns_when_any_running_worker_settles_and_names_the_rest(runtime
     value, elapsed = result[0]
     assert value['wait'] == 'progress' and elapsed < 5, value
     assert [row['status'] for row in value['workers']] == ['completed']
-    assert value['workers'][0]['result_excerpt'] == 'First verified result'
+    assert value['workers'][0]['result'] == 'First verified result'
     assert value['pending'] == {'running': [running['id']], 'delivering': []}
-    assert 'Still running: ' + running['id'] + '.' in value['instruction']
+    assert 'pending.running' in value['instruction'] and running['id'] not in value['instruction']
     assert not {first['task_id'], second['task_id']} & set(admission._term_callbacks)
     assert len(r.calls) == 2
 
@@ -2150,9 +2150,9 @@ def test_a_settlement_wakes_a_wait_on_other_workers_and_waits_behind_none(runtim
     assert not thread.is_alive() and result, 'a settlement waited behind the Workers the poll named'
     value, _ = result[0]
     assert time.monotonic() - settled < 5 and value['wait'] == 'progress', value
-    assert [(row['assignment_id'], row['result_excerpt']) for row in value['workers']] == [(a['id'], 'A verified')]
+    assert [(row['assignment_id'], row['result']) for row in value['workers']] == [(a['id'], 'A verified')]
     assert value['pending'] == {'running': [b['id'], c['id']], 'delivering': []}
-    assert 'were not in this poll' in value['instruction']
+    assert 'not in this poll' in value['instruction']
     assert not {item['task_id'] for item in workers} & set(admission._term_callbacks)
     # Reported once: neither form of the next poll returns A again.
     for ids in ([b['id'], c['id']], [a['id'], b['id'], c['id']]):
@@ -2193,7 +2193,7 @@ def test_a_coordinators_own_review_is_no_news_and_a_delivered_worker_stops_reapp
     assert delivering['wait'] == 'timeout' and delivering['workers'] == [], delivering
     assert delivering['pending'] == {'running': [], 'delivering': [published['id']]}
     assert delivering['unchanged'] == [reviewed['id']]
-    assert 'Accepted and publishing without you' in delivering['instruction']
+    assert 'pending.delivering are accepted and publishing without you' in delivering['instruction']
     thread, result = _poll_in_thread(r, ids)
     time.sleep(0.3)
     receipts[published['id']] = {'state': 'delivered', 'checkpointSha': 'abc123'}
@@ -2261,7 +2261,7 @@ def test_held_delivery_settles_a_wait_with_its_reason(runtime, monkeypatch, stat
     assert value['workers'][0]['delivery']['status'] == state
     assert value['workers'][0]['delivery']['reason'] == 'canonical_dirty'
     assert value['workers'][0]['canonical_delivery'] is False
-    assert 'delivery.reason' in value['instruction'] and row['id'] in value['instruction']
+    assert 'phase held' in value['instruction'] and 'delivery.reason' in value['instruction']
     started = time.monotonic()
     again = r.call('poll', ids=[row['id']], wait_s=30)
     assert again['wait'] == 'settled' and again['workers'] == [] and again['unchanged'] == [row['id']]
@@ -2355,19 +2355,19 @@ def test_notification_before_durable_settlement_rechecks_promptly_and_cheaply(ru
     thread.join(5)
     assert not thread.is_alive() and result[0][0]['wait'] == 'settled', result
     assert time.monotonic() - flipped < 1.5, 'the wait slept to the slow durable recheck'
-    assert result[0][0]['workers'][0]['result_excerpt'] == 'Durable result'
+    assert result[0][0]['workers'][0]['result'] == 'Durable result'
     # Polls read Turn metadata only; the returned row alone reads the projection.
     assert reads.count(False) >= 3 and reads.count(True) == 1, reads
     assert worker['task_id'] not in admission._term_callbacks
 
 
 def _pending_input_instruction(*pending):
-    # One instruction for every input that ends a wait: it names the Workers to wait on next.
+    # One instruction for every input that ends a wait; pending.running names the Workers to wait on next.
     return ('New input is waiting for you and arrives right after this result: a human message or steer, '
             'a project message, or a background completion. The waiting list names its kind, source and '
             'preview. Answer or act on that input first; Workers keep running. Ending a wait for input is '
-            'not failure. Still running: ' + ', '.join(pending) + '. Poll the pending IDs again with wait_s '
-            'to wait for the next settlement; a settlement of any Worker of yours ends that wait.')
+            'not failure. Poll pending.running and pending.delivering again with wait_s to wait for the next '
+            'settlement; a settlement of any Worker of yours ends that wait.')
 
 
 @pytest.mark.parametrize('source', ['router', 'channel', 'typed'])
@@ -2524,7 +2524,7 @@ def test_an_accepted_worker_settles_once_its_delivery_does(runtime, monkeypatch)
     value, _ = result[0]
     assert value['wait'] == 'settled' and value['workers'][0]['delivery']['status'] == 'blocked', value
     assert value['workers'][0]['phase'] == 'held'
-    assert 'delivery.reason' in value['instruction'] and row['id'] in value['instruction']
+    assert 'phase held' in value['instruction'] and 'delivery.reason' in value['instruction']
 
 
 def test_mode_all_waits_for_every_pending_worker(runtime, monkeypatch):

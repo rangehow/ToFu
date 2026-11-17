@@ -668,6 +668,39 @@
         "targetSha": {
           "type": "string",
           "maxLength": 256
+        },
+        "conflict": {
+          "description": "Present only for a delivery held by a real three-way conflict with the branch: the exact conflicted files and a ready rework brief for delegate_project_work.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "paths",
+            "pathCount",
+            "canonicalSha",
+            "rework"
+          ],
+          "properties": {
+            "paths": {
+              "type": "array",
+              "maxItems": 64,
+              "items": {
+                "type": "string",
+                "maxLength": 4096
+              }
+            },
+            "pathCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "canonicalSha": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "rework": {
+              "type": "string",
+              "maxLength": 8192
+            }
+          }
         }
       }
     },
@@ -789,6 +822,72 @@
         }
       }
     },
+    "coordinatorRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "projectPath",
+        "coordinatorId",
+        "recipientId",
+        "authorizationSource",
+        "brief"
+      ],
+      "description": "A lead's projection of request (get_project_assignment, poll): what was asked, of whom and under which checks. The frozen grant (profile tool names, delegation policy and model config) is admission authority the lead never acts on and is omitted.",
+      "properties": {
+        "projectPath": {
+          "$ref": "#/$defs/request/properties/projectPath"
+        },
+        "coordinatorId": {
+          "$ref": "#/$defs/request/properties/coordinatorId"
+        },
+        "recipientId": {
+          "$ref": "#/$defs/request/properties/recipientId"
+        },
+        "authorizationSource": {
+          "$ref": "#/$defs/request/properties/authorizationSource"
+        },
+        "brief": {
+          "$ref": "#/$defs/request/properties/brief"
+        },
+        "acceptance": {
+          "$ref": "#/$defs/request/properties/acceptance"
+        },
+        "model": {
+          "$ref": "#/$defs/request/properties/model"
+        },
+        "budget": {
+          "$ref": "#/$defs/request/properties/budget"
+        },
+        "reworkOf": {
+          "$ref": "#/$defs/request/properties/reworkOf"
+        },
+        "dependencies": {
+          "$ref": "#/$defs/request/properties/dependencies"
+        },
+        "coordinatorWake": {
+          "$ref": "#/$defs/request/properties/coordinatorWake"
+        },
+        "attachments": {
+          "$ref": "#/$defs/request/properties/attachments"
+        }
+      }
+    },
+    "coordinatorResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A lead's projection of execution.result: the Worker's final answer and the background-command output delivered into its Turn. Execution telemetry (tool and API rounds, timing, usage, routing) stays with get_conversation.",
+      "properties": {
+        "content": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "_bgCommandInjects": {
+          "type": "array"
+        }
+      }
+    },
     "assignmentLookup": {
       "type": "object",
       "additionalProperties": false,
@@ -878,7 +977,7 @@
         "turnId",
         "projectionRevision"
       ],
-      "description": "The owner's message that authorizes a request: a genuine human input Turn, or with steerId a message the owner steered into Coordinator reply Turn turnId, whose own input is not human. A steer's committed author is immutable, so a steered source has projectionRevision 1.",
+      "description": "The owner's message that authorizes a request: a genuine human input Turn, or with steerId a message the owner steered into Coordinator reply Turn turnId, whose own input is not human, or with ownerDelegation that reply itself acting under the owner's delegation to every lead (the lifecycle gate's lead_authority audit record id; docs/ROUTER.md R9). A steer's committed author is immutable, so a steered source has projectionRevision 1.",
       "properties": {
         "conversationId": {
           "$ref": "#/$defs/id"
@@ -892,20 +991,46 @@
         },
         "steerId": {
           "$ref": "#/$defs/id"
+        },
+        "ownerDelegation": {
+          "$ref": "#/$defs/id"
         }
       },
-      "if": {
-        "required": [
-          "steerId"
-        ]
-      },
-      "then": {
-        "properties": {
-          "projectionRevision": {
-            "const": 1
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "steerId"
+            ]
+          },
+          "then": {
+            "properties": {
+              "projectionRevision": {
+                "const": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "ownerDelegation"
+            ]
+          },
+          "then": {
+            "properties": {
+              "projectionRevision": {
+                "const": 1
+              }
+            },
+            "not": {
+              "required": [
+                "steerId"
+              ]
+            }
           }
         }
-      }
+      ]
     },
     "budget": {
       "type": "object",
@@ -2610,7 +2735,6 @@
     "delete_timer",
     "dispatch_project_assignment",
     "finish_project_request",
-    "integration_submit",
     "register_responsibility",
     "report_to_user",
     "review_project_work",

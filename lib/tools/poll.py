@@ -151,8 +151,8 @@ def coordinator_poll_tool() -> dict:
         'A timeout leaves Workers running: poll the pending IDs again, '
         'never recreate work. A Worker settles when it needs you or is final: its execution ended '
         '(review its evidence), or, after you accepted it with a checkpoint, its delivery became '
-        'canonical or was held (act on delivery.reason). Results carry evidence excerpts, conversation/'
-        'Turn links and the recorded error of a failed Worker; a delegation that could not start '
+        'canonical or was held (act on delivery.reason). Each settlement carries the Worker\'s whole final '
+        'answer (result), its conversation/Turn links and the recorded error of a failed Worker; a delegation that could not start '
         'reports failed_to_start with its error and recovery. Without IDs it lists this request\'s '
         'Workers that are running or starting. Worker settlement also resumes you automatically.')
     properties = function['parameters']['properties']

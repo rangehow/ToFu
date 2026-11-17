@@ -175,8 +175,13 @@ def _announce_slow_event_barrier(task: dict, *, checkpoint: str, round_num: int,
         logger.debug('[EventBarrier] slow record dropped: %s', type(error).__name__)
 
 
+# A ``ready`` boundary whose events the pre-request boundary awaits:
+# (round, accepted position at the ready boundary).
+_DEFERRED_READY_KEY = '_invocationReadyEventsThrough'
+
+
 def checkpoint_invocation(task: dict, messages: list, round_num: int, *, phase: str,
-                          await_events: bool = True) -> int:
+                          await_events: bool = True, defer_events: bool = False) -> int:
     """One effect-boundary checkpoint for all agent compositions.
 
     Presentation/domain ports own their schema; the invocation owns ordering.
@@ -188,21 +193,55 @@ def checkpoint_invocation(task: dict, messages: list, round_num: int, *, phase: 
     A child's lane holds only its Request Inspector snapshots, so its ``ready``
     boundary (before the next paid request) behaves the same way; its tool
     intent and terminal settle still drain them.
+    ``defer_events`` (the root's ``ready`` round end, with no domain sink)
+    records the events accepted so far; the next pre-request boundary awaits
+    exactly those before the paid request, so the next round's preparation
+    overlaps their persistence. Any awaited checkpoint before it covers them.
     Returns how many accepted task events the durability barrier awaited.
     """
-    from lib.tasks_pkg.event_delivery import flush_task_events, task_event_backlog
-    from lib.tasks_pkg.invocation import invocation_abort_requested, is_child_invocation
-    from lib.tasks_pkg.round_prep_timing import round_prep_step
+    from lib.tasks_pkg.event_delivery import task_event_backlog, task_event_position
+    from lib.tasks_pkg.invocation import is_child_invocation
     task['_invocationCheckpointPhase'] = phase
     sink = task.get('_invocationCheckpointSink')
     if callable(sink):
+        from lib.tasks_pkg.round_prep_timing import round_prep_step
         with round_prep_step(task, 'barrier.sink'):
             wait_for_persistence(task, lambda: sink(task, messages, round_num),
                                  label=f'checkpoint:{phase}')
     if phase == 'ready' and is_child_invocation(task):
         await_events = False
-    if not await_events and not task_event_backlog(task).failed:
+    deferred = task.pop(_DEFERRED_READY_KEY, None)
+    if await_events and defer_events and not callable(sink):
+        task[_DEFERRED_READY_KEY] = (round_num, task_event_position(task))
         return 0
+    awaited = 0
+    if deferred is not None and not await_events:
+        awaited = _await_task_events(task, phase='ready', round_num=deferred[0],
+                                     through=deferred[1])
+    if not await_events and not task_event_backlog(task).failed:
+        return awaited
+    return awaited + _await_task_events(task, phase=phase, round_num=round_num)
+
+
+def settle_deferred_ready_events(task) -> int:
+    """Await a deferred ``ready`` boundary now; every paid request path calls this.
+
+    The root loop's own request reaches it through ``checkpoint_model_dispatch``;
+    compaction summaries and other task-owned model calls call it before their
+    dispatch, so no paid request precedes the ready receipts.
+    """
+    if not isinstance(task, dict):
+        return 0
+    deferred = task.pop(_DEFERRED_READY_KEY, None)
+    if deferred is None:
+        return 0
+    return _await_task_events(task, phase='ready', round_num=deferred[0], through=deferred[1])
+
+
+def _await_task_events(task: dict, *, phase: str, round_num: int, through: int | None = None) -> int:
+    from lib.tasks_pkg.event_delivery import flush_task_events
+    from lib.tasks_pkg.invocation import invocation_abort_requested
+    from lib.tasks_pkg.round_prep_timing import round_prep_step
     started = time.monotonic()
     announced = []
     costs = []
@@ -232,7 +271,7 @@ def checkpoint_invocation(task: dict, messages: list, round_num: int, *, phase: 
             awaited = flush_task_events(task, timeout=None,
                                         cancel_check=lambda: invocation_abort_requested(task),
                                         slow_after=SLOW_EVENT_BARRIER_SECONDS, on_slow=announce,
-                                        on_release=costs.append)
+                                        on_release=costs.append, through=through)
     except BaseException as error:
         released(type(error).__name__)
         raise

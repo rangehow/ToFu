@@ -115,6 +115,17 @@ def build_round_request(task, rs, messages, tool_list, *,
             task, messages, **_snapshot_arguments)
         raise
 
+    # The canonical messages are settled, and a message interchangeable with the
+    # previous round's row at its position is that row: unchanged history keeps
+    # one identity across rounds, so the snapshot projection, cache-marker
+    # rewrites, ingress detachment and every per-row memo after them
+    # (lib/llm/request.py) compute only what changed. Every later consumer
+    # already treats these messages as read-only (copy-on-write).
+    from lib.conversation_sync.settled_rows import settle_items
+    _message_rows = task.setdefault('_wireMessageRows', {})
+    if isinstance(_message_rows, dict) and isinstance(body.get('messages'), list):
+        body['messages'] = _message_rows['canonical'] = settle_items(
+            body['messages'], previous=_message_rows.get('canonical'))
     # The successful body already paid for field stripping, structural repair,
     # and canonical ordering. Reusing its message list avoids a second O(prompt)
     # sanitize/copy while the snapshot projector remains caller-independent.

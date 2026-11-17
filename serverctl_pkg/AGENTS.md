@@ -66,12 +66,16 @@ and readiness; the manager injects its existing failure budget and retains the
 single recovery record. Verify `test_execution_composition.py` for those ports.
 `execution_shards.py` lets the execution host manage on-demand
 `execution_shard` hosts (the same `execution_host.py`, `--report-fd`) through
-`ResidentService`: each runs the primary's frozen pins, exported once and served
-by the stdlib `execution_shard_boot.py` spawned from `PinnedHelperSource`, so a
-later merge never splits one generation across processes. Claim placement is a
-`DurableWorkerService` claim gate (one job per shard; the primary claims while
-idle or when no shard is idle and starts a shard per overflow claim); controls
-fan out from the primary; idle shards retire themselves after
+`ResidentService`: each is forked by one single-threaded fork server
+(`execution_shard_boot.py --fork-server`, spawned from `PinnedHelperSource`)
+that preloaded the primary's frozen pins, so a later merge never splits one
+generation across processes and a shard skips interpreter start and imports.
+The fork server refuses to fork once any thread exists; never start a thread
+in `preload_shard_image`. Claim placement is a `DurableWorkerService` claim
+gate: one job per shard; a claim the busy primary owns is placed before any
+handler (`place`), parked under its lease with one shard started for it, and
+handed back to the queue for the first idle shard. Controls fan out from the
+primary; idle shards and the fork server retire after
 `TOFU_EXECUTOR_IDLE_SECONDS`. Never size shards from hardware or add a count.
 Verify `tests/server/test_execution_shards.py` and the harness concurrent phase.
 `execution_plan.py` prepares a source/environment/configuration digest before

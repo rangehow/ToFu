@@ -50,6 +50,17 @@ BOOT_TS = time.time()
 PID = os.getpid()
 
 
+def _new_process_after_fork():
+    # A forked execution shard (serverctl_pkg/execution_shards.py) is another
+    # process generation: it must never report its fork server's identity.
+    global BOOT_ID, BOOT_TS, PID
+    BOOT_ID, BOOT_TS, PID = uuid.uuid4().hex, time.time(), os.getpid()
+
+
+if hasattr(os, 'register_at_fork'):
+    os.register_at_fork(after_in_child=_new_process_after_fork)
+
+
 def cache_fix_gen():
     """Return the IN-MEMORY ``lib.llm.cache.CACHE_FIX_GEN`` (loaded bytecode
     version of the prefix-cache fix chain), or ``None`` if unavailable.

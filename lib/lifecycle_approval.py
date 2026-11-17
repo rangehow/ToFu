@@ -166,8 +166,14 @@ _TERMINAL = ('consumed', 'denied', 'expired')
 # 「就反正人能干的事情，总负责人都要能干」, and 2026-11-10: 「以后不要搞代我操作了，直接给全权限」).
 # An ``enumerated`` grant covers exactly the scopes it lists and stays as narrow
 # as it was granted.
+# ``lead_authority``: a lead's Turn without an owner message of its own (a wake,
+# a relayed report, a continuation) dispatches and controls Workers on the lead's
+# judgment (owner decision 2026-11-18: 「我的权限要全部下放给负责人们」).
 DELEGATION_SCOPES = ('restart', 'conversation_control', 'owner_settings', 'project_lifecycle',
-                     'project_repair', 'scheduler')
+                     'project_repair', 'scheduler', 'lead_authority')
+# The owner's Project Routers act under a full grant held by their Global Router
+# (owner decision 2026-11-18); an enumerated grant names only that router.
+LEAD_KINDS = ('global_router', 'project_lead')
 # Grants written before coverage was recorded came only from the switch, which
 # stored the complete scope list of its day (from 2026-11-06, restart and
 # conversation_control): such a grant is full. A record listing less is enumerated.
@@ -921,8 +927,8 @@ def _revoked(owner: int) -> dict:
             'updatedAt': None}
 
 
-def _router_identity(value, fields: frozenset, what: str) -> dict:
-    if (not isinstance(value, dict) or set(value) != fields or value['kind'] != 'global_router'
+def _router_identity(value, fields: frozenset, what: str, *, kinds=('global_router',)) -> dict:
+    if (not isinstance(value, dict) or set(value) != fields or value['kind'] not in kinds
             or not isinstance(value['conversationId'], str) or not value['conversationId'].strip()
             or type(value['bindingRevision']) is not int or value['bindingRevision'] < 1
             or value['tenant'] is not None and not isinstance(value['tenant'], str)
@@ -998,6 +1004,19 @@ def _check_grant(document: dict, owner_key: str, requester: dict, scope: str) ->
                                 'The delegation record carries no human grant; it authorizes nothing') from error
     grantee = record.get('grantee') or {}
     from lib.identity import tenant_scope
+    if requester['kind'] == 'project_lead':
+        # The caller resolved the lead from the owner's current coordination binding;
+        # the grant reaches every lead only when it is full.
+        if delegation_coverage(record) != 'full':
+            raise DelegationRefused(
+                'owner_delegation_scope',
+                'The owner granted a narrower delegation that names only the main coordinator, not the '
+                'Project Routers. Ask the owner to grant the full delegation by turning "Act for me" off '
+                'and on in the main coordinator\'s header. Nothing ran.')
+        if tenant_scope(grantee.get('tenant')) != tenant_scope(requester['tenant']):
+            raise DelegationRefused('owner_delegation_router_changed',
+                                    'The owner\'s delegation belongs to another tenant; nothing ran.')
+        return record
     if (grantee.get('conversationId') != requester['conversationId']
             or grantee.get('bindingRevision') != requester['bindingRevision']
             or tenant_scope(grantee.get('tenant')) != tenant_scope(requester['tenant'])):
@@ -1092,7 +1111,7 @@ def set_delegation(owner, granted: bool, *, grantee: dict | None, provenance) ->
 def check_delegation(owner, requester: dict, scope: str) -> dict:
     """The live grant covering ``scope`` for this Global Router, or DelegationRefused."""
     key = _owner_key(owner)
-    requester = _router_identity(requester, _REQUESTER_FIELDS, 'requester')
+    requester = _router_identity(requester, _REQUESTER_FIELDS, 'requester', kinds=LEAD_KINDS)
     try:
         return _grant_view(_check_grant(_read_document(), key, requester, scope))
     except DelegationRefused as refusal:
@@ -1243,7 +1262,7 @@ def begin_delegated_action(owner, requester: dict, *, scope: str, key: str, reas
     original record and changes nothing, so retrying never acts twice.
     """
     owner_key = _owner_key(owner)
-    requester = _router_identity(requester, _REQUESTER_FIELDS, 'requester')
+    requester = _router_identity(requester, _REQUESTER_FIELDS, 'requester', kinds=LEAD_KINDS)
     action_id = delegated_action_id(owner, requester, scope, key)
     now = _now()
     outcome: dict = {}
@@ -1289,7 +1308,7 @@ def record_delegated_refusal(owner, requester: dict, *, scope: str, reason: str,
                              target: dict, code: str, detail: str) -> dict | None:
     """Record an attempt refused while a grant covered it; without one, audit.log only."""
     owner_key = _owner_key(owner)
-    requester = _router_identity(requester, _REQUESTER_FIELDS, 'requester')
+    requester = _router_identity(requester, _REQUESTER_FIELDS, 'requester', kinds=LEAD_KINDS)
     now = _now()
     outcome: dict = {}
 
@@ -1372,7 +1391,7 @@ def accept_delegated_restart(owner, action_id: str, requester: dict, *,
     ``status == 'restarting'`` is the only acceptance.
     """
     owner_key = _owner_key(owner)
-    requester = _router_identity(requester, _REQUESTER_FIELDS, 'requester')
+    requester = _router_identity(requester, _REQUESTER_FIELDS, 'requester', kinds=LEAD_KINDS)
     legacy_last = _read_legacy_restart_stamp()
     now = _now()
     accepted: dict = {}
@@ -1632,7 +1651,7 @@ if __name__ == '__main__':
 
 __all__ = [
     'ACTIONS', 'APPROVED_TTL_SEC', 'PENDING_TTL_SEC', 'RESTART_COOLDOWN_SEC',
-    'DELEGATION_SCOPES', 'DelegationRefused', 'PROVENANCE_DELEGATION', 'PROVENANCE_ENVIRONMENT',
+    'DELEGATION_SCOPES', 'DelegationRefused', 'LEAD_KINDS', 'PROVENANCE_DELEGATION', 'PROVENANCE_ENVIRONMENT',
     'PROVENANCE_HUMAN_UI', 'PROVENANCE_TERMINAL',
     'create_request', 'decide', 'get', 'list_records', 'validate', 'consume',
     'restart_cooldown_remaining', 'restart_pending_on_this_process',

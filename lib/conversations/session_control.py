@@ -178,7 +178,7 @@ def _control_session(task, scope, arguments, *, acting_principal=None):
         from .session_model import set_session_model
         if acting_principal is None:
             acting_principal = source_for_task(ProjectDispatchRepository(
-                scope['user_id'], scope['project_path']), task)[0]
+                scope['user_id'], scope['project_path']), task, delegated=True)[0]
         return set_session_model(task, scope, acting_principal, arguments)
     if action not in {'continue', 'checkpoint_resume', 'regenerate', 'stop', 'follow_up'}:
         raise ValueError('action must be continue, checkpoint_resume, regenerate, stop, follow_up '
@@ -192,7 +192,7 @@ def _control_session(task, scope, arguments, *, acting_principal=None):
     if action != 'stop' and (type(expected) is not int or expected < 1):
         raise ValueError('expected_revision must be the observed Turn projectionRevision')
     principal = acting_principal or source_for_task(ProjectDispatchRepository(
-        scope['user_id'], scope['project_path']), task)[0]
+        scope['user_id'], scope['project_path']), task, delegated=True)[0]
     owner = scope['user_id']
     turn = get_turn(conversation_id, turn_id, user_id=owner, include_projection=False)
     attempt = get_attempt(attempt_id, user_id=owner, include_execution_config=True)

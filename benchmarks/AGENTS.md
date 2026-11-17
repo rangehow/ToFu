@@ -18,6 +18,18 @@ py-spy, not cProfile, sees the loop thread. Storage, push and real providers are
 excluded. Verify `tests/meta/test_agent_round_overhead_measure.py`; method and
 measurements live in `docs/HARNESS_PERFORMANCE.md`.
 
+`request_build_scaling.py` grows one task's real-shaped history (composer
+carriers, injections, reasoning, `run_command` rounds) and times, per round,
+the production `build_round_request`, the selected slot's adaptation plus
+Anthropic `prepare_request` (sealed lineage, raw-archive capture prepared, never
+committed), reporting medians per history checkpoint, plus `cold`: the same
+history's first request on a fresh task (the first request of a Turn), all in
+calling-thread CPU. Run each
+compared tree's copy in a fresh process with `PYTHONPATH` naming that tree.
+Storage and transport are excluded. Verify
+`tests/meta/test_request_build_scaling_measure.py`; byte identity is owned by
+`tests/llm/test_incremental_request_build.py`.
+
 `mcp_live_schema_projection.py` times the gateway's `_executable_catalog` on a
 task whose catalog holds `--mcp-tools` MCP entries served unchanged by a real
 `MCPBridge` index (the steady state). Arms must report the same catalog digest.

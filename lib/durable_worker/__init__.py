@@ -577,6 +577,7 @@ class SynchronousWorkerRunner:
         now_ms: Callable[[], int] | None = None,
         control_signals=None,
         startup: TaskStartupIntervals | None = None,
+        placement: Callable[[WorkerExecutionContext], bool] | None = None,
     ) -> None:
         normalized_worker_id = str(worker_id or '').strip()
         if not normalized_worker_id or len(normalized_worker_id) > 256:
@@ -592,6 +593,9 @@ class SynchronousWorkerRunner:
                     f'duplicate worker task kind: {registration.task_kind}')
             by_kind[registration.task_kind] = registration
         self._control_signals = control_signals
+        # Asked once per owned claim, under its lease monitor and before any
+        # handler: True hands the unentered claim back for a peer process.
+        self._placement = placement
         # Acquisition stages the injected store measured for this runner's one
         # claim; the service builds a runner per claim attempt.
         self._startup = startup
@@ -913,8 +917,12 @@ class SynchronousWorkerRunner:
         stop, monitor = self._start_heartbeat_monitor(context)
         outcome: WorkerJobOutcome | WorkerJobSuspension | None = None
         settlement_unknown = ""
+        released = False
         try:
-            if context.cancellation_requested:
+            if (self._placement is not None and not context.cancellation_requested
+                    and self._placement(context)):
+                released = True
+            elif context.cancellation_requested:
                 outcome = self._settle_cancellation(
                     registration, context, claim.payload
                 )
@@ -952,7 +960,7 @@ class SynchronousWorkerRunner:
             # before deferral/terminal accounting or releasing handler resources.
             monitor.join()
 
-        if shutdown_event is not None and shutdown_event.is_set():
+        if released or (shutdown_event is not None and shutdown_event.is_set()):
             # The handler and heartbeat have exited. Release only this owned
             # transport lease; keep the domain's effect intent unchanged so
             # takeover reconciles unknown writes rather than replaying them.

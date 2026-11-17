@@ -28,6 +28,7 @@ enqueued.
 
 Entry points: ``settle``, ``is_settled``, ``settled_retained_bytes``,
 ``detach_sharing_settled``, ``detach_frame_sharing_settled``, ``derive_rows``,
+``is_exact_json``,
 ``memo_get`` / ``memo_put``, ``run_memo_get`` / ``run_memo_put``, ``rows_memo``.
 
 Dependencies: standard library only. This is a sidecar-shared contract module
@@ -39,6 +40,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import operator
 import sys
 from itertools import islice
@@ -47,6 +49,7 @@ from typing import Any
 __all__ = [
     'DerivedRows', 'FrameCharge', 'SettledDict', 'SettledList', 'SettledRowMutation',
     'UnsettleableValue', 'compact_json_bytes', 'derive_rows',
+    'is_exact_json',
     'detach_frame_sharing_settled', 'detach_sharing_settled', 'interchangeable',
     'is_settled', 'json_array_text', 'memo_get',
     'memo_put', 'rows_memo', 'run_memo_get', 'run_memo_put', 'settle', 'settle_items',
@@ -154,6 +157,9 @@ def is_settled(value: Any) -> bool:
     return kind is SettledDict or kind is SettledList
 
 
+_SHARED_KINDS = _ATOMIC_TYPES | {SettledDict, SettledList}
+
+
 def _settle(value, memo):
     kind = type(value)
     if kind in _ATOMIC_TYPES or kind is SettledDict or kind is SettledList:
@@ -171,13 +177,16 @@ def _settle(value, memo):
             if type(key) not in _ATOMIC_TYPES and not isinstance(
                     key, _IMMUTABLE_VALUE_BASES):
                 raise UnsettleableValue(f'unsettleable key {type(key).__name__}')
-            _dict_setitem(result, key, _settle(child, memo))
+            # Atoms and settled subtrees are shared without a call.
+            _dict_setitem(result, key, child if type(child) in _SHARED_KINDS
+                          else _settle(child, memo))
         return result
     if kind is list:
         result = SettledList()
         memo[identity] = result
         for child in value:
-            _list_append(result, _settle(child, memo))
+            _list_append(result, child if type(child) in _SHARED_KINDS
+                         else _settle(child, memo))
         return result
     if kind is tuple:
         children = tuple(_settle(child, memo) for child in value)
@@ -250,14 +259,24 @@ def interchangeable(left: Any, right: Any) -> bool:
             return False
         for (left_key, left_value), (right_key, right_value) in zip(
                 dict.items(left), dict.items(right)):
-            if not (interchangeable(left_key, right_key)
-                    and interchangeable(left_value, right_value)):
+            if not (left_key is right_key or interchangeable(left_key, right_key)):
+                return False
+            if left_value is right_value:
+                continue
+            # The common leaves decided inline: an equal str/int/bool of the
+            # same exact type, as the atom rule below requires.
+            value_kind = type(left_value)
+            if value_kind is str or value_kind is int or value_kind is bool:
+                if value_kind is type(right_value) and left_value == right_value:
+                    continue
+                return False
+            if not interchangeable(left_value, right_value):
                 return False
         return True
     if (kind in _LIST_KINDS and other in _LIST_KINDS) or (
             kind is tuple and other is tuple):
         return len(left) == len(right) and all(
-            interchangeable(a, b) for a, b in zip(left, right))
+            a is b or interchangeable(a, b) for a, b in zip(left, right))
     if kind is not other or kind not in _ATOMIC_TYPES:
         return False
     if kind is float:
@@ -359,6 +378,39 @@ def rows_memo(rows: Any, key: Any, compute: Any) -> Any:
     if length != len(rows):
         held = run_memo_put(rows, len(rows), key, (compute(),))
     return held[0]
+
+
+_EXACT_JSON_KEY = ('settled-rows', 'exact-json')
+
+
+def is_exact_json(row: Any) -> bool:
+    """Whether a settled tree equals its JSON round trip; memoized on the row.
+
+    Exact means string keys and JSON atoms only (finite floats, no tuples or
+    value subclasses), so the row is its own detached JSON value and any JSON
+    projection of it may share it.
+    """
+    exact = memo_get(row, _EXACT_JSON_KEY)
+    if exact is None:
+        try:
+            exact = _is_exact_json(row)
+        except RecursionError:
+            return False
+        memo_put(row, _EXACT_JSON_KEY, exact)
+    return exact
+
+
+_EXACT_JSON_ATOMS = frozenset({str, int, bool, type(None)})
+
+
+def _is_exact_json(value: Any) -> bool:
+    kind = type(value)
+    if kind is SettledDict:
+        return all(type(key) is str and _is_exact_json(item)
+                   for key, item in dict.items(value))
+    if kind is SettledList:
+        return all(map(_is_exact_json, value))
+    return kind in _EXACT_JSON_ATOMS or (kind is float and math.isfinite(value))
 
 
 def settled_retained_bytes(row: Any) -> int:

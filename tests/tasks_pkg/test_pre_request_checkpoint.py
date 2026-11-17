@@ -350,3 +350,60 @@ def test_process_lost_before_snapshot_ack_leaves_a_prefix_both_readers_accept(
     payload = request_inspector.get_request_payload(task['id'], 1)
     assert [message['content'] for message in payload['messages']] == [
         message['content'] for message in _MESSAGES]
+
+
+def test_a_ready_round_end_persists_while_the_next_round_prepares(root):
+    """The root's ready boundary is deferred to the next paid request.
+
+    Its events persist while the next round prepares; the pre-request boundary
+    awaits exactly those (not the new request's own diagnostics) before the
+    request, and every other paid request of the task awaits them too.
+    """
+    from lib.tasks_pkg.manager import append_event
+    from lib.tasks_pkg.persistence_wait import settle_deferred_ready_events
+    task, authority = root.task, root.authority
+    authority.hold('round_end')
+    append_event(task, build_event(EventType.ROUND_END, roundNum=0, reason='tools'))
+    assert authority.entered.wait(2)
+    close = _in_thread(lambda: checkpoint_invocation(task, _MESSAGES, 1, phase='ready',
+                                                     defer_events=True))
+    assert close.done.wait(5) and close.error is None and close.value == 0, 'round close waited'
+    assert task_event_backlog(task).pending == 1
+
+    _emit_request_snapshot(task, _MESSAGES, 1)  # The next request's own diagnostics.
+    dispatch = _in_thread(lambda: checkpoint_model_dispatch(task, _MESSAGES, 1))
+    assert not dispatch.done.wait(0.2), 'a paid request preceded the ready receipts'
+    authority.released.set()
+    assert dispatch.done.wait(5) and dispatch.error is None and dispatch.value == 1
+    assert [kind for _, kind in authority.committed][0] == 'round_end'
+    # Once settled, no other paid request waits for it again.
+    assert settle_deferred_ready_events(task) == 0
+
+
+def test_a_deferred_ready_boundary_holds_any_other_paid_request(root):
+    from lib.tasks_pkg.manager import append_event
+    from lib.tasks_pkg.persistence_wait import settle_deferred_ready_events
+    task, authority = root.task, root.authority
+    authority.hold('round_end')
+    append_event(task, build_event(EventType.ROUND_END, roundNum=0, reason='tools'))
+    assert authority.entered.wait(2)
+    assert checkpoint_invocation(task, _MESSAGES, 1, phase='ready', defer_events=True) == 0
+    summary = _in_thread(lambda: settle_deferred_ready_events(task))  # e.g. a compaction summary
+    assert not summary.done.wait(0.2)
+    authority.released.set()
+    assert summary.done.wait(5) and summary.error is None and summary.value == 1
+
+
+def test_a_domain_sink_keeps_the_ready_boundary_awaited(root):
+    """A Swarm write-ahead sink records a checkpoint that names its events: never deferred."""
+    from lib.tasks_pkg.manager import append_event
+    task, authority = root.task, root.authority
+    task['_invocationCheckpointSink'] = lambda *_: None
+    authority.hold('round_end')
+    append_event(task, build_event(EventType.ROUND_END, roundNum=0, reason='tools'))
+    assert authority.entered.wait(2)
+    close = _in_thread(lambda: checkpoint_invocation(task, _MESSAGES, 1, phase='ready',
+                                                     defer_events=True))
+    assert not close.done.wait(0.2)
+    authority.released.set()
+    assert close.done.wait(5) and close.error is None and close.value == 1

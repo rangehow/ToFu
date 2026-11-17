@@ -26,6 +26,7 @@ import zlib
 
 import orjson
 
+from lib.conversation_sync.settled_rows import is_exact_json, is_settled
 from lib.log import get_logger
 from lib.logging_pkg.log_record_values import text_value
 from lib.raw_archive_contract import RAW_ARCHIVE_FREE_SPACE_WIRE_MAX_BYTES
@@ -42,6 +43,9 @@ _RAW_ARCHIVE_MAX_BUDGET_MIB = 4096
 def _capture_value(value: Any) -> Any:
     """Project JSON-compatible values without credential scanning or rewriting."""
     if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if is_settled(value) and is_exact_json(value):
+        # Already a JSON tree of plain atoms: its own projection, shared.
         return value
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")

@@ -42,21 +42,38 @@ def _json_text(value: Any) -> str:
 
 
 def _count_text(value: Any, *, model: str = '') -> int:
+    return _counted_text(value, model=model)[0]
+
+
+def _counted_text(value: Any, *, model: str = '') -> tuple[int, bool]:
+    """``(tokens, exact)``; ``exact`` is False for the character estimate."""
     text = value if isinstance(value, str) else _json_text(value)
     if not text:
-        return 0
+        return 0, True
     try:
         from lib.token_counter import count_text
-        return max(0, int(count_text(text, model=model, reusable=True)))
+        return max(0, int(count_text(text, model=model, reusable=True))), True
     except Exception as exc:
         logger.debug('[ContextTelemetry] token count fallback: %s', exc)
         cjk = sum(1 for ch in text if '\u2e80' <= ch <= '\u9fff')
-        return max(1, cjk + (len(text) - cjk + 3) // 4)
+        return max(1, cjk + (len(text) - cjk + 3) // 4), False
 
 
 def _content_tokens(message: dict, *, model: str = '') -> int:
-    content = message.get('content')
-    return _count_text(content, model=model)
+    """Tokens of one message's content; a settled message counts it once per model."""
+    from lib.conversation_sync.settled_rows import is_settled, memo_get, memo_put
+    if not is_settled(message):
+        return _count_text(message.get('content'), model=model)
+    key = (_CONTENT_TOKENS_KEY, model)
+    held = memo_get(message, key)
+    if held is None:
+        held, exact = _counted_text(message.get('content'), model=model)
+        if exact:
+            memo_put(message, key, held)
+    return held
+
+
+_CONTENT_TOKENS_KEY = 'context-telemetry-content-tokens'
 
 
 def tool_schema_tokens(tools: Any, *, model: str = '') -> int:

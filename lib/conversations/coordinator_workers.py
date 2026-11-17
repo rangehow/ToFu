@@ -344,7 +344,7 @@ def _born(task, scope, arguments, repository, service, create, command):
 
 def _delegation_request(task, scope, arguments, repository):
     """The Worker request this Coordinator attempt may delegate, refused before any effect."""
-    _, source, attempt = source_for_task(repository, task, issued=True)
+    _, source, attempt = source_for_task(repository, task, issued=True, delegated=True)
     policy = policy_for_task(repository, task, attempt)
     from lib.project_dispatch.continuation import original_delegation, ensure_open
     origin = original_delegation(task, policy, repository=repository)
@@ -604,8 +604,9 @@ def _await_born(task, scope, ids, *, deadline, mode, interruption, repository, s
                        'canonical_delivery': view.get('canonicalDelivery', False),
                        'publication_requested': bool(view.get('publication')), 'review': view.get('review'),
                        'status': 'cancelled' if view['revoked'] else execution.get('status', 'queued'),
-                       'result_excerpt': content[:4000] if isinstance(content, str) else '',
-                       'result_truncated': isinstance(content, str) and len(content) > 4000}
+                       # News is reported once, so its answer comes whole: an excerpt
+                       # sent the lead back to get_conversation for the rest.
+                       'result': content if isinstance(content, str) else ''}
                 row['phase'] = _phase(row)
                 if row['status'] in ('failed', 'interrupted', 'truncated') and row['turn_id']:
                     failure = _settled_failure(service, recipient, repository.owner, row['turn_id'])
@@ -796,23 +797,26 @@ def _await_born(task, scope, ids, *, deadline, mode, interruption, repository, s
 
 
 def _wait_instruction(status, settled, running, delivering, unchanged, named):
-    """What the Coordinator does next with a wait's news and what is still pending."""
+    """What the Coordinator does next with a wait's news and what is still pending.
+
+    It refers to the result's fields by name and never repeats their IDs: those
+    lists already name every Worker once (``workers``, ``pending``, ``unchanged``).
+    """
     parts = []
     if settled:
-        unnamed = [row['assignment_id'] for row in settled if row['assignment_id'] not in named]
-        parts.append('New since your last poll (each settlement is reported once): '
-                     + ', '.join(row['assignment_id'] for row in settled) + '. Review the settled evidence and '
-                     'arrange follow-up work now; read full evidence through the conversation/Turn links where '
-                     'needed. Failed/cancelled work is not delivery.'
-                     + (' Of these, ' + ', '.join(unnamed) + ' were not in this poll: they are your Workers too.'
-                        if unnamed else ''))
-        held = [row['assignment_id'] for row in settled if row['status'] == 'completed'
-                and not row['canonical_delivery'] and (row['delivery'] or {}).get('status') in _HELD_DELIVERY]
-        if held:
-            parts.append('Delivery of ' + ', '.join(held) + ' is blocked, failed or preserved, not canonical: '
+        parts.append('workers holds the settlements new since your last poll, each reported once with its '
+                     'whole result. Review that evidence and arrange follow-up work now. Failed/cancelled '
+                     'work is not delivery.'
+                     + (' Some of them were not in this poll: they are your Workers too.'
+                        if any(row['assignment_id'] not in named for row in settled) else ''))
+        if any(row['status'] == 'completed' and not row['canonical_delivery']
+               and (row['delivery'] or {}).get('status') in _HELD_DELIVERY for row in settled):
+            parts.append('A worker with phase held has a blocked, failed or preserved delivery, not canonical: '
                          'act on its delivery.reason (review_project_work with the exact checkpoint_sha if '
-                         'publication was never requested, rework for a conflict or failed gate) or report a '
-                         'cause you cannot resolve.')
+                         'publication was never requested; for a conflict, delegate_project_work with '
+                         'delivery.conflict.rework as the brief, which names the exact files and settles '
+                         'the held delivery once it lands; rework for a failed gate) or report a cause you '
+                         'cannot resolve.')
     if status == 'pending_input':
         parts.insert(0, 'New input is waiting for you and arrives right after this result: a human message or '
                         'steer, a project message, or a background completion. The waiting list names its kind, '
@@ -822,25 +826,21 @@ def _wait_instruction(status, settled, running, delivering, unchanged, named):
         parts.append('Nothing new settled; a timeout is not failure.')
     elif not settled:
         parts.append('Nothing new: every Worker you named was already reported.')
-    decide = [row['assignment_id'] for row in settled if row.get('phase') == 'needs_decision']
-    if decide:
-        parts.append('A restart cut off a call of unknown effect in ' + ', '.join(decide) + ' (error.unknownEffects; '
-                     'phase needs_decision): check what each named call changed, then control_conversation '
+    if any(row.get('phase') == 'needs_decision' for row in settled):
+        parts.append('A worker with phase needs_decision had a call of unknown effect cut off by a restart '
+                     '(error.unknownEffects): check what each named call changed, then control_conversation '
                      'checkpoint_resume, stop or follow_up that Worker. Nothing resumes it until you decide.')
-    resuming = [row['assignment_id'] for row in settled if row.get('phase') == 'resuming']
-    if resuming:
-        parts.append('Interrupted by a restart and resuming from its checkpoint by itself: ' + ', '.join(resuming)
-                     + '. Do not resume it; its next settlement is reported here.')
-    if running:
-        parts.append('Still running: ' + ', '.join(running) + '.')
+    if any(row.get('phase') == 'resuming' for row in settled):
+        parts.append('A worker with phase resuming was interrupted by a restart and resumes from its checkpoint '
+                     'by itself. Do not resume it; its next settlement is reported here.')
     if delivering:
-        parts.append('Accepted and publishing without you, not yet canonical: ' + ', '.join(delivering)
-                     + '. Its canonical or held delivery is reported here once.')
+        parts.append('pending.delivering are accepted and publishing without you, not yet canonical; each one\'s '
+                     'canonical or held delivery is reported here once.')
     if unchanged:
-        parts.append('Already reported and unchanged, leave them out of later polls: ' + ', '.join(unchanged) + '.')
+        parts.append('unchanged were already reported: leave them out of later polls.')
     if running or delivering:
-        parts.append('Poll the pending IDs again with wait_s to wait for the next settlement; a settlement '
-                     'of any Worker of yours ends that wait.')
+        parts.append('Poll pending.running and pending.delivering again with wait_s to wait for the next '
+                     'settlement; a settlement of any Worker of yours ends that wait.')
     return ' '.join(parts)
 
 

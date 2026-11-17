@@ -53,8 +53,8 @@ and bounded feedback for report, Q&A and Deepen. Reports explicitly include
 the model-round index in live events; workflow-specific streaming, publication
 and terminal cancellation/error policies stay in their workers.
 
-`report_engine/_body.py` owns report stream text, per-round draft withdrawal
-and terminal-response convergence. The worker keeps model/tool invocation,
+`report_engine/_body.py` owns report stream text, per-round draft withdrawal,
+output-cap continuation joins and terminal-response convergence. The worker keeps model/tool invocation,
 usage and post-processing, and composes publication with task settlement. Verify
 `test_paper_report_body_projection.py` together with report abort, dedup and
 artifact-integrity contracts when changing either side.

@@ -117,6 +117,59 @@ def test_an_owner_attachment_and_a_conversation_image_are_readable_references(le
     assert len(_admit(task, ['a.md', str(root / 'a.md')])) == 1
 
 
+def _steer(image: str, author) -> dict:
+    record = {'blockId': 'injection:user-steer:s1', 'commandId': 's1', 'deliveryState': 'delivered',
+              'previews': [{'text': 'like this', 'images': [{'preview': image, 'url': image}]}]}
+    if author is not None:
+        record['author'] = author
+    return record
+
+
+_OWNER_AUTHOR = {'actor': 'human', 'text': 'like this'}
+
+
+@pytest.mark.parametrize('lane', ['delivered_here', 'committed_by_another_process'])
+def test_an_image_the_owner_steered_into_the_running_turn_is_attachable(lead, monkeypatch, tmp_path, lane):
+    """2026-11-17: a Coordinator could not forward the screenshot the owner steered
+    into its running turn: a steer never enters ``task['messages']``."""
+    from lib import attachments
+    from lib.tasks_pkg import committed_steers
+    task, _root = lead
+    images = tmp_path / 'images'
+    images.mkdir()
+    (images / 'steered.png').write_bytes(_png())
+    monkeypatch.setattr(attachments, '_images_dir', lambda: str(images))
+    record = _steer('/api/images/steered.png', _OWNER_AUTHOR)
+    if lane == 'delivered_here':
+        task['_userSteerInjects'] = [record]
+        monkeypatch.setattr(committed_steers, 'live_turn_steer_records', lambda task: [])
+    else:
+        monkeypatch.setattr(committed_steers, 'live_turn_steer_records', lambda task: [record])
+    [image] = _admit(task, ['/api/images/steered.png'])
+    assert image['mimeType'] == 'image/png'
+
+
+@pytest.mark.parametrize('author', [
+    None,
+    {'actor': 'assistant', 'text': 'like this'},
+    {'actor': 'human', 'text': 'like this', 'origin': {'initiator': 'human', 'forwardedFrom': {
+        'conversationId': 'router', 'turnId': 't'}}},
+], ids=['nonhuman_steer', 'agent_author', 'router_forward'])
+def test_an_image_steered_by_anyone_but_the_owner_here_is_refused(lead, monkeypatch, tmp_path, author):
+    from lib import attachments
+    from lib.conversations.lead_attachments import AttachmentRefused
+    from lib.tasks_pkg import committed_steers
+    task, _root = lead
+    images = tmp_path / 'images'
+    images.mkdir()
+    (images / 'steered.png').write_bytes(_png())
+    monkeypatch.setattr(attachments, '_images_dir', lambda: str(images))
+    task['_userSteerInjects'] = [_steer('/api/images/steered.png', author)]
+    monkeypatch.setattr(committed_steers, 'live_turn_steer_records', lambda task: [])
+    with pytest.raises(AttachmentRefused, match='not an image shown in this conversation'):
+        _admit(task, ['/api/images/steered.png'])
+
+
 @pytest.mark.parametrize('case', [
     'outside', 'traversal', 'symlink', 'directory', 'missing', 'foreign_attachment', 'unseen_image',
 ])

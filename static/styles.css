@@ -3788,8 +3788,20 @@ body.paper-mode-active #presenceStrip{display:none !important}
 
 /* ── Streaming describe-to-recommend (progressive reveal, aligned with chatInner) ── */
 /* Status line above the list: interpreting → grounding progress. */
-.paper-rec-status{display:flex;align-items:center;gap:var(--space-2);font-size:12.5px;color:var(--text-tertiary);min-height:18px}
+.paper-rec-status{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2);font-size:12.5px;color:var(--text-tertiary);min-height:18px}
 .paper-rec-status[hidden]{display:none}
+.paper-rec-status-text{display:flex;align-items:center;gap:var(--space-2);flex:1 1 auto;min-width:0;border-radius:var(--radius-xs)}
+.paper-rec-status-text:focus{outline:none}
+.paper-rec-status-text:focus-visible{box-shadow:var(--focus-ring)}
+.paper-rec-stop{flex:0 0 auto;margin-inline-start:auto}
+/* Research log follows the results as one folded line ("Searched N times");
+   it stays open while research is the only visible progress. */
+.paper-rec-research[hidden]{display:none}
+.paper-rec-research-summary{display:flex;align-items:center;gap:var(--space-1);min-height:28px;padding:var(--space-1) 0;font-size:12.5px;color:var(--text-tertiary);border-radius:var(--radius-xs)}
+.paper-rec-research-summary:hover{color:var(--text-secondary)}
+.paper-rec-research-summary:focus{outline:none}
+.paper-rec-research-summary:focus-visible{box-shadow:var(--focus-ring)}
+.paper-rec-research[open]>.paper-rec-tools{margin-top:var(--space-2)}
 /* Research tool timeline in the recommend view reuses .paper-report-tools
    (chatInner's unified panel), but the recommend shell is a centered flex
    column with its own gap/padding — neutralize the report-flex insets so the

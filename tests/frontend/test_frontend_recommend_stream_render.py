@@ -109,6 +109,8 @@ win.t = global.t = (k, f) => {
     'paper.recommendNoResults': 'Could not verify a matching paper on arXiv.',
     'paper.searchBack': 'Back', 'paper.correctionTitle': 'A quick correction',
     'paper.correctionActual': 'The paper that actually won',
+    'paper.recommendStop': 'Stop', 'paper.recommendStopped': 'Search stopped',
+    'paper.recommendResearchSummary': 'Searched {n} times',
   };
   return M[k] || f || k;
 };
@@ -209,6 +211,54 @@ out.hintShown = !!hintEl && hintEl.hidden === false;
 // Status line settled (no spinner text) once done + all grounded.
 const statusEl = viewer.querySelector('[data-rec-status]');
 out.statusSettled = !!statusEl && statusEl.hidden === true;
+// ORDER: the correction banner and result cards lead; the research log follows.
+const research = viewer.querySelector('[data-rec-research]');
+const bannerEl = viewer.querySelector('[data-rec-banner]');
+const listEl = viewer.querySelector('[data-rec-list]');
+const FOLLOWING = win.Node.DOCUMENT_POSITION_FOLLOWING;
+out.bannerBeforeList = !!(bannerEl && listEl &&
+  (bannerEl.compareDocumentPosition(listEl) & FOLLOWING));
+out.listBeforeResearch = !!(listEl && research &&
+  (listEl.compareDocumentPosition(research) & FOLLOWING));
+out.stopHiddenAtDone = !!viewer.querySelector('[data-rec-stop]') &&
+  viewer.querySelector('[data-rec-stop]').hidden === true;
+
+// ── STOP: a running search with one grounded card and two pending slots ──
+const aborts = [];
+win.Api.paper.recommendAbort = (taskId) => { aborts.push(taskId); return Promise.resolve({ ok: true }); };
+viewer.innerHTML = '';
+const s2 = newStream('stop me');
+win.__recFeatureRegistry._recStream = s2;
+s2.taskId = 'task-stop';
+s2.status = 'running';
+applyEv(s2, { type: 'interpret_done', candidateCount: 3 });
+applyEv(s2, { type: 'candidate', index: 0, card: CARD0 });
+paint();
+const stopBtn = viewer.querySelector('[data-rec-stop]');
+out.stopVisibleWhileRunning = !!stopBtn && stopBtn.hidden === false &&
+  stopBtn.tagName === 'BUTTON' && stopBtn.classList.contains('ui-btn') &&
+  stopBtn.textContent === 'Stop';
+out.stopInsideStatus = !!stopBtn && !!stopBtn.closest('[data-rec-status]') &&
+  !stopBtn.closest('[aria-live]');
+out.slotsBeforeStop = viewer.querySelectorAll('.paper-result-list > *').length;
+if (stopBtn) { stopBtn.focus(); stopBtn.click(); }
+out.abortCalls = aborts;
+out.streamAborted = s2.aborted === true;
+out.cardsAfterStop = Array.from(viewer.querySelectorAll('.paper-result-list > *'))
+  .map((n) => n.getAttribute('data-status'));
+out.groundedTitleKept = viewer.textContent.indexOf('Large Language Diffusion Models') !== -1;
+const statusText = viewer.querySelector('[data-rec-status-text]');
+out.stoppedText = statusText ? statusText.textContent : null;
+out.stoppedStatusLive = !!statusText && statusText.getAttribute('aria-live') === 'polite' &&
+  !!viewer.querySelector('[data-rec-status]') && viewer.querySelector('[data-rec-status]').hidden === false;
+out.noSpinnerAfterStop = !viewer.querySelector('[data-rec-status] .paper-rec-spin');
+out.stopHiddenAfterStop = !!stopBtn && stopBtn.hidden === true;
+out.focusMovedToStatus = win.document.activeElement === statusText;
+out.noErrorPage = !viewer.querySelector('.paper-error') &&
+  !viewer.querySelector('.paper-search-empty');
+// A late push event for the stopped task must not repaint skeletons.
+win._stopRecommend();
+out.abortCallsAfterSecondStop = aborts.length;
 
 console.log('__RESULT__' + JSON.stringify(out));
 })();
@@ -290,6 +340,32 @@ def test_reconciler_streams_skeleton_to_grounded_incrementally():
     assert out['correctionShown'] is True, f'correction banner must render: {out}'
     assert out['hintShown'] is True, f'the "verified on arXiv" hint must show once cards exist: {out}'
     assert out['statusSettled'] is True, f'status line must hide once done + all grounded: {out}'
+    assert out['bannerBeforeList'] is True, f'correction banner must precede the cards: {out}'
+    assert out['listBeforeResearch'] is True, \
+        f'result cards must render ABOVE the research timeline: {out}'
+    assert out['stopHiddenAtDone'] is True, f'no Stop once the task finished: {out}'
+
+
+def test_stop_keeps_grounded_cards_and_shows_stopped_state():
+    out = _run()
+    assert out['stopVisibleWhileRunning'] is True, \
+        f'a design-system Stop button must show while running: {out}'
+    assert out['stopInsideStatus'] is True, \
+        f'Stop sits in the status line, outside the live region: {out}'
+    assert out['slotsBeforeStop'] == 3, out
+    assert out['abortCalls'] == ['task-stop'], f'Stop must call recommendAbort once: {out}'
+    assert out['streamAborted'] is True, out
+    assert out['cardsAfterStop'] == ['grounded'], \
+        f'Stop keeps grounded cards and drops pending skeletons: {out}'
+    assert out['groundedTitleKept'] is True, out
+    assert out['stoppedText'] == 'Search stopped', out
+    assert out['stoppedStatusLive'] is True, f'the stopped state is announced: {out}'
+    assert out['noSpinnerAfterStop'] is True, out
+    assert out['stopHiddenAfterStop'] is True, out
+    assert out['focusMovedToStatus'] is True, \
+        f'focus must not fall to <body> when the focused Stop hides: {out}'
+    assert out['noErrorPage'] is True, f'Stop is not an error or empty result: {out}'
+    assert out['abortCallsAfterSecondStop'] == 1, f'Stop is idempotent: {out}'
 
 
 def test_NC1_child_node_identity_compare_before_swap_is_load_bearing(tmp_path):

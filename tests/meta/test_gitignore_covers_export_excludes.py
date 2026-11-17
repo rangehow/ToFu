@@ -69,6 +69,7 @@ _EXTRA_KEEPERS = {
     # Tests of other opensource-excluded private modules
     # (export_pkg._lists._OPENSOURCE_EXCLUDE_PATHS) stay private with them.
     'tests/router/test_watchdog_compute_patrol.py',
+    'tests/router/test_router_home_hope_seed.py',
     'tests/export/test_export_git_reads.py',
     'tests/evaluations/test_yourprovider_sandbox_score.py',
     'tests/evaluations/test_owner_memory_benchmark.py',

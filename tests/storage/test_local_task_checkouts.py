@@ -76,6 +76,7 @@ def layout(tmp_path, monkeypatch):
     monkeypatch.setattr(local_placement, 'choose_local_root', lambda source, purpose, **_kwargs:
                         local_placement.Placement(True, purpose, 'on', 'selected',
                                                   root=str(placed)))
+    monkeypatch.setattr(task_spares, 'scratch_root', lambda: tmp_path / 'scratch')
     root = tmp_path / 'canonical'
     root.mkdir()
     git(root, 'init', '-q', '-b', 'main')

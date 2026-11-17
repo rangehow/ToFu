@@ -143,6 +143,31 @@ def test_full_epoch_default_is_uncapped_and_model_neutral():
         'an unattended paper task must never expose a wait that cannot resume')
 
 
+@pytest.mark.parametrize('model', [
+    'grok-4.6', 'gpt-5.4', 'claude-sonnet-4-5', 'kimi-k3', 'gemini-2.5-pro',
+    'deepseek-v4-pro', 'glm-4.6'])
+def test_full_epoch_reaches_every_provider_with_object_roots(model):
+    # grok-4.6 400'd every paper report on round 1: "send_agent_message:
+    # tool parameter root must be an object type". The epoch stays canonical
+    # (model-neutral); the shared wire preflight used by every transport must
+    # project each root to a plain object without dropping any tool.
+    from lib.paper.tools import build_paper_full_tool_epoch
+    from lib.tools.gateway import preflight_wire_tool_body
+
+    epoch = build_paper_full_tool_epoch(
+        owner_user_id=TEST_OWNER_USER_ID, model=model, cfg={'plugins': []})
+    assert not epoch.degraded_reason
+    body = {'model': model, 'tools': list(epoch.wire_schemas)}
+    preflight_wire_tool_body(body)
+
+    assert _names(body['tools']) == _names(epoch.wire_schemas)
+    for tool in body['tools']:
+        parameters = tool['function'].get('parameters') or {'type': 'object'}
+        name = tool['function']['name']
+        assert parameters.get('type') == 'object', name
+        assert not {'oneOf', 'anyOf', 'allOf'} & set(parameters), name
+
+
 def test_explicit_budget_bounds_wire_but_preserves_searchable_authority():
     from lib.paper.tools import build_paper_full_tool_epoch
 

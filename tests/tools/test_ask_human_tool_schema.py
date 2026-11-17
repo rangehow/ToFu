@@ -75,8 +75,9 @@ def test_schema_requires_nonempty_options_only_for_choice_mode():
     })
 
     wire = [ASK_HUMAN_TOOL]
-    assert sanitize_wire_tools(wire) is wire
-    kimi_parameters = sanitize_wire_tools(
-        wire, model='kimi-k3')[0]['function']['parameters']
-    assert kimi_parameters['type'] == 'object'
-    assert 'anyOf' not in kimi_parameters
+    for model in ('', 'grok-4.6', 'kimi-k3'):
+        wire_parameters = sanitize_wire_tools(
+            wire, model=model)[0]['function']['parameters']
+        assert wire_parameters['type'] == 'object', model
+        assert 'anyOf' not in wire_parameters, model
+    assert 'anyOf' in params

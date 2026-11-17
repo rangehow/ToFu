@@ -857,24 +857,21 @@ def _normalize_provider_schema_anyof_types(
 def _normalize_provider_tool_schema(
     tool: Mapping[str, Any], *, model: str = '',
 ) -> tuple[Mapping[str, Any], tuple[str, ...], str]:
-    """Return the model-specific provider projection for one tool schema."""
-    from lib.model_info import is_claude, is_gpt, is_kimi
+    """Return the provider projection for one tool schema.
+
+    The root object projection applies to every model. Function arguments are
+    always a JSON object, and provider validators reject a root combinator
+    independently of each other: OpenAI ("must have type 'object' and not have
+    'oneOf'/'anyOf'/'allOf' at the top level"), Anthropic ("input_schema does
+    not support oneOf, allOf, or anyOf at the top level"), Moonshot MFJS and
+    xAI ("tool parameter root must be an object type"). A per-family allowlist
+    400'd every family it had not yet met, so the sound relaxation is the wire
+    contract, not a provider quirk. Nested combinators stay untouched; only
+    the MFJS dialect rewrites remain Kimi-specific.
+    """
+    from lib.model_info import is_kimi
 
     kimi = is_kimi(model)
-    # OpenAI's tool-parameter validator rejects any root combinator outright
-    # ("schema must have type 'object' and not have 'oneOf'/'anyOf'/'allOf'/
-    # 'enum'/'const'/'not' at the top level") — write_file's root oneOf
-    # hard-400'd every gpt-* slot. The same sound root relaxation used for
-    # Kimi applies; only the MFJS dialect rewrites stay Kimi-specific.
-    gpt = is_gpt(model)
-    # The Messages API rejects the same root shape even more bluntly —
-    # "input_schema does not support oneOf, allOf, or anyOf at the top level"
-    # — so every Anthropic-protocol slot (Claude + Fable, including
-    # AWS/Vertex-prefixed aliases) needs the identical relaxation. Nested
-    # combinators stay untouched: only the root is restricted.
-    anthropic = is_claude(model)
-    if not (kimi or gpt or anthropic):
-        return tool, (), ''
     function = tool.get('function')
     if isinstance(function, Mapping):
         schema_key = 'parameters'
@@ -1429,10 +1426,10 @@ def sanitize_wire_tools(
       bad apple must not 400 the whole request;
     • a function entry missing ``type`` is REPAIRED to ``'function'`` on a
       copy (the caller's canonical catalog is never mutated);
-    • Kimi schemas are projected to MFJS on a copy: nested ``type`` +
-      ``anyOf`` is distributed exactly, while an unrepresentable root object
+    • every model receives a plain object root on a copy: a root object
       union becomes a sound relaxation and the canonical execution contract
-      remains strict;
+      remains strict; Kimi schemas are further projected to MFJS (nested
+      ``type`` + ``anyOf`` is distributed exactly);
     • a clean array is returned AS THE SAME OBJECT so prompt-cache bytes and
       identity-based fast paths are untouched on the hot path.
 

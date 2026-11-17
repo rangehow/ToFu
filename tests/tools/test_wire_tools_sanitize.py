@@ -165,7 +165,10 @@ class TestGptRootCombinatorProjection:
         assert params['properties']['v'] == {
             'oneOf': [{'type': 'string'}, {'type': 'integer'}]}
 
-    def test_root_oneof_untouched_for_non_gpt_non_kimi(self):
+    def test_root_oneof_projected_for_every_model_family(self):
+        # A per-family allowlist 400'd grok-4.6 ("tool parameter root must be
+        # an object type") on every paper report; the root relaxation is the
+        # wire contract for all models.
         from lib.tools.gateway import _normalize_provider_tool_schema
         tool = _fn('write_file')
         tool['function']['parameters'] = {
@@ -174,11 +177,15 @@ class TestGptRootCombinatorProjection:
             'required': ['path'],
             'oneOf': [{'required': ['a']}, {'required': ['b']}],
         }
-        out, repairs, error = _normalize_provider_tool_schema(
-            tool, model='deepseek-v4-pro')
-        assert out is tool
-        assert repairs == ()
-        assert error == ''
+        for model in ('deepseek-v4-pro', 'grok-4.6', 'gemini-2.5-pro', ''):
+            out, repairs, error = _normalize_provider_tool_schema(
+                tool, model=model)
+            assert error == '', model
+            assert repairs == ('$.function.parameters.oneOf',), model
+            params = out['function']['parameters']
+            assert params['type'] == 'object'
+            assert not ({'oneOf', 'anyOf', 'allOf'} & set(params)), model
+        assert 'oneOf' in tool['function']['parameters']
 
     def test_clean_object_root_keeps_identity_for_gpt(self):
         # The hot path must not pay a rebuild when nothing is wrong.
@@ -391,9 +398,8 @@ class TestSanitizeWireTools:
             'detail']
 
     def test_non_projected_provider_keeps_strict_root_union_by_identity(self):
-        # gpt-* and kimi-* both get the sound root relaxation (their
-        # validators reject root combinators); every other provider receives
-        # the canonical schema byte-identical.
+        # Every provider gets the sound root relaxation; only Kimi adds the
+        # nested MFJS dialect rewrites.
         dynamic = _fn('strict_elsewhere')
         dynamic['function']['parameters']['anyOf'] = [
             {'properties': {'mode': {'enum': ['a']}}},
@@ -401,7 +407,12 @@ class TestSanitizeWireTools:
         ]
         tools = [dynamic]
 
-        assert sanitize_wire_tools(tools, model='deepseek-v4-pro') is tools
+        out = sanitize_wire_tools(tools, model='deepseek-v4-pro')
+        assert out is not tools
+        parameters = out[0]['function']['parameters']
+        assert parameters['type'] == 'object'
+        assert 'anyOf' not in parameters
+        assert 'anyOf' in dynamic['function']['parameters']
 
     def test_already_mfjs_clean_kimi_catalog_keeps_identity(self):
         tools = [_fn('clean_mfjs')]

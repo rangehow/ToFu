@@ -26,10 +26,11 @@ from lib.tools.gateway import _normalize_provider_tool_schema
 
 pytestmark = pytest.mark.unit
 
-# One model per provider family the gateway projects. Moonshot also rewrites
-# its MFJS dialect (for example dropping maxLength) by design, so only its
-# root projection counts as a repair here.
-PROJECTED_MODELS = ('gpt-5.5', 'claude-opus-5.5', 'kimi-k2.5')
+# The gateway projects the root for every model; one model per provider family
+# that is known to reject a root union. Moonshot also rewrites its MFJS dialect
+# (for example dropping maxLength) by design, so only its root projection
+# counts as a repair here.
+PROJECTED_MODELS = ('gpt-5.5', 'claude-opus-5.5', 'kimi-k2.5', 'grok-4.6')
 _ROOT = '$.function.parameters'
 ROOT_REPAIRS = frozenset(
     {_ROOT, f'{_ROOT}.oneOf', f'{_ROOT}.anyOf', f'{_ROOT}.allOf'})
@@ -108,6 +109,23 @@ def test_registered_tool_schemas_need_no_provider_projection(
         f'{offenders}. Declare a plain object root and register an argument '
         'choice in lib.tools.contracts.ARGUMENT_ALTERNATIVES instead of a '
         'root oneOf/anyOf/allOf.')
+
+
+@pytest.mark.parametrize('model', [*PROJECTED_MODELS, 'deepseek-v4-pro'])
+def test_registered_catalog_reaches_wire_with_object_roots(
+        registered_tools, model):
+    # Pending root combinators included: the shared wire boundary must hand
+    # every provider a plain object root (xAI 400'd send_agent_message).
+    from lib.tools.gateway import sanitize_wire_tools
+
+    catalog = list(registered_tools.values())
+    wire = sanitize_wire_tools(catalog, model=model)
+    assert len(wire) == len(catalog)
+    for tool in wire:
+        parameters = tool['function'].get('parameters') or {'type': 'object'}
+        name = tool['function']['name']
+        assert parameters.get('type') == 'object', name
+        assert not {'oneOf', 'anyOf', 'allOf'} & set(parameters), name
 
 
 def test_pending_root_combinators_are_shrink_only(registered_tools):

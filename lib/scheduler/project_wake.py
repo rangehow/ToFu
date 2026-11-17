@@ -12,7 +12,7 @@ A row whose premise no longer holds (the project's Coordinator binding
 changed, the creating Worker's grant was revoked, the conversation is gone)
 is inert: nothing is delivered and the row is disabled.
 
-Entry points: run_project_wake, render_wake_notice.
+Entry points: run_project_wake, render_wake_notice, wake_notice_subject.
 Dependencies: scheduler.authority (grant), conversations.project_coordination
 (binding), project_dispatch.repository (Worker grant), scheduler.
 conversation_dispatch (delivery).
@@ -22,6 +22,7 @@ from __future__ import annotations
 from datetime import datetime
 import hashlib
 import json
+import re
 
 from lib.identity import require_user_id
 from lib.log import get_logger
@@ -48,6 +49,24 @@ def render_wake_notice(task: dict, grant: dict) -> str:
         'current request; tell the owner only what they need. Cancel or reschedule it with '
         f'schedule_manage(task_id="{task["id"]}").',
     ])
+
+
+_WAKE_SUBJECT = re.compile(r'^Scheduled task \S+ "(?P<name>.*)" \([^\n]*\) is due for project [^\n]*; '
+                           r'[^\n]* scheduled it\. Note:\n(?P<note>.*)\n\nThis wake grants no authority\. ',
+                           re.MULTILINE | re.DOTALL)
+
+
+def wake_notice_subject(text: str) -> str | None:
+    """The scheduled task's name and note of a wake notice, else None.
+
+    The rest is this module's fixed scaffolding; memory selection reads only
+    what the scheduler of the wake wrote (lib/memory/prefetch/_query.py).
+    """
+    stripped = text.lstrip()
+    if not stripped.startswith(_NOTICE_HEADER):
+        return None
+    match = _WAKE_SUBJECT.search(stripped)
+    return '' if match is None else '\n'.join(part for part in (match['name'], match['note']) if part)
 
 
 def _occurrence(task: dict) -> str:

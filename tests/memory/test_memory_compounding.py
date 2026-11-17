@@ -228,6 +228,47 @@ def test_status_notices_and_plain_continuations_select_nothing():
     assert _query(due + source) == 'Move to the larger CodeLab'
 
 
+def test_a_continuation_selects_by_the_state_appended_to_it(monkeypatch):
+    import lib.conversations.coordinator_continuation as continuation
+    from lib.project_dispatch.continuation import CONTINUATION_BRIEF_MARK
+    from lib.project_dispatch.delegation import WORKER_INPUT_SOURCE_HEAD, WORKER_INPUT_SOURCE_TAIL
+
+    monkeypatch.setattr(continuation, '_board', lambda repository, assignment: [
+        {'status': 'in_progress', 'title': 'Hope stop returns 500', 'due': '2026-11-16T16:30:00+08:00',
+         'progress': 'hope CLI stops jobs on H200'},
+        {'status': 'pending', 'title': 'Daily summary'}])
+    monkeypatch.setattr(continuation, '_questions', lambda repository, coordinator: [
+        {'question': 'Rotate the leaked keys?', 'default': 'wait for you', 'turnId': 't-9'}])
+    monkeypatch.setattr(continuation, '_workers', lambda repository, assignment: [
+        ('11e5e38c-0000', 'needs_review', 'Share the 910C handbook'), ('22f6', 'running', 'Overleaf MCP 0.3.2')])
+    context = continuation.continuation_context(None, {'request': {'coordinatorId': 'coordinator-1'}})
+    source = WORKER_INPUT_SOURCE_HEAD + 'coordinator-1; Turn t-1' + WORKER_INPUT_SOURCE_TAIL
+    plain = 'Continue the request. ' + CONTINUATION_BRIEF_MARK + '; review Worker results.'
+    assert _query(plain + source + context).split('\n') == [
+        'Hope stop returns 500', 'hope CLI stops jobs on H200', 'Daily summary', 'Rotate the leaked keys?',
+        'wait for you', 'Share the 910C handbook', 'Overleaf MCP 0.3.2']
+
+    monkeypatch.setattr(continuation, '_board', lambda repository, assignment: [])
+    monkeypatch.setattr(continuation, '_questions', lambda repository, coordinator: [])
+    monkeypatch.setattr(continuation, '_workers', lambda repository, assignment: [])
+    monkeypatch.setattr(continuation, '_source_request', lambda repository, source: 'Fix the parser.')
+    context = continuation.continuation_context(None, {'request': {
+        'coordinatorId': 'coordinator-1', 'authorizationSource': {'turnId': 't-1'}}})
+    assert _query(plain + source + context) == 'Fix the parser.'
+
+
+def test_a_wake_selects_by_what_its_scheduler_wrote():
+    from lib.conversations.coordinator_commitments import render_due_notice
+    from lib.scheduler.project_wake import render_wake_notice
+
+    wake = render_wake_notice({'id': 'project-wake-1', 'name': 'Router keepalive', 'schedule': '*/30 * * * *'},
+                              {'creator': {'role': 'coordinator'}, 'projectPath': '/p',
+                               'reason': 'Resume stalled Workers.\nAct on due promises.'})
+    assert _query(wake) == 'Router keepalive\nResume stalled Workers.\nAct on due promises.'
+    due = render_due_notice([{'title': 'Move to the larger CodeLab', 'dueAt': 1794742200000, 'slips': 1}])
+    assert _query(due) == 'Move to the larger CodeLab'
+
+
 def test_every_program_notice_header_is_recognized():
     """Every notice producer opens with the shared mark the selection recognizes."""
     import re

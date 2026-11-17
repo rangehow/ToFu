@@ -1400,11 +1400,11 @@ unit of cost and, in that order, start **every** candidate that
    normalized problem statement) as an active initiative or a proposal ranked
    ahead of it waits as `duplicate:<id>`, so a twin cannot bypass the other's
    pending approval;
-3. does not conflict with active work on the same project: each initiative is
-   its own request in that project's Project Router, so a second one there
-   waits as `project_busy:<id>` until the first settles (two concurrent
-   initiatives would share one Coordinator, and their measured outcomes and
-   costs could not be told apart);
+3. is independent of other open work: distinct initiatives of one project may
+   start together. Each remains its own queued request in that project's
+   Project Router with its own usage account, so their outcomes and costs stay
+   separate. This removes the old `project_busy:<id>` serialization; it does
+   not make one Coordinator's judgments concurrent (see PROJECT_COORDINATION).
 4. has its resources measured available now (`lib/router/portfolio/capacity.py`),
    never guessed: the model the Project Router would run (resolved exactly as
    its scheduled turn would) needs a route the dispatcher could pick now

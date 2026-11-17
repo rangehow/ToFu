@@ -91,6 +91,15 @@ def task(title, status='in_progress', **extra):
     return {'title': title, 'status': status, **extra}
 
 
+def test_unowned_projection_includes_dropped_open_outcomes(board):
+    from lib.conversations.coordinator_continuation import unowned_outcomes
+    board.publish(task('Paper B: the missing gate verdict'), task('Paper A: diagnose the result'))
+    board.publish(task('Paper A: diagnose the result'))
+    dropped = board.read(group='dropped')['tasks']
+    assert [entry['title'] for entry in dropped] == ['Paper B: the missing gate verdict']
+    assert unowned_outcomes([], [], dropped)['dropped'] == dropped
+
+
 def test_a_task_dropped_from_a_later_board_stays_in_the_history(board):
     b = board
     b.publish(task('Fix the sidebar', 'completed', progress='Merged and verified.'),

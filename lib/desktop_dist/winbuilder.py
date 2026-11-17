@@ -247,6 +247,7 @@ def _pipeline(workdir: str, version: str, sha: str, log_fh,
         shell=True)
     from . import builder as _linux_builder
     _linux_builder.build_frontend(src, log_fh)
+    _build_tofudb_exe(src, log_fh)
 
     winpy = _ensure_winpython(log_fh)
     _ensure_guest_hosts(log_fh)
@@ -519,6 +520,47 @@ def _conda_tools_add(package: str, log_fh) -> None:
             else 'create')
     _sh(f'{conda} {verb} -y -p {prefix} -c conda-forge {package}', log_fh,
         timeout=1800)
+
+
+_TOFUDB_WIN_TARGET = 'x86_64-pc-windows-gnu'
+
+
+def _build_tofudb_exe(src: str, log_fh) -> None:
+    """Cross-compile the tofu-db engine that tofu.spec bundles.
+
+    The CI leg runs `cargo build` natively on Windows (MSVC). Here the
+    engine's bundled C sources (sqlite, mimalloc, zstd) need a Windows C
+    cross-compiler: zig via cargo-zigbuild targets windows-gnu with no
+    SDK (measured 2026-11-17: PE32+ x86-64, 22 MB). zig's clang turns
+    mimalloc's __DATE__ into -Werror=date-time, hence the CFLAGS. The
+    target dir lives in the persistent cache so later builds reuse every
+    compiled dependency.
+    """
+    from . import builder as _linux_builder
+    tools_bin = os.path.join(wintoolchain.cache_dir(), 'tools', 'bin')
+    for package in ('zig', 'cargo-zigbuild'):
+        if not os.path.isfile(os.path.join(tools_bin, package)):
+            _conda_tools_add(package, log_fh)
+    cargo_home = os.environ.get('CARGO_HOME') or os.path.expanduser(
+        '~/.cargo')
+    target_dir = os.path.join(wintoolchain.cache_dir(), 'tofudb-target')
+    env = dict(os.environ,
+               PATH=os.pathsep.join([tools_bin,
+                                     os.path.join(cargo_home, 'bin'),
+                                     os.environ.get('PATH', '')]),
+               CARGO_TARGET_DIR=target_dir,
+               CFLAGS_x86_64_pc_windows_gnu='-Wno-error=date-time')
+    _linux_builder._sh(f'rustup target add {_TOFUDB_WIN_TARGET}', log_fh,
+                       env=env)
+    _linux_builder._sh(
+        f'cargo zigbuild --release --target {_TOFUDB_WIN_TARGET} '
+        '--manifest-path packages/tofu-db/Cargo.toml', log_fh,
+        cwd=src, env=env)
+    dest_dir = os.path.join(src, 'packages', 'tofu-db', 'target', 'release')
+    os.makedirs(dest_dir, exist_ok=True)
+    shutil.copy2(os.path.join(target_dir, _TOFUDB_WIN_TARGET, 'release',
+                              'tofu-db.exe'),
+                 os.path.join(dest_dir, 'tofu-db.exe'))
 
 
 def _ensure_msiextract(log_fh) -> str:

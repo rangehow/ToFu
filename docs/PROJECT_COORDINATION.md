@@ -63,7 +63,16 @@ independent worker conversations that users need to follow. Decision: the bindin
 selects an ordinary root Agent with a registered `project_coordinator` context
 block and dispatch-only tool policy (`lib/tasks_pkg/coordinator_policy.py`).
 It plans, delegates the current human request into independent workers, reviews
-their results, exchanges project messages and reports to the human. File, shell,
+their results, exchanges project messages and reports to the human. For a
+request with many independent papers or outcomes, the role guidance requires one
+accountable Worker per paper/outcome, with a falsifiable metric and an
+independent reviewer, and dispatches those independent outcomes together before
+polling. A single “main-paper” Worker must not absorb the whole portfolio while
+other papers wait; only a verified prerequisite may defer an outcome. This is
+paper-level ownership guidance, not a Worker-count or hardware limit. The
+executable specifications are `test_bound_coordinator_role_is_ordinary_root_guidance`
+and `test_independent_paper_outcomes_start_together_without_polling`.
+File, shell,
 browser, arbitrary program and Swarm/retained-agent execution are denied before
 tool effects, including discovered tools and batch calls. Catalog filtering alone
 is not authorization. Restrictions remain pinned through the selected turn;

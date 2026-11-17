@@ -28,6 +28,9 @@ OFFLINE_DRIVER_IMPORT_ALLOWLIST = {
     # Offline measurement harness: the rawsqlite engine-floor baseline opens
     # only its own disposable tempfile databases, never a live authority.
     'scripts/tofudb_perf_compare.py',
+    # Host-move operator tool: copies host-local SQLite files through the
+    # read-only backup API; it never opens the storage authority.
+    'scripts/migrate_host.py',
 }
 pytestmark = pytest.mark.unit
 
@@ -158,6 +161,35 @@ def test_transaction_method_names_on_domain_services_are_not_database_owners(
         'files': [],
         'violations': [],
     }
+
+
+def test_websocket_connections_are_transport_not_database_ownership(tmp_path):
+    from lib.storage.storage_boundary import boundary_report
+
+    devtools = tmp_path / 'lib' / 'devtools.py'
+    devtools.parent.mkdir(parents=True)
+    devtools.write_text(
+        "import websockets\n"
+        "import websockets as ws\n"
+        "from websockets import connect as dial\n"
+        "async def attach(url):\n"
+        "    async with websockets.connect(url, max_size=None) as a:\n"
+        "        async with ws.connect(url) as b:\n"
+        "            return a, b, dial\n",
+        encoding='utf-8')
+    assert boundary_report(tmp_path)['ready'] is True
+
+    business = tmp_path / 'lib' / 'business.py'
+    business.write_text(
+        "import sqlite3 as websockets_store\n"
+        "def open_store(path, db):\n"
+        "    store = websockets_store.connect(path)\n"
+        "    return store, db.connect(path)\n",
+        encoding='utf-8')
+    report = boundary_report(tmp_path)
+    assert report['files'] == ['lib/business.py']
+    assert [item['capability'] for item in report['violations']
+            if item['capability'] == 'direct_connect'] == ['direct_connect'] * 2
 
 
 def test_transaction_methods_on_database_shaped_receivers_remain_blocked(

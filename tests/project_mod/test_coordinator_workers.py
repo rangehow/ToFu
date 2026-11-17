@@ -1446,6 +1446,23 @@ def test_stop_of_original_request_prevents_new_grants_even_before_task_flag_catc
     assert not r.created and not r.c.repo.list()
 
 
+def test_independent_paper_outcomes_start_together_without_polling(runtime):
+    """Three independent papers need three accountable Workers, not one portfolio lane."""
+    r = runtime
+    papers = [
+        ('paper-a', 'Measure Paper A outcome against its preregistered baseline.'),
+        ('paper-b', 'Run Paper B benchmark and report its falsifiable metric.'),
+        ('paper-c', 'Test Paper C claim with independent review evidence.'),
+    ]
+    workers = [r.call('delegate_project_work', **{
+        **r.args, 'title': title, 'brief': brief, 'idempotency_key': title,
+    }) for title, brief in papers]
+    assert len(r.created) == len(r.calls) == 3
+    assert len({worker['conversation_id'] for worker in workers}) == 3
+    assert len({worker['assignment_id'] for worker in workers}) == 3
+    assert all(worker['dispatch'] == 'accepted' for worker in workers)
+
+
 def test_long_running_request_keeps_delegating_with_no_deadline(runtime):
     r = runtime
     first = r.call('delegate_project_work', **r.args)

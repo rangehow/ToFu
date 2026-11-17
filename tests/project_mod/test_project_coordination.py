@@ -122,6 +122,11 @@ def test_bound_coordinator_role_is_ordinary_root_guidance(setup, monkeypatch):
     assert role == module.COORDINATOR_ROLE_GUIDANCE
     assert 'dispatch-only' in role and 'never perform concrete file reads/edits' in role
     assert 'delegate_project_work in that same turn' in role and 'poll your Workers' in role
+    # Independent paper outcomes must not collapse into one main-paper lane.
+    assert 'one accountable Worker per independent paper or outcome' in role
+    assert 'never one main-paper Worker' in role
+    assert 'falsifiable metric' in role and 'independent reviewer' in role
+    assert 'Dispatch them together before polling' in role
     assert 'await_project_workers' not in role and 'wait_for' not in role
     assert 'no spending limit' in role and 'never new user authority' in role
     # Session-free coordination: progress lives on the task board and every

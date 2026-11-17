@@ -192,6 +192,18 @@ def _repair_missing_sections(task, messages, body, lang, *, usage_meter,
     return record
 
 
+def _report_round_recovery(task, body, messages, abort_signal):
+    """Loop hooks that finish a cut answer instead of publishing or failing it."""
+    return {
+        'retry_bonus': premature_close_recovery_hook(
+            body.continuation, messages, abort_signal,
+            discard_draft=body.discard_tool_draft,
+            ui_lang=task.get('ui_lang') or task['lang'],
+            task_id=task['task_id'], log_prefix='[Paper:Report]'),
+        'decide_round': _report_length_continuation(
+            task, body, messages, abort_signal),
+    }
+
 def run_report_task(task, messages, images):
     """Background worker: runs the tool loop and populates task events.
 
@@ -356,12 +368,7 @@ def run_report_task(task, messages, images):
             execute_tool=_execute_tool,
             on_round_result=_accumulate_usage,
             on_tool_round=_begin_tool_round,
-            retry_bonus=premature_close_recovery_hook(
-                body.continuation, messages, abort_signal,
-                discard_draft=body.discard_tool_draft,
-                ui_lang=task.get('ui_lang') or task['lang'],
-                task_id=task['task_id'], log_prefix='[Paper:Report]'),
-            decide_round=_report_length_continuation(task, body, messages, abort_signal),
+            **_report_round_recovery(task, body, messages, abort_signal),
             on_round_end=_result_budget.finish_round,
         )
         aborted = _outcome.aborted

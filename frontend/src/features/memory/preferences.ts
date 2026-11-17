@@ -15,13 +15,14 @@ interface ContextItem {
   text?: string;
   condition?: string;
   action?: string;
+  status?: string;
   _editing?: boolean;
 }
 
 interface CleanContextItem extends Omit<ContextItem, '_editing'> {}
 
 interface UserContextApi {
-  get(): Promise<{ items?: ContextItem[] } | null>;
+  get(): Promise<{ items?: ContextItem[]; inactive_items?: ContextItem[] } | null>;
   replace(items: CleanContextItem[]): Promise<{
     saved?: boolean;
     items?: ContextItem[];
@@ -72,6 +73,8 @@ const SECTIONS: readonly ContextSection[] = [
 ];
 
 let items: ContextItem[] = [];
+// Inactive items awaiting the owner's confirmation; never injected until confirmed.
+let pending: ContextItem[] = [];
 let savedCleanItems: CleanContextItem[] = [];
 let savedFingerprint = '[]';
 let lifecycle: LifecycleScope | null = null;
@@ -123,22 +126,28 @@ export function destroyPreferences(): void {
   lifecycle = null;
 }
 
-export function cleanItems(): CleanContextItem[] {
-  return items.map((item) => {
-    const clean: CleanContextItem = {
-      id: item.id || '', type: item.type, source: item.source || 'manual',
-      created_at: item.created_at || '', updated_at: item.updated_at || '',
-    };
-    if (item.type === 'work_rule') {
-      clean.condition = (item.condition || '').trim();
-      clean.action = (item.action || '').trim();
-    } else {
-      clean.text = (item.text || '').trim();
-    }
-    return clean;
-  }).filter((item) => item.type === 'work_rule'
+function cleanItem(item: ContextItem): CleanContextItem {
+  const clean: CleanContextItem = {
+    id: item.id || '', type: item.type, source: item.source || 'manual',
+    created_at: item.created_at || '', updated_at: item.updated_at || '',
+  };
+  if (item.type === 'work_rule') {
+    clean.condition = (item.condition || '').trim();
+    clean.action = (item.action || '').trim();
+  } else {
+    clean.text = (item.text || '').trim();
+  }
+  return clean;
+}
+
+function hasContent(item: CleanContextItem): boolean {
+  return item.type === 'work_rule'
     ? Boolean(item.condition || item.action)
-    : Boolean(item.text));
+    : Boolean(item.text);
+}
+
+export function cleanItems(): CleanContextItem[] {
+  return items.map(cleanItem).filter(hasContent);
 }
 
 function fingerprint(): string {
@@ -251,7 +260,36 @@ export function renderPreferences(): void {
         <p>${escape(translate(section.descKey, ''))}</p></div>${add}</header>
       <div class="ctx-items">${rows || empty}</div></section>`;
   }).join('');
+  renderPending();
   markDirty();
+}
+
+function renderPending(): void {
+  const host = document.getElementById('prefsPending');
+  if (!host) return;
+  host.hidden = pending.length === 0;
+  if (!pending.length) {
+    host.innerHTML = '';
+    return;
+  }
+  const rows = pending.map((item, index) => {
+    const content = item.type === 'work_rule'
+      ? `${item.condition || ''} → ${item.action || ''}`
+      : item.text || '';
+    const section = SECTIONS.find((entry) => entry.type === item.type);
+    const date = contextDate(item.created_at);
+    const meta = `${section ? translate(section.titleKey, item.type) : item.type} · ${sourceLabel(item.source)}${date ? ` · ${date}` : ''}`;
+    return `<article class="ctx-pending-item">
+      <div class="ctx-item-content"><p class="ctx-item-text">${escape(content)}</p><div class="ctx-item-meta">${escape(meta)}</div></div>
+      <div class="ctx-pending-actions">
+        <button class="btn btn-primary btn-sm" data-context-action="confirm-pending" data-index="${index}">${escape(translate('context.pendingConfirm', '确认'))}</button>
+        <button class="btn btn-secondary btn-sm" data-context-action="remove-pending" data-index="${index}">${escape(translate('context.remove', '删除'))}</button>
+      </div></article>`;
+  }).join('');
+  host.innerHTML = `<header class="ctx-pending-head">
+      <div class="ctx-group-title-row"><h3>${escape(translate('context.pendingTitle', '等你确认'))}</h3><span>${pending.length}</span></div>
+      <p>${escape(translate('context.pendingDesc', '这些条目来自旧档案或助手的推断，还没经过你确认。确认前不会用在任何对话里；确认后每轮生效，删除后不再出现。'))}</p></header>
+    <div class="ctx-items">${rows}</div>`;
 }
 
 export function addContext(type: ContextType): void {
@@ -314,6 +352,56 @@ export async function removeContext(index: number): Promise<void> {
   renderPreferences();
 }
 
+export async function confirmPending(index: number): Promise<void> {
+  const item = pending[index];
+  if (!item?.id) return;
+  const status = document.getElementById('prefsStatus');
+  // A full replace that names an inactive item activates it on the server.
+  // Send what was last saved plus this item, so unsaved edits stay local.
+  try {
+    const result = await contextApi().replace([...savedCleanItems, cleanItem(item)]);
+    if (!result || result.saved === false || !Array.isArray(result.items)) {
+      throw new Error('server reported save failed');
+    }
+    const confirmed = result.items.find((entry) => entry.id === item.id) || item;
+    pending = pending.filter((entry) => entry.id !== item.id);
+    items.push({ ...confirmed, _editing: false });
+    savedCleanItems = result.items.map(cleanItem).filter(hasContent);
+    savedFingerprint = JSON.stringify(savedCleanItems);
+    renderPreferences();
+    if (status) {
+      status.textContent = translate('context.saved', '已保存，下一轮对话开始生效');
+      status.className = 'ctx-status is-success';
+    }
+  } catch (error: unknown) {
+    if (status) {
+      status.textContent = `${translate('context.saveFailed', '保存失败')}: ${errorMessage(error)}`;
+      status.className = 'ctx-status is-error';
+    }
+  }
+}
+
+export async function removePending(index: number): Promise<void> {
+  const item = pending[index];
+  if (!item?.id) return;
+  const ok = await (globals().showConfirm?.(
+    translate('context.removeConfirm', '删除这条长期上下文？'), { danger: true },
+  ) ?? Promise.resolve(true));
+  if (!ok) return;
+  try {
+    await contextApi().remove(item.id);
+  } catch (error: unknown) {
+    const status = document.getElementById('prefsStatus');
+    if (status) {
+      status.textContent = `${translate('context.removeFailed', '删除失败')}: ${errorMessage(error)}`;
+      status.className = 'ctx-status is-error';
+    }
+    return;
+  }
+  pending = pending.filter((entry) => entry.id !== item.id);
+  renderPending();
+}
+
 function refreshMemorySection(): void {
   if (!document.getElementById('prefsMemoryList')) return;
   try {
@@ -344,6 +432,8 @@ export async function refreshPreferences(): Promise<void> {
     if (owner.signal.aborted || generation !== requestGeneration) return;
     if (!Array.isArray(data?.items)) throw new Error('empty response');
     items = data.items.map((item) => ({ ...item, _editing: false }));
+    pending = (Array.isArray(data.inactive_items) ? data.inactive_items : [])
+      .filter((item) => item.status === 'needs_confirmation');
     savedCleanItems = cleanItems();
     savedFingerprint = JSON.stringify(savedCleanItems);
     renderPreferences();
@@ -444,6 +534,8 @@ function onClick(event: Event): void {
   else if (action === 'edit') startEdit(index);
   else if (action === 'finish') finishEdit(index);
   else if (action === 'remove') void removeContext(index);
+  else if (action === 'confirm-pending') void confirmPending(index);
+  else if (action === 'remove-pending') void removePending(index);
 }
 
 function onInput(event: Event): void {

@@ -60,7 +60,7 @@ def _receipt(attempt, proof, *, unknown=False):
 _UNCONFIRMED_EFFECT_STATES = frozenset({'entered', 'unknown'})
 
 
-def _isolated_worktree(attempt):
+def isolated_worktree(attempt):
     """The Worker's own isolated worktree, or None for a task that has none.
 
     A dispatched Worker's accepted config names its checkout (``projectPath``)
@@ -103,7 +103,7 @@ def classify_cut_calls(turn, attempt):
                 or (row.get('attemptId') or attempt['attemptId']) != attempt['attemptId']):
             continue
         if worktree is None and effect.get('recovery') == 'reconcile':
-            worktree = _isolated_worktree(attempt) or ''
+            worktree = isolated_worktree(attempt) or ''
         effect_class = cut_call_effect_class(
             str(row.get('toolName') or ''), row.get('toolArgs'),
             declared=str(effect.get('recovery') or 'reconcile'), worktree=worktree or None)
@@ -151,8 +151,8 @@ def _save_exit(context, attempt, turn, *, proof, unknown, known_terminal=False, 
     from lib.storage import get_storage_client
     from lib.storage.errors import StorageError, describe_storage_failure, is_transient_storage_error
     from lib.task_replay.task_result_checkpoint_contract import (
-        TASK_RESULT_CACHE_PREFIX_HWM_FIELD, TASK_RESULT_CHECKPOINT_GUARD_CONTRACT,
-        TASK_RESULT_LAST_TURN_CACHE_READ_FIELD,
+        TASK_RESULT_CACHE_BASELINE_FIELD, TASK_RESULT_CACHE_PREFIX_HWM_FIELD,
+        TASK_RESULT_CHECKPOINT_GUARD_CONTRACT, TASK_RESULT_LAST_TURN_CACHE_READ_FIELD,
     )
     context.checkpoint(allow_cancelled=True)
     value, metadata, version = _result_record(context, attempt)
@@ -184,6 +184,7 @@ def _save_exit(context, attempt, turn, *, proof, unknown, known_terminal=False, 
     # settings; replaying the candidates would also overwrite newer cache facts.
     value.pop(TASK_RESULT_CACHE_PREFIX_HWM_FIELD, None)
     value.pop(TASK_RESULT_LAST_TURN_CACHE_READ_FIELD, None)
+    value.pop(TASK_RESULT_CACHE_BASELINE_FIELD, None)
     try:
         result = get_storage_client(write=True).command('task_results.checkpoint', {
             'key': context.claim.task_id, 'value': value, 'expected_version': version,
@@ -277,6 +278,27 @@ def release_unrecordable_exit_carrier(context, task):
         _release_superseded_carrier(task, task['_conversationWorkerContext'])
     for key in _RECOVERY_RETENTION_KEYS:
         task.pop(key, None)
+
+
+def _preserve_live_working_view(task, turn):
+    """Keep the exact view of a live carrier whose claim storage fenced.
+
+    Its terminal persistence was refused, so the graceful suspension never
+    saved the view it was sending, and the resume would rebuild the whole
+    Turn and lose the provider cache (docs/RUN_CONTINUITY.md, "A fenced live
+    Attempt keeps its working view"). Contained: a failure only leaves the
+    canonical rebuild.
+    """
+    projection = turn.get('projection') or {}
+    try:
+        from lib.tasks_pkg.compaction._resume_projection import preserve_suspended_working_view
+        preserve_suspended_working_view(
+            task, turn_text=(projection.get('content'), projection.get('thinking')),
+            restart_settled=True)
+    except Exception as error:
+        from lib.storage.errors import describe_storage_failure
+        logger.warning('[WorkerRecovery] task=%s working view not preserved: %s',
+                       task.get('id'), describe_storage_failure(error))
 
 
 def recover_exited_attempt(context, attempt, turn, *, task=None):
@@ -412,6 +434,8 @@ def recover_exited_attempt(context, attempt, turn, *, task=None):
                                     include_execution_config=True)
         turn = turns.get_turn(attempt['conversationId'], attempt['turnId'],
                               user_id=context.principal.owner_user_id)
+        if restarted and joined and not preparation_exited:
+            _preserve_live_working_view(task, turn)
     # Fenced debt means a required terminal write never acknowledged.
     unknown = not known_terminal or proof == 'process_dead' or fenced_debt
     _save_exit(context, attempt, turn, proof=proof, unknown=unknown,

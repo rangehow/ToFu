@@ -319,7 +319,44 @@ def _turn_completed(task):
     return derive_turn_verdict(task_terminal_evidence(task)).status.value == 'completed'
 
 
-def preserve_suspended_working_view(task):
+def _without_repeatable_cut_batch(task, messages, rounds, *, restart_settled):
+    """Drop a repeatable restart-cut last batch from the view and its rounds.
+
+    The resume command drops the same occurrences from its replay
+    (``command_service._without_repeatable_restart_cut``), so the witnessed
+    view ends at the request that produced the batch. Returns None when the
+    batch is not the view's last tool span: such a view could never match.
+    """
+    if not restart_settled:
+        return messages, rounds
+    from lib.conversation_sync.worker_recovery import isolated_worktree
+    from lib.tools.restart_effect_class import repeatable_restart_cut_batch, without_positions
+    batch = repeatable_restart_cut_batch(
+        rounds, worktree=isolated_worktree({'config': task.get('config') or {}}))
+    if not batch:
+        return messages, rounds
+    from lib.tasks_pkg.compaction._layer2._anchor import _apiform_tool_rounds
+    spans = _apiform_tool_rounds(messages)
+    if not spans or spans[-1][1] != len(messages):
+        return None
+    start = spans[-1][0]
+    announced = {call.get('id') for call in messages[start].get('tool_calls') or []
+                 if isinstance(call, dict)}
+    if announced != {rounds[index]['toolCallId'] for index in batch}:
+        return None
+    return list(messages[:start]), without_positions(rounds, batch)
+
+
+def durable_turn_text(task):
+    """The settled Turn's text lanes, which the resume compares (``_resumeExecutionDigest``)."""
+    from lib import turn_lifecycle as turns
+    from lib.tasks_pkg.manager import task_user_id
+    turn = turns.get_turn(task['convId'], task['_turnId'], user_id=task_user_id(task))
+    projection = (turn or {}).get('projection') or {}
+    return projection.get('content'), projection.get('thinking')
+
+
+def preserve_suspended_working_view(task, *, turn_text=None, restart_settled=None):
     """Save an interrupted root Turn's working view through the archive owner.
 
     Continue restores it before composing context, so the resumed request
@@ -350,7 +387,14 @@ def preserve_suspended_working_view(task):
     from lib.tasks_pkg.manager._persist import _merge_tool_rounds
     from lib.agent_core.model_context_limits import MAX_ENTRY_BYTES, MAX_MESSAGES
     from lib.tasks_pkg.manager import task_user_id
-    rounds = _merge_tool_rounds(task)
+    if restart_settled is None:
+        from lib.turn_verdict import RESTART_ABORT_REASONS
+        restart_settled = task.get('_abort_reason') in RESTART_ABORT_REASONS
+    trimmed = _without_repeatable_cut_batch(task, messages, _merge_tool_rounds(task),
+                                            restart_settled=restart_settled)
+    if trimmed is None:
+        return
+    messages, rounds = trimmed
     boundary = _closed_working_view(messages, rounds, compacted=compacted)
     if boundary is None:
         return
@@ -373,8 +417,12 @@ def preserve_suspended_working_view(task):
     # This snapshot reuses an accepted handoff when there is one; no summary
     # cost is billed and a standalone checkpoint carries no summary at all.
     checkpoint_receipt = deepcopy(receipt) if compacted else {'status': 'completed'}
+    # Bind the view to the Turn text the resume compares: a lost event
+    # delivery leaves that text behind the live task's, and comparing the live
+    # text voided the view exactly when a fresh rebuild costs most.
     witness['executionDigest'] = resume_execution_digest(
-        task.get('content'), task.get('thinking'))
+        *(turn_text(task) if callable(turn_text) else turn_text if turn_text is not None
+          else (task.get('content'), task.get('thinking'))))
     checkpoint_receipt['resumeWitness'] = witness
     checkpoint_receipt['implementation'] = CHECKPOINT_IMPLEMENTATION
     checkpoint_receipt['trigger'] = 'checkpoint'

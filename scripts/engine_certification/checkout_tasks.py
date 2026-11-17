@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -36,7 +37,17 @@ def build(checkout: Path, build_root: Path, out: Path) -> int:
     build_root.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
     with engines._preparation_budget(engines.PREPARATION_TOTAL_TIMEOUT_SECONDS):
-        binary = engines._build(checkout, build_root, environment, build_root=build_root)
+        # Cargo locks its target, but snapshot synchronization precedes Cargo.
+        # Protect both, then detach the candidate before another run can rebuild it.
+        with engines._prepare_lock(build_root / '.build.lock'):
+            built = engines._build(checkout, build_root, environment, build_root=build_root)
+            candidate = out.parent / 'candidate'
+            candidate.mkdir()
+            binary = candidate / built.name
+            shutil.copy2(built, binary)
+            for library in ('libtofu_db.so', 'libtofu_db.dylib', 'tofu_db.dll'):
+                if (built.parent / library).is_file():
+                    shutil.copy2(built.parent / library, candidate / library)
     out.write_text(json.dumps({
         'binary': str(binary), 'compile_seconds': round(time.monotonic() - started, 1),
         'build_info': engines.build_identity(binary),

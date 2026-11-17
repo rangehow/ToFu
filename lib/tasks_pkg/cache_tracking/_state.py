@@ -66,6 +66,7 @@ class CacheState:
         'wire_fp', 'wire_static', 'wire_system', 'wire_markers', 'wire_bytes',
         'wire_field_bytes',
         'wire_region',
+        'wire_controls',
         'wire_routing',
         'total_cache_read', 'total_cache_write',
         'total_breaks', 'total_input_tokens',
@@ -154,6 +155,10 @@ class CacheState:
         # verdict can be gated on the hoisted region too, not just messages.
         # See wire_fingerprint.wire_byte_region.
         self.wire_region: dict | None = None
+        # Values of the cache-relevant request controls from the PREVIOUS
+        # round (wire_fingerprint.cache_relevant_controls), so a
+        # <bytes>controls divergence names which control changed.
+        self.wire_controls: dict | None = None
         # Cache-NAMESPACE routing fingerprint from the PREVIOUS round
         # ({'key','beta','endpoint'} — see wire_fingerprint.routing_fingerprint).
         # Anthropic prompt caching is namespaced by (upstream key + anthropic-beta
@@ -210,6 +215,12 @@ class _CacheInvocation:
     durable_boundary: int = 0
     task_id: str = ''
     baseline_ready: threading.Event = field(default_factory=threading.Event)
+    # Conversation-lane task carrying the staged durable baseline candidate;
+    # cleared at teardown so a retained completed scope holds no task.
+    task: dict | None = None
+    # Version-checked durable comparison baseline hydrated on a cold entry
+    # (no in-memory same-lane predecessor); consumed by round 1 only.
+    durable_baseline: dict | None = None
 
 
 _cache_invocation: ContextVar[_CacheInvocation | None] = ContextVar(
@@ -282,7 +293,8 @@ def cache_tracking_scope(task: dict):
         scope = _CacheInvocation(
             key, lane, sequence,
             state.last_cache_read_tokens if state else 0,
-            state.last_update_time if state else 0.0, task_id=task_id)
+            state.last_update_time if state else 0.0, task_id=task_id,
+            task=None if isolated else task)
         if state is not None:
             # Detector comparisons need the actual previous wire/source hashes,
             # not merely a cache-read count from a random sibling.
@@ -303,6 +315,7 @@ def cache_tracking_scope(task: dict):
             scope.predecessor_read = active_ancestor.predecessor_read
             scope.predecessor_time = active_ancestor.predecessor_time
             scope.durable_boundary = active_ancestor.durable_boundary
+            scope.durable_baseline = active_ancestor.durable_baseline
         else:
             if state is None and not isolated:
                 try:
@@ -311,6 +324,13 @@ def cache_tracking_scope(task: dict):
                         conv_id, user_id=user_id) or 0)
                 except Exception as exc:
                     logger.debug('[CacheTrack] durable predecessor unavailable: %s', exc)
+                try:
+                    from lib.tasks_pkg.cache_tracking._persist import (
+                        comparable_durable_baseline, read_cache_baseline)
+                    scope.durable_baseline = comparable_durable_baseline(
+                        read_cache_baseline(conv_id, user_id=user_id))
+                except Exception as exc:
+                    logger.debug('[CacheTrack] durable baseline unavailable: %s', exc)
             if not isolated:
                 try:
                     from lib.tasks_pkg.cache_tracking._persist import read_persisted_boundary
@@ -333,6 +353,7 @@ def cache_tracking_scope(task: dict):
         pending = []
         with _cache_lock:
             scope.completed = True
+            scope.task = None
             # Finish order is the predecessor sequence; active siblings are
             # never candidates, even when their last API call is newer.
             scope.sequence = next(_invocation_sequence)

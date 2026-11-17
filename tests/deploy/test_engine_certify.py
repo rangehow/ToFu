@@ -185,7 +185,9 @@ def test_a_failed_check_records_nothing_and_keeps_its_evidence(run, monkeypatch)
     assert {check['id']: check['verdict'] for check in result['checks']}['load'] == 'fail'
 
 
-def test_cargo_specs_keep_their_temporary_files_on_the_work_root_never_tmpfs(run, tmp_path, monkeypatch):
+@pytest.mark.parametrize('inherited_tmpdir', [False, True])
+def test_cargo_specs_keep_their_temporary_files_on_the_work_root_never_tmpfs(
+        run, tmp_path, monkeypatch, inherited_tmpdir):
     # In a cgroup without swap tmpfs pages cannot be reclaimed: the gate must not fill /dev/shm on the
     # production host while it runs the engine's fsync-heavy library specifications.
     certification_run, _ = run
@@ -194,6 +196,12 @@ def test_cargo_specs_keep_their_temporary_files_on_the_work_root_never_tmpfs(run
     tool.write_text('#!/bin/sh\nexit 0\n')
     tool.chmod(0o755)
     certification_run.environment['PATH'] = str(tool.parent)
+    # Fastpath keeps the caller's temporary-directory policy; the test must
+    # cover both policies without depending on the test runner's environment.
+    expected_tmpdir = str(tmp_path) if inherited_tmpdir else None
+    certification_run.environment.pop('TMPDIR', None)
+    if expected_tmpdir is not None:
+        certification_run.environment['TMPDIR'] = expected_tmpdir
     seen = {}
 
     def run_check(check_id, argv, *, environment=None, **_kwargs):
@@ -209,7 +217,7 @@ def test_cargo_specs_keep_their_temporary_files_on_the_work_root_never_tmpfs(run
     assert Path(seen['cargo-lib']).is_relative_to(certification_run.work)
     assert not Path(seen['cargo-lib']).is_relative_to('/dev/shm')
     assert not Path(seen['cargo-lib']).exists(), 'the private temporary directory is removed afterwards'
-    assert seen['cargo-fastpath'] is None
+    assert seen['cargo-fastpath'] == expected_tmpdir
 
 
 def test_the_fixture_is_required_and_must_be_a_settled_authority(tmp_path, capsys):
@@ -234,3 +242,168 @@ def test_a_work_root_off_the_fixtures_filesystem_is_refused_before_any_copy(tmp_
         assert 'different filesystems' in capsys.readouterr().err
     finally:
         shutil.rmtree(work_root, ignore_errors=True)
+
+
+def test_certification_inherits_declared_toolchain_without_project_secrets(tmp_path, monkeypatch):
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    cargo_home, rustup_home = tmp_path / 'cargo', tmp_path / 'rustup'
+    (cargo_home / 'bin').mkdir(parents=True)
+    rustup_home.mkdir()
+    cargo = cargo_home / 'bin/cargo'
+    cargo.write_text('#!/bin/sh\nexit 0\n')
+    cargo.chmod(0o755)
+    (repo / '.env').write_text(
+        f'CARGO_HOME={cargo_home}\nRUSTUP_HOME={rustup_home}\nAPI_KEY=project-secret\n')
+    monkeypatch.setattr(os, 'environ', {'PATH': '/usr/bin:/bin', 'HOME': str(tmp_path)})
+    run = gate.Certification(repo, 'c' * 40, tmp_path / 'fixture', tmp_path / 'work', [], '', [])
+    assert run.environment['CARGO_HOME'] == str(cargo_home)
+    assert run.environment['RUSTUP_HOME'] == str(rustup_home)
+    assert shutil.which('cargo', path=run.environment['PATH']) == str(cargo)
+    assert 'API_KEY' not in run.environment
+    assert not (run.checkout / '.env').exists()
+
+
+@pytest.mark.parametrize('local_available', [True, False])
+def test_compiler_cache_survives_changing_fixture_work_roots(tmp_path, monkeypatch, local_available):
+    from argparse import Namespace
+    from types import SimpleNamespace
+    from lib.project_mod import lanes
+
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    fixture = tmp_path / 'fixture'
+    (fixture / 'payload-segments').mkdir(parents=True)
+    (fixture / 'CONTROL').write_bytes(b'control')
+    local = tmp_path / 'local' if local_available else None
+    monkeypatch.setattr(lanes, 'repository', lambda _: SimpleNamespace(top=repo))
+    monkeypatch.setattr(lanes, 'local_root', lambda _: local)
+    monkeypatch.setattr(gate.subprocess, 'run', lambda *a, **k: SimpleNamespace(
+        returncode=0, stdout='a' * 40, stderr=''))
+    runs = [gate._prepare(Namespace(commit='HEAD', fixture=fixture,
+                                   work_root=tmp_path / name, previous_engine=[], note=''), [])
+            for name in ('first', 'second')]
+    first, second = runs
+    first.cache.mkdir(parents=True)
+    artifact = first.cache / 'warm-build'
+    artifact.write_bytes(b'compiled dependency')
+    shutil.rmtree(first.work.parent, ignore_errors=True)
+    if local_available:
+        assert second.cache == first.cache
+        assert (second.cache / artifact.name).read_bytes() == b'compiled dependency'
+        assert second.cache.is_relative_to(local)
+    else:
+        assert second.cache == tmp_path / 'second/cache'
+    assert first.work.parent != second.work.parent
+
+
+def test_shared_compiler_output_is_copied_under_lock_before_certification(tmp_path, monkeypatch):
+    from contextlib import contextmanager, nullcontext
+    from types import SimpleNamespace
+    from scripts.engine_certification import checkout_tasks
+
+    held = []
+
+    @contextmanager
+    def lock(path):
+        held.append(path)
+        yield
+        held.pop()
+
+    def build(_checkout, root, _environment, **_kwargs):
+        assert held == [root / '.build.lock']
+        binary = root / 'tofu-db'
+        binary.write_bytes(b'engine')
+        (root / 'libtofu_db.so').write_bytes(b'library')
+        return binary
+
+    def identity(path):
+        assert not held
+        return {'source_sha256': 'a' * 64}
+
+    engines = SimpleNamespace(_preparation_budget=lambda _: nullcontext(),
+                              PREPARATION_TOTAL_TIMEOUT_SECONDS=1200,
+                              _prepare_lock=lock, _build=build, build_identity=identity,
+                              source_fingerprint=lambda _: 'a' * 64)
+    monkeypatch.setattr(checkout_tasks, '_import_from', lambda *_: engines)
+    output = tmp_path / 'run/build.json'
+    output.parent.mkdir()
+    cache = tmp_path / 'cache'
+    assert checkout_tasks.build(tmp_path / 'checkout', cache, output) == 0
+    candidate = Path(json.loads(output.read_text())['binary'])
+    (cache / 'tofu-db').write_bytes(b'next engine')
+    (cache / 'libtofu_db.so').write_bytes(b'next library')
+    assert candidate.read_bytes() == b'engine'
+    assert (candidate.parent / 'libtofu_db.so').read_bytes() == b'library'
+    assert candidate.is_relative_to(output.parent)
+
+
+@pytest.mark.parametrize('rc, report, rerun, ok, rerun_count', [
+    (101, 'complete', 'pass', True, 2),
+    (101, 'complete', 'fail', False, 2),
+    (101, 'complete', 'empty', False, 2),
+    (101, 'incomplete', 'pass', False, 0),
+    (1, 'complete', 'pass', False, 0),
+    (101, 'count-mismatch', 'pass', False, 0),
+])
+def test_cargo_rechecks_only_complete_named_failures_and_requires_each_exact_case(
+        run, monkeypatch, rc, report, rerun, ok, rerun_count):
+    certification_run, _ = run
+    original = certification_run.evidence / 'cargo-lib.log'
+    failures = '    background_pack::tests::first\n    backup_copy::tests::second\n'
+    count = 3 if report == 'count-mismatch' else 2
+    original.write_text('build failed' if report == 'incomplete' else (
+        f'failures:\n{failures}\ntest result: FAILED. 10 passed; {count} failed; 0 ignored;'
+        ' 0 measured; 0 filtered out; finished in 1.00s\n'))
+    calls = []
+
+    def execute(check_id, argv, *, log_name, environment):
+        assert Path(environment['TMPDIR']).is_dir()
+        assert argv[-3:] == ['--', '--exact', '--test-threads=1']
+        calls.append(argv)
+        log = certification_run.evidence / log_name
+        passed = rerun == 'pass'
+        log.write_text('test result: ok. 1 passed; 0 failed; 0 ignored;' if passed else (
+            'test result: ok. 0 passed; 0 failed; 0 ignored;' if rerun == 'empty' else
+            'test result: FAILED. 0 passed; 1 failed; 0 ignored;'))
+        return (101 if rerun == 'fail' else 0), log
+
+    monkeypatch.setattr(certification_run, '_run', execute)
+    scratch = certification_run.work / 'scratch'
+    scratch.mkdir()
+    result, summary = certification_run._cargo_serial_recheck(
+        'cargo-lib', 'cargo', ['--lib'], rc, original, {'TMPDIR': str(scratch)})
+    assert result is ok
+    assert len(calls) == rerun_count
+    assert original.exists()
+    for item in summary.get('serial_reruns', []):
+        assert item['log']['sha256'] == certification.sha256_file(Path(item['log']['path']))
+    if calls:
+        assert [argv[3] for argv in calls] == ['background_pack::tests::first', 'backup_copy::tests::second']
+
+
+def test_cargo_gate_keeps_original_failure_and_serial_evidence_before_passing(run, monkeypatch):
+    from types import SimpleNamespace
+    certification_run, _ = run
+    monkeypatch.setattr(gate.native_engine, 'resolve_cargo_source',
+                        lambda _: SimpleNamespace(cargo='cargo'))
+
+    def execute(check_id, argv, *, environment, log_name=None):
+        if check_id == 'cargo-lib':
+            assert Path(environment['TMPDIR']).is_dir()
+        log = certification_run.evidence / (log_name or f'{check_id}.log')
+        first_failure = check_id == 'cargo-lib' and log_name is None
+        log.write_text('failures:\n    pack::tests::slow\n\n'
+                       'test result: FAILED. 20 passed; 1 failed;' if first_failure else
+                       'test result: ok. 1 passed; 0 failed;')
+        return (101 if first_failure else 0), log
+
+    monkeypatch.setattr(certification_run, '_run', execute)
+    assert gate.Certification.cargo(certification_run)
+    first, second = certification_run.checks
+    assert [first.id, second.id] == ['cargo-lib', 'cargo-fastpath']
+    assert first.verdict == 'pass' and first.rc == 101
+    assert first.summary['serial_reruns'][0]['test'] == 'pack::tests::slow'
+    assert first.summary['serial_reruns'][0]['rc'] == 0
+    assert first.log['sha256'] == certification.sha256_file(Path(first.log['path']))
+    assert not (certification_run.work / 'tmp-cargo-lib').exists()

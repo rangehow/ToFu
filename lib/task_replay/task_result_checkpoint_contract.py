@@ -15,9 +15,17 @@ The manager publishes last-read candidates only with terminal task snapshots;
 running checkpoints retain them in memory. Invocation teardown is not a
 second durability/settlement authority.
 
+A cache-baseline candidate is a JSON object of process-stable prompt-cache
+evidence whose canonical JSON stays within
+TASK_RESULT_CACHE_BASELINE_MAXIMUM_BYTES. It is an annex of the last-turn
+cache read: valid only beside a last-read candidate. Whenever the last read is
+written, the setting is replaced by the accompanying baseline, or removed when
+none accompanies it, so a stored baseline always describes the round of the
+stored last read. Peers that predate the annex keep it only in the row.
+
 A stored row retains the candidates its publishing checkpoint carried. A writer
 that rewrites an existing row without observing cache facts (the conversation
-worker exit receipt) omits both fields: authorities refuse candidates without
+worker exit receipt) omits all three fields: authorities refuse candidates without
 the cache-settings contract, and with it the rewrite would re-publish stale
 facts.
 """
@@ -40,8 +48,17 @@ CONVERSATION_CACHE_PREFIX_HWM_SETTING = "cachePrefixHWM"
 CONVERSATION_LAST_TURN_CACHE_READ_SETTING = "lastTurnCacheRead"
 TASK_RESULT_CACHE_FACT_MAXIMUM = 2_147_483_647
 
+TASK_CACHE_BASELINE_CANDIDATE_FIELD = "_cacheBaselineCandidate"
+TASK_RESULT_CACHE_BASELINE_FIELD = "cache_baseline"
+CONVERSATION_CACHE_BASELINE_SETTING = "cacheBaseline"
+TASK_RESULT_CACHE_BASELINE_MAXIMUM_BYTES = 4096
+
 
 __all__ = [
+    "CONVERSATION_CACHE_BASELINE_SETTING",
+    "TASK_CACHE_BASELINE_CANDIDATE_FIELD",
+    "TASK_RESULT_CACHE_BASELINE_FIELD",
+    "TASK_RESULT_CACHE_BASELINE_MAXIMUM_BYTES",
     "CONVERSATION_CACHE_PREFIX_HWM_SETTING",
     "CONVERSATION_LAST_TURN_CACHE_READ_SETTING",
     "TASK_CACHE_PREFIX_HWM_CANDIDATE_FIELD",

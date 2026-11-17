@@ -20,9 +20,10 @@
 **   TOFU_FAULT_SEED=S                 seed for the torn cut
 **   TOFU_FAULT_FAIL_WAL_WRITE=N       the Nth WAL xWrite fails with
 **                                     SQLITE_IOERR_WRITE and writes nothing
-** SQL functions on the loading connection: tofu_fault_wal_writes() and
-** tofu_fault_syncs() return the xWrite calls that reached WAL files and the
-** xSync calls on any file.
+**   TOFU_FAULT_FAIL_DB_WRITE=N        the same for the Nth database xWrite
+** SQL functions on the loading connection: tofu_fault_wal_writes(),
+** tofu_fault_db_writes() and tofu_fault_syncs() return the xWrite calls that
+** reached WAL files and main database files, and the xSync calls on any file.
 */
 #include "sqlite3ext.h"
 SQLITE_EXTENSION_INIT1
@@ -45,6 +46,7 @@ struct FaultFile {
   sqlite3_file base;
   sqlite3_file *real;
   int is_wal;
+  int is_db;
   sqlite3_int64 synced_size;
   Pending *head;
   Pending *tail;
@@ -53,8 +55,8 @@ struct FaultFile {
 
 static sqlite3_vfs fault_vfs;
 static FaultFile *open_files;
-static long long syncs, wal_writes;
-static long long loss_at_sync, loss_at_write, fail_wal_write;
+static long long syncs, wal_writes, db_writes;
+static long long loss_at_sync, loss_at_write, fail_wal_write, fail_db_write;
 static int mode; /* 0 drop, 1 torn, 2 kill */
 static unsigned long long seed;
 
@@ -162,6 +164,10 @@ static int fault_write(sqlite3_file *handle, const void *data, int amount, sqlit
   if (file->is_wal) {
     wal_writes++;
     if (fail_wal_write && wal_writes == fail_wal_write) return SQLITE_IOERR_WRITE;
+  }
+  if (file->is_db) {
+    db_writes++;
+    if (fail_db_write && db_writes == fail_db_write) return SQLITE_IOERR_WRITE;
   }
   pending = calloc(1, sizeof(*pending));
   pending->offset = offset;
@@ -289,6 +295,7 @@ static int fault_open(sqlite3_vfs *vfs, const char *name, sqlite3_file *handle, 
   }
   file->base.pMethods = &fault_io_methods;
   file->is_wal = (flags & SQLITE_OPEN_WAL) != 0;
+  file->is_db = (flags & SQLITE_OPEN_MAIN_DB) != 0;
   file->real->pMethods->xFileSize(file->real, &file->synced_size);
   file->next_file = open_files;
   open_files = file;
@@ -313,6 +320,11 @@ static void wal_write_count(sqlite3_context *context, int argc, sqlite3_value **
   sqlite3_result_int64(context, wal_writes);
 }
 
+static void db_write_count(sqlite3_context *context, int argc, sqlite3_value **argv) {
+  (void)argc; (void)argv;
+  sqlite3_result_int64(context, db_writes);
+}
+
 static void sync_count(sqlite3_context *context, int argc, sqlite3_value **argv) {
   (void)argc; (void)argv;
   sqlite3_result_int64(context, syncs);
@@ -330,10 +342,12 @@ int sqlite3_tofufaultvfs_init(sqlite3 *db, char **error, const sqlite3_api_routi
   SQLITE_EXTENSION_INIT2(api);
   sqlite3_create_function(db, "tofu_fault_wal_writes", 0, SQLITE_UTF8, 0, wal_write_count, 0, 0);
   sqlite3_create_function(db, "tofu_fault_syncs", 0, SQLITE_UTF8, 0, sync_count, 0, 0);
+  sqlite3_create_function(db, "tofu_fault_db_writes", 0, SQLITE_UTF8, 0, db_write_count, 0, 0);
   if (sqlite3_vfs_find("tofu-fault")) return SQLITE_OK_LOAD_PERMANENTLY;
   loss_at_sync = env_number("TOFU_FAULT_POWER_LOSS_AT_SYNC");
   loss_at_write = env_number("TOFU_FAULT_POWER_LOSS_AT_WRITE");
   fail_wal_write = env_number("TOFU_FAULT_FAIL_WAL_WRITE");
+  fail_db_write = env_number("TOFU_FAULT_FAIL_DB_WRITE");
   seed = (unsigned long long)env_number("TOFU_FAULT_SEED") * 2654435761ULL + 1;
   chosen = getenv("TOFU_FAULT_MODE");
   mode = chosen && !strcmp(chosen, "torn") ? 1 : chosen && !strcmp(chosen, "kill") ? 2 : 0;

@@ -31,6 +31,7 @@ import getpass
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import socket
@@ -196,16 +197,20 @@ def failed_test_files(junit: Path, checkout: Path) -> list[str]:
 
 class Certification:
     def __init__(self, repo: Path, commit: str, fixture: Path, work_root: Path,
-                 previous: list[Path], note: str, argv: list[str]):
+                 previous: list[Path], note: str, argv: list[str], *, cache_root: Path | None = None):
         self.repo, self.commit, self.fixture = repo, commit, fixture
         self.run_id = f'{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{commit[:12]}'
         self.work = work_root / 'runs' / self.run_id
-        self.cache = work_root / 'cache'
+        # Compiler inputs need no hard links to the fixture. Keep their incremental
+        # cache stable even when automatic certification selects a temporary work root.
+        self.cache = cache_root if cache_root is not None else work_root / 'cache'
         self.evidence = certification.certifications_root(repo) / 'runs' / self.run_id
         self.checkout = self.work / 'checkout'
         self.previous_paths, self.note, self.argv = previous, note, argv
         self.checks: list[Check] = []
-        self.environment = {key: value for key, value in os.environ.items() if key not in SECRET_ENGINE_KEYS}
+        # The detached checkout has no .env; resolve declared toolchain roots before spawning children.
+        environment = {key: value for key, value in os.environ.items() if key not in SECRET_ENGINE_KEYS}
+        self.environment = native_engine.resolve_cargo_source(environment, root=repo).environment
 
     # ── process plumbing ──────────────────────────────────────────────────
     def _run(self, check_id: str, argv: list, *, log_name: str | None = None, cwd: Path | None = None,
@@ -264,10 +269,7 @@ class Certification:
                             output=str(output)).verdict == 'pass'
 
     def cargo(self) -> bool:
-        cargo = shutil.which('cargo', path=self.environment.get('PATH', os.defpath))
-        if not cargo:
-            installed = Path(self.environment.get('CARGO_HOME') or Path.home() / '.cargo') / 'bin/cargo'
-            cargo = str(installed) if installed.is_file() else None
+        cargo = native_engine.resolve_cargo_source(self.environment).cargo
         manifest = ['--manifest-path', 'packages/tofu-db/Cargo.toml', '--lib', '--locked']
         environment = {**self.environment, 'CARGO_TARGET_DIR': str(self.cache / 'cargo-test-target')}
         results = []
@@ -285,13 +287,45 @@ class Certification:
             try:
                 if scratch:
                     scratch.mkdir(parents=True, exist_ok=True)
-                rc, log = self._run(check_id, argv, environment={
-                    **environment, **({'TMPDIR': str(scratch)} if scratch else {})})
+                check_environment = {**environment, **({'TMPDIR': str(scratch)} if scratch else {})}
+                rc, log = self._run(check_id, argv, environment=check_environment)
+                ok, summary = self._cargo_serial_recheck(
+                    check_id, cargo, manifest, rc, log, check_environment)
             finally:
                 if scratch:
                     shutil.rmtree(scratch, ignore_errors=True)
-            results.append(self._record(check_id, started, at, rc == 0, argv=argv, rc=rc, log=log).verdict)
+            results.append(self._record(check_id, started, at, ok, argv=argv, rc=rc, log=log,
+                                        **summary).verdict)
         return results == ['pass', 'pass']
+
+    def _cargo_serial_recheck(self, check_id, cargo, manifest, rc, log, environment) -> tuple[bool, dict]:
+        """Resolve only complete, named Rust test failures; keep both runs as evidence."""
+        summary = {'first_rc': rc, 'serial_reruns': []}
+        if rc == 0:
+            return True, summary
+        report = re.findall(
+            r'(?:^|\n)failures:\n((?:[ \t]+[A-Za-z0-9_:]+\n)+)\n'
+            r'test result: FAILED\. \d+ passed; (\d+) failed;', log.read_text(errors='replace'))
+        if rc != 101 or len(report) != 1:
+            return False, summary
+        names = report[0][0].split()
+        if len(names) != int(report[0][1]) or len(set(names)) != len(names):
+            return False, summary
+        passed = True
+        for index, name in enumerate(names):
+            argv = [cargo, 'test', *manifest, name, '--', '--exact', '--test-threads=1']
+            rerun_rc, rerun_log = self._run(check_id, argv, environment=environment,
+                                          log_name=f'{check_id}-serial-{index}.log')
+            # A removed/renamed test that collects zero cases must never certify.
+            verdicts = re.findall(r'test result: (ok|FAILED)\. (\d+) passed; (\d+) failed;',
+                                  rerun_log.read_text(errors='replace'))
+            passed = (rerun_rc == 0 and verdicts == [('ok', '1', '0')]) and passed
+            summary['serial_reruns'].append({'test': name, 'argv': [str(arg) for arg in argv],
+                'rc': rerun_rc, 'log': {'path': str(rerun_log),
+                                      'sha256': certification.sha256_file(rerun_log)}})
+        summary['classification'] = ('load/timing flake: passed serially' if passed
+                                     else 'failed serially: a real failure')
+        return passed, summary
 
     def ff_native(self, engine: Path) -> bool:
         started, at = time.monotonic(), _utc()
@@ -576,4 +610,5 @@ def _prepare(args, argv: list[str]) -> Certification:
         if not path.expanduser().is_file():
             raise CertificationError(f'--previous-engine {path} is not a file')
     return Certification(repo, resolved.stdout.strip(), fixture, work_root,
-                         [path.expanduser().resolve() for path in args.previous_engine], args.note, argv)
+                         [path.expanduser().resolve() for path in args.previous_engine], args.note, argv,
+                         cache_root=local / 'engine-certify/cache' if local else None)

@@ -61,6 +61,7 @@ def test_length_partial_is_continued_and_published_whole(report_case):
     assert seen[1][-2]['content'] == first
     assert 'tool_calls' not in seen[1][-2]
     assert seen[1][-1]['role'] == 'user'
+    assert seen[1][-1]['_contextInjectionId'] == 'paper_length_continuation'
     assert 'EXACTLY where it stopped' in seen[1][-1]['content']
     # Both pieces stream live; the joined body needs no convergence reset.
     assert _deltas(task) == [(first, 0), (rest, 1)]

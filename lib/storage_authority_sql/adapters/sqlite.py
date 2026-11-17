@@ -23,6 +23,9 @@ from lib.storage.startup_control import StartupProgressCallback
 from lib.storage.storage_metric_policy import bounded_storage_metric_sample_capacity
 from lib.log import get_logger
 from lib.storage_authority_sql.adapters.base import Backend, Operation, receipt_cacheable
+from lib.storage_authority_sql.adapters.sqlite_checkpointer import (
+    WAL_AUTOCHECKPOINT_FRAMES, WalCheckpointer,
+)
 from lib.storage_authority_sql.adapters.sqlite_wal_coalesce import (
     WalCoalescing, connection_target, wal_coalescing,
 )
@@ -408,6 +411,9 @@ class _FairWriter:
         # Fast-path shipper hook: invoked after every successful COMMIT on
         # the writer thread so the shadow tracks the front in near-real-time.
         self._on_commit: Any = None
+        # WalCheckpointer hook, run on this thread with the writer connection
+        # after each batch's jobs are resolved and before the next is taken.
+        self._between_batches: Any = None
         # Commit-latency ground truth (seconds), sampled for the metrics
         # surface — this is how the fast path's measured win stays honest.
         self._metric_sample_capacity = bounded_storage_metric_sample_capacity(
@@ -712,6 +718,11 @@ class _FairWriter:
 
     def _run(self) -> None:
         while True:
+            if self._between_batches is not None:
+                try:
+                    self._between_batches(self._connection)
+                except sqlite3.Error:
+                    logger.warning('SQLite writer-side WAL checkpoint failed', exc_info=True)
             batch = self._take_batch()
             if batch is None:
                 return
@@ -1339,6 +1350,7 @@ class SQLiteBackend(Backend):
         self._authority_storage_class = 'unknown'
         self._authority_filesystem_type = 'unknown'
         self._shipper: Any = None
+        self._checkpointer: WalCheckpointer | None = None
         self._anchor_connection: sqlite3.Connection | None = None
         self._backup_lock = threading.Lock()
         self._turn_search_projection: Any = None
@@ -1379,8 +1391,20 @@ class SQLiteBackend(Backend):
                 # The shipper owns EVERY checkpoint; an automatic one would
                 # break the shadow's byte-prefix invariant.
                 connection.execute('PRAGMA wal_autocheckpoint=0')
+            elif self._wal_coalescing.vfs is not None:
+                # WalCheckpointer copies the WAL beside the writer, so no
+                # writer COMMIT runs a checkpoint.
+                connection.execute('PRAGMA wal_autocheckpoint=0')
             else:
-                connection.execute('PRAGMA wal_autocheckpoint=4096')
+                connection.execute(
+                    f'PRAGMA wal_autocheckpoint={WAL_AUTOCHECKPOINT_FRAMES}')
+        return connection
+
+    def _connect_checkpointer(self) -> sqlite3.Connection:
+        connection = self._connect(query_only=True)
+        # The checkpoint syncs the database before its backfill restarts the
+        # WAL, as the writer's own checkpoint did.
+        connection.execute('PRAGMA synchronous=FULL')
         return connection
 
     @property
@@ -1615,6 +1639,10 @@ class SQLiteBackend(Backend):
                 'authority_uuid': self._authority_uuid,
                 'shadow_dir': str(self._fastpath_decision.shadow_dir),
             })
+        elif self._wal_coalescing.vfs is not None:
+            self._checkpointer = WalCheckpointer(self._connect_checkpointer)
+            self._writer._on_commit = self._checkpointer.notify_commit
+            self._writer._between_batches = self._checkpointer.finish_on_writer
         self._preflight = report.as_dict()
         self._writer.worker_control = self.worker_control
         self._reads_started = True
@@ -1857,6 +1885,9 @@ class SQLiteBackend(Backend):
         fastpath_status = dict(self._preflight_fastpath)
         if self._shipper is not None:
             fastpath_status['shipper'] = self._shipper.status()
+        checkpointer = (
+            self._checkpointer.status() if self._checkpointer is not None
+            else {'active': False})
         return {
             'backend': self.name,
             'sqlite_version': sqlite3.sqlite_version,
@@ -1877,6 +1908,7 @@ class SQLiteBackend(Backend):
             'writer': writer,
             'fastpath': fastpath_status,
             'wal_coalescing': self._wal_coalescing.report(),
+            'wal_checkpointer': checkpointer,
             'deferred_schema': {
                 'automatic_build': 'fresh-authority-only',
                 'missing_indexes': list(self._deferred_schema_missing),
@@ -2195,6 +2227,9 @@ class SQLiteBackend(Backend):
         if self._writer is not None:
             self._writer.close()
             self._writer = None
+        if self._checkpointer is not None:
+            self._checkpointer.close()
+            self._checkpointer = None
         if self._shipper is not None:
             # After the writer drains, the WAL tail is stable — ship it so a
             # graceful stop leaves a fully-current shadow.

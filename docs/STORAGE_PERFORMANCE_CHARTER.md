@@ -2348,15 +2348,12 @@ Verdict:
 - **Throughput:** +2-3% at 3x and +4-7% at 5x, with about 6% more events at
   5x. That is 98% of TofuDB's throughput at 3x and 94-96% at 5x, against
   95% and 89-91% stock.
-- **`worker_job.complete` is still bimodal.** p50 improves at 1x and 5x but
-  is 1,978 ms in coalescing r2 at 3x (stock 192-234 ms). Its p99 improves at
-  every scale but stays at seconds. These commits queue behind the herd, so
-  their spread follows where the herd lands.
-- **One regression: `turn.create_pair` at 1x**, 444-517 against 106-154 ms
-  p50 in both rounds; it is better at 3x and 5x. All 21 Turns start at once
-  at the first phase, right after the faster seed. The likeliest cause is
-  that the seed's WAL is still being checkpointed when they start. That is
-  not verified.
+- **`worker_job.complete` was bimodal.** p50 improved at 1x and 5x but was
+  1,978 ms in coalescing r2 at 3x (stock 192-234 ms).
+- **`turn.create_pair` at 1x regressed**, 444-517 against 106-154 ms p50
+  in both rounds.
+- Both had one cause, an inline checkpoint holding the writer; the next
+  section finds it and removes most of its cost.
 - **TofuDB still wins every write-bound operation.** At p50 it is 1.9-2.5x
   faster for events, 1.3-30x for `complete`, 3-5x for `claim_next` and
   16-45x for the settlement herd. The remaining Sidecar gap is SQLite's
@@ -2384,6 +2381,196 @@ for C in $A $PWD $A $PWD; do
   cp -r $R/results $TMPDIR/$(basename $R)-results && rm -rf -- "$R"
 done
 ```
+
+### Checkpoint page runs: the two regressions (2026-11-17)
+
+**Problem:** why did coalescing regress `turn.create_pair` at 1x and leave
+`worker_job.complete` bimodal?
+
+**Diagnosis.** Three diagnostic legs (seed 0.2, scales 1/3, 90 s, same
+volume) logged every writer COMMIT (duration, batch, faultfs call deltas)
+and every in-scope `pread`/`pwrite`/`fsync`/`fcntl` lock/`mmap` with its
+duration. Findings:
+
+- **No checkpoint runs in the background.** With the fast path off the
+  writer sets `wal_autocheckpoint=4096`, so SQLite checkpoints inside the
+  COMMIT that crosses 4,096 frames, on the writer thread. Nothing is "still
+  checkpointing" after the seed; the stated hypothesis was wrong in that
+  form.
+- **The seed leaves checkpoint debt to whichever commit crosses next.** The
+  seed's frame stream is identical in both arms, but the Turn search
+  projection's `outbox_ack` commits interleave with it asynchronously, so
+  the crossing commit moves. In one coalescing leg and one stock leg it was
+  a seed `record.put` 0.4-0.5 s before the phase (create_pair p50 47 and
+  142 ms). In another coalescing leg it was the first `turn.create_pair`
+  batch: that COMMIT took 340 ms with 1,817 database-page writes and three
+  syncs, and all 21 create_pairs waited (p50 378 ms, p99 406). Faster seed
+  commits made the coalescing arm leave the crossing to the burst more
+  often. The stock arm does it too: stock r1 below shows 516 ms.
+- **The checkpoint's cost is its page writes.** It copies one page per
+  `pwrite` at ~0.2 ms each. Its WAL reads cost ~3 µs each, its syncs
+  under 30 ms, and locks and mmap took no measurable time. A 3,000-page
+  checkpoint held the writer 0.6-0.9 s; one after the 3x herd copied 12,293
+  pages and held it 6.2 s (2.7 s of `pwrite`).
+- **`complete` is bimodal for the same reason.** Completions queue behind
+  the phase-stop herd. When the herd's batch crosses the threshold, every
+  completion behind it waits for the checkpoint (p90 7.6 s against p50
+  90 ms in one leg).
+- Ruled out: checkpoint starvation (every large checkpoint backfilled
+  thousands of frames), lock waits (`fcntl` on the -shm took ~0 ms), shm
+  growth (16 one-byte writes per new region, ~1 ms) and writer-queue
+  fairness (the stalled jobs were running or queued behind a single COMMIT,
+  not reordered).
+- Not explained: in the first diagnostic pair, large COMMITs of both arms
+  spent 1.2-3.3 s between the commit's WAL sync and the checkpoint's with no
+  in-scope I/O logged. The later legs, which also timed locks and mmap, did
+  not show such a gap.
+
+**Fix.** The shim joins a checkpoint's adjacent page writes into one call
+([STORAGE.md](STORAGE.md), "The shim also writes each checkpoint run of
+adjacent pages in one call"). In the diagnostic legs the slowest COMMIT
+fell from 2.4-6.2 s to 0.86 s, and the first-burst checkpoint from 1,817
+write calls (340 ms) to 502 (133 ms).
+
+**ABAB.** Same harness and shape as the section above but 60 s per scale:
+stock (`50c81c53da`) r1, fixed (`fc985a1b2c`) r1, stock r2, fixed r2, in
+`FMG/your-username/tofu-sqlite-regress-scratch-20261117/` (removed). Host
+load (1 min) was 6.9-16.4. All legs had 0 failed requests, and production's
+`app.log` showed no `authority is unavailable` retry before or during any
+leg (the 15:23 `conversation.search` retry last logged at 15:42:55).
+
+p50/p99 ms, stock r1 · fixed r1 · stock r2 · fixed r2:
+
+| op | scale | stock r1 | fixed r1 | stock r2 | fixed r2 |
+|---|---|---|---|---|---|
+| turn.create_pair | 1x | 516/521 | 39/82 | 111/157 | 40/84 |
+| | 3x | 330/350 | 64/158 | 170/430 | 317/343 |
+| | 5x | 518/672 | 156/216 | 540/709 | 178/213 |
+| worker_job.complete | 1x | 75/3,635 | 403/435 | 161/3,897 | 27/106 |
+| | 3x | 297/328 | 125/677 | 1,150/1,174 | 134/1,152 |
+| | 5x | 1,782/6,463 | 188/1,979 | 3,325/4,939 | 1,234/1,799 |
+| phase-stop settlement herd | 1x | 3,754/3,770 | 143/537 | 3,975/3,988 | 169/175 |
+| | 3x | 7,619/7,643 | 1,325/1,355 | 6,260/7,227 | 1,501/1,522 |
+| | 5x | 5,815/12,292 | 2,405/2,526 | 6,202/11,125 | 1,592/2,611 |
+| turn.event.record | 1x | 11.4/211 | 2.9/155 | 11.4/164 | 2.9/143 |
+| | 3x | 13.6/575 | 2.9/183 | 13.7/487 | 2.9/141 |
+| | 5x | 24.2/1,273 | 3.2/419 | 23.1/1,560 | 3.1/432 |
+| worker_job.claim_next | 5x | 386/518 | 129/138 | 388/1,317 | 145/158 |
+| worker_job.heartbeat | 5x | 40/1,364 | 2.3/182 | 39/358 | 1.9/80 |
+| record.get | 5x | 0.3/4 | 0.3/4 | 0.3/4 | 0.3/5 |
+| completed ops/s | 1x / 3x / 5x | 334/981/1,496 | 341/1,003/1,652 | 335/973/1,512 | 341/1,003/1,642 |
+| events (5x) | | 4,206 | 4,567 | 4,151 | 4,588 |
+| seed (229 MB) | | 97 s | 17 s | 99 s | 15 s |
+| in-scope write calls (leg) | | 1,068,275 | 261,805 | 1,064,986 | 251,983 |
+
+Verdict:
+
+- **`turn.create_pair` at 1x is fixed:** 39-40 ms against stock's 111-516.
+  At 3x and 5x the fixed arm is at or below stock in three of four cells;
+  fixed r2 at 3x (317 ms) is inside stock's 170-330 range.
+- **`worker_job.complete` is no longer seconds-bimodal, but its 1x/5x p50
+  still moves with checkpoint placement.** Every fixed cell is at or below
+  the matching stock round except 1x r1 (403 against 75-161 ms), where a
+  checkpoint landed right after the 1x herd. Its worst p50 fell from
+  1,978 ms (previous coalescing) and 3,325 ms (stock) to 1,234 ms; the
+  remaining spread is the checkpoint the herd's commit triggers, now
+  0.1-0.9 s instead of 0.3-6 s.
+- **The earlier gains hold and grow:** events 4-8x faster at p50 with p99
+  27-73% lower, the settlement herd 2.4-26x faster, `claim_next` 2.7-3x,
+  heartbeats 17-21x at 5x, seeding 6x, throughput +2-3% at 3x and +8-10%
+  at 5x, and write calls 4.1x fewer than stock. Reads are unchanged.
+- What is left of the stall is SQLite's design: one writer that runs the
+  checkpoint inline, with page runs that are only as long as the B-tree
+  allows (about 12 pages on this workload).
+
+Reproduce: as in the section above, with `--duration 60`; the diagnostic
+commit log and call log were throwaway patches and are not in the tree.
+
+### Checkpoints beside the writer (2026-11-17)
+
+**Problem:** `worker_job.complete` still waited behind the inline
+checkpoint a phase-stop herd's commit triggered (1x fixed r1 above: 403 ms
+against stock 75-161).
+
+**Design and what the diagnostic legs showed** (seed 0.2, 60 s, per-commit
+log with monotonic times, per-thread `pread`/`pwrite`/sync/lock/mmap log,
+`py-spy dump --native` of the writer; decision in
+[STORAGE.md](STORAGE.md), "Checkpoints run beside the writer"):
+
+- A writer-thread checkpoint taken when the queue is empty cannot help:
+  completions start about 1 ms after their settlement commit is
+  acknowledged (+0.473 s commit, completions from +0.474 s in the earlier
+  leg), so the writer is idle exactly when they arrive.
+- First version, a `PASSIVE` checkpointer on its own connection copying one
+  page per call: the WAL never restarted during the seed and reached
+  168,751 frames. The writer then blocked in `walIndexAppend` (a page
+  fault on the -shm mapping) each time it entered a new 32 KiB wal-index
+  region: commits that crossed a region boundary took 1.08-1.18 s, all
+  others p50 1.4 ms, and `turn.create_pair` at 1x took 1.16-1.27 s in
+  both ABAB rounds. This is the 2026-11-15 rejection's failure.
+- With the shim coalescing every checkpoint (concurrent passes 12x
+  faster) the WAL still grew to 168,751 frames: SQLite restarts it only at
+  a write transaction that begins fully backfilled, and a back-to-back
+  writer always begins while the checkpointer copies its previous commit.
+- With the writer finishing a due checkpoint's remainder (< 4,096 frames)
+  between batches, the WAL peaked at 20,490-40,962 frames (single herd
+  batches) and restarted throughout; `create_pair` at 1x fell to 40 ms.
+- What remains: the concurrent checkpoint's writes and the writer's
+  database reads contend in the DolphinFS client. In one 1x leg the
+  completion batch held the writer 404 ms (193 ms of COMMIT) while a
+  588 ms, 4,407-frame pass ran, and single 128 KiB checkpoint writes took
+  up to 0.66 s at host load ~150. Writer-side remainders took up to
+  0.53 s.
+
+**ABAB** (stock `50c81c53da` against this change), 1x/3x/5x, 60 s, in
+`FMG/your-username/tofu-sqlite-ckpt-scratch-20261117/` (removed). Rounds
+alternated order: a1 stock-new, a2 new-stock, a3 stock-new, a4
+new-stock. Host load (1 min) moved between 5 and 211 during legs, far above
+the 7-16 of the section above, so single cells are noisy. All legs had 0
+failed requests except stock a2 at 3x (18 `database_timeout`). p50 ms:
+
+| op | scale | stock a1 / a2 / a3 / a4 | new a1 / a2 / a3 / a4 |
+|---|---|---|---|
+| turn.create_pair | 1x | 324 / 469 / 642 / 171 | 31 / 41 / 37 / 41 |
+| | 3x | 162 / 1,326 / 191 / 389 | 55 / 61 / 396 / 384 |
+| | 5x | 529 / 3,172 / 302 / 442 | 227 / 154 / 446 / 250 |
+| worker_job.complete | 1x | 94 / 1,287 / 93 / 117 | 49 / 35 / 142 / 434 |
+| | 3x | 1,199 / 3,984 / 1,324 / 246 | 465 / 242 / 139 / 673 |
+| | 5x | 1,766 / 3,172 / 4,238 / 5,235 | 1,083 / 597 / 189 / 664 |
+| phase-stop settlement herd | 1x | 2,185 / 7,916 / 2,056 / 1,130 | 290 / 153 / 338 / 184 |
+| | 3x | 6,527 / 19,695 / 6,333 / 7,702 | 1,018 / 501 / 959 / 1,675 |
+| | 5x | 8,165 / 7,062 / 7,855 / 6,143 | 1,828 / 923 / 2,165 / 2,592 |
+| turn.event.record | 1x | 15 / 66 / 11 / 11 | 2.8 / 20 / 2.9 / 4.1 |
+| | 3x | 14 / 689 / 13 / 13 | 3.0 / 2.9 / 3.1 / 87 |
+| | 5x | 27 / 1,697 / 25 / 23 | 281 / 3.1 / 3.3 / 191 |
+| worker_job.claim_next | 5x | 467 / 4,281 / 373 / 386 | 131 / 134 / 226 / 815 |
+| worker_job.heartbeat | 5x | 39 / 1,349 / 47 / 48 | 69 / 2.1 / 2.0 / 156 |
+
+Verdict:
+
+- **`turn.create_pair` at 1x is 31-41 ms in every round** against stock's
+  171-642.
+- **The settlement herd is 2.4-52x faster in every cell, and
+  `worker_job.complete` at 5x is 1.6-22x faster in every round.**
+- **`worker_job.complete` at 1x and 3x is not yet a clean win:** it beat
+  the paired stock leg in five of eight cells, but a3 1x (142 against 93),
+  a4 1x (434 against 117) and a4 3x (673 against 246) are worse. Its
+  spread (35-673 ms) is smaller than stock's (93-3,984) but it is still
+  not flat; the diagnostic legs place it on DolphinFS contention between
+  the concurrent copy and the writer, and on writer-side remainders.
+- Streamed events are 2.7-8x faster at p50 in nine of twelve cells (stock
+  a2 aside, which collapsed); the three slower new cells (a1 5x, a4 3x/5x,
+  87-281 ms) ran while host load rose past 119-211.
+- The comparison with the previous coalescing build (`dd9df40406`) was
+  not run: host load stayed at 230-310 afterwards and production showed
+  storage retries from 20:01.
+- Production `app.log`: no `authority is unavailable` retry recurred.
+  Storage retries appeared at 18:57:09 (`event.append_batch`, during stock
+  a2), 19:22:25 (after new a4) and 19:33:28-36 (during a diagnostic leg),
+  and from 20:01 with no run of this change active, all at host load
+  150-300. The pre-leg log gate skipped two legs at 18:59.
+
+Reproduce: the ABAB legs as above with `--duration 60 --scales 1,3,5`.
 
 ## TofuDB hot paths on the production DolphinFS client (2026-11-15)
 

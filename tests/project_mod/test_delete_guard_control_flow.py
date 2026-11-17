@@ -72,12 +72,10 @@ class TestReportedCommand:
     def test_allowed_when_the_command_starts_with_a_tmpdir(self):
         assert _verdict(_REPORTED, _SCRATCH) is None
 
-    def test_refused_when_tmpdir_may_be_unset(self):
-        # Without TMPDIR the first printf may write /gh_hdr, and the delete
-        # then removes that top-level path: the refusal names the variable.
-        detail = _verdict(_REPORTED, {})
-        assert detail is not None and detail[1] == 'shallow'
-        assert '$TMPDIR' in detail[2] and '/gh_hdr' in detail[2]
+    def test_allowed_when_tmpdir_is_unset(self):
+        # Without TMPDIR the delete names /gh_hdr, which holds nothing the
+        # command did not create itself (owner decision 2026-11-17).
+        assert _verdict(_REPORTED, {}) is None
 
     def test_cwd_less_pre_hook_leaves_it_to_the_executor(self):
         assert _catastrophic_delete_detail(_REPORTED, environment=None) is None
@@ -177,16 +175,28 @@ class TestFunctionsRunWhereTheyAreCalled:
         # `local` on one path only: the other path's global assignment stays.
         f'f() {{ if test -n "$C"; then local X=/tmp/a; fi; X=/; }}; f; {_RM} -rf "$X"',
         f'f() {{ X=/; return; X=/tmp/a; }}; f; {_RM} -rf "$X"',
-        f'g() {{ {_RM} -rf /; }}',
         f'function g {{ {_RM} -rf /mnt; }}; g',
+        f'g() {{ {_RM} -rf /*; }}; export -f g; bash -c g',
+        # bash calls this one itself, for any command it cannot find.
+        f'command_not_found_handle() {{ {_RM} -rf /*; }}; tofu-missing-command',
     ])
     def test_refused(self, command):
         assert _verdict(command) is not None, command
 
-    def test_a_recursive_function_is_refused_when_the_command_deletes(self):
-        detail = _verdict(f'f() {{ {_RM} -rf "$1"; f x; }}; f /tmp/a')
-        assert detail is not None and detail[1] == 'unproven'
-        assert 'calls itself' in detail[2]
+    @pytest.mark.parametrize('command', [
+        f'g() {{ {_RM} -rf /; }}',
+        # Judged where it is defined, "$1" would be empty and name /.
+        f'clean() {{ {_RM} -rf "$1"/*; }}; clean build',
+    ])
+    def test_a_definition_runs_nothing(self, command):
+        assert _verdict(command) is None, command
+
+    def test_a_recursive_call_is_not_followed(self):
+        # The first call is judged; the call it makes of itself does not run
+        # the body again, and judgement goes on after it.
+        assert _verdict(f'f() {{ {_RM} -rf "$1"; f x; }}; f /tmp/a') is None
+        assert _verdict(f'f() {{ {_RM} -rf "$1"; f x; }}; f /') is not None
+        assert _verdict(f'f() {{ f; }}; f; {_RM} -rf /') is not None
         assert _verdict('f() { echo; f; }; f') is None
 
     def test_a_body_that_redefines_its_name_is_not_recursion(self):
@@ -200,15 +210,18 @@ class TestDerivedValuesKeepTheirCollapse:
     unproven name collapsed to empty as a whole, so after ``E="$D/x"`` the
     operand ``"$E"`` was judged empty while the shell deletes ``/x``."""
 
-    def test_derived_value_is_judged_by_its_collapse(self):
-        detail = _verdict(f'D=$(some_cmd); E="$D/x"; {_RM} -rf "$E"')
-        assert detail is not None and detail[1] == 'unproven'
-        assert '$D' in detail[2] and '/x' in detail[2]
+    def test_derived_value_keeps_its_collapse(self):
+        # The resolver (the desktop agent's share-root check) reads "$E" as
+        # the /x it is when D is empty; the guard does not assume D empty.
+        command = f'D=$(some_cmd); E="$D/x"; {_RM} -rf "$E"'
+        [(_operand, paths, unproven)] = resolve_delete_targets(command, _WS, environment={})
+        assert paths == ['/x'] and unproven == {'D'}
+        assert _verdict(command) is None
 
     @pytest.mark.parametrize('command', [
-        f'E="$TOFU_DELGUARD_UNSET/x"; {_RM} -rf "$E"',
-        f'D=$(some_cmd); E=$D/x; F="$E"; {_RM} -rf "$F"',
-        f'D=$(some_cmd); cd "$D/x" && {_RM} -rf ..',
+        f'E="$TOFU_DELGUARD_UNSET/usr"; {_RM} -rf "$E"',
+        f'D=; E=$D/usr; F="$E"; {_RM} -rf "$F"',
+        f'D=; cd "$D/tmp" && {_RM} -rf ..',
     ])
     def test_refused(self, command):
         assert _verdict(command) is not None, command
@@ -216,6 +229,8 @@ class TestDerivedValuesKeepTheirCollapse:
     @pytest.mark.parametrize('command', [
         f'D=$(some_cmd); E="$D/build/out"; {_RM} -rf "$E"',
         f'D=$(some_cmd); E="$D"; {_RM} -rf "$E"',
+        f'D=$(some_cmd); E=$D/x; F="$E"; {_RM} -rf "$F"',
+        f'D=$(some_cmd); cd "$D/x" && {_RM} -rf ..',
     ])
     def test_allowed(self, command):
         assert _verdict(command) is None, command
@@ -230,9 +245,11 @@ class TestStartingEnvironment:
         assert _verdict(f'{_RM} -rf "$TMPDIR/x"', _SCRATCH) is None
 
     def test_unset_variable_expands_empty(self):
-        detail = _verdict(f'{_RM} -rf "$TMPDIR/x"', {})
+        detail = _verdict(f'{_RM} -rf "$TMPDIR/usr"', {})
         assert detail is not None and detail[1] == 'shallow'
-        assert detail[2] == 'resolves to /x (<2 path components) when $TMPDIR is empty'
+        assert detail[2] == 'resolves to /usr (<2 path components) when $TMPDIR is empty'
+        # A top-level path that names nothing holds nothing to lose.
+        assert _verdict(f'{_RM} -rf "$TMPDIR/tofu-delguard-absent"', {}) is None
 
     def test_process_environment_is_not_consulted(self, monkeypatch):
         monkeypatch.setenv('TOFU_DELGUARD_DIR', '/tmp/tofu-delguard-env')
@@ -258,7 +275,6 @@ class TestStartingEnvironment:
     @pytest.mark.parametrize('command', [
         f'{_RM} -rf /mnt',
         f'D=/; {_RM} -rf "$D"',
-        f'D=$(some_cmd); {_RM} -rf $D/',
         f'{_RM} -rf $HOME',
         f'{_RM} -rf "$TMPDIR" /mnt',
     ])

@@ -722,6 +722,12 @@ def _project_spilled_artifact_alias(task, round_entry, tool_name,
     return model_text.replace(needle, '"artifactRef":"%s"' % alias)
 
 
+def _stopped_by_restart_or_fence(task) -> bool:
+    from lib.turn_verdict import INTERNAL_FENCE_ABORT_REASONS, RESTART_ABORT_REASONS
+    return (isinstance(task, dict) and bool(task.get('aborted'))
+            and task.get('_abort_reason') in RESTART_ABORT_REASONS | INTERNAL_FENCE_ABORT_REASONS)
+
+
 def _settle_tool_result(
     task: dict[str, Any],
     fn_name: str,
@@ -1129,6 +1135,11 @@ def _settle_tool_result(
         #   (toolContent == null → incomplete).
         if round_entry:
             round_entry['toolContent'] = tc_content_str
+            if _stopped_by_restart_or_fence(task):
+                # The model never reads a result settled after this stop; a
+                # resume may drop a repeatable cut batch (restart_effect_class).
+                from lib.tools.restart_effect_class import RESTART_CUT_FIELD
+                round_entry[RESTART_CUT_FIELD] = True
             if tool_result_evidence is not None:
                 round_entry['toolResultEvidence'] = dict(
                     tool_result_evidence)

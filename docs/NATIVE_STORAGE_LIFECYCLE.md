@@ -744,6 +744,13 @@ earlier deployment's evidence.
 
 Decision: restarts deploy only certified engines.
 
+The gate resolves Cargo and Rustup roots through the shared native-engine
+resolver against the invoking checkout's `.env` before spawning any check.
+Its detached checkout has no `.env`; build and Cargo checks inherit the resolved
+toolchain environment. Copying the whole project configuration into the test
+checkout was rejected because unrelated runtime configuration and credentials
+must not become certification inputs.
+
 - **Record.** `scripts/engine_certify.py` (owner `scripts/engine_certification/gate.py`)
   is the only writer. For one commit, in a private detached checkout, it runs
   every check in `serverctl_pkg.engine_certification.REQUIRED_CHECKS` and, only
@@ -817,9 +824,26 @@ Decision: restarts deploy only certified engines.
   checks 623-4,011 s each), then the ordinary preparation deploys the new
   record. Fixture: this checkout's own store when no engine holds its `LOCK`
   (a stopped server), else the newest record's fixture whose `CONTROL` still
-  matches; the work root is `packages/tofu-db/target/engine-certify-work`.
-  Uncommitted engine inputs or contracts, no settled fixture, a work root on
-  another filesystem, or a failing gate refuse with one actionable line before
+  matches. Problem: a recorded fixture can be on a different filesystem from
+  the checkout, while snapshots require hard links. Decision: use
+  `packages/tofu-db/target/engine-certify-work` on the same device, otherwise
+  create a private work root beside the fixture (outside the authority).
+  The gate retains failed work for diagnosis; empty private wrappers are
+  removed. Compiler caches (release builds and Cargo tests) use the existing
+  repository-private local lane root's `engine-certify/cache`, independently
+  of the fixture work root. Thus successive temporary work roots reuse Cargo's
+  validated incremental inputs rather than leaving a cold cache per restart;
+  without local placement the cache stays under the explicit work root.
+  This reuses the manual gate's existing cache location and adds no retention
+  tree or result cache: every required check still runs. Fixture snapshots
+  stay on the fixture filesystem. Shared release builds lock snapshot synchronization
+  through compilation and copy the binary/library into each run before releasing
+  the lock, so a subsequent build cannot replace an in-flight candidate.
+  Keeping compiler caches inside each random
+  work root was rejected because it defeats cross-run reuse. Alternatives rejected: copying a large fixture or bypassing the
+  certification gate to permit restart.
+  Uncommitted engine inputs or contracts, no settled fixture, inability to
+  create a work root on its filesystem, or a failing gate refuse with one actionable line before
   the manager is asked to stop anything. The operator override skips it; the
   in-app restart and the manager's own spawns do not run it.
 - **Automatic spawns** (crash, planned and lease recovery) prepare only the
@@ -828,7 +852,11 @@ Decision: restarts deploy only certified engines.
 
 The gate (GATE-PUBLISH-CARRY's, confirmed 2026-11-12) passes only when: the
 build reports the checkout's source; both isolated certifications pass; both
-cargo runs pass; the native pytest subset passes, where only files with failures
+cargo runs pass (a completed Rust failure summary may be resolved by one exact,
+serial rerun of each named failed test; every rerun must report exactly one
+passed test and zero failures, with its command, exit and log digest retained
+beside the original failure; compiler errors, aborted/incomplete runs and
+unaccounted failures remain failures); the native pytest subset passes, where only files with failures
 or errors are rerun once serially and both results are kept (a serial pass is a
 load/timing flake, a serial failure fails the gate); the load run ends in a
 clean stop (no `child_exit state=timeout`, the engine's

@@ -169,6 +169,45 @@ def test_superseded_and_unconfirmed_entries_are_never_injected(legacy_scope):
         after['items'] + after['inactive_items'])
 
 
+def test_settings_confirms_a_pending_entry_by_naming_it(legacy_scope):
+    import lib.memory.user_profile as up
+    from lib.memory.contracts import context_item_trust_class
+    status = up.context_status(OWNER)
+    keys = ('id', 'type', 'source', 'created_at', 'updated_at', 'text')
+    pending = [item for item in status['inactive_items']
+               if item['status'] == 'needs_confirmation']
+    assert [item['id'] for item in pending] == ['ctx_unaudited']
+
+    # Settings confirms by saving what it last saved plus the pending entry,
+    # stripped to the editor's own fields.
+    up.save_context_items(
+        [{key: item[key] for key in keys} for item in status['items'] + pending],
+        OWNER)
+
+    after = up.load_context(OWNER)
+    confirmed = after['items'][-1]
+    assert confirmed['id'] == 'ctx_unaudited' and confirmed['status'] == 'active'
+    assert confirmed['provenance']['source_class'] == 'legacy_import'
+    assert context_item_trust_class(confirmed) == 'verified'
+    assert [item['id'] for item in after['inactive_items']] == ['ctx_stale']
+    assert UNAUDITED_TEXT in up.render_profile_block(scope=OWNER)
+
+
+def test_owner_deletes_a_pending_entry_but_never_superseded_history(legacy_scope):
+    import lib.memory.user_profile as up
+    up.load_context(OWNER)
+
+    assert up.delete_context_item('ctx_stale', OWNER) is False
+    assert up.delete_context_item('ctx_unaudited', OWNER) is True
+    assert up.delete_context_item('ctx_unaudited', OWNER) is False
+
+    after = up.load_context(OWNER)
+    assert [item['text'] for item in after['items']] == [ACTIVE_TEXT]
+    assert [item['id'] for item in after['inactive_items']] == ['ctx_stale']
+    assert [item['id'] for item in up.deleted_context_items(OWNER)] == [
+        'ctx_unaudited']
+
+
 def test_entry_edited_after_the_audit_is_not_activated(legacy_scope, monkeypatch):
     import lib.memory.user_profile as up
     _install_audit(monkeypatch, {

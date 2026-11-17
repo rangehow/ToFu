@@ -85,6 +85,18 @@ def test_checkpoint_resume(tmp_path):
     assert len(dispatches) == 2
 
 
+def test_survey_calls_grant_no_tools():
+    """Survey is tool-less map-reduce (docs/RESEARCH_CYCLE.md), not an agent loop."""
+    granted = []
+    def dispatch(*args, **kwargs):
+        granted.append(kwargs['tools'])
+        return ({'role': 'assistant', 'content': '{"summary":"s"}'}, 'stop', {})
+    calls = BoundedCalls(dispatch, json.loads, ResearchUsageMeter('survey'),
+                         direction='q', user_id=1)
+    calls('map', {'x': 1})
+    assert granted == [None]
+
+
 def test_hierarchy_enters_real_dispatcher_once(monkeypatch):
     """A zero retries value must not silently suppress the initial attempt."""
     from lib.llm_dispatch import api

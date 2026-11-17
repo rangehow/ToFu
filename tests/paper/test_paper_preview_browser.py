@@ -173,7 +173,11 @@ def test_preview_split_reading_controls_and_mobile_teardown(reader_page, tmp_pat
     assert not page.get_by_role('textbox',name='输入消息').is_visible()
     assert page.get_by_role('tab',name='论文',exact=True).get_attribute('aria-selected')=='true'
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
-    assert page.get_by_role('textbox',name='缩放',exact=True).evaluate('(el) => el.clientWidth >= 54')
+    # Legibility, not a pixel proxy: Chromium 159 excludes a text input's
+    # padding from clientWidth (149 did not), so measure value clipping.
+    assert page.get_by_role('textbox',name='缩放',exact=True).evaluate('''(el) => {
+      const shown = el.value; el.value = '100%';
+      const fits = el.scrollWidth <= el.clientWidth; el.value = shown; return fits; }''')
     assert panel.locator('.paper-preview-viewport').bounding_box()['y']<=100
     assert panel.get_attribute('role')=='tabpanel'
     assert page.get_by_role('tab',name='论文',exact=True).get_attribute('aria-controls')==panel.get_attribute('id')

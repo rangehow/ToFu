@@ -692,6 +692,7 @@ def test_write_partition_call_is_auto_approved_and_audited(
     args = json.dumps({
         'name': 'paper-autoapprove-probe',
         'description': 'auto-approval audit guard probe memory',
+        'trigger': 'paper agent writes a memory under auto-approval',
         'body': '## Why\nprobe body',
         'trigger': 'probing the paper auto-approval audit',
         'scope': 'global',
@@ -724,6 +725,7 @@ def test_write_partition_call_is_auto_approved_and_audited(
             'arguments': {
                 'name': 'paper-gateway-autoapprove-probe',
                 'description': 'nested approval audit guard probe',
+                'trigger': 'paper agent writes a memory through execute_tools',
                 'body': '## Why\nnested probe body',
                 'trigger': 'probing the nested paper approval audit',
                 'scope': 'global',

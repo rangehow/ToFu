@@ -31,7 +31,23 @@ def contract_owner(monkeypatch):
     acceptance.test_accept_records_unknown_verdicts_and_the_receipt_reports_them_unverified,
     acceptance.test_history_rows_carry_checks_and_count_unjudged_checks_as_unknown,
 ], ids=lambda scenario: scenario.__name__)
-def test_handoff_on_selected_authority(detached_semantic_authority, run, scenario, request):
+def test_handoff_on_selected_authority(authority_run, monkeypatch, scenario):
+    if 'monkeypatch' in inspect.signature(scenario).parameters:
+        scenario(authority_run, monkeypatch)
+    else:
+        scenario(authority_run)
+
+
+@pytest.mark.parametrize('tool', ['review_project_work', 'cancel_project_work'])
+@pytest.mark.parametrize('owner', ['another_coordinator', 'another_project'])
+def test_worker_control_outside_the_binding_is_refused_on_selected_authority(
+        authority_run, monkeypatch, tool, owner):
+    contracts.test_review_and_cancel_of_another_coordinators_or_projects_worker_stay_refused_and_audited(
+        authority_run, monkeypatch, tool, owner)
+
+
+@pytest.fixture
+def authority_run(detached_semantic_authority, run):
     factory, _, _ = detached_semantic_authority
     r = run
     for (namespace, key), row in r.c.client.rows.items():
@@ -39,5 +55,4 @@ def test_handoff_on_selected_authority(detached_semantic_authority, run, scenari
             'key': key, 'expected_version': 0, 'value': row['value']}, uuid.uuid4().hex)
     r.c.repo.client = factory
     r.c.repo.storage_version = 2
-    fixtures = list(inspect.signature(scenario).parameters)[1:]
-    scenario(r, **{name: request.getfixturevalue(name) for name in fixtures})
+    return r

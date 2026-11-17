@@ -219,6 +219,71 @@ real two-process `tests/server/test_restart_resume_application.py` (a resident
 storage service and a real headless execution host booting as the next
 generation in a private project).
 
+### A restart-cut batch the model simply issues again
+
+*(running contract; owners `lib/tools/restart_effect_class.py`
+`repeatable_restart_cut_batch`, `lib/conversation_sync/command_service.py`
+`_without_repeatable_restart_cut`, `lib/tasks_pkg/compaction/_resume_projection.py`)*
+
+**Problem (owner review 2026-11-17):** a restart should be invisible to the
+work it pauses, and its resume should reuse the provider prompt cache. Every
+call a restart cut came back to the resumed model as a receipt naming the
+restart ("Wait interrupted by a server restart…", "[Command interrupted by
+server restart]"), which made models narrate the restart, and the first
+resumed request carried those new receipts, so it never repeated the request
+the provider had cached.
+
+**Decision:** when a Turn settled `interrupted` with cause `server_restart`
+resumes (`continue`/`checkpoint_resume`) and its last tool batch was cut, and
+every call in that batch is harmless to run twice, the resume drops the whole
+batch. The model's view ends at the request that produced the batch, so the
+first resumed request repeats it and the model issues the calls again through
+the ordinary gateway, authorization and effect fence. One pure rule decides,
+shared by the suspended working view (which it rewinds and witnesses without
+the batch) and the resume command (which replays the rounds without it):
+
+- *Cut:* an occurrence settled while a restart or storage fence stopped its
+  task carries `_restartCut` (`tool_dispatch._pipeline._settle_tool_result`);
+  an occurrence without a result (a dead process) or announced but never
+  recorded counts as cut too. A batch nothing cut is never dropped: the model
+  already read it.
+- *Repeatable:* never started (`executionEffect.state == not_started`), a
+  `read_only`/`idempotent` declaration (`poll`, reads), or a `run_command`
+  whose every segment only reads or is a test/check run confined to the
+  isolated worktree. A `verifiable` Git or file write is not repeatable (a
+  second `git reset` or `mv` changes state again); its batch keeps today's
+  restart-worded receipts below, which remain the truthful account when the
+  model must check an effect.
+- The dropped call ids ride on the executor config (`_restartRepeatedCallIds`),
+  so the interrupted-effect note never names a call the model issues again.
+
+### A fenced live Attempt keeps its working view
+
+**Problem (2026-11-17 11:15 storage restart):** a storage restart fenced the
+claims of live Attempts. Their terminal persistence was refused, so the
+suspended working view was never saved; the resume restored an 11-hour-old
+checkpoint or rebuilt the Turn canonically (no L1 clearing), re-billing
+170k–470k prompt tokens per Turn and forcing L2 compactions. A graceful
+restart lost views the same way: a lost event delivery left the Turn text
+behind the live task's, and the view's text digest (taken from the live task)
+no longer matched the Turn the resume reads.
+
+**Decision:** durable worker recovery of a joined live carrier it settles as a
+restart saves that carrier's view in the same process before discarding it
+(`worker_recovery._preserve_live_working_view`), and every view binds its
+`executionDigest` to the settled Turn text the resume compares
+(`durable_turn_text`), never the live task's. **Alternatives rejected:** an
+append-only per-request view journal (exact after any kill, but a new storage
+command on both authorities; still the structural answer for a killed
+process); saving the whole view every round (gigabytes per long Attempt);
+re-executing cut calls inside the resume before the first request (a second
+tool path, and a long `poll` would block the resume); keeping the restart
+wording for every cut (the owner's requirement is that a restart is
+invisible when nothing needs checking).
+
+Verification: `tests/compaction/test_restart_cut_resume.py`,
+`tests/tools/test_restart_effect_class.py`.
+
 ### A call the restart stopped before it ran is repeatable
 
 *(running contract; owners `lib/project_dispatch/admission.py`,
@@ -327,6 +392,68 @@ twin; the `d8e7021b` pin, which fails with the pre-R3 `_validated_binding`),
 `test_coordinator_workers.py` (the Worker wait), `test_system_abort_cause.py`
 and `tests/conversation/test_worker_attempt_real_start.py` (real quiesce, boot
 recovery, and a resumed Worker that makes tool calls and completes).
+
+## A resumed Turn continues on the model it was running on
+
+*(running contract; owner `lib/tasks_pkg/orchestrator/_model_continuation.py`)*
+
+**Problem:** an in-Attempt refusal (`content_filter`) or availability fallback
+lives only in process memory (`task['_fallback_model']`). When the interrupted
+Turn is resumed — `continue` / `checkpoint_resume`, restart resume, project
+dispatch continuation, durable worker recovery, all through orchestrator
+`run_task` — the new Attempt used to return to the Turn's accepted
+`config.model`, even though the interrupted Attempt had switched models for its
+remaining rounds. The resumed first request paid a full prompt-cache write on
+the primary model (observed: 360K tokens re-written, `cache_read=0`), then the
+primary refused again and the Attempt fell back to the same model it had
+already been running on — the same large prompt billed twice.
+
+**Decision:** a resumed Attempt continues on the logical model of the
+interrupted Attempt's last paid, response-authoring round: the highest integer
+`round` in the durable `checkpointApiRounds` ledger whose row does not carry
+`responseAuthoring: false` and whose `tag` is not a discarded/refused charge
+(those attempts were billed but their response was never adopted). The
+continuation applies only when all three hold:
+
+1. that model differs from the accepted `config.model`;
+2. the resume did not explicitly choose a different model;
+3. the model is still admitted for this task by the same admission boundary
+   the refusal fallback path uses
+   (`llm_fallback._retry._get_fallback_model`, which honors the configured
+   fallback model and the per-task `disableModelFallback` opt-out). Otherwise
+   normal selection applies.
+
+*Explicit choice* is defined by the existing acceptance-time marker
+`_resumeModelSwitchFrom` (`RESUME_MODEL_SWITCH_FROM_CONFIG_KEY`):
+`command_service.create_attempt` stamps it when a
+continue/checkpoint_resume/answer_guidance request's `config.model` differs
+from the submitted Turn's rail snapshot model — the pause → switch-model →
+continue sequence. It is read before storage rebinds the snapshot, lives in
+the durable Attempt config, and therefore decides identically on request
+replay and durable worker recovery. No new marker, knob, or threshold is
+introduced.
+
+The continued model is resolved BEFORE tools and context are assembled:
+`run_task` re-resolves the model config with the continued model, so
+`max_tokens`, the executable tool catalog, and the context window the
+compaction thresholds measure against all belong to the model that actually
+runs. Preset and thinking stay the round's own values, exactly as the
+in-Attempt refusal fallback keeps them. `task['_fallback_model']` /
+`_fallback_from` are restamped (kind `resume_continuation`) so done/persist
+still report `fallbackModel` / `actualModel`; one log line names the
+continuation.
+
+**Alternatives rejected:** rewriting the accepted Attempt config would falsify
+the owner's recorded choice and leak into every later resume; persisting
+`conv_affinity` (a provider-key stickiness hint) cannot carry a logical model
+decision and would cross credential boundaries; always retrying the primary
+first pays a refusal plus a full cache write on every restart.
+
+Verification: `tests/tasks_pkg/test_resume_model_continuation.py` (last paid
+authoring row elects the fallback with unchanged preset/thinking, unadmitted
+model falls back to accepted, refused/discarded rows skipped, explicit switch
+wins, fallback reporting preserved, and `run_task` resolves tools/context for
+the continued model before assembly).
 
 ## Problem
 

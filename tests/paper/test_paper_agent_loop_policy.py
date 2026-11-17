@@ -24,7 +24,6 @@ PAPER_AGENT_CALLERS = (
     'lib/paper/deepen_engine.py',
     'lib/paper/insight_engine/_synthesize.py',
     'lib/paper/recommend_engine/_research.py',
-    'lib/paper/survey.py',
     'lib/paper/ideate.py',
 )
 
@@ -233,3 +232,4 @@ def test_every_agentic_paper_owner_uses_the_guarded_chassis():
         # own extra paid attempt would be running a second provider dispatch
         # outside the loop's authority, which no Paper stage does.
         assert '.observe_agent_round(' not in source, relative_path
+

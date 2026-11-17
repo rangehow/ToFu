@@ -15919,6 +15919,73 @@
         assert_eq!(parent["metadata"]["settings"]["unrelated"], "preserved");
     }
 
+    fn cache_baseline_checkpoint(task_id: &str, value: Value) -> Request {
+        let mut document = json!({
+            "user_id": 11,
+            "task_id": task_id,
+            "conv_id": "guarded-fault-conversation",
+            "status": "done",
+        });
+        document
+            .as_object_mut()
+            .unwrap()
+            .extend(value.as_object().unwrap().clone());
+        let contract = document
+            .get("last_turn_cache_read")
+            .map(|_| TASK_RESULT_CACHE_SETTINGS_CONTRACT);
+        request(
+            "task_results.checkpoint",
+            11,
+            json!({
+                "key": task_id,
+                "value": document,
+                "expected_version": 0,
+                "guard_contract": TASK_RESULT_CHECKPOINT_GUARD_CONTRACT,
+                "require_parent": true,
+                "cache_settings_contract": contract,
+            }),
+            Some(task_id),
+        )
+    }
+
+    #[test]
+    fn cache_baseline_follows_every_written_last_read() {
+        let mut database = seeded_guarded_task_result_database(prepared_vfs());
+        let baseline = json!({"v": 1, "model": "m", "region": {"tools": "0123456789abcdef"}});
+        let first = cache_baseline_checkpoint(
+            "baseline-first",
+            json!({"last_turn_cache_read": 270_000, "cache_baseline": baseline}),
+        );
+        let result = execute(&mut database, &first, 2_000).unwrap();
+        assert_eq!(result["cache_baseline"], baseline);
+        let get = request(
+            "conversation.get",
+            11,
+            json!({"conv_id": "guarded-fault-conversation", "user_id": 11,
+                   "derive_messages": false}),
+            None,
+        );
+        let parent = execute(&mut database, &get, 2_001).unwrap();
+        assert_eq!(parent["metadata"]["settings"]["cacheBaseline"], baseline);
+
+        let without =
+            cache_baseline_checkpoint("baseline-second", json!({"last_turn_cache_read": 0}));
+        let result = execute(&mut database, &without, 2_002).unwrap();
+        assert!(result.get("cache_baseline").is_none());
+        let parent = execute(&mut database, &get, 2_003).unwrap();
+        assert!(parent["metadata"]["settings"].get("cacheBaseline").is_none());
+        assert_eq!(parent["metadata"]["settings"]["lastTurnCacheRead"], 0);
+
+        let alone = cache_baseline_checkpoint("baseline-alone", json!({"cache_baseline": {"v": 1}}));
+        assert!(execute(&mut database, &alone, 2_004).is_err());
+        let oversized = cache_baseline_checkpoint(
+            "baseline-oversized",
+            json!({"last_turn_cache_read": 1,
+                   "cache_baseline": {"pad": "x".repeat(MAX_TASK_RESULT_CACHE_BASELINE_BYTES)}}),
+        );
+        assert!(execute(&mut database, &oversized, 2_005).is_err());
+    }
+
     #[test]
     fn every_guarded_task_result_fault_keeps_parent_facts_and_checkpoint_atomic() {
         let command = guarded_task_result_command();

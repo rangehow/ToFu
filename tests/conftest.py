@@ -164,22 +164,32 @@ _CLEARED_INHERITED_GIT_ENV_NAMES = (
     _clear_inherited_git_environment(os.environ))
 
 
-@pytest.fixture(scope='session', autouse=True)
-def _git_discovery_ceiling(tmp_path_factory):
+def _git_discovery_ceilings() -> str:
     """No test path resolves a repository above the temporary roots.
 
     A stray ``.git`` there (2026-11-11: /tmp/.git from a misdirected
     ``git init``) made every temporary path part of one repository: plain-folder
     specs bound it and the write-tool radar recorded into it. Git and Tofu's
-    walkers (``lib.git_runtime.beyond_git_ceiling``) stop at these ceilings.
+    walkers (``lib.git_runtime.beyond_git_ceiling``) stop at these ceilings:
+    the temporary root and pytest's per-user root below it, which holds every
+    session's (and xdist worker's) ``basetemp``.
+
+    It is process policy set once when this module loads, like the Git
+    scrub above, not a fixture: a session fixture set it during the first
+    test's setup, so the process-state probe charged that test with a leak
+    (tests/meta/test_process_state_isolation.py).
     """
-    ceilings = dict.fromkeys([str(tmp_path_factory.getbasetemp().parent),
-                              tempfile.gettempdir()])
-    os.environ['GIT_CEILING_DIRECTORIES'] = os.pathsep.join(ceilings)
+    import getpass
+    temporary_root = Path(os.environ.get('PYTEST_DEBUG_TEMPROOT') or tempfile.gettempdir()).resolve()
     try:
-        yield
-    finally:
-        os.environ.pop('GIT_CEILING_DIRECTORIES', None)
+        user = getpass.getuser()
+    except (ImportError, KeyError, OSError):
+        user = 'unknown'
+    return os.pathsep.join(dict.fromkeys([str(temporary_root / f'pytest-of-{user}'),
+                                          tempfile.gettempdir()]))
+
+
+os.environ['GIT_CEILING_DIRECTORIES'] = _git_discovery_ceilings()
 
 # A normal session fixture removes its roots below. SIGKILL/OOM cannot run
 # Python finalizers, so every new-format root also carries its creating PID and
@@ -1262,7 +1272,9 @@ def _start_test_storage() -> None:
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_setup(item):
     from tests.support.native_engine_prerequisite import inherited_engine_refusal_skips
+    from tests.support.storage_alias_isolation import imported_module_names
 
+    item._modules_before_test = imported_module_names()
     # A browser on the live app needs the built graph, with or without the
     # shared ``page`` fixture; check before the server and browser start.
     if {'browser', 'live_server'} <= set(getattr(item, 'fixturenames', ())):
@@ -1284,10 +1296,15 @@ def pytest_runtest_call(item):
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_teardown(item, nextitem):
     """A test that leaves the environment naming production fails here (production_api_guard)."""
+    from tests.support.storage_alias_isolation import restore_storage_client_aliases
+
     try:
         result = yield
     finally:
         _discard_chat_tasks_left_by(item)
+        before = getattr(item, '_modules_before_test', None)
+        if before is not None:
+            restore_storage_client_aliases(before)
     production_guard.check_environment()
     return result
 

@@ -766,6 +766,7 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
     raw_dumper.wire_bytes = None
     raw_dumper.wire_field_bytes = None
     raw_dumper.wire_region = None
+    raw_dumper.wire_controls = None
     # The provider-visible tool surface as sent. A gateway may key cache reuse
     # on it (Sankuai Claude: joined names over ~492 bytes never reuse), so the
     # per-round record carries it next to the logical catalog size, plus the
@@ -814,9 +815,12 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
         # board / peer-status / relevant_memories are injected fresh each turn —
         # is invisible to it. This hashes the real serialized bytes so that
         # divergence can't be laundered into "eviction". See wire_byte_region.
+        # The control values (already extracted for the hash) let the
+        # detector name which control changed.
+        raw_dumper.wire_controls = cache_relevant_controls(body)
         raw_dumper.wire_region = wire_byte_region(
             body.get('system'), body.get('tools'),
-            cache_relevant_controls(body))
+            raw_dumper.wire_controls)
         # Capture WHERE the cache_control breakpoints sit — canonical_messages
         # deliberately strips them, so a miss caused purely by a breakpoint
         # being LOST in translation (byte-identical content) would otherwise be
@@ -2520,6 +2524,9 @@ class SSEAccumulator:
             _wregion = getattr(self.raw_dumper, 'wire_region', None)
             if _wregion is not None:
                 usage['_wire_region'] = _wregion
+            _wcontrols = getattr(self.raw_dumper, 'wire_controls', None)
+            if _wcontrols is not None:
+                usage['_wire_controls'] = _wcontrols
 
         # Cache-namespace routing fingerprint — relayed on its OWN guard (not
         # nested under _wfp), because routing is captured independently of the

@@ -187,7 +187,17 @@ const root = process.argv[3];
 const panel = fs.readFileSync(
   path.join(root, 'static/settings_panels/preferences.html'), 'utf8');
 const saved = [];
+const removed = [];
 let cleared = 0;
+const inactive = [
+  { id: 'ctx_p', type: 'response_preference', text: 'Reports in Chinese tables',
+    source: 'legacy_migration', status: 'needs_confirmation',
+    created_at: '2026-08-12T00:00:00Z' },
+  { id: 'ctx_q', type: 'identity', text: 'Lead dev of project Q',
+    source: 'assistant', status: 'needs_confirmation' },
+  { id: 'ctx_s', type: 'identity', text: 'Superseded fact',
+    source: 'legacy_migration', status: 'superseded' },
+];
 const sample = [
   { id: 'ctx_a', type: 'identity', text: 'Works at YourProvider', source: 'manual' },
   { id: 'ctx_b', type: 'work_rule', condition: 'submitting cluster jobs',
@@ -204,11 +214,12 @@ const { document, check, report } = setup({
   globals: {
     Api: {
       userContext: {
-        get: async () => ({ items: sample, chars: 184 }),
+        get: async () => ({ items: sample, inactive_items: inactive, chars: 184 }),
         replace: async (items) => {
           saved.push(items);
           return { saved: true, items };
         },
+        remove: async (id) => { removed.push(id); return { deleted: true }; },
       },
       memory: {
         clearPreview: async () => ({ total: 2, global: 1, project: 1 }),
@@ -235,6 +246,12 @@ const { document, check, report } = setup({
     check('response_preference_rendered', document.body.textContent.includes('Reply in Chinese'));
     check('category_icons_visible', document.querySelectorAll('.ctx-group-icon svg').length === 4);
     check('initially_clean', document.getElementById('ctxSaveBtn').disabled === true);
+    const pendingBox = document.getElementById('prefsPending');
+    check('pending_shown', pendingBox.hidden === false &&
+      pendingBox.querySelectorAll('.ctx-pending-item').length === 2);
+    check('superseded_not_offered', !pendingBox.textContent.includes('Superseded fact'));
+    check('pending_kept_out_of_cards', !document.getElementById('prefsList')
+      .textContent.includes('Reports in Chinese tables'));
 
     _contextUpdateField(0, 'text', 'Works at YourProvider as an engineer');
     check('edit_marks_dirty', document.getElementById('ctxDirtyState').textContent.length > 0);
@@ -245,6 +262,23 @@ const { document, check, report } = setup({
 
     await clearLegacyMemories(document.querySelector('[onclick^="clearLegacyMemories"]'));
     check('confirmed_clear_called_once', cleared === 1);
+
+    // The shared harness stubs setTimeout; drain microtasks instead.
+    const settle = async () => { for (let turn = 0; turn < 10; turn += 1) await Promise.resolve(); };
+    pendingBox.querySelector('[data-context-action="confirm-pending"][data-index="0"]').click();
+    await settle(); await settle();
+    check('confirm_saves_saved_items_plus_pending', saved.length === 2 &&
+      saved[1].length === 5 && saved[1][4].id === 'ctx_p' &&
+      saved[1][0].text === 'Works at YourProvider as an engineer');
+    check('confirmed_moves_into_its_card', document.querySelector('.ctx-group-response_preference')
+      .textContent.includes('Reports in Chinese tables'));
+    check('confirm_leaves_editor_clean', document.getElementById('ctxSaveBtn').disabled === true);
+    check('one_pending_left', pendingBox.querySelectorAll('.ctx-pending-item').length === 1);
+
+    pendingBox.querySelector('[data-context-action="remove-pending"][data-index="0"]').click();
+    await settle(); await settle();
+    check('pending_delete_removes_on_server', removed.length === 1 && removed[0] === 'ctx_q');
+    check('pending_box_hidden_when_empty', pendingBox.hidden === true);
   } catch (error) {
     check('unexpected_exception_' + error.message, false);
   }
@@ -257,6 +291,6 @@ def test_real_editor_renders_edits_saves_and_clears_under_jsdom():
     run_harness(
         target_js=PREFERENCES_JS,
         body_js=_JSDOM_BODY,
-        expect_pass=13,
+        expect_pass=22,
         label='My Context editor',
     )

@@ -342,6 +342,27 @@ const roundA = convA._testProjections[0].toolRounds[0];
   check('run_record_truth', ['k1', 'k2', 'k3'].map(id =>
     (roundH._swarmAgents || []).find(a => a.id === id)?.status).join() === 'done,failed,unknown');
   check('run_record_error_carried', (roundH._swarmAgents || []).find(a => a.id === 'k2')?.error === 'lease lost');
+
+  // 3k. The status probe answers unknown for a run the owner's live activity
+  //     feed lists as running (owner report 2026-11-17: running agents froze
+  //     as 无结果 after three unknown probes). Live evidence outvotes the
+  //     unknown answer; once the feed drops the run, the honest settle applies.
+  const convK = { id: 'convK', _testProjections: [{ role: 'assistant',
+    toolRounds: [{ roundNum: 1, toolName: 'spawn_agents', _swarm: true, status: 'done',
+      _swarmStartTime: OLD,
+      _swarmSnapshot: { swarm_id: 'run-live', settled: false, agents: [
+        { id: 'impl1', role: 'coder', objective: 'a', status: 'running' }] } }] }] };
+  conversations.push(convK);
+  answer = { active: null, known: false };
+  let liveSwarms = [{ swarm_id: 'run-live', swarm_key: 'convK',
+    agents: [{ id: 'impl1', status: 'running' }] }];
+  win.backgroundActivitySwarms = global.backgroundActivitySwarms = () => liveSwarms;
+  for (let i = 0; i < 5; i += 1) await reconcileSwarmPanels();
+  check('live_activity_outvotes_unknown', !currentRound(convK)._swarmEndTime);
+  liveSwarms = [{ swarm_id: 'run-other', swarm_key: 'convK',
+    agents: [{ id: 'impl1', status: 'running' }] }];
+  for (let i = 0; i < 3; i += 1) await reconcileSwarmPanels();
+  check('other_run_activity_does_not_hold', !!currentRound(convK)._swarmEndTime);
   console.log(out.join('\n'));
 })();
 """
@@ -401,3 +422,32 @@ def test_ambiguous_answer_settle_guard_is_load_bearing():
     # "ambiguous_not_settled" check must FAIL.
     assert 'FAIL ambiguous_not_settled' in output, \
         'NC (two-state probing) should false-settle on an ambiguous answer:\n' + output
+
+
+def test_live_activity_guard_is_load_bearing():
+    """NEUTER: drop the live-activity guard and prove a run the activity feed
+    lists as running then false-settles on repeated unknown probes."""
+    src_path = os.path.join(JS_DIR, 'ui', 'streaming_swarm_panel.js')
+    with open(src_path, encoding='utf-8') as f:
+        src = f.read()
+    needle = 'if (status.active !== true && _swLiveActivityHoldsRun(taskId, runId, agentIds)) {'
+    assert needle in src, 'live-activity guard shape changed — update this neuter test'
+    neutered_src = src.replace(needle, 'if (false) {', 1)
+
+    with tempfile.TemporaryDirectory(
+            prefix='tofu-swarm-live-activity-neuter-') as temp_dir:
+        neutered_path = os.path.join(temp_dir, 'streaming_swarm_panel.js')
+        harness = os.path.join(temp_dir, 'swarm_live_activity_neuter_harness.js')
+        with open(neutered_path, 'w', encoding='utf-8') as f:
+            f.write(neutered_src)
+        with open(harness, 'w') as f:
+            f.write(_HARNESS)
+        proc = subprocess.run(
+            ['node', harness, neutered_path, ROOT],
+            capture_output=True, text=True,
+            timeout=_NODE_HARNESS_TIMEOUT_S,
+        )
+    output = proc.stdout.strip()
+    assert proc.returncode == 0, f'node failed: {proc.stderr}\n{output}'
+    assert 'FAIL live_activity_outvotes_unknown' in output, \
+        'NC (no live-activity guard) should false-settle a live run:\n' + output

@@ -9520,7 +9520,9 @@ const _SEG_NOTE_REASON_CHIP = {
   modified_files: { labelKey: 'systemNote.reasonModifiedFiles', tone: 'warn' },
   output_contract: { labelKey: 'systemNote.reasonOutputContract', tone: 'warn' },
   output_limit_recovery: { labelKey: 'systemNote.reasonTerminalRecovery', tone: 'info' },
+  paper_length_continuation: { labelKey: 'systemNote.reasonTerminalRecovery', tone: 'info' },
   paper_output_repair: { labelKey: 'systemNote.reasonOutputContract', tone: 'warn' },
+  paper_section_repair: { labelKey: 'systemNote.reasonOutputContract', tone: 'warn' },
   paper_tool_guidance: { labelKey: 'systemNote.reasonPaperTools', tone: 'info' },
   parallel_execution: { labelKey: 'systemNote.reasonParallelExecution', tone: 'info' },
   partial_stream_retry: { labelKey: 'systemNote.reasonStreamRetry', tone: 'info' },
@@ -21591,6 +21593,7 @@ function loadCompactionHistory(conversationId) {
 
    Public API:
      runtimeScope.updateBackgroundActivity() — force one snapshot tick.
+     runtimeScope.backgroundActivitySwarms() — the last snapshot's live swarm rows.
    ═══════════════════════════════════════════════════════════════════ */
 // One snapshot-derived index shared with the retained sidebar adapter. Deleted
 // with this adapter when background chrome is composed as a typed surface.
@@ -21964,6 +21967,7 @@ let backgroundConversationActivity = new Map();
   }
 
   runtimeScope.updateBackgroundActivity = updateBackgroundActivity;
+  runtimeScope.backgroundActivitySwarms = () => _last.swarms || [];
 
   // Render/mount only: commits and the rail track pass never start reads.
   runtimeScope.renderBackgroundAgents = _updateDock;
@@ -25242,6 +25246,20 @@ function _swUpdateReconciledRound(entry, updateRound) {
   });
 }
 
+/* The owner's live activity feed lists this run with an unfinished roster
+   agent. A status probe that answers unknown cannot outvote that evidence. */
+function _swLiveActivityHoldsRun(taskId, runId, agentIds) {
+  const swarms = runtimeScope.backgroundActivitySwarms?.() || [];
+  return swarms.some((frame) => {
+    const frameRun = String(frame?.swarm_id || frame?.swarm_run_id || '');
+    if (runId ? frameRun !== runId : frame?.swarm_key !== taskId) return false;
+    return (frame.agents || []).some((agent) => agent
+      && (!agentIds.size || agentIds.has(String(agent.id)))
+      && ['pending', 'running', 'retrying', 'thinking', 'waiting', 'queued']
+        .includes(agent.status));
+  });
+}
+
 async function _reconcileStuckSwarmPanelsOnce() {
   if (typeof Api === "undefined" || !Api.swarm || !Api.swarm.status) return null;
   if (typeof conversations === "undefined" || !Array.isArray(conversations)) return null;
@@ -25349,6 +25367,10 @@ async function _reconcileStuckSwarmPanelsOnce() {
         });
         _swReconcileStateFor(entry.stateKey).checked = true;
       }
+      continue;
+    }
+    if (status.active !== true && _swLiveActivityHoldsRun(taskId, runId, agentIds)) {
+      requestFollowup();
       continue;
     }
     if (status.active !== true) {

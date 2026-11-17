@@ -25,14 +25,15 @@ use crate::generated_tofudb_ir::{
     MAX_DESKTOP_AGENT_ID_CHARACTERS, MAX_MODEL_ROUTING_CIPHERTEXT_CHARACTERS,
     MAX_MODEL_ROUTING_KEY_HINT_CHARACTERS, MAX_MODEL_ROUTING_SECRET_REFERENCE_CHARACTERS,
     MAX_MODEL_ROUTING_TIMESTAMP_SECONDS, MAX_RECENT_PROJECT_PATH_CHARACTERS,
-    MAX_TASK_RESULT_CACHE_FACT, MAX_TASK_RESULT_COST_EXPERIMENT_ROWS,
-    MAX_TASK_RESULT_COST_EXPERIMENT_SCAN_ROWS, MAX_TASK_RESULT_DOCUMENT_BYTES,
-    MAX_TASK_RESULT_RECOVERY_ROWS, MAX_TASK_RESULT_RECOVERY_SCAN_ROWS,
-    MAX_TASK_RESULT_SUMMARY_ROWS, MAX_TASK_RESULT_SUMMARY_SCAN_ROWS, MAX_TENANT_USER_LIST_ROWS,
-    MAX_TENANT_USER_LIST_SCAN_ROWS, MAX_WORKER_JOB_CLAIM_KINDS, MAX_WORKER_JOB_CLOCK_MILLISECONDS,
-    MAX_WORKER_JOB_ERROR_BYTES, MAX_WORKER_JOB_FUTURE_CLOCK_SKEW_MILLISECONDS,
-    MAX_WORKER_JOB_PAYLOAD_BYTES, MAX_WORKER_JOB_PRIORITY, RECORD_DOCUMENT_NAMESPACE,
-    TASK_RESULT_CACHE_SETTINGS_CONTRACT, TASK_RESULT_CHECKPOINT_GUARD_CONTRACT,
+    MAX_TASK_RESULT_CACHE_BASELINE_BYTES, MAX_TASK_RESULT_CACHE_FACT,
+    MAX_TASK_RESULT_COST_EXPERIMENT_ROWS, MAX_TASK_RESULT_COST_EXPERIMENT_SCAN_ROWS,
+    MAX_TASK_RESULT_DOCUMENT_BYTES, MAX_TASK_RESULT_RECOVERY_ROWS,
+    MAX_TASK_RESULT_RECOVERY_SCAN_ROWS, MAX_TASK_RESULT_SUMMARY_ROWS,
+    MAX_TASK_RESULT_SUMMARY_SCAN_ROWS, MAX_TENANT_USER_LIST_ROWS, MAX_TENANT_USER_LIST_SCAN_ROWS,
+    MAX_WORKER_JOB_CLAIM_KINDS, MAX_WORKER_JOB_CLOCK_MILLISECONDS, MAX_WORKER_JOB_ERROR_BYTES,
+    MAX_WORKER_JOB_FUTURE_CLOCK_SKEW_MILLISECONDS, MAX_WORKER_JOB_PAYLOAD_BYTES,
+    MAX_WORKER_JOB_PRIORITY, RECORD_DOCUMENT_NAMESPACE, TASK_RESULT_CACHE_SETTINGS_CONTRACT,
+    TASK_RESULT_CHECKPOINT_GUARD_CONTRACT,
 };
 use crate::semantic::AdmittedRequest;
 use crate::transaction_ir::{
@@ -9493,6 +9494,18 @@ fn compile_task_result(
                         .ok_or(SemanticExecutionError::InvalidPayload)
                 })
                 .transpose()?;
+            // The comparison baseline is the last read's annex: never alone.
+            let cache_baseline = match value.get("cache_baseline") {
+                None => None,
+                Some(baseline @ Value::Object(_))
+                    if last_turn_cache_read.is_some()
+                        && canonical_json(baseline)?.len()
+                            <= MAX_TASK_RESULT_CACHE_BASELINE_BYTES =>
+                {
+                    Some(baseline.clone())
+                }
+                Some(_) => return Err(SemanticExecutionError::InvalidPayload),
+            };
             let cache_settings_requested =
                 cache_prefix_hwm.is_some() || last_turn_cache_read.is_some();
             match payload.get("cache_settings_contract") {
@@ -9538,6 +9551,7 @@ fn compile_task_result(
                     require_parent,
                     cache_prefix_hwm,
                     last_turn_cache_read,
+                    cache_baseline,
                     slot: 0,
                 }],
                 TransactionIrResult::SlotOrLiteral {

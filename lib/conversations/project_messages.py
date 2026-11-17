@@ -608,31 +608,13 @@ class ProjectMailbox:
         history already holds (a retry of a head-era original made before its
         locator existed).
         """
-        return self._arrivals(head)[0]
-
-    def _arrivals(self, head) -> tuple[list[dict], int]:
-        """``(_tail(head), tickets after the head whose original or VOID is written)``."""
-        rows, seen, written = [], {m['id'] for m in head['messages']}, 0
+        rows, seen = [], {m['id'] for m in head['messages']}
         for ticket in range(head['tickets'] + 1, self._drawn() + 1):
             arrival = self._arrival(ticket)
-            written += arrival is not None
             if arrival is not None and arrival != VOID and arrival['id'] not in seen:
                 seen.add(arrival['id'])
                 rows.append(arrival)
-        return rows, written
-
-    def observe(self):
-        """A reader's view that never writes: ``(head, tail, version)``.
-
-        ``tail`` holds the arrivals not yet absorbed (``_tail``); a send never
-        writes the head, so a reader that skipped them would miss every message
-        until the recipient absorbs. ``version`` changes with the head and with
-        each arrival that becomes readable, including one whose ticket was drawn
-        before its sender wrote the original.
-        """
-        head, revision = self.head()
-        tail, written = self._arrivals(head)
-        return head, tail, (revision, written)
+        return rows
 
     def _locate_head_era(self, head):
         """Give head-era originals without a locator theirs before the head is stored in ticketed form.
@@ -819,13 +801,29 @@ class ProjectMailbox:
             ticket += 1
         return 'absorbed'
 
-    def pending(self, head, eligible, exclude, tail=()):
+    def observe(self):
+        """``(version, pending originals)`` for a reader that never absorbs: history first, then drawn arrivals.
+
+        A send only draws a ticket and writes its arrival; the head changes when
+        the recipient absorbs it. ``version`` therefore names the head revision
+        and the unabsorbed arrivals, so an equal version means the same pending
+        originals. Originals are yielded lazily.
+        """
+        head, revision = self.head()
+        tail = self._tail(head)
+
+        def originals():
+            for _position, m in self.pending(head, lambda _sender: True, set()):
+                yield m
+            yield from (m for m in tail if _pending(m))
+        return (revision, tuple(m['id'] for m in tail)), originals()
+
+    def pending(self, head, eligible, exclude):
         """Submitted, unconsidered originals of eligible senders, oldest first.
 
         Yields ``(position, message)`` lazily so callers read only what they
         use. Sealed candidates come from the pending index; ineligible senders
-        are skipped without reading their segments. ``tail`` (arrivals not yet
-        absorbed, ``observe``) follows the absorbed history.
+        are skipped without reading their segments.
         """
         sealed_end = head['sealed'] * self.size
         if head['sealed']:
@@ -840,7 +838,7 @@ class ProjectMailbox:
                 m = rows[position % self.size]
                 if _pending(m) and m['id'] not in exclude and eligible(m['sender']):
                     yield position, m
-        for i, m in enumerate([*head['messages'], *tail]):
+        for i, m in enumerate(head['messages']):
             if _pending(m) and m['id'] not in exclude and eligible(m['sender']):
                 yield sealed_end + i, m
 

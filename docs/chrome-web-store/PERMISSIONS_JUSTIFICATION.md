@@ -62,7 +62,7 @@ Stores the user's own configuration locally: the Tofu server URL they enter, an 
 ## `cookies`
 
 ```
-Some automation tasks require reading or setting cookies for the site being automated (for example carrying a login session into a step). Used via chrome.cookies.getAll / set / remove, scoped to the URL of the task. Cookie values are returned only to the user's own Tofu server.
+Some automation tasks require reading or setting cookies for the site being automated (for example carrying a login session into a step). Used via chrome.cookies.getAll / set / remove, scoped to the URL of the task. Cookie values are returned only to the user's own Tofu server. When the user saved a copy of a site session in their Tofu tool settings, the extension also checks which cookie that copy equals, so Tofu can replace an expired copy with the current session: the user's server sends one-time keyed digests, the comparison runs inside the extension, and only the matching cookie's name, domain and path are returned — no cookie value and no saved credential leaves its side.
 ```
 
 ## `history`

@@ -327,31 +327,30 @@ def patch_server(name: str, changes: dict[str, Any], *, user_id) -> dict[str, MC
     return config
 
 
-def merge_server_env(name: str, values: dict[str, str], *, user_id) -> dict[str, Any] | None:
-    """Atomically set ``values`` in one existing server row's ``env``.
+def update_server(name: str, mutate, *, user_id) -> dict[str, Any] | None:
+    """Atomically replace one existing server row with ``mutate(row)``.
 
-    The row is re-read inside the locked transaction, so a concurrent edit to
-    its other env keys or fields survives (``patch_server`` would replace the
-    whole ``env``). Returns the resulting row, or ``None`` when the row does
-    not exist; an unchanged row is not rewritten.
+    ``mutate`` receives a private copy of the row as it is inside the locked
+    transaction, so a concurrent edit to anything it leaves alone survives
+    (``patch_server`` replaces whole fields). It returns the new row, or
+    ``None`` to keep the row unchanged. Returns the resulting row, or ``None``
+    when the row does not exist.
     """
     outcome: dict[str, Any] = {'row': None}
 
-    def _merge(config):
+    def _apply(config):
         current = config.get(name)
         if not isinstance(current, dict):
             return None
-        env = current.get('env') if isinstance(current.get('env'), dict) else {}
-        updated = copy.deepcopy(current)
-        updated['env'] = {**env, **values}
-        outcome['row'] = copy.deepcopy(updated)
-        if updated['env'] == env:
+        updated = mutate(copy.deepcopy(current))
+        if updated is None or updated == current:
+            outcome['row'] = copy.deepcopy(current)
             return None
         config[name] = updated
+        outcome['row'] = copy.deepcopy(updated)
         return config
 
-    if _locked_config_update(_merge, user_id=user_id) is not None:
-        logger.info('[MCP:Config] Set env %s on server %r', sorted(values), name)
+    _locked_config_update(_apply, user_id=user_id)
     return outcome['row']
 
 

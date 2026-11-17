@@ -1,4 +1,4 @@
-import './world/world-office.css';
+import '../styles/application/27-world-office.css';
 /** Lazy office-world composition: only this adapter knows the application shell. The world reads live
  * data itself (read-only) and reaches the shell through explicit ports: the application's push owner for
  * wake hints, the conversation dock, the classic conversation loader for chatting with a person (the same

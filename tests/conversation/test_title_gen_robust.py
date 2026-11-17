@@ -29,7 +29,6 @@ import types
 
 import pytest
 
-from tests.support.overlay import requires_private_overlay
 
 pytestmark = pytest.mark.unit
 
@@ -74,7 +73,6 @@ def test_runtime_derivation_matches_catalog():
         f'  extra (derived, not in catalog): {got - expected}')
 
 
-@requires_private_overlay
 def test_static_floor_stays_within_catalog_derivation():
     """The emergency floor must not rot: every floor entry is still a
     cheap+thinking model in the live catalog (otherwise trim the floor)."""
@@ -100,7 +98,6 @@ def test_catalog_unreadable_falls_back_to_static_floor(monkeypatch):
     assert tg._thinking_models_to_exclude() == tg._THINKING_MODELS_TO_EXCLUDE
 
 
-@requires_private_overlay
 def test_constant_contains_known_offenders():
     """Spot-check: the 3 models we sampled must be in the excluded set.
 

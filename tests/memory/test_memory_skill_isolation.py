@@ -354,12 +354,8 @@ def test_memory_metadata_cache_readonly_hit_is_recursively_immutable():
     }
     assert cache.store('/immutable', fingerprint, metadata)
 
-    cached, readonly, identity = cache.lookup_readonly(
-        ''.join(['/imm', 'utable']), fingerprint)
+    cached, readonly = cache.lookup_readonly('/immutable', fingerprint)
     assert cached
-    # A hit hands back the retained key object, so records share it.
-    assert identity == '/immutable'
-    assert identity is cache._entries['/immutable'][3]
     with pytest.raises(TypeError):
         readonly['name'] = 'changed'
     with pytest.raises(AttributeError):

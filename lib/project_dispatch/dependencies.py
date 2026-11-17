@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 
 from lib.log import get_logger
-from lib.agent_core.model_context_revision import model_context_revision
+from lib.storage.model_continuation import model_context_revision
 
 logger = get_logger(__name__)
 

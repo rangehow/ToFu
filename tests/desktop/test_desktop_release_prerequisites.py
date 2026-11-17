@@ -5,7 +5,6 @@ import ast
 import json
 from pathlib import Path
 import re
-import tomllib
 
 import pytest
 import yaml
@@ -62,13 +61,8 @@ def test_frontend_release_provisions_contract_parser_and_browser_canary():
     assert any(str(step.get('uses', '')).startswith('actions/setup-python@')
                for step in prerequisites)
     commands = '\n'.join(step.get('run', '') for step in prerequisites)
-    # The contract generators and the canary run in the locked environment:
-    # PyYAML is a core dependency and Playwright comes from the test extra.
-    assert re.search(r'uv sync --frozen --extra test\b', commands)
-    project = tomllib.loads((ROOT / 'pyproject.toml').read_text(encoding='utf-8'))['project']
-    assert any(re.match(r'PyYAML\b', spec) for spec in project['dependencies'])
-    assert any(re.match(r'playwright\b', spec)
-               for spec in project['optional-dependencies']['test'])
+    assert re.search(r'pip install[^\n]*PyYAML', commands)
+    assert re.search(r'pip install[^\n]*playwright', commands)
     assert 'python -m playwright install --with-deps chromium' in commands
 
 

@@ -39,7 +39,7 @@ def reader_page(tmp_path):
     # Isolated reader delivery shares the application's token vocabulary.
     styles = ROOT / 'frontend/src/styles/application'
     (tmp_path / 'reader.css').write_text((styles / '00-design-tokens.css').read_text() +
-                                        (ROOT / 'frontend/src/features/paper/pdf-reader.css').read_text())
+                                        (styles / '03-pdf-reader.css').read_text())
     document = fitz.open()
     for number in range(1, 21):
         page = document.new_page(width=612, height=792)

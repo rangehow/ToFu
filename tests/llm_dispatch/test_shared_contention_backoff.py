@@ -312,7 +312,7 @@ def _queue_state():
 class TestReleaseOnSuccess:
     """A success sent after a gate's last rejection opens it for every queued
     waiter at once: none waits out a pre-assigned later slot. 2026-11-11
-    14:10-18:28 logs: 7,869 s of queued admission on the sankuai opus gate
+    14:10-18:28 logs: 7,869 s of queued admission on the example-corp opus gate
     came after another request on that gate had already succeeded."""
 
     @staticmethod
@@ -523,7 +523,7 @@ def _route_slot(pin, credential, key):
     return Slot(key_name=key, api_key='sk-test',
                 model='kunlunbedrock.claude-opus-5.5-m17',
                 capabilities={'text'}, provider_id=pin,
-                routing_provider_id='sankuai', route_credential_id=credential,
+                routing_provider_id='example-corp', route_credential_id=credential,
                 route_deployment_id='dep-m17', request_scoped=True)
 
 
@@ -549,7 +549,7 @@ class TestQuotaLaneScope:
         assert [(row['provider_id'], row['credential'], row['scope'],
                  row['strikes'])
                 for row in disp.get_shared_contention_info()] == [
-            ('sankuai', 'cred-4861', 'credential', 12)]
+            ('example-corp', 'cred-4861', 'credential', 12)]
 
     def test_other_credentials_keep_their_own_lane(self, monkeypatch):
         limited = _route_slot('model-route:1:aaaa', 'cred-4861', 'ephemeral_a')

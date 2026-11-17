@@ -16,22 +16,6 @@ from lib.tools.disclosure_state import (
 pytestmark = pytest.mark.unit
 
 
-class _NoLiveMcpBridge:
-    """An owner bridge with no connected server: catalog MCP schemas stay as declared."""
-
-    def tool_catalog_generation(self):
-        return 0
-
-    def get_tool_info(self, name):
-        return None
-
-
-@pytest.fixture(autouse=True)
-def _hermetic_mcp_bridge(monkeypatch):
-    import lib.mcp
-    monkeypatch.setattr(lib.mcp, 'get_bridge', lambda owner: _NoLiveMcpBridge())
-
-
 def _tool(name: str, field: str = "doc") -> dict:
     return {
         "type": "function",
@@ -67,7 +51,6 @@ def test_later_search_suppresses_same_schema_but_revised_schema_returns(
     original = _tool("mcp__xuecheng__get_doc_meta", "doc")
     task = {
         "id": "task-disclosure",
-        "_userId": 1,
         "_executable_tool_catalog": [original],
         "_executableToolNamespaceByName": {},
     }

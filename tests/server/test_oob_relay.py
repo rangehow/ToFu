@@ -2,7 +2,7 @@
 
 Specification of designs/headless-recovery-agent/DESIGN.md, piece O3: the
 repair session runs in a network namespace and reaches the project's model
-gateway only through a Unix-socket relay that injects the project's sankuai
+gateway only through a Unix-socket relay that injects the project's example-corp
 credential. The key is revealed through the audited loopback endpoint while
 Tofu is up and held in memory only; the reserved vault entry ``repair.model``
 is the fallback when storage is down. The agent never sees the key.
@@ -158,7 +158,7 @@ class _RoutingApi(BaseHTTPRequestHandler):
             self._json(200, {'data': {'model_routing': {
                 'credentials': [{'credential_id': 'c1', 'provider_access_id': 'pa1', 'kind': 'api_key',
                                  'enabled': True, 'key_hint': '…199c'}],
-                'provider_accesses': [{'provider_access_id': 'pa1', 'provider_id': 'sankuai'}]}}})
+                'provider_accesses': [{'provider_access_id': 'pa1', 'provider_id': 'example-corp'}]}}})
         else:
             self._json(405, {'error': 'method not allowed'})
 
@@ -179,7 +179,7 @@ def test_reveal_key_source_reads_the_audited_loopback_endpoint_with_its_post(tmp
     api = HTTPServer(('127.0.0.1', 0), _RoutingApi)
     threading.Thread(target=api.serve_forever, daemon=True).start()
     try:
-        source = oob_relay.RevealKeySource(f'http://127.0.0.1:{api.server_address[1]}', provider='sankuai')
+        source = oob_relay.RevealKeySource(f'http://127.0.0.1:{api.server_address[1]}', provider='example-corp')
         assert source.get() == SECRET and source.hint() == '…199c'
     finally:
         api.shutdown()

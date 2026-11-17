@@ -27,6 +27,7 @@ pub const TASK_RESULT_CHECKPOINT_GUARD_CONTRACT: &str = "tofu.task-results.check
 pub const TASK_RESULT_CACHE_SETTINGS_CONTRACT: &str =
     "tofu.task-results.checkpoint.cache-settings/v1";
 pub const MAX_TASK_RESULT_CACHE_FACT: u64 = 2147483647;
+pub const MAX_TASK_RESULT_CACHE_BASELINE_BYTES: usize = 4096;
 pub const ACTIVE_LOG_CHECKPOINT_BYTES: u64 = 67108864;
 pub const ACTIVE_LOG_ROTATE_BYTES: u64 = 62914560;
 pub const WAL_RECOVERY_READ_BUFFER_BYTES: usize = 131072;

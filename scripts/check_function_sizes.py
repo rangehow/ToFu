@@ -45,7 +45,7 @@ def _unique_budgets(*entries: tuple[str, str, int]) -> dict[tuple[str, str], int
 # budgets make both growth and unclaimed shrinkage visible.
 FUNCTION_LINE_BUDGETS = _unique_budgets(
     ('lib/tasks_pkg/turn_trace.py', '_fold_task_trace', 221),
-    ('lib/tasks_pkg/cache_tracking/_detect.py', 'detect_cache_break', 378),
+    ('lib/tasks_pkg/cache_tracking/_detect.py', 'detect_cache_break', 375),
     ('lib/tasks_pkg/orchestrator/_finalize.py', '_finalize_and_emit_done', 392),
     ('lib/tasks_pkg/stream_handler/_analyse.py', 'analyse_stream_result', 236),
     ('lib/translate/engine/_engine.py', '_translate_one_chunk', 425),

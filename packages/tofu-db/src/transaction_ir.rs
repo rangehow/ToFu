@@ -534,6 +534,7 @@ pub enum TransactionIrStep {
         require_parent: bool,
         cache_prefix_hwm: Option<u64>,
         last_turn_cache_read: Option<u64>,
+        cache_baseline: Option<Value>,
         slot: usize,
     },
     TaskResultRecordGet {
@@ -1950,6 +1951,7 @@ impl TransactionIr {
                     require_parent,
                     cache_prefix_hwm,
                     last_turn_cache_read,
+                    cache_baseline,
                     slot,
                     ..
                 } => {
@@ -1991,6 +1993,10 @@ impl TransactionIr {
                             .is_some_and(|value| !(1..=MAX_TASK_RESULT_CACHE_FACT).contains(&value))
                         || last_turn_cache_read
                             .is_some_and(|value| value > MAX_TASK_RESULT_CACHE_FACT)
+                        || (cache_baseline.is_some() && last_turn_cache_read.is_none())
+                        || cache_baseline
+                            .as_ref()
+                            .is_some_and(|baseline| !baseline.is_object())
                         || !serde_json::from_slice::<serde_json::Value>(value_json)
                             .is_ok_and(|value| value.is_object())
                     {
@@ -8291,6 +8297,7 @@ fn prepare_transaction_ir_mode(
                 require_parent,
                 cache_prefix_hwm,
                 last_turn_cache_read,
+                cache_baseline,
                 slot,
             } => {
                 let guard = guarded.then_some(crate::task_result::CheckpointGuard {
@@ -8298,6 +8305,7 @@ fn prepare_transaction_ir_mode(
                     require_parent: *require_parent,
                     cache_prefix_hwm: *cache_prefix_hwm,
                     last_turn_cache_read: *last_turn_cache_read,
+                    cache_baseline: cache_baseline.clone(),
                 });
                 slots[*slot] = Some(Some(crate::task_result::checkpoint(
                     database,

@@ -2071,6 +2071,7 @@ with samples left by earlier tests (1 s idle, 4 s under load).
 
 The additive `tofu.task-results.checkpoint.cache-settings/v1` capability commits at most two bounded facts to owner-qualified conversation settings with the task snapshot; no new schema, wire fields or command receipt.
 - `cache_prefix_hwm` is positive and monotonic-max; `last_turn_cache_read` is nonnegative and LWW on a new task write. Observed zero/floor reads replace older warm baselines; missing/null/invalid usage omits the candidate.
+- `cache_baseline` (a JSON object, at most 4096 canonical bytes) is the last read's annex: refused without a `last_turn_cache_read` candidate, and every written last read replaces setting `cacheBaseline` with it or removes the setting when absent. Peers that predate it keep it only in the row.
 - Owner-local caches distinguish absence from zero. Identical replay after ambiguous acknowledgement may repair/increase HWM but repairs last-read only if absent/invalid, never replacing a present zero or a newer value.
 - Responses echo authoritative values and a commit bit. The manager clears candidates only after exact guard/capability echoes; running checkpoints retain the read candidate until terminal task-result publication. Children/inline/transients never publish conversation cache facts.
 - Old Sidecars and legacy unscoped callers retain serialized best-effort per-fact compatibility; a protocol validation error never downgrades to an out-of-transaction write. Existing v1 peers rejecting zero require coordinated upgrade.

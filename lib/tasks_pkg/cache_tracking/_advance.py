@@ -42,6 +42,7 @@ def advance_cache_observation(
         prev.wire_bytes = _cur_wire_bytes
         prev.wire_field_bytes = _cur_wire_field_bytes
         prev.wire_region = _cur_wire_region
+        prev.wire_controls = wire_evidence.controls
     # Routing is captured independently of the body fingerprints — store it
     # whenever present so a namespace flip is caught even on a round where
     # the body wire_fp handling differs (non-Claude / partial capture).
@@ -117,6 +118,18 @@ def advance_cache_observation(
                     '[CacheTrack] last-read sink failed conv=%s: %s',
                     conv_id, _pe,
                 )
+        if _last_read_staged and scope is not None and scope.task is not None:
+            # The comparison baseline rides the same guarded checkpoint as
+            # the read it describes; a round without one withdraws the older.
+            from lib.task_replay.task_result_checkpoint_contract import (
+                TASK_CACHE_BASELINE_CANDIDATE_FIELD)
+            from lib.tasks_pkg.cache_tracking._persist import (
+                durable_cache_baseline)
+            _baseline = durable_cache_baseline(prev)
+            if _baseline is None:
+                scope.task.pop(TASK_CACHE_BASELINE_CANDIDATE_FIELD, None)
+            else:
+                scope.task[TASK_CACHE_BASELINE_CANDIDATE_FIELD] = _baseline
         if not _last_read_staged and scope is None:
             try:
                 from lib.tasks_pkg.cache_tracking._persist import (

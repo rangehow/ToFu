@@ -55,8 +55,10 @@ from typing import Any
 
 from lib.log import get_logger
 from lib.task_replay.task_result_checkpoint_contract import (
+    CONVERSATION_CACHE_BASELINE_SETTING,
     CONVERSATION_CACHE_PREFIX_HWM_SETTING,
     CONVERSATION_LAST_TURN_CACHE_READ_SETTING,
+    TASK_RESULT_CACHE_BASELINE_MAXIMUM_BYTES,
     TASK_RESULT_CACHE_FACT_MAXIMUM,
 )
 
@@ -79,6 +81,9 @@ _HWM_TTL_S = 30.0
 _hwm_read_cache: dict[tuple[int, str], tuple[int, float]] = {}
 # Owner-scoped round-1 read baseline. Guarded by _hwm_lock.
 _last_turn_read_cache: dict[tuple[int, str], tuple[int | None, float]] = {}
+# Owner-scoped durable comparison baseline (annex of the last read), filled by
+# the same settings read. Guarded by _hwm_lock.
+_baseline_read_cache: dict[tuple[int, str], tuple[dict | None, float]] = {}
 _hwm_lock = threading.Lock()
 
 # Per-conv throttle for write-failure warnings: the advance path is
@@ -98,12 +103,110 @@ def _owner_key(conv_id: str, user_id: int) -> tuple[int, str]:
     return user_id, conv_id
 
 
+# Version of the durable comparison baseline. It names the digest algorithms
+# (16-hex md5 of wire_byte_region / system_fingerprint, routing_fingerprint
+# fields); a stored baseline of another version is not comparable, never
+# evidence of a change.
+CACHE_BASELINE_VERSION = 1
+_BASELINE_DIGEST_FIELDS = {
+    'region': ('system', 'tools', 'controls'),
+    'hoisted': ('system', 'tools'),
+}
+_BASELINE_ROUTING_FIELDS = ('key', 'beta', 'endpoint', 'affinity')
+_BASELINE_COUNT_FIELDS = ('calls', 'messages', 'read', 'write')
+
+
+def _is_digest(value: Any) -> bool:
+    return (isinstance(value, str) and len(value) == 16
+            and all(c in '0123456789abcdef' for c in value))
+
+
+def _is_count(value: Any) -> bool:
+    return (isinstance(value, int) and not isinstance(value, bool)
+            and 0 <= value <= TASK_RESULT_CACHE_FACT_MAXIMUM)
+
+
+def _baseline_fits(baseline: dict) -> bool:
+    import json
+    # ASCII-escaped compact JSON is never shorter than either authority's
+    # canonical UTF-8 encoding, so a candidate accepted here is accepted there.
+    return len(json.dumps(baseline, sort_keys=True, separators=(',', ':'))
+               ) <= TASK_RESULT_CACHE_BASELINE_MAXIMUM_BYTES
+
+
+def durable_cache_baseline(state) -> dict | None:
+    """Project one advanced ``CacheState`` onto its process-stable evidence.
+
+    Only digests of actual bytes and plain routing strings survive a process;
+    per-message fingerprints use process-randomized ``hash()`` and are omitted.
+    """
+    baseline: dict[str, Any] = {
+        'v': CACHE_BASELINE_VERSION,
+        'model': str(state.model or ''),
+        'updated_at': round(float(state.last_update_time), 3),
+        'calls': state.call_count,
+        'messages': state.message_count,
+        'read': state.last_cache_read_tokens,
+        'write': state.last_cache_write_tokens,
+    }
+    if not all(_is_count(baseline[f]) for f in _BASELINE_COUNT_FIELDS):
+        return None
+    for name, source in (('region', state.wire_region),
+                         ('hoisted', state.wire_system)):
+        if isinstance(source, dict):
+            digests = {f: source[f] for f in _BASELINE_DIGEST_FIELDS[name]
+                       if _is_digest(source.get(f))}
+            if digests:
+                baseline[name] = digests
+    if isinstance(state.wire_routing, dict):
+        baseline['routing'] = {f: str(state.wire_routing.get(f) or '')
+                               for f in _BASELINE_ROUTING_FIELDS}
+    if isinstance(state.wire_controls, dict):
+        baseline['controls'] = state.wire_controls
+    if _baseline_fits(baseline):
+        return baseline
+    # Control values are the only unbounded field; digests remain comparable.
+    baseline.pop('controls', None)
+    return baseline if _baseline_fits(baseline) else None
+
+
+def comparable_durable_baseline(raw: Any) -> dict | None:
+    """Return a stored baseline only when this version can compare it."""
+    if not isinstance(raw, dict):
+        return None
+    if raw.get('v') != CACHE_BASELINE_VERSION:
+        logger.debug('[CacheTrack] durable baseline version %r is not '
+                     'comparable with %d', raw.get('v'), CACHE_BASELINE_VERSION)
+        return None
+    updated_at = raw.get('updated_at')
+    if (not isinstance(raw.get('model'), str)
+            or isinstance(updated_at, bool)
+            or not isinstance(updated_at, (int, float)) or updated_at < 0
+            or not all(_is_count(raw.get(f)) for f in _BASELINE_COUNT_FIELDS)):
+        return None
+    baseline = {key: raw[key] for key in ('v', 'model', 'updated_at',
+                                           *_BASELINE_COUNT_FIELDS)}
+    for name, fields in _BASELINE_DIGEST_FIELDS.items():
+        source = raw.get(name)
+        if isinstance(source, dict):
+            baseline[name] = {f: source[f] for f in fields
+                              if _is_digest(source.get(f))}
+    routing = raw.get('routing')
+    if isinstance(routing, dict) and all(
+            isinstance(routing.get(f), str) for f in _BASELINE_ROUTING_FIELDS):
+        baseline['routing'] = {f: routing[f] for f in _BASELINE_ROUTING_FIELDS}
+    if isinstance(raw.get('controls'), dict):
+        baseline['controls'] = raw['controls']
+    return baseline
+
+
 def remember_persisted_cache_facts(
     conv_id: str,
     *,
     user_id: int,
     cache_prefix_hwm: int | None = None,
     last_turn_cache_read: int | None = None,
+    cache_baseline: dict | None = None,
 ) -> None:
     """Refresh read-through caches after an authoritative combined write.
 
@@ -137,6 +240,11 @@ def remember_persisted_cache_facts(
         if valid_last_read:
             _last_turn_read_cache[key] = (
                 last_turn_cache_read, expires_at,
+            )
+            # The baseline is the last read's annex: written or removed with it.
+            _baseline_read_cache[key] = (
+                cache_baseline if isinstance(cache_baseline, dict) else None,
+                expires_at,
             )
 
 
@@ -284,21 +392,52 @@ def read_last_turn_cache_read(conv_id: str, *, user_id: int) -> int:
         if hit is not None and hit[1] > now:
             return hit[0] if hit[0] is not None else 0
     val = None
+    baseline = None
     try:
         settings = _conversation_settings(conv_id, user_id=user_id)
         cand = settings.get(_LAST_TURN_READ_KEY)
         if (isinstance(cand, int) and not isinstance(cand, bool)
                 and 0 <= cand <= TASK_RESULT_CACHE_FACT_MAXIMUM):
             val = cand
+        stored = settings.get(CONVERSATION_CACHE_BASELINE_SETTING)
+        baseline = stored if isinstance(stored, dict) else None
     except Exception as e:
         logger.debug('[CacheLastRead] read failed conv=%s: %s', conv_id, e)
     with _hwm_lock:
         _last_turn_read_cache[key] = (val, now + _HWM_TTL_S)
+        _baseline_read_cache[key] = (baseline, now + _HWM_TTL_S)
     return val if val is not None else 0
+
+
+def read_cache_baseline(conv_id: str, *, user_id: int) -> dict | None:
+    """Return the stored durable comparison baseline (raw, unvalidated).
+
+    Served by the settings read ``read_last_turn_cache_read`` already made on
+    the same cold path; only a miss reads settings again. Best-effort.
+    """
+    if not conv_id:
+        return None
+    key = _owner_key(conv_id, user_id)
+    now = time.time()
+    with _hwm_lock:
+        hit = _baseline_read_cache.get(key)
+        if hit is not None and hit[1] > now:
+            return hit[0]
+    baseline = None
+    try:
+        stored = _conversation_settings(conv_id, user_id=user_id).get(
+            CONVERSATION_CACHE_BASELINE_SETTING)
+        baseline = stored if isinstance(stored, dict) else None
+    except Exception as e:
+        logger.debug('[CacheBaseline] read failed conv=%s: %s', conv_id, e)
+    with _hwm_lock:
+        _baseline_read_cache[key] = (baseline, now + _HWM_TTL_S)
+    return baseline
 
 
 def write_last_turn_cache_read(
     conv_id: str, cache_read: int, *, user_id: int,
+    cache_baseline: dict | None = None,
 ) -> bool:
     """Persist the previous-turn final cached-prefix read (tokens).
 
@@ -307,17 +446,24 @@ def write_last_turn_cache_read(
     raises it. Skips the write when the value is unchanged (steady-state warm
     conversation on the same durable value → no DB churn). Uses the serialized
     settings RMW so a concurrent writer merges rather than clobbers.
+    ``cache_baseline`` is the read's annex: stored with it, or removed when
+    absent, so the setting never describes an older round than the read.
     Best-effort — never raises. Returns whether the fact is already durable.
     """
     if (not conv_id or isinstance(cache_read, bool)
             or not isinstance(cache_read, int)
             or not 0 <= cache_read <= TASK_RESULT_CACHE_FACT_MAXIMUM):
         return False
+    if not isinstance(cache_baseline, dict) or not _baseline_fits(cache_baseline):
+        cache_baseline = None
     key = _owner_key(conv_id, user_id)
     # Fast-path skip: our cached read already equals this value → nothing to write.
     with _hwm_lock:
         hit = _last_turn_read_cache.get(key)
-    if hit is not None and hit[0] == cache_read and hit[1] > time.time():
+        baseline_hit = _baseline_read_cache.get(key)
+    if (hit is not None and hit[0] == cache_read and hit[1] > time.time()
+            and baseline_hit is not None
+            and baseline_hit[0] == cache_baseline):
         return True
     try:
         from lib.conversations.settings_store import update_conversation_settings
@@ -328,9 +474,14 @@ def write_last_turn_cache_read(
                 cur if isinstance(cur, int) and not isinstance(cur, bool)
                 and 0 <= cur <= TASK_RESULT_CACHE_FACT_MAXIMUM else None
             )
-            if cache_read == cur:
+            if (cache_read == cur and settings.get(
+                    CONVERSATION_CACHE_BASELINE_SETTING) == cache_baseline):
                 return False  # unchanged — skip the write
             settings[_LAST_TURN_READ_KEY] = cache_read
+            if cache_baseline is None:
+                settings.pop(CONVERSATION_CACHE_BASELINE_SETTING, None)
+            else:
+                settings[CONVERSATION_CACHE_BASELINE_SETTING] = cache_baseline
             return None
 
         # notify=False: internal cache-accounting field, NOT a UI-visible
@@ -341,6 +492,7 @@ def write_last_turn_cache_read(
             remember_persisted_cache_facts(
                 conv_id, user_id=user_id,
                 last_turn_cache_read=cache_read,
+                cache_baseline=cache_baseline,
             )
             return True
     except Exception as e:
@@ -361,9 +513,14 @@ def _reset_read_cache_for_tests() -> None:
     with _hwm_lock:
         _hwm_read_cache.clear()
         _last_turn_read_cache.clear()
+        _baseline_read_cache.clear()
 
 
 __all__ = [
+    'CACHE_BASELINE_VERSION',
+    'comparable_durable_baseline',
+    'durable_cache_baseline',
+    'read_cache_baseline',
     'read_persisted_boundary',
     'advance_persisted_boundary',
     'read_last_turn_cache_read',

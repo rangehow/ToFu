@@ -70,6 +70,8 @@ def render_engine(document, tables) -> list[str]:
         f'    "{records["taskResultCacheSettingsContract"]}";',
         "pub const MAX_TASK_RESULT_CACHE_FACT: u64 = "
         f"{records['taskResultCacheFactMaximum']};",
+        "pub const MAX_TASK_RESULT_CACHE_BASELINE_BYTES: usize = "
+        f"{records['taskResultCacheBaselineMaximumBytes']};",
         "pub const ACTIVE_LOG_CHECKPOINT_BYTES: u64 = "
         f"{wal_rotation['synchronousCheckpointBytes']};",
         "pub const ACTIVE_LOG_ROTATE_BYTES: u64 = "

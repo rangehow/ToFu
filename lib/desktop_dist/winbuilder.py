@@ -59,6 +59,7 @@ import threading
 import time
 
 from lib.log import get_logger, log_context
+from lib.tools.process_environment import inherited_child_environment
 
 from . import store, wintoolchain
 # One repository reader for both platform builders (VERSION and git).
@@ -547,7 +548,7 @@ def _build_tofudb_exe(src: str, log_fh) -> None:
     cargo_home = os.environ.get('CARGO_HOME') or os.path.expanduser(
         '~/.cargo')
     target_dir = os.path.join(wintoolchain.local_root(), 'tofudb-target')
-    env = dict(os.environ,
+    env = dict(inherited_child_environment(),
                PATH=os.pathsep.join([tools_bin,
                                      os.path.join(cargo_home, 'bin'),
                                      os.environ.get('PATH', '')]),

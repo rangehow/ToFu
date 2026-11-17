@@ -829,7 +829,18 @@ must not become certification inputs.
   `packages/tofu-db/target/engine-certify-work` on the same device, otherwise
   create a private work root beside the fixture (outside the authority).
   The gate retains failed work for diagnosis; empty private wrappers are
-  removed. Alternatives rejected: copying a large fixture or bypassing the
+  removed. Compiler caches (release builds and Cargo tests) use the existing
+  repository-private local lane root's `engine-certify/cache`, independently
+  of the fixture work root. Thus successive temporary work roots reuse Cargo's
+  validated incremental inputs rather than leaving a cold cache per restart;
+  without local placement the cache stays under the explicit work root.
+  This reuses the manual gate's existing cache location and adds no retention
+  tree or result cache: every required check still runs. Fixture snapshots
+  stay on the fixture filesystem. Shared release builds lock snapshot synchronization
+  through compilation and copy the binary/library into each run before releasing
+  the lock, so a subsequent build cannot replace an in-flight candidate.
+  Keeping compiler caches inside each random
+  work root was rejected because it defeats cross-run reuse. Alternatives rejected: copying a large fixture or bypassing the
   certification gate to permit restart.
   Uncommitted engine inputs or contracts, no settled fixture, inability to
   create a work root on its filesystem, or a failing gate refuse with one actionable line before

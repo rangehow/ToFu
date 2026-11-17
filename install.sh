@@ -2247,7 +2247,10 @@ else
 
 fi
 
-# ── Optional: bundled internal MCP servers (hope-mcp, xuecheng-mcp, llm-mcp) ──
+# ── Optional: bundled internal MCP servers ──
+# The inventory is declared once, in bundles/yourprovider/mcp_launchers/yourprovider.json:
+# every launcher whose sources name vendor/<launcher> (export_pkg/_lists.py
+# bundles the same set). Opensource trees ship no bundles/, so the list is empty.
 # These private servers aren't on PyPI, so the MCP tab's "Install" button
 # can't fetch them — but they are NOT pip-installed into this env anymore.
 # Each launches ISOLATED via `uv run --no-project --with-editable <source>`
@@ -2261,8 +2264,18 @@ fi
 #   2. ../<name>/        — a DEV checkout: sibling repos next to this one.
 # Skipped silently if neither source exists (opensource exports).
 step "Warming bundled internal MCP servers (isolated envs)"
+_INTERNAL_MCP_REPOS=()
+_INTERNAL_MCP_MANIFEST="${INSTALL_DIR}/bundles/yourprovider/mcp_launchers/yourprovider.json"
+if [[ -f "$_INTERNAL_MCP_MANIFEST" ]]; then
+    mapfile -t _INTERNAL_MCP_REPOS < <(python - "$_INTERNAL_MCP_MANIFEST" <<'PY'
+import json, sys
+launchers = json.load(open(sys.argv[1], encoding='utf-8'))['launchers']
+print('\n'.join(name for name, row in launchers.items() if f'vendor/{name}' in row['sources']))
+PY
+) || warn "Could not read the internal MCP inventory ${_INTERNAL_MCP_MANIFEST}"
+fi
 _BUNDLED_MCPS=()
-for _mcp in hope-mcp xuecheng-mcp llm-mcp; do
+for _mcp in "${_INTERNAL_MCP_REPOS[@]}"; do
     _vendor_path="${INSTALL_DIR}/vendor/${_mcp}"
     _sibling_path="$(cd "${INSTALL_DIR}/.." 2>/dev/null && pwd)/${_mcp}"
     if [[ -f "${_vendor_path}/pyproject.toml" ]]; then
@@ -2299,7 +2312,7 @@ fi
 # Every failure is a WARNING: optional capability state must never abort an
 # otherwise verified installation.
 _MEITUAN_CAPS_PRESENT=0
-for _probe in hope-mcp xuecheng-mcp llm-mcp github-batch-mcp; do
+for _probe in "${_INTERNAL_MCP_REPOS[@]}" github-batch-mcp; do
     [[ -f "${INSTALL_DIR}/vendor/${_probe}/pyproject.toml" ]] && _MEITUAN_CAPS_PRESENT=1
 done
 [[ -d "${INSTALL_DIR}/data/skills/users" ]] && _MEITUAN_CAPS_PRESENT=1

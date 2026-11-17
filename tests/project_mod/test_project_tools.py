@@ -656,6 +656,22 @@ class TestRmTrashWrap:
                          and p.name != '.gitignore')
         assert trashed == [('notes.md',)]
 
+    def test_dot_operands_are_refused_like_rm(self, tmp_path):
+        import subprocess
+        (tmp_path / 'sub').mkdir()
+        (tmp_path / 'sub' / 'keep.txt').write_text('keep\n')
+        rm = chr(114) + chr(109)
+        command = _maybe_wrap_rm_with_trash(
+            f'{rm} -rf . sub/.. sub/./ sub//..// missing/..', str(tmp_path))
+
+        run = subprocess.run(['sh', '-c', command], cwd=tmp_path,
+                             capture_output=True, text=True)
+
+        assert run.returncode == 1
+        assert run.stderr.count("refusing to remove '.' or '..' directory") == 4
+        assert (tmp_path / 'sub' / 'keep.txt').exists()
+        assert not (tmp_path / '.tofu_trash').exists()
+
     def test_rm_substring_not_wrapped(self):
         # 'confirm' contains 'rm' but is not an rm command.
         cmd = 'cat confirm.txt'

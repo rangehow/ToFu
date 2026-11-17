@@ -250,9 +250,8 @@ __all__ = ['PROVISION_SETTING', 'ProjectCoordinationRepository', 'WORKER_MODEL_S
            'prepare_coordinator_role']
 
 
-# The whole role must fit the project_coordinator context block budget
-# (lib/tasks_pkg/context_composer/registry.py); a truncated tail silently
-# drops instructions, so tests pin the fit with the composer's own counter.
+# The project_coordinator block (lib/tasks_pkg/context_composer/registry.py)
+# carries this role whole or omits it; tests compose it and require it unclipped.
 COORDINATOR_ROLE_GUIDANCE = (
     "You are the project Coordinator: the user's single point of contact. The user only talks to you and "
     "never tracks sessions, Workers or IDs; that is your job. Your role is dispatch-only: never perform concrete "

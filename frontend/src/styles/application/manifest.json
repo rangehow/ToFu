@@ -618,16 +618,5 @@
       "path": "30-ui-kit.css"
     }
   ],
-  "deferredSections": [
-    {
-      "path": "38-devices.css",
-      "responsibility": "Devices workspace: fleet page, device drawer, add-device wizard and topology",
-      "featureEntry": "frontend/src/features/devices.ts"
-    },
-    {
-      "path": "14-browser-extension.css",
-      "responsibility": "Browser extension dialog: capability card, install instruction and connection status",
-      "featureEntry": "frontend/src/features/browser-extension.ts"
-    }
-  ]
+  "deferredSections": []
 }

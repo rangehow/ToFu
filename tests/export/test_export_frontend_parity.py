@@ -69,7 +69,11 @@ def test_open_catalog_drops_keys_only_an_excluded_fragment_used(tmp_path, monkey
 
 
 def test_exported_frontend_is_built_from_the_exported_sources(tmp_path, monkeypatch):
+    import subprocess
+
     from export_pkg import _export_core
+
+    real_run = subprocess.run
 
     dest = tmp_path / 'dest'
     (dest / 'scripts').mkdir(parents=True)
@@ -101,6 +105,15 @@ def test_exported_frontend_is_built_from_the_exported_sources(tmp_path, monkeypa
     ignore = (dest / '.gitignore').read_text(encoding='utf-8')
     assert '!/static/vite/' in ignore.split('static/vite/\n', 1)[1], (
         'the built graph must be publishable despite the source .gitignore')
+    # A CI rebuild over the published graph writes previous-manifest.json;
+    # it must stay ignored so the clean-checkout gate sees an unchanged tree.
+    monkeypatch.undo()
+    (dest / 'static/vite/previous-manifest.json').write_text('{}', encoding='utf-8')
+    real_run(['git', 'init', '-q', str(dest)], check=True)
+    ignored = real_run(
+        ['git', '-C', str(dest), 'check-ignore', 'static/vite/manifest.json',
+         'static/vite/previous-manifest.json'], capture_output=True, text=True)
+    assert ignored.stdout.split() == ['static/vite/previous-manifest.json']
 
 
 def test_exported_frontend_never_embeds_the_export_host_path(tmp_path, monkeypatch):

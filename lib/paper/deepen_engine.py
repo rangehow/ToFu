@@ -48,6 +48,11 @@ from lib.log import get_logger
 from .deepen_runtime import _deepen_runtime
 from .agent_loop_policy import run_guarded_paper_agent_loop
 from .agent_usage import PaperAgentUsageMeter
+from .length_continuation import (
+    OUTPUT_TOKEN_CEILING,
+    LengthContinuation,
+    length_continuation_hook,
+)
 from .qa_context import build_qa_messages
 from .request_policy import paper_request_policy_telemetry
 from .tools import (
@@ -363,6 +368,7 @@ def _run_deepen_task(task, messages, *, paper_hash, section, ui_lang):
         conv_id=task['task_id'])
     task['toolResultPolicyV1'] = _result_budget.telemetry()
     _round = {'content': ''}
+    continuation = LengthContinuation()
     _usage_total = {'prompt_tokens': 0, 'completion_tokens': 0,
                     'cache_read_tokens': 0, 'cache_write_tokens': 0,
                     'reasoning_tokens': 0}
@@ -403,13 +409,14 @@ def _run_deepen_task(task, messages, *, paper_hash, section, ui_lang):
             prefer_model=model_name if model else None,
             strict_model=bool(model),
             tools=tools,
-            max_tokens=16000,
+            max_tokens=OUTPUT_TOKEN_CEILING,
             temperature=0,
             thinking_enabled=False,
             log_prefix='[Paper:Deepen]',
         ))
 
     def _on_round_result(rnd, msg, finish, usage):
+        continuation.observe_response(msg)
         _acc_usage(usage)
         task['agentUsageV1'] = _agent_usage.snapshot()
 
@@ -441,6 +448,10 @@ def _run_deepen_task(task, messages, *, paper_hash, section, ui_lang):
             execute_tool=_execute_tool,
             on_round_result=_on_round_result,
             on_tool_round=_begin_tool_round,
+            decide_round=length_continuation_hook(
+                continuation, messages, abort_signal,
+                ui_lang=ui_lang, task_id=task_id,
+                log_prefix='[Paper:Deepen]'),
             on_round_end=_result_budget.finish_round,
         )
         aborted = _outcome.aborted
@@ -455,6 +466,13 @@ def _run_deepen_task(task, messages, *, paper_hash, section, ui_lang):
             )
             return
 
+        if continuation.continued and continuation.terminal_text != full_content:
+            # The joined answer drops a seam line the model repeated while
+            # continuing; converge live pollers onto what is published.
+            full_content = continuation.terminal_text
+            task['full_text'] = full_content
+            _append_deepen_event(task, {'type': 'delta_reset'})
+            _append_deepen_event(task, {'type': 'delta', 'delta': full_content})
         elapsed = time.time() - t0
         logger.info('[Paper:Deepen] Task %s complete — %d chars, %.1fs',
                     task['task_id'], len(full_content), elapsed)

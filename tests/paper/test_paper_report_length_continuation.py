@@ -4,7 +4,7 @@ import pytest
 
 from tests.support.paper_report import complete_report_body
 
-from lib.paper.report_engine._body import join_report_continuation
+from lib.paper.length_continuation import join_length_continuation
 
 
 pytestmark = pytest.mark.unit
@@ -165,5 +165,5 @@ def test_stop_during_truncated_round_is_not_continued(report_case):
     ('', 'start', 'start'),
     ('ends\n\n', '\n', '\n'),
 ])
-def test_join_report_continuation_seam(prefix, continuation, expected):
-    assert join_report_continuation(prefix, continuation) == expected
+def test_join_length_continuation_seam(prefix, continuation, expected):
+    assert join_length_continuation(prefix, continuation) == expected

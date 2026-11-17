@@ -29,7 +29,10 @@ from lib.paper.images.titles import (
 from lib.paper.artifact_repository import PaperArtifactRepository, PaperReport
 from lib.paper.agent_loop_policy import run_guarded_paper_agent_loop
 from lib.paper.agent_usage import PaperAgentUsageMeter
-from lib.paper.prompts import report_continuation_prompt
+from lib.paper.length_continuation import (
+    OUTPUT_TOKEN_CEILING,
+    length_continuation_hook,
+)
 from lib.paper.report_engine._body import ReportBodyProjection
 from lib.paper.report_engine._normalize import normalize_report_markdown_with_changes
 from lib.paper.report_engine._publication import publish_report
@@ -108,32 +111,10 @@ def _report_length_continuation(task, body, messages, abort_signal):
     """
     if is_review_family(task['lang']):
         return None
-    prompt_lang = task.get('ui_lang') or task['lang']
-
-    def _continue_truncated_report(rnd, msg, finish, usage):
-        # A no-tool round cut by the model's output cap is not a finished
-        # report: ask for the rest and let the body join the pieces. There is
-        # no round cap; a continuation that adds no text ends the loop and the
-        # report is published as far as the model got.
-        if (finish != 'length' or abort_signal.aborted
-                or not isinstance(msg, dict) or msg.get('tool_calls')):
-            return None
-        if not body.continue_truncated_response():
-            logger.warning(
-                '[Paper:Report] Task %s round %d — output cap reached with no '
-                'new text; publishing the report as generated (%d chars)',
-                task['task_id'], rnd + 1, len(body.text))
-            return None
-        logger.info(
-            '[Paper:Report] Task %s round %d — output cap reached; requesting '
-            'continuation', task['task_id'], rnd + 1)
-        messages.append({key: value for key, value in msg.items()
-                         if key != 'tool_calls'})
-        messages.append({'role': 'user',
-                         'content': report_continuation_prompt(prompt_lang)})
-        return LoopDirective.continue_round()
-
-    return _continue_truncated_report
+    return length_continuation_hook(
+        body.continuation, messages, abort_signal,
+        ui_lang=task.get('ui_lang') or task['lang'],
+        task_id=task['task_id'], log_prefix='[Paper:Report]')
 
 
 def _repair_missing_sections(task, messages, body, lang, *, usage_meter,
@@ -312,10 +293,6 @@ def run_report_task(task, messages, images):
 
         logger.info('[Paper:Report] Task %s round %d — model=%s msgs=%d',
                     task['task_id'], rnd + 1, model_name, len(messages))
-        # max_tokens: a very large ceiling; _clamp_max_tokens() reduces it to
-        #   each model's native output limit ("as much as the model allows").
-        #   A round that still stops at that limit is continued by
-        #   _report_length_continuation instead of being published truncated.
         from lib.llm.stream_result import ensure_provider_stream_result
         return ensure_provider_stream_result(dispatch_stream(
             messages,
@@ -325,7 +302,7 @@ def run_report_task(task, messages, images):
             prefer_model=model_name if model else None,
             strict_model=bool(model),
             tools=tools,
-            max_tokens=128000,
+            max_tokens=OUTPUT_TOKEN_CEILING,
             temperature=0,
             thinking_enabled=False,
             log_prefix='[Paper:Report]',

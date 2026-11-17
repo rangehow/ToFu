@@ -961,9 +961,20 @@ must not become certification inputs.
   - The lifecycle manager watches the checkout's HEAD reflog (one `stat` per
     monitor tick). When HEAD moves, it calls
     `serverctl_pkg.engine_precertify.start_background`.
-  - That checks cheaply whether a start would run the gate.
+  - That checks cheaply whether HEAD's engine lacks a record (TofuDB, managed
+    engine, not deployed, no passing record, inputs committed).
     `pending_certification` caches HEAD's engine fingerprint per engine-input
     tree id in `engine-certifications/precertify-identity.json`.
+  - This includes an engine change that keeps the storage contract. A start
+    keeps the deployed engine for it without any gate, so only this background
+    run can produce the record that lets the next start deploy HEAD's engine.
+    Problem (2026-11-17, dc9f47374c's engine-only fix): mirroring the restart
+    path's "kept" skip meant such a fix was never certified, never deployed,
+    and `background.json` never reported the HEAD the landing policy below
+    waits for. Decision: the child calls `certify_head_before_start` with
+    `certify_kept_engine=True`; the restart path still keeps without a gate.
+    Alternative rejected: running the gate on the restart path for kept
+    engines, which brings back the blocked restarts.
   - If the gate is needed, it launches the same
     `certify_head_before_start` in a detached child. The child logs to
     `logs/engine-precertify.log` and reports to

@@ -53,11 +53,17 @@ def _reconcile_one(owner_user_id: int, server: str, action: str, *, logger: logg
         logger.info('[MCP] reconciled %s: tool filter', server)
         return
     if row is None or not row.get('enabled', True):
-        if server in {entry['name'] for entry in bridge.list_servers()}:
+        if (server in {entry['name'] for entry in bridge.list_servers()}
+                or bridge.get_breaker_state(server) is not None):
             bridge._disconnect_one(server, forget=True)
             logger.info('[MCP] reconciled %s: disconnected', server)
         return
-    bridge.connect_server(server, row)
+    try:
+        bridge.connect_server(server, row)
+    except Exception:
+        # Like a failed boot connect: the keepalive retries it with backoff.
+        bridge._retry_failed_first_connect(server, row)
+        raise
     if _worker_stop.is_set():
         # Shutdown raced the handshake; never leave a late connection behind.
         bridge._disconnect_one(server, forget=True)

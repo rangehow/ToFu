@@ -38,7 +38,6 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 MODULE_TS = ROOT / "frontend" / "src" / "features" / "settings" / "section-requires.ts"
 PANEL = ROOT / "static" / "settings_panels" / "general.html"
 STYLES = ROOT / "frontend/src/styles/application/10-theme-pickers.css"
-SETTINGS_SHELL = ROOT / "frontend/src/features/settings/settings-shell.css"
 
 
 def _node() -> str:
@@ -175,8 +174,7 @@ def test_vite_section_requirements_match_declared_contract(module_source):
 def test_css_actually_hides_the_control_and_shows_the_notice():
     """The class flip is only meaningful if the stylesheet acts on it —
     otherwise the guard would pass while the user still sees the empty box."""
-    # The degraded-control rule loads with the Settings modal that renders it.
-    css = STYLES.read_text(encoding="utf-8") + SETTINGS_SHELL.read_text(encoding="utf-8")
+    css = STYLES.read_text(encoding="utf-8")
     assert re.search(r"\.settings-section-js-missing\{[^}]*display:none", css), (
         "the notice must be hidden by default"
     )

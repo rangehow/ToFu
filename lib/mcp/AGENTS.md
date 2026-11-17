@@ -10,6 +10,10 @@ Configuration lives in `config.py` under explicit owner files. `client/_state.py
 owns the lifecycle-bound owner bridge registry; only bootstrap may migrate legacy shared
 configuration. `project_names.py` owns the bounded owner-scoped presentation cache;
 its contract is in `docs/modules/tools_execution.md`. `HandlerResolver` owns dynamic dispatch; do not patch global lookup.
+`bridge_relay.py` makes the execution host the only MCP owner of the execution
+plane: an `execution_shard` process's `get_bridge` is a `RelayedMCPBridge`, so a
+new bridge read or call path used by Turns must exist on both classes (verify
+`tests/mcp_protocol/test_mcp_bridge_relay.py`).
 
 ## Editing rules
 

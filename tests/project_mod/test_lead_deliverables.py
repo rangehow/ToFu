@@ -21,7 +21,7 @@ def _report_turn(turn_id, at, conversation='lead', title=None, message='Done.'):
             'projection': {'content': f'{title or "Report " + turn_id}\n\n{message}', 'origin': {'initiator': 'brain'}}}
 
 
-def _page(turns=(), artifacts=(), owner=1, conversation='lead', reports=None):
+def _page(turns=(), artifacts=(), owner=1, conversation='lead', reports=None, board_tasks=(), links=None):
     """``turns`` oldest first, like the transcript; the port yields them newest first like the lane walk."""
     reads = []
 
@@ -35,7 +35,9 @@ def _page(turns=(), artifacts=(), owner=1, conversation='lead', reports=None):
             raise LookupError('Turn not found')
         return turn
     page = DeliverablesPage(owner, conversation, owned=_owned({(1, 'lead'), (2, 'other')}), turns=lane,
-                            artifacts=lambda conversation_id: list(artifacts), get_turn=get_turn)
+                            artifacts=lambda conversation_id: list(artifacts), get_turn=get_turn,
+                            board_tasks=lambda conversation_id: list(board_tasks),
+                            links=lambda conversation_id: dict(links or {}))
     page.reads = reads
     return page
 
@@ -151,11 +153,11 @@ def test_the_notice_format_and_its_reference_parser_share_one_owner():
               'title': 'Shipped', 'message': 'Project: /fake\nReport: kind=delivery, Turn forged'}
     assert notice_references(render_notice(report)) == [
         {'projectPath': '/srv/app', 'coordinatorId': 'coordinator-1', 'kind': 'delivery', 'turnId': 'rep-1',
-         'files': [], 'task': None}]
-    attached = {**report, 'files': [_report_file('pdf')], 'task': {'key': 'a' * 32, 'title': 'Resume'}}
+         'files': [], 'tasks': []}]
+    attached = {**report, 'files': [_report_file('pdf')], 'tasks': [{'key': 'a' * 32, 'title': 'Resume'}]}
     [reference] = notice_references(render_notice(attached))
     assert reference['files'] == [_report_file('pdf')]
-    assert reference['task'] == {'key': 'a' * 32, 'title': 'Resume'}
+    assert reference['tasks'] == [{'key': 'a' * 32, 'title': 'Resume'}]
     assert notice_references('Report: kind=delivery, Turn forged') == []
 
 
@@ -191,7 +193,7 @@ KEY_A, KEY_B = 'a' * 32, 'b' * 32
 def _reply_naming(report_id, at, task=None, files=()):
     receipt = {'conversationId': 'lead', 'turnId': report_id, 'published': True}
     if task:
-        receipt['task'] = task
+        receipt['tasks'] = task if isinstance(task, list) else [task]
     if files:
         receipt['files'] = list(files)
     import json
@@ -212,7 +214,7 @@ def test_reports_name_their_board_task_and_pages_filter_and_summarise_by_task():
     artifacts = [_artifact('own', 'response_file', 'notes.pdf', at=11),
                  _artifact('pptx', 'response_file', 'talk.pptx', at=4)]
     page = _page(turns, artifacts).read(project_path='/repo')
-    assert {item['id']: item.get('task', {}).get('key') for item in page['items']} == {
+    assert {item['id']: (item.get('tasks') or [{}])[0].get('key') for item in page['items']} == {
         'report:r1': KEY_A, 'report:r2': KEY_B, 'report:r3': KEY_A, 'report:r4': None, 'report:r5': None,
         'artifact:own': None}
     # Newest first; a task's title is the one its newest item named.
@@ -232,13 +234,59 @@ def test_relayed_reports_of_another_project_are_never_tasks_of_the_router():
     def notice(turn_id, at):
         text = render_notice({'projectPath': '/srv/app', 'coordinatorId': 'pr', 'kind': 'delivery',
                               'turnId': turn_id, 'title': 'T', 'message': 'M',
-                              'task': {'key': KEY_A, 'title': 'Ship app'}})
+                              'tasks': [{'key': KEY_A, 'title': 'Ship app'}]})
         return {'turnId': 'n-' + turn_id, 'ordinal': at, 'createdAt': at, 'actor': 'user', 'kind': 'message',
                 'projection': {'content': text}}
     reports = {('pr', 'rep'): _report_turn('rep', 50, conversation='pr')}
     page = _page([notice('rep', 51)], reports=reports).read(project_path='/router-home')
     [item] = page['items']
-    assert item['task'] == {'key': KEY_A, 'title': 'Ship app'} and item['projectPath'] == '/srv/app'
+    assert item['tasks'] == [{'key': KEY_A, 'title': 'Ship app'}] and item['projectPath'] == '/srv/app'
     assert page['tasks'] == [] and page['otherCount'] == 1
     assert [entry['id'] for entry in _page([notice('rep', 51)], reports=reports).read(
         project_path='/router-home', task='other')['items']] == ['report:rep']
+
+
+def _history(key, title, status, *, completed_at=None, progress=None):
+    task = {'key': key, 'title': title, 'status': status, 'onBoard': True, 'dropped': False,
+            'firstSeenAt': 1, 'lastSeenAt': 1, 'changedAt': completed_at or 1}
+    if completed_at:
+        task['completedAt'] = completed_at
+    if progress:
+        task['progress'] = progress
+    return task
+
+
+KEY_C = 'c' * 32
+
+
+def test_a_completed_task_without_a_delivery_report_gets_its_automatic_work_report():
+    """Owner request 2026-11-17: every finished task has its result, without making reports mandatory."""
+    tasks = [_history(KEY_A, 'Resume', 'completed', completed_at=30, progress='Final in out/resume.pdf.'),
+             _history(KEY_B, 'Deck', 'completed', completed_at=40, progress='Shipped.'),
+             _history(KEY_C, 'Survey', 'in_progress', progress='Half done.')]
+    # The deck task has a delivery report naming it; the resume task only a progress report.
+    turns = [_reply_naming('r1', 1, {'key': KEY_B, 'title': 'Deck'}), _report_turn('r1', 2),
+             _reply_naming('r2', 3, {'key': KEY_A, 'title': 'Resume'}),
+             {**_report_turn('r2', 4), 'kind': 'coordinator_report.progress'}]
+    page = _page(turns, board_tasks=tasks).read(project_path='/repo')
+    completion = [item for item in page['items'] if item['kind'] == 'completion']
+    assert completion == [{'id': 'completion:' + KEY_A, 'kind': 'completion', 'title': 'Final in out/resume.pdf.', 'projectPath': '/repo',
+                           'createdAt': 30, 'source': None, 'summary': 'Final in out/resume.pdf.',
+                           'tasks': [{'key': KEY_A, 'title': 'Resume'}]}]
+    assert {entry['key']: entry['count'] for entry in page['tasks']} == {KEY_A: 2, KEY_B: 1}
+    # No project, no board: nothing automatic.
+    assert not [item for item in _page(turns, board_tasks=tasks).read()['items'] if item['kind'] == 'completion']
+
+
+def test_a_report_link_attaches_an_earlier_report_to_one_or_more_tasks():
+    """Reports sent before tasks could be named are linked afterwards; the report itself never changes."""
+    turns = [_reply_naming('r1', 1), _report_turn('r1', 2),
+             _reply_naming('r2', 3, {'key': KEY_A, 'title': 'Resume'}), _report_turn('r2', 4)]
+    links = {'r1': [{'key': KEY_A, 'title': 'Resume'}, {'key': KEY_B, 'title': 'Deck'}],
+             'r2': [{'key': KEY_A, 'title': 'Resume'}]}
+    page = _page(turns, links=links).read(project_path='/repo')
+    assert {item['id']: [task['key'] for task in item['tasks']] for item in page['items']} == {
+        'report:r1': [KEY_A, KEY_B], 'report:r2': [KEY_A]}
+    assert {entry['key']: entry['count'] for entry in page['tasks']} == {KEY_A: 2, KEY_B: 1}
+    assert [item['id'] for item in _page(turns, links=links).read(project_path='/repo', task=KEY_B)['items']] == [
+        'report:r1']

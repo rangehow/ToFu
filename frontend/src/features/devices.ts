@@ -1,4 +1,4 @@
-import './devices.css';
+import '../styles/application/38-devices.css';
 /** Lazy Devices workspace (`#/devices`): the fleet page, the device drawer (`#/devices/<key>`) and the
  * add-device wizard (`#/devices/add`). Only this adapter knows the application shell; the page reads the
  * shared live store. Entry point: _mountDevicesPage (the workspace loader in application.ts).

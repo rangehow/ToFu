@@ -4480,6 +4480,54 @@
       "handler": "desktop_node_remove"
     },
     {
+      "method": "PATCH",
+      "path": "/api/v4/desktop/nodes/<node_id>",
+      "transport": "http",
+      "responseContract": "tofu.api/v4",
+      "summary": "Rename one of the caller's nodes",
+      "tags": [
+        "capabilities"
+      ],
+      "scope": "",
+      "public": false,
+      "requiredScopes": null,
+      "documented": true,
+      "owner": "routes/api_v1/desktop.py",
+      "handler": "desktop_node_rename"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/desktop/nodes/<node_id>/confirm",
+      "transport": "http",
+      "responseContract": "tofu.api/v4",
+      "summary": "Confirm a node that redeemed a pairing",
+      "tags": [
+        "capabilities"
+      ],
+      "scope": "",
+      "public": false,
+      "requiredScopes": null,
+      "documented": true,
+      "owner": "routes/api_v1/desktop.py",
+      "handler": "desktop_node_confirm"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/desktop/nodes/<node_id>/reject",
+      "transport": "http",
+      "responseContract": "tofu.api/v4",
+      "summary": "Reject a node that redeemed a pairing",
+      "tags": [
+        "capabilities"
+      ],
+      "scope": "",
+      "public": false,
+      "requiredScopes": null,
+      "documented": true,
+      "owner": "routes/api_v1/desktop.py",
+      "handler": "desktop_node_reject"
+    },
+    {
       "method": "POST",
       "path": "/api/v4/desktop/pair-code",
       "transport": "http",
@@ -8983,6 +9031,24 @@
       "documented": true,
       "owner": "routes/api_v1/project_brain.py",
       "handler": "project_coordinator_progress_history_read"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/project/coordination/report-links",
+      "transport": "http",
+      "responseContract": "tofu.api/v4",
+      "summary": "Link a lead's earlier reports to its board tasks by title",
+      "tags": [
+        "project"
+      ],
+      "scope": "conversations",
+      "public": false,
+      "requiredScopes": [
+        "conversations"
+      ],
+      "documented": true,
+      "owner": "routes/api_v1/project_brain.py",
+      "handler": "project_coordinator_report_links_write"
     },
     {
       "method": "GET",

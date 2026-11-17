@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.support.overlay import requires_private_overlay
+from tests.support.overlay import requires_yourprovider_overlay
 
 pytestmark = pytest.mark.unit
 
@@ -37,14 +37,14 @@ def _wire_ids(bundle, model):
             if d['offering_id'] in offerings]
 
 
-@requires_private_overlay
+@requires_yourprovider_overlay
 def test_yourprovider_gateway_offers_both_public_wire_ids():
     bundle = _yourprovider_bundle()
     assert _wire_ids(bundle, LONGCAT) == ['LongCat-2.5']
     assert _wire_ids(bundle, HY4) == ['hy4']
 
 
-@requires_private_overlay
+@requires_yourprovider_overlay
 def test_longcat_25_model_carries_the_documented_facts():
     from lib.model_info._context import context_profile
     from lib.model_info._release import release_date

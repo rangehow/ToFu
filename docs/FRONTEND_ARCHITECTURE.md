@@ -857,7 +857,7 @@ requesting the application preserves the waterfall. Tests: `main.test.ts`,
   Problem: the removal above left pairing, fleet health and permissions with
   no home, and a Settings tab cannot show a fleet. Decision: a top-level
   workspace `#/devices` (`page-host.ts` workspace `devices`,
-  `features/devices.ts`, lazy chunk with `features/devices.css`) holds the Home
+  `features/devices.ts`, lazy chunk with `38-devices.css`) holds the Home
   card, the fleet grouped by kind with live health, the add-device wizard
   (`#/devices/add[/<nodeId>]`: kind → one-shot code/link/one-line headless
   command → confirm the pending node with its fingerprint → name, Home-ceiling

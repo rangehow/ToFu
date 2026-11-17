@@ -301,6 +301,29 @@ def _preserve_live_working_view(task, turn):
                        task.get('id'), describe_storage_failure(error))
 
 
+def _paused_resume_error():
+    """The settlement error of a resumable interruption this generation will not resume by itself.
+
+    Its settlement drain asks ``restart_resume.resume_recovered_turn``, which
+    stands down by the same rule; without this the Turn would sit interrupted
+    with no word on why nothing continued it.
+    """
+    from lib.conversations.restart_resume import automatic_resume_pause
+    pause = automatic_resume_pause()
+    if pause is None:
+        return None
+    from lib.error_envelope import make_envelope
+    return make_envelope('internal', context='conversation-worker-recovery',
+        source='conversation-worker', retryable=False, severity='warning',
+        message=('Automatic resume is paused: ' + pause['reason']
+                 + ' / 自动续跑已暂停：服务器重启后未自动继续本轮，可点击“继续”从检查点恢复'),
+        hint='Continue resumes it from its checkpoint / 点击“继续”从检查点恢复',
+        extensions={'code': 'automatic_resume_paused',
+                    'automaticResume': {'state': 'paused', 'guard': pause['guard'],
+                                        'reason': pause['reason']},
+                    'retryPolicy': {'mode': 'manual', 'automatic': False}})
+
+
 def recover_exited_attempt(context, attempt, turn, *, task=None):
     """Converge an exited worker without invoking any model, tool or preparer."""
     from lib.process_owner import owner_state, process_owner
@@ -429,6 +452,9 @@ def recover_exited_attempt(context, attempt, turn, *, task=None):
             carrier.update(status='aborted', finishReason='interrupted',
                            _abort_reason='server_shutdown' if stopping else RESTART_RECOVERY)
             event_type = 'aborted'
+            if not stopping and error is None:
+                error = _paused_resume_error()
+                carrier['error'] = error
         turns.record_task_event(carrier, {'type': event_type, **({'error': error} if error else {})})
         attempt = turns.get_attempt(attempt['attemptId'], user_id=context.principal.owner_user_id,
                                     include_execution_config=True)

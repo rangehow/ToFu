@@ -149,9 +149,11 @@ def test_join_tries_via_routes_first_and_stops_on_a_refused_code(tmp_path, monke
     import lib.desktop_agent.attachments as attachments_mod
     tried = []
 
-    def redeem(url, secret, node_id, name, timeout):
+    def redeem(url, body, timeout):
         tried.append(url)
-        return (None, 'unreachable') if url.startswith('http://10.') else ('tok', '')
+        assert body['node_id'] == 'n1' and body['code'] == 'abcdefgh' and body['kind'] == 'computer'
+        return (None, 'unreachable') if url.startswith('http://10.') else (
+            {'token': 'tok', 'id': 'cred-1'}, '')
 
     monkeypatch.setattr(attachments_mod, '_redeem', redeem)
     record = attachments_mod.join(
@@ -160,6 +162,8 @@ def test_join_tries_via_routes_first_and_stops_on_a_refused_code(tmp_path, monke
     assert tried == ['http://10.0.0.5:15000', 'https://h.example/p']
     assert record['url'] == 'https://h.example/p'
     assert record['candidates'] == ['http://10.0.0.5:15000']
+    from lib.desktop_wire.node_protocol import fingerprint
+    assert record['fingerprint'] == fingerprint('n1', 'cred-1')
 
     tried.clear()
     monkeypatch.setattr(attachments_mod, '_redeem',
@@ -227,16 +231,18 @@ def _bearer(owner):
 @pytest.fixture
 def clean_bridge():
     from lib.api_keys import list_keys, revoke_key
-    from lib.desktop import bridge
-    from lib.desktop.pairing import _STORE, _STORE_LOCK
+    from lib.desktop import bridge, node_registry
 
     def clear():
         with bridge.command_queue_lock:
             bridge.command_queue.clear()
             bridge._agents.clear()
-        with _STORE_LOCK:
-            _STORE.clear()
+        with node_registry._LOCK:
+            node_registry._PRESENCE.clear()
         for owner in (OWNER, OTHER):
+            registry = node_registry.NodeRegistry(owner)
+            for record in registry.list():
+                registry.forget(record['nodeId'])
             for key in list_keys(owner_user_id=owner):
                 revoke_key(key['id'], owner_user_id=owner)
 
@@ -245,7 +251,7 @@ def clean_bridge():
     clear()
 
 
-def _pair(cli, auth, node_id, name):
+def _pair(cli, auth, node_id, name, *, confirm=True):
     r = cli.post('/api/v4/desktop/pair-code?base=http://localhost/proxy/15000/',
                  headers=dict(auth, Host='localhost'))
     assert r.status_code == 201, r.get_data(as_text=True)
@@ -260,8 +266,15 @@ def _pair(cli, auth, node_id, name):
     paired = _payload(r)
     _validator('PairResponse').validate(paired)
     assert paired['node_id'] == node_id
+    assert paired['node_state'] == 'pending_confirmation'
+    from lib.desktop_wire.node_protocol import fingerprint
+    assert paired['fingerprint'] == fingerprint(node_id, paired['id'])
     # The 6-digit form of the same pairing is consumed with it.
-    assert cli.post('/api/desktop/pair', json={'code': body['code']}).status_code == 409
+    assert cli.post('/api/desktop/pair', json={'code': body['code'],
+                                               'node_id': node_id}).status_code == 409
+    if confirm:
+        r = cli.post('/api/v4/desktop/nodes/%s/confirm' % node_id, headers=auth, json={})
+        assert r.status_code == 200, r.get_data(as_text=True)
     return paired['token']
 
 
@@ -358,11 +371,24 @@ def test_token_revoke_disconnects_its_node(flask_client, clean_bridge):
     assert not any(a['agent_id'] == 'node-c' for a in bridge.list_agents(str(OWNER)))
 
 
-def test_offline_paired_credential_is_listed_as_an_offline_node(flask_client, clean_bridge):
+def test_offline_paired_node_is_listed_from_the_durable_registry(flask_client, clean_bridge):
     auth = _bearer(OWNER)
-    _pair(flask_client, auth, 'node-d', 'old-pc')
+    _pair(flask_client, auth, 'node-d', 'old-pc', confirm=False)
     nodes = flask_client.get('/api/v4/desktop/nodes', headers=auth).get_json()['nodes']
-    assert [(n['node_id'], n['name'], n['online']) for n in nodes] == [(None, 'old-pc', False)]
+    assert [(n['node_id'], n['name'], n['online'], n['state']) for n in nodes] == [
+        ('node-d', 'old-pc', False, 'pending')]
+    flask_client.post('/api/v4/desktop/nodes/node-d/confirm', headers=auth, json={})
+    nodes = flask_client.get('/api/v4/desktop/nodes', headers=auth).get_json()['nodes']
+    assert [(n['node_id'], n['online'], n['state']) for n in nodes] == [('node-d', False, 'active')]
+
+
+def test_legacy_bridge_credential_is_listed_unregistered_until_it_polls(flask_client, clean_bridge):
+    from lib.api_keys import create_key
+    auth = _bearer(OWNER)
+    create_key('old-pc', scopes=['agents:bridge'], owner_user_id=OWNER)
+    nodes = flask_client.get('/api/v4/desktop/nodes', headers=auth).get_json()['nodes']
+    assert [(n['node_id'], n['name'], n['online'], n['state']) for n in nodes] == [
+        (None, 'old-pc', False, 'unregistered')]
 
 
 def test_pair_link_base_is_pinned_to_the_request_host(flask_client, clean_bridge):

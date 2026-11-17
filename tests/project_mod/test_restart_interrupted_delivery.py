@@ -113,6 +113,39 @@ def test_a_later_attempt_reopens_a_denied_receipt_and_its_completion_publishes(r
     assert (root / 'new.txt').read_text() == 'resumed attempt\n'
 
 
+def test_a_follow_up_recovers_work_preserved_by_an_early_capture(repo, monkeypatch):
+    """Recovery for receipts a premature 'failed' preserved at their baseline.
+
+    The early capture holds no Worker edits (it equals the shared tip). The
+    follow-up attempt reopens the receipt and its completion captures the
+    checkout's current, uncommitted bytes onto the Worker's own checkpoint ref.
+    """
+    from lib import integration_control as ic
+    root, _, _ = repo
+    work = automatic_workspace(repo, monkeypatch)
+    delivery.bind_task_workspace(str(root), 'automatic', user_id=1, executor_task_id='attempt-1')
+    delivery.settle_task_workspace(str(root), 'automatic', user_id=1, outcome='failed',
+                                   executor_task_id='attempt-1')
+    early = state.get_workspace(str(root), 'automatic', user_id=1)
+    assert receipt(root)['state'] == 'preserved'
+    assert ic._git(root, ['diff', '--quiet', early['base_sha'], early['checkpoint_sha']]).returncode == 0
+    # The attempt kept working after the premature verdict; nothing is committed.
+    (work / 'new.txt').write_text('worker result\n')
+
+    delivery.bind_task_workspace(str(root), 'automatic', user_id=1, executor_task_id='attempt-2')
+    delivery.settle_task_workspace(str(root), 'automatic', user_id=1, outcome='completed',
+                                   executor_task_id='attempt-2')
+
+    row = state.get_workspace(str(root), 'automatic', user_id=1)
+    done = row['origin']['delivery']
+    assert (done['state'], done['executorTaskId']) == ('delivered', 'attempt-2'), done
+    assert row['checkpoint_sha'] != early['checkpoint_sha']
+    assert ic._rev(root, ic._checkpoint_ref(1, 'automatic')) == row['checkpoint_sha']
+    assert ic._git(root, ['merge-base', '--is-ancestor', early['checkpoint_sha'],
+                          row['checkpoint_sha']]).returncode == 0
+    assert (root / 'new.txt').read_text() == 'worker result\n'
+
+
 def test_the_receiver_never_acts_on_an_earlier_attempts_snapshot_once_reopened(repo, monkeypatch):
     from lib import integration_control as ic
     root, _, _ = repo

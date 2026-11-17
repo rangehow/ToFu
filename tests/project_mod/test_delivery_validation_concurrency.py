@@ -309,7 +309,7 @@ def test_discard_entrypoint_waits_for_inflight_publication_fence(repo, monkeypat
     row = _row(root, 'automatic')
     at_intent, release, discard_requested, discarded = (threading.Event() for _ in range(4))
     save = delivery._save
-    destination_lock = ic._destination_lock
+    repo_lock = ic._repo_lock
 
     def pause(row, receipt, **updates):
         if updates.get('state') == 'pending' and updates.get('targetSha'):
@@ -317,17 +317,15 @@ def test_discard_entrypoint_waits_for_inflight_publication_fence(repo, monkeypat
             assert release.wait(15)
         return save(row, receipt, **updates)
 
-    # Revocation and publication share the checkout's destination admission,
-    # which discard acquires before repository admission.
     @contextmanager
-    def observe_admission(destination, **options):
+    def observe_lock(root, **kwargs):
         if threading.current_thread().name.startswith('discard-test'):
             discard_requested.set()
-        with destination_lock(destination, **options):
+        with repo_lock(root, **kwargs):
             yield
 
     monkeypatch.setattr(delivery, '_save', pause)
-    monkeypatch.setattr(ic, '_destination_lock', observe_admission)
+    monkeypatch.setattr(ic, '_repo_lock', observe_lock)
 
     def discard():
         ic.discard_workspace(str(root), 'automatic', user_id=owner)

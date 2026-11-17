@@ -62,3 +62,48 @@ def test_reports_artifacts_and_relayed_deliveries_project_from_their_owners(sema
 
     with pytest.raises(PermissionError):
         DeliverablesPage(owner + 1, lead, artifacts=lambda conversation: []).read()
+
+
+@pytest.mark.parametrize('semantic_authority', ['sqlite', 'native'], indirect=True)
+def test_report_links_and_automatic_work_reports_project_on_the_authority(semantic_authority, monkeypatch):
+    """Owner request 2026-11-17: earlier reports are linked to tasks afterwards, and a task completed without
+    a delivery report shows its final progress note; both read through the real board and link records."""
+    factory, owner, _ = semantic_authority
+    from lib import storage
+    monkeypatch.setattr(storage, 'get_storage_client', factory)
+    from lib.conversations import lead_deliverables
+    from lib.conversations.coordinator_progress import CoordinatorTaskProgress
+    from lib.conversations.coordinator_report_links import link_report, report_links
+    from lib.conversations.coordinator_reports import CoordinatorReports
+    from lib.conversations.lead_deliverables import DeliverablesPage
+    from lib.conversations.project_coordination import ProjectCoordinationRepository
+    monkeypatch.setattr(lead_deliverables, 'notify', lambda *args: None)
+    project = '/deliverables-links/' + uuid.uuid4().hex
+    binding = ProjectCoordinationRepository(owner).create(project, folder_id='test', expected_revision=0,
+                                                          command_id='create')
+    lead = binding['conversationId']
+    scope = {'owner': owner, 'projectPath': project, 'coordinatorId': lead, 'bindingRevision': binding['revision']}
+    progress = CoordinatorTaskProgress(owner, project)
+    progress.publish(scope, {'summary': 'Two tasks.', 'tasks': [
+        {'title': 'Resume', 'status': 'in_progress', 'progress': 'Drafting.'},
+        {'title': 'Deck', 'status': 'pending'}]})
+    progress.publish(scope, {'summary': 'Both done.', 'tasks': [
+        {'title': 'Resume', 'status': 'completed', 'progress': 'Final in out/resume.pdf.'},
+        {'title': 'Deck', 'status': 'completed', 'progress': 'Shipped.'}]})
+    resume, deck = progress.read()['taskKeys']
+    early = CoordinatorReports(owner, project).publish(scope, {
+        'title': 'Deck shipped', 'message': 'Sent before tasks could be named.', 'kind': 'delivery',
+        'idempotency_key': 'early'})
+    task = {'key': deck, 'title': 'Deck'}
+    assert link_report(owner, project, lead, early['turnId'], task) == link_report(
+        owner, project, lead, early['turnId'], task)  # Idempotent.
+    assert report_links(owner, project, lead) == {early['turnId']: [task]}
+    assert report_links(owner, project, 'another-lead') == {}
+
+    page = DeliverablesPage(owner, lead, artifacts=lambda conversation: []).read(project_path=project)
+    by_id = {item['id']: item for item in page['items']}
+    assert by_id['report:' + early['turnId']]['tasks'] == [task]
+    # The deck task's delivery report replaces its automatic one; the resume task gets its final note.
+    assert 'completion:' + deck not in by_id
+    assert by_id['completion:' + resume]['summary'] == 'Final in out/resume.pdf.'
+    assert {entry['key']: entry['count'] for entry in page['tasks']} == {resume: 1, deck: 1}

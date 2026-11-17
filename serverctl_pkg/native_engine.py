@@ -1010,11 +1010,15 @@ def _uncertified_head_decision(root: Path, environment: dict, dest: Path, expect
     return decision
 
 
-def certify_head_before_start(root: Path, environment: dict | None = None) -> None:
+def certify_head_before_start(root: Path, environment: dict | None = None, *,
+                              certify_kept_engine: bool = False) -> None:
     """Certify HEAD's engine with the engine gate when a start would otherwise refuse it.
 
     Runs before anything is stopped, outside the preparation deadline (the gate
     takes hours). Afterwards the ordinary preparation deploys the new record.
+    A start keeps a contract-compatible deployed engine without the gate; the
+    background run passes ``certify_kept_engine`` so HEAD's engine still gets
+    the record that lets the next start deploy it.
     Raises EnginePreparationError with one actionable line when automatic
     certification is impossible or does not produce HEAD's record.
     """
@@ -1037,8 +1041,8 @@ def certify_head_before_start(root: Path, environment: dict | None = None) -> No
         pass
     contract = storage_contract_sha256(root)
     record, problem = passing_record(root, expected, contract)
-    if record is not None or _uncertified_head_decision(
-            root, environment, dest, expected, contract, problem)['decision'] == 'kept':
+    if record is not None or (not certify_kept_engine and _uncertified_head_decision(
+            root, environment, dest, expected, contract, problem)['decision'] == 'kept'):
         return
     refused = f"Cannot certify HEAD's storage engine {expected[:12]} automatically, so nothing was stopped: "
     commit, dirty = _head_engine_inputs(root)

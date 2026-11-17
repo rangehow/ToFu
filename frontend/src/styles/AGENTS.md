@@ -47,23 +47,23 @@ the composed-sheet size budgets.
   explicit; these owners pass the token gate without legacy exemptions.
 - `02-*` owners separate composer geometry/field/controls/menus, shell actions,
   Update, persisted image receipts and message residency/navigation. Six
-  Inspector sheets live in `features/inspector/` and import from
-  diagnostics-presenters; the tool anchors remain critical. Field and edited Inspector sheets pass strict tokens.
+  `02-inspector-*` sheets import directly from diagnostics-presenters; the tool
+  anchors remain critical. Field and edited Inspector sheets pass strict tokens.
 - `08-*` owners separate Swarm, injections, signals, Scheduler/Timer panels,
   previews and round cards; the three `08-timer-receipt-*` owners pass strict
-  tokens. `src/app-dialogs.css` belongs to the lazy dialog controller.
+  tokens. `08-app-dialogs.css` belongs to the lazy dialog controller.
   `10-*` owners separate project selection, optimizer previews and theme rules.
   Unmigrated rule copies use exact manifest hashes, never a renewed allowlist.
 - `08-tool-group-*` and `08-tool-row-*` separate batch/timeline/history and row
   intent/attribution/evidence. `08-tool-search-*` own search evidence and motion.
 - Tool presentation styles: the ordered `09-*` owners separate command status,
   controls/output, approvals/diffs, memory/results/progress, project/conversation
-  receipts, guidance, failures/activity and WorkUnits. `features/slide-editor.css`
+  receipts, guidance, failures/activity and WorkUnits. `09-slide-editor.css`
   belongs to the lazy Slides entry; it never rides the conversation sheet.
-- Demand-loaded feature CSS lives beside its importing owner, not here (e.g.
-  `features/paper/{pdf-reader,preview-*}.css`, `features/memory/panel.css`,
-  `features/local-control*.css`); only startup-composed sections stay in
-  `application/`.
+- `03-pdf-reader.css` is imported by the shared PDF core; `24-paper-preview-*`
+  separates shared reader chrome from preview sources/editors/proposals. The
+  manifest names each direct component importer, covering Paper, chat preview
+  and Research reuse without adding these sheets to startup.
 - `14-*` owners separate browser setup, shared capability controls, Memory,
   the browser extension dialog, branches, references, agent evidence, toasts
   and reasoning.

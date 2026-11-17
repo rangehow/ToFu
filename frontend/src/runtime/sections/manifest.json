@@ -766,79 +766,6 @@
    "runtimeBindings": []
   },
   {
-   "name": "cost-popover-presenters",
-   "output": "frontend/src/runtime/cost-popover-presenters.generated.js",
-   "moduleImports": [
-    {
-     "source": "frontend/src/i18n/index.ts",
-     "bindings": [
-      "t"
-     ]
-    },
-    {
-     "source": "frontend/src/html-safety.ts",
-     "bindings": [
-      "escapeHtml"
-     ]
-    },
-    {
-     "source": "frontend/src/token-usage.ts",
-     "bindings": [
-      "normalizeTokenUsage"
-     ]
-    }
-   ],
-   "registryImports": [],
-   "runtimeServices": [
-    {
-     "name": "Icon",
-     "kind": "function"
-    },
-    {
-     "name": "_CP_KEY_SVG",
-     "kind": "value"
-    },
-    {
-     "name": "_CP_WARN_SVG",
-     "kind": "value"
-    },
-    {
-     "name": "_cacheBreakCulprits",
-     "kind": "function"
-    },
-    {
-     "name": "_cacheBreakReason",
-     "kind": "function"
-    },
-    {
-     "name": "_cacheBreakState",
-     "kind": "function"
-    },
-    {
-     "name": "_costCtxByTurnId",
-     "kind": "object"
-    },
-    {
-     "name": "_featureFlags",
-     "kind": "object"
-    },
-    {
-     "name": "calcCostCny",
-     "kind": "function"
-    }
-   ],
-   "sections": [
-    {
-     "source": "ui/finish_info_rich.js",
-     "path": "ui/finish_info_rich.js"
-    }
-   ],
-   "runtimeExports": [
-    "_toggleCostPopover"
-   ],
-   "runtimeBindings": []
-  },
-  {
    "name": "utility-panels",
    "output": "frontend/src/runtime/utility-panels-runtime.generated.js",
    "moduleImports": [
@@ -2242,6 +2169,10 @@
   {
    "source": "execution-interactions.js",
    "path": "execution-interactions.js"
+  },
+  {
+   "source": "ui/finish_info_rich.js",
+   "path": "ui/finish_info_rich.js"
   }
  ]
 }

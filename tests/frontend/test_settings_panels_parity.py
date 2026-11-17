@@ -14,7 +14,6 @@ Run isolated (project convention): PYTEST_DISABLE_PLUGIN_AUTOLOAD=1.
 """
 from __future__ import annotations
 
-import glob
 import os
 import re
 
@@ -294,15 +293,6 @@ def _settings_css():
     return _read(os.path.join(PROJECT_ROOT, 'static', 'settings.css'))
 
 
-def _settings_owned_css():
-    """settings.css plus the sheets the Settings feature owners import beside
-    their modules (Settings tab rules moved there from settings.css)."""
-    feature_dir = os.path.join(PROJECT_ROOT, 'frontend', 'src', 'features', 'settings')
-    sheets = sorted(glob.glob(os.path.join(feature_dir, '**', '*.css'), recursive=True))
-    assert sheets, f'no feature-owned Settings stylesheets under {feature_dir}'
-    return '\n'.join([_settings_css(), *(_read(path) for path in sheets)])
-
-
 def _strip_css_comments(css):
     return re.sub(r'/\*.*?\*/', '', css, flags=re.S)
 
@@ -326,15 +316,13 @@ def test_settings_css_prefixes_not_left_in_styles():
 
 
 def test_settings_css_prefixes_present_in_settings():
-    """Reverse: each migrated prefix must actually appear in settings.css or a
-    Settings feature-owned sheet (so the styles didn't just get deleted).
-    Guards an over-eager removal."""
-    settings = _strip_css_comments(_settings_owned_css())
+    """Reverse: each migrated prefix must actually appear in settings.css (so
+    the styles didn't just get deleted). Guards an over-eager removal."""
+    settings = _strip_css_comments(_settings_css())
     missing = [pat for pat in _SETTINGS_ONLY_CSS_PREFIXES
                if not re.search(pat, settings)]
     assert not missing, (
-        'Migrated prefixes absent from settings.css and the Settings '
-        'feature-owned sheets (styles deleted, not '
+        'Migrated prefixes absent from settings.css (styles deleted, not '
         f'moved?): {missing}'
     )
 

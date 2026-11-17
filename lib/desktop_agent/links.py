@@ -58,21 +58,26 @@ def start(state, perms, log, *, remote=True, on_revoked=None):
         from lib.desktop_agent import run_agent
         stop_event = threading.Event()
         state['stop'] = stop_event
+        state['error'] = None
 
         def on_status(status):
             state['last_status'] = status
             log('Link status (%s): %s' % (state.get('label') or url, status))
-            # Tofu itself refused the credential: it was revoked (or the node
-            # was removed on the server). Retrying cannot succeed; stop the
-            # link and let the owner join again.
-            if remote and status.get('state') == 'auth':
+            # Tofu itself refused this node for good: its credential was
+            # revoked (or the node removed), or the Home saw an identity
+            # conflict. Retrying cannot succeed; stop the link and let the
+            # owner join again.
+            refused = {'auth': 'revoked', 'conflict': 'conflict'}.get(status.get('state'))
+            if remote and refused:
                 stop_event.set()
-                state['revoked'] = True
-                if on_revoked is not None:
+                state['revoked'] = refused
+                # A second live process of this very node was refused: the
+                # config it shares with the surviving process stays active.
+                if on_revoked is not None and status.get('reason') != 'duplicate_boot':
                     try:
                         on_revoked(state)
                     except Exception as exc:
-                        log('Could not record revoked link: %s' % exc)
+                        log('Could not record refused link: %s' % exc)
 
         def route_repair():
             current = state.get('url') or ''
@@ -94,8 +99,10 @@ def start(state, perms, log, *, remote=True, on_revoked=None):
                           bridge_secret=secret, stop_event=stop_event,
                           on_status=on_status,
                           route_repair=route_repair if remote else None,
-                          browser_relay=state.get('browser_relay') if remote else None)
+                          browser_relay=state.get('browser_relay') if remote else None,
+                          stop_on_refusal=remote)
             except Exception as exc:
+                state['error'] = str(exc)
                 on_status({'state': 'error', 'detail': str(exc)})
                 log('Agent loop crashed: %s' % exc)
             finally:
@@ -164,7 +171,7 @@ class NodeLinks:
         self._links[att_id] = state
         ensure_relay(state, self.log)
         start(state, self.perms, self.log, remote=True,
-              on_revoked=lambda _s: update_attachment(att_id, state='revoked'))
+              on_revoked=lambda s: update_attachment(att_id, state=s['revoked']))
 
     def start(self, local=None):
         """Start the local link (``(url, secret)``) and every active attachment."""
@@ -189,10 +196,10 @@ class NodeLinks:
             self._links.clear()
         return all([stop(state, self.log) for state in links])
 
-    def join(self, text, *, node_id, name='', stop=None):
+    def join(self, text, *, node_id, name='', stop=None, kind='computer'):
         """Redeem one pairing input and, if the node is running, link at once."""
         from lib.desktop_agent.attachments import join
-        record = join(text, node_id=node_id, name=name, log=self.log, stop=stop)
+        record = join(text, node_id=node_id, name=name, log=self.log, stop=stop, kind=kind)
         with self._lock:
             old = self._links.pop(record['id'], None)
             if old is not None:
@@ -222,11 +229,13 @@ class NodeLinks:
                          'last_status': local.get('last_status') or {}})
         for record in attachments():
             state = links.get(record['id']) or {}
-            revoked = state.get('revoked') or record.get('state') == 'revoked'
+            refused = state.get('revoked') or (
+                record.get('state') if record.get('state') in ('revoked', 'conflict') else None)
             rows.append({'id': record['id'],
                          'label': record.get('label') or record['url'],
                          'url': state.get('url') or record['url'], 'local': False,
-                         'state': 'revoked' if revoked else 'active',
+                         'state': refused or 'active',
+                         'fingerprint': record.get('fingerprint') or '',
                          'enabled': bool(state.get('enabled')),
                          'last_status': state.get('last_status') or {}})
         return rows

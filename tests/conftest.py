@@ -21,7 +21,6 @@ import sys
 import tempfile
 import threading
 import time
-from urllib.parse import urlsplit
 
 import pytest
 
@@ -1701,20 +1700,11 @@ def _close_coro_loop(loop, drive):
 def _run_coro_on_private_loop(coro):
     import asyncio
 
-    from lib.agent_core.push import hub
-
     loop = asyncio.new_event_loop()
-    # Synchronous views resolve request bodies on the serving loop
-    # (lib.quart_sync.resolve). Bind this request's loop the way production
-    # binds its serving loop; otherwise a body still streaming in is awaited
-    # from a foreign loop whose selector is never woken, and the view hangs.
-    previous_loop = hub._loop
-    hub._loop = loop
     try:
         task = asyncio.ensure_future(coro, loop=loop)
         return _run_coro_with_alarm(loop, task)
     finally:
-        hub._loop = previous_loop
         if not loop.is_closed():
             loop.close()
 
@@ -2130,43 +2120,6 @@ _BENIGN_CONSOLE_ERRORS = (
 )
 
 
-#: Each engine's exact ``Request.failure`` text for a request the browser itself
-#: cancelled (navigation, reload, page close) — the same
-#: event in three dialects. Any other failure text, including every DNS,
-#: connection, TLS or HTTP-level failure, stays a hard finding.
-#: Firefox names a cancelled channel ``NS_BINDING_ABORTED`` or, for a
-#: streaming read torn down mid-body, ``NS_ERROR_ABORT`` (both observed on CI
-#: for navigation-cancelled SSE and fetches); WebKit uses
-#: ``Load request cancelled``.
-_CANCELLED_REQUEST_FAILURES = {
-    'chromium': frozenset({'net::ERR_ABORTED'}),
-    'firefox': frozenset({'NS_BINDING_ABORTED', 'NS_ERROR_ABORT'}),
-    'webkit': frozenset({'Load request cancelled'}),
-}
-
-
-def _is_cancelled_request_failure(browser_name, failure):
-    """Whether ``failure`` is ``browser_name``'s own cancellation of a request."""
-    return failure in _CANCELLED_REQUEST_FAILURES[browser_name]
-
-
-#: WebKit also raises a load it cancelled (navigation, reload, close) as a page
-#: error worded ``<url> due to access control checks.`` (observed on CI for an
-#: in-flight same-origin ``/api/v4`` read). A same-origin request never runs
-#: CORS, so for the page's own host that text can only be the cancellation;
-#: a cross-origin access-control failure stays a hard finding.
-_WEBKIT_ACCESS_CONTROL_REPORT = re.compile(
-    r'^(?:Fetch API cannot load )?(?:https?:)?/{1,2}(?P<host>[^/\s]+)/\S* '
-    r'due to access control checks\.$')
-
-
-def _is_webkit_same_origin_cancel(browser_name, page_url, message):
-    if browser_name != 'webkit':
-        return False
-    match = _WEBKIT_ACCESS_CONTROL_REPORT.match(message)
-    return bool(match) and match.group('host') == urlsplit(page_url or '').netloc
-
-
 def _attach_js_error_capture(pg):
     """Record uncaught JS exceptions + unexpected console errors on ``pg``.
 
@@ -2187,9 +2140,8 @@ def _attach_js_error_capture(pg):
 
       * ``pageerror``   → ALWAYS hard. An uncaught exception is never fine.
       * ``console.error`` → hard UNLESS it matches :data:`_BENIGN_CONSOLE_ERRORS`.
-      * ``requestfailed`` → hard unless it is the engine's own cancellation of
-        an in-flight request (:data:`_CANCELLED_REQUEST_FAILURES`; Chromium's
-        ``net::ERR_ABORTED``), not a missing asset.
+      * ``requestfailed`` → hard unless ``ERR_ABORTED``, which is the browser
+        cancelling an in-flight preload/navigation, not a missing asset.
         (Verified: the ERR_ABORTED seen at boot is a pet sprite preload, and
         that file EXISTS on disk — treating it as a 404 would be a false
         accusation of the kind the charter warns about.)
@@ -2200,11 +2152,8 @@ def _attach_js_error_capture(pg):
     """
     hard = []
     pg._tofu_js_errors = hard
-    browser_name = pg.context.browser.browser_type.name
 
     def _on_pageerror(exc):
-        if _is_webkit_same_origin_cancel(browser_name, getattr(pg, 'url', ''), str(exc)):
-            return
         hard.append(f'uncaught exception: {str(exc)[:300]}')
 
     def _on_console(msg):
@@ -2217,7 +2166,7 @@ def _attach_js_error_capture(pg):
 
     def _on_requestfailed(req):
         failure = req.failure or ''
-        if _is_cancelled_request_failure(browser_name, failure):
+        if 'ERR_ABORTED' in failure:
             return
         hard.append(f'request failed: {req.url[:200]} ({failure})')
 

@@ -31,6 +31,7 @@ def test_total_failure_rolls_back_restart_stamp(monkeypatch):
 
     monkeypatch.setattr(
         'serverctl_pkg.application_restart.run_application_restart_control', refuse)
+    monkeypatch.setattr(reexec, '_shutdown_requester', lambda reason: None)
     monkeypatch.setattr(
         'lib.server.server_reexec.begin_server_reexec', lambda reason: False)
     monkeypatch.setattr(
@@ -38,8 +39,12 @@ def test_total_failure_rolls_back_restart_stamp(monkeypatch):
         lambda *, pid: cleared.append(pid) or True)
     monkeypatch.setattr(reexec, 'audit_log', lambda *a, **k: None)
 
-    assert reexec.perform_server_reexec('update') is False
+    outcome = reexec.perform_server_reexec('update')
+    assert outcome.handed_over is False
     assert cleared == [reexec.os.getpid()]
+    assert outcome.refusals == (
+        ('manager delegation', 'manager unreachable'),
+        ('in-place re-exec', 'storage engine preparation failed: manager unreachable'))
 
 
 @pytest.mark.unit
@@ -54,5 +59,5 @@ def test_preflight_failure_does_not_touch_stamp(monkeypatch):
         lambda *, pid: cleared.append(pid) or True)
     monkeypatch.setattr(reexec, 'audit_log', lambda *a, **k: None)
 
-    assert reexec.perform_server_reexec('update') is False
+    assert reexec.perform_server_reexec('update').handed_over is False
     assert cleared == []

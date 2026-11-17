@@ -157,13 +157,7 @@ def _assert_secret_never_left_memory(pid: int, tmp_path: Path) -> None:
             assert _SECRET.encode() not in content
     for path in tmp_path.rglob('*'):
         if path.is_file() and not path.is_symlink():
-            try:
-                content = path.read_bytes()
-            except FileNotFoundError:
-                # The live kernel's background work (e.g. uv staging the MCP cache in
-                # a temporary directory) may remove a file between listing and reading.
-                continue
-            assert _SECRET.encode() not in content, path
+            assert _SECRET.encode() not in path.read_bytes(), path
 
 
 def _stderr_tail(path: Path) -> str:

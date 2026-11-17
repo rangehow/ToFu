@@ -1,5 +1,6 @@
 """Isolated certification must never publish into a running deployment."""
 import hashlib
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -146,11 +147,15 @@ def test_shared_test_storage_refusal_stays_fatal_for_an_explicit_engine(tmp_path
         _start_test_storage()
 
 
+def _item():
+    """A stand-in for the pytest Item the setup/call hooks receive (never None)."""
+    return SimpleNamespace(fixturenames=())
+
 @pytest.mark.parametrize('phase', ['pytest_runtest_setup', 'pytest_runtest_call'])
 def test_native_refusal_in_any_fixture_or_test_body_skips_with_the_remedy(phase, monkeypatch):
     import tests.conftest as conftest
     monkeypatch.delenv('TOFU_TEST_TOFUDB_BIN', raising=False)
-    hook = getattr(conftest, phase)(item=None)
+    hook = getattr(conftest, phase)(item=_item())
     next(hook)
     with pytest.raises(pytest.skip.Exception) as skipped:
         hook.throw(engines.EngineAdmissionRefusedError(
@@ -165,7 +170,7 @@ def test_native_refusal_in_any_fixture_or_test_body_skips_with_the_remedy(phase,
 def test_native_refusal_stays_fatal_in_an_explicit_engine_lane(phase, tmp_path, monkeypatch):
     import tests.conftest as conftest
     monkeypatch.setenv('TOFU_TEST_TOFUDB_BIN', str(tmp_path / 'tofu-db'))
-    hook = getattr(conftest, phase)(item=None)
+    hook = getattr(conftest, phase)(item=_item())
     next(hook)
     with pytest.raises(engines.EnginePreparationError):
         hook.throw(engines.EngineAdmissionRefusedError('stale'))
@@ -174,7 +179,7 @@ def test_native_refusal_stays_fatal_in_an_explicit_engine_lane(phase, tmp_path, 
 def test_only_the_typed_engine_refusal_becomes_a_skip(monkeypatch):
     import tests.conftest as conftest
     monkeypatch.delenv('TOFU_TEST_TOFUDB_BIN', raising=False)
-    hook = conftest.pytest_runtest_setup(item=None)
+    hook = conftest.pytest_runtest_setup(item=_item())
     next(hook)
     with pytest.raises(RuntimeError, match='authority defect'):
         hook.throw(RuntimeError('authority defect'))
@@ -186,7 +191,7 @@ def test_other_preparation_failures_are_not_reported_as_engine_refusals(phase, m
     # failure of the code under test, never a missing engine prerequisite.
     import tests.conftest as conftest
     monkeypatch.delenv('TOFU_TEST_TOFUDB_BIN', raising=False)
-    hook = getattr(conftest, phase)(item=None)
+    hook = getattr(conftest, phase)(item=_item())
     next(hook)
     with pytest.raises(engines.EnginePreparationError, match='timed out'):
         try:

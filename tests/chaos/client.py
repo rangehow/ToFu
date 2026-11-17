@@ -116,7 +116,13 @@ class InstanceClient:
         return list(self.snapshot(conversation_id).get('turns') or [])
 
     def wait_settled(self, conversation_id: str, *, timeout: float) -> list[dict]:
-        """Every Turn of the conversation reached a terminal status within ``timeout``."""
+        """Every Turn of the conversation reached a terminal status within ``timeout``.
+
+        A restart pause is not where a Turn ends: recovery settles a fenced
+        attempt ``interrupted`` (cause ``server_restart``) and its settlement
+        drain then resumes it in place (``restart_resume.resume_recovered_turn``).
+        Accepting the pause as terminal read it, under load, as the outcome.
+        """
         deadline = time.monotonic() + timeout
         last = None
         while time.monotonic() < deadline:
@@ -127,11 +133,23 @@ class InstanceClient:
                 time.sleep(0.2)
                 continue
             assistant = [t for t in turns if t.get('actor') == 'assistant']
-            if assistant and all(t.get('status') in TERMINAL_TURN_STATUSES for t in assistant):
+            if (assistant and all(t.get('status') in TERMINAL_TURN_STATUSES for t in assistant)
+                    and not _awaiting_restart_resume(assistant[-1])):
                 return turns
             last = [(t.get('actor'), t.get('status')) for t in turns]
             time.sleep(0.2)
         raise TimeoutError(f'turns of {conversation_id} did not settle within {timeout:.0f}s: {last}')
+
+
+def _awaiting_restart_resume(turn: dict) -> bool:
+    """The newest Turn is a restart pause whose automatic resume has not replaced it yet.
+
+    A pause recovery holds instead (a cut tool call whose effect it could not
+    confirm) is final and carries its error; only a silent pause is resumed.
+    """
+    settlement = turn.get('settlement') or {}
+    return (turn.get('status') == 'interrupted' and settlement.get('cause') == 'server_restart'
+            and not ((settlement.get('error') or {}).get('message') or '').strip())
 
 
 class EventStream:

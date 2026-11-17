@@ -284,7 +284,15 @@ def _record_failure(batch: ToolExecutionBatch, ports: ToolExecutionPorts,
     except ImportError as import_error:
         ports.log.debug('[Task %s] UnknownWorkspaceRootError import failed: %s',
                         batch.task_label, import_error)
-    if unknown_root:
+    from lib.llm.llm_errors import AbortedError
+    if isinstance(error, AbortedError):
+        # An abort fence (Stop, revoked authority, an unconfirmed prior effect)
+        # decided this outcome and the model receives it; it is not a crash.
+        ports.log.warning(
+            '[Task %s] conv=%s Tool %s (tc_id=%s) refused at round %d: %s: %s',
+            batch.task_label, batch.task.get('convId', ''), name, call_id,
+            batch.round_number, type(error).__name__, error)
+    elif unknown_root:
         ports.log.info(
             '[Task %s] conv=%s Tool %s (tc_id=%s) recoverable workspace-root '
             'error returned to LLM at round %d: %s',

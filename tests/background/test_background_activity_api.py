@@ -16,6 +16,7 @@ import asyncio
 import threading
 import time
 import unittest
+import unittest.mock
 
 import pytest
 
@@ -61,7 +62,7 @@ class _StubSession:
 
 @pytest.fixture(autouse=True)
 def _clean_registries(monkeypatch):
-    monkeypatch.setattr('lib.swarm.message_receipts.snapshot_receipts',
+    monkeypatch.setattr('lib.swarm.message_receipts.resident_snapshot',
                         lambda session, agents, specs: {
                             'messageReceipts': [], 'messageReceiptsVersions': {},
                             'messageReceiptsAvailable': True, 'messageParticipants': []})
@@ -213,6 +214,30 @@ class TestBackgroundActivityRoute(unittest.TestCase):
             body = await r.get_json()
             self.assertEqual(body['backgroundCommands'], [])
         _run(go())
+
+    def test_unconfirmed_execution_owner_logs_the_cause(self):
+        from lib.tasks_pkg.command_control_transport import CommandControlUnavailable
+
+        def unconfirmed(app, *, user_id):
+            try:
+                raise TimeoutError('Execution control acknowledgement elapsed')
+            except TimeoutError as error:
+                raise CommandControlUnavailable(
+                    'Execution control outcome is unconfirmed') from error
+
+        async def go():
+            return await self._client().get(
+                '/api/v1/activity/background',
+                headers={'Authorization': f'Bearer {self.token}'})
+
+        with unittest.mock.patch(
+                'lib.tasks_pkg.command_control_runtime.background_activity', unconfirmed), \
+                self.assertLogs('routes.api_v1.activity', level='WARNING') as logs:
+            response = _run(go())
+        self.assertEqual(response.status_code, 503)
+        [line] = logs.output
+        self.assertIn('Execution control outcome is unconfirmed', line)
+        self.assertIn('cause=TimeoutError', line)
 
 
 if __name__ == '__main__':

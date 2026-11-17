@@ -77,10 +77,13 @@ export function presentTurnFinish(
     return { tone: 'success', label: 'Completed', detail: '' };
   }
   if (turn.status === 'interrupted') {
+    /* Recovery explains an interruption it will not continue by itself (a
+     * paused automatic resume, a cut call to check) in the settlement error. */
+    const error = normalizeErrorEnvelope(settlement.error);
     return {
       tone: 'warning',
       label: 'Interrupted',
-      detail: text(settlement.cause, 'generation_interrupted'),
+      detail: text(error?.message, text(settlement.cause, 'generation_interrupted')),
       resumeOptions: resumeTurnOptions(turn),
     };
   }

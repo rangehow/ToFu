@@ -241,6 +241,37 @@ def test_failed_notice_review_warns_the_command_chat_even_without_a_reply_origin
     assert item.reply_to == (f'{COMMAND}/99' if outcome == 'error' else None)
 
 
+@pytest.mark.parametrize('initiator', ['proactive', 'timer', 'autopilot'])
+def test_failed_scheduled_wake_notice_warns_the_owner_like_any_nonhuman_notice(
+        store, router, enabled, router_turns, monkeypatch, initiator):
+    """A project-wake keepalive (initiator proactive) or any other nonhuman
+    wake is a notice by the same test as the Router's [SILENT] gate, so its
+    empty_stop failure warns the owner instead of vanishing."""
+    enabled(command_chat=COMMAND)
+    router_turns({'initiator': initiator})
+    monkeypatch.setattr('lib.conversations.restart_resume.resume_failed_notice_turn',
+                        lambda *args, **kwargs: {'outcome': 'not_resumed', 'reason': 'test'})
+    autoreply.on_task_terminal(_done(
+        content='', status='error', finishReason='abnormal_stop',
+        error={'kind': 'abnormal_stop', 'message': '(empty_stop) bounded recovery exhausted',
+               'raw': 'bucket=empty_stop attempts=2/2'}))
+    autoreply.flush_notice_recovery_for_test()
+    [item] = store.active_outbox()
+    assert item.thread == COMMAND and item.origin['kind'] == 'router_status'
+    assert '未能完成一条通知的审阅' in item.text and 'empty_stop' in item.text
+    assert item.idempotency_key == 'out-1:notice-review:error'
+
+
+@pytest.mark.parametrize('origin', [{'initiator': 'human'}, {}])
+def test_failed_human_or_unknown_turn_gets_no_notice_warning(
+        store, router, enabled, router_turns, origin):
+    enabled(command_chat=COMMAND)
+    router_turns(origin)
+    autoreply.on_task_terminal(_done(content='', status='error', finishReason='error',
+                                    error={'kind': 'provider_error', 'message': 'boom'}))
+    assert store.active_outbox() == []
+
+
 def test_native_rejected_human_declaration_does_not_report_completion(
         store, router, enabled, router_turns):
     enabled(command_chat=COMMAND)

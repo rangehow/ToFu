@@ -756,6 +756,9 @@ class MasterOrchestrator:
         # Keep it available to result reads without turning it into success.
         self._recovered_partial_outputs: dict[str, str] = {}
         self._lock = threading.Lock()
+        # The background-activity read answers from these, never from storage.
+        from lib.swarm.message_receipts import ResidentReceipts
+        self.resident_receipts = ResidentReceipts()
         self._aborted = False
 
         self._restart_suspended = False

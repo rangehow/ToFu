@@ -269,9 +269,23 @@ def forget_node(owner, node_id: str, *, client=None) -> tuple[dict, int]:
     return _mutate(owner, change, client=client)
 
 
+def transfer_node(owner, old_node_id: str, new_node_id: str, *, client=None) -> tuple[dict, int]:
+    """A confirmed re-pair of a known device (lib/desktop/node_registry.py, predecessor):
+    the new node ID inherits the old one's ceiling (unless it has its own) and defaults."""
+    def change(record):
+        ceiling = record['ceilings'].pop(old_node_id, None)
+        if ceiling is not None:
+            record['ceilings'].setdefault(new_node_id, ceiling)
+        for kind, value in record['defaults'].items():
+            if value == old_node_id:
+                record['defaults'][kind] = new_node_id
+        return record
+    return _mutate(owner, change, client=client)
+
+
 __all__ = [
     'CEILING_TIERS', 'CONTRACT', 'KINDS', 'LIVENESS_WINDOW_S', 'NAMESPACE', 'PolicyNotFound',
     'ceiling_tiers', 'defaults', 'device_tiers', 'effective_tiers', 'forget_node',
     'home_tiers', 'intersect', 'invalidate', 'notify_devices_changed', 'permissions_listing',
-    'permissions_view', 'policy', 'set_ceiling', 'set_defaults', 'validate',
+    'permissions_view', 'policy', 'set_ceiling', 'set_defaults', 'transfer_node', 'validate',
 ]

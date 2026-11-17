@@ -133,9 +133,11 @@ def test_scheduler_drops_start_when_agent_finishes():
 def _snapshot_with_running_agent():
     """Build a snapshot from a master whose one agent is mid-flight."""
     from lib.swarm.master import MasterOrchestrator
+    from lib.swarm.message_receipts import ResidentReceipts
     m = MasterOrchestrator.__new__(MasterOrchestrator)
     import threading
     m._lock = threading.RLock()
+    m.resident_receipts = ResidentReceipts()
     m._results_by_id = {}
     m._agents = {}
     m.specs = [_spec('a1')]
@@ -202,9 +204,11 @@ def test_snapshot_terminal_agent_has_no_started_at_but_keeps_elapsed():
     """A finished agent renders from `elapsed`; it needs no live start clock."""
     from lib.swarm.master import MasterOrchestrator
     from lib.swarm.protocol import SubAgentResult, SubAgentStatus
+    from lib.swarm.message_receipts import ResidentReceipts
     import threading
     m = MasterOrchestrator.__new__(MasterOrchestrator)
     m._lock = threading.RLock()
+    m.resident_receipts = ResidentReceipts()
     spec = _spec('a1')
     res = SubAgentResult(status=SubAgentStatus.COMPLETED.value,
                          final_answer='ok')
@@ -231,9 +235,11 @@ def test_snapshot_carries_round_count_for_running_and_finished_agents():
     from types import SimpleNamespace
     from lib.swarm.master import MasterOrchestrator
     from lib.swarm.protocol import SubAgentResult, SubAgentStatus
+    from lib.swarm.message_receipts import ResidentReceipts
     import threading
     m = MasterOrchestrator.__new__(MasterOrchestrator)
     m._lock = threading.RLock()
+    m.resident_receipts = ResidentReceipts()
     finished, running, queued = _spec('finished'), _spec('running'), _spec('queued')
     m._results_by_id = {'finished': (finished, SubAgentResult(
         status=SubAgentStatus.COMPLETED.value, final_answer='ok', rounds_used=94))}

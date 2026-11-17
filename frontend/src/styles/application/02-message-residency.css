@@ -28,3 +28,4 @@
  * transient pre-correction content reads as "verifying", not as truth. Cleared
  * the moment Phase-2 reconciles (or the fetch settles). Persisted corruption is
  * already prevented by the rev CAS; this only closes the cosmetic stale flash. */
+#chatInner.chat-cache-verifying{opacity:.82;transition:opacity .18s ease}

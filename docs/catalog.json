@@ -80,6 +80,10 @@
       "guard": "tests/desktop/test_desktop_node_protocol.py"
     },
     {
+      "path": "contracts/desktop_node_registry_v1.schema.json",
+      "guard": "tests/desktop/test_desktop_node_registry.py"
+    },
+    {
       "path": "contracts/swarm_messages_v1.json",
       "guard": "tests/swarm/test_run_messages.py"
     },

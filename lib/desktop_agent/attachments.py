@@ -23,6 +23,7 @@ import time
 
 from lib.desktop_wire.node_protocol import (
     LegacyConnectLine,
+    fingerprint,
     PairingInputError,
     attachment_id,
     node_contract,
@@ -42,19 +43,26 @@ class JoinError(Exception):
         super().__init__('join:%s%s' % (code, (':' + detail) if detail else ''))
 
 
-def _pair_body(secret: str, node_id: str, name: str) -> dict:
-    return {'code': secret, 'node_id': node_id, 'name': name[:80],
-            'platform': sys.platform[:40]}
+def _pair_body(secret: str, node_id: str, name: str, kind: str = 'computer',
+               previous_node_id: str = '') -> dict:
+    body = {'code': secret, 'node_id': node_id, 'name': name[:80],
+            'platform': sys.platform[:40], 'kind': kind}
+    if previous_node_id and previous_node_id != node_id:
+        body['previous_node_id'] = previous_node_id
+    return body
 
 
 def _pair_outcome(resp):
-    """``(token, '')`` for a redeemed code, else ``(None, reason)``."""
+    """``(PairResponse, '')`` for a redeemed code, else ``(None, reason)``."""
     if resp.status_code == 201:
         try:
-            token = str((resp.json() or {}).get('token') or '')
+            payload = resp.json() or {}
         except ValueError:
-            token = ''
-        return (token, '') if token else (None, 'not_tofu')
+            payload = {}
+        if isinstance(payload, dict) and isinstance(payload.get('data'), dict):
+            payload = payload['data']
+        token = str(payload.get('token') or '') if isinstance(payload, dict) else ''
+        return (payload, '') if token else (None, 'not_tofu')
     if resp.status_code == 409:
         return None, 'invalid_code'
     if resp.status_code == 429:
@@ -62,22 +70,22 @@ def _pair_outcome(resp):
     return None, 'http_%d' % resp.status_code
 
 
-def _redeem(url: str, secret: str, node_id: str, name: str, timeout: float):
-    """One direct pair exchange. Returns the credential, or a failure reason."""
+def _redeem(url: str, body: dict, timeout: float):
+    """One direct pair exchange. Returns the PairResponse, or a failure reason."""
     import requests
     from lib.http_transport.client import http_post
     path = node_contract()['x-transport']['pair_path']
     try:
         resp = http_post(url + path, timeout=timeout, allow_redirects=False,
                          auth=lambda request: request,
-                         json=_pair_body(secret, node_id, name))
+                         json=body)
     except requests.RequestException as exc:
         logger.debug('[Agent] pair exchange via %s failed: %s', url, exc)
         return None, 'unreachable'
     return _pair_outcome(resp)
 
 
-def _redeem_via_browser(link, node_id: str, name: str, log, stop=None):
+def _redeem_via_browser(link, body: dict, log, stop=None):
     """Redeem through the signed-in page's relay; waits while the link lives.
 
     The wait is the pairing lifetime (``x-pairing.ttl_seconds``): after it the
@@ -96,7 +104,7 @@ def _redeem_via_browser(link, node_id: str, name: str, log, stop=None):
                 return None, 'browser_unavailable'
             time.sleep(0.5)
         resp = relay.request(link.server_url + node_contract()['x-transport']['pair_path'],
-                             _pair_body(link.secret, node_id, name), {},
+                             body, {},
                              timeout=max(1.0, deadline - time.monotonic()))
         if resp is None:
             return None, 'browser_unavailable'
@@ -106,13 +114,20 @@ def _redeem_via_browser(link, node_id: str, name: str, log, stop=None):
 
 
 def join(text: str, *, node_id: str, name: str = '', timeout: float = 8.0,
-         log=lambda _msg: None, via_browser: bool = True, stop=None) -> dict:
+         log=lambda _msg: None, via_browser: bool = True, stop=None,
+         kind: str = 'computer') -> dict:
     """Join a server from one pasted input; returns the saved attachment.
 
     A pairing code is one-shot: a route that answered ``invalid_code`` was
     Tofu refusing the code itself, so later routes are not tried with it.
+    The new node waits for the Home owner's confirmation; the attachment
+    keeps the fingerprint both ends show. A host that replaced an earlier
+    node (renamed, container recreated) names it, so the Home shows a
+    re-pair of a known device.
     """
-    from lib.desktop_agent.config import save_attachment
+    from lib.desktop_agent.config import clear_predecessor, node_identity, save_attachment
+    identity = node_identity()
+    previous = identity['predecessor'] if identity['node_id'] == node_id else None
     try:
         parsed = parse_join_input(text)
     except PairingInputError as exc:
@@ -123,20 +138,21 @@ def join(text: str, *, node_id: str, name: str = '', timeout: float = 8.0,
         label = url
     else:
         url, secret, label = '', '', parsed.server_url
-        reasons = []
+        body = _pair_body(parsed.secret, node_id, name, kind, previous or '')
+        reasons, paired = [], {}
         for route in parsed.candidates:
-            token, reason = _redeem(route, parsed.secret, node_id, name, timeout)
-            if token:
-                url, secret = route, token
+            paired, reason = _redeem(route, body, timeout)
+            if paired:
+                url, secret = route, paired['token']
                 break
             log('Pairing via %s failed: %s' % (route, reason))
             reasons.append(reason)
             if reason in ('invalid_code', 'rate_limited'):
                 break
         if not url and via_browser and reasons[-1] not in ('invalid_code', 'rate_limited'):
-            token, reason = _redeem_via_browser(parsed, node_id, name, log, stop)
-            if token:
-                url, secret = parsed.server_url, token
+            paired, reason = _redeem_via_browser(parsed, body, log, stop)
+            if paired:
+                url, secret = parsed.server_url, paired['token']
             else:
                 reasons.append(reason)
         if not url:
@@ -145,8 +161,18 @@ def join(text: str, *, node_id: str, name: str = '', timeout: float = 8.0,
     record = {'id': attachment_id(url), 'url': url, 'secret': secret,
               'candidates': candidates, 'label': label,
               'paired_at': time.time(), 'state': 'active'}
+    if not isinstance(parsed, LegacyConnectLine):
+        record['fingerprint'] = fingerprint(node_id, str(paired.get('id') or ''))
+        if paired.get('fingerprint') and paired['fingerprint'] != record['fingerprint']:
+            raise JoinError('fingerprint_mismatch')
     save_attachment(record)
-    log('Joined %s as node %s' % (label, name))
+    if previous and not isinstance(parsed, LegacyConnectLine):
+        clear_predecessor()
+    if record.get('fingerprint'):
+        log('Joined %s as node %s; waiting for the owner to confirm it on that '
+            'Tofu (fingerprint %s)' % (label, name, record['fingerprint']))
+    else:
+        log('Joined %s as node %s' % (label, name))
     return record
 
 

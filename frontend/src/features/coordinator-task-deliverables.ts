@@ -19,7 +19,7 @@ import type { LeadDeliverable, LeadDeliverablePage } from '../api/project-coordi
 import { appendDeliverables } from './lead-deliverables/model';
 import { deliverableRow } from './lead-deliverables/rows';
 import type { DeliverableOpener } from './lead-deliverables/open';
-import './lead-deliverables/lead-deliverables.css';
+import '../styles/application/36-lead-deliverables.css';
 
 export const OTHER_TASKS = 'other';
 

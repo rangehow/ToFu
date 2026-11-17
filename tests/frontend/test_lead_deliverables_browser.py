@@ -70,6 +70,8 @@ def _seed(page, tmp_path, monkeypatch):
     CoordinatorTaskProgress(1, project).publish(scope, {'summary': 'Login fix shipped; resume in review.', 'tasks': [
         {'title': 'Polish the resume', 'status': 'in_progress', 'progress': 'Final pass.'},
         {'title': 'Fix the Safari login', 'status': 'completed', 'progress': 'Merged.'},
+        # Completed without any report: its automatic work report is its final note.
+        {'title': 'Back up the notes', 'status': 'completed', 'progress': 'Saved to backup/notes-2026-11.'},
     ]})
     keys = CoordinatorTaskProgress(1, project).read()['taskKeys']
     tasks = {'resume': {'key': keys[0], 'title': 'Polish the resume'}, 'login': {'key': keys[1], 'title': 'Fix the Safari login'}}
@@ -81,14 +83,14 @@ def _seed(page, tmp_path, monkeypatch):
     call = {'type': 'tool_use', 'blockId': 'tool:call-report', 'id': 'call-report', 'name': 'report_to_user',
             'input': '{}', 'result': {'status': 'done', 'content': json.dumps(
                 {'conversationId': leader, 'turnId': progress['turnId'], 'published': True, 'files': [file_ref],
-                 'task': tasks['resume']})}}
+                 'tasks': [tasks['resume']]})}}
     append_settled_turn(leader, user_id=1, command_id='reply-' + uuid.uuid4().hex[:8], actor='assistant',
                         kind='message', projection={'content': 'Reported.', 'segments': [call]})
     receipt = CoordinatorReports(1, project).publish(scope,
         {'title': TITLE, 'message': '**Outcome**: login no longer drops on Safari.\n- Merged to main\n- Regression suite green',
-         'kind': 'delivery', 'idempotency_key': 'delivery-' + uuid.uuid4().hex[:8]}, task=tasks['login'])
+         'kind': 'delivery', 'idempotency_key': 'delivery-' + uuid.uuid4().hex[:8]}, tasks=[tasks['login']])
     delivered = {**call, 'blockId': 'tool:call-delivery', 'id': 'call-delivery', 'result': {'status': 'done', 'content': json.dumps(
-        {'conversationId': leader, 'turnId': receipt['turnId'], 'published': True, 'task': tasks['login']})}}
+        {'conversationId': leader, 'turnId': receipt['turnId'], 'published': True, 'tasks': [tasks['login']]})}}
     append_settled_turn(leader, user_id=1, command_id='reply-' + uuid.uuid4().hex[:8], actor='assistant',
                         kind='message', projection={'content': 'Delivered.', 'segments': [delivered]})
     return folder.json()['data']['id'], leader, receipt['turnId'], project, publishing[0]
@@ -139,6 +141,20 @@ def test_classic_task_board_expands_each_task_to_its_reports_and_files(page, mon
     delivery = board.locator(f'.coordinator-task-deliverables[data-task="{login.get_attribute("data-task")}"] .lead-deliverable')
     expect(delivery.locator('.lead-deliverable__kind')).to_have_text('Delivered')
     expect(delivery.locator('.lead-deliverable__title')).to_have_text(TITLE)
+    # A task completed without a report still expands, to its automatic work report.
+    backup = board.locator('.coordinator-progress-task-toggle', has_text='Back up the notes')
+    expect(backup.locator('.coordinator-progress-task-count')).to_have_text('1')
+    backup.click()
+    work = board.locator(f'.coordinator-task-deliverables[data-task="{backup.get_attribute("data-task")}"] .lead-deliverable')
+    expect(work.locator('.lead-deliverable__kind')).to_have_text('Work report')
+    expect(work.locator('.lead-deliverable__title')).to_have_text('Saved to backup/notes-2026-11.')
+    _settle(page)
+    board.screenshot(path=str(OUTPUT / 'board-completion-expanded.png'), animations='disabled')
+    work.locator('.lead-deliverable__open').click()
+    note = page.locator('dialog.lead-deliverable-dialog .lead-deliverable-report--completion')
+    expect(note).to_contain_text('Saved to backup/notes-2026-11.')
+    page.locator('dialog.lead-deliverable-dialog').get_by_role('button', name='Close').click()
+
     # The deliverable itself: the readable report card, not the conversation.
     delivery.locator('.lead-deliverable__open').click()
     dialog = page.locator('dialog.lead-deliverable-dialog')

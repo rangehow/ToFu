@@ -58,11 +58,18 @@ class Chaos:
         return conversation, nonce, user_text, response
 
     def settle(self, conversation: str) -> tuple[dict, dict]:
-        turns = self.client.wait_settled(conversation, timeout=SETTLE_DEADLINE_S)
-        human = [t for t in turns if t.get('actor') == 'human']
-        assistant = [t for t in turns if t.get('actor') == 'assistant']
-        assert human and assistant, turns
-        return human[-1], assistant[-1]
+        deadline = time.monotonic() + SETTLE_DEADLINE_S
+        while True:
+            turns = self.client.wait_settled(conversation, timeout=max(1.0, deadline - time.monotonic()))
+            human = [t for t in turns if t.get('actor') == 'human']
+            assistant = [t for t in turns if t.get('actor') == 'assistant']
+            assert human and assistant, turns
+            # Recovery settles a restart's Turn, then its settlement drain resumes
+            # it: a resumable restart interruption with no explanation is still
+            # on its way back (a paused or held one names why in its error).
+            if not _resumes_by_itself(assistant[-1]) or time.monotonic() >= deadline:
+                return human[-1], assistant[-1]
+            time.sleep(0.2)
 
     # side effects ----------------------------------------------------------
     def effect_command(self, nonce: str, then: str = '') -> str:
@@ -124,6 +131,14 @@ class Chaos:
         return assistant
 
 
+def _resumes_by_itself(turn: dict) -> bool:
+    settlement = turn.get('settlement') or {}
+    return (turn.get('status') == 'interrupted' and settlement.get('cause') == 'server_restart'
+            and not settlement.get('error')
+            and any(option.get('operation') in ('continue', 'checkpoint_resume')
+                    for option in settlement.get('resumeOptions') or ()))
+
+
 @contextlib.contextmanager
 def _running_chaos(root: Path):
     provider = fp.ScriptedProvider().start()
@@ -153,9 +168,9 @@ def chaos(tmp_path_factory):
 
 @pytest.fixture
 def chaos_restart(tmp_path_factory):
-    """A private instance for explicit restarts: each restart counts toward the
-    restart-storm guard (lib/conversations/restart_resume.py), which stands
-    automatic resume down; on the shared instance it would change what the
+    """A private instance for explicit restarts: the shared instance's kill specs
+    accumulate crash boots toward the restart-storm guard (lib/shutdown_marker.py),
+    which stands automatic resume down; sharing them would change what the
     later kill-and-recover specs observe."""
     with _running_chaos(tmp_path_factory.mktemp('chaos-restart')) as harness:
         yield harness
@@ -710,3 +725,133 @@ def test_worker_delegated_by_a_coordinator_that_started_before_mcp_connected_rea
         assert time.monotonic() < deadline, _mcp_results(chaos, worker_nonce)
         time.sleep(0.1)
     assert _mcp_calls(chaos).count('record worker') == 1, _mcp_results(chaos, worker_nonce)
+
+
+# ── MCP across execution shards (lib/mcp/bridge_relay.py) ──────────────────
+
+def _shard_pids(chaos) -> list[int]:
+    pids = []
+    for row in chaos.instance.leaked_processes():
+        try:
+            environ = Path(f'/proc/{row["pid"]}/environ').read_bytes().split(b'\0')
+        except OSError:
+            continue
+        if b'TOFU_PROCESS_ROLE=execution_shard' in environ:
+            pids.append(row['pid'])
+    return pids
+
+
+def _launches(chaos, name: str) -> int:
+    log = chaos.instance.root / 'mcp-pair' / name / 'launches.log'
+    return len(log.read_text().split('\n')) - 1 if log.exists() else 0
+
+
+@pytest.fixture
+def chaos_mcp_pair(chaos):
+    """Mocks named like the live owner's hope and github servers."""
+    import sys
+    from tests.chaos.instance import CHECKOUT
+    for name in ('hope', 'github'):
+        state = chaos.instance.root / 'mcp-pair' / name
+        state.mkdir(parents=True, exist_ok=True)
+        (state / 'schema').write_text('v1')
+        chaos.client.request('POST', '/api/v4/mcp/servers', {
+            'name': name, 'command': sys.executable, 'transport': 'stdio',
+            'args': [str(CHECKOUT / 'tests' / 'chaos' / 'mcp_server.py'), str(state)]})
+        chaos.client.request('POST', '/api/v4/mcp/connect', {'server': name})
+    try:
+        deadline = time.monotonic() + SETTLE_DEADLINE_S
+        note = f'probe-{uuid.uuid4().hex[:8]}'
+        while True:
+            conversation, nonce, _text = _mcp_turn(chaos, [
+                ('mcp__hope__chaos_record', {'note': note}),
+                ('mcp__github__chaos_record', {'note': note})], 'probe')
+            chaos.settle(conversation)
+            if all(f'record {note}' in _pair_calls(chaos, name) for name in ('hope', 'github')):
+                break
+            assert time.monotonic() < deadline, _mcp_results(chaos, nonce)
+            note = f'probe-{uuid.uuid4().hex[:8]}'
+        yield chaos
+    finally:
+        for name in ('hope', 'github'):
+            chaos.client.request('DELETE', f'/api/v4/mcp/servers/{name}')
+
+
+def _pair_calls(chaos, name: str) -> list[str]:
+    log = chaos.instance.root / 'mcp-pair' / name / 'calls.log'
+    return log.read_text().splitlines() if log.exists() else []
+
+
+def _held_mcp_turns(chaos, count: int, tool: str, release: threading.Event):
+    from tests.chaos.client import CHAT_CONFIG
+    config = {'tools': {**CHAT_CONFIG['tools'], 'toolSearch': 'local'}}
+    turns = []
+    for index in range(count):
+        note = f'{tool}-{index}-{uuid.uuid4().hex[:6]}'
+        calls = [{'name': f'mcp__{server}__{tool}', 'arguments': {'note': note}}
+                 for server in (('hope', 'github') if tool == 'chaos_record' else ('hope',))]
+        nonce = chaos.provider.script([
+            fp.hold('Holding. ', release, fp.tool('execute_tools', {'calls': calls})),
+            fp.text(f'Done {note}. [END_TURN: done]')])
+        conversation = f'chaos{uuid.uuid4().hex[:16]}'
+        user_text = f'Use the MCP servers. [chaos turn={nonce}]'
+        chaos.client.create_turn(conversation, user_text, workspace=str(chaos.workspace), first=True,
+                                 config=config)
+        turns.append((conversation, nonce, user_text, note))
+    deadline = time.monotonic() + SETTLE_DEADLINE_S
+    while not all(chaos.provider.requests(nonce) for _c, nonce, _u, _n in turns):
+        assert time.monotonic() < deadline, 'the held Turns never all reached the provider'
+        time.sleep(0.1)
+    return turns
+
+
+def test_concurrent_sessions_across_shards_reach_one_mcp_server_set(chaos_mcp_pair):
+    """Found live 2026-11-17: every execution shard ran its own MCP auto-connect
+    (53 processes x 7 servers) and a shard whose npx launch lost the npm-cache
+    race lacked github for its life. Shards now relay to the execution host's
+    servers: 20 concurrent sessions across shards call both mocks, every call
+    runs once, and no shard launches a server."""
+    chaos = chaos_mcp_pair
+    launches = {name: _launches(chaos, name) for name in ('hope', 'github')}
+    release = threading.Event()
+    try:
+        turns = _held_mcp_turns(chaos, 20, 'chaos_record', release)
+        assert _shard_pids(chaos), 'the burst ran without execution shards'
+    finally:
+        release.set()
+    for conversation, _nonce, user_text, _note in turns:
+        chaos.assert_contract(conversation, user_text, outcomes={'completed'})
+    for name in ('hope', 'github'):
+        calls = _pair_calls(chaos, name)
+        for _c, nonce, _u, note in turns:
+            assert calls.count(f'record {note}') == 1, (name, note, _mcp_results(chaos, nonce))
+        assert _launches(chaos, name) == launches[name], f'a shard launched its own {name}'
+
+
+def test_execution_shards_killed_mid_mcp_call_never_replay_it(chaos_mcp_pair):
+    """A shard dies while its Turn's MCP call is in flight on the execution
+    host's server: the owner withdraws the call, the Turn settles, and the call
+    is never sent again by the Turn's takeover."""
+    chaos = chaos_mcp_pair
+    hold = chaos.instance.root / 'mcp-pair' / 'hope' / 'hold-call'
+    hold.touch()
+    release = threading.Event()
+    try:
+        turns = _held_mcp_turns(chaos, 6, 'chaos_wait', release)
+        release.set()
+        deadline = time.monotonic() + SETTLE_DEADLINE_S
+        while not all(f'wait {note}' in _pair_calls(chaos, 'hope') for *_rest, note in turns):
+            assert time.monotonic() < deadline, 'the MCP calls never reached the server'
+            time.sleep(0.1)
+        shards = _shard_pids(chaos)
+        assert shards, 'no execution shard held a call'
+        for pid in shards:
+            os.kill(pid, signal.SIGKILL)
+    finally:
+        release.set()
+        hold.unlink(missing_ok=True)
+    for conversation, _nonce, user_text, _note in turns:
+        chaos.assert_contract(conversation, user_text, outcomes=set(TERMINAL_TURN_STATUSES))
+    calls = _pair_calls(chaos, 'hope')
+    for _c, nonce, _u, note in turns:
+        assert calls.count(f'wait {note}') == 1, (note, _mcp_results(chaos, nonce))

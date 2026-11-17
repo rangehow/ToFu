@@ -411,6 +411,48 @@ def test_interrupted_chats_resume_from_their_checkpoint_once(chats):
     assert [item['outcome'] for item in again] == ['not_resumed'] and len(c.started) == 2
 
 
+def test_the_pass_summary_names_every_conversation_with_its_reason(chats, caplog):
+    """2026-11-17 22:10:50: the pass logged only `1 of 21 interrupted conversation(s)
+    resumed`; the other 20 (handed to project dispatch recovery, superseded by queued
+    Router input) could not be told apart from lost work without reading every store.
+    One summary line names each resumed conversation and each skipped one with its
+    reason, and a pass that resumes nothing still logs it."""
+    import logging
+    c = chats
+    prose = c.running('chat-prose', content='Half of the answer')
+    stopped = c.running('owner-stopped', content='Stopped by the owner')
+    finished = c.running('finished-before-stop', content='All done')
+    restart_resume.record_quiesced_conversations([prose, stopped, finished])
+    c.settle(prose, 'server_shutdown')
+    c.settle(stopped, None)
+    finished.update(status='done', finishReason='stop')
+    c.turns.record_task_event(finished, {'type': 'done', 'finishReason': 'stop'})
+    c.next_generation()
+    with caplog.at_level(logging.INFO, logger='lib.conversations.restart_resume'):
+        results = {item['conversationId']: item for item in
+                   restart_resume.resume_restart_paused_turns(previous_shutdown=RESTART)}
+    [summary] = [record.getMessage() for record in caplog.records
+                 if '[RestartResume] summary:' in record.getMessage()]
+    assert '1 of 3 interrupted conversation(s) resumed' in summary
+    assert 'resumed=[chat-prose]' in summary
+    for name in ('owner-stopped', 'finished-before-stop'):
+        assert f'{name}: {results[name]["reason"]}' in summary, summary
+    assert 'user_abort' in results['owner-stopped']['reason']
+
+    # Nothing resumed: the summary still says why each one was left.
+    again = c.running('owner-stopped-again', content='Stopped again')
+    restart_resume.record_quiesced_conversations([again])
+    c.settle(again, None)
+    c.next_generation()
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger='lib.conversations.restart_resume'):
+        [item] = restart_resume.resume_restart_paused_turns(previous_shutdown=RESTART)
+    [summary] = [record.getMessage() for record in caplog.records
+                 if '[RestartResume] summary:' in record.getMessage()]
+    assert 'resumed=[]' in summary
+    assert f'skipped=[owner-stopped-again: {item["reason"]}]' in summary, summary
+
+
 def test_the_next_generation_resumes_the_chat_then_wakes_the_requester_with_the_result(
         chats, monkeypatch, tmp_path):
     """The whole restart path on real Turn storage: a Settings restart is accepted

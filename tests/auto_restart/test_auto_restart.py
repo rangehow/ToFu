@@ -241,7 +241,7 @@ def test_deferred_reexec_delegates_to_shared_primitive(monkeypatch):
         reexec, 'perform_server_reexec',
         lambda reason, *, frontend_prevalidated=False, requested_at=None:
             calls.append((reason, frontend_prevalidated, requested_at))
-            or True)
+            or reexec.ServerReexecOutcome(True))
     upd._deferred_reexec(delay=0)
     assert calls == [('update', False, None)]
     calls.clear()
@@ -267,7 +267,7 @@ def test_managed_reexec_refreshes_supervisor_then_replaces_worker(monkeypatch):
         },
     )
 
-    assert reexec.perform_server_reexec('update') is True
+    assert reexec.perform_server_reexec('update').handed_over is True
     assert calls == [('/project', {
         'stage': 'delegate',
         'reason': 'update',
@@ -291,7 +291,7 @@ def test_managed_reexec_threads_requested_at_to_supervisor(monkeypatch):
 
     epoch = 1789972800.0
     assert reexec.perform_server_reexec(
-        'update', frontend_prevalidated=True, requested_at=epoch) is True
+        'update', frontend_prevalidated=True, requested_at=epoch).handed_over is True
     assert calls == [('/project', {
         'stage': 'delegate',
         'reason': 'update',

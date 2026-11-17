@@ -13,7 +13,7 @@ import type { LeadDeliverable, LeadDeliverableKind, LeadDeliverablePage, LeadDel
 
 export type { LeadDeliverable, LeadDeliverableKind, LeadDeliverablePage, LeadDeliverableTurn };
 
-export const DELIVERABLE_KINDS: ReadonlyArray<LeadDeliverableKind> = ['report', 'file', 'deck', 'document', 'merge'];
+export const DELIVERABLE_KINDS: ReadonlyArray<LeadDeliverableKind> = ['report', 'file', 'deck', 'document', 'merge', 'completion'];
 
 /** What opening an item shows: the artifact, the report card, or the Worker's result Turn. */
 export type DeliverableTarget =
@@ -23,7 +23,8 @@ export type DeliverableTarget =
 
 export function deliverableTarget(item: LeadDeliverable): DeliverableTarget | null {
   if (item.artifactId) return { kind: 'artifact', artifactId: item.artifactId };
-  if (item.kind === 'report') return { kind: 'report', item };
+  // A completed task's automatic work report reads in the same dialog as a report.
+  if (item.kind === 'report' || item.kind === 'completion') return { kind: 'report', item };
   if (item.result) return { kind: 'turn', turn: item.result };
   return item.source ? { kind: 'turn', turn: item.source } : null;
 }
@@ -83,7 +84,7 @@ export function deliverableAge(createdAt: number, now: number, locale?: string):
 /** What a row looks like: a report by its own kind, a file by its format. */
 export type DeliverableVisual =
   | 'delivery' | 'progress' | 'decision' | 'blocked' | 'report'
-  | 'deck' | 'pdf' | 'sheet' | 'image' | 'document' | 'file' | 'merge';
+  | 'deck' | 'pdf' | 'sheet' | 'image' | 'document' | 'file' | 'merge' | 'completion';
 
 const SHEET_FORMATS = new Set(['xlsx', 'xls', 'csv', 'tsv']);
 const IMAGE_FORMATS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg']);

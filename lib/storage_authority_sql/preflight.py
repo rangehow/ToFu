@@ -15,7 +15,6 @@ import uuid
 from lib.storage.errors import StorageError
 from lib.log import get_logger
 from lib.storage_authority_sql.storage_capabilities import describe_mount
-from runtime_guards import pid_is_alive
 
 
 logger = get_logger('tofu.storage.sidecar.preflight')
@@ -95,7 +94,9 @@ class ProjectLease:
                     raise StorageError(
                         'database_unavailable',
                         'Cannot verify the existing Web storage owner')
-                if not pid_is_alive(owner_pid):
+                try:
+                    os.kill(owner_pid, 0)
+                except OSError:
                     return
                 raise StorageError(
                     'database_unavailable',

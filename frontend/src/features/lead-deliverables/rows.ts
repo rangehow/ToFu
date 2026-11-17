@@ -15,7 +15,7 @@ import {
   type DeliverableVisual, type LeadDeliverable,
 } from './model';
 import type { DeliverableOpener } from './open';
-import './lead-deliverables.css';
+import '../../styles/application/36-lead-deliverables.css';
 
 export interface DeliverableRowOptions {
   opener(): Promise<DeliverableOpener>;
@@ -27,6 +27,7 @@ export interface DeliverableRowOptions {
 const GLYPHS: Readonly<Record<DeliverableVisual, string>> = {
   delivery: 'checkCircle', progress: 'chart', decision: 'messageCircle', blocked: 'alertTriangle', report: 'inbox',
   deck: 'slides', pdf: 'file', sheet: 'fileSheet', image: 'image', document: 'file', file: 'fileCode', merge: 'gitMerge',
+  completion: 'checkCircle',
 };
 
 function badgeKey(item: LeadDeliverable, visual: DeliverableVisual) {

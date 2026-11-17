@@ -11,7 +11,7 @@
 #    make test-unit     — Run unit tests only
 #    make test-api      — Run API integration tests only
 #    make test-slow     — Run expensive deterministic tests
-#    make test-chaos    — Fault-injection smoke through an isolated two-process instance
+#    make test-chaos    — Fault-injection smoke through isolated two-process instances and real nodes
 #    make test-visual   — Run Playwright visual E2E tests
 #    make test-e2e      — Run hermetic E2E smoke (real app + browser + stub LLM)
 #    make test-frontend — Run Vite/ESM artifact + owner contracts (needs npm)
@@ -259,8 +259,8 @@ test-api-core: ## Run API integration tests against the available shipped graph
 	# run in a dedicated no-xdist phase so a parallel lane cannot starve them.
 	$(PYTEST) $(PYTEST_BASE) -m "api and serial" --timeout=600 --tb=short -q $(COV_APPEND)
 
-test-chaos: ## Fault-injection smoke: real Turns through an isolated two-process instance (docs/DEFENSIVE_PATTERNS.md)
-	$(PYTEST) $(PYTEST_BASE) tests/chaos $(PYTEST_PARALLEL) --tb=short -q
+test-chaos: ## Fault-injection smoke: real Turns and real nodes through isolated two-process instances (docs/DEFENSIVE_PATTERNS.md)
+	$(PYTEST) $(PYTEST_BASE) tests/chaos $(PYTEST_PARALLEL) $(if $(filter 0,$(JOBS)),,--dist loadfile) --tb=short -q
 
 test-slow: ## Run expensive deterministic tests with bounded parallelism
 	$(PYTEST) $(PYTEST_BASE) -m slow $(PYTEST_PARALLEL) --timeout=600 --tb=short -q

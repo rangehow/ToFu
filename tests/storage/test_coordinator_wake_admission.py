@@ -61,6 +61,7 @@ def test_a_results_wake_of_a_budgeted_request_with_two_workers_is_admitted(segme
 
     [wake] = controls(r)
     assert wake['request']['coordinatorWake']['reason'] == 'results'
-    # Worker states are read from the task board, not enumerated in the brief.
-    assert first['id'] not in wake['request']['brief']
+    # The brief anchors on the task board and Worker tools, never a results list
+    # copied into it (6a66c62932, "Anchor Coordinator continuations on the task board").
+    assert 'get_project_workers' in wake['request']['brief']
     assert r.wake() == [] and len(controls(r)) == 1

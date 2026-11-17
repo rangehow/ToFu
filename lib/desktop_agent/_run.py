@@ -132,36 +132,18 @@ def _ensure_agent_id():
     The id lives in the agent config file (TOFU_DESKTOP_CONFIG or
     ~/.tofu/desktop_agent.json) so restarts keep the same identity — the
     server-side registry and command addressing key on it (RWA P0).
-    The file keeps one id per host (``agent_ids``, keyed by
+    The file keeps one id per host (``config.node_identity``, keyed by
     :func:`host_identity.host_key`), so hosts sharing one home directory stay
     distinct nodes. The legacy single ``agent_id`` goes to the first host that
     claims it, so an existing paired node keeps its identity.
     """
-    from lib.desktop_agent.host_identity import host_key
-    host = host_key()
-    candidate = uuid.uuid4().hex
-    outcome = {'agent_id': candidate}
-
-    def _mutate(cfg):
-        ids = cfg.get('agent_ids') if isinstance(cfg.get('agent_ids'), dict) else {}
-        mine = str(ids.get(host) or '').strip()
-        if mine:
-            outcome['agent_id'] = mine
-            return None
-        legacy = str(cfg.get('agent_id') or '').strip()
-        if legacy and legacy not in ids.values():
-            outcome['agent_id'] = legacy
-        cfg['agent_ids'] = {**ids, host: outcome['agent_id']}
-        if not legacy:
-            cfg['agent_id'] = outcome['agent_id']
-        return cfg
-
+    from lib.desktop_agent.config import node_identity
     try:
-        update_config(_mutate)
+        return node_identity()['node_id']
     except Exception as e:
         logger.warning('[Agent] could not persist agent_id (a new one will '
                        'be generated on next start): %s', e)
-    return outcome['agent_id']
+        return uuid.uuid4().hex
 
 
 def _agent_version() -> str:
@@ -228,10 +210,19 @@ def _capabilities(permissions):
     }
 
 
+# One per node process (contracts/desktop_node_registry_v1 x-identity.boot): a
+# Home refuses an earlier boot of a node ID that polls again after a newer one.
+_BOOT_ID = uuid.uuid4().hex
+
+# Poll refusals that retrying cannot fix: the link stops and reports why.
+_TERMINAL_REFUSALS = ('desktop_node_identity_conflict', 'desktop_node_unregistered')
+
+
 def _build_agent_frame(agent_id, permissions, share_roots=None):
     """Build the v2 registration frame sent with every poll."""
     frame = {
         'agent_id': agent_id,
+        'boot_id': _BOOT_ID,
         'protocol_version': protocol_version(),
         'name': socket.gethostname(),
         'platform': sys.platform,
@@ -261,7 +252,7 @@ _ROUTE_REPAIR_COOLDOWN_S = 300.0
 
 def run_agent(server_url, permissions, poll_interval=1.0, bridge_secret='',
               stop_event=None, on_status=None, route_repair=None,
-              browser_relay=None):
+              browser_relay=None, stop_on_refusal=True):
     """Main agent loop — polls server for commands, executes locally, returns results.
 
     Args:
@@ -298,6 +289,14 @@ def run_agent(server_url, permissions, poll_interval=1.0, bridge_secret='',
             This is the viable transport for web-only Codelab / VS Code
             ``/proxy/<port>`` deployments where the standalone process is
             rejected by the SSO edge before it can reach Tofu.
+        stop_on_refusal: end the loop when Tofu itself refuses this node for
+            good (credential revoked: 'auth'; identity conflict or no Home
+            record: 'conflict'), instead of retrying a refusal no retry can
+            fix. The packaged app's local link keeps retrying: its server may
+            restart with a new process capability.
+
+    Status 'pending' (``fingerprint``) means the Home has not yet confirmed
+    this node: polls continue, held by the Home, and carry no commands.
     """
 
     endpoint = f'{server_url.rstrip("/")}/api/desktop/poll'
@@ -476,6 +475,7 @@ def run_agent(server_url, permissions, poll_interval=1.0, bridge_secret='',
 
     consecutive_errors = 0
     negotiated_v3 = False
+    rtt_ms = [None]
 
     from lib.http_transport.outbound import managed_session
     with managed_session() as poll_session:
@@ -490,6 +490,8 @@ def run_agent(server_url, permissions, poll_interval=1.0, bridge_secret='',
                     agent_frame['execution_slots'] = runtime.available_slots()
                     agent_frame['capabilities'] = _capabilities(permissions)
                     agent_frame['active_command_ids'] = runtime.active_command_ids()
+                    if rtt_ms[0] is not None:
+                        agent_frame['rtt_ms'] = rtt_ms[0]
                     out_streams = stream_outbox.prefix(limit('stream_items_floor'), limit('stream_bytes_floor'))
                 poll_payload = {'results': out_results,
                                 'streams': out_streams,
@@ -504,6 +506,7 @@ def run_agent(server_url, permissions, poll_interval=1.0, bridge_secret='',
                 if browser_relay is not None:
                     try:
                         if browser_relay.browser_available():
+                            poll_payload['agent']['route'] = 'browser_relay'
                             resp = browser_relay.request(
                                 endpoint, poll_payload, headers, timeout=20)
                             via_browser = resp is not None
@@ -511,6 +514,7 @@ def run_agent(server_url, permissions, poll_interval=1.0, bridge_secret='',
                         logger.warning('[Agent] browser relay poll failed: %s', e)
                         resp = None
                 if resp is None:
+                    poll_payload['agent']['route'] = 'direct'
                     resp = poll_session.post(
                         endpoint,
                         json=poll_payload,
@@ -540,6 +544,8 @@ def run_agent(server_url, permissions, poll_interval=1.0, bridge_secret='',
                         logger.error('Server returned 401 — the device credential '
                                      'is missing, revoked, or belongs to another '
                                      'owner. Pair the device again.')
+                        if stop_on_refusal:
+                            break
                     else:
                         _emit('proxy')
                         _route_dead_hit()
@@ -551,6 +557,23 @@ def run_agent(server_url, permissions, poll_interval=1.0, bridge_secret='',
                     consecutive_errors += 1
                     stop_event.wait(retry_delay(poll_interval, consecutive_errors))
                     continue
+                if resp.status_code == 409:
+                    try:
+                        refusal = resp.json()
+                    except ValueError:
+                        refusal = {}
+                    if isinstance(refusal, dict) and refusal.get('error') in _TERMINAL_REFUSALS:
+                        _emit('conflict', reason=str(refusal.get('reason') or '')[:64],
+                              hint=str(refusal.get('hint') or '')[:240])
+                        _route_alive()
+                        logger.error('The Home refused this node: %s (%s). %s',
+                                     refusal.get('error'), refusal.get('reason'),
+                                     refusal.get('hint') or '')
+                        if stop_on_refusal:
+                            break
+                        consecutive_errors += 1
+                        stop_event.wait(retry_delay(poll_interval, consecutive_errors))
+                        continue
                 if resp.status_code != 200:
                     _emit('http', code=resp.status_code)
                     logger.info('Server returned %s', resp.status_code)
@@ -588,7 +611,15 @@ def run_agent(server_url, permissions, poll_interval=1.0, bridge_secret='',
                     del result_queue[:len(out_results)]
                     del stream_outbox[:len(out_streams)]
                 consecutive_errors = 0
-                _emit('ok', transport='browser' if via_browser else 'direct')
+                if out_results or out_streams:
+                    # Answered without a hold: its wall time is a round trip.
+                    rtt_ms[0] = int((time.monotonic() - poll_started) * 1000)
+                pending = data.get('node') if isinstance(data.get('node'), dict) else None
+                if pending is not None:
+                    _emit('pending', fingerprint=str(pending.get('fingerprint') or ''),
+                          transport='browser' if via_browser else 'direct')
+                else:
+                    _emit('ok', transport='browser' if via_browser else 'direct')
                 _route_alive()
                 last_contact[0] = time.monotonic()
 
@@ -670,9 +701,14 @@ def main(argv=None):
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Join a server with the pairing link from its Local Control panel, then
-  # serve every joined server (read-only unless --allow-* is given)
+  # Join a server with the pairing link from its Devices page, then serve
+  # every joined server (read-only unless --allow-* is given). The server's
+  # owner confirms the node (compare the printed fingerprint) before it
+  # receives any command.
   python -m lib.desktop_agent --join 'https://tofu.example/#tofu-pair=...'
+
+  # The same pairing typed as its 6-digit code
+  python -m lib.desktop_agent --join 'https://tofu.example 123456'
 
   # Serve every server joined earlier
   python -m lib.desktop_agent
@@ -696,7 +732,7 @@ Examples:
 """
     )
     parser.add_argument('--join', default='', metavar='PAIRING_LINK',
-                        help='Join a server with its one-time pairing link first')
+                        help="Join a server with its one-time pairing link (or '<url> <code>') first")
     parser.add_argument('--server', default='',
                         help='Serve only this server URL (needs --bridge-token)')
     parser.add_argument('--allow-write', action='store_true', help='Allow file write/move operations')
@@ -758,10 +794,13 @@ Examples:
     if args.join:
         from lib.desktop_agent.attachments import JoinError, join
         try:
-            record = join(args.join, node_id=_ensure_agent_id(), log=logger.info)
+            record = join(args.join, node_id=_ensure_agent_id(), log=logger.info, kind='server')
         except JoinError as e:
             parser.error('could not join: %s' % e.code)
         logger.info('[Agent] joined %s', record['label'])
+        if record.get('fingerprint'):
+            print('Joined %s. Confirm this node on that Tofu\'s Devices page; '
+                  'fingerprint %s.' % (record['label'], record['fingerprint']), flush=True)
     if args.server:
         run_agent(args.server, permissions, args.poll_interval, bridge_secret=bridge_secret)
         return

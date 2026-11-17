@@ -18,7 +18,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from lib.identity import PrincipalContext
-from lib.agent_core.model_context_revision import model_context_revision
+from lib.storage.model_continuation import model_context_revision
 from .repository import CONTRACT, ProjectDispatchError, _validate_schema
 
 # ``((repository key, request budget id), first row)`` a Coordinator task keeps.

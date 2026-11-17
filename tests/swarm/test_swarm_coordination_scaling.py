@@ -147,7 +147,8 @@ def test_receipt_snapshot_reads_conversation_scope_once_for_all_agents(monkeypat
     specs = [SubTaskSpec(id=f'a{i}', role='coder', objective=f'o{i}') for i in range(50)]
     session = SimpleNamespace(
         task_id='run-1', user_id=7, conv_id='conv-1', inbox_key='conv-1', _agents={},
-        _parent_task_proxy={'id': 'run-1', 'convId': 'conv-1', '_userId': 7, 'config': {}})
+        _parent_task_proxy={'id': 'run-1', 'convId': 'conv-1', '_userId': 7, 'config': {}},
+        resident_receipts=message_receipts.ResidentReceipts())
     agents = [{'id': s.id, 'status': 'running'} for s in specs]
     snapshot = message_receipts.snapshot_receipts(session, agents, specs)
     assert snapshot['messageReceiptsAvailable'] is True
@@ -174,7 +175,8 @@ def test_receipt_snapshot_scope_failure_still_fails_every_target(monkeypatch):
     specs = [SubTaskSpec(id=f'a{i}', role='coder', objective=f'o{i}') for i in range(5)]
     session = SimpleNamespace(
         task_id='run-1', user_id=7, conv_id='conv-1', inbox_key='conv-1', _agents={},
-        _parent_task_proxy={'id': 'run-1', 'convId': 'conv-1', '_userId': 7, 'config': {}})
+        _parent_task_proxy={'id': 'run-1', 'convId': 'conv-1', '_userId': 7, 'config': {}},
+        resident_receipts=message_receipts.ResidentReceipts())
     snapshot = message_receipts.snapshot_receipts(
         session, [{'id': s.id, 'status': 'running'} for s in specs], specs)
     assert snapshot['messageReceiptsAvailable'] is False

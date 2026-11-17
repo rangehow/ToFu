@@ -13,6 +13,7 @@ import os
 import signal
 from pathlib import Path
 import sys
+import time
 
 from .native_engine import _run
 from .restart_budget import ARTIFACT_PREPARATION_SECONDS
@@ -43,6 +44,10 @@ def run_application_restart_control(
                '--stage', stage, '--reason', reason]
     if requested_at is not None:
         command.extend(['--requested-at', str(requested_at)])
+    if stage == 'delegate':
+        # One clock for the whole handoff: the child's Supervisor refresh polls
+        # until this deadline instead of its own shorter default.
+        command.extend(['--deadline-at', str(time.time() + DELEGATION_TIMEOUT_SECONDS)])
     output = _run(
         command, cwd=project, environment=dict(os.environ),
         timeout=(DELEGATION_TIMEOUT_SECONDS if stage == 'delegate'
@@ -79,6 +84,7 @@ def main(argv: list[str] | None = None) -> int:
                         choices=('prepare', 'prepare-storage-engine', 'delegate'))
     parser.add_argument('--reason', default='update')
     parser.add_argument('--requested-at', type=float)
+    parser.add_argument('--deadline-at', type=float)
     args = parser.parse_args(argv)
     project = str(Path.cwd().resolve())
     try:
@@ -113,7 +119,8 @@ def main(argv: list[str] | None = None) -> int:
             from supervisor_protocol import request_deferred_worker_restart
             result = request_deferred_worker_restart(
                 project, source=f'application-{args.reason}',
-                environment=os.environ, requested_at=args.requested_at)
+                environment=os.environ, requested_at=args.requested_at,
+                deadline_at=args.deadline_at)
     except (OSError, RuntimeError, ValueError) as exc:
         print(str(exc), file=sys.stderr, flush=True)
         return 1

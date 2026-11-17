@@ -752,6 +752,42 @@ def test_refresh_waits_out_a_slow_accepted_reexec_without_launching_a_rival(
         assert process.poll() is None
 
 
+@pytest.mark.serial
+def test_the_restart_delegate_waits_out_a_reexec_slower_than_twelve_seconds_within_its_budget(
+        tmp_path, monkeypatch):
+    """The refresh inside the real delegate child polls within the delegate's own
+    deadline (DELEGATION_TIMEOUT_SECONDS), not a separate 12 s default: under the
+    live incident's load a healthy reload outlasted 12 s and every bridge refused."""
+    from serverctl_pkg import application_restart
+    project = _closure_project(tmp_path)
+    with _real_supervisor(project) as (process, base, environment, before):
+        script = project / 'supervisor.py'
+        script.write_text('import time; time.sleep(15)\n'
+                          + script.read_text(encoding='utf-8'), encoding='utf-8')
+        for key in ('TOFU_PROJECT_PATH', 'PORT', 'TOFU_MANAGER_PORT'):
+            monkeypatch.delenv(key, raising=False)
+        for key in ('TOFU_SUPERVISOR_HOST', 'TOFU_SUPERVISOR_PORT', 'TOFU_SUPERVISOR_PROJECTS',
+                    'TOFU_SUPERVISOR_PYTHON'):
+            monkeypatch.setenv(key, environment[key])
+        # The delegate child runs from the target checkout (cwd), as in production.
+        # The closure already holds some serverctl_pkg files; identical copies
+        # leave the Supervisor's generation unchanged.
+        shutil.copytree(os.path.join(_REPO_ROOT, 'serverctl_pkg'), project / 'serverctl_pkg',
+                        dirs_exist_ok=True, ignore=shutil.ignore_patterns('__pycache__'))
+        if not (project / 'lib').exists():
+            (project / 'lib').symlink_to(os.path.join(_REPO_ROOT, 'lib'), target_is_directory=True)
+        started = time.monotonic()
+
+        result = application_restart.run_application_restart_control(
+            str(project), stage='delegate', reason='pytest')
+
+        assert time.monotonic() - started > 12.0
+        assert result['ok'] is True
+        assert result['supervisorRefresh']['reloadAccepted'] is True
+        assert result['supervisorRefresh']['managerPid'] == process.pid
+        assert process.poll() is None
+
+
 @pytest.mark.parametrize(('refusal', 'detail'), [
     ({'ok': False, 'httpStatus': 409, 'message': 'Supervisor reload is already in progress.'},
      'already in progress'),
@@ -1136,6 +1172,152 @@ def test_daemon_watchdog_retires_after_explicit_owner_exits(tmp_path):
             ['bash', sh, 'stop'], env=env, capture_output=True, text=True,
             timeout=20)
         _kill_group(watchdog_pid)
+
+
+def _make_real_supervisor_project(tmp_path):
+    """A checkout copy that runs the real supervisor.sh + supervisor.py."""
+    proj = tmp_path / 'real-supervisor-project'
+    for name in ('supervisor.sh', 'supervisor.py', 'server_manager.py', 'supervisor_protocol.py',
+                 'tofu_dotenv.py', 'runtime_guards.py', 'runtime_path_policy.py',
+                 'tofu_db/__init__.py', 'tofu_db/_loopback.py', 'bootstrap_pkg/__init__.py',
+                 'bootstrap_pkg/resource_policy_generated.py', 'bootstrap_pkg/process_roles.py'):
+        (proj / name).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(os.path.join(_REPO_ROOT, name), proj / name)
+    for name in ('data', 'logs'):
+        (proj / name).mkdir()
+    (proj / 'server.py').write_text('raise SystemExit(0)\n')
+    (proj / 'stop.sh').write_text('#!/bin/sh\nexit 0\n')
+    src = (proj / 'supervisor.sh').read_text()
+    (proj / 'supervisor.sh').write_text(
+        src.replace('set -euo pipefail\n', 'set -euo pipefail\nsystemctl() { return 1; }\n', 1))
+    os.chmod(proj / 'supervisor.sh', 0o755)
+    return proj
+
+
+def _supervisor_health(port):
+    try:
+        with urllib.request.urlopen(f'http://127.0.0.1:{port}/health', timeout=5) as response:
+            return json.loads(response.read())
+    except (OSError, ValueError):
+        return None
+
+
+@_needs_bash_setsid
+@pytest.mark.serial
+def test_isolated_supervisor_from_the_same_checkout_never_overwrites_the_other_pid_entry(
+        tmp_path, supervisor_owner_lease):
+    """Incident 2026-11-17: an isolated watchdog launched from the live
+    checkout on another TOFU_SUPERVISOR_PORT rewrote ``data/supervisor.pid``,
+    so status/stop/daemon of the live instance addressed the wrong process.
+    Each supervisor port owns its own PID entry and launch lock."""
+    proj = _make_real_supervisor_project(tmp_path)
+    ports = []
+    for _ in range(2):
+        with contextlib.closing(socket.socket()) as probe:
+            probe.bind(('127.0.0.1', 0))
+            ports.append(probe.getsockname()[1])
+    first_port, second_port = ports
+    base_env = {key: value for key, value in os.environ.items()
+                if key not in ('TOFU_PROJECT_PATH', 'TOFU_SUPERVISOR_PORT', 'PORT')}
+    base_env.update(TOFU_SUPERVISOR_PROJECTS=str(proj), TOFU_SUPERVISOR_HOST='127.0.0.1',
+                    TOFU_SUPERVISOR_PYTHON=sys.executable,
+                    TOFU_SUPERVISOR_OWNER_PID=supervisor_owner_lease,
+                    TOFU_DATA_DIR=str(tmp_path / 'storage'),
+                    TOFU_HEARTBEAT_DIR=str(tmp_path / 'heartbeat'))
+
+    def shell(port, command):
+        return subprocess.run(['bash', str(proj / 'supervisor.sh'), command], cwd=proj,
+                              env={**base_env, 'TOFU_SUPERVISOR_PORT': str(port)},
+                              capture_output=True, text=True, timeout=60)
+
+    def entry(port):
+        path = proj / 'data' / f'supervisor-{port}.pid'
+        return int(path.read_text()) if path.is_file() else None
+
+    def wait_health(port):
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            health = _supervisor_health(port)
+            if health is not None:
+                return health
+            time.sleep(0.1)
+        raise AssertionError(f'supervisor on {port} never answered /health: '
+                             + (proj / 'logs' / 'server-manager.log').read_text()[-3000:])
+
+    first = second = None
+    try:
+        launched = shell(first_port, 'daemon')
+        assert launched.returncode == 0, launched.stdout + launched.stderr
+        first = entry(first_port)
+        assert first is not None and server_manager.pid_is_alive(first)
+        first_health = wait_health(first_port)
+
+        launched = shell(second_port, 'daemon')
+        assert launched.returncode == 0, launched.stdout + launched.stderr
+        second = entry(second_port)
+        assert second is not None and second != first, 'the second port joined the first watchdog'
+        assert entry(first_port) == first, 'the second supervisor overwrote the first PID entry'
+        assert not (proj / 'data' / 'supervisor.pid').exists(), 'a non-default port wrote the default entry'
+        assert wait_health(second_port)['managerPid'] != first_health['managerPid']
+
+        assert f'RUNNING (pid={first},' in shell(first_port, 'status').stdout
+        assert f'RUNNING (pid={second},' in shell(second_port, 'status').stdout
+
+        stopped = shell(second_port, 'stop')
+        assert stopped.returncode == 0, stopped.stdout + stopped.stderr
+        assert not server_manager.pid_is_alive(second)
+        second = None
+        assert entry(first_port) == first and server_manager.pid_is_alive(first)
+        assert _supervisor_health(first_port)['managerPid'] == first_health['managerPid']
+        stopped = shell(first_port, 'stop')
+        assert stopped.returncode == 0, stopped.stdout + stopped.stderr
+        assert not server_manager.pid_is_alive(first)
+        first = None
+    finally:
+        for port in ports:
+            shell(port, 'stop')
+        _kill_group(first)
+        _kill_group(second)
+
+
+@_needs_bash_setsid
+@pytest.mark.serial
+def test_the_default_supervisor_port_keeps_its_established_pid_entry(tmp_path, supervisor_owner_lease):
+    """The durable default instance (port 15001) keeps ``data/supervisor.pid``,
+    so a watchdog launched before per-port entries stays visible to
+    status/stop/daemon after this code lands; another port never touches it."""
+    proj = _make_sh_project(tmp_path)
+    sh = str(proj / 'supervisor.sh')
+    env = {key: value for key, value in os.environ.items() if key != 'TOFU_SUPERVISOR_PORT'}
+    env.update(TOFU_SUPERVISOR_PROJECTS=str(proj), TOFU_SUPERVISOR_PYTHON=sys.executable,
+               TOFU_SUPERVISOR_OWNER_PID=supervisor_owner_lease)
+    isolated_env = {**env, 'TOFU_SUPERVISOR_PORT': '17412'}
+    default_pid = isolated_pid = None
+    try:
+        launched = subprocess.run(['bash', sh, 'daemon'], env=env, capture_output=True, text=True,
+                                  timeout=30)
+        assert launched.returncode == 0, launched.stderr
+        default_pid = _read_pid(proj)
+        assert default_pid is not None
+        launched = subprocess.run(['bash', sh, 'daemon'], env=isolated_env, capture_output=True,
+                                  text=True, timeout=30)
+        assert launched.returncode == 0, launched.stderr
+        isolated_pid = int((proj / 'data' / 'supervisor-17412.pid').read_text())
+        assert isolated_pid != default_pid and _read_pid(proj) == default_pid
+        assert subprocess.run(['bash', sh, 'stop'], env=isolated_env, capture_output=True,
+                              text=True, timeout=30).returncode == 0
+        assert not server_manager.pid_is_alive(isolated_pid)
+        isolated_pid = None
+        assert _read_pid(proj) == default_pid and server_manager.pid_is_alive(default_pid)
+        refused = subprocess.run(['bash', sh, 'status'], env={**env, 'TOFU_SUPERVISOR_PORT': '../x'},
+                                 capture_output=True, text=True, timeout=30)
+        assert refused.returncode != 0 and 'TOFU_SUPERVISOR_PORT' in refused.stderr
+    finally:
+        for environment in (isolated_env, env):
+            subprocess.run(['bash', sh, 'stop'], env=environment, capture_output=True, text=True,
+                           timeout=30)
+        _kill_group(default_pid)
+        _kill_group(isolated_pid)
 
 
 @_needs_bash_setsid

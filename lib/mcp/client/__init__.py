@@ -74,6 +74,8 @@ from lib.mcp.client._vendor import (  # noqa: E402,F401
     _reconcile_npx_cache,
     _npx_rebuild_pending,
     reconcile_for_connect,
+    launches_into_npm_cache,
+    npm_cache_lock,
     _vendored_path,
     _reload_vendored_if_changed,
     _VENDOR_EXCLUDE_DIRS,

@@ -116,17 +116,6 @@ def board_task_keys(head):
     return [title_key(task['title']) for task in head['board']['tasks']]
 
 
-def board_task_ref(head, title):
-    """``{key, title}`` of the board task titled ``title``; ValueError naming the board otherwise."""
-    tasks = head['board']['tasks'] if head else []
-    for task, key in zip(tasks, board_task_keys(head) if head else []):
-        if task['title'] == title:
-            return {'key': key, 'title': title}
-    titles = '; '.join(task['title'] for task in tasks) or 'the board is empty'
-    raise ValueError('task must be the exact title of a task on your task board (update_task_progress). '
-                     'Current tasks: ' + titles)
-
-
 def _head_key(owner, project):
     digest = hashlib.sha256(json.dumps(project, ensure_ascii=False).encode()).hexdigest()
     return str(owner) + ':' + digest

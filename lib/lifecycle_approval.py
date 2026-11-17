@@ -1354,7 +1354,7 @@ def settle_delegated_action(owner, action_id: str, *, status: str, code: str | N
     if not changed:
         return record
     audit_log('owner_delegation_action_settled', action_id=action_id, status=status, code=code or '',
-              detail=(detail or '')[:300])
+              detail=(detail or '')[:2000])
     return record
 
 

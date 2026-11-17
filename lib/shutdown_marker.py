@@ -51,6 +51,10 @@ _MARKER_NAME = '.server_shutdown.json'
 # incident was 3,286 process starts in one evening driven by neighbour OOM, so
 # killed-turn recovery must NOT blindly re-fire billed LLM turns into a crash
 # loop (a thundering herd that worsens the OOM and re-kills the same turns).
+# Each entry is ``{'at': <boot epoch>, 'crashed': <previous exit was unclean>}``;
+# only crash boots count toward a storm. A deliberate restart (the owner's, the
+# Router's, a redeploy) exits clean, so any number of them in a row is not a
+# crash loop. Bare-number entries of older builds carry no verdict and never count.
 _BOOTS_NAME = '.server_boots.json'
 _BOOTS_KEEP = 50   # bounded ring — newest N boot timestamps
 
@@ -207,15 +211,45 @@ def mark_clean(reason: str = 'signal') -> None:
         logger.warning('[shutdown_marker] mark_clean failed (non-fatal): %s', e)
 
 
+def mark_drained(reason: str = 'signal') -> bool:
+    """Flip the marker this process armed to ``clean`` once its graceful drain finished.
+
+    For a host whose stop is a drain rather than a signal handler (the
+    resident execution host): a drain that completed is a deliberate exit, so
+    the next boot neither tags its Turns ``killed`` nor counts it toward a
+    restart storm. A host killed before its drain finished stays unclean.
+    Leaves the marker alone when another process armed it, or when a stronger
+    intent (``manual``, ``restart``) was already recorded. Returns whether the
+    marker now reads clean.
+    """
+    def _write_marker(current: Any) -> Any:
+        if (isinstance(current, dict) and current.get('state') == 'running'
+                and current.get('pid') == os.getpid()):
+            return {'state': 'clean', 'pid': os.getpid(), 'host': socket.gethostname(),
+                    'clean_ts': time.time(), 'reason': reason}
+        return current
+
+    try:
+        result = update_json_atomic(marker_path(), _write_marker, default=None, fsync=True)
+    except OSError as e:
+        logger.warning('[shutdown_marker] mark_drained failed (non-fatal): %s', e)
+        return False
+    clean = isinstance(result, dict) and result.get('state') == 'clean'
+    logger.info('[shutdown_marker] drained (marker %s)', result.get('reason') if clean else 'unchanged')
+    return clean
+
+
 def _boots_path() -> str:
     return os.path.join(data_root(), _BOOTS_NAME)
 
 
-def record_boot(ts: float | None = None) -> list[float]:
-    """Append this boot's timestamp to the bounded boot-history ring.
+def record_boot(ts: float | None = None, *, crashed: bool = False) -> list[float]:
+    """Append this boot to the bounded boot-history ring.
 
-    Returns the (post-append, newest-last) list of boot timestamps. Best-effort:
-    a read/write failure returns whatever we have and never blocks boot.
+    ``crashed`` says the previous process exited unclean (killed or crashed).
+    Returns the (post-append, newest-last) timestamps of the ring's crash
+    boots, the input of :func:`is_restart_storm`. Best-effort: a read/write
+    failure returns whatever we have and never blocks boot.
     """
     try:
         stamp = float(ts if ts is not None else time.time())
@@ -229,18 +263,11 @@ def record_boot(ts: float | None = None) -> list[float]:
     outcome: list[float] = []
 
     def _append(raw):
-        boots = []
-        if isinstance(raw, list):
-            for value in raw:
-                try:
-                    boots.append(float(value))
-                except (TypeError, ValueError) as e:
-                    logger.debug('[shutdown_marker] ignored malformed boot '
-                                 'timestamp %r: %s', value, e)
-                    continue
-        boots.append(stamp)
+        boots = [entry for entry in raw if isinstance(entry, dict) and _is_num(entry.get('at'))] \
+            if isinstance(raw, list) else []
+        boots.append({'at': stamp, 'crashed': bool(crashed)})
         del boots[:-_BOOTS_KEEP]
-        outcome[:] = boots
+        outcome[:] = _crash_boots(boots)
         return boots
 
     try:
@@ -254,19 +281,25 @@ def record_boot(ts: float | None = None) -> list[float]:
     return outcome
 
 
+def _crash_boots(entries) -> list[float]:
+    return [float(entry['at']) for entry in entries
+            if isinstance(entry, dict) and entry.get('crashed') is True and _is_num(entry.get('at'))]
+
+
 def is_restart_storm(boots: list[float] | None = None, *, now: float | None = None) -> bool:
-    """True when boots are arriving too fast — a crash/restart storm is active.
+    """True when crash boots are arriving too fast — a crash loop is active.
 
     A storm means the process is being repeatedly killed (the neighbour-OOM
     incident). During a storm, killed-turn recovery must STAND DOWN: re-firing
     billed LLM turns would pile more memory pressure onto an already-dying pod
-    and re-kill the same turns forever. Definition: ``>= _STORM_THRESHOLD`` boots
-    within the last ``_STORM_WINDOW_SECS`` seconds (this boot counts).
+    and re-kill the same turns forever. Definition: ``>= _STORM_THRESHOLD``
+    crash boots (boots after an unclean exit) within the last
+    ``_STORM_WINDOW_SECS`` seconds; ``boots`` are crash-boot timestamps.
     """
     now = now if now is not None else time.time()
     if boots is None:
         raw = read_json(_boots_path(), default=None)
-        boots = [float(v) for v in raw if _is_num(v)] if isinstance(raw, list) else []
+        boots = _crash_boots(raw) if isinstance(raw, list) else []
     recent = [b for b in boots if (now - b) <= _STORM_WINDOW_SECS]
     return len(recent) >= _STORM_THRESHOLD
 
@@ -312,11 +345,14 @@ def report_and_arm() -> dict[str, Any]:
     # Record this boot and detect a restart STORM so killed-turn recovery can
     # stand down (never re-fire billed turns into a crash loop).
     try:
-        boots = record_boot()
-        cls['restart_storm'] = is_restart_storm(boots)
+        crashed = verdict == VERDICT_UNCLEAN
+        boots = record_boot(crashed=crashed)
+        # This boot follows a clean exit: whatever crashed before, the process
+        # is not crash-looping now.
+        cls['restart_storm'] = crashed and is_restart_storm(boots)
         if cls['restart_storm']:
             logger.error(
-                '[shutdown_marker] RESTART STORM detected (>=%d boots within %ds) '
+                '[shutdown_marker] RESTART STORM detected (>=%d crash boots within %ds) '
                 '— killed-turn auto-recovery will STAND DOWN to avoid a '
                 'thundering-herd re-dispatch that worsens the crash loop.',
                 _STORM_THRESHOLD, int(_STORM_WINDOW_SECS))
@@ -332,6 +368,6 @@ def report_and_arm() -> dict[str, Any]:
 
 __all__ = [
     'CLEAN_REASONS', 'VERDICT_FIRST_BOOT', 'VERDICT_CLEAN', 'VERDICT_UNCLEAN',
-    'marker_path', 'classify_previous_shutdown', 'arm', 'mark_clean',
+    'marker_path', 'classify_previous_shutdown', 'arm', 'mark_clean', 'mark_drained',
     'report_and_arm', 'record_boot', 'is_restart_storm',
 ]

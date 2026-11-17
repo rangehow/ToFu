@@ -349,7 +349,9 @@ in its header) and `lib/project_mod/run_command.py`.
   had imported before it admits work, and retires itself after
   `TOFU_EXECUTOR_IDLE_SECONDS` idle. The host defers a claim to an idle shard
   while it is busy and otherwise claims itself, so no job waits for capacity;
-  command controls (and `mcp_reconcile`) fan out from the host. No count,
+  command controls fan out from the host, and shards relay MCP calls to the
+  host's one server set (docs/modules/tools_execution.md, "MCP servers run
+  once per execution plane"). No count,
   CPU probe or new setting exists. The per-interpreter serialization points
   of hotspots 2-3 (one storage client, one delivery coordinator, one GIL for
   every session) are per process now; their per-round cost is unchanged.

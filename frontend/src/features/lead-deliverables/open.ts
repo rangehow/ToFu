@@ -86,6 +86,19 @@ export function runtimeOpenPorts(overrides: Partial<DeliverableOpenPorts> = {}):
 
 function reportCard(item: LeadDeliverable, ports: DeliverableOpenPorts): HTMLElement {
   const copy = deliverableCopy(item);
+  if (item.kind === 'completion') {
+    // No report message exists: the task's final progress note, under what it is.
+    const host = document.createElement('div');
+    host.className = 'lead-deliverable-report lead-deliverable-report--completion';
+    const label = document.createElement('p');
+    label.className = 'lead-deliverable-report__label';
+    label.textContent = t('leadDeliverables.completionNote');
+    const body = document.createElement('div');
+    body.className = 'md-content';
+    body.innerHTML = ports.markdown(copy.summary || t('leadDeliverables.completionEmpty'));
+    host.append(label, body);
+    return host;
+  }
   const cards = createToolCardPresentation({ translate: t, markdown: source => ports.markdown(source), conversationTitle: () => undefined });
   const host = document.createElement('div');
   host.className = 'lead-deliverable-report';

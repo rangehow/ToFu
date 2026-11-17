@@ -436,48 +436,95 @@ def _bridge_credentials(owner_user_id: int, tenant_id: str | None) -> list[dict]
     ]
 
 
+def _node_row(record, agent, credential, transport, predecessor=None, policy=None) -> dict:
+    from lib.desktop.device_policy import permissions_view
+    from lib.desktop_wire.node_protocol import granted_tiers
+    agent = agent or {}
+    node_id = record['nodeId'] if record else agent.get('agent_id')
+    # Effective permissions: the Home ceiling AND the device's declared switch
+    # (read-only until the node has polled this Home process).
+    tiers = (permissions_view(policy['owner'], node_id, agent.get('capabilities'),
+                              record=policy['record'], rev=policy['rev'],
+                              known=bool(agent))['effective']
+             if node_id else granted_tiers(None))
+    state = 'unregistered'
+    if record is not None:
+        state = 'conflict' if record['state'] == 'active' and record.get('conflict') else record['state']
+    online = bool(agent.get('online'))
+    return {
+        'node_id': record['nodeId'] if record else agent.get('agent_id'),
+        'name': (record or {}).get('name') or agent.get('name') or agent.get('agent_id')
+                or (credential or {}).get('name') or (credential or {}).get('id') or '',
+        'state': state,
+        'online': online,
+        'last_seen': agent.get('last_seen'),
+        'platform': agent.get('platform') or (record or {}).get('platform') or '',
+        'version': agent.get('version') or '',
+        'outdated': bool(agent.get('outdated')),
+        'system': agent.get('system'),
+        'share_roots': list(agent.get('share_roots') or []),
+        'tiers': tiers,
+        'credential': credential,
+        'attachment': 'paired' if (record or credential or agent.get('key_id')) else 'process',
+        'fingerprint': (record or {}).get('fingerprint'),
+        'kind': (record or {}).get('kind'),
+        'paired_at': (record or {}).get('pairedAt'),
+        'confirmed_at': (record or {}).get('confirmedAt'),
+        'route': transport['route'] if online else None,
+        'rtt_ms': transport['rtt_ms'] if online else None,
+        'running': transport['running'] if online else 0,
+        'replacement_fingerprint': ((record or {}).get('replacement') or {}).get('fingerprint'),
+        'conflict': (record or {}).get('conflict'),
+        'predecessor': predecessor,
+    }
+
+
 def _node_listing(owner_user_id: int, tenant_id: str | None, agents) -> list[dict]:
     """The caller's nodes (``Node`` in contracts/desktop_node_v1.schema.json).
 
-    A node is a registered bridge device. A paired credential no device has
-    polled with since this process started is listed as an offline node
-    named by its credential, so a restart does not hide paired machines.
-    The packaged app's in-process node authenticates with its process
-    capability and has no credential (``attachment == 'process'``).
+    The Home's durable registry (lib/desktop/node_registry.py) is the list of
+    paired nodes, online or not, pending or active; the live bridge registry
+    adds liveness and the facts of the latest poll. A live node without a
+    record is the packaged app's in-process node; a bridge credential that no
+    record names and no node has polled with yet (minted before the registry,
+    or by the owner directly) is listed ``unregistered`` until its first poll
+    adopts it.
     """
-    from lib.desktop_wire.node_protocol import granted_tiers
+    from lib.desktop.device_policy import policy as device_policy
+    from lib.desktop.node_registry import NodeRegistry, transport_facts
+    record, rev = device_policy(owner_user_id)
+    policy = {'owner': owner_user_id, 'record': record, 'rev': rev}
     credentials = {c['id']: c for c in _bridge_credentials(owner_user_id, tenant_id)}
+    live = {a['agent_id']: a for a in agents}
+    online_ids = {a['agent_id'] for a in agents if a.get('online')}
+    records = NodeRegistry(owner_user_id, tenant_id=tenant_id).list()
+    by_id = {record['nodeId']: record for record in records}
     nodes, bound = [], set()
-    for agent in agents:
+    for record in records:
+        predecessor = by_id.get(record.get('predecessor') or '')
+        if predecessor is not None:
+            predecessor = {'node_id': predecessor['nodeId'], 'name': predecessor['name'],
+                           'online': predecessor['nodeId'] in online_ids}
+        agent = live.pop(record['nodeId'], None)
+        if agent is not None and agent.get('key_id') != record['credentialId']:
+            live[record['nodeId']] = agent
+            agent = None
+        bound.add(record['credentialId'])
+        if record.get('replacement'):
+            bound.add(record['replacement']['credentialId'])
+        nodes.append(_node_row(record, agent, credentials.get(record['credentialId']),
+                               transport_facts(owner_user_id, record['nodeId']), predecessor,
+                               policy))
+    for agent in live.values():
         credential = credentials.get(agent.get('key_id') or '')
         if credential:
             bound.add(credential['id'])
-        nodes.append({
-            'node_id': agent['agent_id'],
-            'name': agent.get('name') or agent['agent_id'],
-            'online': bool(agent.get('online')),
-            'last_seen': agent.get('last_seen'),
-            'platform': agent.get('platform') or '',
-            'version': agent.get('version') or '',
-            'outdated': bool(agent.get('outdated')),
-            'system': agent.get('system'),
-            'share_roots': list(agent.get('share_roots') or []),
-            'tiers': granted_tiers(agent.get('capabilities')),
-            'credential': credential,
-            'attachment': 'paired' if agent.get('key_id') else 'process',
-        })
+        nodes.append(_node_row(None, agent, credential,
+                               transport_facts(owner_user_id, agent['agent_id']), policy=policy))
     for credential in credentials.values():
-        if credential['id'] in bound:
-            continue
-        nodes.append({
-            'node_id': None,
-            'name': credential.get('name') or credential['id'],
-            'online': False,
-            'last_seen': None,
-            'tiers': granted_tiers(None),
-            'credential': credential,
-            'attachment': 'paired',
-        })
+        if credential['id'] not in bound:
+            nodes.append(_node_row(None, None, credential,
+                                   {'route': None, 'rtt_ms': None, 'running': 0}, policy=policy))
     return nodes
 
 
@@ -487,14 +534,16 @@ def _node_listing(owner_user_id: int, tenant_id: str | None, agents) -> list[dic
     summary='List the caller\'s nodes (this machine and other machines)',
     description=(
         'Shape: ``NodeListing`` in contracts/desktop_node_v1.schema.json. '
-        'Online nodes come from the live bridge registry; paired credentials '
-        'without a live device are listed offline. Tools address a node by '
-        '``node_id`` or name through their ``device`` field.'
+        'Paired nodes come from the Home\'s durable node registry '
+        '(contracts/desktop_node_registry_v1.schema.json) with their trust '
+        'state (pending / active / conflict) and fingerprint; liveness and '
+        'poll facts come from the live bridge registry. Tools address an '
+        'active node by ``node_id`` or name through their ``device`` field.'
     ),
     tags=['capabilities'],
 )
 def desktop_nodes():
-    """SYNC on purpose: the credential listing blocks on storage I/O."""
+    """SYNC on purpose: the registry and credential listings block on storage I/O."""
     from lib.desktop import list_agents
     from .auth import request_principal
     principal = request_principal()
@@ -503,41 +552,121 @@ def desktop_nodes():
     return api_ok({'nodes': _node_listing(owner_user_id, principal.tenant_id, agents)})
 
 
+def _follow_policy(owner_user_id: int) -> None:
+    """Registry transitions change device policy (removal, re-pair); the execution
+    host drops its cached copy like any policy change (routes/api_v1/devices.py)."""
+    from .devices import _follow_in_execution
+    _follow_in_execution(owner_user_id)
+
+
+def _registry_call(context: str, operation):
+    """Run one owner transition of the node registry and map its typed failures."""
+    from lib.desktop.node_registry import NodeNotFound, NodeRegistry, NodeStateError
+    from .auth import request_principal
+    principal = request_principal()
+    owner_user_id = principal.require_owner(context=context)
+    registry = NodeRegistry(owner_user_id, tenant_id=principal.tenant_id)
+    try:
+        outcome = operation(registry)
+        _follow_policy(owner_user_id)
+        return api_ok(outcome)
+    except NodeNotFound:
+        return api_not_found('not_found', message='node not found')
+    except NodeStateError as error:
+        return api_conflict(str(error), source='api_v1.desktop.' + context.replace(' ', '_'))
+
+
+@api_v1_desktop_bp.route('/api/v1/desktop/nodes/<node_id>/confirm', methods=['POST'])
+@require_auth
+@api_meta(
+    summary='Confirm a node that redeemed a pairing',
+    description=(
+        'Owner decision 5: a redeemed pairing waits for this confirmation '
+        'before the node receives any command. Confirms a pending node, or '
+        'a pending re-pairing of an active node ID (the previous credential '
+        'is revoked), and clears a recorded identity conflict. Compare the '
+        'fingerprint shown by the node first. Body: ``confirmRequest`` in '
+        'contracts/desktop_node_registry_v1.schema.json; answer '
+        '``nodeTransition``.'
+    ),
+    tags=['capabilities'],
+)
+async def desktop_node_confirm(node_id):
+    import asyncio
+    body = await async_parse_body(exact=('name',))
+    name = optional_str(body, 'name', default='', max_len=80).strip() or None
+    return await asyncio.to_thread(
+        _registry_call, 'desktop node confirm',
+        lambda registry: registry.confirm(node_id, name=name))
+
+
+@api_v1_desktop_bp.route('/api/v1/desktop/nodes/<node_id>/reject', methods=['POST'])
+@require_auth
+@api_meta(
+    summary='Reject a node that redeemed a pairing',
+    description=(
+        'Revokes the credential issued at redemption. A pending node is '
+        'forgotten; a pending re-pairing of an active node is dropped and the '
+        'active node keeps working. Answer ``nodeTransition``.'
+    ),
+    tags=['capabilities'],
+)
+def desktop_node_reject(node_id):
+    """SYNC on purpose: revocation blocks on storage I/O."""
+    return _registry_call('desktop node reject', lambda registry: registry.reject(node_id))
+
+
+@api_v1_desktop_bp.route('/api/v1/desktop/nodes/<node_id>', methods=['PATCH'])
+@require_auth
+@api_meta(
+    summary='Rename one of the caller\'s nodes',
+    description='Body: ``renameRequest`` in contracts/desktop_node_registry_v1.schema.json.',
+    tags=['capabilities'],
+)
+async def desktop_node_rename(node_id):
+    import asyncio
+    body = await async_parse_body(exact=('name',))
+    name = optional_str(body, 'name', default='', max_len=80).strip()
+    if not name:
+        return api_bad_request('name is required', field='name')
+    return await asyncio.to_thread(
+        _registry_call, 'desktop node rename', lambda registry: registry.rename(node_id, name))
+
+
 @api_v1_desktop_bp.route('/api/v1/desktop/nodes/<node_id>', methods=['DELETE'])
 @require_auth
 @api_meta(
     summary='Remove one of the caller\'s nodes',
     description=(
-        'Revokes the node\'s agents:bridge credential and disconnects it at '
-        'once: its registry entry is dropped and its pending commands fail. '
-        'The node sees its next poll refused and stops that attachment. '
-        'The in-process node of the packaged app has no credential (409).'
+        'Revokes every credential the Home issued to the node, disconnects '
+        'it at once (its registry entry is dropped and its pending commands '
+        'fail) and forgets its durable record, online or not. The node sees '
+        'its next poll refused and stops that attachment. The in-process node '
+        'of the packaged app has no credential (409).'
     ),
     tags=['capabilities'],
 )
 def desktop_node_remove(node_id):
     """SYNC on purpose: credential revocation blocks on storage I/O."""
-    from lib.api_keys import revoke_key
-    from lib.desktop import disconnect_credential, list_agents
+    from lib.desktop import list_agents
+    from lib.desktop.node_registry import NodeRegistry
     from .auth import request_principal
     principal = request_principal()
     owner_user_id = principal.require_owner(context='desktop node remove')
+    registry = NodeRegistry(owner_user_id, tenant_id=principal.tenant_id)
+    if registry.get(node_id) is not None:
+        outcome = registry.forget(node_id)
+        _follow_policy(owner_user_id)
+        return api_ok({'removed': node_id, 'credential': outcome['revoked_credentials'][0],
+                       'disconnected': outcome['disconnected']})
     agent = next((a for a in list_agents(user_id=str(owner_user_id))
                   if a['agent_id'] == node_id), None)
     if agent is None:
         return api_not_found('not_found', message='node not found')
-    key_id = agent.get('key_id') or ''
-    if not key_id:
-        return api_conflict(
-            'This node is the desktop app\'s own in-process node; turn off '
-            'Computer Control in that app instead.',
-            source='api_v1.desktop.node_remove')
-    revoke_key(key_id, owner_user_id=owner_user_id, tenant_id=principal.tenant_id)
-    removed = disconnect_credential(key_id, str(owner_user_id))
-    audit_log('desktop_node_removed', key_id=key_id, node_id=node_id,
-              owner_user_id=owner_user_id)
-    return api_ok({'removed': node_id, 'credential': key_id,
-                   'disconnected': removed})
+    return api_conflict(
+        'This node is the desktop app\'s own in-process node; turn off '
+        'Computer Control in that app instead.',
+        source='api_v1.desktop.node_remove')
 
 
 @api_v1_desktop_bp.route('/api/v1/desktop/build', methods=['GET', 'POST'])
@@ -869,14 +998,17 @@ def desktop_device_wait_cancel(wait_id):
 @api_meta(
     summary='Mint a one-time pairing link (and its 6-digit code)',
     description=(
-        'Mints one pairing (valid 5 minutes, one-shot, 3-attempt lockout) '
+        'Mints one durable pairing (valid 5 minutes across Home restarts, '
+        'one-shot, per-IP failure budget) '
         'bound to the caller: ``link`` is what the owner pastes into, or '
         'scans with, the Tofu desktop app (``PairingLink`` in '
         'contracts/desktop_node_v1.schema.json); ``code`` is the same '
         'pairing as 6 typeable digits. ``?base=`` (the page\'s live origin '
         '+ path prefix, pinned to the request host) becomes the link base; '
-        'a reachable direct LAN address is added as a ``via`` route. The '
-        'node redeems either form through POST /api/desktop/pair.'
+        'a reachable direct LAN address is added as a ``via`` route. '
+        '``command`` is the one-line headless join. The node redeems either '
+        'form through POST /api/desktop/pair and then waits for the owner to '
+        'confirm it (POST /api/v1/desktop/nodes/<node_id>/confirm).'
     ),
     tags=['capabilities'],
 )
@@ -893,7 +1025,7 @@ async def desktop_pair_code_mint():
     from lib.desktop.pairing import (
         _CODE_TTL_S, PairingIdentity, mint_pairing, pending_codes,
     )
-    from lib.desktop_wire.node_protocol import build_pairing_link
+    from lib.desktop_wire.node_protocol import build_pairing_link, headless_join_command
     from routes.browser import _external_base_url
     from .auth import current_auth, request_principal
     auth = current_auth()
@@ -904,7 +1036,8 @@ async def desktop_pair_code_mint():
         account_user_id=(auth.account_user_id if auth else ''),
         tenant_id=principal.tenant_id,
     )
-    code, link_secret, expires_at = mint_pairing(identity)
+    import asyncio
+    code, link_secret, expires_at = await asyncio.to_thread(mint_pairing, identity)
     direct = _direct_lan_candidate()
     link = build_pairing_link(_external_base_url(), link_secret,
                               via=[direct] if direct else [])
@@ -912,9 +1045,10 @@ async def desktop_pair_code_mint():
     return api_created({
         'code': code,
         'link': link,
+        'command': headless_join_command(link),
         'expires_at': expires_at,
         'ttl': _CODE_TTL_S,
-        'pending': pending_codes(owner_user_id),
+        'pending': await asyncio.to_thread(pending_codes, owner_user_id),
     })
 
 
@@ -923,7 +1057,9 @@ async def desktop_pair_code_mint():
     summary='Exchange a pairing code for a bridge token',
     description=(
         'The AGENT calls this (NO bearer — the code IS the credential) '
-        'to consume a one-time code and receive an agents:bridge token. '
+        'to consume a one-time code and receive an agents:bridge token for a '
+        '*pending* node: it polls but receives no command until the owner '
+        'confirms it (``fingerprint`` is shown on both ends). '
         'One-shot: a code that is missing, expired, over-attempted, or '
         'already used fails. Does NOT require authentication: this is '
         'the onboarding of a fresh agent that has no token yet.'
@@ -948,7 +1084,6 @@ async def desktop_pair():
                                      ip_fail_budget_exceeded,
                                      record_pair_failure,
                                      record_pair_success)
-    from lib.request_parser import async_parse_body, optional_str
     # Per-IP global failure budget (owner 2026-08-04): an attacker who
     # keeps guessing NEW codes gets a fresh per-code budget each time, so
     # per-code lockout alone leaves 1e6 space brute-forceable. A blocked
@@ -961,7 +1096,11 @@ async def desktop_pair():
                          message='Too many failed pairing attempts from '
                                  'this address. Wait a few minutes and '
                                  'try again with a fresh code.')
-    body = await async_parse_body(exact=('code', 'name', 'platform', 'node_id'))
+    import asyncio
+    from lib.desktop.node_registry import CREDENTIAL_ORIGIN, NodeRegistry, valid_node_id
+    from lib.desktop_wire.node_protocol import node_contract
+    body = await async_parse_body(exact=('code', 'name', 'platform', 'node_id', 'kind',
+                                         'previous_node_id'))
     code = optional_str(body, 'code', default='',
                         max_len=64).strip()
     node_id = optional_str(body, 'node_id', default='', max_len=128).strip()
@@ -969,7 +1108,16 @@ async def desktop_pair():
         or 'paired-agent'
     platform = optional_str(body, 'platform', default='',
                             max_len=40).strip() or 'unknown'
-    identity = consume_code(code)
+    kind = optional_str(body, 'kind', default='computer', max_len=16).strip()
+    previous_node_id = optional_str(body, 'previous_node_id', default='', max_len=128).strip()
+    if previous_node_id and not valid_node_id(previous_node_id):
+        return api_bad_request('invalid previous_node_id', field='previous_node_id')
+    if not valid_node_id(node_id):
+        return api_bad_request('desktop_node_identity_required', field='node_id',
+                               message='Update this node: pairing needs its node ID.')
+    if kind not in node_contract()['$defs']['NodeKind']['enum']:
+        return api_bad_request('invalid kind', field='kind')
+    identity = await asyncio.to_thread(consume_code, code, node_id=node_id)
     if identity is None:
         record_pair_failure(client_ip)
         audit_log('desktop_pair_failed', code=code[:2] + '****',
@@ -979,26 +1127,41 @@ async def desktop_pair():
                                     'or already used. Generate a new one '
                                     'in the panel.')
     record_pair_success(client_ip)
-    row, token = create_key(
+    row, token = await asyncio.to_thread(
+        create_key,
         name,
         scopes=[_BRIDGE_SCOPE],
         owner_user_id=identity.owner_user_id,
         account_user_id=identity.account_user_id,
         tenant_id=identity.tenant_id,
+        metadata={'origin': CREDENTIAL_ORIGIN, 'node_id': node_id},
     )
+    registry = NodeRegistry(identity.owner_user_id, tenant_id=identity.tenant_id)
+    try:
+        record = await asyncio.to_thread(
+            registry.record_pairing, node_id=node_id, credential_id=row['id'],
+            name=name, platform=platform, kind=kind, previous_node_id=previous_node_id)
+    except Exception:
+        # Never leave a live credential the registry does not name.
+        from lib.api_keys import revoke_key
+        await asyncio.to_thread(revoke_key, row['id'], owner_user_id=identity.owner_user_id,
+                                tenant_id=identity.tenant_id)
+        raise
+    fingerprint = (record.get('replacement') or record)['fingerprint']
     audit_log('desktop_pair_succeeded', key_id=row.get('id'),
               owner_user_id=identity.owner_user_id, platform=platform,
               node_id=node_id)
-    payload = {
+    return api_created({
         'id': row.get('id'),
         'name': name,
         'token': token,
         'scopes': [_BRIDGE_SCOPE],
         'owner_id': identity.owner_user_id,
-    }
-    if node_id:
-        payload['node_id'] = node_id
-    return api_created(payload)
+        'node_id': node_id,
+        'kind': kind,
+        'fingerprint': fingerprint,
+        'node_state': 'pending_confirmation',
+    })
 
 
 @api_v1_desktop_bp.route('/api/v1/desktop/token', methods=['POST'])
@@ -1059,12 +1222,18 @@ async def desktop_token_revoke(key_id):
     if not row or _BRIDGE_SCOPE not in (row.get('scopes') or []):
         return api_not_found('not_found',
                              message='bridge token not found')
+    from lib.desktop.node_registry import NodeRegistry
+    forgotten = NodeRegistry(owner_user_id, tenant_id=principal.tenant_id) \
+        .forget_credential(key_id)
+    if forgotten:
+        _follow_policy(owner_user_id)
     revoke_key(
         key_id, owner_user_id=owner_user_id, tenant_id=principal.tenant_id)
     disconnected = disconnect_credential(key_id, str(owner_user_id))
     audit_log('desktop_bridge_token_revoked', key_id=key_id,
               owner_user_id=owner_user_id)
-    return api_ok({'revoked': key_id, 'disconnected': disconnected})
+    return api_ok({'revoked': key_id, 'disconnected': sorted(set(
+        disconnected + ((forgotten or {}).get('disconnected') or [])))})
 
 
 __all__ = ['api_v1_desktop_bp']

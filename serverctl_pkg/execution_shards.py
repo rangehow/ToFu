@@ -41,9 +41,9 @@ as a crashed primary's would be.
 - Control. Command controls reach the primary as before; it answers locally,
   then asks its shards. An unreachable shard makes the answer unavailable,
   never "not found" (contracts/command_control_v1.json). Process-local state
-  every Turn depends on (the MCP bridge: ``mcp_reconcile``) is repeated on
-  every ready shard; a shard still starting reads the owner's stored MCP rows
-  in its own boot.
+  every Turn depends on is repeated on every ready shard. MCP is not: a shard
+  runs no MCP servers and relays to the primary's bridge
+  (``lib/mcp/bridge_relay.py``), so ``mcp_reconcile`` applies once, here.
 - Lifecycle. The primary is each shard's manager (ResidentService): pipe EOF
   stops a shard whose primary died; the primary's stop signals every shard
   and joins it within the existing native-service stop budget.
@@ -197,19 +197,12 @@ class ShardPool:
         if method == 'storage_rpc_metrics':
             # Process-wide latency of this incarnation; shards keep their own.
             return local
-        endpoints = self._endpoints()
         if method == 'mcp_reconcile':
-            # An MCP bridge is process-local: every process that runs Turns
-            # repeats the owner's action. A shard that cannot confirm makes the
-            # whole answer unconfirmed rather than a silent partial success.
-            scheduled = local['scheduled']
-            for endpoint in endpoints:
-                answer = call(endpoint, method, task_id, user_id=user_id, params=params,
-                              deadline_unix_ms=deadline_unix_ms)
-                scheduled = scheduled and answer['scheduled']
-            return {'scheduled': scheduled}
+            # Shards relay to this host's MCP bridge (lib/mcp/bridge_relay.py).
+            return local
+        endpoints = self._endpoints()
         if method == 'device_policy_reconcile':
-            # The device policy cache is process-local too: every process that
+            # The device policy cache is process-local: every process that
             # runs Turns drops it, or the answer is not applied.
             applied = local['applied']
             for endpoint in endpoints:

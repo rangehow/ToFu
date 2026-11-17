@@ -9,7 +9,6 @@ from collections.abc import Callable as Callable, Mapping, Sequence as Sequence
 from dataclasses import dataclass, field
 import faulthandler
 import os
-import sys
 from pathlib import Path
 import sqlite3
 import threading
@@ -169,25 +168,16 @@ def _place_temporary_files() -> str:
             f'SQLite did not accept {directory} as its temporary directory')
     path = os.path.join(directory, f'.tofu-sqlite-unlinked-probe-{uuid.uuid4().hex}')
     payload = b'tofu-sqlite-temporary-file-probe'
-    # SQLite's Windows VFS never unlinks an open file (Windows refuses that);
-    # it opens temporary files delete-on-close, which O_TEMPORARY reproduces.
-    windows = sys.platform == 'win32'
-    flags = os.O_RDWR | os.O_CREAT | os.O_EXCL
-    if sys.platform == 'win32':
-        flags |= os.O_TEMPORARY | os.O_BINARY
     try:
-        descriptor = os.open(path, flags, 0o600)
+        descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
     except OSError as exc:
         raise StorageError(
             'database_unavailable',
             f'SQLite temporary directory {directory} is not writable: {exc}') from exc
     try:
-        if not windows:
-            os.unlink(path)
-        os.lseek(descriptor, 0, os.SEEK_SET)
-        os.write(descriptor, payload)
-        os.lseek(descriptor, 0, os.SEEK_SET)
-        if os.read(descriptor, len(payload)) != payload:
+        os.unlink(path)
+        os.pwrite(descriptor, payload, 0)
+        if os.pread(descriptor, len(payload), 0) != payload:
             raise OSError('read back different bytes')
     except OSError as exc:
         raise StorageError(

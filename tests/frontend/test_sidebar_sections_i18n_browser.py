@@ -24,10 +24,10 @@ TRANSLATED_TITLE = '登录问题已修复并交付'
 COPY = {
     'zh': {'other': '其他汇报与文件', 'delivered': '交付', 'progress': '进展', 'source': '跳到原消息',
            'title': TRANSLATED_TITLE, 'board': '任务进展', 'active': '1 项进行中', 'history': '历史任务',
-           'finished': '已结束 1 项', 'status': '进行中', 'age': r'此刻|分钟前'},
+           'finished': '已结束 2 项', 'status': '进行中', 'age': r'此刻|分钟前'},
     'en': {'other': 'Other reports and files', 'delivered': 'Delivered', 'progress': 'Progress', 'source': 'Go to message',
            'title': TRANSLATED_TITLE, 'board': 'Task progress', 'active': 'In progress: 1', 'history': 'Task history',
-           'finished': 'Finished: 1', 'status': 'In progress', 'age': r'this minute|minutes? ago'},
+           'finished': 'Finished: 2', 'status': 'In progress', 'age': r'this minute|minutes? ago'},
 }
 
 

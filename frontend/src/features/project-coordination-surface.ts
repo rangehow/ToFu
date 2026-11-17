@@ -12,12 +12,12 @@ import {
   type CoordinatorProgressCard, type CoordinatorProgressView,
 } from './coordinator-progress';
 import type { CoordinatorProgressBoard, CoordinatorReportState } from '../api/project-coordination.generated';
-import { coordinationText } from './project-coordination-text';
+import { coordinationText } from './project-coordination-board';
 import { createRouterWorkerModel, type RouterWorkerModelControl } from './router-worker-model';
 import { createCoordinatorConversationId } from './coordinator-conversation-id';
 import type { ProjectCoordinationPorts } from './project-coordination';
 import type { CoordinationBinding } from '../api/project-coordination.generated';
-import './project-coordination.css';
+import '../styles/application/33-project-coordination.css';
 
 /** Newer board revisions of the open Coordinator chat, for a task history open over it. */
 export interface CoordinatorBoardChanges { subscribe(changed: () => void): () => void }

@@ -18,7 +18,7 @@ afterEach(() => { document.body.replaceChildren(); });
 
 function item(id: string, task?: { key: string; title: string }, extra: Partial<LeadDeliverable> = {}): LeadDeliverable {
   return { id: `report:${id}`, kind: 'report', reportKind: 'progress', title: `Report ${id}`, projectPath: '/work/tofu',
-    createdAt: NOW, source: { conversationId: 'lead', turnId: id }, summary: 'Body', ...(task ? { task } : {}), ...extra };
+    createdAt: NOW, source: { conversationId: 'lead', turnId: id }, summary: 'Body', ...(task ? { tasks: [task] } : {}), ...extra };
 }
 
 const SUMMARY = {

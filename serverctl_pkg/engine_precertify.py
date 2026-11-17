@@ -98,11 +98,11 @@ def _head_identity(root: Path) -> tuple[str, str, str] | None:
 def pending_certification(root: Path) -> dict | None:
     """What HEAD's engine needs certified before a restart could deploy or keep one, else None.
 
-    None exactly when ``certify_head_before_start`` would not run the gate for
-    a reason a background run cannot change: not TofuDB, no engine crate,
-    an unmanaged engine, the deployed engine is HEAD's, HEAD has a passing
-    record, the deployed engine is kept for HEAD's contract, or engine inputs
-    are uncommitted.
+    None exactly when a background run has nothing to certify: not TofuDB, no
+    engine crate, an unmanaged engine, the deployed engine is HEAD's, HEAD has
+    a passing record, or engine inputs are uncommitted. A deployed engine that
+    a start would keep for HEAD's contract still leaves HEAD pending: without
+    HEAD's record no start ever deploys HEAD's engine.
     """
     from tofu_dotenv import read_dotenv_values
     from runtime_guards import load_deployment_configuration
@@ -124,9 +124,7 @@ def pending_certification(root: Path) -> dict | None:
             return None
     except (OSError, native_engine.EnginePreparationError):
         pass
-    record, problem = passing_record(root, source, contract)
-    if record is not None or native_engine._uncertified_head_decision(
-            root, environment, dest, source, contract, problem)['decision'] == 'kept':
+    if passing_record(root, source, contract)[0] is not None:
         return None
     return {'commit': commit, 'sourceSha256': source, 'contractSha256': contract}
 
@@ -180,7 +178,7 @@ def run(root: Path) -> int:
         _log(root, f"start: certifying engine {pending['sourceSha256'][:12]} commit {pending['commit'][:12]} "
                    f"contract {pending['contractSha256'][:12]}")
         try:
-            native_engine.certify_head_before_start(root)
+            native_engine.certify_head_before_start(root, certify_kept_engine=True)
             record, problem = passing_record(root, pending['sourceSha256'], pending['contractSha256'])
             ok = record is not None
             message = record.summary() if ok else f'the gate finished but {problem}'

@@ -23,7 +23,7 @@ import uuid
 from lib.conversations.project_identity import normalize_project_path
 from lib.identity import PrincipalContext, require_user_id
 from lib.log import get_logger
-from lib.agent_core.model_context_revision import model_context_revision
+from lib.storage.model_continuation import model_context_revision
 from lib.agent_core.storage_errors import StorageError
 from lib.utils import sha256_holding_gil
 
@@ -740,6 +740,10 @@ class ProjectDispatchRepository:
                 try:
                     return self.attempt_get(attempt_id, user_id=self.owner)
                 except Exception as error:
+                    # Returned, not swallowed: each caller decides per attempt,
+                    # exactly as get_attempts answers each id.
+                    logger.debug('Attempt %s read failed; returned to the caller: %s',
+                                 attempt_id, error)
                     return error
             return {attempt_id: one(attempt_id) for attempt_id in attempt_ids}
         if not attempt_ids:

@@ -239,6 +239,8 @@ def test_working_recovery_reads_the_executing_attempt_and_settles_the_work_id(mo
     from lib.tasks_pkg.manager.runtime import chat_task_runtime
     reads, settled = [], []
     monkeypatch.setattr(chat_task_runtime, 'get', lambda task_id: reads.append(('live', task_id)))
+    monkeypatch.setattr('lib.turn_lifecycle.get_attempt',
+                        lambda attempt_id, **kw: {'status': 'interrupted'})
 
     def query(operation, payload):
         reads.append((operation, payload['key']))
@@ -256,3 +258,30 @@ def test_working_recovery_reads_the_executing_attempt_and_settles_the_work_id(mo
     verdict = executor or 'project-worker:assignment'
     assert reads == [('live', verdict), ('task_results.replay_get', verdict)]
     assert settled == [('/managed/worker', 'project-worker:assignment', 'interrupted')]
+
+
+@pytest.mark.parametrize('status', ['pending', 'running'])
+def test_working_recovery_leaves_an_attempt_running_in_another_process_working(monkeypatch, status):
+    """Regression for assignment 63fa4f57 (2026-11-17): the attempt ran in an
+    execution shard, so the integration worker's process held no carrier for it.
+    The pass read its absent task result as ``failed``, which is sticky for the
+    generation: the completed attempt's settlement then found the receipt
+    preserved ("Task did not complete") at the checkpoint of that early capture.
+    A durable attempt still pending or running settles itself."""
+    from types import SimpleNamespace
+    from lib.tasks_pkg.manager.runtime import chat_task_runtime
+    settled, attempts = [], []
+    monkeypatch.setattr(chat_task_runtime, 'get', lambda task_id: None)
+    monkeypatch.setattr('lib.turn_lifecycle.get_attempt', lambda attempt_id, **kw: attempts.append(
+        (attempt_id, kw['user_id'])) or {'status': status})
+    monkeypatch.setattr('lib.storage.get_storage_client', lambda **kw: SimpleNamespace(
+        query=lambda operation, payload: None))
+    monkeypatch.setattr(delivery, 'settle_task_workspace',
+                        lambda path, task_id, **kw: settled.append(kw['outcome']))
+    receipt = {'state': 'working', 'executorTaskId': 'conversation-attempt:shard'}
+    row = {'task_id': 'project-worker:assignment', 'user_id': 7, 'workspace_path': '/managed/worker',
+           'project_root': ROOT, 'origin': {'delivery': receipt}}
+
+    assert delivery._recover_working_registration(row) == receipt
+    assert attempts == [('shard', 7)]
+    assert settled == []

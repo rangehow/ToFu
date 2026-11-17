@@ -19,13 +19,13 @@ import uuid
 import pytest
 
 from tests.support.process_scratch import process_scratch_directory
-from tests.support.sidecar_fixtures import installed_storage_runtime
 
 
 @pytest.fixture(scope='module')
 def _chat_sidecar_runtime():
     """Start one real SQLite-backed Sidecar for an opted-in test module."""
     from lib.storage import StorageRuntime, StorageSupervisor
+    from lib.storage.service import install_runtime_for_test
     scratch = process_scratch_directory('chat-sidecar-')
     project_root = scratch / uuid.uuid4().hex[:8]
     project_root.mkdir(parents=True, exist_ok=True)
@@ -34,11 +34,16 @@ def _chat_sidecar_runtime():
             project_root=project_root, backend='sqlite', startup_timeout=60),
         auto_restart=False,
     )
+    install_runtime_for_test(runtime)
+    runtime.start()
     try:
-        with installed_storage_runtime(runtime):
-            runtime.start()
-            yield runtime
+        yield runtime
     finally:
+        install_runtime_for_test(None)
+        try:
+            runtime.stop()
+        except Exception:
+            pass
         shutil.rmtree(scratch, ignore_errors=True)
 
 

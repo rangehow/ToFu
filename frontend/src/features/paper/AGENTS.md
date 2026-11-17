@@ -2,12 +2,12 @@
 
 ## Map
 
-`pdf-reader.ts` owns PDF resources, viewport geometry and `pdf-reader.css`.
+`pdf-reader.ts` owns PDF resources, viewport geometry and `03-pdf-reader.css`.
 `reader-controls.ts` owns navigation/search/outline and the three shared
-`preview-{shell,controls,responsive}.css` sheets.
+`24-paper-preview-{shell,controls,responsive}.css` sheets.
 `preview-panel.ts` owns chat split/focus/drawers and the seven preview detail
 sheets. Paper, chat preview and Research import these same component owners.
-Each sheet sits beside, and is imported by, its direct owner.
+The style manifest names the direct importer of every deferred sheet.
 
 Keep optional CSS on this actual module graph; an outer Paper-only entry would
 omit Research. Feature activation awaits the existing cached module transaction

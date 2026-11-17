@@ -1,6 +1,7 @@
 """HF Papers keyword search keeps the endpoint's relevance ranking."""
 
-from tofu_search.search.vertical import base, hf_papers
+from tofu_search.search.vertical import base
+from tofu_search.search.vertical import hf_papers
 
 
 class _Resp:

@@ -158,6 +158,8 @@ def test_reexec_arms_shutdown_before_saving_snapshot(monkeypatch, tmp_path):
     import lib.server.server_reexec as reexec
     calls = []
     monkeypatch.delenv('TOFU_MANAGED_BY', raising=False)
+    # This process is server.py: its serving loop installed the shutdown bridge.
+    monkeypatch.setattr(reexec, '_shutdown_requester', lambda reason: None)
     monkeypatch.setattr(
         reexec, 'begin_server_reexec',
         lambda reason: calls.append(('begin', reason)) or True)
@@ -177,7 +179,7 @@ def test_reexec_arms_shutdown_before_saving_snapshot(monkeypatch, tmp_path):
     monkeypatch.setattr(
         'serverctl_pkg.application_restart.run_application_restart_control',
         refuse_manager)
-    assert reexec.perform_server_reexec('test') is True
+    assert reexec.perform_server_reexec('test').handed_over is True
     assert calls == [
         ('control', 'delegate'),
         # Only the in-place image reopens storage, so only it prepares the engine.

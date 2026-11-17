@@ -76,6 +76,34 @@ def test_permission_denial_is_not_internal_error(monkeypatch):
     assert routes._safe_route_error_response(PermissionError('private context')) == ('forbidden', 403)
 
 
+def test_storage_failure_behind_a_500_is_logged_with_its_classification(monkeypatch, caplog):
+    """2026-11-17: 510 assignment-page 500s left no exception in any log. An engine kept
+    across an IR change answered the history preview read without contentPreview, so
+    get_turn raised database_protocol_error, which this route mapped to 500 silently."""
+    import logging
+    from lib.storage import StorageError
+    from routes.api_v1 import project_brain as routes
+    monkeypatch.setattr(routes, 'api_error', lambda value, status: (value, status))
+    error = StorageError('database_protocol_error', 'Turn content preview read returned an invalid result')
+    with caplog.at_level(logging.WARNING, logger=routes.logger.name):
+        assert routes._safe_route_error_response(error) == (error, 500)
+    [record] = [r for r in caplog.records if r.name == routes.logger.name]
+    assert record.levelno == logging.ERROR and record.exc_info is not None
+    assert 'code=database_protocol_error' in record.getMessage()
+    assert 'Turn content preview read returned an invalid result' in record.getMessage()
+
+
+def test_client_class_storage_failure_is_not_logged_as_an_error(monkeypatch, caplog):
+    import logging
+    from lib.storage import StorageError
+    from routes.api_v1 import project_brain as routes
+    monkeypatch.setattr(routes, 'api_error', lambda value, status: (value, status))
+    error = StorageError('database_not_found', 'missing')
+    with caplog.at_level(logging.WARNING, logger=routes.logger.name):
+        assert routes._safe_route_error_response(error) == (error, 404)
+    assert not [r for r in caplog.records if r.name == routes.logger.name and r.levelno >= logging.ERROR]
+
+
 @pytest.mark.parametrize('suffix,expected', [('', {}), ('&commandId=grant-command', {'command_id': 'grant-command'}),
     ('&cursor=older/owned-cursor', {'cursor': 'older/owned-cursor'}), ('&assignmentId=retained', {'assignment_id': 'retained'})])
 def test_get_command_receipt_delegates_exact_query_without_authorize(monkeypatch, suffix, expected):

@@ -203,12 +203,14 @@ def _tool_requirement_rows(requires_tools: list,
         logger.debug('[Skills] tool spec probe failed: %s', exc)
     if owner_user_id is not None:
         try:
+            from lib.mcp.bridge_relay import relayed_bridge
             from lib.mcp.client import _state as mcp_state
-            with mcp_state._bridge_lock:
-                bridge = (mcp_state._bridges or {}).get(owner_user_id)
+            bridge = relayed_bridge(owner_user_id)
+            if bridge is None:
+                with mcp_state._bridge_lock:
+                    bridge = (mcp_state._bridges or {}).get(owner_user_id)
             if bridge is not None and getattr(bridge, 'connected', False):
-                with bridge._lock:
-                    known.update(bridge._tool_index.keys())
+                known.update(ns for ns, _info, _disabled in bridge.tool_index_rows())
         except Exception as exc:
             logger.debug('[Skills] MCP tool probe failed: %s', exc)
     rows = []

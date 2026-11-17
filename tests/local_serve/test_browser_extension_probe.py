@@ -506,11 +506,12 @@ def test_stale_banner_ignores_other_devices_stale_extensions():
 # ══════════════════════════════════════════════════════════
 
 def _browser_extension_css() -> str:
-    """The sheets the dialog's feature entry imports (they load with it)."""
-    entry = ROOT / BROWSER_EXTENSION_FEATURE_ENTRY
-    sheets = [(entry.parent / name).read_text(encoding='utf-8')
-              for name in re.findall(r"^import '(\.[^']+\.css)';", entry.read_text(encoding='utf-8'), re.M)]
-    assert sheets, f'no sheet is imported by {BROWSER_EXTENSION_FEATURE_ENTRY}'
+    """The deferred sheets the dialog's feature entry imports."""
+    manifest = json.loads((STYLE_ROOT / 'manifest.json').read_text(encoding='utf-8'))
+    sheets = [(STYLE_ROOT / row['path']).read_text(encoding='utf-8')
+              for row in manifest['deferredSections']
+              if row.get('featureEntry') == BROWSER_EXTENSION_FEATURE_ENTRY]
+    assert sheets, f'no deferred sheet is imported by {BROWSER_EXTENSION_FEATURE_ENTRY}'
     return '\n'.join(sheets)
 
 

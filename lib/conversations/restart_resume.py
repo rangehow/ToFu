@@ -66,6 +66,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
+import logging
 import time
 import uuid
 
@@ -277,15 +278,33 @@ def _candidates(records: list[dict], boot_recovered: list[dict]) -> list[dict]:
     return list(candidates.values())
 
 
-def _stand_down(previous_shutdown) -> str:
+def _pause(previous_shutdown) -> dict | None:
+    """Why this generation's automatic resume stands down: ``{'guard', 'reason'}``, or None."""
     if not isinstance(previous_shutdown, Mapping):
-        return ''
+        return None
     if previous_shutdown.get('restart_storm'):
-        return ('restart storm: automatic resume stands down so a crash loop cannot re-run paid turns; '
-                'Continue it when the server is stable')
+        return {'guard': 'restart_storm',
+                'reason': ('restart storm: the server is in a crash loop, so automatic resume stands '
+                           'down and cannot re-run paid turns into it; Continue it when the server is stable')}
     if previous_shutdown.get('verdict') == 'clean' and previous_shutdown.get('reason') == 'manual':
-        return 'manual shutdown: the owner stopped the server, so nothing resumes by itself'
-    return ''
+        return {'guard': 'manual_shutdown',
+                'reason': 'manual shutdown: the owner stopped the server, so nothing resumes by itself'}
+    return None
+
+
+def _stand_down(previous_shutdown) -> str:
+    pause = _pause(previous_shutdown)
+    return pause['reason'] if pause else ''
+
+
+def automatic_resume_pause() -> dict | None:
+    """This generation's stand-down of automatic resume (``{'guard', 'reason'}``), or None.
+
+    The settlement of a Turn this generation's recovery interrupts carries it
+    (``worker_recovery``), and the restart notice reports it, so a paused
+    resume is never silent.
+    """
+    return _pause(_PREVIOUS_SHUTDOWN)
 
 
 def _result(owner, conversation_id, outcome, reason='', **fields) -> dict:
@@ -554,6 +573,19 @@ def resume_failed_notice_turn(owner: int, conversation_id: str, turn_id: str | N
                                  log_prefix='[NoticeResume]')
 
 
+def _log_summary(results: list[dict]) -> None:
+    """One line naming every candidate: each resumed conversation, each skipped one with
+    its reason. A skip is usually a hand-off (project dispatch recovery, Goal continuity)
+    or a settled/superseded Turn; without the reason it reads as lost work."""
+    resumed = [item['conversationId'] for item in results if item['outcome'] == 'resumed']
+    skipped = [f"{item['conversationId']}: {item['reason'] or item['outcome']}"
+               for item in results if item['outcome'] != 'resumed']
+    logger.log(logging.WARNING if skipped else logging.INFO,
+               '[RestartResume] summary: %d of %d interrupted conversation(s) resumed; '
+               'resumed=[%s] skipped=[%s]', len(resumed), len(results),
+               ', '.join(resumed), ', '.join(skipped))
+
+
 def resume_restart_paused_turns(*, previous_shutdown=None, boot_recovered=None) -> list[dict]:
     """The post-ready pass of a server generation; one result per interrupted Turn.
 
@@ -590,10 +622,8 @@ def resume_restart_paused_turns(*, previous_shutdown=None, boot_recovered=None) 
                        for item in record['conversations']):
                 _delete_record(record)
         _LAST_RESULTS = results
-        if any(item['outcome'] == 'resumed' for item in results) or stand_down:
-            logger.warning('[RestartResume] %d of %d interrupted conversation(s) resumed%s',
-                           sum(item['outcome'] == 'resumed' for item in results), len(results),
-                           f' ({stand_down})' if stand_down else '')
+        if results:
+            _log_summary(results)
     finally:
         _PASS_FINISHED = True
     if retry is not None:
@@ -641,7 +671,8 @@ def describe_conversation(owner: int, conversation_id: str, since) -> str:
     return f'{status} ({cause})' if cause else str(status)
 
 
-__all__ = ['INPUT_ACTORS', 'RESTART_PAUSED_NAMESPACE', 'RESUME_OPERATIONS', 'describe_conversation',
+__all__ = ['INPUT_ACTORS', 'RESTART_PAUSED_NAMESPACE', 'RESUME_OPERATIONS', 'automatic_resume_pause',
+           'describe_conversation',
            'describe_unknown_effects', 'lane_tail_verdict', 'last_results', 'pass_finished',
            'read_lane_tail_verdict', 'record_quiesced_conversations', 'resume_conversation',
            'resume_recovered_turn', 'resume_restart_paused_turns', 'set_boot_recovered',

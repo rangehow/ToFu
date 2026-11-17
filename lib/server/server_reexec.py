@@ -28,6 +28,29 @@ ShutdownRequester = Callable[[str], None]
 ExecFunction = Callable[[str, list[str]], object]
 
 
+MANAGER_DELEGATION_BRIDGE = 'manager delegation'
+INPLACE_REEXEC_BRIDGE = 'in-place re-exec'
+
+
+@dataclass(frozen=True)
+class ServerReexecOutcome:
+    """What ``perform_server_reexec`` did: handed over, or each refusal with its exact reason.
+
+    ``refusals`` holds ``(bridge or stage, reason)`` pairs in the order they were tried, so
+    a refused restart's settled record names every bridge instead of a generic sentence.
+    """
+
+    handed_over: bool
+    refusals: tuple[tuple[str, str], ...] = ()
+
+    @property
+    def detail(self) -> str:
+        if self.handed_over:
+            return ''
+        reasons = '; '.join(f'{name}: {reason}' for name, reason in self.refusals)
+        return f'Every restart bridge refused; the server keeps running. {reasons}'
+
+
 @dataclass(frozen=True)
 class _PendingServerReexec:
     reason: str
@@ -58,8 +81,18 @@ def _restart_project() -> str:
         or os.path.join(os.path.dirname(__file__), '..', '..'))
 
 
+def _inplace_reexec_unavailable() -> str:
+    """Why this process cannot replace its own image, or '' when server.py's bridge is installed."""
+    with _STATE_LOCK:
+        if _shutdown_requester is not None:
+            return ''
+    return (f'skipped: pid {os.getpid()} has no serving-loop shutdown bridge; only the '
+            'server.py process replaces its own image, and this restart runs elsewhere '
+            '(e.g. the execution host)')
+
+
 def perform_server_reexec(reason: str, *, frontend_prevalidated: bool = False,
-                           requested_at: float | None = None) -> bool:
+                           requested_at: float | None = None) -> ServerReexecOutcome:
     """Request a graceful process replacement through its lifecycle owner.
 
     The caller must have verified there is no in-flight work — see
@@ -71,8 +104,10 @@ def perform_server_reexec(reason: str, *, frontend_prevalidated: bool = False,
     behind the stuck-retry incident. A freshly reloaded manager also cannot
     keep launch-time resource policy pinned in a stale parent or inherited
     environment. Only when the manager cannot be reached or refuses does the
-    worker fall back to the bounded in-place ``execv`` path. Returns ``False``
-    only when every lifecycle bridge refuses the request.
+    worker fall back to the bounded in-place ``execv`` path, and only in the
+    ``server.py`` process: elsewhere (the execution host runs delegated
+    restarts) that bridge is skipped with its reason instead of attempted.
+    The outcome is handed over, or names every refusal and its exact reason.
 
     ``frontend_prevalidated`` marks that the synchronous request path already
     ran (and passed) the frontend artifact preflight this restart; re-running
@@ -95,10 +130,10 @@ def perform_server_reexec(reason: str, *, frontend_prevalidated: bool = False,
                 reason=reason,
                 detail=preflight_error[:500],
             )
-            return False
+            return ServerReexecOutcome(False, (('restart preflight', preflight_error),))
 
     project = _restart_project()
-    engine_error = ''
+    refusals: list[tuple[str, str]] = []
     try:
         from serverctl_pkg.application_restart import run_application_restart_control
         supervisor_started = time.monotonic()
@@ -122,16 +157,31 @@ def perform_server_reexec(reason: str, *, frontend_prevalidated: bool = False,
             reason=reason,
             detail=str(exc)[:500],
         )
-        # The in-place image reopens storage itself, so it needs the engine
-        # the manager would otherwise have prepared (or retained).
-        try:
-            run_application_restart_control(project, stage='prepare-storage-engine')
-        except (OSError, RuntimeError) as engine_exc:
-            engine_error = str(engine_exc)
-            logger.error('[Update] In-place re-exec refused: storage engine '
-                         'preparation failed: %s', engine_error)
-            audit_log('self_update_restart_preflight_failed', pid=os.getpid(),
-                      reason=reason, detail=engine_error[:500])
+        refusals.append((MANAGER_DELEGATION_BRIDGE, str(exc) or type(exc).__name__))
+        unavailable = _inplace_reexec_unavailable()
+        if unavailable:
+            logger.error('[Update] In-place re-exec %s', unavailable)
+            audit_log('self_update_inplace_reexec_skipped', pid=os.getpid(),
+                      reason=reason, detail=unavailable)
+            refusals.append((INPLACE_REEXEC_BRIDGE, unavailable))
+        else:
+            # The in-place image reopens storage itself, so it needs the engine
+            # the manager would otherwise have prepared (or retained).
+            try:
+                run_application_restart_control(project, stage='prepare-storage-engine')
+            except (OSError, RuntimeError) as engine_exc:
+                engine_error = str(engine_exc)
+                logger.error('[Update] In-place re-exec refused: storage engine '
+                             'preparation failed: %s', engine_error)
+                audit_log('self_update_restart_preflight_failed', pid=os.getpid(),
+                          reason=reason, detail=engine_error[:500])
+                refusals.append((INPLACE_REEXEC_BRIDGE,
+                                 f'storage engine preparation failed: {engine_error}'))
+            else:
+                if not begin_server_reexec(reason):
+                    refusals.append((INPLACE_REEXEC_BRIDGE,
+                                     'the serving loop refused the shutdown request '
+                                     '("Server re-exec" in the log names why)'))
     else:
         audit_log(
             'self_update_managed_restart_requested',
@@ -143,9 +193,9 @@ def perform_server_reexec(reason: str, *, frontend_prevalidated: bool = False,
         logger.warning(
             '[Update] Current Supervisor accepted a fresh worker generation '
             '(%s)', reason)
-        return True
+        return ServerReexecOutcome(True)
 
-    if engine_error or not begin_server_reexec(reason):
+    if refusals[1:]:
         # Every bridge refused BEFORE the shutdown point of no return, so this
         # process is guaranteed to keep serving. Roll back the acceptance
         # stamp consume_restart committed in-request: leaving it would make
@@ -159,7 +209,7 @@ def perform_server_reexec(reason: str, *, frontend_prevalidated: bool = False,
                     'stamp rolled back so a retry can proceed')
         except Exception as rb_exc:
             logger.warning('[Update] Restart stamp rollback failed: %s', rb_exc)
-        return False
+        return ServerReexecOutcome(False, tuple(refusals))
     logger.info(
         '[Update] Graceful server re-exec requested (%s); draining lifecycle',
         reason,
@@ -185,7 +235,7 @@ def perform_server_reexec(reason: str, *, frontend_prevalidated: bool = False,
         logger.warning('[Update] re-exec marker write failed (guard may race): %s',
                        _mk_e)
     finish_server_reexec_preparation()
-    return True
+    return ServerReexecOutcome(True, tuple(refusals))
 
 
 def install_server_reexec_shutdown_requester(
@@ -379,6 +429,7 @@ def _reset_server_reexec_state_for_tests() -> None:
 
 
 __all__ = [
+    'ServerReexecOutcome',
     'perform_server_reexec',
     'prepare_server_reexec_frontend',
     'begin_server_reexec',

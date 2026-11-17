@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import shutil
 import sys
+import time
 import types
 
 import pytest
@@ -85,7 +86,10 @@ def test_delegation_uses_latest_disk_generation(target, monkeypatch):
     assert first['generation'] == 'first'
     assert second['generation'] == 'updated-generation'
     assert second['project'] == str(target)
+    deadline_at = second['request'].pop('deadline_at')
     assert second['request'] == {'source': 'application-manual', 'requested_at': 123.5}
+    # The child's Supervisor refresh shares the delegate's one deadline.
+    assert 0 < deadline_at - time.time() <= control.DELEGATION_TIMEOUT_SECONDS
 
 
 def test_a_late_stderr_line_cannot_displace_the_receipt(target):

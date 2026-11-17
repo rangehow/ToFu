@@ -119,6 +119,30 @@ def test_a_continuation_settles_earlier_intents_as_interrupted_and_admits_new_ef
     assert not resumed.get('aborted')
 
 
+def test_a_long_call_still_settles_after_later_calls_are_folded(runtime, monkeypatch):
+    """2026-11-17 (114 'Tool ... execution failed ... AbortedError' lines): a swarm child's
+    run_command #80 ran 1m49s while its siblings settled more calls than the ledger retains.
+    Folding advanced the watermark past the still-open #80, so its completion read as already
+    folded and was dropped; the intent stayed open and fenced every later effect of the
+    Worker as 'Prior tool effect remains unconfirmed'."""
+    from lib.project_dispatch import accounting
+    monkeypatch.setattr(accounting, '_retained', lambda: 2)
+    r = runtime
+    task, row = _worker_task(r)
+    budget = task['_executionBudget']
+    long_call = budget.begin_tool_attempt(task, 'toolu_long', 'run_command', 1)
+    for index in range(4):
+        event = budget.begin_tool_attempt(task, f'toolu_quick_{index}', 'write_file', 1)
+        budget.finish_tool_attempt(event, phase='executor_returned')
+    budget.finish_tool_attempt(long_call, phase='executor_returned')
+    assert ('run_command', 1, 'intent') not in ledger(r, row)
+    after = budget.begin_tool_attempt(task, 'toolu_after', 'run_command', 2)
+    budget.finish_tool_attempt(after, phase='executor_returned')
+    stored = r.c.repo.read(row['id'])
+    assert not [item for item in stored['toolAttempts'] if item['phase'] == 'intent']
+    assert stored['settledToolUsage']['calls'] + len(stored['toolAttempts']) == 6
+
+
 def test_settling_is_idempotent_and_leaves_terminal_rows_alone(runtime):
     r = runtime
     task, row = _worker_task(r)

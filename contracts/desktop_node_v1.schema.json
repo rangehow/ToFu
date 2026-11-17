@@ -2,13 +2,15 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "tofu.desktop-node/v1",
   "title": "Tofu node control protocol: pairing, permission tiers, node listing",
-  "description": "Every Tofu desktop install is a node. A node dials OUT to each server it joined (bridge transport: contracts/desktop_bridge_v3.schema.json, POST /api/desktop/poll) so NAT, ssh tunnels and reverse proxies need no inbound route. A node joins a server by redeeming a one-time pairing link; the server lists nodes per owner and tools address one by node id or name. Owner: lib/desktop_wire/node_protocol.py; design: docs/modules/remote_execution.md#nodes-and-pairing.",
+  "description": "Every Tofu desktop install is a node. A node dials OUT to each server it joined (bridge transport: contracts/desktop_bridge_v3.schema.json, POST /api/desktop/poll) so NAT, ssh tunnels and reverse proxies need no inbound route. A node joins a server by redeeming a one-time pairing link; the server lists nodes per owner and tools address one by node id or name. Trust: a redeemed pairing creates a node the Home's owner confirms before it receives work; the Home's durable node registry is contracts/desktop_node_registry_v1.schema.json. Owner: lib/desktop_wire/node_protocol.py; design: docs/modules/remote_execution.md#nodes-and-pairing.",
   "type": "object",
   "x-protocol-version": 1,
   "x-transport": {
     "schema": "contracts/desktop_bridge_v3.schema.json",
     "poll_path": "/api/desktop/poll",
     "pair_path": "/api/desktop/pair",
+    "confirm_path": "/api/v1/desktop/nodes/<node_id>/confirm",
+    "reject_path": "/api/v1/desktop/nodes/<node_id>/reject",
     "direction": "node-to-server"
   },
   "x-pairing": {
@@ -16,7 +18,16 @@
     "via_key": "via",
     "link_secret_bytes": 24,
     "short_code_digits": 6,
-    "ttl_seconds": 300
+    "ttl_seconds": 300,
+    "code_join": "A pairing can also be joined as '<server-url> <6-digit code>' (the code form of the same one-shot pairing); that URL is the only route tried.",
+    "headless_command": "python -m lib.desktop_agent --join <shell-quoted pairing link>"
+  },
+  "x-routes": {
+    "description": "How a node reaches a Home. Every route is opened by the node (outbound only). The Home records which route kind a node's latest admitted poll used, for display only; it never selects routes.",
+    "kinds": ["direct", "browser_relay"],
+    "reserved": {
+      "home_relay": "Deferred (owner decision 8, 2026-11-17): a reachable Home relaying polls for another Home. RouteKind keeps the value so adding it later is additive; no Home admits it today."
+    }
   },
   "x-permission-tiers": {
     "order": ["read", "write", "exec", "gui", "egress", "codex_login"],
@@ -93,6 +104,16 @@
       "pattern": "^https?://[^\\s#?]+$",
       "maxLength": 2048
     },
+    "NodeKind": {
+      "description": "computer = the desktop app (join dialog); server = a headless node (--join). Declared at pairing; the Home's registry keeps it.",
+      "enum": ["computer", "server"]
+    },
+    "Fingerprint": {
+      "description": "XXXX-XXXX; derivation in contracts/desktop_node_registry_v1.schema.json x-identity.fingerprint.",
+      "type": "string",
+      "pattern": "^[0-9A-F]{4}-[0-9A-F]{4}$"
+    },
+    "RouteKind": {"enum": ["direct", "browser_relay", "home_relay"]},
     "Tiers": {
       "type": "object",
       "required": ["read", "write", "exec", "gui", "egress", "codex_login"],
@@ -124,36 +145,42 @@
     },
     "PairRequest": {
       "type": "object",
-      "required": ["code"],
+      "required": ["code", "node_id"],
       "properties": {
         "code": {"type": "string", "minLength": 1, "maxLength": 64},
         "node_id": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,128}$"},
         "name": {"type": "string", "maxLength": 80},
-        "platform": {"type": "string", "maxLength": 40}
+        "platform": {"type": "string", "maxLength": 40},
+        "kind": {"$ref": "#/$defs/NodeKind"},
+        "previous_node_id": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,128}$", "description": "The node this host replaced (host renamed, container recreated); the Home shows the pairing as a re-pair of that device."}
       },
       "additionalProperties": false
     },
     "PairResponse": {
       "type": "object",
-      "required": ["id", "name", "token", "scopes", "owner_id"],
+      "required": ["id", "name", "token", "scopes", "owner_id", "node_id", "fingerprint", "node_state"],
       "properties": {
         "id": {"type": "string", "minLength": 1},
         "name": {"type": "string"},
         "token": {"type": "string", "minLength": 1},
         "scopes": {"const": ["agents:bridge"]},
         "owner_id": {"type": "integer"},
-        "node_id": {"type": "string"}
+        "node_id": {"type": "string"},
+        "fingerprint": {"$ref": "#/$defs/Fingerprint"},
+        "node_state": {"enum": ["pending_confirmation"]},
+        "kind": {"$ref": "#/$defs/NodeKind"}
       },
       "additionalProperties": false
     },
     "PairCodeResponse": {
       "type": "object",
-      "required": ["code", "link", "expires_at", "ttl"],
+      "required": ["code", "link", "expires_at", "ttl", "command"],
       "properties": {
         "code": {"type": "string", "pattern": "^[0-9]{6}$"},
         "link": {"type": "string", "minLength": 1, "maxLength": 8192},
         "expires_at": {"type": "number"},
         "ttl": {"type": "integer"},
+        "command": {"type": "string", "minLength": 1, "maxLength": 8400, "description": "One-line headless join (x-pairing.headless_command)."},
         "pending": {"type": "array"}
       },
       "additionalProperties": false
@@ -169,15 +196,30 @@
         "candidates": {"type": "array", "items": {"$ref": "#/$defs/HttpUrl"}},
         "label": {"type": "string", "maxLength": 200},
         "paired_at": {"type": "number"},
-        "state": {"enum": ["active", "revoked"]}
+        "fingerprint": {"$ref": "#/$defs/Fingerprint"},
+        "state": {"enum": ["active", "revoked", "conflict"]}
       },
       "additionalProperties": false
     },
     "Node": {
       "type": "object",
-      "required": ["node_id", "name", "online", "tiers", "credential"],
+      "required": ["node_id", "name", "online", "tiers", "credential", "state"],
       "properties": {
         "node_id": {"type": ["string", "null"]},
+        "state": {
+          "description": "Registry state. conflict = an active node whose credential another node ID or a second live process presented; unregistered = the in-process node, or a credential no node has polled with yet.",
+          "enum": ["pending", "active", "conflict", "unregistered"]
+        },
+        "fingerprint": {"anyOf": [{"$ref": "#/$defs/Fingerprint"}, {"type": "null"}]},
+        "kind": {"anyOf": [{"$ref": "#/$defs/NodeKind"}, {"type": "null"}]},
+        "paired_at": {"type": ["number", "null"]},
+        "confirmed_at": {"type": ["number", "null"]},
+        "route": {"anyOf": [{"$ref": "#/$defs/RouteKind"}, {"type": "null"}]},
+        "rtt_ms": {"type": ["integer", "null"], "description": "Round trip of the node's latest non-held exchange as the node measured it (poll frame rtt_ms); null offline or unreported. Transport fact of the poll-terminating process, never stored."},
+        "running": {"type": "integer", "minimum": 0, "description": "Commands in flight on the node per its latest admitted poll; 0 offline."},
+        "replacement_fingerprint": {"anyOf": [{"$ref": "#/$defs/Fingerprint"}, {"type": "null"}], "description": "A re-pairing of this node ID waits for confirmation."},
+        "conflict": {"description": "conflict in contracts/desktop_node_registry_v1.schema.json, or null.", "type": ["object", "null"]},
+        "predecessor": {"description": "A pending re-pair names the known device it replaces; online true means a live twin, not a successor.", "anyOf": [{"type": "null"}, {"type": "object", "required": ["node_id", "name", "online"], "additionalProperties": false, "properties": {"node_id": {"type": "string"}, "name": {"type": "string"}, "online": {"type": "boolean"}}}]},
         "name": {"type": "string"},
         "online": {"type": "boolean"},
         "last_seen": {"type": ["number", "null"]},

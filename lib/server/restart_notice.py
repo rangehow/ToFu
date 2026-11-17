@@ -184,6 +184,15 @@ def _conversation_lines(notice: dict, outcome: dict) -> list[str] | None:
     return lines
 
 
+def _resume_pause(notice: dict, outcome: dict) -> dict | None:
+    """The stand-down of this generation's automatic resume, when it is the restart's successor."""
+    from lib import boot_identity
+    from lib.conversations import restart_resume
+    if outcome['status'] != 'completed' or boot_identity.BOOT_TS <= (notice.get('acceptedAt') or 0):
+        return None
+    return restart_resume.automatic_resume_pause()
+
+
 def render_notice(notice: dict, outcome: dict) -> str:
     """The requester's view of one restart's outcome."""
     who = ('requested by this conversation' if notice.get('source') == 'owner_delegation'
@@ -202,6 +211,10 @@ def render_notice(notice: dict, outcome: dict) -> str:
                  else f'Code: unchanged; the old server keeps serving {old}.' if kept_serving
                  else f'Code before the restart: {old}.')
     lines.append('Builds: ' + _builds(notice, outcome))
+    pause = _resume_pause(notice, outcome)
+    if pause:
+        lines.append(f'Automatic resume: paused by the {pause["guard"]} guard ({pause["reason"]}); '
+                     'each interrupted Turn below offers Continue.')
     conversations = _conversation_lines(notice, outcome)
     if conversations is not None:
         lines.append(f'Interrupted conversations ({len(conversations)}):' if conversations

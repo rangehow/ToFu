@@ -430,27 +430,7 @@ class CoordinatorTaskHistory:
                 'coverage': 'complete'}
         if scope is None:
             return validate_progress(page, 'progressHistoryPage')
-        now = int(self.clock() * 1000)
-        board = head['board'] if head else None
-        keys = head.get('taskKeys') if head else None
-        if board is not None and keys is None:
-            # The head predates task history; its next changed board seeds it.
-            page['recorded'] = False
-            records = {}
-            keys = plan_transition(None, None, board)
-            shown = {key: {'key': key, 'title': task['title'], 'status': task['status'],
-                           'firstSeenAt': board['updatedAt'], 'lastSeenAt': board['updatedAt'],
-                           'changedAt': board['updatedAt']} for key, task in zip(keys, board['tasks'])}
-        else:
-            records = _Records(self.progress.client, scope).all()
-            shown = records
-        on_board = dict(zip(keys or (), board['tasks'] if board else ()))
-        entries = [_entry(record, board=board, task=on_board.get(key), now=now)
-                   for key, record in shown.items()]
-        entries.extend(_entry({'key': key, 'title': task['title'], 'status': task['status'],
-                               'firstSeenAt': board['updatedAt'], 'lastSeenAt': board['updatedAt'],
-                               'changedAt': board['updatedAt']}, board=board, task=task, now=now)
-                       for key, task in on_board.items() if key not in shown)
+        entries, page['recorded'] = self._entries(scope, head)
         translation = head.get('translation') if head else None
         if translation:
             page['translation'] = deepcopy(translation)
@@ -474,3 +454,38 @@ class CoordinatorTaskHistory:
             page['nextCursor'] = f'{rank}.{-changed}.{key}.{_fingerprint(group, needle)}'
             page['coverage'] = 'page'
         return validate_progress(page, 'progressHistoryPage')
+
+    def tasks(self, conversation_id):
+        """Every shown task of the binding whose Coordinator is ``conversation_id`` (unpaged), else [].
+
+        The lead deliverables projection resolves report task titles and derives
+        each completed task's automatic work report from these.
+        """
+        scope, binding, head = self.progress.current()
+        if scope is None or binding.get('conversationId') != conversation_id:
+            return []
+        return self._entries(scope, head)[0]
+
+    def _entries(self, scope, head):
+        """Every shown task and whether the history is recorded (a pre-history head is not)."""
+        now = int(self.clock() * 1000)
+        board = head['board'] if head else None
+        keys = head.get('taskKeys') if head else None
+        recorded = True
+        if board is not None and keys is None:
+            # The head predates task history; its next changed board seeds it.
+            recorded = False
+            keys = plan_transition(None, None, board)
+            shown = {key: {'key': key, 'title': task['title'], 'status': task['status'],
+                           'firstSeenAt': board['updatedAt'], 'lastSeenAt': board['updatedAt'],
+                           'changedAt': board['updatedAt']} for key, task in zip(keys, board['tasks'])}
+        else:
+            shown = _Records(self.progress.client, scope).all()
+        on_board = dict(zip(keys or (), board['tasks'] if board else ()))
+        entries = [_entry(record, board=board, task=on_board.get(key), now=now)
+                   for key, record in shown.items()]
+        entries.extend(_entry({'key': key, 'title': task['title'], 'status': task['status'],
+                               'firstSeenAt': board['updatedAt'], 'lastSeenAt': board['updatedAt'],
+                               'changedAt': board['updatedAt']}, board=board, task=task, now=now)
+                       for key, task in on_board.items() if key not in shown)
+        return entries, recorded

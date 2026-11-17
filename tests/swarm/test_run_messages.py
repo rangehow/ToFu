@@ -5,6 +5,7 @@ import threading
 import pytest
 from lib.storage.errors import StorageError
 from lib.swarm.protocol import SubTaskSpec
+from lib.swarm.message_receipts import ResidentReceipts
 from lib.swarm.run_messages import RunMessageRepository, RunMessageError, binding_for, inject_messages, confirm_input
 from lib.swarm import message_service
 from tests.swarm.test_retained_agents import RecordClient
@@ -24,7 +25,8 @@ def context(monkeypatch):
     spec = SubTaskSpec(id='child-a', role='coder', objective='Inspect')
     session = SimpleNamespace(task_id='launch', conv_id='conv-a', user_id=7, inbox_key='conv-a',
         _parent_task_proxy=task, specs=[spec], _lock=threading.Lock(), _results_by_id={},
-        _aborted=False, _restart_suspended=False, is_terminated=False)
+        _aborted=False, _restart_suspended=False, is_terminated=False,
+        resident_receipts=ResidentReceipts())
     binding = binding_for(task, spec, 'conv-a', run_id='launch')
     repository = RunMessageRepository(binding)
     child = {'id': 'runtime-child-1', '_userId': 7, 'config': {}, '_swarmMessageBinding': binding}
@@ -636,6 +638,12 @@ def test_run_snapshot_task_mapping_uses_witness_not_sender_prefix(context, monke
                for row in snapshot['messageParticipants'])
 
 
+def _join_receipt_refreshes():
+    for thread in threading.enumerate():
+        if thread.name == 'swarm-receipts-refresh':
+            thread.join(10)
+
+
 @pytest.mark.parametrize('unavailable', [False, True])
 def test_activity_snapshot_carries_exact_run_history(context, monkeypatch, unavailable):
     from lib.swarm.integration import _state
@@ -649,7 +657,13 @@ def test_activity_snapshot_carries_exact_run_history(context, monkeypatch, unava
             raise StorageError('database_timeout', 'unavailable', retryable=True)
         monkeypatch.setattr(context.client, 'query', fail_read)
     assert _state.list_active_swarms(user_id=8) == []
+    # Registered after the send, the session holds no read yet: the activity
+    # read says so instead of reading storage, and requests that read.
     [snapshot] = _state.list_active_swarms(user_id=7)
+    assert snapshot['messageReceiptsAvailable'] is False
+    _join_receipt_refreshes()
+    [snapshot] = _state.list_active_swarms(user_id=7)
+    _join_receipt_refreshes()
     assert snapshot['swarm_id'] == 'launch'
     assert snapshot['swarm_key'] == 'reusable-key'
     assert snapshot['messageReceiptsAvailable'] is (not unavailable)

@@ -53,8 +53,8 @@ and bounded feedback for report, Q&A and Deepen. Reports explicitly include
 the model-round index in live events; workflow-specific streaming, publication
 and terminal cancellation/error policies stay in their workers.
 
-`report_engine/_body.py` owns report stream text, per-round draft withdrawal
-and terminal-response convergence. The worker keeps model/tool invocation,
+`report_engine/_body.py` owns report stream text, per-round draft withdrawal,
+output-cap continuation joins and terminal-response convergence. The worker keeps model/tool invocation,
 usage and post-processing, and composes publication with task settlement. Verify
 `test_paper_report_body_projection.py` together with report abort, dedup and
 artifact-integrity contracts when changing either side.
@@ -69,6 +69,13 @@ storage refusal, request-local isolation and shared completion contracts.
 passes. The worker admits only published canonical reports; individual hooks
 own their gates and artifact/usage updates. Verify postpass order, isolated
 phase failures and process-control propagation in `test_paper_report_postpass_order.py`.
+
+`report_engine/_sections.py` derives the required explainer sections from the
+`---`-delimited `## ` headings of `_REPORT_PROMPT_EN/_ZH` (never a second
+list) and splices repaired sections at their canonical positions. The worker
+runs one non-fatal repair round through the guarded loop for non-review
+reports and records `sectionRepair` in the report meta. Verify
+`test_paper_report_section_repair.py`.
 
 `report_metadata.py` is the dependency-free usage/recorded-cost projection
 shared with SQL merge/accumulation operations and failed-write hook projection. It owns no pricing lookup,

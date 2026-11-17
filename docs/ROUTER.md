@@ -816,10 +816,9 @@ workspace is Tofu's, not a project the owner attaches or edits. Copy uses
 these names everywhere the owner reads it: settings, tool descriptions and
 hints.
 
-Both entries open onto the lead office beneath them (PROJECT_COORDINATION.md,
-"Lead office"): the main coordinator's card onto the headquarters, a project
-coordinator's row onto its floor, in place of the list of conversations each
-started; the conversation itself keeps the main view.
+Beneath both entries the classic sidebar lists the lead's 成果 and the
+conversations it started as plain rows; no office scene is mounted there
+(PROJECT_COORDINATION.md, "Lead office"); the conversation keeps the main view.
 
 **Alternatives rejected:** keeping pinned entries and only renaming them (two
 extra rows on every screen and still no visible relation to project

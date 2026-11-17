@@ -427,37 +427,7 @@ it('remembers each coordinator independently and keeps the group beneath its own
   second.destroy();
 });
 
-it('becomes the archive without a running tally while the lead office shows that Coordinator\'s work', async () => {
-  const host = document.createElement('div');
-  document.body.replaceChildren(host);
-  const rows: CoordinatorConversationRow[] = [
-    { id: 'worker-a', title: 'A', _coordinatorSource: 'coordinator-1', updatedAt: 2 },
-    { id: 'worker-b', title: 'B', _coordinatorSource: 'coordinator-1', updatedAt: 1 },
-  ];
-  let office = '';
-  const group = createCoordinatorConversationGroup({
-    host, rows: () => rows,
-    readPage: async () => ({ conversations: [], nextCursor: null, coverage: 'complete' as const }),
-    open: vi.fn(), renderRow: row => `<div class="conv-item" data-conv-id="${row.id}">${row.id}</div>`,
-    activeConversationId: () => '', isRunning: () => true, officeShows: id => id === office,
-    readExpanded: () => null, writeExpanded: vi.fn(),
-  });
-  group.update('coordinator-1');
-  await vi.waitFor(() => expect(host.querySelector('.coordinator-conversations-count')?.textContent).toBe('2'));
-  expect(host.querySelector('.coordinator-conversations-live')?.textContent).toBe('projectCoordination.running:2');
-  office = 'coordinator-1';
-  group.refresh();
-  // The whole history stays reachable; only the live tally moves to the office.
-  expect(host.querySelector('.coordinator-conversations-count')?.textContent).toBe('2');
-  expect(host.querySelector('.coordinator-conversations-live')?.textContent).toBe('');
-  expect(host.querySelector('.coordinator-conversations-toggle')?.getAttribute('aria-label')).toBe('projectCoordination.conversations: (2)');
-  office = 'coordinator-other';
-  group.refresh();
-  expect(host.querySelector('.coordinator-conversations-live')?.textContent).toBe('projectCoordination.running:2');
-  group.destroy();
-});
-
-it('tallies and keeps Workers\' background work, also while the lead office shows the Coordinator', async () => {
+it('tallies and keeps Workers\' background work beside the running tally', async () => {
   // Owner report 2026-11-13: 29 Workers ran background commands and the sidebar showed none.
   const host = document.createElement('div');
   document.body.replaceChildren(host);
@@ -475,13 +445,12 @@ it('tallies and keeps Workers\' background work, also while the lead office show
     renderRow: row => `<div class="conv-item" data-conv-id="${row.id}"><div class="conv-date"><span class="conv-date-text">t</span>${background.has(row.id) ? '<span class="conv-status-tag conv-status-background">bg</span>' : ''}</div></div>`,
     activeConversationId: () => '', isRunning: row => row.id === 'worker-a',
     status: row => (row.id === 'worker-c' ? 'done' : 'running'),
-    officeShows: () => true, hasBackground: row => background.has(row.id),
+    hasBackground: row => background.has(row.id),
     readExpanded: () => true, writeExpanded: vi.fn(),
   });
   group.update('coordinator-1');
   await vi.waitFor(() => expect(host.querySelector('.coordinator-conversations-count')?.textContent).toBe('3'));
-  // The office owns the Turn tally; background work is not in the office, so its tally stays.
-  expect(host.querySelector('.coordinator-conversations-live')?.textContent).toBe('sidebar.backgroundRunningTag:2');
+  expect(host.querySelector('.coordinator-conversations-live')?.textContent).toBe('projectCoordination.running:1 · sidebar.backgroundRunningTag:2');
   const tags = () => [...host.querySelectorAll('.conv-item')].map(row => [row.getAttribute('data-conv-id'),
     [...row.querySelectorAll('.conv-date > span')].map(span => span.className)]);
   expect(tags()).toEqual([
@@ -491,7 +460,7 @@ it('tallies and keeps Workers\' background work, also while the lead office show
   ]);
   background.clear();
   group.refresh();
-  expect(host.querySelector('.coordinator-conversations-live')?.textContent).toBe('');
+  expect(host.querySelector('.coordinator-conversations-live')?.textContent).toBe('projectCoordination.running:1');
   expect(host.querySelectorAll('.conv-status-background')).toHaveLength(0);
   group.destroy();
 });

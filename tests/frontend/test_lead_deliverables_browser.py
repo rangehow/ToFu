@@ -74,7 +74,7 @@ def test_classic_sidebar_lists_and_opens_a_leads_deliverables(page, monkeypatch,
     _settle(page)
     page.locator('#sidebar').screenshot(path=str(OUTPUT / 'classic-sidebar.png'), animations='disabled')
 
-    section = page.locator('#projectCoordinatorEntry + .lead-office-slot + .lead-deliverables-slot .lead-deliverables')
+    section = page.locator('#projectCoordinatorEntry + .lead-deliverables-slot .lead-deliverables')
     expect(section).to_be_visible()
     toggle = section.locator('.lead-deliverables__toggle')
     expect(toggle).to_contain_text('Deliverables')

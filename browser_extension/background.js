@@ -54,7 +54,7 @@ const BROWSER_CAPABILITIES = [
   'select', 'scroll', 'wait', 'execute', 'iframes', 'frame_authority', 'network_capture',
   'network_body', 'deep_collect', 'research_hints', 'research_origin_guard',
   'devtools_console', 'js_debugger',
-  'upload', 'file_export', 'downloads', 'screenshot',
+  'upload', 'file_export', 'downloads', 'screenshot', 'cookie_match',
 ];
 // Auto re-pair (owner decree 2026-08-04): the extension must NEVER send the
 // user hunting for a bridge secret. A 401 kicks a silent re-pair ladder that
@@ -717,6 +717,7 @@ async function executeCommand(type, params, temporaryTabs, connection = bridgeCo
     case 'get_cookies':    return cmdGetCookies(params);
     case 'set_cookie':     return cmdSetCookie(params);
     case 'remove_cookie':  return cmdRemoveCookie(params);
+    case 'match_cookies':  return cmdMatchCookies(params);
     case 'get_history':    return cmdGetHistory(params);
     case 'get_bookmarks':  return cmdGetBookmarks(params);
     case 'create_tab':     return cmdCreateTab(params);
@@ -3141,6 +3142,43 @@ async function cmdSetCookie(params) {
 async function cmdRemoveCookie(params) {
   await chrome.cookies.remove({ url: params.url, name: params.name });
   return { removed: true };
+}
+
+// Which cookies equal credentials the user's own Tofu server already stores
+// (lib/mcp/browser_credentials.py)? The server sends a one-time HMAC key and
+// keyed digests; the comparison runs here, so neither cookie values nor the
+// stored credentials cross the bridge. Only matching cookies' identity
+// returns. Candidates name a cookie when they come from a Cookie header.
+async function cmdMatchCookies(params) {
+  const byLength = new Map();
+  for (const candidate of Array.isArray(params.candidates) ? params.candidates : []) {
+    if (!candidate || typeof candidate.id !== 'string' || typeof candidate.mac !== 'string'
+        || !Number.isInteger(candidate.length) || candidate.length <= 0) continue;
+    if (!byLength.has(candidate.length)) byLength.set(candidate.length, []);
+    byLength.get(candidate.length).push(candidate);
+  }
+  const rawKey = atob(String(params.key || ''));
+  if (!byLength.size || !rawKey) return { matches: [] };
+  const keyBytes = Uint8Array.from(rawKey, (ch) => ch.charCodeAt(0));
+  const key = await crypto.subtle.importKey(
+    'raw', keyBytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const encoder = new TextEncoder();
+  const matches = [];
+  for (const cookie of await chrome.cookies.getAll({})) {
+    const bucket = byLength.get(cookie.value.length);
+    if (!bucket) continue;
+    const digest = new Uint8Array(
+      await crypto.subtle.sign('HMAC', key, encoder.encode(cookie.value)));
+    const mac = Array.from(digest, (value) => value.toString(16).padStart(2, '0')).join('');
+    for (const candidate of bucket) {
+      if (candidate.mac !== mac || (candidate.name && candidate.name !== cookie.name)) continue;
+      matches.push({
+        id: candidate.id, name: cookie.name, domain: cookie.domain, path: cookie.path,
+        hostOnly: cookie.hostOnly, secure: cookie.secure, httpOnly: cookie.httpOnly,
+      });
+    }
+  }
+  return { matches };
 }
 
 // ══════════════════════════════════════════

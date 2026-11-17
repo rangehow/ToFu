@@ -1279,7 +1279,16 @@ starts: `flask_app`, any fixture or test body (the `pytest_runtest_setup` and
 `pytest_runtest_call` wrappers in `tests/conftest.py`), the native
 `semantic_authority` (checked with `verify_current` before launch) and
 child-process tests (`require_native_engine_for_checkout()` before they
-spawn). A lane that selected `TOFU_TEST_TOFUDB_BIN` keeps every refusal fatal,
+spawn). These skips are the norm in a Worker task checkout, whose source the
+deployed engine was not built from, so browser and visual tests skip there.
+Because `pytest -q` shows a skip as one `s`, `pytest_terminal_summary` in
+`tests/conftest.py` adds an "inherited native storage engine" section that
+counts them and prints the rerun command, the same invocation prefixed with
+`TOFU_PERSONAL_STORAGE_BACKEND=sqlite`
+(`inherited_engine_skip_summary`, `tests/meta/test_native_engine_skip_summary.py`).
+The lane is not switched automatically: the run selected its backend, and a
+skip that names the alternative keeps engine coverage honest.
+A lane that selected `TOFU_TEST_TOFUDB_BIN` keeps every refusal fatal,
 and no other exception is reclassified, so an owner that refuses a mismatched
 engine raises `EngineAdmissionRefusedError` itself, private benchmark authorities
 such as the native HTML corpus (`benchmarks/knowledge_html/durable.py`)

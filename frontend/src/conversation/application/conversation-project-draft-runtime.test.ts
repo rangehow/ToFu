@@ -268,8 +268,6 @@ describe('composer delivery into a live reply', () => {
       createProjectCoordinationSurface, createSameTaskReadJoin, createGlobalRouterEntry, createRouterWatchdogEntry, createCoordinatorConversationGroups,
       // The main coordinator header's owner-delegation disclosure is not under test here.
       createRouterOwnerDelegation: () => ({ settings: document.createElement('details'), destroy() {} }),
-      // The classic mode: the sidebar lead office (not under test here) never loads.
-      readLanding: () => 'chat', subscribeLanding: () => () => {},
       openProjectCoordinationWorkspace: vi.fn(), getFolders: () => folders,
       // Retained conversation-list owners the Coordinator groups paint rows and status with.
       _convStatusFlags: () => ({}), mergeConversationCatalogRows: vi.fn(),

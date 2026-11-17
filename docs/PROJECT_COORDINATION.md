@@ -1249,7 +1249,12 @@ sessions and tells the human what matters.
   A republished board keeps the translations of texts it still shows; a dropped
   job (restart, refused admission, translator failure) leaves the board as
   written until the next publish. The card shows covered texts translated,
-  with the shared "Original" toggle back to the board as written. Alternatives
+  with the shared "Original" toggle back to the board as written. The task
+  history page carries the same translation, so a task still on the board
+  reads as on the card (its original text stays in the row's tooltip) and
+  history search also matches it; a task that left the board shows its text
+  as written, because the head keeps only the texts its board still shows.
+  Alternatives
   rejected: having the Coordinator write in the reading language (the board
   would leave its working language and turning translation off could not
   restore it); translating in the browser or on the GET read (rendering and
@@ -2134,6 +2139,28 @@ contracts, not claims that a running service has loaded this checkout.
 
 ### Lead office (owner decision 2026-11-12)
 
+Status (owner decision 2026-11-17, "经典模式和普通对话一样，动画只留在 Studio"): the
+lead office is not mounted anywhere. The classic sidebar shows each lead as plain
+rows: its entry row, its 成果 list (`features/lead-deliverables/`, "Lead
+deliverables") and the archive of the conversations it started, with each Worker's
+status and the running tally. The studio (`#/world`, `features/world/`) is the only
+animated surface; it hides the classic sidebar (`01-workspace-dock.css`). The
+2026-11-15 rule below gated the sidebar office on the stored landing choice
+(`tofu_landing_workspace`), which is `world` by default and after every studio visit, so the
+office appeared in the classic chat view, the one place that sidebar is seen; that
+mode read and its change subscription are removed with it.
+Problem: the owner saw animated office rooms per Worker under 项目负责人 in the classic
+view. Decision: remove the mount from the common owner (`presence.js`) rather than
+re-key its gate on the shown workspace, because the sidebar is never visible in the
+studio, so no gate could ever show it there. Alternatives considered: gating on
+`body[data-workspace]` (a dead branch: the studio hides the sidebar); hiding the slot
+with CSS (would still load and run the scene). The `features/lead-office/` module,
+its stylesheet and copy remain in the tree, unreferenced by the runtime, until the
+studio redesign decides whether any of it is reused; the text below records its
+design. Specifications: `project-coordination-entry.test.ts` (plain rows whatever the
+stored landing) and `tests/frontend/test_lead_sidebar_plain_browser.py` (real
+browser, both stored landings, studio round trip).
+
 Problem: owners prefer talking to their leads, and the multi-level lead system
 already coordinates the work, so the Goal Studio's game office had become a
 separate destination owners do not open: a game reachable only through its own
@@ -2199,26 +2226,9 @@ office for project leads only omits the main coordinator; a new progress endpoin
 or polling loop would duplicate the assignment, board and report authorities;
 plain list rows lose the spatial, at-a-glance reading the art gives.
 
-The office is the studio mode's sidebar only (owner decision 2026-11-15: "经典模式下，
-侧栏不要显示动画界面"). The mode is the one landing choice of
-`application-shell/landing.ts` (`readLanding()`: `world` is the studio, `chat` the
-classic view, the same rule index.html's pre-paint applies); `presence.js` reads it
-when placing the office and follows `subscribeLanding` for switches in this tab or
-another. In the classic mode the lead's entry row and its conversation group, with
-each Worker's status and the running tally, are the whole team view: the office
-module, its stage, art, render loop and assignment reads are never imported or
-started, and switching to classic hides a shown office, which disposes its stage
-and subscription. Alternatives considered: a CSS rule hiding the office would still
-load and run its scene; a separate sidebar setting would be a second source of
-truth for the same mode choice.
-Specifications: `frontend/src/features/lead-office/*.test.ts`,
-`project-coordination-surface.test.ts` (office facts for the shown entry across
-its project's chats, none for the main view), `coordinator-conversation-group.test.ts`
-(the archive without a running tally), `project-coordination-entry.test.ts` (classic
-mode never loads the office; switching modes shows and hides it) and
-`tests/frontend/test_lead_office_browser.py`
-(floor and headquarters beneath their entries, keyboard doors, the framed room,
-the office kept across navigation, a project floor opening its folder).
+Until 2026-11-17 the office was the studio mode's sidebar only (owner decision
+2026-11-15), keyed on the stored landing choice; that coupling is removed (status
+above). Specifications of the unmounted module: `frontend/src/features/lead-office/*.test.ts`.
 
 ### Lead office art and state mapping (owner request 2026-11-15)
 
@@ -3002,7 +3012,13 @@ authorization boundary, default deny: a path must be a regular file inside the
 sending task's verified read roots, read without following symlinks
 (`lib.artifacts.file_snapshot`); an `att_media_` reference must be one of the
 owner's own attachments (owner-scoped lookup); an image must be shown in the
-sender's conversation. Anything else is refused (`attachment_refused`) before any
+sender's conversation: in one of its messages, or in an owner message steered
+into the Turn the sender is running. A steer never enters the task's messages,
+so its images are read from its records (this executor's delivered ones and
+those committed to the live Turn), and only a record whose committed author is
+the owner's own input here counts (`require_human_turn`): nonhuman steers and
+Global Router forwards add none (2026-11-17: a Coordinator could not forward the
+screenshot the owner steered into its turn). Anything else is refused (`attachment_refused`) before any
 record is written or anything is sent. An admitted file is stored once, by digest,
 through `lib.media_attachments.ingest_received_file` (origin `agent_message`), the
 same retained attachment a channel file or chat upload becomes; no size or count
@@ -3031,7 +3047,8 @@ Alternatives rejected:
 
 Verification: `tests/project_mod/test_lead_attachments.py` (real Sidecar: image,
 PDF, text and arbitrary binary delivery; refused outside, traversal, symlink,
-directory, missing, foreign-owner and unseen-image references) and
+directory, missing, foreign-owner and unseen-image references; an owner-steered
+image admitted, a nonhuman, agent-authored or forwarded steer's refused) and
 `tests/project_mod/test_lead_attachment_delivery.py` (each message path and the
 contract mirror).
 

@@ -1463,6 +1463,17 @@ def pytest_runtest_logreport(report):
         _FRONTEND_DEP_SKIPS.append(report.nodeid)
 
 
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    from tests.support.native_engine_prerequisite import inherited_engine_skip_summary
+
+    lines = inherited_engine_skip_summary(terminalreporter.stats.get('skipped', ()),
+                                          config.invocation_params.args)
+    if lines:
+        terminalreporter.section('inherited native storage engine', yellow=True)
+        for line in lines:
+            terminalreporter.line(line)
+
+
 def pytest_sessionfinish(session, exitstatus):
     reclaim = _reclaim_stale_pytest_roots()
     if reclaim['errors']:

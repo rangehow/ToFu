@@ -1465,6 +1465,42 @@ async function automationOwnershipProbe() {
   };
 }
 
+async function cookieMatchProbe() {
+  const {createHmac} = require('node:crypto');
+  const jar = [
+    {name: 'overleaf_session2', value: 's%3Afresh-session', domain: '.overleaf.com',
+     path: '/', hostOnly: false, secure: true, httpOnly: true},
+    {name: 'web_session', value: 'header-session-value', domain: '.xiaohongshu.com',
+     path: '/', hostOnly: false, secure: true, httpOnly: true},
+    {name: 'lang', value: 'en', domain: 'example.test', path: '/', hostOnly: true,
+     secure: false, httpOnly: false},
+  ];
+  const queries = [];
+  chrome.cookies.getAll = async (details) => { queries.push(details); return jar; };
+  const key = Buffer.alloc(32, 7);
+  const mac = (value) => createHmac('sha256', key).update(value, 'utf8').digest('hex');
+  const candidate = (id, value, name) => ({
+    id, length: value.length, mac: mac(value), ...(name ? {name} : {})});
+  context.__cookieMatchParams = {
+    key: key.toString('base64'),
+    candidates: [
+      candidate('whole', 's%3Afresh-session'),
+      candidate('pair', 'header-session-value', 'web_session'),
+      candidate('other-name', 'header-session-value', 'sid'),
+      candidate('stale', 's%3Astale-session'),
+    ],
+  };
+  const result = await vm.runInContext(
+    "executeCommand('match_cookies', __cookieMatchParams)", context);
+  context.__cookieMatchParams = {key: '', candidates: []};
+  const empty = await vm.runInContext(
+    "executeCommand('match_cookies', __cookieMatchParams)", context);
+  return {
+    result, empty, queries,
+    advertised: vm.runInContext("BROWSER_CAPABILITIES.includes('cookie_match')", context),
+  };
+}
+
 async function temporaryTabTimeoutProbe() {
   const timers = new Map();
   let timerId = 0;
@@ -1822,6 +1858,7 @@ const probes = {
   researchOriginRealm: researchOriginRealmProbe,
   researchHintBudget: researchHintBudgetProbe,
   pagination: paginationProbe,
+  cookieMatch: cookieMatchProbe,
 };
 
 Promise.resolve().then(async () => {

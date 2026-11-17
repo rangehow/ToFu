@@ -1,30 +1,37 @@
-/* Lead deliverables (features/lead-deliverables/list.ts): the 成果 section beneath
- * a lead's sidebar entry in the classic mode, above the archive of conversations
- * it started. Its toggle reads like that archive's toggle; a long list scrolls
- * inside the section so the conversation list keeps its share of the sidebar. */
-.lead-deliverables-slot { flex-shrink: 0; margin: var(--space-0) var(--space-2) var(--space-1); }
-.lead-deliverables-slot[hidden], .lead-deliverables[hidden] { display: none; }
-.lead-deliverables { display: flex; flex-direction: column; min-height: 0; }
-.lead-deliverables__toggle {
-  display: flex; width: 100%; min-width: 0; align-items: center; gap: var(--space-2);
-  padding: var(--space-2) var(--space-3); color: var(--text-secondary);
-  border: var(--control-edge-inset) solid transparent; border-radius: var(--radius-sm);
-  background: transparent; font-size: var(--font-size-sm); font-weight: var(--weight-medium);
-  cursor: pointer;
+/* Lead deliverables expanded on the Coordinator task board (features/coordinator-task-deliverables.ts):
+ * a task row's disclosure toggle with its item count, the expanded list of that task's reports and
+ * files (lead-deliverables/rows.ts), and the report reader dialog (lead-deliverables/open.ts). */
+.coordinator-progress-task[data-expandable="true"] { display: block; }
+.coordinator-progress-task-toggle {
+  display: flex; width: 100%; min-width: 0; align-items: flex-start; gap: var(--space-2);
+  padding: 0; color: inherit; text-align: start; font: inherit;
+  border: var(--control-edge-inset) solid transparent; border-radius: var(--radius-sm); background: transparent; cursor: pointer;
 }
-.lead-deliverables__toggle:hover { background: var(--bg-hover); color: var(--text-primary); }
-.lead-deliverables__toggle:focus-visible { outline: var(--control-edge-inset) solid var(--accent); outline-offset: var(--control-edge-inset); }
-/* The archive toggle's chevron, turned to point right while collapsed. */
-.lead-deliverables__chevron { flex-shrink: 0; color: var(--text-tertiary); transform: rotate(-90deg); transition: transform var(--motion-fast) var(--ease-standard); }
-.lead-deliverables__toggle[aria-expanded="true"] .lead-deliverables__chevron { transform: none; }
-.lead-deliverables__label { flex: 1; min-width: 0; text-align: start; }
-.lead-deliverables__count { color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
-.lead-deliverables__body { display: flex; flex-direction: column; max-height: 40vh; overflow-y: auto; overscroll-behavior: contain; }
-.lead-deliverables__body[hidden] { display: none; }
-.lead-deliverables__list { margin: 0; padding: 0; list-style: none; }
-.lead-deliverable { position: relative; display: flex; align-items: flex-start; border-radius: var(--radius-sm); }
+.coordinator-progress-task-toggle:hover { background: var(--bg-hover); }
+.coordinator-progress-task-toggle:focus-visible { outline: var(--control-edge-inset) solid var(--accent); outline-offset: var(--control-edge-inset); }
+.coordinator-progress-task-toggle > .coordinator-progress-text { flex: 1; min-width: 0; }
+.coordinator-progress-task-count {
+  flex-shrink: 0; min-width: 1.6em; padding: 0 var(--space-2); color: var(--accent); text-align: center;
+  border-radius: var(--radius-pill); background: var(--accent-subtle);
+  font-size: var(--font-size-xs); font-variant-numeric: tabular-nums; line-height: 1.6;
+}
+.coordinator-progress-other { margin-block-start: var(--space-1); }
+/* The archive toggle's chevron, turned to point right while folded. */
+.coordinator-progress-task-chevron {
+  flex-shrink: 0; margin-block-start: 0.3em; color: var(--text-tertiary);
+  transform: rotate(-90deg); transition: transform var(--motion-fast) var(--ease-standard);
+}
+.coordinator-progress-task-toggle[aria-expanded="true"] .coordinator-progress-task-chevron { transform: none; }
+@media (prefers-reduced-motion: reduce) { .coordinator-progress-task-chevron { transition: none; } }
+.coordinator-progress-glyph--history { width: 16px; height: 16px; flex-shrink: 0; }
+.coordinator-progress-glyph--history::before {
+  content: ''; display: block; width: 6px; height: 6px; margin: 5px; border-radius: 50%; background: var(--text-tertiary);
+}
+.coordinator-task-deliverables { margin: var(--space-1) 0 var(--space-2) calc(16px + var(--space-2)); }
+.coordinator-task-deliverables__list { margin: 0; padding: 0; list-style: none; }
+.coordinator-task-deliverables__status { margin: 0; padding: var(--space-1) var(--space-3); color: var(--text-tertiary); font-size: var(--font-size-xs); }
+.lead-deliverable { position: relative; display: flex; flex-wrap: wrap; align-items: flex-start; border-radius: var(--radius-sm); }
 .lead-deliverable:hover { background: var(--bg-hover); }
-.lead-deliverable:has(> .lead-deliverable__files) { flex-wrap: wrap; }
 .lead-deliverable__open {
   display: grid; flex: 1; min-width: 0; grid-template-columns: auto 1fr; column-gap: var(--space-2);
   padding: var(--space-1) var(--space-3); color: var(--text-primary); text-align: start;
@@ -42,6 +49,7 @@
 .lead-deliverable[data-report-kind="decision"] .lead-deliverable__kind,
 .lead-deliverable[data-report-kind="blocked"] .lead-deliverable__kind { color: var(--warning-text); border-color: var(--warning-border); background: var(--warning-bg); }
 .lead-deliverable__title { min-width: 0; overflow: hidden; font-size: var(--font-size-sm); text-overflow: ellipsis; white-space: nowrap; }
+.lead-deliverable__meta { min-width: 0; overflow: hidden; color: var(--text-tertiary); font-size: var(--font-size-xs); text-overflow: ellipsis; white-space: nowrap; }
 /* A report's attached files: chips under its row, each opening the file itself. */
 .lead-deliverable__files { display: flex; flex-basis: 100%; flex-wrap: wrap; gap: var(--space-1); padding: 0 var(--space-3) var(--space-1); }
 .lead-deliverable__file {
@@ -51,17 +59,13 @@
 }
 .lead-deliverable__file:hover { border-color: var(--accent); color: var(--accent); }
 .lead-deliverable__file:focus-visible { outline: var(--control-edge-inset) solid var(--accent); outline-offset: var(--control-edge-inset); }
-.lead-deliverable__meta { min-width: 0; overflow: hidden; color: var(--text-tertiary); font-size: var(--font-size-xs); text-overflow: ellipsis; white-space: nowrap; }
 /* Overlaid on hover/focus so the title keeps the row's whole width the rest of the time. */
 .lead-deliverable__source {
-  position: absolute; inset-block: 0; inset-inline-end: 0; height: fit-content; margin-block: auto;
+  position: absolute; inset-block-start: var(--space-1); inset-inline-end: 0;
   background: var(--bg-hover); font-size: var(--font-size-xs); opacity: 0;
 }
 .lead-deliverable:hover .lead-deliverable__source, .lead-deliverable__source:focus-visible { opacity: 1; }
 @media (hover: none) { .lead-deliverable__source { opacity: 1; } }
-.lead-deliverables__status { margin: 0; padding: var(--space-1) var(--space-3); color: var(--text-tertiary); font-size: var(--font-size-xs); }
-.lead-deliverables__status[hidden], .lead-deliverables__more[hidden], .lead-deliverables__retry[hidden] { display: none; }
-.lead-deliverables__more, .lead-deliverables__retry { align-self: flex-start; margin: var(--space-0) var(--space-2) var(--space-1); }
 .lead-deliverable-dialog .ui-dialog__body { max-height: 70vh; overflow-y: auto; }
 .lead-deliverable-report .ptool-coord-card { margin: 0; }
 .lead-deliverable-report__files { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-block-start: var(--space-3); }

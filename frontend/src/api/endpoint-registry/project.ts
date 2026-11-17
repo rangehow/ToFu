@@ -112,10 +112,13 @@ export function createProjectEndpoints(ports: EndpointPorts) {
       signal?: AbortSignal) =>
       get<CoordinatorProgressHistoryPage>('/api/v4/project/coordination/progress/history',
         { query: { path, ...query }, signal, timeout: COORDINATION_READ_TIMEOUT_MS, onError: 'throw' }),
-    // One page of a lead's deliverables, newest first (docs/PROJECT_COORDINATION.md, Lead deliverables).
-    leadDeliverables: (conversationId: string, path: string, cursor?: string, signal?: AbortSignal) =>
+    // One page of a lead's deliverables, newest first, optionally one task's (a task key, or 'other');
+    // every page summarises the items per task (docs/PROJECT_COORDINATION.md, Lead deliverables).
+    leadDeliverables: (conversationId: string, path: string, query: { cursor?: string; task?: string } = {},
+      signal?: AbortSignal) =>
       get<LeadDeliverablePage>('/api/v4/project/coordination/deliverables',
-        { query: { conversationId, ...(path ? { path } : {}), ...(cursor ? { cursor } : {}) }, signal,
+        { query: { conversationId, ...(path ? { path } : {}), ...(query.cursor ? { cursor: query.cursor } : {}),
+          ...(query.task ? { task: query.task } : {}) }, signal,
           timeout: COORDINATION_READ_TIMEOUT_MS, onError: 'throw' }),
     markCoordinatorReportRead: (body: CoordinatorReportReadRequest) =>
       post<CoordinatorReportState>('/api/v4/project/coordination/reports/read', body, { onError: 'throw' }),

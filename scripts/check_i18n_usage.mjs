@@ -22,13 +22,14 @@ const translationCallNames = new Set([
   't', '_t', '_tt', '_tf', 'tr', 'translate', 'moduleTranslate',
 ]);
 /* Components whose every user-visible string must come from the catalogs: the
- * lead deliverables (reports and files) section and the Coordinator task board
+ * lead deliverables (each board task's reports and files) and the Coordinator task board
  * (Progress) with its sidebar row and task history. A literal holding a letter
  * in a copy position (text, tooltip, aria-label, placeholder, button label,
  * disclosure summary, appended text) fails; separators and symbols such as
  * ' · ' and '›' pass. */
 export const literalCopyFiles = [
-  'frontend/src/features/lead-deliverables/list.ts',
+  'frontend/src/features/lead-deliverables/rows.ts',
+  'frontend/src/features/coordinator-task-deliverables.ts',
   'frontend/src/features/lead-deliverables/open.ts',
   'frontend/src/features/lead-deliverables/model.ts',
   'frontend/src/features/coordinator-progress.ts',

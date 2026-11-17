@@ -2194,8 +2194,8 @@ contracts, not claims that a running service has loaded this checkout.
 
 Status (owner decision 2026-11-17, "经典模式和普通对话一样，动画只留在 Studio"): the
 lead office is not mounted anywhere. The classic sidebar shows each lead as plain
-rows: its entry row, its 成果 list (`features/lead-deliverables/`, "Lead
-deliverables") and the archive of the conversations it started, with each Worker's
+rows: its entry row and the archive of the conversations it started (its
+deliverables read on its task board, "Lead deliverables"), with each Worker's
 status and the running tally. The studio (`#/world`, `features/world/`) is the only
 animated surface; it hides the classic sidebar (`01-workspace-dock.css`). The
 2026-11-15 rule below gated the sidebar office on the stored landing choice
@@ -2441,13 +2441,9 @@ One item model and one opener serve both modes
 deliverable itself: an artifact in the artifact panel (file preview, deck
 viewer), a report as the conversation's own `report_to_user` card in a dialog,
 a merge at its Worker's result Turn. The secondary action ("Go to message")
-opens the lead's message at that exact Turn. In the classic view, presence
-places a reports-and-files section (汇报与文件, open until the owner folds it;
-each report row names its kind and opens its attached files from chips) after each shown lead's office slot (the Global Router's
-card, a project's Coordinator row), above the archive of conversations it
-started; older pages load on demand, so lists of any length are complete. A
-`lead_deliverable` push for the shown lead and a push reconnect re-read the first
-page. In the studio, a delivery on the desk and a trophy on the shelf build the
+opens the lead's message at that exact Turn. In the classic view the items
+live on the lead's task board ("Each task expands to its reports and files"
+below); the sidebar holds no deliverables list. In the studio, a delivery on the desk and a trophy on the shelf build the
 same item (same identity) and call the same opener, whose Turn port docks the
 office's conversation column; other desk documents still open their author's brief.
 
@@ -2456,6 +2452,46 @@ implementation; a parallel store that needed seeding and could disagree with
 the reports and artifacts it copied); scraping Turns in the browser (only
 covers loaded windows); deriving the list from the latest-report head (it keeps
 only the newest report); a second studio-only implementation.
+
+#### Each task expands to its reports and files (owner request 2026-11-17)
+
+Problem: the sidebar section listed every report and file of a lead by time,
+apart from the work it belonged to, and duplicated the task board in the
+narrow sidebar; the owner asked to drop it and read each task's results by
+expanding that task on the board.
+
+Decision: `report_to_user` takes `task`, the exact title of a task on the
+Coordinator's board. The tool resolves it before publishing anything (an
+unknown title is refused with the board's titles) to `{key, title}`, where
+`key` is the task's history identity (`progressHistoryKey`, "Task history":
+the head's `taskKeys`, or `title_key` for a head written before history). The
+call's receipt names it, as it names the files, and the relay notice carries
+it (`Task:` line) to the Global Router. The deliverables projection gives each
+report its `task`; a page filters by `task` (a key, or `other`) and always
+summarises the conversation: `tasks` (key, latest title, count, newest time)
+and `otherCount`. Only a task of the lead's own project counts as a task:
+reports the Global Router relays from projects keep their `task` for display
+but read under `other`. `progressState.taskKeys` gives the browser each board
+task's key.
+
+On the board (`features/coordinator-progress.ts` with the lazily loaded
+`coordinator-task-deliverables.ts`), a task with items is a disclosure showing
+its count; expanding it lists that task's items newest first
+(`lead-deliverables/rows.ts`, older pages on demand). Tasks that left the
+board but have items follow as "Earlier tasks", and everything else (reports
+sent before `task` existed or naming no task, files published on their own,
+relayed reports) reads under "Other reports and files", so every deliverable
+stays reachable from the board. A `lead_deliverable` push for the lead and a
+reconnect re-read the summary and each open task. The sidebar's deliverables
+section and its bridge are deleted; the lead's entry keeps its unread report
+preview.
+
+Alternatives rejected: matching reports to tasks by title text in the browser
+(titles change and collide; the key is the history identity); keeping the
+sidebar list beside the board (two places to look, the owner's complaint);
+moving every item onto the board with no "other" group (older reports would
+vanish); a per-task deliverables store (the projection already holds the
+facts).
 
 ### Office team facts (2026-11-13)
 
@@ -2765,8 +2801,8 @@ deliverables. Decision:
 - A project-brain `virtual_user` input (an automatic continuation, a delegated
   brief) reads as one folded row, "Automatic instruction" and its first line
   (`renderers/machine-brief-block.ts`); its body renders only when opened.
-- The sidebar section beneath each lead lists every report, with its kind and
-  attached files, and is open until the owner folds it ("Lead deliverables").
+- Each board task expands to its reports and files ("Each task expands to its
+  reports and files"); the sidebar holds no deliverables list.
 
 Alternatives rejected: a separate "for me" transcript mode that hides process
 Turns (a second view model per Turn identity across windowing, navigation and

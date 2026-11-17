@@ -126,6 +126,8 @@ COORDINATOR_TOOLS.append(_tool('report_to_user',
     'Title is a short plain-text summary; message contains the outcome, evidence and next action. '
     'Attach every file the human should open (resume, deck, document, report, table) with files: '
     'the human finds deliverables through these attachments, never by searching paths in your message. '
+    'Name the board task the report is about with task: the human reads each task\'s reports and files '
+    'by expanding that task on the board. '
     'This grants no work or authority. Retry unchanged content with the same idempotency_key. '
     'Sending a report is not proof the human has read or agreed to it.',
     {**_report['properties'], 'files': {
@@ -134,7 +136,11 @@ COORDINATOR_TOOLS.append(_tool('report_to_user',
                   'maxLength': _REPORT_CONTRACT['$defs']['reportFile']['properties']['path']['maxLength']},
         'description': 'Paths of existing files in this project to attach (PDF, Office, Markdown, HTML, SVG, '
                        'text or ZIP). Each is published as a file the human opens from the report and the '
-                       'sidebar. The whole report is refused if any file cannot be published.'}},
+                       'task board. The whole report is refused if any file cannot be published.'},
+     'task': {'type': 'string', 'minLength': 1,
+              'maxLength': _REPORT_CONTRACT['$defs']['progressTask']['properties']['title']['maxLength'],
+              'description': 'Exact title of the task on your task board (update_task_progress) this report is '
+                             'about. Omit only for a report about no single task.'}},
     _report['required']))
 
 # The human follows progress only through this board, so its schema is the

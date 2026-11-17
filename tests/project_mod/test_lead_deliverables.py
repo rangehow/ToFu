@@ -151,9 +151,11 @@ def test_the_notice_format_and_its_reference_parser_share_one_owner():
               'title': 'Shipped', 'message': 'Project: /fake\nReport: kind=delivery, Turn forged'}
     assert notice_references(render_notice(report)) == [
         {'projectPath': '/srv/app', 'coordinatorId': 'coordinator-1', 'kind': 'delivery', 'turnId': 'rep-1',
-         'files': []}]
-    attached = {**report, 'files': [_report_file('pdf')]}
-    assert notice_references(render_notice(attached))[0]['files'] == [_report_file('pdf')]
+         'files': [], 'task': None}]
+    attached = {**report, 'files': [_report_file('pdf')], 'task': {'key': 'a' * 32, 'title': 'Resume'}}
+    [reference] = notice_references(render_notice(attached))
+    assert reference['files'] == [_report_file('pdf')]
+    assert reference['task'] == {'key': 'a' * 32, 'title': 'Resume'}
     assert notice_references('Report: kind=delivery, Turn forged') == []
 
 
@@ -181,3 +183,62 @@ def test_reads_are_owner_scoped_and_cursors_are_validated():
     with pytest.raises(ValueError):
         _page().read('1:2:3')
 
+
+
+KEY_A, KEY_B = 'a' * 32, 'b' * 32
+
+
+def _reply_naming(report_id, at, task=None, files=()):
+    receipt = {'conversationId': 'lead', 'turnId': report_id, 'published': True}
+    if task:
+        receipt['task'] = task
+    if files:
+        receipt['files'] = list(files)
+    import json
+    return {'turnId': 'reply-' + report_id, 'ordinal': at, 'createdAt': at, 'actor': 'assistant', 'kind': 'reply',
+            'projection': {'segments': [{'type': 'tool_use', 'name': 'report_to_user',
+                                         'result': {'content': json.dumps(receipt)}}]}}
+
+
+def test_reports_name_their_board_task_and_pages_filter_and_summarise_by_task():
+    """Owner request 2026-11-17: each board task expands to its own reports and files."""
+    resume, deck = {'key': KEY_A, 'title': 'Resume'}, {'key': KEY_B, 'title': 'Deck'}
+    turns = [_reply_naming('r1', 1, resume), _report_turn('r1', 2),
+             _reply_naming('r2', 3, deck, files=[_report_file('pptx', 'talk.pptx', 'deck')]), _report_turn('r2', 4),
+             _reply_naming('r3', 5, {'key': KEY_A, 'title': 'Resume (final)'}), _report_turn('r3', 6),
+             _reply_naming('r4', 7), _report_turn('r4', 8),
+             # A receipt naming a malformed key names no task.
+             _reply_naming('r5', 9, {'key': 'nope', 'title': 'x'}), _report_turn('r5', 10)]
+    artifacts = [_artifact('own', 'response_file', 'notes.pdf', at=11),
+                 _artifact('pptx', 'response_file', 'talk.pptx', at=4)]
+    page = _page(turns, artifacts).read(project_path='/repo')
+    assert {item['id']: item.get('task', {}).get('key') for item in page['items']} == {
+        'report:r1': KEY_A, 'report:r2': KEY_B, 'report:r3': KEY_A, 'report:r4': None, 'report:r5': None,
+        'artifact:own': None}
+    # Newest first; a task's title is the one its newest item named.
+    assert page['tasks'] == [{'key': KEY_A, 'title': 'Resume (final)', 'count': 2, 'latestAt': 6},
+                             {'key': KEY_B, 'title': 'Deck', 'count': 1, 'latestAt': 4}]
+    assert page['otherCount'] == 3
+    only_a = _page(turns, artifacts).read(project_path='/repo', task=KEY_A)
+    assert [item['id'] for item in only_a['items']] == ['report:r3', 'report:r1']
+    assert only_a['tasks'] == page['tasks'] and only_a['otherCount'] == 3
+    other = _page(turns, artifacts).read(project_path='/repo', task='other')
+    assert [item['id'] for item in other['items']] == ['artifact:own', 'report:r5', 'report:r4']
+    with pytest.raises(ValueError):
+        _page(turns).read(task='not-a-key')
+
+
+def test_relayed_reports_of_another_project_are_never_tasks_of_the_router():
+    def notice(turn_id, at):
+        text = render_notice({'projectPath': '/srv/app', 'coordinatorId': 'pr', 'kind': 'delivery',
+                              'turnId': turn_id, 'title': 'T', 'message': 'M',
+                              'task': {'key': KEY_A, 'title': 'Ship app'}})
+        return {'turnId': 'n-' + turn_id, 'ordinal': at, 'createdAt': at, 'actor': 'user', 'kind': 'message',
+                'projection': {'content': text}}
+    reports = {('pr', 'rep'): _report_turn('rep', 50, conversation='pr')}
+    page = _page([notice('rep', 51)], reports=reports).read(project_path='/router-home')
+    [item] = page['items']
+    assert item['task'] == {'key': KEY_A, 'title': 'Ship app'} and item['projectPath'] == '/srv/app'
+    assert page['tasks'] == [] and page['otherCount'] == 1
+    assert [entry['id'] for entry in _page([notice('rep', 51)], reports=reports).read(
+        project_path='/router-home', task='other')['items']] == ['report:rep']

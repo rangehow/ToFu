@@ -330,8 +330,8 @@ def test_coordinator_conversations_are_contained_in_a_collapsible_sidebar_group(
     page.locator(f'.folder-tab[data-folder-id="{folder_id}"]').click()
     seed_conversation(live, title='Live delegated worker', settings={'folderId': folder_id, 'projectPath': project,
                       '_coordinatorSource': leader}, messages=[{'role': 'user', 'content': 'Live delegated worker'}])
-    # The group sits beneath its Coordinator's pinned entry and that entry's deliverables slot.
-    group = page.locator(f'#projectCoordinatorEntry + .lead-deliverables-slot + .coordinator-conversations-host '
+    # The group sits beneath its Coordinator's pinned entry.
+    group = page.locator(f'#projectCoordinatorEntry + .coordinator-conversations-host '
                          f'.coordinator-conversations[data-coordinator-id="{leader}"]')
     toggle = group.locator('.coordinator-conversations-toggle')
     expect(toggle).to_have_attribute('aria-expanded', 'false')
@@ -519,7 +519,7 @@ def test_sidebar_paints_each_coordinator_once_across_folder_switches(page, monke
         }''', folder_id)
         assert painted == ([] if switches_project else replaced_rows)
         page.wait_for_function(leader_settled, arg=leader)
-        expect(page.locator('#projectCoordinatorEntry + .lead-deliverables-slot + .coordinator-conversations-host '
+        expect(page.locator('#projectCoordinatorEntry + .coordinator-conversations-host '
                             '.coordinator-conversations-toggle')).to_be_visible()
         expect(history).to_have_count(len(replaced_rows))
         assert history.evaluate_all('(rows) => rows.map((row) => row.dataset.convId)') == replaced_rows
@@ -537,7 +537,7 @@ def test_sidebar_paints_each_coordinator_once_across_folder_switches(page, monke
     visit(folder_ids[1], beta, [])
     visit(folder_ids[0], current, [replaced])
 
-    toggle = page.locator('#projectCoordinatorEntry + .lead-deliverables-slot + .coordinator-conversations-host '
+    toggle = page.locator('#projectCoordinatorEntry + .coordinator-conversations-host '
                           '.coordinator-conversations-toggle')
     pointing = '''(toggle) => {
         toggle.getAnimations({ subtree: true }).forEach((animation) => animation.finish());

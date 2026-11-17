@@ -103,6 +103,30 @@ def _translation(target, translations, board):
     return {'target': target, 'texts': texts} if texts else None
 
 
+def board_task_keys(head):
+    """History identity of each board task, in board order.
+
+    A head written before task history has no ``taskKeys``; each title's first
+    identity is then the key its history record starts (``title_key``).
+    """
+    keys = head.get('taskKeys')
+    if keys is not None:
+        return list(keys)
+    from lib.conversations.coordinator_task_history import title_key
+    return [title_key(task['title']) for task in head['board']['tasks']]
+
+
+def board_task_ref(head, title):
+    """``{key, title}`` of the board task titled ``title``; ValueError naming the board otherwise."""
+    tasks = head['board']['tasks'] if head else []
+    for task, key in zip(tasks, board_task_keys(head) if head else []):
+        if task['title'] == title:
+            return {'key': key, 'title': title}
+    titles = '; '.join(task['title'] for task in tasks) or 'the board is empty'
+    raise ValueError('task must be the exact title of a task on your task board (update_task_progress). '
+                     'Current tasks: ' + titles)
+
+
 def _head_key(owner, project):
     digest = hashlib.sha256(json.dumps(project, ensure_ascii=False).encode()).hexdigest()
     return str(owner) + ':' + digest
@@ -417,6 +441,7 @@ class CoordinatorTaskProgress:
                     result['translation'] = deepcopy(row['value']['translation'])
                 if row['value'].get('commitments'):
                     result['commitments'] = deepcopy(row['value']['commitments'])
+                result['taskKeys'] = board_task_keys(row['value'])
         return validate_progress(result, 'progressState')
 
     def _hint(self):

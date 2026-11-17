@@ -134,7 +134,8 @@ def project_lead_deliverables_read():
         from lib.conversations.lead_deliverables import DeliverablesPage
         path = decode_proxy_path_arg('path') or ''
         return api_ok(DeliverablesPage(_owner(), request.args.get('conversationId') or '').read(
-            request.args.get('cursor') or None, project_path=str(path).strip()))
+            request.args.get('cursor') or None, project_path=str(path).strip(),
+            task=request.args.get('task') or None))
     except Exception as exc:
         return _safe_route_error_response(exc)
 

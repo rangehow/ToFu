@@ -682,14 +682,10 @@ export function createToolSearchPresentation(
         }
       }
     }
-    const merged = [...byDomain.values()];
-    for (const vertical of merged) {
-      vertical.items.sort((left, right) => (
-        rankNumber(right.upvotes) - rankNumber(left.upvotes)
-        || rankNumber(right.citations) - rankNumber(left.citations)
-      ));
-    }
-    return { verticals: merged, omitted };
+    // Item order is the source's ranking (relevance for a keyword search,
+    // popularity for a trending list); re-sorting by upvotes here buried the
+    // best title match under unrelated popular papers.
+    return { verticals: [...byDomain.values()], omitted };
   }
 
   function renderEngineBreakdownHtml(
@@ -761,7 +757,16 @@ export function createToolSearchPresentation(
     header: ToolSearchHeaderHtml,
   ): string {
     if (!isSearchToolRound(round) && !isFetchToolRound(round)) return '';
-    if (!results.length) return renderZeroResultHtml(round, header);
+    const verticalCollection = collectVerticalRecords(round);
+    const verticalMerge = mergeVerticalRecords(verticalCollection.records);
+    const verticalItemCount = verticalMerge.verticals
+      .reduce((total, vertical) => total + vertical.items.length, 0);
+    // Web engines can come back empty while the vertical (arXiv/HF/S2) lookup
+    // answered: the model received those papers, so this is not "no results".
+    if (!results.length && !verticalItemCount) {
+      return renderZeroResultHtml(round, header);
+    }
+    const badgeCount = projectedResultCount || verticalItemCount;
 
     const visibleResults = results.slice(
       0,
@@ -805,8 +810,6 @@ export function createToolSearchPresentation(
       }</div>`
       : '';
 
-    const verticalCollection = collectVerticalRecords(round);
-    const verticalMerge = mergeVerticalRecords(verticalCollection.records);
     const verticalHtml = verticalMerge.verticals
       .map((vertical) => renderVerticalCardHtml(vertical, iconHtml))
       .join('');
@@ -837,8 +840,8 @@ export function createToolSearchPresentation(
            <span class="ptool-icon">${header.iconHtml}</span>
            <span class="ptool-text">${header.queryHtml}</span>
            ${verticalBadgeHtml}
-           <span class="ptool-badge ptool-badge-info">${projectedResultCount} result${
-             projectedResultCount !== 1 ? 's' : ''
+           <span class="ptool-badge ptool-badge-info">${badgeCount} result${
+             badgeCount !== 1 ? 's' : ''
            }</span>
            ${header.rightControlsHtml}
            <span class="ptool-results-toggle">${iconHtml('chevronDown', 16)}</span>

@@ -20,6 +20,7 @@ from copy import deepcopy
 from typing import Any
 
 from lib.tools.poll import AUTO_BACKGROUND_AFTER_S, POLL_WAIT_CAP_S
+from lib.tools.contracts import tool_schema_name
 
 RUN_COMMAND_STOP = (
     'runs until it finishes, the user stops it, or you stop a '
@@ -238,12 +239,6 @@ def _replace_all(value: Any, replacements) -> Any:
     return value
 
 
-def _schema_name(tool: Any) -> Any:
-    fn = tool.get('function') if isinstance(tool, dict) else None
-    fn = fn if isinstance(fn, dict) else tool
-    return fn.get('name') if isinstance(fn, dict) else None
-
-
 def project_leaf_worker_tools(
     tools: list[dict[str, Any]] | None,
 ) -> list[dict[str, Any]]:
@@ -252,8 +247,8 @@ def project_leaf_worker_tools(
     Prose only: names, parameters and validation are unchanged, and the
     handler (lib/tasks_pkg/handlers/poll.py) enforces the scope.
     """
-    return [_replace_all(tool, _LEAF_WORKER_PROSE[_schema_name(tool)])
-            if _schema_name(tool) in _LEAF_WORKER_PROSE else tool
+    return [_replace_all(tool, _LEAF_WORKER_PROSE[tool_schema_name(tool)])
+            if tool_schema_name(tool) in _LEAF_WORKER_PROSE else tool
             for tool in tools or []]
 
 
@@ -287,7 +282,7 @@ def project_no_saved_conversation_tools(
     """
     projected = []
     for tool in tools or []:
-        name = _schema_name(tool)
+        name = tool_schema_name(tool)
         if name not in ('run_command', 'poll', 'kill'):
             projected.append(tool)
             continue
@@ -314,7 +309,7 @@ def project_run_completion_tools(
     and validation are unchanged.
     """
     return [_replace_all(tool, _RUN_REPLACEMENTS)
-            if _schema_name(tool) in _DELIVERY_TOOL_NAMES else tool
+            if tool_schema_name(tool) in _DELIVERY_TOOL_NAMES else tool
             for tool in tools or []]
 
 
@@ -330,7 +325,7 @@ def project_pull_only_completion_tools(
     only: names, parameters and validation are unchanged.
     """
     return [_replace_all(tool, _PULL_REPLACEMENTS)
-            if _schema_name(tool) in _DELIVERY_TOOL_NAMES else tool
+            if tool_schema_name(tool) in _DELIVERY_TOOL_NAMES else tool
             for tool in tools or []]
 
 

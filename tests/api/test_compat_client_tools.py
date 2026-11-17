@@ -313,7 +313,6 @@ async def test_paid_request_uses_physical_usage_and_durable_wallet_barrier(
     monkeypatch.setattr('lib.relay_config.billing_enabled', lambda: True)
     monkeypatch.setattr('lib.desktop.egress.route_request', lambda *args, **kwargs: 'direct')
     monkeypatch.setattr('lib.proxy.subscription_route_candidates', lambda url, **kwargs: [])
-    monkeypatch.setattr(astream, '_resolve_async_route', lambda url: (None, {'mode': 'fixture'}))
     client = get_storage_client(write=True)
     sends, identities = [], []
     command = client.command

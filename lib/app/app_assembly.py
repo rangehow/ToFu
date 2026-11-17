@@ -171,17 +171,6 @@ def configure_application(
     app.after_request(attach_rate_headers)
     app.teardown_request(release_browser_poll_admission_on_teardown)
 
-    # Settings → 数据库 panel: feed its activity clock. The maintenance thread
-    # itself belongs to the serving lifespan (registered background services).
-    # Fully guarded: a panel failure must never break request serving.
-    try:
-        from lib.database_panel import maintenance as _database_panel_maintenance
-
-        app.before_request(_database_panel_maintenance.note_http_activity)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning('database panel maintenance unavailable: %s: %s',
-                       type(exc).__name__, str(exc)[:200])
-
     register_static_cache_headers(app)
     register_static_route(
         app,

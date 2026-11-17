@@ -167,30 +167,6 @@ def _admit_path(path: str, roots: list[str], *, carried: bool = True, where: str
                    {'path': snapshot.path, 'roots': list(roots)}, carried=carried)
 
 
-def _registered_project(owner: int, requested: str) -> str | None:
-    """The owner's registered project root ``requested`` names exactly (its path, or the same directory).
-
-    Registered means a root of one of the owner's project folders (primary or
-    not, router_project lists them) or a project with a coordination binding
-    (get_router_projects lists them); the router home and watchdog are not
-    projects. The recent-project list is navigation history, not a registration.
-    """
-    from lib.conversations.folders import owner_folders
-    from lib.conversations.project_coordination import ProjectCoordinationRepository
-    from lib.router.home import is_router_home
-    from lib.router.watchdog.binding import is_watchdog_location
-    wanted = os.path.normpath(os.path.expanduser(requested))
-    if not os.path.isabs(wanted) or is_router_home(owner, wanted) or is_watchdog_location(owner, wanted):
-        return None
-    paths = [os.path.normpath(path) for folder in owner_folders().list(owner)
-             for path in folder['projectPaths'] if isinstance(path, str) and os.path.isabs(path)]
-    exact = [path for path in paths if path == wanted]
-    if not exact and ProjectCoordinationRepository(owner).is_bound(wanted):
-        exact = [wanted]
-    same = [path for path in paths if os.path.realpath(path) == os.path.realpath(wanted)]
-    return (exact or same or [None])[0]
-
-
 def _admit_project_file(owner: int, project: Any, path: Any, *, carried: bool) -> dict[str, Any]:
     """``{path, project}``: a regular file inside one of the owner's registered project roots (P13).
 
@@ -200,7 +176,8 @@ def _admit_project_file(owner: int, project: Any, path: Any, *, carried: bool) -
     """
     if not isinstance(project, str) or not project.strip() or not isinstance(path, str) or not path.strip():
         raise ChannelError('invalid_attachments', 'A project attachment is {path, project} with both non-empty')
-    registered = _registered_project(owner, project.strip())
+    from lib.router.registered_projects import registered_project
+    registered = registered_project(owner, project.strip())
     if registered is None:
         raise ChannelError('attachment_project_unknown',
                            f'{project} is not one of the owner\'s registered projects; give the project root '

@@ -27,6 +27,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from lib.tools.contracts import tool_schema_name
+
 
 
 ACTIVE_MULTI_AGENT_MODES = frozenset({'read_only', 'full'})
@@ -45,16 +47,6 @@ READ_ONLY_AGENT_EXTRA_BAN = frozenset({
     # root; poll there could wait on another lane and deadlock the root.
     'poll', 'kill',
 })
-
-
-def tool_schema_name(tool: Any) -> str:
-    """Return a function tool's name without assuming one wire dialect."""
-    if not isinstance(tool, dict):
-        return ''
-    function = tool.get('function')
-    if isinstance(function, dict):
-        return str(function.get('name') or '')
-    return str(tool.get('name') or '')
 
 
 def catalog_has_spawn_agents(catalog: Any) -> bool:

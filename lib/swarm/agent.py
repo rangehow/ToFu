@@ -45,12 +45,6 @@ DEFAULT_TOOL_RESULT_MAX_CHARS = 30_000
 _SSE_TOOL_PREVIEW_CHARS = SWARM_TOOL_TIMELINE_DETAIL_CHARS
 
 
-def _tool_timeline_text(value) -> str:
-    if value is None:
-        return ''
-    return value if isinstance(value, str) else str(value)
-
-
 _FLOW_ROUND_MAX_DEPTH = 6
 _FLOW_ROUND_MAX_ITEMS = 100
 _FLOW_ROUND_MAX_STRING_CHARS = SWARM_TOOL_TIMELINE_DETAIL_CHARS
@@ -304,7 +298,7 @@ class SubAgent:
 
         if spec.retained_agent_id:
             # An implicit artifact helper cannot expand a narrowed assignment.
-            from lib.swarm.routing import tool_schema_name
+            from lib.tools.contracts import tool_schema_name
             selected = {tool_schema_name(tool) for tool in all_tools}
             self.tools = [tool for tool in self.tools if tool_schema_name(tool) in selected]
         decision = (parent_task.get('config') or {}).get('_toolOrchestration') or {}
@@ -605,7 +599,7 @@ class SubAgent:
     def _exactly_selected_tool_names(self):
         if not self.spec.tools:
             return ()
-        from lib.swarm.routing import tool_schema_name
+        from lib.tools.contracts import tool_schema_name
         return [tool_schema_name(tool) for tool in self.tools]
 
     def run(self) -> SubAgentResult:

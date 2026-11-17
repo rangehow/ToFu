@@ -66,10 +66,3 @@ def normalize_official_openai_provider(provider: dict) -> dict:
         result.append(model)
     normalized['models'] = result
     return normalized
-
-
-def normalize_official_openai_providers(providers: list) -> list:
-    if not isinstance(providers, list):
-        return []
-    return [normalize_official_openai_provider(provider)
-            for provider in providers if isinstance(provider, dict)]

@@ -55,7 +55,6 @@ from lib.llm.llm_errors import (
 from lib.llm.request_repair import RequestRepairState, repair_rejected_request
 from lib.log import get_logger
 from lib.proxy import report_outcome as _proxy_report_outcome
-from lib.proxy import resolve_async_route as _resolve_async_route
 from lib.subscription_quota import USAGE_QUOTA_KEY, record_codex_quota
 
 logger = get_logger(__name__)
@@ -74,14 +73,6 @@ async def _aiter_response_bytes(response):
             line = line.encode('utf-8')
         if line:
             yield bytes(line) + b'\n\n'
-
-
-def _httpx_proxy_url(url: str):
-    """Proxy URL for the httpx async client — delegates to
-    ``lib.proxy.async_proxy_for`` so the async transport honours env
-    ``no_proxy`` exactly like the sync one (httpx alone ignores it once an
-    explicit ``proxy=`` is set)."""
-    return _resolve_async_route(url)[0]
 
 
 def _close_abandoned_raw_dumper(plan, log_prefix: str, reason: str) -> None:

@@ -75,11 +75,9 @@ api_v1_project_bp = Blueprint("api_v1_project", __name__)
 
 def _active_project_path(explicit: str = "") -> str:
     """Resolve the project path: explicit body field overrides server state."""
-    if explicit:
-        return explicit
-    from lib.project_mod.config import _state
+    from lib.project_mod.config import get_project_path
 
-    return _state.get("path", "") or ""
+    return explicit or get_project_path() or ""
 
 
 def _project_set_recent_paths(data: dict, paths: list) -> list[str]:
@@ -122,11 +120,6 @@ def _decoded_path_arg(name: str = "path") -> str:
     from lib.request_parser import decode_proxy_path_arg
 
     return decode_proxy_path_arg(name)
-
-
-def _project_user_id() -> int:
-    """Resolve the authenticated owner at the HTTP boundary."""
-    return int(_request_user_id())
 
 
 # ── State / lifecycle ────────────────────────────────────────────────

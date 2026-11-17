@@ -55,6 +55,7 @@ from .program import (
     readiness,
     source_tree_digest,
 )
+from lib.tools.contracts import tool_schema_name
 
 logger = get_logger(__name__)
 
@@ -84,11 +85,6 @@ _CAPABILITY_PREFIXES = {
     'manuscript': ('literature.',),
     'publish': ('publication.push',),
 }
-
-
-def _schema_name(schema: Mapping[str, Any]) -> str:
-    function = schema.get('function')
-    return str(function.get('name') or '') if isinstance(function, Mapping) else ''
 
 
 def _binding_applies(action: str, capability: str) -> bool:
@@ -155,9 +151,9 @@ def build_action_tool_epoch(
                 'review bindings and retry')
     executable = tuple(
         copy.deepcopy(schema) for schema in full.executable_schemas
-        if _schema_name(schema) in allowed_names
+        if tool_schema_name(schema) in allowed_names
     )
-    found_names = {_schema_name(schema) for schema in executable}
+    found_names = {tool_schema_name(schema) for schema in executable}
     missing = sorted(allowed_names - found_names)
     if action == 'publish' and missing:
         raise ValueError('bound tool is unavailable in the executable epoch: '

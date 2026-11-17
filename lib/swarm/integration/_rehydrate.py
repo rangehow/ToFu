@@ -423,7 +423,7 @@ def _rehydrate_one_locked(sess: dict, *, resume_task: dict | None = None,
     execution_parent = resume_task
     all_tools = [] if resume_task is not None else _rebuild_tool_list(config)
     if resume_task is not None:
-        from lib.swarm.routing import tool_schema_name
+        from lib.tools.contracts import tool_schema_name
         from lib.tasks_pkg.child_invocation import snapshot_conversation_child_policy
         from lib.tool_input_repair import RENAMED_TOOL_NAMES
         names = (config.get('parent_cfg') or {}).get('_swarmToolNames')

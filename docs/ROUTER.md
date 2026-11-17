@@ -2101,6 +2101,13 @@ target execution authority. See
   and `is_router_home` compute the identity without effects;
   `owner_resources(user_id, *, content)` reads the owner's `RESOURCES.md`
   without following links (R13).
+- `lib/router/registered_projects.py` — `registered_project_roots(owner)` and
+  `registered_project(owner, requested)`: the one owner of "is this a
+  registered project root?" (a folder root or a coordination binding, never
+  the router home, the Watchdog or the recent-project navigation history).
+  Channel attachments (`{path, project}`) and the Feishu bridge's project
+  selection ask here; `scripts/check_architecture.py` rejects any other
+  module reading `get_recent_projects` to admit a project.
 - Cross-project lead messages (R13) — `lib/conversations/project_messages.py`
   (`lead_role`, `validate_sender(..., recipient=)`, the `crossProject` contract
   section) and `list_project_leads` (`lib/router/projects.py` `project_leads`,

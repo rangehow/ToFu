@@ -61,6 +61,8 @@ import time
 from lib.log import get_logger, log_context
 
 from . import store, wintoolchain
+# One repository reader for both platform builders (VERSION and git).
+from .builder import _git, _read_version
 
 logger = get_logger(__name__)
 
@@ -656,22 +658,6 @@ def _tofu_search_source(workdir: str) -> str:
         shutil.copy2(wheels[-1], dest)
         return dest
     return 'tofu-search'
-
-
-def _read_version() -> str:
-    with open(os.path.join(_REPO_ROOT, 'VERSION'), encoding='utf-8') as f:
-        v = f.read().strip()
-    if not v:
-        raise RuntimeError('VERSION file is empty')
-    return v
-
-
-def _git(*args) -> str:
-    out = subprocess.run(['git', '-C', _REPO_ROOT, *args],
-                         capture_output=True, timeout=60)
-    if out.returncode != 0:
-        raise RuntimeError(f'git {args[0]} failed: {out.stderr[:200]!r}')
-    return out.stdout.decode('utf-8', 'replace')
 
 
 def _sh(cmd: str, log_fh, *, shell: bool = False,

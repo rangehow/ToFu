@@ -47,7 +47,6 @@ def test_stop_before_headers_closes_socket_and_dumper_once(monkeypatch, stop_kin
         monkeypatch.setattr(astream, 'get_async_client', lambda **_: client)
         monkeypatch.setattr('lib.desktop.egress.route_request', lambda *a, **kw: 'direct')
         monkeypatch.setattr('lib.proxy.subscription_route_candidates', lambda url: [])
-        monkeypatch.setattr(astream, '_resolve_async_route', lambda url: (None, {}))
         monkeypatch.setattr(_transport, 'ABORT_POLL_INTERVAL', 0.01)
         port = server.sockets[0].getsockname()[1]
         plan = SimpleNamespace(

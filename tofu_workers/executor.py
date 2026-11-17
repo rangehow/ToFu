@@ -52,7 +52,8 @@ class _LoopCarrierStarter:
         self._lock = threading.Lock()
         self._requests: queue.SimpleQueue | None = None
         self._pid = 0
-        os.register_at_fork(after_in_child=self._forget_after_fork)
+        if hasattr(os, 'register_at_fork'):  # absent on Windows
+            os.register_at_fork(after_in_child=self._forget_after_fork)
 
     def _forget_after_fork(self) -> None:
         # The parent's thread does not exist in a forked child.

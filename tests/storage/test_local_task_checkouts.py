@@ -544,3 +544,36 @@ def test_reclaiming_a_delivered_local_checkout_removes_its_lock_and_registration
     assert row['origin']['delivery']['state'] == 'delivered'
     assert row['origin']['sourceRetirement'] == 'reclaimed'
     assert not checkout.exists() and str(checkout) not in worktrees(root)
+
+
+def test_binding_reads_the_task_checkouts_identity_once_fresh_or_resumed(layout, monkeypatch):
+    """The checkout verified before binding is the one the binding names: no second read.
+
+    Each identity read is a Git process on the checkout's volume; resumed
+    Workers measured 21 to 26 s of binding under host load (docs/PROJECT_COORDINATION.md,
+    "A lead reads each result once", bottleneck 2).
+    """
+    root = layout['root']
+    git(root, 'config', '--local', 'tofu.workspaceMode', 'isolated')
+    monkeypatch.setattr('lib.agent_core.events.emit_phase', lambda *args, **kwargs: None)
+    reads = []
+    original = workspace_delivery._checkout
+
+    def counted(path, **kwargs):
+        reads.append(str(path))
+        return original(path, **kwargs)
+
+    monkeypatch.setattr(workspace_delivery, '_checkout', counted)
+    fresh = {'id': 'bound-worker', 'convId': 'conversation', '_userId': OWNER,
+             'status': 'running', 'config': {'projectPath': str(root)}}
+    workspace_delivery.bind_worker_workspace(fresh)
+    checkout = fresh['config']['projectPath']
+    assert checkout != str(root)
+    assert reads.count(checkout) == 1, reads
+
+    reads.clear()
+    resumed = dict(fresh, config={'projectPath': str(root)})
+    workspace_delivery.bind_worker_workspace(resumed)
+
+    assert resumed['config']['projectPath'] == checkout
+    assert reads.count(checkout) == 1, reads

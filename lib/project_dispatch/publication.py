@@ -402,6 +402,31 @@ def delivery_final(assignment: Mapping, attempt: Mapping | None, workspace_get) 
     return found is not None and found[2].get('state') == 'delivered'
 
 
+def _held_conflict(task_id: str, status: str, checkpoint: str, receipt: Mapping) -> dict | None:
+    """The exact files of a real conflict hold and the rework that resolves it.
+
+    Routine overlaps never reach this: landings run in sequence and keep both
+    insertions (``lib.project_mod.insertion_conflicts``). What remains needs a
+    Worker. The brief is complete for ``delegate_project_work``: a landing of
+    the resolved work contains this checkpoint, so this delivery then settles
+    as delivered by itself (``task_delta_delivery.checkpoint_contained``).
+    """
+    retry = receipt.get('retry') or {}
+    paths = [str(path) for path in retry.get('conflictPaths') or []]
+    if status != 'blocked' or retry.get('condition') != 'conflict_inputs_changed' or not paths:
+        return None
+    count = int(retry.get('conflictPathCount') or len(paths))
+    listed = ', '.join(paths) + (f' and {count - len(paths)} more' if count > len(paths) else '')
+    rework = (f'Resolve held delivery {task_id}: its checkpoint {checkpoint} conflicts with the '
+              f'shared branch at {listed}. In your worktree on the current shared branch, merge '
+              f'commit {checkpoint}, resolve each conflicted file keeping both sides\' intent '
+              '(regenerate generated outputs from the merged sources, never hand-merge them), '
+              'rerun the checks covering those files, commit and save a checkpoint. Once your '
+              'work lands, the held delivery settles as delivered by itself.')
+    return {'paths': paths[:64], 'pathCount': count,
+            'canonicalSha': str(retry.get('sourceSha') or '')[:256], 'rework': rework[:8192]}
+
+
 def delivery_view(assignment: Mapping, attempt: Mapping | None, workspace_get, *,
                   resolve=_resolved) -> dict | None:
     """Read the exact associated workspace receipt, never infer from candidate.
@@ -434,9 +459,13 @@ def delivery_view(assignment: Mapping, attempt: Mapping | None, workspace_get, *
             # already holds: the review releases it in a later write, else the
             # receiver's next pass delivers. Only a live refusal is held.
             status, reason = 'pending', ''
-        return {'taskId': task_id, 'status': status[:64], 'reason': reason[:1024],
+        view = {'taskId': task_id, 'status': status[:64], 'reason': reason[:1024],
                 'checkpointSha': str(receipt.get('checkpointSha') or row.get('checkpoint_sha') or '')[:256],
                 'targetSha': str(receipt.get('targetSha') or '')[:256]}
+        conflict = _held_conflict(task_id, status, view['checkpointSha'], receipt)
+        if conflict:
+            view['conflict'] = conflict
+        return view
     except Exception as diagnostic_error:
         logger.debug('delivery_view failure handled: %s', type(diagnostic_error).__name__)
         return None

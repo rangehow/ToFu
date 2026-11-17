@@ -668,6 +668,39 @@
         "targetSha": {
           "type": "string",
           "maxLength": 256
+        },
+        "conflict": {
+          "description": "Present only for a delivery held by a real three-way conflict with the branch: the exact conflicted files and a ready rework brief for delegate_project_work.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "paths",
+            "pathCount",
+            "canonicalSha",
+            "rework"
+          ],
+          "properties": {
+            "paths": {
+              "type": "array",
+              "maxItems": 64,
+              "items": {
+                "type": "string",
+                "maxLength": 4096
+              }
+            },
+            "pathCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "canonicalSha": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "rework": {
+              "type": "string",
+              "maxLength": 8192
+            }
+          }
         }
       }
     },

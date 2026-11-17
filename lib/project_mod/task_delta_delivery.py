@@ -101,6 +101,39 @@ def remembered_no_delta(row) -> bool:
     return code == 0
 
 
+# (project root, checkpoint) -> (branch tip, contained): ancestry of two
+# immutable commits never changes, so a held row asks Git again only once the
+# tip moved. One entry per task checkpoint this process asked about.
+_CONTAINED: dict[tuple[str, str], tuple[str, bool]] = {}
+
+
+def checkpoint_contained(row, tip: str = '') -> bool:
+    """Whether the branch tip (HEAD unless ``tip``) already has the row's exact checkpoint as an ancestor.
+
+    Such a checkpoint was landed by another assignment that merged it, or by
+    ``git_land``: its delivery publishes nothing, so it settles as delivered
+    whatever its own assignment's review or authority says. Only exit status
+    0 of ``merge-base --is-ancestor`` counts; tree similarity never does.
+    Repair proposals keep their own publication fence.
+    """
+    from lib import integration_control as ic
+    if ((row.get('origin') or {}).get('delivery') or {}).get('repair'):
+        return False
+    checkpoint, root = row.get('checkpoint_sha'), Path(row['project_root'])
+    tip = tip or (ic._rev(root, 'HEAD') if checkpoint else '')
+    if not (checkpoint and tip):
+        return False
+    key = (str(root), checkpoint)
+    known = _CONTAINED.get(key)
+    if known is not None and known[0] == tip:
+        return known[1]
+    code = ic._git(root, ['merge-base', '--is-ancestor', checkpoint, tip],
+                   stall_seconds=GIT_STALL_SECONDS).returncode
+    if code in (0, 1):
+        _CONTAINED[key] = (tip, code == 0)
+    return code == 0
+
+
 def retired_workspace_placeholder(root: Path, workspace: Path) -> bool:
     """Recognize a removed checkout's empty/file-history-bootstrap directory.
 
@@ -318,8 +351,11 @@ def _stageless_conflict_detail(root, pending, baseline, source, checkpoint):
 
 
 def _merge_workspace_delta(root, source, patch_path, task_id, index_path, baseline, checkpoint,
-                           message=''):
+                           message='', merged_parent=''):
     """Resolve against captured workspace bytes without touching its index.
+
+    ``merged_parent`` (see :func:`_lineage_parent`) becomes the result's second
+    parent, so the branch records the checkpoint as merged.
 
     Every read and private-index step here scales with the delta and the
     volume, so it runs under the stall window with no total deadline; only the
@@ -349,6 +385,18 @@ def _merge_workspace_delta(root, source, patch_path, task_id, index_path, baseli
         conflicts = ic._git(root, ['ls-files', '-u', '-z'], env=environment, check=True,
                             stall_seconds=GIT_STALL_SECONDS).stdout
         paths = conflicted_paths(conflicts)
+        if paths:
+            # The canonical tip holds the earlier landings: an insertion made at
+            # the same place keeps both, the tip's first (insertion_conflicts).
+            from lib.project_mod.insertion_conflicts import resolve_insertion_conflicts
+            paths = resolve_insertion_conflicts(paths, lambda args: ic._git(
+                root, ['--literal-pathspecs', *args], env=environment, binary=True,
+                stall_seconds=GIT_STALL_SECONDS))
+            if not paths:
+                tree = ic._git(root, ['write-tree'], env=environment, check=True,
+                               stall_seconds=GIT_STALL_SECONDS).stdout.strip()
+                return _commit(root, tree, source, message or f'Tofu workspace delivery: {task_id}',
+                               merged_parent), '', []
         if pending and not paths:
             # modify/delete and binary patch failures leave no unmerged stages;
             # name every pending path from the immutable trees instead of
@@ -381,13 +429,33 @@ def _merge_workspace_delta(root, source, patch_path, task_id, index_path, baseli
             return '', applied.stderr or applied.stdout or f'Git merge failed with exit {applied.returncode}', paths
     tree = ic._git(root, ['write-tree'], env=environment, check=True,
                    stall_seconds=GIT_STALL_SECONDS).stdout.strip()
-    return _commit(root, tree, source, message or f'Tofu workspace delivery: {task_id}'), '', []
+    return _commit(root, tree, source, message or f'Tofu workspace delivery: {task_id}',
+                   merged_parent), '', []
 
 
-def _commit(root, tree, parent, message):
+def _commit(root, tree, parent, message, merged_parent=''):
     from lib import integration_control as ic
-    return ic._git(root, ['commit-tree', tree, '-p', parent, '-m', message],
+    parents = ['-p', parent] + (['-p', merged_parent] if merged_parent else [])
+    return ic._git(root, ['commit-tree', tree, *parents, '-m', message],
                    env=_INTEGRATION_IDENTITY, check=True).stdout.strip()
+
+
+def _lineage_parent(root, baseline, checkpoint, head):
+    """The checkpoint, when a landing on ``head`` may record it as merged; else ''.
+
+    The landed delta is ``_delta_base..checkpoint``. When that base is the
+    true merge base of the checkpoint and the branch, the landing holds every
+    change the checkpoint has beyond their common history, so the checkpoint
+    is a second parent: whatever it merged (another assignment's checkpoint
+    included) becomes an ancestor of the branch, and a delivery of that
+    checkpoint later settles by containment instead of replaying its delta.
+    A baseline holding other writers' uncommitted bytes is no branch commit;
+    its checkpoint never becomes a parent, since those bytes do not land.
+    """
+    from lib import integration_control as ic
+    found = ic._git(root, ['merge-base', checkpoint, head], stall_seconds=GIT_STALL_SECONDS)
+    common = found.stdout.strip() if found.returncode == 0 else ''
+    return checkpoint if common and _delta_base(root, baseline, checkpoint, head) == common else ''
 
 
 def _delivered_without_publication(root, row, receipt, head, changed, checkpoint):
@@ -562,11 +630,13 @@ def _commit_reviewed_delta(row, root, baseline, checkpoint, changed, claims, adm
                                      checkpoint, head, paths)))
 
     while True:
+        merged_parent = _lineage_parent(root, baseline, checkpoint, head)
         with tempfile.TemporaryDirectory(prefix='task-delta-commit-',
                                          dir=str(ic._workspace_root())) as directory:
             commit, conflict, paths = _merge_workspace_delta(
                 root, head, Path(directory) / 'task.patch', task_id,
-                Path(directory) / 'index', baseline, checkpoint, message=message)
+                Path(directory) / 'index', baseline, checkpoint, message=message,
+                merged_parent=merged_parent)
         if conflict:
             paths = paths or _paths_lacking_their_base(root, head, baseline, checkpoint)
             entangled = _borrowed_paths(root, row, paths)
@@ -583,7 +653,7 @@ def _commit_reviewed_delta(row, root, baseline, checkpoint, changed, claims, adm
         try:
             steps = checkout_landing.plan(root, head, tree, file_mode)
             if steps.tree != tree:
-                commit = _commit(root, steps.tree, head, message)
+                commit = _commit(root, steps.tree, head, message, merged_parent)
             step_claims = [('file', str(root / step.path)) for step in steps]
             with workspace_claims_lease(step_claims, timeout=5.0), ic._repo_lock(str(root)):
                 _, receipt, allowed = admitted()
@@ -676,6 +746,8 @@ def deliver_task_delta(row, receipt, save_receipt):
     def hold(latest, current):
         if not changed and not repair:
             return None  # Terminal bookkeeping has no filesystem publication.
+        if checkpoint_contained(latest):
+            return None  # Already landed: _delivered_without_publication settles it.
         from lib.project_dispatch.publication import publication_reason
         reason = publication_reason(latest, current)
         if reason:

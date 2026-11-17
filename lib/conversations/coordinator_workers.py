@@ -813,8 +813,10 @@ def _wait_instruction(status, settled, running, delivering, unchanged, named):
                and (row['delivery'] or {}).get('status') in _HELD_DELIVERY for row in settled):
             parts.append('A worker with phase held has a blocked, failed or preserved delivery, not canonical: '
                          'act on its delivery.reason (review_project_work with the exact checkpoint_sha if '
-                         'publication was never requested, rework for a conflict or failed gate) or report a '
-                         'cause you cannot resolve.')
+                         'publication was never requested; for a conflict, delegate_project_work with '
+                         'delivery.conflict.rework as the brief, which names the exact files and settles '
+                         'the held delivery once it lands; rework for a failed gate) or report a cause you '
+                         'cannot resolve.')
     if status == 'pending_input':
         parts.insert(0, 'New input is waiting for you and arrives right after this result: a human message or '
                         'steer, a project message, or a background completion. The waiting list names its kind, '

@@ -245,8 +245,9 @@ def _legacy_transient_capture_receipt(receipt: dict) -> bool:
 
 
 def _publication_hold(row: dict, receipt: dict) -> dict | None:
-    from lib.project_mod.task_delta_delivery import checkpoint_has_no_delta
-    if receipt.get('taskOutcome') == 'completed' and checkpoint_has_no_delta(row):
+    from lib.project_mod.task_delta_delivery import checkpoint_contained, checkpoint_has_no_delta
+    if receipt.get('taskOutcome') == 'completed' and (
+            checkpoint_has_no_delta(row) or checkpoint_contained(row)):
         return None
     from lib.project_dispatch.publication import publication_reason
     reason = publication_reason(row, receipt)
@@ -1216,6 +1217,7 @@ def resume_pending_workspace_deliveries(*, retained: bool = False, lanes: bool =
     global _RECOVERY_CURSOR, _RECOVERY_RETAINED, _ACTION_OUTSTANDING
     if not _RECOVERY_CURSOR:
         _RECOVERY_RETAINED, _ACTION_OUTSTANDING = retained, False
+        _PASS_TIPS.clear()
         if retained:
             # A recovery pass decides every row afresh, remembered refusals included.
             from lib.project_dispatch.publication import forget_assignment_decision
@@ -1251,8 +1253,25 @@ def _held_by_its_assignment(row: dict, receipt: dict) -> bool:
     from lib.project_dispatch.publication import awaits_assignment
     if not awaits_assignment(row):
         return False
-    from lib.project_mod.task_delta_delivery import remembered_no_delta
-    return not remembered_no_delta(row)
+    from lib.project_mod.task_delta_delivery import checkpoint_contained, remembered_no_delta
+    if remembered_no_delta(row):
+        return False
+    # Another assignment or git_land may have landed this checkpoint since the
+    # refusal: then it settles as delivered, which no review has to allow.
+    return receipt.get('state') != 'blocked' or not checkpoint_contained(
+        row, tip=_pass_tip(row['project_root']))
+
+
+# Canonical root -> its HEAD, read once per receiver pass by held rows asking
+# whether their checkpoint has landed; cleared when a pass starts.
+_PASS_TIPS: dict[str, str] = {}
+
+
+def _pass_tip(root: str) -> str:
+    tip = _PASS_TIPS.get(root)
+    if tip is None:
+        tip = _PASS_TIPS[root] = _control()._rev(root, 'HEAD') if Path(root).is_dir() else ''
+    return tip
 
 
 def _resume_row(row: dict) -> bool:

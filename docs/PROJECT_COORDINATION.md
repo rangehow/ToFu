@@ -517,9 +517,14 @@ Remaining measured bottlenecks, ranked by lead time lost, with their owner:
    delivery-registry defect, owned by its own assignment), `task_delta_conflict`
    13, `task_delta_entangled` 3, `git checkout-index failed` 3, `workspace_busy`
    2. Accept to canonical as the lead saw it: p50 50 s, p90 923 s, max 2,467 s.
-   Structural fix for conflicts: landing serialized per overlapping path set by
-   the receiver, each task rebased onto the previous landing before its
-   three-way merge (not implemented here).
+   Fixed (follow-up e11fb172): landings were already serial per project, so
+   each merges onto its predecessor's result; insertions both sides made at one
+   place now keep both, the earlier landing's first, and a real conflict reaches
+   the lead as `delivery.conflict` with its exact files and a ready rework brief.
+   A landed delivery records its checkpoint as a second parent, so a superseded
+   assignment whose checkpoint another landing (or `git_land`) contains settles
+   as delivered without review. Decision and replay: "Landings in sequence keep
+   both insertions" in `docs/modules/project_integration.md`.
 2. Worker startup. `worker_entry` for Workers: p50 2.1 s, p95 44.5 s, max
    131 s (153 starts, `[TaskStartupTiming]` in app.log 11-17..18), nearly all
    `workspace_root_binding`; a fresh materialize took 129 s once
@@ -527,11 +532,31 @@ Remaining measured bottlenecks, ranked by lead time lost, with their owner:
    `workspace_bind` about 12 s and two untimed checkout identity reads. The
    same reads take 14 to 70 ms in a fresh process on this host (load average
    64 to 145 during the measurement), so this is host contention, which
-   principle 3 forbids gating; the redundant second `_checkout` of the bound
-   workspace is the candidate to remove.
+   principle 3 forbids gating. Removed (e11fb172): the second `_checkout` of
+   the bound workspace, a Git process that re-read the identity the first read
+   had verified; the binding compares its own fields instead. Fixture medians
+   (8 binds each, load 10 to 12): resumed 58 to 46 ms, fresh 253 to 240 ms; one
+   identity read costs 15.5 ms on this host at load 11 (live gain under the
+   measured load 64 to 145 not measured;
+   `test_binding_reads_the_task_checkouts_identity_once_fresh_or_resumed`).
 3. Waiting. Polls spent 40.3 of 41.9 tool-wall hours; 22 timeouts of 1,500 s
    (nothing settled) and 44 `pending_input` returns (p50 122 s) on 11-17..18.
    These are idle waits on Workers, not lost lead work.
+4. Duplicated work (measured e11fb172 over the lead's 162 delegations,
+   11-15..17, against delivery commits on the shared branch): 21 were
+   "Merge-repair"/"Re-land" Workers redoing a held landing by hand (10 on
+   11-15, 4 on 11-16, 7 on 11-17); the causes were the delta-base and
+   generated-output defects (fixed 11-15/16), publication-authority holds
+   (sibling assignment) and same-place insertions (fixed by the landing rule
+   above). Of 95 assignments with a landed delivery, 57 concurrently running
+   pairs touched the same non-generated file, 32 of them a code file (most
+   shared: `docs/PROJECT_COORDINATION.md` 21 pairs,
+   `frontend/src/runtime/app-runtime.js` 6). Same-goal duplicates by title
+   while both ran: 2 pairs of the same re-land started twice (9b1975d4 /
+   c210a6c9, 8cc1d672 / 1b432251) and 1 overlapping goal split across two
+   Workers (cdc1c942 / 4abd0466, the ▶ chevron replacement). File overlap
+   between concurrent Workers is ordinary and now lands by itself; the
+   re-land duplicates disappear with the repair Workers they duplicated.
 
 Verify `tests/project_mod/test_coordinator_evidence_envelope.py`.
 

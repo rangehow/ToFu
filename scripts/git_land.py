@@ -149,6 +149,18 @@ def _merge_in(top: Path, scratch: Path, head: str, source: str, bases: list[str]
         paths = sorted({entry.split('\t', 1)[1]
                         for entry in unmerged.split('\0') if '\t' in entry})
         if paths:
+            # HEAD holds the earlier landings: an insertion the branch made at
+            # the same place keeps both, HEAD's first (insertion_conflicts).
+            from lib.project_mod.insertion_conflicts import resolve_insertion_conflicts
+            index = {'GIT_INDEX_FILE': str(_git_paths(scratch, 'index')[0])}
+            paths = resolve_insertion_conflicts(paths, lambda args: _git(
+                scratch, *args, env=index, check=False, binary=True))
+            if not paths:
+                tree = _git(scratch, 'write-tree').stdout.strip()
+                for state in ('AUTO_MERGE', 'MERGE_HEAD', 'MERGE_MODE', 'MERGE_MSG'):
+                    _git_paths(scratch, state)[0].unlink(missing_ok=True)
+                return tree
+        if paths:
             from lib.project_mod.generated_integration import (
                 GeneratedOutputError, resolve_generated_conflicts)
             def scratch_git(_root, args, env=None, **kwargs):

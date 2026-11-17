@@ -12,7 +12,7 @@ import json
 import math
 import re
 import time
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import orjson
 from quart import Response, request
@@ -680,11 +680,11 @@ async def conversation_turn_history_page(conversation_id: str):
     except ConversationSyncNotFound as exc:
         return api_not_found(str(exc))
     except ConversationTurnPageStale as exc:
-        if exc.current_sync_sequence is not None:
-            return api_error(
-                "history_page_stale", status=409,
-                currentSyncSeq=exc.current_sync_sequence)
-        return api_error("history_page_stale", status=409, reason=exc.reason)
+        # One legacy api_error(str) site (tests/meta/test_error_envelope_ratchet.py).
+        stale: dict[str, Any] = (
+            {"currentSyncSeq": exc.current_sync_sequence}
+            if exc.current_sync_sequence is not None else {"reason": exc.reason})
+        return api_error("history_page_stale", status=409, **stale)
     except StorageError as exc:
         return storage_failure_response(
             exc, operation="conversation.sync.turn_page"

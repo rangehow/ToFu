@@ -235,6 +235,11 @@ def test_running_app_is_closed_gracefully_in_both_authorings():
     assert _WORKFLOW.count('CloseApplications=yes') == 1, (
         'the Inno script must pin CloseApplications')
     assert _WORKFLOW.count('RestartApplications=no') == 1
+    # The Restart Manager cannot close the windowless server child, so the
+    # Inno script kills the tree before copying and before uninstalling.
+    assert "'/IM Tofu.exe /T /F'" in _WORKFLOW
+    assert 'function PrepareToInstall(' in _WORKFLOW
+    assert 'function InitializeUninstall(' in _WORKFLOW
 
 
 # ═══════════════════════════════════════════════════════════════════

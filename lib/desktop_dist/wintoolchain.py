@@ -62,9 +62,13 @@ from . import store
 logger = get_logger(__name__)
 
 # ── Pinned inputs (sha256 measured on the first provision, 2026-08-01) ──
+# The proot URL is upstream's rolling CI build, not a versioned asset (the
+# GitHub releases stop at v5.3.0, 2022). Re-pinned 2026-11-17 after it
+# rolled to v5.4.1-32-g25dc6a3; the cached copy in cache_dir() is what
+# keeps a warm host stable.
 _PROOT_URL = 'https://proot.gitlab.io/proot/bin/proot'
-_PROOT_SHA256 = ('b7f2adf5a225000a164f4905aabefeeb'
-                 'e11c4c1d5bedff5e1fe8866c48dd70d2')
+_PROOT_SHA256 = ('90375de3807212b8f948ff98ed66020f'
+                 '7c9cf7ea447c8734f1af02a2643c8d26')
 _UBUNTU_BASE_URL = ('https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/'
                     'release/ubuntu-base-24.04.3-base-amd64.tar.gz')
 _UBUNTU_BASE_SHA256 = ('6bc2cde3930ad088b3bb46fa45279e96'

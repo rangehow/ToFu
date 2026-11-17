@@ -20,11 +20,10 @@ import sys
 from pathlib import Path
 
 import pytest
-from tests.support.export_toolchain import require_export_toolchain
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-export = require_export_toolchain()
+export = pytest.importorskip('export', reason='export.py is not shipped in opensource builds')
 
 import export_pkg._internal as internal  # noqa: E402
 

@@ -30,7 +30,6 @@ from __future__ import annotations
 import json
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
 
 from quart import Blueprint, request
 
@@ -241,7 +240,7 @@ def _register_bot_routes(channel: str, label: str) -> None:
         return await _configure_thread(channel, thread_key)
 
     cursor = [{'name': 'cursor', 'in': 'query', 'required': False, 'schema': {'type': 'string', 'maxLength': 512}}]
-    routes: tuple[tuple[Any, str, str, str, str, dict[str, Any]], ...] = (
+    routes = (
         (get_account, 'account', '', 'GET', 'conversations',
          dict(summary=f'Read the {label} bot account: status, owner, pairing code or login code',
               responses=_responses('BotAccountView', f'{label} account'))),

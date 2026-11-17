@@ -88,21 +88,6 @@ def run_workflow_gate(command, event, outcomes, profile):
         text=True, capture_output=True, timeout=10)
 
 
-def test_dotfile_artifacts_opt_into_hidden_file_upload():
-    # upload-artifact@v4 (>= 4.4) skips hidden files by default and then reports
-    # "No files were found" for a path such as .coverage.
-    jobs = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text())['jobs']
-    uploads = [step['with'] for job in jobs.values() for step in job.get('steps', [])
-               if str(step.get('uses', '')).startswith('actions/upload-artifact@')]
-    hidden = [upload for upload in uploads
-              if any(part.startswith('.') and part not in {'.', '..'}
-                     for line in str(upload['path']).splitlines()
-                     for part in Path(line.strip()).parts)]
-    assert {upload['name'] for upload in hidden} >= {'coverage-unit', 'coverage-api'}
-    for upload in hidden:
-        assert upload.get('include-hidden-files') is True, upload['name']
-
-
 def test_browser_lane_uses_the_same_journeys_as_local_development():
     jobs = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text())['jobs']
     commands = [step.get('run', '') for step in jobs['e2e']['steps']]

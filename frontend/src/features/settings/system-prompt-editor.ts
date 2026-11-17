@@ -14,7 +14,6 @@
    module mirrors them into the modal and writes edits back on Apply.
    ═══════════════════════════════════════════════════════════════════ */
 
-import './system-prompt-editor.css';
 import { featureRegistry } from '../../feature-registry';
 
 interface SystemPromptBlock {

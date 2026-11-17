@@ -3,9 +3,8 @@
  */
 import type { CoordinationCanvasState } from './project-coordination-canvas';
 import { createButton, createDialog, createAlert, createDisclosureSummary, createTabs } from '../ui';
-import './project-coordination.css';
-import { coordinationTaskDigest, createCoordinationBoard, projectCoordinationWorkGroups } from './project-coordination-board';
-import { coordinationText as text } from './project-coordination-text';
+import '../styles/application/33-project-coordination.css';
+import { coordinationText as text, coordinationTaskDigest, createCoordinationBoard, projectCoordinationWorkGroups } from './project-coordination-board';
 export { projectCoordinationWorkGroups } from './project-coordination-board';
 import { t } from '../i18n';
 import { projectCoordinationGraph } from './project-coordination-graph';

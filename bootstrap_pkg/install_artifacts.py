@@ -1,6 +1,6 @@
 """Installer artifact admission before environment creation.
 
-Entrypoints: prepare_search_wheel(root, python), build_search_wheel, build_search_sdist and CLI. Dependencies: stdlib;
+Entrypoints: prepare_search_wheel(root, python), build_search_wheel and CLI. Dependencies: stdlib;
 wheel build uses pip in the supplied bootstrap interpreter, never the live env.
 Content-addressed caches live beside the checkout and survive HOME changes.
 """
@@ -8,9 +8,7 @@ from __future__ import annotations
 
 import argparse
 from email.parser import BytesParser
-import gzip
 import hashlib
-import io
 import json
 import os
 from pathlib import Path
@@ -18,14 +16,9 @@ import re
 import subprocess
 import sys
 import shutil
-import tarfile
 import tempfile
 from urllib.parse import unquote, urlsplit
 import zipfile
-
-
-# 1980-01-01T00:00:00Z: the earliest timestamp a ZIP (wheel) entry can record.
-ZIP_DOS_EPOCH = 315532800
 
 
 def wheel_version(wheel: Path) -> str:
@@ -136,63 +129,11 @@ def build_search_wheel(member: Path, out_dir: Path, python: str) -> Path:
     uv = shutil.which('uv')
     command = ([uv, 'build', str(member), '--wheel', '--out-dir', str(out_dir)] if uv else
                [python, '-m', 'pip', 'wheel', '--no-deps', '--wheel-dir', str(out_dir), str(member)])
-    # Entry timestamps otherwise come from file mtimes, so every build of one
-    # source has new bytes and the bundled wheel can never equal the published
-    # one. A fixed SOURCE_DATE_EPOCH makes equal sources build equal wheels.
-    env = {**os.environ, 'SOURCE_DATE_EPOCH': str(ZIP_DOS_EPOCH)}
-    subprocess.run(command, check=True, timeout=300, stdout=sys.stderr, env=env)
+    subprocess.run(command, check=True, timeout=300, stdout=sys.stderr)
     candidates = list(out_dir.glob('tofu_search-*.whl'))
     if len(candidates) != 1:
         raise ValueError('Search build did not produce exactly one wheel')
     return candidates[0]
-
-
-def build_search_sdist(member: Path, out_dir: Path, python: str) -> Path:
-    """Build exactly one byte-reproducible tofu-search sdist into ``out_dir``.
-
-    setuptools writes each member's file mtime and the build time into the
-    tarball and gzip header regardless of SOURCE_DATE_EPOCH, so the archive is
-    rewritten with sorted members, ZIP_DOS_EPOCH mtimes, neutral ownership and
-    a zero gzip timestamp. Equal sources then give equal published bytes.
-    """
-    with tempfile.TemporaryDirectory() as raw:
-        uv = shutil.which('uv')
-        command = ([uv, 'build', str(member), '--sdist', '--out-dir', raw] if uv else
-                   [python, '-m', 'build', '--sdist', '--outdir', raw, str(member)])
-        env = {**os.environ, 'SOURCE_DATE_EPOCH': str(ZIP_DOS_EPOCH)}
-        subprocess.run(command, check=True, timeout=300, stdout=sys.stderr, env=env)
-        candidates = list(Path(raw).glob('tofu_search-*.tar.gz'))
-        if len(candidates) != 1:
-            raise ValueError('Search build did not produce exactly one sdist')
-        target = out_dir / candidates[0].name
-        _write_normalized_sdist(candidates[0], target)
-    return target
-
-
-def _write_normalized_sdist(source: Path, target: Path) -> None:
-    with tarfile.open(source, 'r:gz') as archive:
-        members = sorted(archive.getmembers(), key=lambda item: item.name)
-        entries = []
-        for item in members:
-            if not (item.isfile() or item.isdir()):
-                raise ValueError(f'Unexpected sdist member type: {item.name}')
-            data = archive.extractfile(item).read() if item.isfile() else None
-            entries.append((item, data))
-    with open(target, 'wb') as handle, \
-            gzip.GzipFile(filename='', mode='wb', fileobj=handle, mtime=0) as stream, \
-            tarfile.open(fileobj=stream, mode='w', format=tarfile.USTAR_FORMAT) as output:
-        for item, data in entries:
-            info = tarfile.TarInfo(item.name)
-            info.type = item.type
-            info.mode = 0o755 if item.isdir() or item.mode & 0o111 else 0o644
-            info.mtime = ZIP_DOS_EPOCH
-            info.uid = info.gid = 0
-            info.uname = info.gname = ''
-            if data is None:
-                output.addfile(info)
-            else:
-                info.size = len(data)
-                output.addfile(info, io.BytesIO(data))
 
 
 def main() -> None:
@@ -206,7 +147,7 @@ def main() -> None:
 def _compiled_versions(lock: Path) -> dict[str, str]:
     """Require every resolved package, including local first-party wheels."""
     expected = {}
-    for raw in lock.read_text(encoding='utf-8').splitlines():
+    for raw in lock.read_text().splitlines():
         line = raw.strip().rstrip('\\').strip()
         if not line or line.startswith(('#', '--')):
             continue
@@ -272,7 +213,7 @@ def _acquire_python_wheels(python: str, requirements: Path, wheelhouse: Path) ->
             spec = (info['url'] if info['url'].startswith('file:') else
                     record['metadata']['name'] + '==' + record['metadata']['version'])
             lines.append(spec + ' --hash=sha256:' + digest)
-        acquisition.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        acquisition.write_text('\n'.join(lines) + '\n')
         expected = {record['metadata']['name'].lower().replace('_', '-'):
                     record['metadata']['version'] for record in records}
     subprocess.run([python, '-m', 'pip', 'wheel', '--no-deps', '--require-hashes',
@@ -292,7 +233,7 @@ def _acquire_python_wheels(python: str, requirements: Path, wheelhouse: Path) ->
     if expected is not None and set(admitted) != set(expected):
         raise ValueError('Required Python artifacts are incomplete; no environment commit permitted')
     lock = wheelhouse / 'install.lock'
-    lock.write_text('\n'.join(admitted[key] for key in sorted(admitted)) + '\n', encoding='utf-8')
+    lock.write_text('\n'.join(admitted[key] for key in sorted(admitted)) + '\n')
     return lock
 
 

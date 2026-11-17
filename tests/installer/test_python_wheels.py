@@ -86,8 +86,7 @@ def test_bundles_survive_checkout_relocation_and_install_without_network(tmp_pat
     local.parent.mkdir()
     local.write_bytes(artifact.read_bytes())
     new_requirements = target / 'requirements.txt'
-    # pip reads requirements files as UTF-8 whatever the locale (Windows: cp1252).
-    new_requirements.write_text(str(local) + '\n', encoding='utf-8')
+    new_requirements.write_text(str(local) + '\n')
     assert wheels.requirements_digest(requirements) == wheels.requirements_digest(new_requirements)
     monkeypatch.setenv('TOFU_PYTHON_BUNDLE', str(archive))
     monkeypatch.setattr(wheels, 'identity', lambda python: RUNTIME)
@@ -256,50 +255,3 @@ def test_pip_fallback_obeys_release_constraints(tmp_path, monkeypatch):
     resolution = calls[0]
     assert '--constraint' in resolution
     assert resolution[resolution.index('--constraint') + 1] == str(constraints)
-
-
-def test_search_wheel_build_pins_entry_timestamps_for_reproducible_bytes(tmp_path, monkeypatch):
-    seen = {}
-
-    def fake_run(command, **kwargs):
-        seen['env'] = kwargs['env']
-        (tmp_path / 'tofu_search-1.0.0-py3-none-any.whl').write_bytes(b'wheel')
-
-    monkeypatch.setenv('SOURCE_DATE_EPOCH', '1700000000')
-    monkeypatch.setattr(install_artifacts.subprocess, 'run', fake_run)
-    wheel = install_artifacts.build_search_wheel(tmp_path, tmp_path, sys.executable)
-    assert wheel.name == 'tofu_search-1.0.0-py3-none-any.whl'
-    # File mtimes no longer reach the archive, so an export rebuild of the
-    # released source reproduces the published wheel's bytes.
-    assert seen['env']['SOURCE_DATE_EPOCH'] == '315532800'
-
-
-def test_search_sdist_bytes_depend_only_on_member_content(tmp_path, monkeypatch):
-    def raw_sdist(out_dir, stamp):
-        artifact = Path(out_dir) / 'tofu_search-1.0.0.tar.gz'
-        with tarfile.open(artifact, 'w:gz', format=tarfile.PAX_FORMAT) as archive:
-            for name, data in (('tofu_search-1.0.0/setup.cfg', b'[egg_info]\n'),
-                               ('tofu_search-1.0.0/PKG-INFO', b'Name: tofu-search\n')):
-                info = tarfile.TarInfo(name)
-                info.size, info.mtime, info.uid, info.uname = len(data), stamp, 1234, 'builder'
-                archive.addfile(info, io.BytesIO(data))
-        return artifact
-
-    built = []
-    for index, stamp in enumerate((1794906132.9, 1794906146.3)):
-        def fake_run(command, stamp=stamp, **kwargs):
-            flag = '--out-dir' if '--out-dir' in command else '--outdir'
-            raw_sdist(command[command.index(flag) + 1], stamp)
-
-        monkeypatch.setattr(install_artifacts.subprocess, 'run', fake_run)
-        out = tmp_path / f'out{index}'
-        out.mkdir()
-        built.append(install_artifacts.build_search_sdist(tmp_path, out, sys.executable))
-        time.sleep(1.1)  # a gzip header would otherwise record a later build second
-    first, second = (path.read_bytes() for path in built)
-    assert built[0].name == 'tofu_search-1.0.0.tar.gz' and first == second
-    with tarfile.open(built[0]) as archive:
-        members = archive.getmembers()
-    assert [item.name for item in members] == sorted(item.name for item in members)
-    assert {(item.mtime, item.uid, item.uname, tuple(item.pax_headers)) for item in members} == {
-        (install_artifacts.ZIP_DOS_EPOCH, 0, '', ())}

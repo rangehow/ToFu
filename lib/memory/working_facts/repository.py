@@ -42,10 +42,6 @@ class FactRepository:
             owned_conversation(self.conversation_id, self.owner)
         except PermissionError as exc:
             raise FactsUnavailable('Working facts unavailable') from exc
-        except StorageError as exc:
-            if exc.code in {'database_forbidden', 'database_not_found'}:
-                raise FactsUnavailable('Working facts unavailable') from exc
-            raise
         self.key = digest([self.owner, self.tenant, self.conversation_id])
 
     def payload(self):

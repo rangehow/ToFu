@@ -160,6 +160,20 @@ def test_task_history_keeps_tasks_later_boards_omitted(flask_client, chat_sideca
     assert flask_client.get(endpoint, query_string={'path': '/test/other-' + uuid.uuid4().hex}).get_json()['tasks'] == []
 
 
+def test_lead_deliverables_refuse_a_foreign_owner(flask_client, chat_sidecar, monkeypatch):
+    from lib.conversations.project_coordination import ProjectCoordinationRepository
+    from routes.api_v1 import project_brain
+    path = '/test/deliverables-' + uuid.uuid4().hex
+    lead = ProjectCoordinationRepository(1).create(path, folder_id='test', expected_revision=0,
+                                                   command_id='create')['conversationId']
+    endpoint = '/api/v4/project/coordination/deliverables'
+    owned = flask_client.get(endpoint, query_string={'conversationId': lead, 'path': path})
+    assert owned.status_code == 200, owned.get_json()
+    monkeypatch.setattr(project_brain, '_owner', lambda: 2)
+    foreign = flask_client.get(endpoint, query_string={'conversationId': lead, 'path': path})
+    assert foreign.status_code == 403, foreign.get_json()
+
+
 def test_binding_schema_and_generated_dto_are_current():
     import json
     import subprocess

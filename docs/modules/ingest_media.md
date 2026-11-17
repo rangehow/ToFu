@@ -204,22 +204,28 @@ code for every surface (removed from `prepare-source.ts`); prompt-only rules are
 ignored by the models this targets. Verify
 `tests/paper/test_paper_report_markdown_normalize.py`.
 
-**Report output-cap continuation — Problem:** a no-tool report round that
-ends with `finish_reason == 'length'` (the model's output cap after
+**Output-cap continuation (report, Q&A, Deepen) — Problem:** a no-tool round
+that ends with `finish_reason == 'length'` (the model's output cap after
 `_clamp_max_tokens`) was published as if complete, so models with small output
-caps silently lost the final sections. **Decision:** the worker's
-`decide_round` hook appends the partial answer plus
-`prompts.report_continuation_prompt` and continues the shared loop; continuation
-deltas stream normally. `_body.py` makes the terminal body the joined partials
-plus the final response (`join_report_continuation`: exact seam join, dropping
-only an exact repeat of the cut line). There is no continuation cap: the loop
+caps silently lost the final sections; Q&A and Deepen also passed private
+`max_tokens` caps (8000/16000) below many models' native limits.
+**Decision:** `lib/paper/length_continuation.py` is the one policy. All three
+workers pass `OUTPUT_TOKEN_CEILING` (128000, clamped by dispatch) and install
+`length_continuation_hook`, which appends the partial answer plus
+`prompts.length_continuation_prompt` and continues the shared loop;
+continuation deltas stream normally. `LengthContinuation` makes the terminal
+text the joined partials plus the final response (`join_length_continuation`:
+exact seam join, dropping only an exact repeat of the cut line); the report's
+`_body.py` adopts it as the terminal body, and Q&A/Deepen publish it (with a
+`delta_reset` convergence when a seam was deduplicated). There is no continuation cap: the loop
 ends when the model finishes, on Stop, or when a continuation adds no visible
 text (the body as generated is then published). Review/rebuttal documents keep
 single-round behaviour. **Alternatives rejected:** a fixed continuation count
 is a tuning knob; adopting only the last message would discard earlier parts;
-fuzzy overlap matching needs a similarity threshold. Q&A and Deepen still
-publish `length`-truncated answers. Verify
-`test_paper_report_length_continuation.py` with the body-projection suite.
+fuzzy overlap matching needs a similarity threshold; per-engine copies of
+the join/continue logic would drift. Verify
+`test_paper_report_length_continuation.py`,
+`test_paper_qa_deepen_length_continuation.py` and the body-projection suite.
 
 **Problem:** the retained report presenter mixed rendering with event mutation,
 sequence deduplication and push teardown; releasing its task subscription also

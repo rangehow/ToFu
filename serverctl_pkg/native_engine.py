@@ -1041,16 +1041,11 @@ def certify_head_before_start(root: Path, environment: dict | None = None) -> No
             refused + f'engine inputs differ from commit {commit[:12]} ({", ".join(dirty)}); '
             'commit or revert them, then start again.')
     fixture = _certification_fixture(root)
-    work_root = root / MANAGED_ENGINE_ROOT / 'engine-certify-work'
-    work_root.mkdir(parents=True, exist_ok=True)
-    if work_root.stat().st_dev != fixture.stat().st_dev:
-        raise EnginePreparationError(
-            refused + f'{work_root} is not on the filesystem of the fixture {fixture}; run '
-            f'scripts/engine_certify.py --fixture {fixture} --work-root <directory on its filesystem>, then start again.')
     _report_progress(f"Certifying HEAD's storage engine {expected[:12]} (commit {commit[:12]}) with the engine "
                      f'gate against {fixture} before anything is stopped; this takes hours.')
     started = time.monotonic()
-    returncode = _run_engine_gate(root, commit, fixture, work_root)
+    with _certification_work_root(root, fixture) as work_root:
+        returncode = _run_engine_gate(root, commit, fixture, work_root)
     record, problem = passing_record(root, expected, storage_contract_sha256(root))
     if record is None:
         raise EnginePreparationError(
@@ -1058,6 +1053,38 @@ def certify_head_before_start(root: Path, environment: dict | None = None) -> No
             f'{root / MANAGED_ENGINE_ROOT}/engine-certifications/runs/); fix the failed check and start again, '
             'or deploy uncertified once: serverctl.py restart --deploy-uncertified-engine "<reason>".')
     _report_progress(f'Certified {record.summary()} in {time.monotonic() - started:.0f}s.')
+
+
+@contextmanager
+def _certification_work_root(root: Path, fixture: Path) -> Iterator[Path]:
+    """Place hard-link snapshots beside the fixture when the checkout is on another device.
+
+    The gate removes successful work itself and retains failed work for diagnosis.
+    Remove only our empty wrapper, never retained evidence or any fixture data.
+    """
+    managed = root / MANAGED_ENGINE_ROOT / 'engine-certify-work'
+    temporary = None
+    try:
+        managed.mkdir(parents=True, exist_ok=True)
+        if managed.stat().st_dev == fixture.stat().st_dev:
+            work_root = managed
+        else:
+            temporary = Path(tempfile.mkdtemp(prefix='engine-certify-work-', dir=fixture.parent))
+            work_root = temporary
+    except OSError as exc:
+        raise EnginePreparationError(
+            "Cannot certify HEAD's storage engine automatically, so nothing was stopped: "
+            f'cannot create a work root on the filesystem of fixture {fixture}: {exc}; run '
+            f'scripts/engine_certify.py --fixture {fixture} --work-root <directory on its filesystem>, '
+            'then start again.') from exc
+    try:
+        yield work_root
+    finally:
+        if temporary is not None:
+            try:
+                temporary.rmdir()
+            except OSError:
+                pass  # A failed gate retains its work; cleanup must not mask its result.
 
 
 def _head_engine_inputs(root: Path) -> tuple[str, list[str]]:

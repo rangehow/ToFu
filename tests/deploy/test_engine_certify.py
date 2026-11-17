@@ -185,7 +185,9 @@ def test_a_failed_check_records_nothing_and_keeps_its_evidence(run, monkeypatch)
     assert {check['id']: check['verdict'] for check in result['checks']}['load'] == 'fail'
 
 
-def test_cargo_specs_keep_their_temporary_files_on_the_work_root_never_tmpfs(run, tmp_path, monkeypatch):
+@pytest.mark.parametrize('inherited_tmpdir', [False, True])
+def test_cargo_specs_keep_their_temporary_files_on_the_work_root_never_tmpfs(
+        run, tmp_path, monkeypatch, inherited_tmpdir):
     # In a cgroup without swap tmpfs pages cannot be reclaimed: the gate must not fill /dev/shm on the
     # production host while it runs the engine's fsync-heavy library specifications.
     certification_run, _ = run
@@ -194,6 +196,12 @@ def test_cargo_specs_keep_their_temporary_files_on_the_work_root_never_tmpfs(run
     tool.write_text('#!/bin/sh\nexit 0\n')
     tool.chmod(0o755)
     certification_run.environment['PATH'] = str(tool.parent)
+    # Fastpath keeps the caller's temporary-directory policy; the test must
+    # cover both policies without depending on the test runner's environment.
+    expected_tmpdir = str(tmp_path) if inherited_tmpdir else None
+    certification_run.environment.pop('TMPDIR', None)
+    if expected_tmpdir is not None:
+        certification_run.environment['TMPDIR'] = expected_tmpdir
     seen = {}
 
     def run_check(check_id, argv, *, environment=None, **_kwargs):
@@ -209,7 +217,7 @@ def test_cargo_specs_keep_their_temporary_files_on_the_work_root_never_tmpfs(run
     assert Path(seen['cargo-lib']).is_relative_to(certification_run.work)
     assert not Path(seen['cargo-lib']).is_relative_to('/dev/shm')
     assert not Path(seen['cargo-lib']).exists(), 'the private temporary directory is removed afterwards'
-    assert seen['cargo-fastpath'] is None
+    assert seen['cargo-fastpath'] == expected_tmpdir
 
 
 def test_the_fixture_is_required_and_must_be_a_settled_authority(tmp_path, capsys):

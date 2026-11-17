@@ -26,7 +26,16 @@ _LAUNCHER = _ROOT / 'desktop' / 'launcher.py'
 # Stdlib modules that exist on POSIX and are absent from Windows CPython.
 _POSIX_ONLY = ('fcntl', 'termios', 'pwd', 'grp', 'resource')
 
+# ...and the os functions Windows CPython lacks. 2026-11-17: tofu_workers
+# called os.register_at_fork at import, aborting the Windows PyInstaller
+# build (tofu.spec -> lib.vite_assets -> runtime_guards -> tofu_workers).
+_POSIX_ONLY_OS_ATTRS = ('register_at_fork', 'fork', 'forkpty', 'setsid',
+                        'getuid', 'geteuid', 'killpg')
+
 _DESKTOP_BOOT_MODULES = (
+    'tofu_workers',
+    'runtime_guards',
+    'lib.vite_assets',
     'serverctl',
     'bootstrap_pkg.server_entry',
     'lib.server.server_boot_env',
@@ -39,7 +48,10 @@ _DESKTOP_BOOT_MODULES = (
 )
 
 _PROBE = r'''
-import importlib, sys
+import importlib, os, sys
+for attr in sys.argv[2].split(','):
+    if hasattr(os, attr):
+        delattr(os, attr)
 blocked = set(sys.argv[1].split(','))
 for name in blocked:
     sys.modules.pop(name, None)
@@ -52,7 +64,7 @@ class _WindowsStdlib:
 
 sys.meta_path.insert(0, _WindowsStdlib())
 failures = []
-for module in sys.argv[2:]:
+for module in sys.argv[3:]:
     try:
         importlib.import_module(module)
     except Exception as exc:
@@ -66,12 +78,12 @@ def test_desktop_boot_modules_import_without_posix_only_stdlib():
     env = dict(os.environ, PYTHONPATH=str(_ROOT))
     proc = subprocess.run(
         [sys.executable, '-c', _PROBE, ','.join(_POSIX_ONLY),
-         *_DESKTOP_BOOT_MODULES],
+         ','.join(_POSIX_ONLY_OS_ATTRS), *_DESKTOP_BOOT_MODULES],
         cwd=_ROOT, env=env, capture_output=True, text=True, timeout=300)
     assert proc.returncode == 0, (
-        'modules on the Windows desktop boot path import a POSIX-only '
-        'stdlib module at module level (import it lazily inside the POSIX '
-        'branch instead):\n' + proc.stdout + proc.stderr[-2000:])
+        'modules on the Windows desktop boot path use a POSIX-only stdlib '
+        'module or os function at module level (guard it or move it into '
+        'the POSIX branch):\n' + proc.stdout + proc.stderr[-2000:])
 
 
 def test_smoke_branch_imports_the_server_main_prologue():

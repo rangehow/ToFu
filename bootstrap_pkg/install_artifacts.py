@@ -21,6 +21,10 @@ from urllib.parse import unquote, urlsplit
 import zipfile
 
 
+# 1980-01-01T00:00:00Z: the earliest timestamp a ZIP (wheel) entry can record.
+ZIP_DOS_EPOCH = 315532800
+
+
 def wheel_version(wheel: Path) -> str:
     with zipfile.ZipFile(wheel) as archive:
         names = [name for name in archive.namelist() if name.endswith('.dist-info/METADATA')]
@@ -129,7 +133,11 @@ def build_search_wheel(member: Path, out_dir: Path, python: str) -> Path:
     uv = shutil.which('uv')
     command = ([uv, 'build', str(member), '--wheel', '--out-dir', str(out_dir)] if uv else
                [python, '-m', 'pip', 'wheel', '--no-deps', '--wheel-dir', str(out_dir), str(member)])
-    subprocess.run(command, check=True, timeout=300, stdout=sys.stderr)
+    # Entry timestamps otherwise come from file mtimes, so every build of one
+    # source has new bytes and the bundled wheel can never equal the published
+    # one. A fixed SOURCE_DATE_EPOCH makes equal sources build equal wheels.
+    env = {**os.environ, 'SOURCE_DATE_EPOCH': str(ZIP_DOS_EPOCH)}
+    subprocess.run(command, check=True, timeout=300, stdout=sys.stderr, env=env)
     candidates = list(out_dir.glob('tofu_search-*.whl'))
     if len(candidates) != 1:
         raise ValueError('Search build did not produce exactly one wheel')

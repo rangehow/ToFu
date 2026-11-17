@@ -20,6 +20,7 @@ There is no dependency back on ``run_command.py`` — the execution layer depend
 on this module, not the reverse.
 """
 
+import fnmatch
 import os
 import re
 import shlex
@@ -3230,9 +3231,14 @@ def unwrap_process_wrappers(words):
 #
 # The rules below track what the shell will ACTUALLY expand:
 #
-#   * ``NAME=value`` / ``export`` / ``readonly`` segments bind literals —
-#     including ``$(pwd)`` (the command's cwd) and ``$(mktemp -d)`` (a fresh
-#     deep path) — while any other ``$(…)`` makes the value DYNAMIC;
+#   * a word expands the way the shell expands it (``_expand_word``): quotes
+#     and escapes, ``$NAME``, the positional parameters (``$1``, ``"$@"``),
+#     the ``${…}`` operators (``${D:-x}``, ``${D:?}``, ``${D%/*}`` …), command
+#     substitutions and a leading ``~``, then field splitting and pathname
+#     expansion of unquoted results. A substitution whose output is known
+#     prints it (``pwd``, ``mktemp``, ``echo``/``printf``/``dirname``/
+#     ``basename`` of known words, ``cd DIR && pwd``, ``git rev-parse
+#     --show-toplevel``); any other one is DYNAMIC;
 #   * a dynamic/unset variable is judged as possibly EMPTY (the Steam
 #     ``$STEAMROOT/`` bug class): ``rm -rf "$D/"`` with ``D`` empty deletes
 #     ``/``; a suffix deep enough to survive the collapse (``$D/build/out``)
@@ -3252,12 +3258,23 @@ def unwrap_process_wrappers(words):
 #   * a name the command never bound holds its value in the environment the
 #     command's shell starts with, which the caller passes (run_command: the
 #     child environment it built); a caller that does not know it (the
-#     cwd-less pre-hook) leaves every operand reading it to the executor.
+#     cwd-less pre-hook) leaves every operand reading it to the executor;
+#   * builtins change exactly what they change: assignments and declarations
+#     bind (``export``/``declare -x`` also export), ``unset`` empties a name,
+#     ``read``/``getopts``/``printf -v``/``mapfile`` make it dynamic,
+#     ``let``/``((…))``/``source`` may change it, ``set --``/``shift`` and a
+#     function call set the positional parameters, ``cd``/``pushd``/``popd``
+#     move, and ``eval`` runs the text its operands expand to;
+#   * a child shell (``sh -c``, ``bash <<EOF``) sees the exported names, the
+#     functions of ``export -f`` and its own positional parameters; a
+#     ``trap`` action runs later in this shell, with any state reached after
+#     the trap was set.
 #
 # A value set is a tuple of candidate strings in which ``_DYNAMIC`` stands
 # for "or no provable literal value" (a path left the name dynamic or
-# unset) and a ``_Collapsed`` for the empty collapse of a value built from
-# such names; None is the set holding only ``_DYNAMIC``. ``_DEFERRED`` is a
+# unset), ``_TRUSTED`` for "or an unknown value that is never empty", and a
+# ``_Collapsed`` for the empty collapse of a value built from unproven
+# names; None is the set holding only ``_DYNAMIC``. ``_DEFERRED`` is a
 # value read from an environment the caller does not know. Sets stay
 # bounded; when they overflow the name simply loses its proven value: it
 # holds ``_OVERFLOW``, judged like ``_DYNAMIC`` but kept by every join, so a
@@ -3265,10 +3282,13 @@ def unwrap_process_wrappers(words):
 _DELETE_BINDING_CAP = 8
 _CWD_CAP = 8
 _MKSTEMP_VALUE = '/tmp/.tofu-delete-guard-mktemp'  # depth-2 placeholder
-_DELETE_ASSIGN_HEADS = frozenset({'export', 'readonly', 'declare', 'local'})
-_DELETE_STATE_RESET_HEADS = frozenset({
-    'eval', 'source', '.', 'read', 'set', 'unset', 'typeset', 'let', 'exec',
-})
+_DECLARATION_BUILTINS = frozenset({'export', 'readonly', 'declare', 'typeset', 'local'})
+# An assignment in front of one of these may outlive the command (POSIX).
+_SPECIAL_BUILTINS = frozenset({
+    ':', '.', 'break', 'continue', 'eval', 'exec', 'exit', 'export', 'readonly',
+    'return', 'set', 'shift', 'times', 'trap', 'unset'})
+_ASSIGNMENT_WORD = re.compile(r'([A-Za-z_][A-Za-z0-9_]*)(\+?)=')
+_SHELL_IDENTIFIER = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
 
 
 class _ValueMarker:
@@ -3286,6 +3306,9 @@ class _ValueMarker:
 _DYNAMIC = _ValueMarker('_DYNAMIC')
 _DEFERRED = _ValueMarker('_DEFERRED')
 _OVERFLOW = _ValueMarker('_OVERFLOW')
+# A value this guard cannot know but the shell guarantees is not empty (the
+# non-empty case of ``${D:-x}``, ``$(dirname …)``): no collapse to judge.
+_TRUSTED = _ValueMarker('_TRUSTED')
 
 
 class _Collapsed:
@@ -3365,196 +3388,916 @@ def _mkstemp_value(source):
 
 
 def _resolve_delete_value(raw, state, home):
-    """Resolve one assignment VALUE text to a bounded candidate tuple.
+    """Resolve one assignment VALUE text to its value set.
 
     ``raw`` is the RAW text after ``NAME=`` (quotes intact — an assignment
-    word is never word-split, so ``D=\"a b\"`` binds ``a b``). Returns None
-    when the value is not provably literal (any substitution other than a
-    tracked ``pwd``/``mktemp`` producer, an unproven variable alone), and
-    ``_DEFERRED`` when it reads an environment the caller does not know. A
-    candidate built from an unproven name keeps its empty collapse as a
-    ``_Collapsed`` (``_DYNAMIC`` when that collapse is empty itself). Values
-    may themselves reference earlier bindings (``BAD=$R/frontend``).
+    word is never field-split or globbed, so ``D="a b"`` binds ``a b``). The
+    set holds literal candidates and, for a candidate built from a name or a
+    command substitution without a provable value, its empty collapse
+    (``_Collapsed``, or ``_DYNAMIC`` when that collapse is empty itself);
+    None when only ``_DYNAMIC`` remains. Returns ``_OVERFLOW`` past the
+    candidate bound and ``_DEFERRED`` when it reads an environment the
+    caller does not know. Values may reference earlier bindings
+    (``BAD=$R/frontend``).
     """
-    if not raw or raw.endswith('\\'):
-        return None
     try:
-        expanded = _expand_delete_operand(raw, state, home, for_binding=True)
+        values = _expand_word(raw, state, home, split=False).values()
     except _EnvironmentDeferred:
         return _DEFERRED
-    if expanded is None or expanded is _OVERFLOW:
-        return expanded
-    values = tuple(dict.fromkeys(
-        candidate if not names else _Collapsed(candidate, names) if candidate
-        else _DYNAMIC
-        for candidate, names in zip(expanded.candidates, expanded.collapsed)))
-    return None if values == (_DYNAMIC,) else values
+    except _Overflowed:
+        return _OVERFLOW
+    except _Unenumerable:
+        return None
+    return _value_set(values)
 
 
 _Expansion = namedtuple('_Expansion', ['candidates', 'unproven', 'collapsed'])
+_Field = namedtuple('_Field', ['text', 'names', 'glob', 'trusted'])
+_Alternative = namedtuple(
+    '_Alternative',
+    ['closed', 'text', 'names', 'glob', 'present', 'uncertain', 'trusted'])
+_START = _Alternative((), '', frozenset(), False, False, frozenset(), False)
+_REFERENCED_NAME = re.compile(r'\$\{?([A-Za-z_][A-Za-z0-9_]*)')
+_GLOB_MARK = '\x00glob'
+_GLOB_CHARACTERS = frozenset('*?[')
+_DEFAULT_IFS = ' \t\n'
+_PARAMETER_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!0-]')
+# Longest first, so ``:-`` wins over ``:``, ``##`` over ``#``, ``//`` over ``/``.
+_PARAMETER_OPERATORS = (
+    ':-', ':=', ':?', ':+', '-', '=', '?', '+', '##', '#', '%%', '%', '//',
+    '/#', '/%', '/', '^^', '^', ',,', ',', '@', ':')
+_DEFAULT_ASSIGNMENT = re.compile(r'\$\{([A-Za-z_][A-Za-z0-9_]*):?=')
+_OUTPUT_REDIRECT = re.compile(r'(?:([0-9]+)|&)?(?:>>?|>\||<>|>&)\Z')
 
 
-def _expand_delete_operand(raw, state, home, *, for_binding=False):
-    """Expand one word like the shell would, without executing anything.
+class _Unenumerable(Exception):
+    """A word whose expansions this guard cannot enumerate."""
 
-    Returns an ``_Expansion``: ``candidates`` is a tuple of strings (a single
-    word, quotes stripped); ``collapsed`` holds, per candidate, the variable
-    names that had no provable literal value on its path and were
-    substituted EMPTY — the unset-collapse case (``rm -rf \"$D/\"`` with
-    ``D`` unset or dynamic deletes ``/``); ``unproven`` is their union. A
-    proven literal binding contributes its own value(s). Command
-    substitutions contribute only when the producer is tracked (``pwd``,
-    ``mktemp``); anything else substitutes EMPTY and names no variable (an
-    anonymous ``$(…)`` still collapses to the empty shape). Glob characters
-    in an unquoted position keep the candidates but mark them pattern-shaped
-    via a trailing '\x00glob' flag consumed by the depth judgement.
 
-    ``for_binding=True`` (assignment VALUES) is stricter: an anonymous
-    substitution makes the whole binding unproven (None) so its USES name
-    the variable (``D=$(some_cmd); rm -rf $D/`` refuses as "if $D expands
-    empty", not as a bare "resolves to /").
+class _Overflowed(Exception):
+    """A word with more candidate expansions than ``_DELETE_BINDING_CAP``."""
 
-    Returns None when the word cannot even be enumerated (unterminated
-    quote, arithmetic, a candidate-count blowup); for a binding, a blowup
-    or a name that lost its proven value returns ``_OVERFLOW``. Raises
-    ``_EnvironmentDeferred`` when it reads the environment or the cwd of a
-    caller that does not know them.
+
+def _expand_delete_operand(raw, state, home):
+    """Expand one command operand like the shell would, without executing.
+
+    Returns an ``_Expansion``: ``candidates`` are the fields the operand may
+    become (a field pathname expansion applies to carries a trailing
+    ``_GLOB_MARK`` the depth judgement consumes; a field holding a value
+    that is unknown but never empty is not among them); ``collapsed`` holds, per
+    candidate, the names (variables, or a command substitution's text)
+    without a provable value that were substituted EMPTY on its path — the
+    unset-collapse case (``rm -rf "$D/"`` with ``D`` unset or dynamic
+    deletes ``/``); ``unproven`` is their union. Returns None when the
+    operand cannot be enumerated or has more candidates than the bound.
+    Raises ``_EnvironmentDeferred`` when it reads the environment or the cwd
+    of a caller that does not know them.
     """
-    pieces = [('', frozenset())]  # (candidate text, names collapsed into it)
-    globbed = False
-    quote = None
-    index = 0
-    length = len(raw)
+    try:
+        # Each word a brace expression makes (bash) is an operand of its own;
+        # dash keeps the braces.
+        alternatives = [alternative for word in [raw, *(_brace_variants(raw) or ())]
+                        for alternative in _scan_word(word, state, home, True, False).fields()]
+    except (_Unenumerable, _Overflowed):
+        return None
+    fields = [field for fields, _uncertain in alternatives for field in fields
+              if not field.trusted]
+    collapsed = tuple(field.names for field in fields)
+    return _Expansion(
+        tuple(field.text + (_GLOB_MARK if field.glob else '') for field in fields),
+        set().union(*collapsed), collapsed)
 
-    def _push(chunk):
-        nonlocal pieces
-        pieces = [(text + chunk, names) for text, names in pieces]
 
-    def _substitute(values, name=None):
-        nonlocal pieces
-        combined = []
-        for text, names in pieces:
-            for value in values:
-                if value is _DYNAMIC:
-                    combined.append((text, names | {name}))
-                elif isinstance(value, _Collapsed):
-                    combined.append((text + value.text, names | value.names))
-                else:
-                    combined.append((text + value, names))
-        if len(combined) > _DELETE_BINDING_CAP:
-            return False
-        pieces = combined
-        return True
+def _expand_word(raw, state, home, *, split=True, heredoc=False):
+    """Scan shell word *raw* into its possible expansions, a
+    :class:`_WordExpansion`. *split*: a command operand, which brace
+    expansion (bash), field splitting and pathname expansion apply to; off
+    for an assignment value or a script's text. *heredoc*: the body of an
+    unquoted heredoc, where quotes are plain characters."""
+    if split and not heredoc:
+        variants = _brace_variants(raw)
+        if variants is not None:
+            # dash keeps the braces; bash makes a word of each variant.
+            fields = _scan_word(raw, state, home, split, heredoc).fields()
+            products = [((), frozenset())]
+            for variant in variants:
+                alternatives = _scan_word(variant, state, home, split, heredoc).fields()
+                products = [(fields_so_far + more, uncertain | more_uncertain)
+                            for fields_so_far, uncertain in products
+                            for more, more_uncertain in alternatives]
+                if len(products) > _DELETE_BINDING_CAP:
+                    raise _Overflowed()
+            return _FieldAlternatives(fields + products)
+    return _scan_word(raw, state, home, split, heredoc)
 
-    while index < length:
+
+class _FieldAlternatives:
+    """Field lists a word may make: the expansion of a brace expression."""
+
+    def __init__(self, alternatives):
+        self._alternatives = alternatives
+
+    def fields(self):
+        return self._alternatives
+
+
+def _brace_variants(raw):
+    """The words bash brace expansion makes of *raw* (``/tmp/{a,b}`` makes
+    ``/tmp/a`` and ``/tmp/b``, ``{1..3}`` three words), or None when it has
+    no unquoted brace expression."""
+    found = _first_brace(raw)
+    if found is None:
+        return None
+    start, end, parts = found
+    variants = []
+    for part in parts:
+        word = raw[:start] + part + raw[end + 1:]
+        variants.extend(_brace_variants(word) or [word])
+        if len(variants) > _DELETE_BINDING_CAP:
+            raise _Overflowed()
+    return variants
+
+
+_BRACE_SEQUENCE = re.compile(
+    r'(-?[0-9]+)\.\.(-?[0-9]+)(?:\.\.(-?[0-9]+))?\Z|([A-Za-z])\.\.([A-Za-z])(?:\.\.(-?[0-9]+))?\Z')
+
+
+def _first_brace(raw):
+    """``(start, end, parts)`` of the first unquoted brace expression in
+    *raw*: a ``{a,b}`` list or a ``{x..y[..step]}`` sequence; None when it
+    has none."""
+    quote, index = None, 0
+    while index < len(raw):
         char = raw[index]
-        if quote is None and char == '\\':
-            if index + 1 >= length:
-                return None
-            _push(raw[index + 1])
+        if char == '\\' and quote != "'":
             index += 2
             continue
-        if char in "'\"":
-            if quote is None:
-                quote = char
-                index += 1
-                continue
-            if quote == char:
-                quote = None
-                index += 1
-                continue
-            _push(char)
-            index += 1
-            continue
-        if char == '~' and quote != "'" and index == 0:
-            if length > 1 and raw[1] not in '/':
-                return None  # ~user resolves through the OS; stay opaque
-            _push(home)
-            index += 1
-            continue
-        if char == '$' and quote != "'":
-            if quote is None and raw.startswith("$'", index):
-                return None  # bash decodes ANSI-C escapes into any path bytes
-            if quote is None and raw.startswith('$"', index):
-                index += 1  # $"…" is a plain double-quoted string in bash
-                continue
-            if raw.startswith('$(', index):
-                end = _substitution_end(raw, index + 2)
-                if end is None:
-                    return None
-                values = _substitution_values(
-                    raw[index + 2:end].strip(), state, for_binding)
-                if values is None:
-                    return None
-                if not _substitute(values):
-                    return _OVERFLOW if for_binding else None
-                index = end + 1
-                continue
-            reference = _re.match(
-                r'\$\{([A-Za-z_][A-Za-z0-9_]*)(:\?[^}]*)?\}|\$([A-Za-z_][A-Za-z0-9_]*)',
-                raw[index:])
-            if reference:
-                name = reference.group(1) or reference.group(3)
-                guarded = reference.group(2) is not None
-                if name == 'PWD':
-                    values = state.cwd_values()
-                    if values is None:
-                        return None
-                elif name == 'HOME':
-                    values = (home,) if home else ()
-                else:
-                    values = state.get_value(name)
-                    if values is _OVERFLOW and for_binding:
-                        return _OVERFLOW
-                    if values is None or values is _OVERFLOW:
-                        values = (_DYNAMIC,)  # unset/dynamic: the empty collapse
-                if guarded and _DYNAMIC in values:
-                    return None  # ${X:?…} aborts the shell when unset
-                if not _substitute(values, name):
-                    return _OVERFLOW if for_binding else None
-                index += reference.end()
-                continue
-            # $$, $?, $1, … — special parameters, never delete-relevant paths.
-            _push('$')
-            index += 1
-            continue
-        if char == '`' and quote != "'":
-            close = raw.find('`', index + 1)
-            if close < 0:
-                return None
-            values = _substitution_values(
-                raw[index + 1:close].strip(), state, for_binding)
-            if values is None:
-                return None
-            if not _substitute(values):
-                return _OVERFLOW if for_binding else None
-            index = close + 1
-            continue
-        if quote is None and char in '*?[':
-            globbed = True  # pathname expansion applies to the whole word
-            _push(char)
-            index += 1
-            continue
-        _push(char)
+        if char == "'" and quote != '"':
+            quote = None if quote == "'" else "'"
+        elif char == '"' and quote != "'":
+            quote = None if quote == '"' else '"'
+        elif char == '{' and quote is None and not raw.startswith('${', index - 1 if index else 0):
+            found = _brace_parts(raw, index)
+            if found is not None:
+                return (index,) + found
         index += 1
+    return None
+
+
+def _brace_parts(raw, start):
+    """``(end, parts)`` of the brace expression opening at ``raw[start]``,
+    or None when those braces stay literal."""
+    depth, quote, index, cut = 0, None, start, [start]
+    while index < len(raw):
+        char = raw[index]
+        if char == '\\' and quote != "'":
+            index += 2
+            continue
+        if char == "'" and quote != '"':
+            quote = None if quote == "'" else "'"
+        elif char == '"' and quote != "'":
+            quote = None if quote == '"' else '"'
+        elif quote is None and char == '{' and not (index and raw[index - 1] == '$'):
+            depth += 1
+        elif quote is None and char == '}':
+            depth -= 1
+            if depth == 0:
+                cut.append(index)
+                break
+        elif quote is None and char == ',' and depth == 1:
+            cut.append(index)
+        index += 1
+    else:
+        return None
+    end = cut[-1]
+    if len(cut) > 2:
+        return end, [raw[left + 1:right] for left, right in zip(cut, cut[1:])]
+    sequence = _BRACE_SEQUENCE.match(raw[start + 1:end])
+    if sequence is None:
+        return None
+    numbers = sequence.group(1) is not None
+    first, last = ((int(sequence.group(1)), int(sequence.group(2))) if numbers
+                   else (ord(sequence.group(4)), ord(sequence.group(5))))
+    step = abs(int(sequence.group(3) or sequence.group(6) or 1)) or 1
+    count = abs(last - first) // step + 1
+    if count > _DELETE_BINDING_CAP:
+        raise _Overflowed()
+    direction = step if last >= first else -step
+    values = [first + position * direction for position in range(count)]
+    return end, [str(value) if numbers else chr(value) for value in values]
+
+
+def _scan_word(raw, state, home, split, heredoc):
+    """Scan *raw* left to right into a :class:`_WordExpansion`."""
+    expansion = _WordExpansion(state, home, split)
+    quote, index, length = None, 0, len(raw)
+    while index < length:
+        char = raw[index]
+        if quote == "'":
+            end = raw.find("'", index)
+            if end < 0:
+                raise _Unenumerable()
+            expansion.literal(raw[index:end], quoted=True)
+            quote, index = None, end + 1
+        elif char == '\\':
+            index = expansion.escape(raw, index, quote == '"', heredoc)
+        elif char == "'" and quote is None and not heredoc:
+            expansion.quote_seen()
+            quote, index = "'", index + 1
+        elif char == '"' and not heredoc:
+            if not quote and not raw.startswith(('"$@"', '"${@}"'), index):
+                expansion.quote_seen()  # "$@" alone makes no field without arguments
+            quote, index = (None if quote else '"'), index + 1
+        elif char == '$':
+            index = expansion.dollar(raw, index, quote == '"' or heredoc)
+        elif char == '`':
+            index = expansion.backtick(raw, index, quote == '"' or heredoc)
+        elif char == '~' and index == 0 and quote is None and not heredoc:
+            index = expansion.tilde(raw)
+        else:
+            end = index + 1
+            while end < length and raw[end] not in '\\\'"$`':
+                end += 1
+            expansion.literal(raw[index:end], quoted=quote is not None or heredoc)
+            index = end
     if quote is not None:
-        return None  # unterminated quote: stay opaque
-    marker = '\x00glob' if globbed else ''
-    collapsed = tuple(names for _text, names in pieces)
-    return _Expansion(tuple(text + marker for text, _names in pieces),
-                      set().union(*collapsed), collapsed)
+        raise _Unenumerable()  # an unterminated quote
+    return expansion
 
 
-def _substitution_values(body, state, for_binding):
-    """Values of a ``$(…)`` or backtick *body*: the cwd for ``pwd``, a deep
-    placeholder for ``mktemp``, EMPTY for anything else (None in a binding,
-    whose uses then name the variable)."""
-    if body in ('pwd', 'pwd -P', 'pwd -L', 'command pwd'):
-        return state.cwd_values()
+class _WordExpansion:
+    """The possible expansions of one shell word as it is scanned.
+
+    Each ``_Alternative`` holds the finished fields and the field being
+    built; *present* marks a field that exists although empty (a quoted
+    one), *trusted* a field holding a value that is unknown but never empty,
+    and *uncertain* the unquoted unproven values that may have split the
+    alternative into any number of fields.
+    """
+
+    def __init__(self, state, home, split):
+        self.state, self.home, self.split = state, home, split
+        self.alternatives = [_START]
+
+    def fields(self):
+        """``(fields, uncertain)`` per alternative of an operand."""
+        return [(_close_field(alternative).closed, alternative.uncertain)
+                for alternative in self.alternatives]
+
+    def values(self):
+        """The value set of an unsplit word: one value per alternative."""
+        return _dedupe(_field_value(alternative.text, alternative.names,
+                                    alternative.glob, alternative.trusted)
+                       for alternative in self.alternatives)
+
+    def literal(self, chunk, quoted):
+        glob = self.split and not quoted and _has_glob(chunk)
+        self.alternatives = [
+            alternative._replace(
+                text=alternative.text + chunk, glob=alternative.glob or glob,
+                present=alternative.present or quoted or bool(chunk))
+            for alternative in self.alternatives]
+
+    def quote_seen(self):
+        self.alternatives = [alternative._replace(present=True)
+                             for alternative in self.alternatives]
+
+    def splice(self, values, name=None, quoted=False):
+        """Splice in each value of the set *values*, the value of *name*."""
+        unquoted = self.split and not quoted
+        ifs = self._ifs() if unquoted else ''
+        self._keep([_splice(alternative, value, name, quoted, unquoted, ifs)
+                    for alternative in self.alternatives for value in values])
+
+    def _keep(self, alternatives):
+        if len(alternatives) > _DELETE_BINDING_CAP:
+            raise _Overflowed()
+        self.alternatives = alternatives
+
+    def _ifs(self):
+        value = self.state.bindings.get('IFS', (_DEFAULT_IFS,))
+        if not isinstance(value, tuple) or len(value) != 1 or not isinstance(value[0], str):
+            raise _Unenumerable()  # field splitting on an IFS this guard cannot know
+        return value[0]
+
+    def escape(self, raw, index, in_double, heredoc):
+        """A backslash quotes the next character; in double quotes and heredoc
+        bodies only ``$``, a backtick, a backslash and a newline (and ``"`` in
+        double quotes), and stays itself before any other."""
+        following = raw[index + 1:index + 2]
+        if following and (not (in_double or heredoc) or following in '$`\\\n'
+                          or (in_double and following == '"')):
+            if following != '\n':
+                self.literal(following, quoted=True)
+            return index + 2
+        self.literal('\\', quoted=True)
+        return index + 1
+
+    def dollar(self, raw, index, quoted):
+        following = raw[index + 1:index + 2]
+        if following == "'" and not quoted:
+            return self._ansi_c(raw, index)
+        if following == '"' and not quoted:
+            return index + 1  # bash $"…": the double-quoted string that follows
+        if raw.startswith('$((', index):
+            end = _arithmetic_end(raw, index + 3)
+            if end is not None:
+                self.literal('0', quoted=True)  # a number: never empty
+                return end
+        if following == '(':
+            end = _substitution_end(raw, index + 2)
+            if end is None:
+                raise _Unenumerable()
+            body = raw[index + 2:end].strip()
+            self.splice(_substitution_values(body, self.state, self.home),
+                        f'$({_brief(body)})', quoted)
+            return end + 1
+        if following == '{':
+            end = _parameter_end(raw, index + 2)
+            if end is None:
+                raise _Unenumerable()
+            self.parameter(raw[index + 2:end], quoted)
+            return end + 1
+        match = _PARAMETER_NAME.match(raw, index + 1)
+        if match is None:
+            self.literal('$', quoted=True)
+            return index + 1
+        name = match.group(0)[0] if match.group(0)[0].isdigit() else match.group(0)
+        self.parameter(name, quoted)  # `$10` is `${1}0`
+        return index + 1 + len(name)
+
+    def backtick(self, raw, index, quoted):
+        body, position = [], index + 1
+        while position < len(raw) and raw[position] != '`':
+            if raw[position] == '\\' and raw[position + 1:position + 2] in ('$', '`', '\\'):
+                position += 1
+            body.append(raw[position])
+            position += 1
+        if position >= len(raw):
+            raise _Unenumerable()  # an unterminated backtick
+        text = ''.join(body).strip()
+        self.splice(_substitution_values(text, self.state, self.home),
+                    f'`{_brief(text)}`', quoted)
+        return position + 1
+
+    def tilde(self, raw):
+        end = raw.find('/')
+        if raw[1:end] if end >= 0 else raw[1:]:
+            raise _Unenumerable()  # ~user, ~+, ~-: the shell resolves them
+        self.splice(self._parameter_values('HOME'), 'HOME', quoted=True)
+        return 1
+
+    def _ansi_c(self, raw, index):
+        decoded = []
+        end = _ansi_c_span(raw, index, decoded)
+        if end is None:
+            raise _Unenumerable()
+        # bash decodes the escapes; a POSIX sh reads `$` and a quoted string.
+        self.splice((''.join(decoded), '$' + raw[index + 2:end - 1]), None, quoted=True)
+        return end
+
+    def parameter(self, inner, quoted):
+        """Splice parameter expansion ``${inner}``."""
+        if inner in ('@', '*'):
+            self._arguments(joined=inner == '*' and quoted, quoted=quoted)
+            return
+        if inner in ('#', '?', '$') or (inner.startswith('#') and len(inner) > 1):
+            self.literal('0', quoted=True)  # a count, a status, a pid, a length
+            return
+        if inner == '-':
+            self.literal('h', quoted=True)  # the option letters
+            return
+        if inner == '0':
+            self.splice(_value_tuple(self.state.zero), '$0', quoted)
+            return
+        if inner.startswith('!'):
+            self.splice((_DYNAMIC,), '$' + inner, quoted)
+            return
+        match = _PARAMETER_NAME.match(inner)
+        if match is None:
+            raise _Unenumerable()
+        name, rest = match.group(0), inner[match.end():]
+        if rest.startswith('['):
+            self.splice((_DYNAMIC,), name, quoted)  # arrays are not tracked
+            return
+        if name in ('@', '*'):
+            if not rest.startswith(':') or rest.startswith((':-', ':=', ':?', ':+')):
+                raise _Unenumerable()  # an operator on each parameter
+            # ${@:offset[:length]}: some of the parameters; judging all is a superset.
+            self._arguments(joined=name == '*' and quoted, quoted=quoted)
+            return
+        values = self._parameter_values(name)
+        if rest:
+            operator = next((op for op in _PARAMETER_OPERATORS if rest.startswith(op)), None)
+            if operator is None:
+                raise _Unenumerable()
+            values = self._operate(values, operator, rest[len(operator):])
+        self.splice(values, name, quoted)
+
+    def _parameter_values(self, name):
+        if name.isdigit():
+            return _value_tuple(self.state.positional_value(int(name)))
+        if name in ('@', '*'):
+            return (_DYNAMIC,)
+        if name in ('#', '?', '$'):
+            return ('0',)
+        if name == 'PWD' and 'PWD' not in self.state.bindings:
+            values = self.state.cwd_values()
+            if values is None:
+                raise _Unenumerable()
+            return values
+        if name == 'HOME' and 'HOME' not in self.state.bindings and (
+                self.state.environment is None or not self.state.environment.get('HOME')):
+            return (self.home,) if self.home else (_DYNAMIC,)
+        value = self.state.get_value(name)
+        if value is _OVERFLOW and not self.split:
+            raise _Overflowed()  # a value built from it overflows too
+        return _value_tuple(value)
+
+    def _word_values(self, word):
+        return _expand_word(word, self.state, self.home, split=False).values()
+
+    def _operate(self, values, operator, word):
+        """Apply ``${NAME<operator><word>}`` to NAME's value set."""
+        colon = operator.startswith(':')
+        if operator in (':-', '-', ':=', '='):
+            # An empty value takes the default; without `:` only an unset one
+            # does, and set-but-empty is not told apart from unset here.
+            default = self._word_values(word)
+            return _dedupe(item for value in values for item in (
+                default + (() if colon else ('',)) if value == ''
+                else default + ((_TRUSTED,) if colon else (_DYNAMIC,)) if value is _DYNAMIC
+                else (value,)))
+        if operator in (':?', '?'):
+            # The shell stops when the value is empty (unset, without `:`).
+            return _dedupe(
+                item for value in values for item in (
+                    () if value == '' and colon
+                    else ((_TRUSTED,) if colon else (_DYNAMIC,)) if value is _DYNAMIC
+                    else (value,)))
+        if operator in (':+', '+'):
+            alternate = self._word_values(word)
+            return _dedupe(item for value in values for item in (
+                ('',) + alternate if value is _DYNAMIC or (value == '' and not colon)
+                else ('',) if value == '' else alternate))
+        if operator in ('#', '##', '%', '%%'):
+            patterns = self._word_values(word)
+            return _dedupe(_trim(value, pattern, operator)
+                           for value in values for pattern in patterns)
+        if operator in ('/', '//', '/#', '/%'):
+            pattern, _separator, replacement = word.partition('/')
+            patterns, replacements = self._word_values(pattern), self._word_values(replacement)
+            return _dedupe(_replace_pattern(value, operator, found, put)
+                           for value in values for found in patterns for put in replacements)
+        if operator == ':':
+            return _dedupe(_substring(value, word) for value in values)
+        if operator in ('^', '^^', ',', ',,') and not word:
+            return _dedupe(_convert_case(value, operator) for value in values)
+        return (_DYNAMIC,)
+
+    def _arguments(self, joined, quoted):
+        """Splice ``$@``/``$*``: each positional parameter a field of its own,
+        or (``"$*"``) all of them joined by a space."""
+        prefix, tail = self.state.positional
+        if joined:
+            for position, value in enumerate(prefix):
+                if position:
+                    self.literal(' ', quoted=True)
+                self.splice(_value_tuple(value), f'${position + 1}', quoted=True)
+            if tail != ():
+                without = self.alternatives
+                if prefix:
+                    self.literal(' ', quoted=True)
+                self.splice(_value_tuple(tail), '$*', quoted=True)
+                self._keep(without + self.alternatives)
+            return
+        unquoted = self.split and not quoted
+        ifs = self._ifs() if unquoted else ''
+        alternatives = self.alternatives
+        for position, value in enumerate(prefix):
+            if position:
+                alternatives = [_close_field(alternative) for alternative in alternatives]
+            alternatives = [_splice(alternative, item, f'${position + 1}', quoted, unquoted, ifs)
+                            for alternative in alternatives for item in _value_tuple(value)]
+            self._keep(alternatives)
+        if tail != ():
+            more = [_splice(_close_field(alternative) if prefix else alternative, item, '$@',
+                            quoted, unquoted, ifs)
+                    for alternative in alternatives for item in _value_tuple(tail)]
+            alternatives = [alternative._replace(uncertain=alternative.uncertain | {'$@'})
+                            for alternative in alternatives + more]
+        self._keep(alternatives)
+
+
+def _splice(alternative, value, name, quoted, unquoted, ifs):
+    """*alternative* with *value*, one element of a value set, spliced in;
+    *unquoted* in an operand, it is split into fields at *ifs* characters and
+    its glob characters apply."""
+    if value is _DYNAMIC or value is _TRUSTED:
+        label = name or 'an expansion'
+        return alternative._replace(
+            names=alternative.names | {label} if value is _DYNAMIC else alternative.names,
+            present=alternative.present or quoted or value is _TRUSTED,
+            trusted=alternative.trusted or value is _TRUSTED,
+            uncertain=alternative.uncertain | {label} if unquoted else alternative.uncertain)
+    text, names = ((value.text, value.names) if isinstance(value, _Collapsed)
+                   else (value, frozenset()))
+    marked = text.endswith(_GLOB_MARK)
+    if marked:
+        text = text[:-len(_GLOB_MARK)]
+    segments = re.split('[' + re.escape(ifs) + ']+', text) if ifs and text else [text]
+    for position, segment in enumerate(segments):
+        if position:
+            alternative = _close_field(alternative)
+        alternative = alternative._replace(
+            text=alternative.text + segment, names=alternative.names | names,
+            glob=(alternative.glob or (unquoted and _has_glob(segment))
+                  or (marked and position == len(segments) - 1)),
+            present=alternative.present or quoted or bool(segment))
+    if ifs and any(char not in _DEFAULT_IFS and char in text for char in ifs):
+        # Splitting at a non-blank IFS character keeps empty fields.
+        alternative = alternative._replace(uncertain=alternative.uncertain | {'IFS'})
+    return alternative
+
+
+def _close_field(alternative):
+    """*alternative* with the field being built finished."""
+    if alternative.present or alternative.text:
+        alternative = alternative._replace(closed=alternative.closed + (
+            _Field(alternative.text, alternative.names, alternative.glob,
+                   alternative.trusted),))
+    return alternative._replace(text='', names=frozenset(), glob=False, present=False,
+                                trusted=False)
+
+
+def _field_value(text, names, glob, trusted=False):
+    """The value-set element of an expanded text: the literal, its empty
+    collapse when it rests on unproven *names*, ``_TRUSTED`` when it holds
+    a value that is unknown but never empty."""
+    if trusted:
+        return _TRUSTED
+    text += _GLOB_MARK if glob else ''
+    if not names:
+        return text
+    return _Collapsed(text, names) if text else _DYNAMIC
+
+
+def _value_set(values):
+    """A binding's value from a value set: None for ``_DYNAMIC`` alone."""
+    if values == (_DYNAMIC,):
+        return None
+    return _OVERFLOW if len(values) > _DELETE_BINDING_CAP else values
+
+
+def _value_tuple(value):
+    """The elements of a binding's value."""
+    if value is _DEFERRED:
+        raise _EnvironmentDeferred('a parameter')
+    if value is None or value is _OVERFLOW:
+        return (_DYNAMIC,)
+    return value
+
+
+def _dedupe(items):
+    return tuple(dict.fromkeys(items))
+
+
+def _may_be_empty(value):
+    return value is _DYNAMIC or value == ''
+
+
+def _has_glob(text):
+    return any(char in _GLOB_CHARACTERS for char in text)
+
+
+def _brief(text):
+    return ' '.join(text.split())[:40]
+
+
+def _parameter_end(raw, start):
+    """Index of the ``}`` closing a ``${`` whose text starts at *start*."""
+    depth, index, quote = 1, start, None
+    while index < len(raw):
+        char = raw[index]
+        if char == '\\' and quote != "'":
+            index += 2
+            continue
+        if quote == "'":
+            quote = None if char == "'" else quote
+        elif char == "'" and quote is None:
+            quote = "'"
+        elif char == '"':
+            quote = None if quote == '"' else '"'
+        elif raw.startswith('$(', index) and not raw.startswith('$((', index):
+            end = _substitution_end(raw, index + 2)
+            if end is None:
+                return None
+            index = end
+        elif raw.startswith('${', index):
+            depth += 1
+            index += 1
+        elif char == '}':
+            depth -= 1
+            if depth == 0:
+                return index
+        index += 1
+    return None
+
+
+def _text_of(value):
+    """The text a value set element stands for: an unknown one collapses."""
+    if isinstance(value, str):
+        return value[:-len(_GLOB_MARK)] if value.endswith(_GLOB_MARK) else value
+    return _split_value(value)[0] if isinstance(value, _Collapsed) else ''
+
+
+def _split_value(value):
+    """``(text, names, glob)`` of a literal or collapsed value."""
+    text, names = ((value.text, value.names) if isinstance(value, _Collapsed)
+                   else (value, frozenset()))
+    if text.endswith(_GLOB_MARK):
+        return text[:-len(_GLOB_MARK)], names, True
+    return text, names, False
+
+
+def _trim(value, pattern, operator):
+    """``${NAME#pattern}`` (``##``, ``%``, ``%%``) on one value."""
+    if not isinstance(value, (str, _Collapsed)) or not isinstance(pattern, str):
+        return _DYNAMIC
+    text, names, glob = _split_value(value)
+    if glob:
+        return _DYNAMIC
+    if operator in ('#', '##'):
+        ends = range(len(text) + 1) if operator == '#' else range(len(text), -1, -1)
+        text = text[next((end for end in ends
+                          if fnmatch.fnmatchcase(text[:end], pattern)), 0):]
+    else:
+        starts = range(len(text), -1, -1) if operator == '%' else range(len(text) + 1)
+        text = text[:next((start for start in starts
+                           if fnmatch.fnmatchcase(text[start:], pattern)), len(text))]
+    return _field_value(text, names, False)
+
+
+def _replace_pattern(value, operator, pattern, replacement):
+    """``${NAME/pattern/replacement}`` (``//``, ``/#``, ``/%``) on one
+    value; a pattern with glob characters is not followed."""
+    if (not isinstance(value, str) or not isinstance(pattern, str)
+            or not isinstance(replacement, str) or _has_glob(pattern)
+            or value.endswith(_GLOB_MARK)):
+        return _DYNAMIC
+    if not pattern:
+        return value
+    if operator == '/':
+        return value.replace(pattern, replacement, 1)
+    if operator == '//':
+        return value.replace(pattern, replacement)
+    if operator == '/#':
+        return replacement + value[len(pattern):] if value.startswith(pattern) else value
+    return value[:-len(pattern)] + replacement if value.endswith(pattern) else value
+
+
+def _substring(value, specification):
+    """``${NAME:offset[:length]}`` on one value, for integer literals."""
+    if not isinstance(value, str) or value.endswith(_GLOB_MARK):
+        return _DYNAMIC
+    try:
+        numbers = [int(part) for part in specification.split(':')]
+    except ValueError:
+        return _DYNAMIC
+    if len(numbers) not in (1, 2):
+        return _DYNAMIC
+    start = numbers[0] if numbers[0] >= 0 else max(len(value) + numbers[0], 0)
+    if len(numbers) == 1:
+        return value[start:]
+    end = start + numbers[1] if numbers[1] >= 0 else len(value) + numbers[1]
+    return value[start:end]
+
+
+def _convert_case(value, operator):
+    """``${NAME^}`` (``^^``, ``,``, ``,,``) on one value."""
+    if not isinstance(value, (str, _Collapsed)):
+        return value
+    text, names, glob = _split_value(value)
+    if operator == '^^':
+        text = text.upper()
+    elif operator == ',,':
+        text = text.lower()
+    elif text:
+        text = (text[0].upper() if operator == '^' else text[0].lower()) + text[1:]
+    return _field_value(text, names, glob)
+
+
+def _substitution_values(body, state, home):
+    """The value set command substitution *body* prints: a deep placeholder
+    for ``mktemp``, the cwd for ``pwd``, and what ``echo``, ``printf``,
+    ``dirname``, ``basename``, ``cd DIR && pwd`` and ``git rev-parse
+    --show-toplevel`` print for words this guard can expand; ``_DYNAMIC``
+    for anything else."""
     mkstemp = _mkstemp_value(body)
     if mkstemp is not None:
         return (mkstemp,)
-    return None if for_binding else ('',)
+    try:
+        items = parse_shell_structure(body)
+    except ShellStructureUnknown:
+        return (_DYNAMIC,)
+    if not items or not all(isinstance(item, SimpleCommand) and not item.heredocs
+                            and not _redirects_output(item) for item in items):
+        return (_DYNAMIC,)
+    first = [_literal_command_word(word) for word in items[0].words]
+    if (len(items) == 2 and first[:1] == ['cd']
+            and items[1].separator in ('&&', ';', '\n')
+            and [_literal_command_word(word) for word in items[1].words]
+            in (['pwd'], ['pwd', '-L'], ['pwd', '-P'])):
+        return _directory_output(state, items[0].words, home, items[1].separator == '&&')
+    if len(items) != 1:
+        return (_DYNAMIC,)
+    views = _program_views(items[0].words)
+    if views is _UNKNOWN_PROGRAM or len(views) != 1:
+        return (_DYNAMIC,)
+    literal, raw = views[0]
+    producer = _PRODUCERS.get(os.path.basename(literal[0]))
+    return (_DYNAMIC,) if producer is None else producer(literal, raw, state, home)
+
+
+def _redirects_output(item):
+    """Whether *item* sends its standard output somewhere other than its
+    command substitution."""
+    for operator, _target in item.redirects:
+        match = _OUTPUT_REDIRECT.match(operator)
+        if match and match.group(1) in (None, '1'):
+            return True
+    return False
+
+
+def _pwd_output(literal, raw, state, home):
+    values = state.cwd_values()
+    if values is None:
+        raise _Unenumerable()
+    return values
+
+
+def _echo_output(literal, raw, state, home):
+    operands = list(raw[1:])
+    while operands and re.fullmatch(r'-[neE]+', _literal_command_word(operands[0])):
+        if set(_literal_command_word(operands.pop(0))[1:]) - {'n'}:
+            return (_DYNAMIC,)  # dash prints -e and -E as operands
+    output = _joined_output(operands, state, home, ' ')
+    # dash's echo interprets backslash escapes; bash's does not.
+    return (_DYNAMIC,) if any('\\' in _text_of(value) for value in output) else output
+
+
+def _printf_output(literal, raw, state, home):
+    if len(raw) < 2:
+        return (_DYNAMIC,)
+    formats = _expand_word(raw[1], state, home, split=False).values()
+    if len(formats) != 1 or not isinstance(formats[0], str):
+        return (_DYNAMIC,)
+    form = formats[0][:-2] if formats[0].endswith('\\n') else formats[0]
+    if form == '%s':
+        output = _joined_output(raw[2:], state, home, '')
+        return (_DYNAMIC,) if any('\n' in _text_of(value) for value in output) else output
+    if '%' not in form and '\\' not in form and len(raw) == 2:
+        return (form,)
+    return (_DYNAMIC,)
+
+
+def _dirname_output(literal, raw, state, home):
+    if len(raw) != 2:
+        return (_DYNAMIC,)
+    return _mapped_output(raw[1], state, home, _posix_dirname, _TRUSTED)
+
+
+def _basename_output(literal, raw, state, home):
+    if len(raw) not in (2, 3):
+        return (_DYNAMIC,)
+    suffix = literal[2] if len(raw) == 3 else ''
+    return _mapped_output(raw[1], state, home,
+                          lambda path: _posix_basename(path, suffix), _DYNAMIC)
+
+
+def _git_output(literal, raw, state, home):
+    operands, bases = list(literal[1:]), None
+    if operands[:1] == ['-C'] and len(operands) > 1:
+        bases, stays = _cd_destinations(state, list(raw[2:3]), home)
+        if stays:
+            return (_DYNAMIC,)
+        operands = operands[2:]
+    if operands != ['rev-parse', '--show-toplevel']:
+        return (_DYNAMIC,)
+    if state.environment is None:
+        raise _EnvironmentDeferred('GIT_DIR')
+    if any(name in state.bindings or state.environment.get(name)
+           for name in ('GIT_DIR', 'GIT_WORK_TREE')):
+        return (_DYNAMIC,)
+    if bases is None:
+        bases = state.cwd_values()
+        if bases is None:
+            raise _Unenumerable()
+    return _dedupe(_git_toplevel(base) for base in bases)
+
+
+_PRODUCERS = {
+    'pwd': _pwd_output, 'echo': _echo_output, 'printf': _printf_output,
+    'dirname': _dirname_output, 'basename': _basename_output, 'git': _git_output,
+}
+
+
+def _joined_output(raws, state, home, separator):
+    """What the fields of words *raws* print joined by *separator* (``echo``:
+    a space, ``printf %s``: nothing); each is expanded like an operand. A
+    field pathname expansion applies to prints names this guard cannot list;
+    an unknown field may print anything."""
+    outputs = [((), frozenset(), False)]
+    for raw in raws:
+        alternatives = _expand_word(raw, state, home).fields()
+        if any(field.glob for fields, _uncertain in alternatives for field in fields):
+            return (_DYNAMIC,)
+        outputs = [(texts + tuple(field.text for field in fields),
+                    names.union(uncertain, *(field.names for field in fields)),
+                    trusted or any(field.trusted for field in fields))
+                   for texts, names, trusted in outputs
+                   for fields, uncertain in alternatives]
+        if len(outputs) > _DELETE_BINDING_CAP:
+            raise _Overflowed()
+    return _dedupe(_field_value(separator.join(texts), names, False, trusted)
+                   for texts, names, trusted in outputs)
+
+
+def _mapped_output(raw, state, home, function, of_unknown):
+    """*function* of each value of word *raw* (``dirname``, ``basename``),
+    of the empty collapse for a value built from unproven names; *of_unknown*
+    stands for its result on a value this guard cannot know at all."""
+    output = []
+    for value in _expand_word(raw, state, home, split=False).values():
+        if value is _DYNAMIC or value is _TRUSTED:
+            output.append(of_unknown)
+            continue
+        text, names, glob = _split_value(value)
+        output.append(of_unknown if glob else _field_value(function(text), names, False))
+    return _dedupe(output)
+
+
+def _posix_dirname(path):
+    stripped = path.rstrip('/')
+    if not stripped:
+        return '/' if path else '.'
+    if '/' not in stripped:
+        return '.'
+    return stripped.rsplit('/', 1)[0].rstrip('/') or '/'
+
+
+def _posix_basename(path, suffix=''):
+    stripped = path.rstrip('/')
+    if not stripped:
+        return '/' if path else ''
+    base = stripped.rsplit('/', 1)[-1]
+    return base[:-len(suffix)] if suffix and base != suffix and base.endswith(suffix) else base
+
+
+def _git_toplevel(directory):
+    """What ``git rev-parse --show-toplevel`` prints in *directory*: the
+    closest directory holding ``.git``; nothing outside a repository."""
+    current = os.path.normpath(directory)
+    while True:
+        if os.path.lexists(os.path.join(current, '.git')):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            return ''
+        current = parent
+
+
+def _directory_output(state, words, home, after_success):
+    """What ``cd DIR && pwd`` prints (nothing when cd fails); after ``;``
+    the old cwd instead."""
+    literal = [_literal_command_word(word) for word in words]
+    try:
+        destinations, stays = _cd_destinations(
+            state, _directory_operands(literal, words), home)
+    except _Unenumerable:
+        return (_DYNAMIC,)  # a directory this guard cannot know, or nothing
+    printed = list(destinations)
+    if stays or not after_success:
+        cwds = state.cwd_values()
+        if cwds is None:
+            raise _Unenumerable()
+        printed += list(cwds)
+    return _dedupe(printed + [''] if after_success else printed)  # cd may fail
+
+
+def _script_texts(raws, state, home, *, heredoc=False):
+    """The texts a shell may run for words *raws* (``eval`` joins its
+    operands with spaces), or None when they cannot be enumerated."""
+    expansion = _WordExpansion(state, home, split=False)
+    try:
+        for position, raw in enumerate(raws):
+            if position:
+                expansion.literal(' ', quoted=True)
+            expansion.splice(_expand_word(raw, state, home, split=False,
+                                          heredoc=heredoc).values(), None, quoted=True)
+    except (_Unenumerable, _Overflowed):
+        return None
+    return list(_dedupe(_text_of(value) for value in expansion.values()))
 
 
 def _could_run_delete(text):
@@ -3687,28 +4430,41 @@ def _candidate_depth(path):
 def _loop_variable(header, state, home):
     """``(name, values, runs at least once)`` of a ``for``/``select`` header.
 
-    Each listed word is expanded like an assignment value; a word that may
-    become zero or several words (``$(ls)``, ``*.log``, ``"$@"``) adds a
-    dynamic value and may leave the list empty. An arithmetic ``for ((…))``
-    binds nothing; ``select`` and ``for x`` (the positional parameters) may
-    run the body any number of times. An empty list yields ``()`` values.
+    The listed words expand like operands, a field each (field splitting and
+    pathname expansion apply; a glob field keeps its pattern shape); a word
+    that may make no field (``$(ls)``, ``"$@"``, an unquoted unproven value)
+    may leave the list empty. Without ``in`` the loop walks the positional
+    parameters. An arithmetic ``for ((…))`` binds nothing, and ``select``
+    may run its body any number of times. An empty list yields ``()``.
     """
     words = header[1:]
     if not words or words[0].startswith('(('):
         return None, None, False
-    if words[1:2] != ('in',):
-        return words[0], None, False
-    listed = words[2:]
-    single = [raw for raw in listed if not _shell_word_shape(raw).multiple]
-    runs = header[0] == 'for' and bool(single)
-    values = [_DYNAMIC] if len(single) < len(listed) else []
-    for raw in single:
-        value = _resolve_delete_value(raw, state, home)
-        if value is _DEFERRED or value is _OVERFLOW:
-            return words[0], value, runs
-        values.extend((_DYNAMIC,) if value is None else value)
-    values = tuple(dict.fromkeys(values))
-    return words[0], None if values == (_DYNAMIC,) else values, runs
+    values, runs = [], False
+    try:
+        if words[1:2] != ('in',):
+            prefix, tail = state.positional
+            for value in prefix + ((tail,) if tail != () else ()):
+                values.extend(_value_tuple(value))
+            runs = bool(prefix)
+        else:
+            for raw in words[2:]:
+                try:
+                    alternatives = _expand_word(raw, state, home).fields()
+                except (_Unenumerable, _Overflowed):
+                    values.append(_DYNAMIC)
+                    continue
+                for fields, uncertain in alternatives:
+                    values.extend(_field_value(*field) for field in fields)
+                    if uncertain:
+                        values.append(_DYNAMIC)
+                runs = runs or all(fields and not uncertain
+                                   for fields, uncertain in alternatives)
+    except _EnvironmentDeferred:
+        return words[0], _DEFERRED, False
+    values = _dedupe(values)
+    return (words[0], None if values == (_DYNAMIC,) else values,
+            runs and header[0] == 'for')
 
 
 def _join_values(mine, theirs):
@@ -3784,26 +4540,50 @@ class _DeleteGuardState:
     """Literal shell state at one point of a command, as this guard tracks it.
 
     ``environment`` is the mapping the command's shell starts with (None when
-    the caller does not know it); ``functions`` maps a name to its possible
-    definitions (None among them where the name may be undefined).
-    ``jumps`` and ``calls`` describe the position rather than the state:
-    where ``break``/``continue``/``return`` lead, and the functions being
-    run. ``memo`` keeps one parse and structure per script for the whole
-    judgement, so a script read twice defines the same functions.
+    the caller does not know it). ``cwds`` are the possible working
+    directories (none for a caller that gave no cwd); ``cwd_lost`` marks a
+    path where a ``cd`` target could not be followed. ``functions`` maps a
+    name to its possible definitions (None
+    among them where the name may be undefined). ``positional`` is
+    ``(prefix, tail)``: a value per known positional parameter, then the
+    values of any number of further ones (``()``: none); ``zero`` is the
+    value of ``$0``. ``exports`` maps a name to whether a process this shell
+    starts sees it (True, False, 'maybe'; a name absent from it is exported
+    when the starting environment holds it), ``allexport`` is the ``set -a``
+    mode ('on', 'off', 'maybe') and ``exported_functions`` the functions of
+    ``export -f``; ``aliases`` maps an alias to the texts it may hold;
+    ``traps`` are the trap actions set on this path. ``jumps``, ``calls`` and
+    ``alias_active`` describe the position rather than the state: where
+    ``break``/``continue``/``return`` lead, the functions being run and the
+    aliases whose text is being read.
+    ``memo`` keeps, for the whole judgement, one parse and structure per
+    script and the trap actions set.
     """
 
-    __slots__ = ('bindings', 'cwds', 'cwd_known', 'cwd_given', 'environment',
-                 'functions', 'jumps', 'calls', 'memo')
+    __slots__ = ('bindings', 'cwds', 'cwd_given', 'cwd_lost',
+                 'environment', 'functions', 'positional', 'zero', 'exports',
+                 'allexport', 'exported_functions', 'aliases', 'traps', 'jumps',
+                 'calls', 'alias_active', 'memo')
+    _POSITION = frozenset({'jumps', 'calls', 'alias_active', 'memo'})
 
     def __init__(self, cwd, environment):
         start = os.path.normpath(cwd) if cwd and os.path.isabs(cwd) else None
         self.bindings = {}
         self.cwds = [start] if start else []
-        self.cwd_known = self.cwd_given = start is not None
+        self.cwd_given = start is not None
+        self.cwd_lost = False
         self.environment = environment
         self.functions = {}
+        self.positional = ((), ())
+        self.zero = (_TRUSTED,)  # the shell's name
+        self.exports = {}
+        self.exported_functions = frozenset()
+        self.allexport = 'off'
+        self.aliases = {}
+        self.traps = ()
         self.jumps = _NO_JUMPS
         self.calls = frozenset()
+        self.alias_active = frozenset()
         self.memo = {}
 
     def branch(self):
@@ -3814,23 +4594,63 @@ class _DeleteGuardState:
         clone.bindings = dict(self.bindings)
         clone.cwds = list(self.cwds)
         clone.functions = dict(self.functions)
+        clone.exports = dict(self.exports)
+        clone.aliases = dict(self.aliases)
         return clone
 
-    def fork(self, *, child_shell=False):
-        """State of a subshell (``( … )``, a pipeline stage, a substitution),
-        which cannot jump to this shell's loops or calls; a separate
-        *child_shell* process (``bash <<'EOF'``, ``sh -c '…'``) inherits the
-        cwd and the environment but no unexported binding or function."""
+    def fork(self):
+        """State of a subshell (``( … )``, a pipeline stage, a substitution): it
+        cannot jump to this shell's loops or calls and runs none of its
+        traps."""
         clone = self.branch()
         clone.jumps = _NO_JUMPS
-        if child_shell:
-            clone.bindings, clone.functions, clone.calls = {}, {}, frozenset()
+        clone.traps = ()
         return clone
+
+    def child(self, positional=((), ()), zero=(_TRUSTED,)):
+        """State of a shell process this one starts (``sh -c``, ``bash
+        <<'EOF'``): the cwd, the environment with every exported name, the
+        functions of ``export -f``, its own *positional* parameters and
+        ``$0``."""
+        clone = self.fork()
+        clone.zero = zero
+        clone.bindings, clone.exports = {}, {}
+        for name in dict.fromkeys([*self.bindings, *self.exports]):
+            exported = self._exported(name)
+            if exported == 'maybe':
+                clone.bindings[name] = _join_values(
+                    self._held(name), _DEFERRED if self.environment is None else ('',))
+            elif exported:
+                clone.bindings[name] = self._held(name)
+            elif self.environment is None or name in self.environment:
+                clone.bindings[name] = ('',)  # withdrawn from the environment
+                continue
+            else:
+                continue
+            clone.exports[name] = True  # the child exports what it inherits
+        clone.functions = {name: self.functions[name]
+                           for name in self.exported_functions if name in self.functions}
+        clone.positional = positional
+        clone.exported_functions = frozenset(clone.functions)
+        clone.allexport = 'off'
+        clone.aliases = {}
+        clone.calls = clone.alias_active = frozenset()
+        return clone
+
+    def _exported(self, name):
+        """True, False or 'maybe': whether a process this shell starts sees its
+        value of *name*."""
+        if name in self.exports:
+            return self.exports[name]
+        if self.environment is None:
+            return 'maybe'  # it may come from the unknown environment
+        return name in self.environment
 
     def assign(self, other):
         """Take the state *other* reached at this same point."""
-        self.bindings, self.cwds = other.bindings, other.cwds
-        self.cwd_known, self.functions = other.cwd_known, other.functions
+        for slot in self.__slots__:
+            if slot not in self._POSITION:
+                setattr(self, slot, getattr(other, slot))
 
     def join(self, other):
         """Add the state *other* reached at this same point on another path."""
@@ -3840,26 +4660,43 @@ class _DeleteGuardState:
             if cwd not in self.cwds:
                 self.cwds.append(cwd)
         del self.cwds[_CWD_CAP:]
-        self.cwd_known = self.cwd_known or other.cwd_known
+        self.cwd_lost = self.cwd_lost or other.cwd_lost
         for name in dict.fromkeys([*self.functions, *other.functions]):
-            self.functions[name] = tuple(dict.fromkeys(
-                self.functions.get(name, (None,)) + other.functions.get(name, (None,))))
+            self.functions[name] = _dedupe(self.functions.get(name, (None,))
+                                           + other.functions.get(name, (None,)))
+        self.positional = _join_positional(self.positional, other.positional)
+        for name in dict.fromkeys([*self.exports, *other.exports]):
+            mine, theirs = self._exported(name), other._exported(name)
+            self.exports[name] = mine if mine == theirs else 'maybe'
+        self.exported_functions |= other.exported_functions
+        for name in dict.fromkeys([*self.aliases, *other.aliases]):
+            self.aliases[name] = _dedupe(self.aliases.get(name, ())
+                                         + other.aliases.get(name, ()))
+        if self.allexport != other.allexport:
+            self.allexport = 'maybe'
+        self.traps += tuple(watch for watch in other.traps if watch not in self.traps)
 
     def signature(self):
-        """The values, cwds and definitions a join can add to."""
-        return ({name: frozenset(value) if isinstance(value, tuple) else value
-                 for name, value in self.bindings.items()},
-                frozenset(self.cwds), self.cwd_known,
-                {name: frozenset(found) for name, found in self.functions.items()})
+        """What a join can add to: values, places, definitions, exports and
+        traps."""
+        return ({name: _comparable(value) for name, value in self.bindings.items()},
+                frozenset(self.cwds), self.cwd_lost,
+                {name: frozenset(found) for name, found in self.functions.items()},
+                (tuple(_comparable(value) for value in self.positional[0]),
+                 _comparable(self.positional[1])), _comparable(self.zero),
+                frozenset(self.exports.items()),
+                self.exported_functions, self.allexport,
+                {name: frozenset(texts) for name, texts in self.aliases.items()},
+                frozenset(self.traps))
 
     def _held(self, name):
-        """The value *name* holds here: its binding, else the environment's."""
+        """The value *name* holds here: its binding, else the environment's
+        (empty when the environment lacks it)."""
         if name in self.bindings:
             return self.bindings[name]
         if self.environment is None:
             return _DEFERRED
-        value = self.environment.get(name)
-        return (value,) if value else None
+        return (self.environment.get(name, ''),)
 
     def get_value(self, name):
         value = self._held(name)
@@ -3867,42 +4704,176 @@ class _DeleteGuardState:
             raise _EnvironmentDeferred(name)
         return value
 
-    def cwd_values(self):
-        """Candidates of ``$PWD`` and ``$(pwd)``: None once a ``cd`` target
-        could not be followed; unknown to a caller that gave no cwd."""
-        if self.cwds:
-            return tuple(self.cwds)
-        if not self.cwd_given:
-            raise _EnvironmentDeferred('PWD')
-        return None
+    def positional_value(self, number):
+        """The value of positional parameter *number*."""
+        prefix, tail = self.positional
+        if number <= len(prefix):
+            return prefix[number - 1]
+        return ('',) if tail == () else _join_values(tail, ('',))
 
-    def change_directory(self, raw, home):
+    def cwd_values(self):
+        """Candidates of ``$PWD`` and ``$(pwd)``: None after a ``cd`` this
+        guard could not follow; unknown to a caller that gave no cwd."""
+        if not self.cwd_given and (self.cwd_lost or not self.cwds):
+            raise _EnvironmentDeferred('PWD')
+        if self.cwd_lost or not self.cwds:
+            return None
+        return tuple(self.cwds)
+
+
+def _comparable(value):
+    return frozenset(value) if isinstance(value, tuple) else value
+
+
+def _join_positional(mine, theirs):
+    """The positional parameters two paths reach the same point with."""
+    (mine_prefix, mine_tail), (their_prefix, their_tail) = mine, theirs
+    shared = min(len(mine_prefix), len(their_prefix))
+    prefix = tuple(_join_values(left, right)
+                   for left, right in zip(mine_prefix, their_prefix))
+    rest = mine_prefix[shared:] + their_prefix[shared:]
+    tail = ('',) if rest else ()  # a parameter one path lacks is unset there
+    for value in rest + tuple(item for item in (mine_tail, their_tail) if item != ()):
+        tail = _join_values(tail, value)
+    return prefix, tail
+
+
+def _positional_from(raws, state, home):
+    """``(prefix, tail)`` positional parameters argument words *raws* set:
+    the value of each argument whose word always makes exactly one field,
+    then the values of any number of further ones."""
+    prefix, tail = [], ()
+    for raw in raws:
         try:
-            expanded = _expand_delete_operand(raw, self, home)
+            alternatives = _expand_word(raw, state, home).fields()
         except _EnvironmentDeferred:
-            expanded = None
-        if expanded is None:
-            self.cwd_known = False
-            self.cwds = []
-            return
-        resolved = []
-        for dest in expanded.candidates:
-            if not dest:
-                continue  # `cd ''` fails; keep the previous cwd
-            if os.path.isabs(dest):
-                resolved.append(os.path.normpath(dest))
-            elif self.cwds:
-                resolved.extend(os.path.normpath(os.path.join(base, dest))
-                                for base in self.cwds)
-        if resolved:
-            # `cd` may fail: keep the previous cwd as a fallback so a
-            # `;`-chained delete is judged from BOTH cwds.
-            seen = []
-            for entry in resolved + list(self.cwds):
-                if entry and entry not in seen:
-                    seen.append(entry)
-            self.cwds = seen[:_CWD_CAP]
-            self.cwd_known = True
+            tail = _join_values(tail, _DEFERRED)
+            continue
+        except (_Unenumerable, _Overflowed):
+            tail = _join_values(tail, None)
+            continue
+        if tail == () and all(len(fields) == 1 and not uncertain and not fields[0].glob
+                              for fields, uncertain in alternatives):
+            prefix.append(_value_set(_dedupe(_field_value(*fields[0])
+                                             for fields, _uncertain in alternatives)))
+            continue
+        values = [_field_value(*field) for fields, _uncertain in alternatives
+                  for field in fields]
+        if any(uncertain for _fields, uncertain in alternatives):
+            values.append(_DYNAMIC)
+        if values:
+            tail = _join_values(tail, _value_set(_dedupe(values)))
+    return tuple(prefix), tail
+
+
+def _shift(state, count):
+    """``shift [count]``: the positional parameters move down; with *count*
+    None (not a literal number) any of them may come first."""
+    prefix, tail = state.positional
+    if count is None:
+        rest = ()
+        for value in prefix + ((tail,) if tail != () else ()):
+            rest = _join_values(rest, value)
+        state.positional = ((), _join_values(rest, ('',)) if rest != () else ())
+    else:
+        state.positional = (prefix[count:], tail) if count <= len(prefix) else ((), tail)
+
+
+_TRAP_ACTIONS = object()  # the memo key of the trap actions set in a command
+
+
+class _TrapWatch:
+    """A trap action and the join of every state reached since it was set: a
+    signal, or ``exit`` for an EXIT trap, may run it at any of them."""
+
+    __slots__ = ('text', 'seen')
+
+    def __init__(self, text):
+        self.text, self.seen = text, None
+
+    def observe(self, state):
+        if self.seen is None:
+            self.seen = state.branch()
+        else:
+            self.seen.join(state)
+
+
+def _directory_operands(literal, raw):
+    """The operands of ``cd``/``pushd`` after their options (``-L``, ``-P``,
+    ``-e``, ``-@``)."""
+    for position in range(1, len(literal)):
+        word = literal[position]
+        if word == '--':
+            return list(raw[position + 1:])
+        if not (len(word) > 1 and word[0] == '-' and set(word[1:]) <= set('LPe@')):
+            return list(raw[position:])
+    return []
+
+
+def _cd_destinations(state, operands, home):
+    """``(directories, may stay)`` ``cd OPERANDS`` may enter; ``cd -`` is
+    ``cd "$OLDPWD"`` and ``cd`` alone ``cd "$HOME"``. Raises
+    ``_Unenumerable`` for a target this guard cannot follow (an unknown
+    value, a pattern, a ``$CDPATH`` search) and ``_EnvironmentDeferred`` for
+    one only a caller with the environment and cwd can follow."""
+    if len(operands) > 1:
+        return [], True  # too many arguments: cd fails
+    raw = operands[0] if operands else '"$HOME"'
+    if _literal_command_word(raw) == '-':
+        raw = '"$OLDPWD"'
+    destinations, stays = [], False
+    for fields, uncertain in _expand_word(raw, state, home).fields():
+        if uncertain or len(fields) > 1:
+            raise _Unenumerable()
+        if not fields:
+            stays = True
+            continue
+        text, names, glob, trusted = fields[0]
+        if trusted or glob or names:
+            raise _Unenumerable()  # an unknown value may name any directory
+        if not text:
+            stays = True  # `cd ""` stays where it is; an unset OLDPWD fails
+        elif os.path.isabs(text):
+            destinations.append(os.path.normpath(text))
+        elif _searches_cdpath(state, text):
+            raise _Unenumerable()
+        elif state.cwd_lost or not state.cwds:
+            state.cwd_values()  # defers when the caller gave no cwd
+            raise _Unenumerable()
+        else:
+            destinations.extend(os.path.normpath(os.path.join(base, text))
+                                for base in state.cwds)
+    return destinations, stays
+
+
+def _searches_cdpath(state, text):
+    """Whether ``cd TEXT`` may search ``$CDPATH`` instead of the cwd."""
+    if text.split('/', 1)[0] in ('.', '..'):
+        return False
+    value = state._held('CDPATH')
+    return not isinstance(value, tuple) or any(item != '' for item in value)
+
+
+def _change_directory(state, operands, home):
+    """``cd OPERANDS``: the new cwd candidates; a successful cd sets
+    ``$OLDPWD`` to the old ``$PWD`` and ``$PWD`` to the new directory. cd
+    may fail, so the old state stays possible."""
+    try:
+        destinations, _stays = _cd_destinations(state, operands, home)
+    except (_Unenumerable, _EnvironmentDeferred, _Overflowed):
+        destinations = None
+    if destinations == []:
+        return  # cd stays where it is, or fails
+    old_pwd = state._held('PWD') if 'PWD' in state.bindings else (
+        None if state.cwd_lost or not state.cwds else tuple(state.cwds))
+    state.bindings['OLDPWD'] = _join_values(state._held('OLDPWD'), old_pwd)
+    if 'PWD' in state.bindings:
+        state.bindings['PWD'] = _join_values(
+            state.bindings['PWD'], None if destinations is None else _dedupe(destinations))
+    if destinations is None:
+        state.cwd_lost = True
+    else:
+        state.cwds = list(_dedupe(destinations + state.cwds))[:_CWD_CAP]
 
 
 # ── Delete operands come only from commands a shell would run ──────
@@ -3997,9 +4968,195 @@ def _item_events(run, items, state):
     yield from _nested_events(item, state)
     if isinstance(item, Subshell):
         yield from _delete_events(item.body, state.fork())
+    else:
+        yield from _command_run_events(items, run.index, run.words, state)
+    for watch in state.traps:
+        watch.observe(state)
+
+
+def _command_run_events(items, index, words, state):
+    """Judge item *index* run as the simple command *words* (its words after
+    any reserved words): the scripts it hands a shell, then the command.
+    Where its command word may be an alias, the alias text runs too."""
+    aliased = _alias_expansions(words, state)
+    if aliased is not None and not aliased:
+        yield from _unaliased_run_events(items, index, words, state)
         return
-    yield from _shell_input_events(items, run.index, state)
-    yield from _simple_command_events(run.words, state)
+    if aliased is None:
+        text = '\n'.join([' '.join(words)] + [
+            value for values in state.aliases.values() for value in values])
+        if _could_run_delete(text):
+            yield 'opaque', text, ShellStructureUnknown(
+                'more alias texts than this guard follows', 0)
+        aliased = ()
+    outcomes = []
+    for text, names in aliased:
+        path = state.branch()
+        path.alias_active = state.alias_active | names
+        yield from _alias_text_events(items, index, text, path)
+        path.alias_active = state.alias_active
+        outcomes.append(path)
+    plain = state.branch()
+    yield from _unaliased_run_events(items, index, words, plain)
+    outcomes.append(plain)
+    state.assign(_joined(outcomes))
+
+
+def _alias_text_events(items, index, text, state):
+    """Run *text*, the command an alias made of item *index*. One simple
+    command keeps the item's heredocs and redirects; other text runs as a
+    script, and the item's stdin may be read by a shell it names."""
+    parsed = _parsed_script(text, state)
+    if (not isinstance(parsed, ShellStructureUnknown) and len(parsed) == 1
+            and isinstance(parsed[0], SimpleCommand)
+            and not (parsed[0].redirects or parsed[0].heredocs or parsed[0].nested)):
+        alternative_items = list(items)
+        alternative_items[index] = items[index]._replace(words=parsed[0].words)
+        yield from _command_run_events(alternative_items, index, parsed[0].words, state)
+        return
+    yield from _delete_text_events(text, state)
+    for body in _stdin_texts(items[index]):
+        if _could_run_delete(body):
+            yield 'opaque', body, ShellStructureUnknown(
+                'the input of a command an alias names', 0)
+
+
+def _alias_expansions(words, state):
+    """``(text, names)`` for each command *words* may run where its command
+    word, and after an alias value ending in a blank the next word, is an
+    alias: the command with the aliases *names* expanded. [] when no alias
+    applies; None past ``_DELETE_BINDING_CAP`` texts. An alias is never
+    expanded inside its own text."""
+    if not state.aliases:
+        return []
+    count = 0
+    while count < len(words) and _ASSIGNMENT_WORD.match(words[count]):
+        count += 1
+    pending, expansions = [(list(words[:count]), count, frozenset())], []
+    while pending:
+        head, position, used = pending.pop()
+        word = words[position] if position < len(words) else None
+        values = (() if word is None or word in used or word in state.alias_active
+                  else state.aliases.get(word, ()))
+        if used:  # the next word itself: it may be no alias
+            expansions.append((' '.join(head + list(words[position:])), used))
+        for value in values:
+            if value[-1:] in (' ', '\t'):
+                pending.append((head + [value], position + 1, used | {word}))
+            else:
+                expansions.append(
+                    (' '.join(head + [value] + list(words[position + 1:])), used | {word}))
+        if len(expansions) + len(pending) > _DELETE_BINDING_CAP:
+            return None
+    return expansions
+
+
+def _unaliased_run_events(items, index, words, state):
+    position = _expanding_program_word(words)
+    if position is not None:
+        yield from _expanded_command_events(items, index, words, position, state)
+        return
+    yield from _shell_input_events(items, index, state)
+    yield from _simple_command_events(words, state)
+
+
+def _expanding_program_word(words):
+    """Index in *words* of the first program word the shell expands (a
+    parameter, substitution, tilde, pattern or brace expression), the command
+    word or the program a wrapper runs (``sudo $RM``), else None."""
+    if not any(shell_source_has_expansion(word) for word in words):
+        return None
+    views = _program_views(list(words))
+    if views is _UNKNOWN_PROGRAM:
+        return None
+    for _literal, raw in views:
+        if not raw or not shell_source_has_expansion(raw[0]):
+            continue
+        for start in range(len(words) - len(raw), -1, -1):
+            if list(words[start:start + len(raw)]) == list(raw):
+                return start
+    return None
+
+
+def _expanded_command_events(items, index, words, position, state):
+    """``words[position]``, a program word the shell expands (``$RM -rf /``,
+    ``"$@"`` in a wrapper function, ``sudo $RM``, ``$EMPTY rm …``,
+    ``/bin/r? …``), runs the program its first field names with its other
+    fields as the first arguments: each field list it may make is judged as
+    the command it makes, with the item's heredocs and redirects. Where the
+    program may be one this guard cannot name, the command also refuses when
+    its text could run a delete."""
+    home = os.path.expanduser('~')
+    _default_assignments(words[:position + 1], state, home)
+    try:
+        alternatives = _expand_word(words[position], state, home).fields()
+    except _EnvironmentDeferred:
+        return  # the executor's pass knows the environment
+    except (_Unenumerable, _Overflowed):
+        alternatives = None
+    unknown = alternatives is None
+    choices = []
+    for fields, uncertain in alternatives or ():
+        made, may_be_unknown = _program_word_choices(fields, uncertain)
+        choices.extend(made)
+        unknown = unknown or may_be_unknown
+    if unknown:
+        text = ' '.join(words)
+        if _could_run_delete(text):
+            yield 'opaque', text, ShellStructureUnknown(
+                'a program word this guard cannot expand', 0)
+    choices = _dedupe(choices)
+    if len(choices) == 1 and not unknown:
+        yield from _program_choice_events(items, index, words, position, choices[0], state)
+        return
+    outcomes = [state.branch()] if unknown else []
+    for choice in choices:
+        path = state.branch()
+        yield from _program_choice_events(items, index, words, position, choice, path)
+        outcomes.append(path)
+    if outcomes:
+        state.assign(_joined(outcomes))
+
+
+def _program_choice_events(items, index, words, position, choice, state):
+    """Judge item *index* with its program word ``words[position]`` made the
+    words *choice*."""
+    expanded = tuple(words[:position]) + choice + tuple(words[position + 1:])
+    alternative_items = list(items)
+    alternative_items[index] = items[index]._replace(words=expanded)
+    yield from _unaliased_run_events(alternative_items, index, expanded, state)
+
+
+def _program_word_choices(fields, uncertain):
+    """The words a program word making *fields* may start its command with,
+    requoted, and whether the program may also be one this guard cannot
+    name: an unknown or partly unknown value (judged as its empty collapse
+    too) or a pattern, which may name any program (judged as each delete
+    command it matches)."""
+    rest = tuple(_requote(field) for field in fields[1:] if not field.trusted)
+    if not fields:
+        return [rest], bool(uncertain)
+    program = fields[0]
+    if program.trusted:
+        return [], True
+    name = os.path.basename(program.text)
+    if program.glob and _has_glob(name):
+        return [(_shell_quoted(command),) + rest for command in sorted(_DELETE_COMMANDS)
+                if fnmatch.fnmatchcase(command, name)], True
+    return [(_shell_quoted(program.text),) + rest], bool(uncertain or program.names)
+
+
+def _shell_quoted(text):
+    return "'" + text.replace("'", "'\\''") + "'"
+
+
+def _requote(field):
+    """A raw word that expands back to *field*: its text quoted, the pattern
+    characters of a field pathname expansion applies to left bare."""
+    if not field.glob:
+        return _shell_quoted(field.text)
+    return ''.join(part if part in _GLOB_CHARACTERS or part == ']' else _shell_quoted(part)
+                   for part in re.split(r'([*?[\]])', field.text) if part)
 
 
 def _group_events(parts, items, state):
@@ -4160,35 +5317,38 @@ def _unstructured_item_events(items, index, state):
         return
     if not isinstance(item, SimpleCommand):
         return  # a case clause marker
-    yield from _shell_input_events(items, index, state)
     words = list(item.words)
     while words and words[0] in _UNPAIRED_SYNTAX:
         del words[0]
     if words[:1] in (['for'], ['select']):
+        yield from _shell_input_events(items, index, state)
         name, values, _runs = _loop_variable(
             tuple(words), state, os.path.expanduser('~'))
         if name is not None and values != ():
             state.bindings[name] = values
         return
-    yield from _simple_command_events(words, state)
+    yield from _command_run_events(items, index, words, state)
 
 
 def _reads_shell_stdin(item):
+    """Whether *item* may run a shell reading its stdin; a program word with
+    a parameter or command expansion may name one."""
     if not isinstance(item, SimpleCommand):
         return False
     from lib.project_mod.command_heredoc import shell_input_source
     views = _program_views(item.words)
     return (views is not _UNKNOWN_PROGRAM
-            and any(shell_input_source(view[0]) == ('stdin', None) for view in views))
+            and any(shell_input_source(view[0]) == ('stdin', None)
+                    or shell_source_has_expansion(view[1][0], pathname=False)
+                    for view in views))
 
 
 def _shell_string_script(raw):
-    """(script text, child-only bindings) of a word a shell runs as source.
+    """(script text, literal) of a word a shell runs as source.
 
-    A single-quoted or expansion-free string reaches the child shell as
-    written, and the child sees none of this shell's unexported bindings;
-    a double-quoted one is expanded here first, so this shell's bindings
-    apply. None when the word is not one shell word.
+    A *literal* word (single-quoted, ANSI-C or expansion-free) reaches the
+    shell that runs it as written; any other is expanded by this shell first
+    (:func:`_script_texts`). None when the word is not one shell word.
     """
     if "$'" in raw:
         decoded = _ansi_c_word(raw)
@@ -4203,41 +5363,56 @@ def _shell_string_script(raw):
     return words[0], raw.startswith("'") or not any(c in raw for c in '$`')
 
 
+_ShellSource = namedtuple('_ShellSource', ['raw', 'script', 'arguments', 'heredoc', 'reader'])
+
+
 def _shell_source_scripts(items, index, views):
     """Text a shell executes as a script of its own for ``items[index]``: the
     ``-c`` operand of a shell, and the heredocs/here-strings of a command whose
     stdin a shell reads (``bash <<'EOF'``, ``cat <<'EOF' | sh``).
 
     *views* are the item's ``(literal, raw)`` program views. Returns
-    ``(raw text, script)`` pairs in execution order; *script* is the
-    ``(text, child_only)`` of :func:`_shell_string_script`, or None when the
-    raw word is not one shell word.
+    ``_ShellSource`` tuples in execution order: the raw text; *script*, the
+    ``(text, literal)`` of :func:`_shell_string_script` (None when the raw
+    word is not one shell word; for a heredoc, whether its delimiter was
+    quoted); the raw words after a ``-c`` string (``$0``, then the
+    positional parameters); whether the text is a heredoc body; the index of
+    the item whose shell reads it, whose words give that shell's environment.
     """
-    from lib.project_mod.command_heredoc import shell_input_source
+    from lib.project_mod.command_heredoc import shell_command_operand, shell_input_source
     item = items[index]
     scripts = []
     reads_stdin = False
     for view in views:
-        source = shell_input_source(view[0])
-        if source is not None and source[0] == 'command' and source[1]:
-            raw_source = shell_input_source(view[1])
-            raw_text = (raw_source[1] if raw_source and raw_source[0] == 'command'
-                        and raw_source[1] else source[1])
-            scripts.append((raw_text, _shell_string_script(raw_text)))
-        reads_stdin = reads_stdin or source == ('stdin', None)
-    stdin_inputs = [(heredoc.body, (heredoc.body, heredoc.quoted))
+        # The shell dequotes its program word and options (`"bash" -c …`); the
+        # command string's own quoting decides whether this shell expands it.
+        position = shell_command_operand(view[0])
+        if position is not None and view[0][position]:
+            raw_text = view[1][position]
+            scripts.append(_ShellSource(raw_text, _shell_string_script(raw_text),
+                                        tuple(view[1][position + 1:]), False, index))
+        reads_stdin = reads_stdin or shell_input_source(view[0]) == ('stdin', None)
+    stdin_inputs = [_ShellSource(heredoc.body, (heredoc.body, heredoc.quoted), (), True, None)
                     for heredoc in item.heredocs]
-    stdin_inputs += [(target, _shell_string_script(target))
+    stdin_inputs += [_ShellSource(target, _shell_string_script(target), (), False, None)
                      for operator, target in item.redirects
                      if operator.endswith('<<<')]
     if stdin_inputs:
-        for later in items[index + 1:]:
-            if reads_stdin or later.separator != '|':
-                break
-            reads_stdin = _reads_shell_stdin(later)
-        if reads_stdin:
-            scripts.extend(stdin_inputs)
+        reader = index if reads_stdin else _stdin_shell_stage(items, index)
+        if reader is not None:
+            scripts.extend(source._replace(reader=reader) for source in stdin_inputs)
     return scripts
+
+
+def _stdin_shell_stage(items, index):
+    """Index of a later stage of the pipeline of ``items[index]`` that may be a
+    shell reading what the earlier stages print, else None."""
+    for position in range(index + 1, len(items)):
+        if items[position].separator != '|':
+            return None
+        if _reads_shell_stdin(items[position]):
+            return position
+    return None
 
 
 def _stdin_texts(item):
@@ -4257,15 +5432,92 @@ def _shell_input_events(items, index, state):
                 yield 'opaque', text, ShellStructureUnknown(
                     'a wrapper or runner option is not understood', 0)
         return
-    for _raw, script in _shell_source_scripts(items, index, views):
-        if script is None or not script[0].strip():
+    home = os.path.expanduser('~')
+    for source in _shell_source_scripts(items, index, views):
+        if source.script is None:
+            if _could_run_delete(source.raw):
+                yield 'opaque', source.raw, ShellStructureUnknown(
+                    'a shell script word this guard cannot read', 0)
             continue
-        text, child_only = script
-        yield from _delete_text_events(text, state.fork(child_shell=child_only))
+        if not source.script[0].strip():
+            continue
+        text, literal = source.script
+        texts = None
+        if not literal:  # this shell expands it before the child runs it
+            try:
+                texts = _script_texts([source.raw], state, home, heredoc=source.heredoc)
+            except _EnvironmentDeferred:
+                texts = None
+        positional = _positional_from(source.arguments[1:], state, home)
+        zero = (_resolve_delete_value(source.arguments[0], state, home)
+                if source.arguments else (_TRUSTED,))
+        for script in texts or [text]:
+            child = state.child(positional, zero)
+            _command_environment(items[source.reader].words, state, child, home)
+            yield from _delete_text_events(script, child)
+    yield from _printed_script_events(items, index, views, state, home)
 
 
-def _delete_text_events(text, state):
-    """Delete events of shell source *text* run with *state*."""
+def _printed_script_events(items, index, views, state, home):
+    """A shell later in the pipeline reads what ``items[index]`` prints
+    (``echo 'rm -rf /' | sh``): judge the output this guard can tell (see
+    :func:`_substitution_values`) as a child shell's script."""
+    reader = None if len(views) != 1 or _redirects_output(items[index]) else (
+        _stdin_shell_stage(items, index))
+    if reader is None:
+        return
+    literal, raw = views[0]
+    producer = _PRODUCERS.get(os.path.basename(literal[0]))
+    if producer is None:
+        return
+    try:
+        printed = producer(literal, raw, state, home)
+    except _EnvironmentDeferred:
+        return  # the executor's pass knows the environment
+    except (_Unenumerable, _Overflowed):
+        text = ' '.join(raw)
+        if _could_run_delete(text):
+            yield 'opaque', text, ShellStructureUnknown(
+                'output a shell reads that this guard cannot expand', 0)
+        return
+    for value in printed:
+        text = _text_of(value)
+        if text.strip():
+            child = state.child()
+            _command_environment(items[reader].words, state, child, home)
+            yield from _delete_text_events(text, child)
+
+
+def _command_environment(words, state, child, home):
+    """Give *child*, the shell a command starts, the variables the command
+    puts in its environment: ``NAME=value`` words in front of it or of
+    ``env``, and ``env -i`` (an empty environment) or ``env -u NAME``."""
+    position = 0
+    while position < len(words):
+        word = words[position]
+        match = _ASSIGNMENT_WORD.match(word)
+        if match and not match.group(2):
+            child.bindings[match.group(1)] = _resolve_delete_value(
+                word[match.end():], state, home)
+        elif _literal_command_word(word) == 'env':
+            position += 1
+            while position < len(words) and _literal_command_word(words[position]).startswith('-'):
+                option = _literal_command_word(words[position])
+                if option in ('-i', '--ignore-environment', '-'):
+                    child.bindings, child.environment = {}, {}
+                elif option in ('-u', '--unset') and position + 1 < len(words):
+                    position += 1
+                    child.bindings[_literal_command_word(words[position])] = ('',)
+                position += 1
+            continue
+        else:
+            return
+        position += 1
+
+
+def _parsed_script(text, state):
+    """The parse of shell source *text*, kept for the whole judgement; the
+    ``ShellStructureUnknown`` when it cannot be parsed."""
     parsed = state.memo.get(text)
     if parsed is None:
         try:
@@ -4273,6 +5525,12 @@ def _delete_text_events(text, state):
         except ShellStructureUnknown as error:
             parsed = error
         state.memo[text] = parsed
+    return parsed
+
+
+def _delete_text_events(text, state):
+    """Delete events of shell source *text* run with *state*."""
+    parsed = _parsed_script(text, state)
     if isinstance(parsed, ShellStructureUnknown):
         if _could_run_delete(text):
             yield 'opaque', text, parsed
@@ -4287,25 +5545,26 @@ def _simple_command_events(words, state):
     if not texts:
         return
     home = os.path.expanduser('~')
-    # Literal assignment commands bind for the rest of the command.
-    head_texts = texts[1:] if texts[0] in _DELETE_ASSIGN_HEADS else texts
-    if head_texts and all(_ENV_ASSIGNMENT_GUARD_RE.match(t) for t in head_texts):
-        call = state.jumps.call if texts[0] in ('local', 'declare') else None
-        for token in head_texts:
-            name, _, raw_value = token.partition('=')
-            if call is not None:
-                # The function's return gives a local name its old value back.
-                held = state._held(name)
-                call.saved[name] = (_join_values(call.saved[name], held)
-                                    if name in call.saved else held)
-            state.bindings[name] = _resolve_delete_value(raw_value, state, home)
-        if len(state.bindings) > 64:
-            state.bindings.clear()
+    _default_assignments(texts, state, home)
+    count = 0
+    while count < len(texts) and _ASSIGNMENT_WORD.match(texts[count]):
+        count += 1
+    prefix, rest = texts[:count], texts[count:]
+    if not rest:
+        for token in prefix:
+            _assign(state, token, home)
         return
-    command = next(word for word in texts if not _ENV_ASSIGNMENT_GUARD_RE.match(word))
-    head = _literal_command_word(command)
+    head = _literal_command_word(rest[0])
+    if head.startswith('(('):
+        _may_change(state, _SHELL_IDENTIFIER.findall(head))  # arithmetic may assign
+        return
+    if prefix and (head in _SPECIAL_BUILTINS or head in state.functions):
+        _persist(prefix, state, home)
+    if head in _DECLARATION_BUILTINS:
+        _declaration(head, rest[1:], state, home)
+        return
     if head in ('break', 'continue', 'return'):
-        _jump(head, texts[texts.index(command) + 1:], state)
+        _jump(head, rest[1:], state)
         return
     views = _program_views(texts)
     if views is _UNKNOWN_PROGRAM:
@@ -4319,7 +5578,123 @@ def _simple_command_events(words, state):
     for literal, raw in views:
         yield from _program_delete_events(literal, raw, state, home)
     if head in state.functions:
-        yield from _function_call_events(head, state)
+        yield from _function_call_events(head, rest[1:], prefix, state, home)
+
+
+def _assign(state, token, home):
+    """``NAME=value`` (``NAME+=value``) binds NAME; exported under ``set -a``."""
+    match = _ASSIGNMENT_WORD.match(token)
+    name, value = match.group(1), token[match.end():]
+    if match.group(2):
+        value = '${%s}%s' % (name, value)  # appending
+    state.bindings[name] = _resolve_delete_value(value, state, home)
+    if state.allexport == 'on':
+        state.exports[name] = True
+    elif state.allexport == 'maybe' and state._exported(name) is not True:
+        state.exports[name] = 'maybe'
+
+
+def _persist(prefix, state, home):
+    """Assignments in front of a special builtin or a function call may outlive
+    it (POSIX) or not (bash): either value stays possible."""
+    for token in prefix:
+        name = _ASSIGNMENT_WORD.match(token).group(1)
+        before = state._held(name)
+        _assign(state, token, home)
+        state.bindings[name] = _join_values(before, state.bindings[name])
+
+
+def _may_change(state, names):
+    """Names a command may have assigned: their old values stay possible."""
+    for name in names:
+        state.bindings[name] = _join_values(state._held(name), None)
+
+
+def _set_dynamic(state, names):
+    """Names a command assigns values this guard cannot know."""
+    for name in names:
+        if _SHELL_IDENTIFIER.fullmatch(name):
+            state.bindings[name] = None
+
+
+def _default_assignments(texts, state, home):
+    """``${NAME:=word}`` (``${NAME=word}``) in any word assigns NAME its
+    default when it is unset or empty."""
+    for raw in texts:
+        for match in _DEFAULT_ASSIGNMENT.finditer(raw):
+            end = _parameter_end(raw, match.start() + 2)
+            if end is None or _in_single_quotes(raw, match.start()):
+                continue
+            name = match.group(1)
+            try:
+                default = _expand_word(raw[match.end():end], state, home,
+                                       split=False).values()
+                values = _value_tuple(state.get_value(name))
+            except (_EnvironmentDeferred, _Unenumerable, _Overflowed):
+                _may_change(state, (name,))
+                continue
+            state.bindings[name] = _value_set(_dedupe(
+                item for value in values
+                for item in (default if _may_be_empty(value) else (value,))))
+
+
+def _in_single_quotes(raw, index):
+    """Whether *index* of shell word *raw* lies inside single quotes."""
+    quote, position = None, 0
+    while position < index:
+        char = raw[position]
+        if char == '\\' and quote != "'":
+            position += 2
+            continue
+        if char == "'" and quote != '"':
+            quote = None if quote == "'" else "'"
+        elif char == '"' and quote != "'":
+            quote = None if quote == '"' else '"'
+        position += 1
+    return quote == "'"
+
+
+def _declaration(head, raws, state, home):
+    """``export``/``readonly``/``declare``/``typeset``/``local``: options,
+    then ``NAME[=value]`` operands."""
+    flags, operands = set(), []
+    for position, raw in enumerate(raws):
+        word = _literal_command_word(raw)
+        if word == '--':
+            operands = list(raws[position + 1:])
+            break
+        if len(word) > 1 and word[0] in '-+' and word[1:].isalpha():
+            flags.update(word[0] + letter for letter in word[1:])
+            continue
+        operands = list(raws[position:])
+        break
+    exporting = (head == 'export' and '-n' not in flags) or '-x' in flags
+    withdrawing = (head == 'export' and '-n' in flags) or '+x' in flags
+    untracked = head != 'export' and bool(flags & {'-a', '-A', '-n'})  # arrays, namerefs
+    local = state.jumps.call if head == 'local' or (
+        head in ('declare', 'typeset') and '-g' not in flags) else None
+    for raw in operands:
+        match = _ASSIGNMENT_WORD.match(raw)
+        name = match.group(1) if match else _literal_command_word(raw)
+        if not _SHELL_IDENTIFIER.fullmatch(name):
+            continue
+        if '-f' in flags:
+            if exporting:
+                state.exported_functions |= {name}
+            continue
+        if local is not None:
+            held = state._held(name)
+            local.saved[name] = (_join_values(local.saved[name], held)
+                                 if name in local.saved else held)
+        if match and untracked:
+            state.bindings[name] = None
+        elif match:
+            _assign(state, raw, home)
+        elif local is not None:
+            # bash unsets a new local; dash keeps the value it had.
+            state.bindings[name] = _join_values(state._held(name), ('',))
+        if exporting or withdrawing:
+            state.exports[name] = exporting
 
 
 def _jump(head, arguments, state):
@@ -4336,24 +5711,30 @@ def _jump(head, arguments, state):
         exits.reach('breaks' if head == 'break' else 'continues', state)
 
 
-def _function_call_events(name, state):
-    """Run the body of shell function *name* on the caller's *state*."""
-    if name in state.calls:
-        raise _RecursiveFunction(name)
+def _function_call_events(name, arguments, prefix, state, home):
+    """Run the body of shell function *name* on the caller's *state*, with
+    the call's *arguments* as its positional parameters and its *prefix*
+    assignments in force."""
+    positional = _positional_from(arguments, state, home)
     outcomes = []
     for definition in state.functions[name]:
         path = state.branch()
         if definition is not None:
+            if definition in state.calls:
+                raise _RecursiveFunction(name)  # a body may redefine its own name
             exits = _Exits()
             path.jumps = _Jumps(state.jumps.loops, exits)
-            path.calls = state.calls | {name}
+            path.calls = state.calls | {definition}
+            path.positional = positional
+            for token in prefix:
+                _assign(path, token, home)
             yield from _node_events(definition.body, definition.items, path)
             exits.join_into(path, 'returns')
             for local, saved in exits.saved.items():
                 # A path that made the name local gets its old value back; a
                 # path that never ran `local` keeps what it assigned.
                 path.bindings[local] = _join_values(saved, path._held(local))
-            path.jumps, path.calls = state.jumps, state.calls
+            path.jumps, path.calls, path.positional = state.jumps, state.calls, state.positional
         outcomes.append(path)
     state.assign(_joined(outcomes))
 
@@ -4361,17 +5742,9 @@ def _function_call_events(name, state):
 def _program_delete_events(literal, raw, state, home):
     """Apply one program view to *state*; yield its delete operands."""
     head = os.path.basename(literal[0])
-    if head == 'eval' and len(literal) > 1:
-        # eval runs its operands, joined by spaces, in this same shell.
-        yield from _delete_text_events(' '.join(literal[1:]), state)
-    if head in _DELETE_STATE_RESET_HEADS:
-        state.bindings.clear()
-        return
-    if head == 'cd':
-        args = [raw_word for literal_word, raw_word in zip(literal[1:], raw[1:])
-                if not literal_word.startswith('-')]
-        if len(args) == 1:
-            state.change_directory(args[0], home)
+    effect = _BUILTIN_EFFECTS.get(head)
+    if effect is not None:
+        yield from effect(literal, raw, state, home) or ()
         return
     if head not in _DELETE_COMMANDS:
         return
@@ -4384,6 +5757,235 @@ def _program_delete_events(literal, raw, state, home):
             if literal_word.startswith('-'):
                 continue
         yield 'operand', raw_word, state
+
+
+def _cd_effect(literal, raw, state, home):
+    _change_directory(state, _directory_operands(literal, raw), home)
+
+
+def _pushd_effect(literal, raw, state, home):
+    """``pushd DIR`` enters DIR like ``cd``; the directory stack is not
+    tracked, so ``pushd`` alone or ``pushd +N`` goes somewhere unknown."""
+    operands = _directory_operands(literal, raw)
+    if len(operands) == 1 and not re.fullmatch(r'[+-][0-9]+',
+                                                _literal_command_word(operands[0])):
+        _change_directory(state, operands, home)
+    else:
+        _popd_effect(literal, raw, state, home)
+
+
+_ALIAS_NAME = re.compile(r"[^\s'\"\\$`=<>|&;()]+")
+
+
+def _alias_effect(literal, raw, state, home):
+    """``alias NAME=VALUE …``: a command read later whose word is NAME may
+    run VALUE (dash, and bash in POSIX mode, expand aliases in scripts).
+    Every value a name held stays possible: a function body keeps the
+    aliases of its definition, and ``unalias`` does not undo a command
+    already read."""
+    for word in raw[1:]:
+        try:
+            texts = _script_texts([word], state, home)
+        except _EnvironmentDeferred:
+            continue  # the executor's pass knows the environment
+        if texts is None:
+            if _could_run_delete(word):
+                yield 'opaque', word, ShellStructureUnknown(
+                    'an alias value this guard cannot expand', 0)
+            continue
+        for text in texts:
+            name, separator, value = text.partition('=')
+            if separator and _ALIAS_NAME.fullmatch(name):
+                state.aliases[name] = _dedupe(state.aliases.get(name, ()) + (value,))
+
+
+def _popd_effect(literal, raw, state, home):
+    """``popd`` returns to a directory of the stack, which is not tracked."""
+    state.cwd_lost = True
+    state.bindings['OLDPWD'] = _join_values(state._held('OLDPWD'), tuple(state.cwds) or None)
+    if 'PWD' in state.bindings:
+        state.bindings['PWD'] = None
+
+
+def _eval_events(literal, raw, state, home):
+    """``eval`` runs, in this shell, the text its operands expand to joined by
+    spaces."""
+    try:
+        texts = _script_texts(raw[1:], state, home)
+    except _EnvironmentDeferred:
+        return  # the executor's pass knows the environment
+    if texts is None:
+        text = ' '.join(raw[1:])
+        if _could_run_delete(text):
+            yield 'opaque', text, ShellStructureUnknown(
+                'eval operands this guard cannot expand', 0)
+        return
+    outcomes = []
+    for text in texts:
+        path = state.branch()
+        yield from _delete_text_events(text, path)
+        outcomes.append(path)
+    state.assign(_joined(outcomes))
+
+
+def _source_effect(literal, raw, state, home):
+    """``source FILE`` (``. FILE``) runs a file this guard does not read: any
+    name the command bound may have changed; inherited names are trusted."""
+    _may_change(state, list(state.bindings))
+
+
+def _unset_effect(literal, raw, state, home):
+    functions = '-f' in literal[1:]
+    for name in literal[1:]:
+        if not _SHELL_IDENTIFIER.fullmatch(name):
+            continue
+        if functions:
+            state.functions.pop(name, None)
+        else:
+            state.bindings[name] = ('',)
+
+
+def _read_effect(literal, raw, state, home):
+    values, operands = _builtin_options(literal, 'adinNptu')
+    _set_dynamic(state, operands + values.get('a', []) or ['REPLY'])
+
+
+def _getopts_effect(literal, raw, state, home):
+    _set_dynamic(state, list(literal[2:3]) + ['OPTARG', 'OPTIND'])
+
+
+def _printf_effect(literal, raw, state, home):
+    values, _operands = _builtin_options(literal, 'v')
+    _set_dynamic(state, values.get('v', []))
+
+
+def _mapfile_effect(literal, raw, state, home):
+    _values, operands = _builtin_options(literal, 'dnOsuCc')
+    _set_dynamic(state, operands[:1] or ['MAPFILE'])
+
+
+def _let_effect(literal, raw, state, home):
+    _may_change(state, [name for word in literal[1:]
+                        for name in _SHELL_IDENTIFIER.findall(word)])
+
+
+def _set_effect(literal, raw, state, home):
+    """``set``: ``-a``/``-o allexport`` switch exporting; ``--`` (or the first
+    operand) sets the positional parameters; other options change no name."""
+    position = 1
+    while position < len(literal):
+        word = literal[position]
+        if word in ('--', '-'):
+            state.positional = _positional_from(raw[position + 1:], state, home)
+            return
+        if word in ('-o', '+o'):
+            if literal[position + 1:position + 2] == ['allexport']:
+                state.allexport = 'on' if word == '-o' else 'off'
+            position += 2
+            continue
+        if len(word) > 1 and word[0] in '-+':
+            if 'a' in word[1:]:
+                state.allexport = 'on' if word[0] == '-' else 'off'
+            position += 1
+            continue
+        state.positional = _positional_from(raw[position:], state, home)
+        return
+
+
+def _shift_effect(literal, raw, state, home):
+    count = literal[1] if len(literal) > 1 else '1'
+    _shift(state, int(count) if count.isdigit() else None)
+
+
+def _trap_action(raw):
+    """The action word of ``trap ACTION SIGNAL…`` (*raw*: the trap's words),
+    or None when the command sets no action (it prints, resets or ignores)."""
+    operands = list(raw[1:])
+    if operands and _literal_command_word(operands[0]) == '--':
+        operands.pop(0)
+    if len(operands) < 2:
+        return None
+    action = _literal_command_word(operands[0])
+    if action in ('-', '') or action.isdigit() or action.startswith('-'):
+        return None
+    return operands[0]
+
+
+def _trap_effect(literal, raw, state, home):
+    """``trap ACTION SIGNAL…`` sets an action that runs later in this shell; it
+    is judged after the command with every state reached once it was set. A
+    double-quoted action expands now, a literal one when it runs."""
+    action = _trap_action(raw)
+    if action is None:
+        return
+    script = _shell_string_script(action)
+    if script is None:
+        texts = None
+    elif script[1]:
+        texts = [script[0]]
+    else:
+        try:
+            texts = _script_texts([action], state, home)
+        except _EnvironmentDeferred:
+            return  # the executor's pass knows the environment
+    if texts is None:
+        if _could_run_delete(action):
+            yield 'opaque', action, ShellStructureUnknown(
+                'a trap action this guard cannot expand', 0)
+        return
+    watches = state.memo.setdefault(_TRAP_ACTIONS, {})
+    for text in texts:
+        if text.strip():
+            watch = watches.setdefault(text, _TrapWatch(text))
+            watch.observe(state)
+            if watch not in state.traps:
+                state.traps += (watch,)
+
+
+def _builtin_options(literal, value_letters):
+    """``(option values by letter, operands)`` of a builtin with getopt-style
+    options; the letters in *value_letters* take a value."""
+    values, position = {}, 1
+    while position < len(literal):
+        word = literal[position]
+        if word == '--':
+            position += 1
+            break
+        if len(word) < 2 or word[0] != '-':
+            break
+        for index in range(1, len(word)):
+            if word[index] in value_letters:
+                value = word[index + 1:]
+                if not value and position + 1 < len(literal):
+                    position += 1
+                    value = literal[position]
+                values.setdefault(word[index], []).append(value)
+                break
+        position += 1
+    return values, list(literal[position:])
+
+
+_BUILTIN_EFFECTS = {
+    'cd': _cd_effect, 'pushd': _pushd_effect, 'popd': _popd_effect,
+    'eval': _eval_events, 'source': _source_effect, '.': _source_effect,
+    'unset': _unset_effect, 'read': _read_effect, 'getopts': _getopts_effect,
+    'printf': _printf_effect, 'mapfile': _mapfile_effect,
+    'readarray': _mapfile_effect, 'let': _let_effect, 'set': _set_effect,
+    'shift': _shift_effect, 'trap': _trap_effect, 'alias': _alias_effect,
+}
+
+
+def _command_events(items, state):
+    """Delete events of a whole command: its script, then each trap action set
+    in it, with every state reached after the trap was set."""
+    yield from _delete_events(items, state)
+    judged = set()
+    watches = state.memo.get(_TRAP_ACTIONS, {})
+    while len(judged) < len(watches):
+        for text, watch in list(watches.items()):
+            if text not in judged:
+                judged.add(text)
+                yield from _delete_text_events(text, watch.seen.fork())
 
 
 def _repository_metadata_anchors(cwd):
@@ -4458,15 +6060,20 @@ class _DeleteJudge:
                     'the operand mixes expansions this guard cannot prove '
                     'statically; use a literal absolute path')
         for candidate, unproven_names in zip(expanded.candidates, expanded.collapsed):
-            glob_marked = candidate.endswith('\x00glob')
-            text = candidate[:-len('\x00glob')] if glob_marked else candidate
+            glob_marked = candidate.endswith(_GLOB_MARK)
+            text = candidate[:-len(_GLOB_MARK)] if glob_marked else candidate
             if not text:
                 continue  # an empty operand deletes nothing
-            if not os.path.isabs(text) and not state.cwd_known:
-                continue  # cwd-less caller: the executor's pass judges it
+            if not os.path.isabs(text):
+                if state.cwd_lost and state.cwd_given:
+                    return (raw_operand, 'unproven',
+                            'it is relative to the directory of an earlier cd this '
+                            'guard cannot follow; use an absolute path')
+                if state.cwd_lost or not state.cwds:
+                    continue  # cwd-less caller: the executor's pass judges it
             # The glob marker rides on the joined path so _candidate_depth
             # can still collapse a pure-glob tail to its parent.
-            marker = '\x00glob' if glob_marked else ''
+            marker = _GLOB_MARK if glob_marked else ''
             paths = [text + marker] if os.path.isabs(text) else [
                 os.path.join(base, text) + marker for base in state.cwds]
             for path in paths:
@@ -4489,13 +6096,28 @@ class _DeleteJudge:
                     reason, detail = verdict_reason
                     if unproven_names and reason in ('shallow', 'home'):
                         names = ', '.join(
-                            f'${n}' for n in sorted(unproven_names))
+                            n if n.startswith('$') else f'${n}'
+                            for n in sorted(unproven_names))
                         return (raw_operand, 'unproven',
                                 f'if {names} expand(s) empty, the operand '
                                 f'{detail}; bind a literal path or delete a '
                                 'literal absolute path instead')
+                    empty = _empty_names(raw_operand, state)
+                    if empty and reason in ('shallow', 'home'):
+                        detail += f' when {", ".join(empty)} is empty'
                     return (raw_operand, reason, detail)
         return None
+
+
+def _empty_names(raw_operand, state):
+    """The variables *raw_operand* reads that are empty on some path here
+    (unset, assigned empty), named in a refusal."""
+    names = []
+    for name in dict.fromkeys(_REFERENCED_NAME.findall(raw_operand)):
+        value = None if name in ('PWD', 'HOME') else state._held(name)
+        if isinstance(value, tuple) and '' in value:
+            names.append(f'${name}')
+    return names
 
 
 def _unparsed_excerpt(text, error):
@@ -4545,7 +6167,7 @@ def _catastrophic_delete_detail(command, cwd=None, *, environment=os.environ):
         return _unparsed_delete_verdict(command, error)
     judge = _DeleteJudge(cwd, ws_real)
     try:
-        for kind, payload, context in _delete_events(
+        for kind, payload, context in _command_events(
                 items, _DeleteGuardState(cwd, environment)):
             verdict = (_unparsed_delete_verdict(payload, context) if kind == 'opaque'
                        else judge(payload, context))
@@ -4585,7 +6207,7 @@ def resolve_delete_targets(command, cwd=None, *, environment=os.environ):
     home = os.path.expanduser('~')
     resolved_targets = []
     try:
-        for kind, payload, context in _delete_events(
+        for kind, payload, context in _command_events(
                 items, _DeleteGuardState(cwd, environment)):
             resolved_targets.append(
                 (_unparsed_excerpt(payload, context), None, {'<opaque>'})
@@ -4606,12 +6228,13 @@ def _resolved_target(operand, state, home):
         return operand, None, {'<opaque>'}
     paths = []
     for candidate in expanded.candidates:
-        text = candidate[:-len('\x00glob')] \
-            if candidate.endswith('\x00glob') else candidate
+        text = candidate[:-len(_GLOB_MARK)] if candidate.endswith(_GLOB_MARK) else candidate
         if not text:
             continue
         if os.path.isabs(text):
             paths.append(os.path.normpath(text))
+        elif state.cwd_lost:
+            return operand, None, {'<opaque>'}  # relative to a cd not followed
         else:
             paths.extend(os.path.normpath(os.path.join(base, text))
                          for base in state.cwds)
@@ -5333,10 +6956,26 @@ def _dangerous_simple_command_rule(items, index, functions):
             rule = _dangerous_rule_in_text(' '.join(literal[1:]), functions)
             if rule:
                 return rule
-    for raw, script in _shell_source_scripts(items, index, views):
+        action = (_trap_action(view[1]) if os.path.basename(literal[0]) == 'trap'
+                  else None)
+        if action is not None:
+            # A trap action runs later in this same shell.
+            script = _shell_string_script(action)
+            rule = (_raw_dangerous_rule(action) if script is None
+                    else _dangerous_rule_in_text(script[0], functions))
+            if rule:
+                return rule
+        if os.path.basename(literal[0]) == 'alias':
+            # A later command naming the alias runs its text in this shell.
+            for word in literal[1:]:
+                _name, separator, value = word.partition('=')
+                rule = separator and _dangerous_rule_in_text(value, functions)
+                if rule:
+                    return rule
+    for source in _shell_source_scripts(items, index, views):
         # A child shell runs the script and sees none of this shell's functions.
-        rule = (_raw_dangerous_rule(raw) if script is None
-                else _dangerous_rule_in_text(script[0]))
+        rule = (_raw_dangerous_rule(source.raw) if source.script is None
+                else _dangerous_rule_in_text(source.script[0]))
         if rule:
             return rule
     return None

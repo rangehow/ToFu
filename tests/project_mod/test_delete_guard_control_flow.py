@@ -76,7 +76,7 @@ class TestReportedCommand:
         # Without TMPDIR the first printf may write /gh_hdr, and the delete
         # then removes that top-level path: the refusal names the variable.
         detail = _verdict(_REPORTED, {})
-        assert detail is not None and detail[1] == 'unproven'
+        assert detail is not None and detail[1] == 'shallow'
         assert '$TMPDIR' in detail[2] and '/gh_hdr' in detail[2]
 
     def test_cwd_less_pre_hook_leaves_it_to_the_executor(self):
@@ -189,6 +189,11 @@ class TestFunctionsRunWhereTheyAreCalled:
         assert 'calls itself' in detail[2]
         assert _verdict('f() { echo; f; }; f') is None
 
+    def test_a_body_that_redefines_its_name_is_not_recursion(self):
+        # Found by differential fuzzing: the inner call runs the new definition.
+        assert _verdict(f'f() {{ f() {{ {_RM} -rf /tmp/a/b; }}; f; }}; f') is None
+        assert _verdict(f'f() {{ f() {{ {_RM} -rf /; }}; f; }}; f') is not None
+
 
 class TestDerivedValuesKeepTheirCollapse:
     """Found by differential fuzzing against dash: a value built from an
@@ -224,9 +229,10 @@ class TestStartingEnvironment:
     def test_set_variable_resolves_from_the_given_environment(self):
         assert _verdict(f'{_RM} -rf "$TMPDIR/x"', _SCRATCH) is None
 
-    def test_unset_variable_may_expand_empty(self):
+    def test_unset_variable_expands_empty(self):
         detail = _verdict(f'{_RM} -rf "$TMPDIR/x"', {})
-        assert detail is not None and detail[1] == 'unproven'
+        assert detail is not None and detail[1] == 'shallow'
+        assert detail[2] == 'resolves to /x (<2 path components) when $TMPDIR is empty'
 
     def test_process_environment_is_not_consulted(self, monkeypatch):
         monkeypatch.setenv('TOFU_DELGUARD_DIR', '/tmp/tofu-delguard-env')

@@ -194,10 +194,16 @@ its own state copy and the paths join after it. Never mark single assignments as
 "maybe" instead. Variables the command never binds come from the environment its
 shell starts with, an explicit input: run_command passes the child environment it
 built, the cwd-less pre-hook passes none and defers those operands ("Catastrophic-
-delete guard control flow" in `docs/modules/tools_execution.md`). Verify
+delete guard control flow" in `docs/modules/tools_execution.md`). Words,
+builtins, program words, aliases and the scripts a shell reads follow the shell
+(``_expand_word``, ``_BUILTIN_EFFECTS``, ``_expanding_program_word``;
+"Catastrophic-delete guard shell semantics"): a program word with expansions is
+judged as each command its fields make, never by its raw text. Verify
 `tests/project_mod/test_delete_guard.py`,
 `tests/project_mod/test_delete_guard_structure.py`,
-`tests/project_mod/test_delete_guard_control_flow.py` and
+`tests/project_mod/test_delete_guard_control_flow.py`,
+`tests/project_mod/test_delete_guard_shell_semantics.py`,
+`tests/project_mod/test_delete_guard_shell_oracle.py` and
 `tests/project_mod/test_dangerous_command_structure.py`.
 
 `git_guard.py` owns the shared-checkout Git guard: ack-nonce lifecycle,

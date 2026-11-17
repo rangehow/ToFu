@@ -440,38 +440,13 @@ def _live_neighbour_sets():
         t, _src = it.build_retrieval_query(idea)
         if t:
             batch.append(t)
-    sets, rungs = [], []
-    shipped_search = it.ts_search_by_query
-
-    def observed_search(*args, **kwargs):
-        res = shipped_search(*args, **kwargs)
-        rungs[-1].append(((res or {}).get('outcome'), (res or {}).get('error') or ''))
-        return res
-
-    it.ts_search_by_query = observed_search
-    try:
-        for idea in ideas:
-            rungs.append([])
-            ps = it._novelty_prior_set(idea, k=5, batch_terms=batch)
-            sets.append(ps.get('retrieved') or [])
-            time.sleep(3)          # be polite to the arXiv API
-    finally:
-        it.ts_search_by_query = shipped_search
+    sets = []
+    for idea in ideas:
+        ps = it._novelty_prior_set(idea, k=5, batch_terms=batch)
+        sets.append(ps.get('retrieved') or [])
+        time.sleep(3)          # be polite to the arXiv API
     _LIVE_CACHE['v'] = (ideas, sets)
-    _LIVE_CACHE['rungs'] = rungs
     return _LIVE_CACHE['v']
-
-
-# Throttling and lost links say nothing about the query. HTTP 500 (the
-# unescaped-`*` defect) and every other status stay product failures.
-_TRANSPORT_ERROR_RE = re.compile(r'^(HTTP (429|503)$|\w*(Timeout|ConnectionError)\w*:)')
-
-
-def _transport_only(rungs):
-    """Every rung of one idea failed in transport, so it measured nothing."""
-    return bool(rungs) and all(
-        outcome == 'request_failed' and _TRANSPORT_ERROR_RE.match(error)
-        for outcome, error in rungs)
 
 
 def test_retrieved_neighbours_are_in_the_ideas_field():
@@ -506,16 +481,7 @@ def test_every_idea_retrieves_a_non_empty_basis():
     ideas, sets = _live_neighbour_sets()
     if ideas is None:
         return
-    rungs = _LIVE_CACHE['rungs']
-    unmeasured = [ideas[i].get('title', '?')[:50] for i, s in enumerate(sets)
-                  if not s and _transport_only(rungs[i])]
-    empty = [ideas[i].get('title', '?')[:50] for i, s in enumerate(sets)
-             if not s and not _transport_only(rungs[i])]
-    if unmeasured and not empty and pytest is not None:
-        # The same transport-only gate as _skip_if_retrieval_unreachable,
-        # applied to throttling that began after the probe.
-        pytest.skip(f'arXiv throttled or dropped every rung for {unmeasured}: '
-                    f'{rungs}. Transport gate only; any other empty basis fails.')
+    empty = [ideas[i].get('title', '?')[:50] for i, s in enumerate(sets) if not s]
     assert not empty, (
         f'{len(empty)}/{len(ideas)} ideas retrieved ZERO neighbours: {empty}. '
         'A sanitized query must not break the API (the real failure was an '

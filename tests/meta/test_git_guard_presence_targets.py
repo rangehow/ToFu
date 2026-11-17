@@ -14,14 +14,6 @@ from lib.tasks_pkg.tool_dispatch import _pipeline as pipeline
 pytestmark = pytest.mark.unit
 
 
-@pytest.fixture(autouse=True)
-def no_system_git_config(tmp_path, monkeypatch):
-    """The host's own /etc/gitconfig (e.g. a git-lfs filter) is not the fixture's."""
-    from lib.project_mod import git_command_scope
-    monkeypatch.setattr(git_command_scope, '_SYSTEM_GIT_CONFIG',
-                        str(tmp_path / 'system-gitconfig'))
-
-
 @pytest.fixture
 def checkouts(tmp_path):
     roots = []

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.support.overlay import requires_private_overlay
+from tests.support.overlay import requires_yourprovider_overlay
 
 from lib.provider.provider_template_recipes import (
     RECIPE_VERSION,
@@ -340,7 +340,7 @@ def test_static_template_overrides_builtin_recipe_list():
         package_openai['offering_recipes'])
 
 
-@requires_private_overlay
+@requires_yourprovider_overlay
 def test_loader_passes_static_overrides_to_the_feed_exclusion(
         monkeypatch, tmp_path):
     import lib.provider.provider_template_feed as feed
@@ -391,7 +391,7 @@ def test_every_shared_builtin_compiles_an_onboarding_bundle():
         assert bundle['connections'][0]['base_url'], row['key']
 
 
-@requires_private_overlay
+@requires_yourprovider_overlay
 def test_yourprovider_flash_wire_names_follow_their_deployment_checkpoint():
     """A deployment's checkpoint, not its wire spelling, selects its Model.
 
@@ -454,7 +454,7 @@ def test_compiled_offerings_follow_their_model_authority():
                     assert offering['context_window'] == model['context_window']
 
 
-@requires_private_overlay
+@requires_yourprovider_overlay
 def test_bundle_model_rows_keep_the_recipe_context_window():
     # Provider context is constrained only by the resolved Model authority.
     bundle = compile_provider_template_bundle(

@@ -28,8 +28,6 @@ import subprocess
 
 import pytest
 
-from tests.support.export_toolchain import export_toolchain_present
-
 pytestmark = pytest.mark.unit
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -50,12 +48,7 @@ RETIRED_INTERNAL_MODULES = ('lib.catpaw_local_import', 'lib.channels.dx', 'lib.l
 #: an increment that removes it.
 INTERNAL_MODULES_IN_CORE: dict[str, str] = {}
 INTERNAL_IMPORT_DEBT: frozenset[tuple[str, str]] = frozenset()
-# Assembled from fragments: the public export renames the bare company names,
-# which would turn this pattern into a search for the placeholders.
-HOST_PATTERN = re.compile('san' + r'kuai\.com|' + 'mei' + r'tuan\.com|' + '/mnt/' + 'dolphinfs', re.IGNORECASE)
-#: The private tree's ledger. The public export rewrites every company
-#: endpoint (export_pkg._lists._ENDPOINTS), so a public checkout, which
-#: never ships the export toolchain, must carry none at all.
+HOST_PATTERN = re.compile(r'example-corp\.com|yourprovider\.com|' + '/mnt/' + 'dolphinfs', re.IGNORECASE)
 HOST_LITERAL_DEBT: dict[str, int] = {
     # The off-host repair relay forwards to the project gateway while Tofu
     # itself may be down, so no routing document is readable then; the
@@ -63,7 +56,7 @@ HOST_LITERAL_DEBT: dict[str, int] = {
     # names no upstream today. Moving the default needs that config first
     # (docs/PUBLIC_CORE.md remaining increment 5b).
     'serverctl_pkg/oob_relay.py': 1,
-} if export_toolchain_present() else {}
+}
 FRONTEND_HOST_LINE_DEBT: dict[str, int] = {}
 
 

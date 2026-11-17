@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from tests.support.export_toolchain import require_export_toolchain
 
 
 pytestmark = pytest.mark.unit
@@ -33,12 +32,14 @@ def test_host_launchers_never_embed_the_build_machine():
 
 
 def test_conf_files_remain_eligible_for_generic_export_sanitization():
-    export_module = require_export_toolchain()
+    export_module = pytest.importorskip(
+        "export", reason="export.py is not shipped in open-source builds")
     assert export_module._is_text_file("deploy/generated/tofu.conf") is True
 
 
 def test_generic_export_scrub_still_removes_accidental_host_paths():
-    export_module = require_export_toolchain()
+    export_module = pytest.importorskip(
+        "export", reason="export.py is not shipped in open-source builds")
     source = (
         f"command={_MOUNT}/ssd_pool/x/INS/{_OPERATOR}/env/python server.py\n"
         f"user={_ACCOUNT}\n"

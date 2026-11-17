@@ -15,7 +15,6 @@ import unittest
 
 import pytest
 
-from tests.support.overlay import requires_private_overlay
 from tests.support.model_routing import (
     clear_test_model_routing,
     install_native_test_model_route,
@@ -301,7 +300,6 @@ class ModelsBYOSurfaceTest(unittest.TestCase):
 
         _new_loop_run(go())
 
-    @requires_private_overlay
     def test_provider_template_compiles_yourprovider_faces_into_v2_connections(self):
         async def go():
             cli = self.app.test_client()

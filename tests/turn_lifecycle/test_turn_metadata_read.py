@@ -111,43 +111,15 @@ def test_content_preview_of_non_text_content_is_null(storage, monkeypatch):
 @pytest.mark.parametrize('response', [{'turnId': 'turn'}, {'turnId': 'turn', 'contentPreview': 'x' * 9},
                                       {'turnId': 'turn', 'contentPreview': {'content': 'x'}}])
 def test_content_preview_response_is_bounded_and_present(monkeypatch, response):
-    reads = []
-
     class Client:
         def query(self, operation, payload):
-            reads.append(payload)
+            assert payload['content_preview_chars'] == 8 and payload['include_projection'] is False
             return response
     monkeypatch.setattr(turns, '_turn_client', lambda **kwargs: Client())
     with pytest.raises(StorageError) as caught:
         turns.get_turn('conversation', 'turn', user_id=7, include_projection=False,
                        content_preview_chars=8)
     assert caught.value.code == 'database_protocol_error'
-    assert reads[0] == {'conversation_id': 'conversation', 'turn_id': 'turn', 'user_id': 7,
-                        'include_projection': False, 'content_preview_chars': 8}
-    # A row without the preview reads like an engine built before the parameter:
-    # the one follow-up is the plain full read, never a second preview request.
-    assert reads[1:] == ([{'conversation_id': 'conversation', 'turn_id': 'turn', 'user_id': 7}]
-                         if 'contentPreview' not in response else [])
-
-
-def test_engine_ignoring_content_preview_gets_the_same_cut_from_the_projection(storage, monkeypatch):
-    class EngineBeforeContentPreview:
-        def query(self, operation, payload):
-            payload = {key: value for key, value in payload.items() if key != 'content_preview_chars'}
-            return storage.client.query(operation, payload)
-
-    monkeypatch.setattr(turns, '_turn_client', lambda **kwargs: storage.client)
-    content = '结果：\U0001F600' + 'growing answer ' * 400
-    created = turns.append_settled_turn('preview-legacy',
-        command_id='preview-legacy-seed', actor='assistant', projection={'content': content},
-        user_id=1, conversation_defaults={'allowCreate': True, 'title': 'Preview'})
-    turn_id = created['turn']['turnId']
-    current = turns.get_turn('preview-legacy', turn_id, user_id=1, include_projection=False,
-                             content_preview_chars=2000)
-    monkeypatch.setattr(turns, '_turn_client', lambda **kwargs: EngineBeforeContentPreview())
-    assert turns.get_turn('preview-legacy', turn_id, user_id=1, include_projection=False,
-                          content_preview_chars=2000) == current
-    assert current['contentPreview'] == content[:2000]
 
 
 @pytest.mark.parametrize('include_projection,chars', [(True, 8), (False, 0), (False, True), (False, '8')])

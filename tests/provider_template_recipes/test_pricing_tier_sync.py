@@ -116,13 +116,10 @@ def test_unpriced_cheap_tags_are_allowlisted():
         )
         if inp is None or out is None:
             found.add((key, row["model_id"]))
-    # A release tier without an overlay bundle loads none of its templates.
-    loaded = {template["key"] for template in load_provider_templates()}
-    expected = {entry for entry in UNPRICED_CHEAP_ALLOWLIST if entry[0] in loaded}
-    assert found == expected, (
-        f"new unpriced cheap tags: {sorted(found - expected)}; "
+    assert found == UNPRICED_CHEAP_ALLOWLIST, (
+        f"new unpriced cheap tags: {sorted(found - UNPRICED_CHEAP_ALLOWLIST)}; "
         f"allowlist entries now priced (remove them): "
-        f"{sorted(expected - found)}"
+        f"{sorted(UNPRICED_CHEAP_ALLOWLIST - found)}"
     )
 
 

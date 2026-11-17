@@ -60,7 +60,7 @@ def _receipt(attempt, proof, *, unknown=False):
 _UNCONFIRMED_EFFECT_STATES = frozenset({'entered', 'unknown'})
 
 
-def _isolated_worktree(attempt):
+def isolated_worktree(attempt):
     """The Worker's own isolated worktree, or None for a task that has none.
 
     A dispatched Worker's accepted config names its checkout (``projectPath``)
@@ -103,7 +103,7 @@ def classify_cut_calls(turn, attempt):
                 or (row.get('attemptId') or attempt['attemptId']) != attempt['attemptId']):
             continue
         if worktree is None and effect.get('recovery') == 'reconcile':
-            worktree = _isolated_worktree(attempt) or ''
+            worktree = isolated_worktree(attempt) or ''
         effect_class = cut_call_effect_class(
             str(row.get('toolName') or ''), row.get('toolArgs'),
             declared=str(effect.get('recovery') or 'reconcile'), worktree=worktree or None)
@@ -279,6 +279,27 @@ def release_unrecordable_exit_carrier(context, task):
         task.pop(key, None)
 
 
+def _preserve_live_working_view(task, turn):
+    """Keep the exact view of a live carrier whose claim storage fenced.
+
+    Its terminal persistence was refused, so the graceful suspension never
+    saved the view it was sending, and the resume would rebuild the whole
+    Turn and lose the provider cache (docs/RUN_CONTINUITY.md, "A fenced live
+    Attempt keeps its working view"). Contained: a failure only leaves the
+    canonical rebuild.
+    """
+    projection = turn.get('projection') or {}
+    try:
+        from lib.tasks_pkg.compaction._resume_projection import preserve_suspended_working_view
+        preserve_suspended_working_view(
+            task, turn_text=(projection.get('content'), projection.get('thinking')),
+            restart_settled=True)
+    except Exception as error:
+        from lib.storage.errors import describe_storage_failure
+        logger.warning('[WorkerRecovery] task=%s working view not preserved: %s',
+                       task.get('id'), describe_storage_failure(error))
+
+
 def recover_exited_attempt(context, attempt, turn, *, task=None):
     """Converge an exited worker without invoking any model, tool or preparer."""
     from lib.process_owner import owner_state, process_owner
@@ -412,6 +433,8 @@ def recover_exited_attempt(context, attempt, turn, *, task=None):
                                     include_execution_config=True)
         turn = turns.get_turn(attempt['conversationId'], attempt['turnId'],
                               user_id=context.principal.owner_user_id)
+        if restarted and joined and not preparation_exited:
+            _preserve_live_working_view(task, turn)
     # Fenced debt means a required terminal write never acknowledged.
     unknown = not known_terminal or proof == 'process_dead' or fenced_debt
     _save_exit(context, attempt, turn, proof=proof, unknown=unknown,

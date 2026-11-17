@@ -280,7 +280,7 @@ _INTERRUPTED_CALLS = {
 
 def _in_worker_worktree(monkeypatch):
     from lib.conversation_sync import worker_recovery
-    monkeypatch.setattr(worker_recovery, '_isolated_worktree', lambda attempt: '/worktrees/worker')
+    monkeypatch.setattr(worker_recovery, 'isolated_worktree', lambda attempt: '/worktrees/worker')
 
 
 @pytest.mark.parametrize('shape', sorted(_INTERRUPTED_CALLS))
@@ -759,12 +759,18 @@ def test_takeover_names_the_lost_lease_of_a_joined_worker(claimed, monkeypatch, 
             observed_cancel_sequence=context.claim.cancel_sequence)['ok'] is True
         takeover = _claim(factory, 'takeover', lease_ms=300_000)
     resumed, calls = _watch_recovered_resume(monkeypatch)
+    from lib.conversation_sync import worker_recovery
+    preserved = []
+    monkeypatch.setattr(worker_recovery, '_preserve_live_working_view',
+                        lambda task, turn: preserved.append((task.get('id'), turn.get('status'))))
     _recover(monkeypatch, takeover)
     _superseded_carrier_retired(context)
     settlement = turns.get_turn(pair['turn']['conversationId'], pair['turn']['turnId'],
                                 user_id=owner)['settlement']
     assert (settlement['outcome'], settlement['cause'], settlement['evidence']) == (
         'interrupted', 'server_restart', 'system_recovery')
+    # The live carrier's exact view is kept for the resume, once, after settlement.
+    assert preserved == [(context.claim.task_id, 'interrupted')]
     assert settlement.get('error') is None, settlement.get('error')
     if shutdown is None:
         # This serving process resumes it now; no boot pass will ever list it.

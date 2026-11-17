@@ -671,7 +671,11 @@ def append_interrupted_effect_note(task: dict[str, Any], messages: list[dict[str
     open tool intents before this attempt admits a call. Their rounds may be
     missing from the replayed history, so the model learns of them here, once.
     """
-    calls = task.get('_interruptedToolEffects') or []
+    # A dropped restart-cut batch is issued again by the model; naming its
+    # calls would tell it about a cut it never reads.
+    repeated = set((task.get('config') or {}).get('_restartRepeatedCallIds') or ())
+    calls = [call for call in task.get('_interruptedToolEffects') or []
+             if call.get('tool_call_id') not in repeated]
     if not calls:
         return
     named = '; '.join(

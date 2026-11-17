@@ -219,6 +219,71 @@ real two-process `tests/server/test_restart_resume_application.py` (a resident
 storage service and a real headless execution host booting as the next
 generation in a private project).
 
+### A restart-cut batch the model simply issues again
+
+*(running contract; owners `lib/tools/restart_effect_class.py`
+`repeatable_restart_cut_batch`, `lib/conversation_sync/command_service.py`
+`_without_repeatable_restart_cut`, `lib/tasks_pkg/compaction/_resume_projection.py`)*
+
+**Problem (owner review 2026-11-17):** a restart should be invisible to the
+work it pauses, and its resume should reuse the provider prompt cache. Every
+call a restart cut came back to the resumed model as a receipt naming the
+restart ("Wait interrupted by a server restart…", "[Command interrupted by
+server restart]"), which made models narrate the restart, and the first
+resumed request carried those new receipts, so it never repeated the request
+the provider had cached.
+
+**Decision:** when a Turn settled `interrupted` with cause `server_restart`
+resumes (`continue`/`checkpoint_resume`) and its last tool batch was cut, and
+every call in that batch is harmless to run twice, the resume drops the whole
+batch. The model's view ends at the request that produced the batch, so the
+first resumed request repeats it and the model issues the calls again through
+the ordinary gateway, authorization and effect fence. One pure rule decides,
+shared by the suspended working view (which it rewinds and witnesses without
+the batch) and the resume command (which replays the rounds without it):
+
+- *Cut:* an occurrence settled while a restart or storage fence stopped its
+  task carries `_restartCut` (`tool_dispatch._pipeline._settle_tool_result`);
+  an occurrence without a result (a dead process) or announced but never
+  recorded counts as cut too. A batch nothing cut is never dropped: the model
+  already read it.
+- *Repeatable:* never started (`executionEffect.state == not_started`), a
+  `read_only`/`idempotent` declaration (`poll`, reads), or a `run_command`
+  whose every segment only reads or is a test/check run confined to the
+  isolated worktree. A `verifiable` Git or file write is not repeatable (a
+  second `git reset` or `mv` changes state again); its batch keeps today's
+  restart-worded receipts below, which remain the truthful account when the
+  model must check an effect.
+- The dropped call ids ride on the executor config (`_restartRepeatedCallIds`),
+  so the interrupted-effect note never names a call the model issues again.
+
+### A fenced live Attempt keeps its working view
+
+**Problem (2026-11-17 11:15 storage restart):** a storage restart fenced the
+claims of live Attempts. Their terminal persistence was refused, so the
+suspended working view was never saved; the resume restored an 11-hour-old
+checkpoint or rebuilt the Turn canonically (no L1 clearing), re-billing
+170k–470k prompt tokens per Turn and forcing L2 compactions. A graceful
+restart lost views the same way: a lost event delivery left the Turn text
+behind the live task's, and the view's text digest (taken from the live task)
+no longer matched the Turn the resume reads.
+
+**Decision:** durable worker recovery of a joined live carrier it settles as a
+restart saves that carrier's view in the same process before discarding it
+(`worker_recovery._preserve_live_working_view`), and every view binds its
+`executionDigest` to the settled Turn text the resume compares
+(`durable_turn_text`), never the live task's. **Alternatives rejected:** an
+append-only per-request view journal (exact after any kill, but a new storage
+command on both authorities; still the structural answer for a killed
+process); saving the whole view every round (gigabytes per long Attempt);
+re-executing cut calls inside the resume before the first request (a second
+tool path, and a long `poll` would block the resume); keeping the restart
+wording for every cut (the owner's requirement is that a restart is
+invisible when nothing needs checking).
+
+Verification: `tests/compaction/test_restart_cut_resume.py`,
+`tests/tools/test_restart_effect_class.py`.
+
 ### A call the restart stopped before it ran is repeatable
 
 *(running contract; owners `lib/project_dispatch/admission.py`,

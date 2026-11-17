@@ -330,7 +330,7 @@ def test_coordinator_conversations_are_contained_in_a_collapsible_sidebar_group(
     page.locator(f'.folder-tab[data-folder-id="{folder_id}"]').click()
     seed_conversation(live, title='Live delegated worker', settings={'folderId': folder_id, 'projectPath': project,
                       '_coordinatorSource': leader}, messages=[{'role': 'user', 'content': 'Live delegated worker'}])
-    # The group sits directly beneath its Coordinator's pinned entry.
+    # The group sits beneath its Coordinator's pinned entry.
     group = page.locator(f'#projectCoordinatorEntry + .coordinator-conversations-host '
                          f'.coordinator-conversations[data-coordinator-id="{leader}"]')
     toggle = group.locator('.coordinator-conversations-toggle')

@@ -2950,9 +2950,8 @@ without a route opens `#/world` unless the owner's last explicit choice (`tofu_l
 by `application-shell/landing.ts`) is the classic view, and an address that names a route is honoured as
 given. The HUD's "Classic view" button opens `#/chat`; the classic top bar's "Office" link returns.
 The classic sidebar is the classic view's alone (the studio hides it), so it never mounts an animated
-scene whatever the stored choice (docs/PROJECT_COORDINATION.md, "Lead office"); a lead's reports and
-files sit in the right-hand context panel of its classic conversation, and both views open a deliverable
-through the one opener in
+scene whatever the stored choice (docs/PROJECT_COORDINATION.md, "Lead office"). A lead's deliverables
+read on its task board, each task expanding to its own, and both views open a deliverable through the one opener in
 `features/lead-deliverables/open.ts` (docs/PROJECT_COORDINATION.md, "Lead deliverables").
 `01-workspace-dock.css` places the workspace in the shell grid: HUD across the top, the scene under all of
 the rest, and the application's own conversation column docked over the scene's right side by

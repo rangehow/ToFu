@@ -340,3 +340,41 @@ def test_create_only_receipt_points_to_current_request_delegation(runtime):
     assert 'without a separate per-worker authorization' in result['next_step']
     assert 'grants no execution rights' in result['next_step']
     assert not r.calls and not r.c.repo.list()
+
+
+def test_a_report_names_its_board_task_or_is_refused_before_anything_is_published(runtime, reports, monkeypatch):
+    """Owner request 2026-11-17: the board expands each task to the reports that name it."""
+    from lib.artifacts import events
+    from lib.conversations import coordinator_progress, coordinator_reports
+    from lib.tools import rich_response
+    r = runtime
+    monkeypatch.setattr(coordinator_reports, 'CoordinatorReports', reports.factory)
+    published = []
+    monkeypatch.setattr(rich_response, 'publish_file_for_task', lambda *args: published.append(args) or {})
+    monkeypatch.setattr(events, 'emit_artifact_event', lambda task, artifact: None)
+    head = {'board': {'tasks': [{'title': 'Resume', 'status': 'in_progress'},
+                                {'title': 'Deck', 'status': 'pending'}]}, 'taskKeys': ['a' * 32, 'b' * 32]}
+    scope = {'owner': 7, 'projectPath': '/project', 'coordinatorId': 'coordinator', 'bindingRevision': 1}
+
+    class Progress:
+        def __init__(self, owner, project):
+            assert (owner, project) == (7, '/project')
+
+        def current(self):
+            return scope, {}, head
+    monkeypatch.setattr(coordinator_progress, 'CoordinatorTaskProgress', Progress)
+
+    refused = r.call('report_to_user', **{**reports.request, 'idempotency_key': 'off-board',
+                                          'task': 'Interview', 'files': ['out/cv.pdf']})
+    assert 'Resume; Deck' in json.dumps(refused) and not reports.turns and not published
+
+    result = r.call('report_to_user', **{**reports.request, 'task': 'Deck'})
+    assert result['task'] == {'key': 'b' * 32, 'title': 'Deck'} and result['published']
+    [turn] = reports.turns.values()
+    assert 'task' not in turn['projection']  # The receipt names the task; the Turn stays the report text.
+
+    # A head written before task history keys each title by its first identity.
+    from lib.conversations.coordinator_task_history import title_key
+    head.pop('taskKeys')
+    assert r.call('report_to_user', **{**reports.request, 'idempotency_key': 'legacy', 'task': 'Resume'}
+                  )['task'] == {'key': title_key('Resume'), 'title': 'Resume'}

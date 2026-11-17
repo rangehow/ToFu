@@ -16,7 +16,9 @@ file. A rollover keeps the outgoing file locked until its successor is open,
 so a peer waiting on the old file then finds the replacement. On the BeeGFS
 FUSE mount that holds ``logs/``, a write through a renamed descriptor shares
 its O_APPEND position with the new file at the old path: both files then gain
-NUL holes and lose lines (docs/LOGGING.md, "Shared rotating files").
+NUL holes and lose lines (docs/LOGGING.md, "Shared rotating files"). A
+descriptor whose file a peer's retention already removed is stale the same way
+(that mount fails its ``fstat`` with ENOENT), so the record goes to the path.
 
 Entry point: ``SharedRotationMixin``, listed before a ``BaseRotatingHandler``
 subclass. Dependencies: standard library only. Platforms without ``fcntl``
@@ -73,12 +75,17 @@ class SharedRotationMixin:
                 self.stream = self._open()
             descriptor = self.stream.fileno()
             fcntl.flock(descriptor, fcntl.LOCK_EX)
-            opened = os.fstat(descriptor)
+            try:
+                opened = os.fstat(descriptor)
+            except FileNotFoundError:
+                # The BeeGFS FUSE mount answers ENOENT once a peer's retention
+                # unlinked the file behind this descriptor; reopen the path.
+                opened = None
             try:
                 current = os.stat(self.baseFilename)
             except FileNotFoundError:
                 current = None
-            if current is not None and (
+            if opened is not None and current is not None and (
                     current.st_dev, current.st_ino) == (opened.st_dev, opened.st_ino):
                 # Size decisions count every writer's bytes, not only this
                 # descriptor's last write.

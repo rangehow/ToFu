@@ -28,6 +28,9 @@ count skip it, and numbered rotations grow their chain instead of dropping it
 (:func:`numbered_backup_slots`), so a budget that only today's evidence
 exceeds is reported as ``over_budget_bytes``.  The aggregate budget evicts
 the previous day's rotations only after every older candidate is gone.
+Per-process fault dumps of live processes, the newest dead dump (the previous
+generation's crash evidence) and dumps written today are protected the same
+way (docs/LOGGING.md, "Rotations of the current day are never deleted").
 """
 
 from __future__ import annotations
@@ -721,11 +724,17 @@ def append_bytes_locked(path: str | os.PathLike[str], payload: bytes,
         except (ImportError, OSError):
             pass
         view = memoryview(payload)
-        while view:
-            written = os.write(descriptor, view)
-            if written <= 0:
-                raise OSError('zero-length append to diagnostic log')
-            view = view[written:]
+        try:
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    raise OSError('zero-length append to diagnostic log')
+                view = view[written:]
+        except OSError as error:
+            # A caller that retries resumes at the first unwritten byte
+            # instead of splitting or duplicating the record.
+            error.tofu_bytes_written = len(payload) - len(view)
+            raise
     finally:
         try:
             import fcntl
@@ -872,7 +881,11 @@ def _prune_process_fault_dumps(directory: Path, result: dict, *, now: float,
     budget = stream_family_budget_bytes(policy.name)
     total = sum(row[3] for row in live_rows + retained_dead)
     survivors = []
+    previous_generation = retained_dead[-1:]
     for row in retained_dead:
+        if row in previous_generation:
+            survivors.append(row)
+            continue
         if total > budget and _remove_inventory_row(
                 row, result, reason='fault_family_budget', dry_run=dry_run):
             total -= row[3]
@@ -909,6 +922,10 @@ def _is_rotation(path: Path, family: str) -> bool:
             and path.name.startswith(policy.filename + '.'))
 
 
+def _is_crash_evidence(family: str) -> bool:
+    return family == 'faulthandler_process'
+
+
 def _directory_inventory(log_dir: Path, *, now: float) -> list[dict]:
     rows = []
     try:
@@ -916,6 +933,7 @@ def _directory_inventory(log_dir: Path, *, now: float) -> list[dict]:
     except OSError:
         return rows
     today = current_day_start(now)
+    newest_dead_dump = None
     for path in paths:
         info = _regular_file(path, log_dir)
         if info is None:
@@ -924,14 +942,23 @@ def _directory_inventory(log_dir: Path, *, now: float) -> list[dict]:
         recent_unmanaged = family == 'unmanaged' and (
             now - info.st_mtime < _RECENT_UNKNOWN_SECONDS)
         current_rotation = (info.st_mtime >= today
-                            and _is_rotation(path, family))
-        rows.append({
+                            and (_is_rotation(path, family)
+                                 or _is_crash_evidence(family)))
+        row = {
             'path': str(path), 'name': path.name, 'bytes': info.st_size,
             'mtime': info.st_mtime, 'priority': priority,
             'family': family,
             'protected': bool(protected or recent_unmanaged
                               or current_rotation),
-        })
+        }
+        rows.append(row)
+        if _is_crash_evidence(family) and not protected and (
+                newest_dead_dump is None
+                or row['mtime'] > newest_dead_dump['mtime']):
+            newest_dead_dump = row
+    if newest_dead_dump is not None:
+        # The newest dead sink is the previous generation's crash evidence.
+        newest_dead_dump['protected'] = True
     return rows
 
 

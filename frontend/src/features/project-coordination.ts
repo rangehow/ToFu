@@ -14,7 +14,7 @@ import { captureCoordinationView, createCoordinationReference } from './project-
 import { createCoordinationManagement } from './project-coordination-management';
 import type { CoordinatorUsageState, ProjectDispatchPage } from '../api/project-dispatch.generated';
 import { createAssignmentHistoryNavigation } from './project-assignment-history';
-import type { CoordinatorReportState, CoordinatorReportReadRequest, CoordinationBinding, CoordinatorProgressState, ProjectMessagePage, CoordinatorConversationPage } from '../api/project-coordination.generated';
+import type { CoordinatorReportState, CoordinatorReportReadRequest, CoordinationBinding, CoordinatorProgressState, ProjectMessagePage, CoordinatorConversationPage, LeadDeliverablePage } from '../api/project-coordination.generated';
 import { createProjectMessageReceipts } from './project-message-receipts';
 import { createProjectDispatch, type ProjectDispatchPorts } from './project-dispatch';
 import { createProjectScopeChanges, type ProjectScopeChangePorts } from './project-scope-changes';
@@ -44,6 +44,12 @@ export interface ProjectCoordinationPorts {
   budget?: CoordinatorBudgetPorts;
   workerModel?: RouterWorkerModelPorts;
   progress?: { read(path: string, signal?: AbortSignal): Promise<CoordinatorProgressState> };
+  /** A lead conversation's deliverables, the task board expands each task to (Lead deliverables). */
+  deliverables?: {
+    read(conversationId: string, path: string, query: { task?: string; cursor?: string },
+      signal?: AbortSignal): Promise<LeadDeliverablePage>;
+    subscribe(changed: (frame: { kind?: unknown; conversationId?: unknown }) => void): () => void;
+  };
   messages?(path: string, conversationId: string, beforeId: string): Promise<ProjectMessagePage>;
   board(path: string, signal?: AbortSignal): Promise<{ active: CoordinationWork[]; recentOutcomes: CoordinationWork[] } | null>;
   bind(path: string, conversationId: string, expectedRevision: number): Promise<CoordinationBinding>;

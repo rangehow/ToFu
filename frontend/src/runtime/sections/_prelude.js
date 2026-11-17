@@ -171,7 +171,6 @@ const openProjectCoordinationWorkspace = (ports) => import('../features/project-
 // The task board's 历史任务 drawer loads with its styles when it first opens.
 const openCoordinatorTaskHistory = (ports) => import('../features/coordinator-task-history')
   .then(module => module.openCoordinatorTaskHistory(ports));
-const loadLeadDeliverables = () => import('../features/lead-deliverables/classic');
 import {
   conversationFullIdById as queryConversationFullIdById,
   conversationTitleById as queryConversationTitleById,

@@ -1571,7 +1571,7 @@ read-only) → `progressState` in `contracts/project_coordination_v1.schema.json
 Coordinator task history (`GET /api/v4/project/coordination/progress/history?path=&group=&q=&cursor=`,
 scope `conversations`, read-only, opaque cursor, 400 for an unknown group or a
 cursor of another query) → `progressHistoryPage` in the same schema;
-lead deliverables (`GET /api/v4/project/coordination/deliverables?conversationId=&path=&cursor=`,
+lead deliverables (`GET /api/v4/project/coordination/deliverables?conversationId=&path=&cursor=&task=`,
 scope `conversations`, read-only, projected from the lead's report Turns and artifact rows, newest
 first, opaque cursor (400 when malformed), 403 for a conversation the caller does not own; push hint `{projectKey, kind: "lead_deliverable",
 conversationId}` on the `project` channel) → `deliverablePage` in the same schema;

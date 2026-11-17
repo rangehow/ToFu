@@ -93,12 +93,32 @@ export function createProjectCoordinationSurface(ports: {
    * survive repaints of the same Coordinator conversation: both stay attached
    * (an open choice is never torn down by a push frame) and the control reads
    * its value once per visit. */
-  let boardCard: { key: string; card: CoordinatorProgressCard; workerModel?: RouterWorkerModelControl } | undefined;
+  let boardCard: { key: string; card: CoordinatorProgressCard; workerModel?: RouterWorkerModelControl;
+    deliverables?: { destroy(): void } } | undefined;
   /* A task history open over the board re-reads when the shown board advances. */
   let shownBoardRevision = 0;
   const boardListeners = new Set<() => void>();
   const subscribeBoard = (changed: () => void) => { boardListeners.add(changed); return () => { boardListeners.delete(changed); }; };
-  function dropBoardCard() { boardCard?.workerModel?.destroy(); boardCard?.card.el.remove(); boardCard = undefined; shownBoardRevision = 0; }
+  function dropBoardCard() {
+    boardCard?.workerModel?.destroy(); boardCard?.deliverables?.destroy(); boardCard?.card.el.remove();
+    boardCard = undefined; shownBoardRevision = 0;
+  }
+  /* Each task of the board expands to its reports and files. The helper loads on
+   * the board's first paint, off the startup path, and lives as long as the card. */
+  function attachTaskDeliverables(card: NonNullable<typeof boardCard>, scope: ProjectCoordinationPorts, conversationId: string) {
+    const port = scope.deliverables;
+    if (!port) return;
+    void import('./coordinator-task-deliverables').then(({ createTaskDeliverables }) => {
+      if (boardCard !== card) return;
+      const helper = createTaskDeliverables({
+        conversationId, projectPath: scope.path,
+        read: (query, signal) => port.read(conversationId, scope.path, query, signal),
+        subscribe: port.subscribe,
+      }, () => card.card.repaint());
+      card.deliverables = helper;
+      card.card.attachDeliverables(helper);
+    }).catch(error => console.warn('[ProjectCoordination] task deliverables unavailable', error));
+  }
   let unsubscribe: (() => void) | undefined;
   let subscribedPath = '';
   const norm = (path: string) => path.replace(/[/\\]+$/, '');
@@ -313,6 +333,7 @@ export function createProjectCoordinationSurface(ports: {
             open: boardOpen, finishedOpen, footer: workerModel?.el,
             toggle: open => { boardOpen = open; }, toggleFinished: open => { finishedOpen = open; },
           }) };
+          attachTaskDeliverables(boardCard, scope, coordinatorChat);
         }
       } else dropBoardCard();
       ports.sidebar.replaceChildren();
@@ -395,7 +416,8 @@ export function createProjectCoordinationSurface(ports: {
       if (ports.mode !== 'sidebar' && binding?.availability === 'available' && binding.conversationId === scope.currentConversationId) {
         if (boardCard) {
           const view: CoordinatorProgressView = progressUnavailable ? { kind: 'unavailable' }
-            : progressBoard ? { kind: 'board', board: progressBoard, translation } : { kind: 'empty' };
+            : progressBoard ? { kind: 'board', board: progressBoard, translation, taskKeys: progress?.taskKeys }
+              : { kind: 'empty' };
           boardCard.card.render(view, { history, retry: invalidate });
           if (progressBoard && progressBoard.revision !== shownBoardRevision) {
             const first = shownBoardRevision === 0;

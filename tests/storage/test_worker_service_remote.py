@@ -161,3 +161,85 @@ def test_a_woken_claim_times_its_acquisition_from_the_commit_hint(semantic_autho
     # every stage happened before the handler published it.
     starts = [record['observedAtMs'] for record in records if record['boundary'] == 'start']
     assert starts == sorted(starts) and starts[-1] <= published[0]
+
+
+def test_a_repeating_unknown_settlement_converges_instead_of_storming(semantic_authority):
+    """Regression for 2026-11-17 00:00-00:14: entered Attempts whose owner's
+    exit could not be proved were claimed, refused and released hundreds of
+    times a minute (2,409 'domain settlement unknown', 2,269 'handler failed',
+    2,413 'requires recovery'). Each claim also ran the failure port, which
+    repeated the same refused recovery.
+
+    The domain's own unknown verdict is the claim's settlement: the failure
+    port never reruns it, and the released job is offered again only after one
+    worker lease, the recovery horizon of the lease contract. Fresh work is
+    claimed meanwhile without delay.
+    """
+    from lib.durable_worker import WorkerDomainSettlementUnknown
+    from lib.durable_worker.runtime_policy import runtime_policy
+    factory, owner, _ = semantic_authority
+    policy = runtime_policy()
+    claims, failure_settlements = [], []
+    fresh_done = threading.Event()
+
+    def execute(context, payload):
+        claims.append(context.claim.task_id)
+        if payload.get('unprovable'):
+            raise WorkerDomainSettlementUnknown(
+                'Entered conversation requires physical-exit recovery evidence')
+        return WorkerJobOutcome(status='succeeded', result_ref=context.claim.task_id)
+
+    def failure(context, payload, error):
+        # Conversations' failure port reruns the same exit recovery.
+        failure_settlements.append(context.claim.task_id)
+        raise WorkerDomainSettlementUnknown('Domain failure settlement is unconfirmed')
+
+    def settle(context, payload, outcome, now_ms):
+        value = StorageWorkerJobStore(client_factory=factory).complete(
+            context.claim, outcome=outcome, now_ms=now_ms)
+        if not payload.get('unprovable'):
+            fresh_done.set()
+        return value
+
+    def enqueue(task, **payload):
+        factory(write=True).command('worker_job.enqueue', {
+            'task_id': task, 'user_id': owner, 'tenant_id': '', 'task_kind': registration.task_kind,
+            'payload': {'contract': 'test/v1', **payload, 'principal': PrincipalContext.user(
+                subject_id='test-owner', owner_user_id=owner).to_payload()},
+            'idempotency_key': task, 'priority': 0, 'available_at_ms': 0,
+            'now_ms': int(time.time() * 1000),
+        }, uuid.uuid4().hex)
+
+    registration = WorkerKindRegistration(task_kind='unprovable-settlement',
+        safety=WorkerKindSafety(True, True, True, True), handler=execute,
+        failure_handler=failure, completion_handler=settle)
+    service = DurableWorkerService(
+        principal=PrincipalContext.system(subject_id='test-control', scopes={policy['controlScope']}),
+        client_factory=factory, registrations=[registration], max_workers=1,
+        now_ms=lambda: int(time.time() * 1000), policy=policy,
+        wake_source=StorageWorkerWakeSource(factory, policy))
+    stuck = ['unprovable-' + uuid.uuid4().hex for _ in range(3)]
+    for task in stuck:
+        enqueue(task, unprovable=True)
+    service.start()
+    try:
+        deadline = time.monotonic() + 10
+        while set(claims) < set(stuck) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert set(claims) >= set(stuck)
+        fresh = 'fresh-' + uuid.uuid4().hex
+        enqueued_at = time.monotonic()
+        enqueue(fresh)
+        assert fresh_done.wait(10)
+        fresh_wait = time.monotonic() - enqueued_at
+        # Several former storm periods, far less than one lease.
+        time.sleep(2)
+    finally:
+        assert service.stop()
+    assert sorted(claims) == sorted([*stuck, fresh]), 'an unprovable job was re-offered within one lease'
+    assert failure_settlements == []
+    assert fresh_wait < policy['workerLeaseMilliseconds'] / 1000
+    for task in stuck:
+        job = factory().query('worker_job.get', {'task_id': task, 'user_id': owner})
+        # Released, not settled: the job keeps its unknown outcome for recovery.
+        assert job['status'] not in ('succeeded', 'failed', 'cancelled')

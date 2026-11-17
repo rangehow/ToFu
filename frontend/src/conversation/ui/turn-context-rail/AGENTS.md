@@ -17,7 +17,6 @@ be changed from one map.
 | Track latch (`data-turn-context-rail`: present / pending / absent) | `surface-engine.ts` |
 | Pane grid track and adaptive width | `styles/application/01-shell-navigation.css`, `runtime/sections/main.js` |
 | Background agents section inside the rail's card | `agent-sidebar-dock.ts`, `styles/application/32-agent-sidebar-dock.css` |
-| A lead's reports and files section inside the rail's card (or the fold) | `features/lead-deliverables/list.ts`, `styles/application/36-lead-deliverables.css`; mounted by `runtime/sections/presence.js` (`mountLeadDeliverables`, called from the track pass) |
 
 Rules:
 

@@ -79,6 +79,28 @@ CPU 7–9% lower and passed unchanged tail/RSS guards; earlier 100-operation tai
 failures remain recorded. This is component evidence, not HTTP or system speed.
 See `system_audit_rotation_preflight_admission_20261009.json`.
 
+**A transient filesystem fault delays audit records, never drops them.**
+Problem: on 2026-11-17 11:15–11:16 dolphinfs answered `EDQUOT` and Remote I/O
+while the storage sidecar fenced writes. The audit writer dropped each record
+whose append failed: 21 records, in 14 `Failed to write audit log record`
+lines. A partial append could also leave a line fragment that later lines
+glued onto. Decision: the writer thread keeps every unwritten record per
+target path, in order. It retries them before the next record, at the
+existing log-maintenance cadence (`maintenance_interval_seconds`) while idle,
+and at shutdown. `append_bytes_locked` reports how many bytes reached the file,
+so a partial append resumes at its first unwritten byte and a line is never
+split across a rotation or duplicated. One fault episode logs one
+`logging.audit_write_failed` and one `logging.audit_write_recovered`, never
+one per record. Retained records share the queue's existing capacity and
+newest-first drop accounting, so memory stays bounded during a long outage.
+Records still in memory at a SIGKILL are lost, as queued ones already were
+(owner-approved trade-off above). Alternatives rejected: a separate on-disk
+spool (it sits on the same failing filesystem); a retry count or backoff
+setting (a knob, where demand and the maintenance cadence already exist);
+blocking the caller (the queue exists so a mount fault never stalls a
+request). Spec:
+`tests/log/test_audit_log_nonblocking.py::test_transient_storage_fault_retains_and_later_writes_every_record`.
+
 ## Shared rotating files
 
 **Problem.** The API host (`server.py`) and the resident execution host
@@ -101,7 +123,11 @@ the rotating handlers (`_SizeAndTimeRotatingFileHandler`,
 holds an exclusive `flock` on the file currently at the path. Holding it, a
 writer reopens the path when its descriptor is no longer that file, adopting
 the peer's rollover, and seeks to the end so size checks count every writer.
-A rollover keeps the outgoing file locked until its successor is open. File
+A descriptor whose file a peer's retention already unlinked is stale too: the
+FUSE mount fails its `fstat` with ENOENT, which once escaped to `handleError`
+and dropped the record (57 `--- Logging error ---` reports on 2026-11-17 from
+writers idle across a peer's rollover and pruning); the writer now reopens
+the path. A rollover keeps the outgoing file locked until its successor is open. File
 names, policies and readers are unchanged; platforms without `fcntl` keep the
 stock handlers. Files damaged before the fix are left as they are. The native
 storage host is a third writer of `app.log`, `error.log` and `incident.jsonl`
@@ -233,6 +259,26 @@ evidence of the same incident exposed; a time window ("the last N hours") is
 a knob, while the calendar day is the unit the daily handlers already rotate
 by. Specs: `tests/log/test_log_retention_eviction.py` and
 `tests/server/test_logging_retention_bounds.py`.
+
+**Crash evidence of the current and previous generation is kept.** A
+per-process faulthandler dump (`tofu_faulthandler_<pid>.log`, written by the
+serving worker of each generation) is crash evidence, not a rotation, so the
+global budget once ranked a just-stopped worker's dump as the cheapest
+candidate of the day: on 2026-11-17 it deleted 7 dumps, including
+`tofu_faulthandler_75010.log` (the stalled worker A6 stopped) 22 s after it
+exited and `tofu_faulthandler_130220.log` (the failed generation) 2 s after
+it was replaced, while ordinary logs of the day were protected rotations.
+Decision: a live process's dump (current generation), the newest dead dump
+(previous generation, also across midnight) and every dump last written on
+the current day are protected from the global budget exactly like the
+day's rotations; the fault family budget never removes the newest dead
+dump. Older dead dumps still yield to the family's age, count and byte
+bounds and, after ordinary logs, to the global budget; remaining pressure is
+reported as `over_budget_bytes`. Growth admitted: at most one dead dump
+beyond the day's own (16 MiB ceiling each). Alternatives rejected: excluding
+the family from the global budget (a crash loop's older dumps would never
+yield); a generation registry read from the manager (retention also runs
+offline, with no manager); a larger budget (a knob).
 
 ## Task startup timing anchors
 

@@ -29,7 +29,7 @@ _SQL_PREFIXES = (
     'select ', 'insert ', 'update ', 'delete ', 'create ', 'alter ',
     'drop ', 'pragma ', 'begin ', 'commit ', 'rollback ', 'vacuum ',
 )
-_BOUNDARY_CACHE_VERSION = 23
+_BOUNDARY_CACHE_VERSION = 24
 _BOUNDARY_CACHE_NAME = '.tofu-storage-boundary-cache.json'
 _BOUNDARY_SEARCH_PATTERN = (
     r'\b(?:sqlite3|psycopg|psycopg2|get_thread_db|pooled_db|'
@@ -245,8 +245,14 @@ def _scan_python_file(path: Path, relative: str) -> list[BoundaryViolation]:
                 return True
         return False
 
+    # Network transports whose connect(address) opens a socket, never a
+    # database: names bound to these modules are not database receivers.
     socket_names = {'socket'}
     for imported in ast.walk(tree):
+        if isinstance(imported, ast.Import):
+            for alias in imported.names:
+                if alias.name == 'websockets':
+                    socket_names.add(alias.asname or alias.name)
         if isinstance(imported, ast.ImportFrom) and imported.module == 'socket':
             for alias in imported.names:
                 socket_names.add(alias.asname or alias.name)

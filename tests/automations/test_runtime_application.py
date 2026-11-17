@@ -170,16 +170,14 @@ def test_claimed_jobs_start_beyond_the_idle_hint_and_leave_no_poll_receipts(sema
 
 def test_idle_service_does_not_preallocate_the_capacity(semantic_authority):
     factory, _, _ = semantic_authority
-    # Thread objects, not idents: a thread that exits after this snapshot
-    # frees its ident for reuse by the service's own threads.
-    before = set(threading.enumerate())
+    before = {thread.ident for thread in threading.enumerate()}
     service = create_service(client_factory=factory, max_workers=97)
     try:
         service.start()
         wait_until(lambda: service.snapshot()['highWater'] == 1)
         time.sleep(.3)
         threads = [thread for thread in threading.enumerate()
-                   if thread not in before and thread.name.startswith('tofu-durable')]
+                   if thread.ident not in before and thread.name.startswith('tofu-durable')]
         assert len(threads) == 2
         assert service.snapshot()['highWater'] == 1
         assert service.stop(timeout=5)

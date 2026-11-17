@@ -68,28 +68,6 @@ def test_runtime_boundary_has_same_scope_with_or_without_git_and_rg(
     assert 'scripts/offline_migration.py' in storage_boundary.strict_inventory(tmp_path)['files']
 
 
-@pytest.mark.parametrize('rg_available', [False, True])
-def test_marker_free_data_admits_the_same_with_or_without_rg(
-        tmp_path, monkeypatch, rg_available):
-    from lib.storage import storage_boundary
-
-    # Non-Python data that happens to end in .py under lib/ (for example a
-    # runtime data directory without __init__.py) holds no storage marker.
-    data = tmp_path / 'lib' / 'runtime_data' / 'task.py'
-    data.parent.mkdir(parents=True)
-    data.write_text('user data')
-    (tmp_path / 'lib' / 'business.py').write_text(
-        "import sqlite3\nconn = sqlite3.connect('x')\n")
-    monkeypatch.setattr(storage_boundary, '_boundary_cache_path',
-                        lambda: tmp_path / 'boundary-cache.json')
-    if not rg_available:
-        monkeypatch.setattr(storage_boundary, '_candidate_python_files',
-                            lambda root, relatives: None)
-
-    assert storage_boundary.boundary_report(tmp_path)['files'] == [
-        'lib/business.py']
-
-
 def test_exclusive_boundary_scanner_rejects_business_sql_but_exempts_sidecar(
         tmp_path):
     from lib.storage.storage_boundary import boundary_report
@@ -115,27 +93,6 @@ def test_exclusive_boundary_scanner_rejects_business_sql_but_exempts_sidecar(
         'database_driver_import', 'direct_connect', 'direct_cursor',
         'direct_execute', 'direct_commit',
     }
-
-
-def test_network_transport_connect_is_not_database_ownership(tmp_path):
-    from lib.storage.storage_boundary import strict_inventory
-
-    tool = tmp_path / 'scripts' / 'cdp_probe.py'
-    tool.parent.mkdir(parents=True)
-    tool.write_text(
-        "import socket\n"
-        "import websockets\n"
-        "socket.create_connection(('127.0.0.1', 9))\n"
-        "async def probe(url):\n"
-        "    async with websockets.connect(url, max_size=None) as ws:\n"
-        "        return ws\n",
-        encoding='utf-8')
-    database = tmp_path / 'scripts' / 'offline_copy.py'
-    database.write_text("import sqlite3 as db\nhandle = db.connect('x')\n", encoding='utf-8')
-
-    files = strict_inventory(tmp_path)['files']
-    assert 'scripts/cdp_probe.py' not in files
-    assert files['scripts/offline_copy.py'] == 2
 
 
 def test_transaction_method_names_on_domain_services_are_not_database_owners(

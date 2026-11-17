@@ -67,8 +67,7 @@ assert.deepEqual(calls,[
 
 
 def test_context_layout_has_mobile_contract():
-    # Preferences tab rules load with the memory preferences owner.
-    css = _read('static/settings.css') + _read('frontend/src/features/memory/preferences.css')
+    css = _read('static/settings.css')
     assert '.ctx-group-work_rule' in css
     assert '@media(max-width:760px)' in css
     # My Context widens its panel while active and keeps a content-width

@@ -434,6 +434,16 @@
 }
 [data-theme="tofu"] .upd-retry-btn:hover{transform:translate(1px,1px);box-shadow:var(--clay-md);background:#f2ecda}
 /* Version hero — current → latest */
+[data-theme="tofu"] .upd-hero{
+  background:linear-gradient(135deg,#f2ecda,#f5eedd);
+  border:2px solid #3B2E1E;border-radius:var(--radius);box-shadow:var(--clay-sm);
+}
+[data-theme="tofu"] .upd-ver-label{color:#5A4B36}
+[data-theme="tofu"] .upd-ver-num{color:#3B2E1E}
+[data-theme="tofu"] .upd-ver.latest .upd-ver-num{color:#a87d2e}
+[data-theme="tofu"] .upd-hero.up-to-date .upd-ver.latest .upd-ver-num{color:#3B2E1E}
+[data-theme="tofu"] .upd-arrow{border-radius:var(--radius-sm);border:2px solid #3B2E1E;background:#FFFEFA;color:#3B2E1E}
+[data-theme="tofu"] .upd-hero:not(.up-to-date) .upd-arrow{background:#c9993f;color:#FFFDF8;box-shadow:var(--clay-sm)}
 /* Apply / restart action button — tofu block */
 [data-theme="tofu"] .upd-apply-btn{
   background:#c9993f;color:#3B2E1E;border:2px solid #3B2E1E;border-radius:var(--radius-sm);
@@ -575,6 +585,10 @@
    ══════════════════════════════════════════════════════ */
 
 /* ── Overlay — warm tinted fog ── */
+[data-theme="tofu"] .stg-modal-overlay {
+  background: rgba(74, 63, 47, 0.45);
+  backdrop-filter: blur(2px);
+}
 
 /* ── Modal shell — game cartridge card ── */
 [data-theme="tofu"] .stg-modal {
@@ -749,6 +763,21 @@
   box-shadow:
     inset 0 2px 4px rgba(74, 63, 47, 0.06),
     0 0 0 3px rgba(196, 149, 106, 0.15);
+}
+[data-theme="tofu"] .stg-modal .stg-field .stg-tag-editor .stg-tag-input,
+[data-theme="tofu"] .stg-modal .stg-field .stg-tag-editor .stg-tag-input:focus {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: var(--space-1) 2px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: var(--font-size-sm);
+}
+[data-theme="tofu"] .stg-modal .stg-tag-chip {
+  border-color: #B8AD94;
+  border-radius: 6px;
+  background: #FFFEF8;
+  box-shadow: none;
 }
 
 /* ── Hint text ── */
@@ -987,6 +1016,7 @@
   color:#7A441F !important;
   font-weight:700 !important
 }
+[data-theme="tofu"] .cost-tag .cost-breakdown{color:#B8A080}
 [data-theme="tofu"] #browserToggle.active{background:rgba(143,81,38,0.08);color:#7A441F;border-bottom-color:rgba(143,81,38,0.5)}
 [data-theme="tofu"] #desktopToggle.active{background:rgba(138,120,176,0.08);color:#8A78B0;border-bottom-color:rgba(138,120,176,0.5)}
 

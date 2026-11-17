@@ -16,24 +16,12 @@ class AcceleratorBudgetExceeded(Exception):
     """Retry via resumable chunk scanning, not the same expensive SQL."""
 
 
-def _define_sqlite_function(connection, name: str, function: Callable) -> None:
-    """Register a one-argument function once per connection.
-
-    Redefining an existing function makes SQLite expire every prepared
-    statement, and before 3.53 it fails with SQLITE_BUSY ("Error creating
-    function") while FTS5 still holds pending writes in an open transaction.
-    """
-    if connection.execute(
-            'SELECT 1 FROM pragma_function_list WHERE name=? AND narg=1 AND builtin=0',
-            (name,)).fetchone() is None:
-        connection.create_function(name, 1, function, deterministic=True)
-
-
 def prepare_search_session(session: Session) -> None:
     if session.backend == 'sqlite':
-        _define_sqlite_function(
-            session.connection,  # type: ignore[attr-defined]
-            'tofu_search_lower', lambda value: str(value or '').lower())
+        session.connection.create_function(  # type: ignore[attr-defined]
+            'tofu_search_lower', 1, lambda value: str(value or '').lower(),
+            deterministic=True,
+        )
 
 
 def simple_fold_column(
@@ -48,10 +36,11 @@ def simple_fold_column(
     """
     if session.backend != 'sqlite':
         return column, str
-    _define_sqlite_function(
-        session.connection,  # type: ignore[attr-defined]
-        'tofu_simple_fold',
-        lambda value: None if value is None else simple_case_fold(str(value)))
+    session.connection.create_function(  # type: ignore[attr-defined]
+        'tofu_simple_fold', 1,
+        lambda value: None if value is None else simple_case_fold(str(value)),
+        deterministic=True,
+    )
     return f'tofu_simple_fold({column})', simple_case_fold
 
 

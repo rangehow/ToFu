@@ -1,6 +1,6 @@
 /** Demand-loaded Local Control modal, capability probes, node pairing and SSO poll relay. */
-import './local-control.css';
-import './local-control-nodes.css';
+import '../styles/application/14-local-control.css';
+import '../styles/application/14-local-control-nodes.css';
 import '../runtime/local-control-presenters.generated.js';
 import { getFeatureBinding } from '../feature-registry';
 import { invokeFeatureEntry, type FeatureCallable } from '../runtime-bridge';

@@ -412,8 +412,7 @@ def test_nonexecutable_cargo_is_not_selected(project, tmp_path):
     (cargo_home / 'bin/cargo').write_text('not executable')
     with pytest.raises(engines.EnginePreparationError, match='Cargo was not found'):
         engines._build(project, tmp_path,
-                       {'HOME': str(tmp_path / 'home'), 'CARGO_HOME': str(cargo_home),
-                        'PATH': str(tmp_path / 'empty-path')})
+                       {'CARGO_HOME': str(cargo_home), 'PATH': str(tmp_path / 'empty-path')})
 
 
 @pytest.mark.skipif(os.name == 'nt', reason='POSIX executable permission')

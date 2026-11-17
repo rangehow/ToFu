@@ -79,7 +79,7 @@ class MemoryMetadataCache:
         self._fingerprint_settle_ns = max(0, int(fingerprint_settle_ns))
         self._clock_ns = time.time_ns
         self._entries: OrderedDict[
-            str, tuple[MemoryFileFingerprint, Mapping, int, str]
+            str, tuple[MemoryFileFingerprint, Mapping, int]
         ] = OrderedDict()
         self._retained_bytes = 0
         self._lock = threading.Lock()
@@ -111,19 +111,19 @@ class MemoryMetadataCache:
         self,
         identity: str,
         fingerprint: MemoryFileFingerprint,
-    ) -> tuple[bool, Mapping, str]:
+    ) -> tuple[bool, Mapping]:
         with self._lock:
             entry = self._entries.get(identity)
             if entry is None:
                 self._metrics['misses'] += 1
-                return False, {}, identity
-            cached_fingerprint, metadata, weight, retained_identity = entry
+                return False, {}
+            cached_fingerprint, metadata, weight = entry
             if cached_fingerprint != fingerprint:
                 self._entries.pop(identity, None)
                 self._retained_bytes -= weight
                 self._metrics['stale'] += 1
                 self._metrics['misses'] += 1
-                return False, {}, identity
+                return False, {}
             # Several valid filesystems expose nanosecond fields backed by a
             # much coarser write clock (1 ms here; FAT can be 2 s). A same-size
             # in-place edit inside that tick can therefore preserve all five
@@ -135,10 +135,10 @@ class MemoryMetadataCache:
                         self._clock_ns() - self._fingerprint_settle_ns)):
                 self._metrics['unstable'] += 1
                 self._metrics['misses'] += 1
-                return False, {}, identity
+                return False, {}
             self._entries.move_to_end(identity)
             self._metrics['hits'] += 1
-        return True, metadata, retained_identity
+        return True, metadata
 
     def lookup(
         self,
@@ -146,7 +146,7 @@ class MemoryMetadataCache:
         fingerprint: MemoryFileFingerprint,
     ) -> tuple[bool, dict]:
         """Return a mutable caller-owned metadata copy on cache hit."""
-        cached, metadata, _identity = self._lookup_frozen(identity, fingerprint)
+        cached, metadata = self._lookup_frozen(identity, fingerprint)
         if not cached:
             return False, {}
         return True, _thaw_metadata_value(metadata)
@@ -155,13 +155,8 @@ class MemoryMetadataCache:
         self,
         identity: str,
         fingerprint: MemoryFileFingerprint,
-    ) -> tuple[bool, Mapping, str]:
-        """Return the recursively immutable cached view without copying.
-
-        The third item is the identity string this cache retains for a hit
-        (``identity`` itself otherwise), so a caller's record can share that
-        object instead of holding an equal copy per listing.
-        """
+    ) -> tuple[bool, Mapping]:
+        """Return the recursively immutable cached view without copying."""
         return self._lookup_frozen(identity, fingerprint)
 
     def clock_ns(self) -> int:
@@ -213,11 +208,11 @@ class MemoryMetadataCache:
                 len(self._entries) >= self._max_entries
                 or self._retained_bytes + weight > self._max_bytes
             ):
-                _key, (_fingerprint, _metadata, evicted_weight, _identity) = (
+                _key, (_fingerprint, _metadata, evicted_weight) = (
                     self._entries.popitem(last=False))
                 self._retained_bytes -= evicted_weight
                 self._metrics['evictions'] += 1
-            self._entries[identity] = (fingerprint, retained, weight, identity)
+            self._entries[identity] = (fingerprint, retained, weight)
             self._retained_bytes += weight
             return True
 

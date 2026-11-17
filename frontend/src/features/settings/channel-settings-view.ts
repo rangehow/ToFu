@@ -18,7 +18,6 @@
  * opening tab's lifecycle scope, the `Api.credentials` list and the runtime
  * `closeSettings` / `loadConversation` bindings.
  */
-import './channel-settings.css';
 import { featureRegistry } from '../../feature-registry';
 import { t } from '../../i18n';
 import type { LifecycleScope } from '../../lifecycle';

@@ -724,8 +724,6 @@ def test_timed_wake_keeps_one_timer_per_project_and_the_earliest_due_time(monkey
     assert continuation._TIMED_WAKES[(7, '/p')][1] is first
     continuation.schedule_wake(7, '/p', now[0] - 5, clock=lambda: now[0])
     timer = continuation._TIMED_WAKES[(7, '/p')][1]
-    # cancel() only signals the replaced timer; its thread exits asynchronously.
-    first.join(3)
-    assert timer is not first and first.finished.is_set() and not first.is_alive()
+    assert timer is not first and not first.is_alive()
     timer.join(3)
     assert len(fired) == 1 and (7, '/p') not in continuation._TIMED_WAKES

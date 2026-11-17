@@ -461,22 +461,26 @@ def system_fingerprint(system: Any, tools: Any) -> dict[str, str]:
     # Tools: hash the ordered (name, description, canonical-params) triples,
     # ignoring cache_control. A tool add/remove/reorder or a schema edit shows;
     # a marker move does not.
-    _tool_specs: list[str] = []
-    for t in tools or ():
-        if not isinstance(t, dict):
-            continue
-        fn = t.get('function') if isinstance(t.get('function'), dict) else t
-        name = fn.get('name') or ''
-        desc = fn.get('description') or ''
-        params = fn.get('parameters')
-        try:
-            _pj = json.dumps(params, sort_keys=True, ensure_ascii=False)
-        except (TypeError, ValueError):
-            _pj = str(params)
-        _tool_specs.append(name + '\x03' + desc + '\x03' + _pj)
+    def _tools_md5() -> str:
+        _tool_specs: list[str] = []
+        for t in tools or ():
+            if not isinstance(t, dict):
+                continue
+            fn = t.get('function') if isinstance(t.get('function'), dict) else t
+            name = fn.get('name') or ''
+            desc = fn.get('description') or ''
+            params = fn.get('parameters')
+            try:
+                _pj = json.dumps(params, sort_keys=True, ensure_ascii=False)
+            except (TypeError, ValueError):
+                _pj = str(params)
+            _tool_specs.append(name + '\x03' + desc + '\x03' + _pj)
+        return _md5('\x01'.join(_tool_specs))
 
+    from lib.conversation_sync.settled_rows import rows_memo
     return {'system': _md5(_sys_text),
-            'tools': _md5('\x01'.join(_tool_specs))}
+            'tools': rows_memo(tools or (), ('wire-fingerprint', 'tool-specs'),
+                               _tools_md5)}
 
 
 def marker_signature(body: dict) -> dict[str, Any]:
@@ -1062,13 +1066,15 @@ def wire_byte_region(system: Any, tools: Any,
         _sys_raw = system            # a bare string IS its own wire bytes
     else:
         _sys_raw = _dump(system)     # block list — order-sensitive by design
-    _tools_raw = _dump(tools or [])
+    from lib.conversation_sync.settled_rows import rows_memo
+    _tools_md5 = rows_memo(tools or (), ('wire-fingerprint', 'tool-bytes'),
+                           lambda: _md5(_dump(tools or [])))
     try:
         _controls_raw = json.dumps(controls or {}, ensure_ascii=False,
                                    sort_keys=True)
     except (TypeError, ValueError):
         _controls_raw = str(controls)
-    return {'system': _md5(_sys_raw), 'tools': _md5(_tools_raw),
+    return {'system': _md5(_sys_raw), 'tools': _tools_md5,
             'controls': _md5(_controls_raw)}
 
 

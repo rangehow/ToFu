@@ -23,7 +23,7 @@ import threading
 from types import MappingProxyType
 
 from lib.conversation_sync.settled_rows import (
-    SettledDict, SettledList, is_settled, memo_get, memo_put,
+    SettledDict, SettledList, is_settled, memo_get, memo_put, rows_memo,
 )
 from lib.utils import sha256_holding_gil, update_holding_gil
 
@@ -47,6 +47,7 @@ _EXACT_JSON_MEMO = ('request-json', 'exact')
 _SEMANTIC_CHAIN_MEMO = ('request-json', 'semantic-chain')
 _WIRE_ITEM_MEMO = ('request-json', 'wire-item')
 _TOOL_INPUT_TEXT_MEMO = ('request-json', 'tool-input-text')
+_FIELD_JSON_MEMO = ('request-json', 'field')
 _SEMANTIC_FIELDS = ('model', 'messages', 'system', 'tools')
 
 
@@ -92,6 +93,14 @@ def request_preparation(*, stage='wire_projection'):
     except Exception as error:
         raise LocalRequestPreparationError(
             'local request preparation failed', stage=stage) from error
+
+
+def _encode_field(value, *, sorted_keys=False):
+    """``_encode(value)``; a list of settled rows is encoded once per run."""
+    if type(value) in _JSON_LISTS:
+        return rows_memo(value, (_FIELD_JSON_MEMO, sorted_keys),
+                         lambda: _encode(value, sorted_keys=sorted_keys))
+    return _encode(value, sorted_keys=sorted_keys)
 
 
 def _digest(value, *, sorted_keys=False):
@@ -198,8 +207,11 @@ def semantic_request_id(body):
         if settled:
             memo_put(message, _SEMANTIC_CHAIN_MEMO, (state, extended))
         state = extended
-    rest = _encode({key: body.get(key) for key in _SEMANTIC_FIELDS
-                    if key != 'messages'}, sorted_keys=True)
+    # ``_encode`` of the sorted remainder {model, system, tools}, composed
+    # field by field so a settled tool list is encoded once per surface.
+    rest = b'{' + b','.join(
+        _encode(key) + b':' + _encode_field(body.get(key), sorted_keys=True)
+        for key in _SEMANTIC_FIELDS if key != 'messages') + b'}'
     digest = state.copy()
     update_holding_gil(digest, b'],' + rest[1:])
     return digest.hexdigest()
@@ -386,7 +398,7 @@ def seal_request(body, *, model, provider_id='', protocol='openai',
         if key in _ITEM_LIST_FIELDS and type(value) in _JSON_LISTS:
             position, items[key] = _append_items(chunks, value, start)
         else:
-            encoded = _encode(value)
+            encoded = _encode_field(value)
             chunks.append(encoded)
             position = start + len(encoded)
         scalar = value is None or isinstance(value, (str, int, float, bool))

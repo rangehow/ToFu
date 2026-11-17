@@ -355,6 +355,27 @@ class TestGoldenByteIdentity:
                       if s.get('type') == SEG_THINKING and s.get('llmRound') == 0)
         assert think0['signature'] == 'opaque-sig-0'
 
+    @pytest.mark.parametrize('make', ALL_TASKS, ids=[f.__name__ for f in ALL_TASKS])
+    def test_settled_rounds_reuse_their_segments_and_equal_a_fresh_build(self, make):
+        """A settled round's segments are built once and shared by later mirrors."""
+        from lib.conversation_sync.settled_rows import settle
+        plain = make()
+        task = make()
+        for field in ('toolRounds', '_checkpointToolRounds'):
+            if field in task:
+                task[field] = [settle(row) for row in task[field]]
+        first = assemble_segments(task)
+        second = assemble_segments(task)
+        assert first == second == assemble_segments(plain)
+        tool_blocks = [segment for segment in first if segment['type'] == SEG_TOOL_USE]
+        assert all(any(segment is again for again in second) for segment in tool_blocks)
+        # A round replaced copy-on-write (its verdict changed) is rebuilt.
+        if task['toolRounds']:
+            task['toolRounds'][-1] = settle(
+                {**task['toolRounds'][-1], 'toolContent': 'replaced'})
+            plain['toolRounds'][-1] = {**plain['toolRounds'][-1], 'toolContent': 'replaced'}
+            assert assemble_segments(task) == assemble_segments(plain)
+
 
 # ═════════════════════════════════════════════════════════════
 #  Engine-authored intervention notes (SEG_SYSTEM_NOTE)

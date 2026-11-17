@@ -495,6 +495,12 @@ def _prepare_initial_tool_surface(cfg, task, tool_list, search_mode):
         policies.get(provider_tool_name(tool)) == 'searchable'
         or provider_tool_name(tool) not in visible_names for tool in authority))
     task['_toolSearchMode'] = search_mode
+    # Every round's wire surface is projected from these schemas and never
+    # edits them in place: settled (deep-immutable, byte-identical) rows keep
+    # their identity through request detachment, so per-round schema
+    # encodes, counts and digests memoize on them instead of repeating.
+    from lib.conversation_sync.settled_rows import settle_items
+    tool_list = settle_items(tool_list)
     task['_tool_schema'] = tool_list
     if authority and search_mode == 'local':
         flags = normalize_context_experiment_flags(cfg)['tools']

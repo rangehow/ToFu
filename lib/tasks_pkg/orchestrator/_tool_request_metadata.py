@@ -170,6 +170,8 @@ def attach_tool_request_metadata(task, body, messages, tool_list, *, model, roun
     # Keep it separate from execution authority because Tool Search may defer
     # schemas without removing the corresponding executable capability.
     body['_tool_wire_catalog'] = list(_tools_this_round or [])
+    # Task-owned rows of the last final wire surface (lib/llm/tool_wire.py).
+    body['_wire_tool_rows'] = task.setdefault('_wireToolRows', {})
     body['_tool_discovery_policy_by_name'] = dict(
         task.get('_toolDiscoveryPolicyByName') or {})
     _tool_search_catalog_size = task.get('_toolSearchCatalogSize')

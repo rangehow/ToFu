@@ -467,8 +467,16 @@ class RequestTextCounts:
 
 
 def _dump_tool_schemas(tools: Any) -> str | None:
-    """Tool-schema text exactly as ``iter_message_texts`` derives it."""
+    """Tool-schema text exactly as ``iter_message_texts`` derives it.
+
+    A list of settled schema rows is dumped once per surface: the same text
+    object then serves every round that sends those rows.
+    """
     try:
+        if isinstance(tools, list):
+            from lib.conversation_sync.settled_rows import rows_memo
+            return rows_memo(tools, ('token-counter', 'tool-schema-text'),
+                             lambda: json.dumps(tools, ensure_ascii=False))
         return json.dumps(tools, ensure_ascii=False)
     except (TypeError, ValueError) as e:
         logger.debug('[TokenCounter] tool schema json.dumps failed: %s', e)

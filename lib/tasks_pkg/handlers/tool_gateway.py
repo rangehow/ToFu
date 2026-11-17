@@ -150,21 +150,34 @@ def _executable_catalog(task: dict[str, Any], fallback=None) -> list[dict]:
 
     MCP entries are first re-projected onto the owner bridge's live schemas:
     the task snapshot predates any server restart or upgrade during the turn.
+    The projection is skipped while the task still holds the catalog it last
+    projected and the bridge's tool-catalog generation is unchanged: the live
+    rows it compared against are then the same.
     """
-    if '_executable_tool_catalog' in task:
-        catalog = list(task.get('_executable_tool_catalog') or [])
-        if any(_schema_name(tool).startswith('mcp__') for tool in catalog):
-            from lib.mcp import get_bridge
-            from lib.mcp.live_schemas import project_live_mcp_schemas
-            from lib.tasks_pkg.manager import task_user_id
-            live = project_live_mcp_schemas(
-                get_bridge(task_user_id(task)), catalog,
-                task.get('_toolContractDocumentsByName') or {})
-            if live is not None:
-                catalog, task['_toolContractDocumentsByName'] = live
-                task['_executable_tool_catalog'] = catalog
-        return list(catalog)
-    return list(fallback or [])
+    if '_executable_tool_catalog' not in task:
+        return list(fallback or [])
+    source = task.get('_executable_tool_catalog') or []
+    stamp = task.get('_liveMcpSchemaStamp')
+    if stamp is None or stamp[2] is not source:
+        if not any(_schema_name(tool).startswith('mcp__') for tool in source):
+            return list(source)
+    from lib.mcp import get_bridge
+    from lib.mcp.live_schemas import project_live_mcp_schemas
+    from lib.tasks_pkg.manager import task_user_id
+    bridge = get_bridge(task_user_id(task))
+    # Read before projecting: a change during projection advances it, so the
+    # next call projects again.
+    generation = bridge.tool_catalog_generation()
+    if stamp is not None and stamp[2] is source and stamp[0] is bridge \
+            and stamp[1] == generation:
+        return list(source)
+    live = project_live_mcp_schemas(
+        bridge, list(source), task.get('_toolContractDocumentsByName') or {})
+    if live is not None:
+        source, task['_toolContractDocumentsByName'] = live
+        task['_executable_tool_catalog'] = source
+    task['_liveMcpSchemaStamp'] = (bridge, generation, source)
+    return list(source)
 
 
 def _schema_name(tool: Any) -> str:

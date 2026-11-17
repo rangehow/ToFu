@@ -27,6 +27,7 @@ from .length_continuation import (
     OUTPUT_TOKEN_CEILING,
     LengthContinuation,
     length_continuation_hook,
+    premature_close_recovery_hook,
 )
 from .qa_runtime import _append_qa_event, _cleanup_stale_qa_tasks, _qa_runtime
 from .tools import (
@@ -120,15 +121,18 @@ def _run_qa_task(task, messages):
             log_prefix='[Paper:QA]',
         ))
 
-    def _begin_tool_round(rnd, msg):
-        # Discard any interim draft prose this round emitted (it will be
-        # rewritten after the tool results land).
+    def _discard_round_draft(_rnd):
         nonlocal full_content
         round_content = _round['content']
         if round_content:
             full_content = full_content[:-len(round_content)]
             task['full_text'] = full_content
             _append_qa_event(task, {'type': 'delta_reset'})
+
+    def _begin_tool_round(rnd, msg):
+        # Discard any interim draft prose this round emitted (it will be
+        # rewritten after the tool results land).
+        _discard_round_draft(rnd)
         messages.append(msg)
 
     def _on_round_result(_rnd, msg, _finish, _usage):
@@ -154,6 +158,11 @@ def _run_qa_task(task, messages):
             execute_tool=_execute_tool,
             on_round_result=_on_round_result,
             on_tool_round=_begin_tool_round,
+            retry_bonus=premature_close_recovery_hook(
+                continuation, messages, abort_signal,
+                discard_draft=_discard_round_draft,
+                ui_lang=task.get('lang') or 'en', task_id=task_id,
+                log_prefix='[Paper:QA]'),
             decide_round=length_continuation_hook(
                 continuation, messages, abort_signal,
                 ui_lang=task.get('lang') or 'en', task_id=task_id,

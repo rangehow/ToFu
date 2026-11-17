@@ -52,6 +52,7 @@ from .length_continuation import (
     OUTPUT_TOKEN_CEILING,
     LengthContinuation,
     length_continuation_hook,
+    premature_close_recovery_hook,
 )
 from .qa_context import build_qa_messages
 from .request_policy import paper_request_policy_telemetry
@@ -420,13 +421,16 @@ def _run_deepen_task(task, messages, *, paper_hash, section, ui_lang):
         _acc_usage(usage)
         task['agentUsageV1'] = _agent_usage.snapshot()
 
-    def _begin_tool_round(rnd, msg):
+    def _discard_round_draft(_rnd):
         nonlocal full_content
         round_content = _round['content']
         if round_content:
             full_content = full_content[:-len(round_content)]
             task['full_text'] = full_content
             _append_deepen_event(task, {'type': 'delta_reset'})
+
+    def _begin_tool_round(rnd, msg):
+        _discard_round_draft(rnd)
         messages.append(msg)
 
     _execute_tool = make_paper_task_tool_executor(
@@ -448,6 +452,11 @@ def _run_deepen_task(task, messages, *, paper_hash, section, ui_lang):
             execute_tool=_execute_tool,
             on_round_result=_on_round_result,
             on_tool_round=_begin_tool_round,
+            retry_bonus=premature_close_recovery_hook(
+                continuation, messages, abort_signal,
+                discard_draft=_discard_round_draft,
+                ui_lang=ui_lang, task_id=task_id,
+                log_prefix='[Paper:Deepen]'),
             decide_round=length_continuation_hook(
                 continuation, messages, abort_signal,
                 ui_lang=ui_lang, task_id=task_id,

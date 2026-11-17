@@ -51,6 +51,7 @@ from typing import Any, Callable
 
 from lib.llm.stream_result import (
     ProviderStreamResult,
+    ProviderStreamState,
     require_verified_provider_stream_result,
 )
 from lib.log import get_logger
@@ -59,7 +60,24 @@ from lib.tool_results.tool_call_identity import ensure_unique_tool_call_ids
 logger = get_logger(__name__)
 
 __all__ = ['AbortSignal', 'LoopDirective', 'LoopOutcome', 'run_agent_loop',
-           'unparseable_tool_calls', 'agent_loop_checkpoint_limits']
+           'unparseable_tool_calls', 'agent_loop_checkpoint_limits',
+           'detect_premature_close']
+
+
+def detect_premature_close(_rnd: int, msg: Any, finish: Any, usage: Any) -> bool:
+    """Return True when a round's provider stream did not verifiably finish.
+
+    The ``retry_bonus`` detector for chassis callers. The state comes from the
+    single typed classifier (``ProviderStreamResult.from_legacy`` reads the
+    ``_stream_state`` every dispatch result carries), so this agrees with the
+    chassis' own adoption refusal: every round it would reject with
+    ``UnverifiedProviderStreamError`` is retryable, except a client abort,
+    which belongs to the abort placements.
+    """
+    state = ProviderStreamResult.from_legacy(
+        msg if isinstance(msg, dict) else None, finish, usage).state
+    return state not in (ProviderStreamState.PROVIDER_FINISHED,
+                         ProviderStreamState.CLIENT_ABORTED)
 
 
 def unparseable_tool_calls(msg: dict) -> list:
@@ -628,7 +646,8 @@ def run_agent_loop(
             # A typed provider attempt is never allowed to fall through the
             # generic "no tools means completed" rule without positive finish
             # evidence. Root chat's decide_round owns lossless retry and exits
-            # above; standalone paper/swarm consumers fail honestly here.
+            # above; paper workers recover through retry_bonus; a consumer
+            # without recovery, or with its retries spent, fails honestly here.
             require_verified_provider_stream_result(
                 dispatch_result, context='agent-loop round')
 

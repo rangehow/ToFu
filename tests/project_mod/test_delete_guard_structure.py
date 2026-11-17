@@ -224,16 +224,16 @@ class TestTrueRefusals:
 
     def test_pipeline_background_scoping_is_not_shared_state(self):
         # `D=/mnt | cat` binds D in a pipeline subshell only: under both bash
-        # and a POSIX shell the outer $D expands EMPTY, so "$D/x" resolves to
-        # /x (a top-level delete) while a bare "$D" deletes nothing.
+        # and a POSIX shell the outer $D expands EMPTY, so "$D/usr" resolves
+        # to /usr (a top-level delete) while a bare "$D" deletes nothing.
         assert _is_catastrophic_delete(
-            f'D=/mnt | cat; {_RM} -rf "$D/x"', cwd=_WS) is not None
+            f'D=/mnt | cat; {_RM} -rf "$D/usr"', cwd=_WS) is not None
         assert _is_catastrophic_delete(
             f'D=/mnt | cat; {_RM} -rf "$D/"', cwd=_WS) is not None
         assert _is_catastrophic_delete(
             f'D=/mnt | cat; {_RM} -rf "$D"', cwd=_WS) is None
         assert _is_catastrophic_delete(
-            f'D=/mnt & wait; {_RM} -rf "$D/x"', cwd=_WS) is not None
+            f'D=/mnt & wait; {_RM} -rf "$D/usr"', cwd=_WS) is not None
         assert _is_catastrophic_delete(
             f'D=/mnt & wait; {_RM} -rf "$D/"', cwd=_WS) is not None
 
@@ -249,13 +249,9 @@ class TestTrueRefusals:
         assert _is_catastrophic_delete(f"{_RM} -rf $'\\x2f'", cwd=_WS) is not None
         assert _is_catastrophic_delete(f'{_RM} -rf $"/"', cwd=_WS) is not None
 
-    def test_dbracket_operators_still_split_for_posix(self):
-        # `[[` is a bash builtin; dash runs `[[` as a command name and the
-        # || branch. The delete must be seen under the POSIX reading.
+    def test_a_delete_after_a_dbracket_test_is_seen(self):
         assert _is_catastrophic_delete(
             f'[[ -n x ]] || {_RM} -rf /', cwd=_WS) is not None
-        assert _is_catastrophic_delete(
-            f'[[ -n x || {_RM} -rf / ]]', cwd=_WS) is not None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -354,7 +350,7 @@ class TestSharedProgramView:
         f"script -c '{_RM} -rf /'",
         f"bash -c $'{_RM} -rf /'",
         f'timeout $T {_RM} -rf /',
-        f'setsid --bogus {_RM} -rf /tmp/scoped/x',
+        f'setsid --bogus {_RM} -rf /',
     ])
     def test_root_delete_blocked_through_the_shared_view(self, shape):
         assert _is_catastrophic_delete(shape, cwd=_WS) is not None, shape
@@ -370,15 +366,17 @@ class TestSharedProgramView:
         f'docker exec c {_RM} -rf /tmp/tofu-delguard/scoped',
         f"su -c 'echo {_RM} -rf /'",
         'setsid --bogus python3 x.py',
+        f'setsid --bogus {_RM} -rf /tmp/tofu-delguard/scoped',
         'eval "echo hi"',
         f"bash -c $'echo {_RM}'",
     ])
     def test_scoped_and_data_forms_allowed(self, shape):
         assert _is_catastrophic_delete(shape, cwd=_WS) is None, shape
 
-    def test_variable_wrapper_option_refuses_as_unproven(self):
+    def test_variable_wrapper_option_still_judges_the_delete(self):
         detail = _catastrophic_delete_detail(f'timeout $T {_RM} -rf /', cwd=_WS)
-        assert detail is not None and detail[1] == 'unproven'
+        assert detail is not None and detail[1] == 'shallow'
+        assert _catastrophic_delete_detail(f'timeout $T {_RM} -rf build', cwd=_WS) is None
 
     def test_eval_shares_the_shell_state(self):
         # eval runs in this shell: its cd reaches the next command.
@@ -456,9 +454,12 @@ class TestPrivilegeWrapperGrammar:
         f'sudo --user=x --bogus=1 {_RM} -rf /tmp/tofu-delguard/scoped',
         f'doas -Z {_RM} -rf /tmp/tofu-delguard/scoped',
     ])
-    def test_unknown_options_refuse_as_unproven_when_they_could_delete(self, shape):
-        detail = _catastrophic_delete_detail(shape, cwd=_WS)
-        assert detail is not None and detail[1] == 'unproven', shape
+    def test_unknown_options_still_judge_the_delete_they_hide(self, shape):
+        # The first delete word is taken as the program: a scoped target
+        # passes, the same delete of / is refused.
+        assert _catastrophic_delete_detail(shape, cwd=_WS) is None, shape
+        root = shape.replace('/tmp/tofu-delguard/scoped', '/')
+        assert _catastrophic_delete_detail(root, cwd=_WS) is not None, root
 
     @pytest.mark.parametrize('shape', [
         'sudo --bogus python3 x.py',

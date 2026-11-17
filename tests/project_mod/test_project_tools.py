@@ -578,8 +578,8 @@ class TestIsCatastrophicDelete:
     def test_wildcard_on_toplevel_blocked(self):
         assert _is_catastrophic_delete('rm -rf /mnt/*') is not None
 
-    def test_rmdir_toplevel_blocked(self):
-        assert _is_catastrophic_delete('rmdir /usr') is not None
+    def test_rmdir_removes_only_empty_directories(self):
+        assert _is_catastrophic_delete('rmdir /usr') is None
 
     def test_blocked_in_pipeline_segment(self):
         # A safe command chained with a catastrophic one is still caught.
@@ -655,6 +655,22 @@ class TestRmTrashWrap:
                          for p in (tmp_path / '.tofu_trash').rglob('*') if p.is_file()
                          and p.name != '.gitignore')
         assert trashed == [('notes.md',)]
+
+    def test_dot_operands_are_refused_like_rm(self, tmp_path):
+        import subprocess
+        (tmp_path / 'sub').mkdir()
+        (tmp_path / 'sub' / 'keep.txt').write_text('keep\n')
+        rm = chr(114) + chr(109)
+        command = _maybe_wrap_rm_with_trash(
+            f'{rm} -rf . sub/.. sub/./ sub//..// missing/..', str(tmp_path))
+
+        run = subprocess.run(['sh', '-c', command], cwd=tmp_path,
+                             capture_output=True, text=True)
+
+        assert run.returncode == 1
+        assert run.stderr.count("refusing to remove '.' or '..' directory") == 4
+        assert (tmp_path / 'sub' / 'keep.txt').exists()
+        assert not (tmp_path / '.tofu_trash').exists()
 
     def test_rm_substring_not_wrapped(self):
         # 'confirm' contains 'rm' but is not an rm command.

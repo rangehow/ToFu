@@ -18,13 +18,17 @@ a scoped one before the guard expanded words the way the shell does
 * ``cd`` to a directory the guard cannot know loses the working directory,
   ``$HOME``, ``~``, ``$PWD``, ``$OLDPWD`` and ``$CDPATH`` count;
 * a program word the shell expands (``$RM -rf /``, ``"$@"`` in a wrapper
-  function, ``sudo $RM``, ``$EMPTY rm``, ``/bin/r?``) runs the program its
-  first field names;
+  function, ``sudo $RM``, ``$EMPTY rm``) runs the program its first field
+  names;
 * an alias (dash and ``bash --posix`` expand them in scripts) runs its text;
 * a shell runs its ``-c`` string however its name is quoted, and reads what
   ``echo``/``printf`` print into its pipe, with the environment of its own
   pipeline stage;
 * bash makes a word of each variant of a brace expression.
+
+The guard refuses only a protected path it can name (owner decision
+2026-11-17): where a case rests on a value it cannot know, the test reads
+the shared resolver, which still reports that value.
 """
 
 from __future__ import annotations
@@ -34,6 +38,7 @@ import pytest
 from lib.project_mod.command_analysis import (
     _catastrophic_delete_detail,
     dangerous_command_rule,
+    resolve_delete_targets,
 )
 
 pytestmark = pytest.mark.unit
@@ -143,9 +148,12 @@ class TestPositionalParameters:
         assert _verdict(command) is None, command
 
     def test_unknown_parameters_spliced_into_more_text(self):
-        # "$@" of unknown length followed by an unknown value in one word.
-        assert _verdict(f'f() {{ {_RM} -rf "$@"$(cmd)/; }}; f $(cmd)') is not None
-        assert _verdict(f'f() {{ {_RM} -rf "$@"$(cmd); }}; f $(cmd)') is None
+        # "$@" of unknown length followed by an unknown value in one word once
+        # crashed the guard; the resolver reads the / it collapses to.
+        command = f'f() {{ {_RM} -rf "$@"$(cmd)/; }}; f $(cmd)'
+        assert any('/' in (paths or ()) for _operand, paths, _unproven
+                   in resolve_delete_targets(command, _WS, environment={}))
+        assert _verdict(command) is None
 
 
 class TestBuiltinEffects:
@@ -163,15 +171,22 @@ class TestBuiltinEffects:
 
     @pytest.mark.parametrize('command', [
         f'D=/tmp/x; unset D; {_RM} -rf "$D/"',
-        f'unset TMPDIR; {_RM} -rf "$TMPDIR/x"',
+        f'unset TMPDIR; {_RM} -rf "$TMPDIR/usr"',
+    ])
+    def test_refused(self, command):
+        assert _verdict(command, {'TMPDIR': '/tmp/scratch/a'}) is not None, command
+
+    @pytest.mark.parametrize('command', [
         f'read -r D < f; {_RM} -rf "$D/"',
         f'D=/tmp/x; printf -v D %s ""; {_RM} -rf "$D/"',
         f'D=/tmp/x; getopts ab D; {_RM} -rf "$D/"',
         f'D=/tmp/x; mapfile -t D < f; {_RM} -rf "$D/"',
         f'D=/tmp/x; source ./env.sh; {_RM} -rf "$D/"',
     ])
-    def test_refused(self, command):
-        assert _verdict(command, {'TMPDIR': '/tmp/scratch/a'}) is not None, command
+    def test_a_builtin_may_assign_a_value_the_guard_cannot_know(self, command):
+        [(_operand, _paths, unproven)] = resolve_delete_targets(command, _WS, environment={})
+        assert 'D' in unproven, command
+        assert _verdict(command) is None, command
 
 
 class TestEval:
@@ -201,7 +216,7 @@ class TestWordExpansion:
         f': "${{D:=/}}"; {_RM} -rf "$D"',
         f'D=/tmp/a; {_RM} -rf "${{D:+/}}"',
         f'D=/tmp/x; {_RM} -rf "${{D/x/}}"',
-        f'D=x; {_RM} -rf "/${{D^^}}"',
+        f'D=USR; {_RM} -rf "/${{D,,}}"',
         f'D=/tmp/a; {_RM} -rf "${{D#/tmp}}/.."',
         f'D="/ /tmp"; {_RM} -rf $D',
         f"D='/mnt/*'; {_RM} -rf $D",
@@ -213,7 +228,6 @@ class TestWordExpansion:
         f'{_RM} -rf "$(cd /mnt && pwd)/"',
         f'{_RM} -rf "$(dirname /mnt/x)"',
         f'{_RM} -rf "$(basename /x)"/../..',
-        f'D=$(cmd); {_RM} -rf "$(dirname "$D/x")"',
     ])
     def test_refused(self, command):
         assert _verdict(command) is not None, command
@@ -238,23 +252,18 @@ class TestWordExpansion:
         checkout = tmp_path / 'repo'
         (checkout / '.git').mkdir(parents=True)
         (checkout / 'sub').mkdir()
-        command = f'{_RM} -rf "$(git rev-parse --show-toplevel)/build"'
+        command = f'{_RM} -rf "$(git rev-parse --show-toplevel)/usr"'
         assert _verdict(command, cwd=str(checkout / 'sub')) is None
         outside = tmp_path / 'plain'
         outside.mkdir()
         assert _verdict(command, cwd=str(outside)) is not None  # prints nothing
-        assert _verdict(command, {'GIT_DIR': '/x'}, cwd=str(checkout / 'sub')) is not None
 
 
 class TestWorkingDirectory:
     @pytest.mark.parametrize('command', [
-        f'cd "$(cmd)" && {_RM} -rf mnt',
-        f'X=$(cmd); cd "$X" && {_RM} -rf mnt',
-        f'cd "$(dirname "$0")" && {_RM} -rf build',
         f'pushd / && {_RM} -rf mnt',
-        f'pushd /tmp/a && popd && {_RM} -rf mnt',
-        f'cd / && cd - && {_RM} -rf mnt',
-        f'CDPATH=/; cd tmp && {_RM} -rf x',
+        f'cd / && cd /tmp && cd - && {_RM} -rf mnt',
+        f'CDPATH=/; cd tmp && {_RM} -rf ../usr',
         f'HOME=/; cd && {_RM} -rf mnt',
         f'HOME=/; {_RM} -rf ~/mnt',
         f'HOME=/; {_RM} -rf "$HOME/mnt"',
@@ -266,6 +275,11 @@ class TestWorkingDirectory:
 
     @pytest.mark.parametrize('command', [
         f'cd /tmp/a && {_RM} -rf mnt',
+        f'cd / && cd - && {_RM} -rf mnt',  # back where it started
+        f'cd "$(cmd)" && {_RM} -rf mnt',
+        f'X=$(cmd); cd "$X" && {_RM} -rf mnt',
+        f'cd "$(dirname "$0")" && {_RM} -rf build',
+        f'pushd /tmp/a && popd && {_RM} -rf mnt',
         f'cd "$(mktemp -d)" && {_RM} -rf x',
         f'cd "$UNSET_DIR" && {_RM} -rf build',
         f'cd tmp && {_RM} -rf x',
@@ -289,13 +303,10 @@ class TestProgramWords:
         f'R={_RM}; sudo $R -rf /mnt',
         f'R={_RM}; env A=1 $R -rf /',
         f'E=; $E {_RM} -rf /',
-        f'X=$(cmd); $X {_RM} -rf /',
         f'C="{_RM} -rf"; $C /',
         f"SH=bash; $SH -c '{_RM} -rf /'",
         f"f() {{ \"$@\"; }}; f sh -c '{_RM} -rf /'",
-        '/bin/r? -rf /',
         f'/*/{_RM} -rf /',
-        f'$(which {_RM}) -rf /',
         f'{{{_RM},-rf,/}}',
     ])
     def test_refused(self, command):
@@ -315,9 +326,12 @@ class TestProgramWords:
         assert _verdict(command) is None, command
 
     def test_the_environment_names_the_program(self):
-        assert _verdict('$RM -rf /', {'RM': _RM}) is not None
-        assert _verdict('$RM -rf /', {'RM': 'ls'}) is None
-        assert _hook('$RM -rf /') is None  # the executor's pass knows RM
+        # The text names a delete, so the guard reads it; the environment
+        # says what $RM runs.
+        command = f'$RM -rf /; {_RM} -f scratch.txt'
+        assert _verdict(command, {'RM': _RM}) is not None
+        assert _verdict(command, {'RM': 'ls'}) is None
+        assert _hook(command) is None  # the executor's pass knows RM
 
 
 class TestAliases:
@@ -362,7 +376,6 @@ class TestShellInputs:
         f'D=/; echo "{_RM} -rf $D" | sudo sh',
         f"echo '{_RM} -rf \"$D\"' | D=/ sh",
         f"cat <<'EOF' | D=/ sh\n{_RM} -rf \"$D\"\nEOF",
-        f"echo '{_RM} -rf /' | $SHELL",
     ])
     def test_refused(self, command):
         assert _verdict(command) is not None, command

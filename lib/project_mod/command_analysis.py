@@ -25,9 +25,11 @@ import os
 import re
 import shlex
 from collections import Counter, namedtuple
+from glob import glob as _glob
 
 from lib.log import get_logger
 from lib.project_mod.command_structure import (
+    Compound,
     ItemRun,
     ShellStructureUnknown,
     SimpleCommand,
@@ -3337,14 +3339,6 @@ class _EnvironmentDeferred(Exception):
     know them; the executor's pass judges that operand."""
 
 
-class _RecursiveFunction(Exception):
-    """A shell function called itself; this guard does not follow recursion."""
-
-    def __init__(self, name):
-        super().__init__(name)
-        self.name = name
-
-
 def _mkstemp_value(source):
     """A bounded proof that ``$(mktemp …)`` yields a fresh deep path, or None."""
     body = source.strip()
@@ -4164,12 +4158,23 @@ def _printf_output(literal, raw, state, home):
 def _dirname_output(literal, raw, state, home):
     if len(raw) != 2:
         return (_DYNAMIC,)
+    if _makes_no_field(raw[1], state, home):
+        return ('',)  # no operand: dirname fails and prints nothing
     return _mapped_output(raw[1], state, home, _posix_dirname, _TRUSTED)
+
+
+def _makes_no_field(raw, state, home):
+    """Whether word *raw* expands to no field on every path (an unquoted
+    empty value)."""
+    return all(not fields and not uncertain
+               for fields, uncertain in _expand_word(raw, state, home).fields())
 
 
 def _basename_output(literal, raw, state, home):
     if len(raw) not in (2, 3):
         return (_DYNAMIC,)
+    if len(raw) == 2 and _makes_no_field(raw[1], state, home):
+        return ('',)  # no operand: basename fails and prints nothing
     suffix = literal[2] if len(raw) == 3 else ''
     return _mapped_output(raw[1], state, home,
                           lambda path: _posix_basename(path, suffix), _DYNAMIC)
@@ -4301,16 +4306,24 @@ def _script_texts(raws, state, home, *, heredoc=False):
 
 
 def _could_run_delete(text):
-    """Whether shell text this guard cannot parse might run rm/rmdir/unlink.
+    """Whether shell text names rm/rmdir/unlink at all. The delete guard does
+    not read a command without one of those words, and the resolver reports
+    text it cannot read as unresolvable only when it has one."""
+    for word in ('rm', 'unlink'):  # rmdir starts with rm
+        start = text.find(word) if text else -1
+        while start >= 0:
+            end = start + len(word)
+            if word == 'rm' and text.startswith('dir', end):
+                end += 3
+            if not ((start and _joins_word(text[start - 1]))
+                    or (end < len(text) and _joins_word(text[end]))):
+                return True
+            start = text.find(word, start + 1)
+    return False
 
-    Unparseable text refuses only when it could hide a delete command: a
-    syntax shape the parser does not model must not turn every ``echo`` or
-    ``git log`` into a "catastrophic delete".
-    """
-    return bool(text) and _DELETE_WORD_RE.search(text) is not None
 
-
-_DELETE_WORD_RE = _re.compile(r'(?<![\w.-])(?:rm|rmdir|unlink)(?![\w.-])')
+def _joins_word(char):
+    return char.isalnum() or char in '_.-'
 
 
 _ANSI_C_ESCAPES = {'a': '\a', 'b': '\b', 'e': '\x1b', 'E': '\x1b', 'f': '\f',
@@ -4401,6 +4414,11 @@ def _literal_command_word(raw):
         return raw if decoded is None else decoded
     if '$' in raw or '`' in raw or not any(char in raw for char in '\'"\\'):
         return raw
+    inner = raw[1:-1]
+    if len(raw) > 1 and raw[0] == raw[-1] and (
+            (raw[0] == "'" and "'" not in inner)
+            or (raw[0] == '"' and '"' not in inner and '\\' not in inner)):
+        return inner
     try:
         words = shlex.split(raw, comments=False, posix=True)
     except ValueError:
@@ -4421,8 +4439,8 @@ def _candidate_depth(path):
     normalized = os.path.normpath(path)
     if glob:
         components = [c for c in normalized.split('/') if c]
-        while components and all(ch in '*?[]' for ch in components[-1]):
-            components.pop()
+        while components and all(ch in '*?' for ch in components[-1]):
+            components.pop()  # `*`, `?*`: every name; `[ab]` names one character
         normalized = '/' + '/'.join(components) if components else '/'
     return normalized, len([c for c in normalized.split('/') if c])
 
@@ -4555,16 +4573,21 @@ class _DeleteGuardState:
     ``traps`` are the trap actions set on this path. ``jumps``, ``calls`` and
     ``alias_active`` describe the position rather than the state: where
     ``break``/``continue``/``return`` lead, the functions being run and the
-    aliases whose text is being read.
-    ``memo`` keeps, for the whole judgement, one parse and structure per
-    script and the trap actions set.
+    aliases whose text is being read; ``elsewhere`` whether the command being
+    run executes on another host, container or root (``ssh``, ``docker
+    exec``, ``chroot``); ``cd_outcome`` what the last ``cd`` that may fail
+    left on success and on failure (see :func:`_outcomes`). ``home`` is this
+    process's home directory. ``memo``
+    keeps, for the whole judgement, one parse and structure per script, the
+    program views of each command and the trap actions set.
     """
 
     __slots__ = ('bindings', 'cwds', 'cwd_given', 'cwd_lost',
                  'environment', 'functions', 'positional', 'zero', 'exports',
                  'allexport', 'exported_functions', 'aliases', 'traps', 'jumps',
-                 'calls', 'alias_active', 'memo')
-    _POSITION = frozenset({'jumps', 'calls', 'alias_active', 'memo'})
+                 'calls', 'alias_active', 'elsewhere', 'cd_outcome', 'home', 'memo')
+    _POSITION = frozenset({'jumps', 'calls', 'alias_active', 'elsewhere', 'cd_outcome',
+                           'home', 'memo'})
 
     def __init__(self, cwd, environment):
         start = os.path.normpath(cwd) if cwd and os.path.isabs(cwd) else None
@@ -4584,6 +4607,9 @@ class _DeleteGuardState:
         self.jumps = _NO_JUMPS
         self.calls = frozenset()
         self.alias_active = frozenset()
+        self.elsewhere = False
+        self.cd_outcome = None
+        self.home = os.path.expanduser('~')
         self.memo = {}
 
     def branch(self):
@@ -4814,7 +4840,7 @@ def _cd_destinations(state, operands, home):
     """``(directories, may stay)`` ``cd OPERANDS`` may enter; ``cd -`` is
     ``cd "$OLDPWD"`` and ``cd`` alone ``cd "$HOME"``. Raises
     ``_Unenumerable`` for a target this guard cannot follow (an unknown
-    value, a pattern, a ``$CDPATH`` search) and ``_EnvironmentDeferred`` for
+    value, a pattern, an unknown ``$CDPATH``) and ``_EnvironmentDeferred`` for
     one only a caller with the environment and cwd can follow."""
     if len(operands) > 1:
         return [], True  # too many arguments: cd fails
@@ -4836,7 +4862,7 @@ def _cd_destinations(state, operands, home):
         elif os.path.isabs(text):
             destinations.append(os.path.normpath(text))
         elif _searches_cdpath(state, text):
-            raise _Unenumerable()
+            destinations.extend(_cdpath_destinations(state, text))
         elif state.cwd_lost or not state.cwds:
             state.cwd_values()  # defers when the caller gave no cwd
             raise _Unenumerable()
@@ -4844,6 +4870,30 @@ def _cd_destinations(state, operands, home):
             destinations.extend(os.path.normpath(os.path.join(base, text))
                                 for base in state.cwds)
     return destinations, stays
+
+
+def _cdpath_destinations(state, text):
+    """Where ``cd TEXT`` goes when it searches ``$CDPATH``: for each value it
+    may hold, the first entry under which TEXT is a directory now, else TEXT
+    under the cwd. Raises ``_Unenumerable`` for a ``$CDPATH`` or cwd this
+    guard cannot know."""
+    value = state._held('CDPATH')
+    if not isinstance(value, tuple) or not all(isinstance(item, str) for item in value):
+        raise _Unenumerable()
+    if state.cwd_lost or not state.cwds:
+        state.cwd_values()  # defers when the caller gave no cwd
+        raise _Unenumerable()
+    destinations = []
+    for cwd in state.cwds:
+        for search in value:
+            for entry in search.split(':'):
+                candidate = os.path.normpath(os.path.join(cwd, entry, text))
+                if os.path.isdir(candidate):
+                    break
+            else:
+                candidate = os.path.normpath(os.path.join(cwd, text))
+            destinations.append(candidate)
+    return destinations
 
 
 def _searches_cdpath(state, text):
@@ -4856,8 +4906,10 @@ def _searches_cdpath(state, text):
 
 def _change_directory(state, operands, home):
     """``cd OPERANDS``: the new cwd candidates; a successful cd sets
-    ``$OLDPWD`` to the old ``$PWD`` and ``$PWD`` to the new directory. cd
-    may fail, so the old state stays possible."""
+    ``$OLDPWD`` to the old ``$PWD`` and ``$PWD`` to the new directory. A cd
+    into directories that all exist now succeeds. Any other may fail, so the
+    old state stays possible; ``cd_outcome`` keeps both outcomes for the
+    ``&&``/``||`` list the cd may lead."""
     try:
         destinations, _stays = _cd_destinations(state, operands, home)
     except (_Unenumerable, _EnvironmentDeferred, _Overflowed):
@@ -4866,6 +4918,16 @@ def _change_directory(state, operands, home):
         return  # cd stays where it is, or fails
     old_pwd = state._held('PWD') if 'PWD' in state.bindings else (
         None if state.cwd_lost or not state.cwds else tuple(state.cwds))
+    entered = None if destinations is None else list(_dedupe(destinations))[:_CWD_CAP]
+    if entered is not None and all(os.path.isdir(path) for path in entered):
+        state.bindings['OLDPWD'] = old_pwd
+        if 'PWD' in state.bindings:
+            state.bindings['PWD'] = tuple(entered)
+        state.cwds, state.cwd_lost = entered, False
+        return
+    state.cd_outcome = (entered, (list(state.cwds), state.cwd_lost,
+                                  state.bindings.get('PWD', _ABSENT),
+                                  state.bindings.get('OLDPWD', _ABSENT)))
     state.bindings['OLDPWD'] = _join_values(state._held('OLDPWD'), old_pwd)
     if 'PWD' in state.bindings:
         state.bindings['PWD'] = _join_values(
@@ -4900,9 +4962,11 @@ def _change_directory(state, operands, home):
 # docs/modules/tools_execution.md.
 
 def _delete_events(items, state):
-    """Yield ``('operand', raw word, state)`` for each delete operand the
-    parsed script may run, in execution order, and ``('opaque', text,
-    error)`` for shell-executed text that cannot be parsed. *state* follows
+    """Yield ``('operand', raw word, state)`` for each rm/unlink operand the
+    parsed script may run, in execution order, ``('empty-directory', raw
+    word, state)`` for each rmdir operand, ``('opaque', text, error)`` for
+    shell-executed text that cannot be parsed and ``('recursion', name,
+    state)`` for a recursive call that is not followed. *state* follows
     the script's literal bindings, ``cd`` hops and function definitions
     along its control flow; groups and substitution bodies run in a fork."""
     known = state.memo.get(id(items))
@@ -4922,18 +4986,95 @@ def _list_events(script, items, state):
 
 def _and_or_events(and_or, items, state):
     """``a && b || c``: an operand runs once the list so far succeeded
-    (``&&``) or failed (``||``); the state after it joins both outcomes."""
+    (``&&``) or failed (``||``); the state after it joins both outcomes. An
+    operand that leaves (:func:`_leaves`) ends the path that runs it."""
     (_, first), *rest = and_or.pipelines
-    yield from _pipeline_events(first, items, state)
     if not rest:
+        yield from _pipeline_events(first, items, state)
         return
-    succeeded, failed = state.branch(), state.branch()
+    state.cd_outcome = None
+    yield from _pipeline_events(first, items, state)
+    succeeded, failed = _outcomes(first, items, state)
     for operator, pipeline in rest:
-        runs, other = (succeeded, failed) if operator == '&&' else (failed, succeeded)
+        runs = succeeded if operator == '&&' else failed
+        if runs is None:
+            continue  # no path reaches it
+        leaves = _leaves(pipeline, runs)
+        runs.cd_outcome = None
         yield from _pipeline_events(pipeline, items, runs)
-        other.join(runs)
-    succeeded.join(failed)
-    state.assign(succeeded)
+        ran_ok, ran_failed = (None, None) if leaves else _outcomes(pipeline, items, runs)
+        if operator == '&&':
+            succeeded, failed = ran_ok, _union(failed, ran_failed)
+        else:
+            succeeded, failed = _union(succeeded, ran_ok), ran_failed
+    final = _union(succeeded, failed)
+    if final is not None and final is not state:
+        state.assign(final)
+
+
+_ABSENT = object()  # a name that has no binding
+
+
+def _outcomes(pipeline, items, state):
+    """``(success, failure)`` states after *pipeline* ran on *state*: a
+    single ``cd`` that may fail enters its directories on success and stays
+    where it was on failure, the other way round under ``!``; any other
+    pipeline leaves both the state it reached. The state the cd entered is
+    *state* itself."""
+    outcome, state.cd_outcome = state.cd_outcome, None
+    failed = state.branch()
+    if (outcome is not None and len(pipeline.commands) == 1
+            and isinstance(pipeline.commands[0], ItemRun)):
+        entered, (cwds, cwd_lost, pwd, oldpwd) = outcome
+        if entered is not None:
+            state.cwds, state.cwd_lost = entered, False
+        failed.cwds, failed.cwd_lost = cwds, cwd_lost
+        for name, value in (('PWD', pwd), ('OLDPWD', oldpwd)):
+            if value is _ABSENT:
+                failed.bindings.pop(name, None)
+            else:
+                failed.bindings[name] = value
+        if _negated(pipeline.commands[0], items):
+            return failed, state
+    return state, failed
+
+
+def _negated(run, items):
+    """Whether ``!`` inverts the status of the pipeline *run* starts."""
+    words = items[run.index].words
+    return words[:len(words) - len(run.words)].count('!') % 2 == 1
+
+
+def _union(mine, theirs):
+    """Join two states that may reach the same point, None for no path."""
+    if mine is None:
+        return theirs
+    if theirs is not None:
+        mine.join(theirs)
+    return mine
+
+
+def _leaves(pipeline, state):
+    """Whether *pipeline* always ends the path that runs it: ``exit``, a
+    ``return`` in a function or ``break``/``continue`` in a loop (whose
+    state :func:`_jump` already carried where it leads), alone or last in a
+    ``{ … }`` group."""
+    if len(pipeline.commands) != 1:
+        return False  # each stage runs in a subshell
+    node = pipeline.commands[0]
+    if isinstance(node, Compound):
+        if node.kind != 'group' or not node.parts[0]:
+            return False
+        last = node.parts[0][-1]
+        return (len(last.pipelines) == 1 and not last.background
+                and _leaves(last.pipelines[0][1], state))
+    words = [word for word in node.words or () if not _ASSIGNMENT_WORD.match(word)]
+    head = _literal_command_word(words[0]) if words else None
+    if head == 'exit':
+        return True
+    if head == 'return':
+        return state.jumps.call is not None
+    return head in ('break', 'continue') and bool(state.jumps.loops)
 
 
 def _pipeline_events(pipeline, items, state):
@@ -5052,30 +5193,59 @@ def _alias_expansions(words, state):
 
 
 def _unaliased_run_events(items, index, words, state):
-    position = _expanding_program_word(words)
+    elsewhere = state.elsewhere
+    if not elsewhere and not _FOREIGN_FILESYSTEM_RUNNERS.isdisjoint(words):
+        state.elsewhere = True
+    position = _expanding_program_word(words, state)
     if position is not None:
         yield from _expanded_command_events(items, index, words, position, state)
-        return
-    yield from _shell_input_events(items, index, state)
-    yield from _simple_command_events(words, state)
+    else:
+        yield from _shell_input_events(items, index, words, state)
+        yield from _simple_command_events(words, state)
+    state.elsewhere = elsewhere
 
 
-def _expanding_program_word(words):
-    """Index in *words* of the first program word the shell expands (a
-    parameter, substitution, tilde, pattern or brace expression), the command
-    word or the program a wrapper runs (``sudo $RM``), else None."""
-    if not any(shell_source_has_expansion(word) for word in words):
+# Runners whose program sees the files of another host, container or root:
+# a top-level path missing here may exist there.
+_FOREIGN_FILESYSTEM_RUNNERS = frozenset({
+    'ssh', 'chroot', 'nsenter', 'unshare', 'docker', 'podman', 'kubectl'})
+
+
+def _expanding_program_word(words, state):
+    """Index in *words* of the first program word the shell may make another
+    program (a parameter or command expansion, a bash brace expression), the
+    command word or the program a wrapper runs (``sudo $RM``), else None. A
+    pattern keeps its basename (``/*/rm`` is ``rm``)."""
+    if not any('$' in word or '`' in word or '{' in word for word in words):
         return None
-    views = _program_views(list(words))
+    views = _views(words, state)
     if views is _UNKNOWN_PROGRAM:
         return None
     for _literal, raw in views:
-        if not raw or not shell_source_has_expansion(raw[0]):
+        if not raw or not _program_word_expands(raw[0]):
             continue
         for start in range(len(words) - len(raw), -1, -1):
             if list(words[start:start + len(raw)]) == list(raw):
                 return start
     return None
+
+
+def _program_word_expands(raw):
+    if shell_source_has_expansion(raw, pathname=False):
+        return True
+    try:
+        return '{' in raw and _brace_variants(raw) is not None
+    except _Overflowed:
+        return True
+
+
+def _views(words, state):
+    """The :func:`_program_views` of *words*, computed once per judgement."""
+    key = ('views', tuple(words))
+    views = state.memo.get(key)
+    if views is None:
+        views = state.memo[key] = _program_views(list(words))
+    return views
 
 
 def _expanded_command_events(items, index, words, position, state):
@@ -5084,9 +5254,9 @@ def _expanded_command_events(items, index, words, position, state):
     ``/bin/r? …``), runs the program its first field names with its other
     fields as the first arguments: each field list it may make is judged as
     the command it makes, with the item's heredocs and redirects. Where the
-    program may be one this guard cannot name, the command also refuses when
-    its text could run a delete."""
-    home = os.path.expanduser('~')
+    program may be one this guard cannot name, the resolver reports it
+    unresolvable when its text could run a delete."""
+    home = state.home
     _default_assignments(words[:position + 1], state, home)
     try:
         alternatives = _expand_word(words[position], state, home).fields()
@@ -5129,21 +5299,20 @@ def _program_choice_events(items, index, words, position, choice, state):
 
 def _program_word_choices(fields, uncertain):
     """The words a program word making *fields* may start its command with,
-    requoted, and whether the program may also be one this guard cannot
-    name: an unknown or partly unknown value (judged as its empty collapse
-    too) or a pattern, which may name any program (judged as each delete
-    command it matches)."""
+    requoted, and whether its program may be one this guard cannot name: a
+    value it cannot know names no program (owner decision 2026-11-17), and a
+    pattern names the first file it matches."""
     rest = tuple(_requote(field) for field in fields[1:] if not field.trusted)
     if not fields:
-        return [rest], bool(uncertain)
+        return ([] if uncertain else [rest]), bool(uncertain)
     program = fields[0]
-    if program.trusted:
+    if program.trusted or program.names:
         return [], True
-    name = os.path.basename(program.text)
-    if program.glob and _has_glob(name):
-        return [(_shell_quoted(command),) + rest for command in sorted(_DELETE_COMMANDS)
-                if fnmatch.fnmatchcase(command, name)], True
-    return [(_shell_quoted(program.text),) + rest], bool(uncertain or program.names)
+    if program.glob and _has_glob(os.path.basename(program.text)):
+        matches = sorted(_glob(program.text))
+        return ([tuple(_shell_quoted(match) for match in matches) + rest]
+                if matches else []), False
+    return [(_shell_quoted(program.text),) + rest], bool(uncertain)
 
 
 def _shell_quoted(text):
@@ -5202,7 +5371,7 @@ def _for_events(parts, items, state):
     """``for``/``select``: the body runs once per listed word, any number of
     times for a computed list, ``select`` or an arithmetic ``for ((…))``."""
     header, body = parts
-    name, values, runs = _loop_variable(header, state, os.path.expanduser('~'))
+    name, values, runs = _loop_variable(header, state, state.home)
     if values == ():
         return  # an empty list never runs the body
     exits = _Exits()
@@ -5240,11 +5409,20 @@ def _case_events(parts, items, state):
     state.assign(_joined(outcomes))
 
 
+# Functions a shell calls without the script naming them: bash runs
+# command_not_found_handle (zsh command_not_found_handler) in place of any
+# command it cannot find.
+_SHELL_CALLED_FUNCTIONS = frozenset({'command_not_found_handle', 'command_not_found_handler'})
+
+
 def _function_events(parts, items, state):
-    """A definition runs nothing: its body is judged here, and runs on the
-    caller's state wherever the name is called."""
+    """A definition runs nothing: its body runs on the caller's state wherever
+    the name is called. The state here is not the one it runs with (``$1``,
+    names assigned before the call), so the body is not judged here unless
+    the shell itself may call it (:data:`_SHELL_CALLED_FUNCTIONS`)."""
     name, body = parts
-    yield from _node_events(body, items, state.fork())
+    if name in _SHELL_CALLED_FUNCTIONS:
+        yield from _node_events(body, items, state.fork())
     state.functions[name] = (_Definition(body, items),)
 
 
@@ -5321,9 +5499,9 @@ def _unstructured_item_events(items, index, state):
     while words and words[0] in _UNPAIRED_SYNTAX:
         del words[0]
     if words[:1] in (['for'], ['select']):
-        yield from _shell_input_events(items, index, state)
+        yield from _shell_input_events(items, index, words, state)
         name, values, _runs = _loop_variable(
-            tuple(words), state, os.path.expanduser('~'))
+            tuple(words), state, state.home)
         if name is not None and values != ():
             state.bindings[name] = values
         return
@@ -5331,16 +5509,12 @@ def _unstructured_item_events(items, index, state):
 
 
 def _reads_shell_stdin(item):
-    """Whether *item* may run a shell reading its stdin; a program word with
-    a parameter or command expansion may name one."""
     if not isinstance(item, SimpleCommand):
         return False
     from lib.project_mod.command_heredoc import shell_input_source
     views = _program_views(item.words)
     return (views is not _UNKNOWN_PROGRAM
-            and any(shell_input_source(view[0]) == ('stdin', None)
-                    or shell_source_has_expansion(view[1][0], pathname=False)
-                    for view in views))
+            and any(shell_input_source(view[0]) == ('stdin', None) for view in views))
 
 
 def _shell_string_script(raw):
@@ -5384,14 +5558,18 @@ def _shell_source_scripts(items, index, views):
     scripts = []
     reads_stdin = False
     for view in views:
+        source = shell_input_source(view[0])
+        if source is None:
+            continue
+        reads_stdin = reads_stdin or source == ('stdin', None)
         # The shell dequotes its program word and options (`"bash" -c …`); the
         # command string's own quoting decides whether this shell expands it.
-        position = shell_command_operand(view[0])
-        if position is not None and view[0][position]:
+        position = (shell_command_operand(view[0]) if source[0] == 'command' and source[1]
+                    else None)
+        if position is not None:
             raw_text = view[1][position]
             scripts.append(_ShellSource(raw_text, _shell_string_script(raw_text),
                                         tuple(view[1][position + 1:]), False, index))
-        reads_stdin = reads_stdin or shell_input_source(view[0]) == ('stdin', None)
     stdin_inputs = [_ShellSource(heredoc.body, (heredoc.body, heredoc.quoted), (), True, None)
                     for heredoc in item.heredocs]
     stdin_inputs += [_ShellSource(target, _shell_string_script(target), (), False, None)
@@ -5421,10 +5599,11 @@ def _stdin_texts(item):
             + [target for operator, target in item.redirects if operator.endswith('<<<')])
 
 
-def _shell_input_events(items, index, state):
+def _shell_input_events(items, index, words, state):
     """Judge text that a shell executes as a script of its own (see
-    :func:`_shell_source_scripts`)."""
-    views = _program_views(items[index].words)
+    :func:`_shell_source_scripts`); *words* are the item's words after any
+    reserved words."""
+    views = _views(words, state)
     if views is _UNKNOWN_PROGRAM:
         # The hidden program may be a shell reading this stdin.
         for text in _stdin_texts(items[index]):
@@ -5432,7 +5611,7 @@ def _shell_input_events(items, index, state):
                 yield 'opaque', text, ShellStructureUnknown(
                     'a wrapper or runner option is not understood', 0)
         return
-    home = os.path.expanduser('~')
+    home = state.home
     for source in _shell_source_scripts(items, index, views):
         if source.script is None:
             if _could_run_delete(source.raw):
@@ -5462,13 +5641,14 @@ def _printed_script_events(items, index, views, state, home):
     """A shell later in the pipeline reads what ``items[index]`` prints
     (``echo 'rm -rf /' | sh``): judge the output this guard can tell (see
     :func:`_substitution_values`) as a child shell's script."""
-    reader = None if len(views) != 1 or _redirects_output(items[index]) else (
-        _stdin_shell_stage(items, index))
-    if reader is None:
+    if len(views) != 1:
         return
     literal, raw = views[0]
     producer = _PRODUCERS.get(os.path.basename(literal[0]))
-    if producer is None:
+    if producer is None or _redirects_output(items[index]):
+        return
+    reader = _stdin_shell_stage(items, index)
+    if reader is None:
         return
     try:
         printed = producer(literal, raw, state, home)
@@ -5544,7 +5724,7 @@ def _simple_command_events(words, state):
     texts = list(words)
     if not texts:
         return
-    home = os.path.expanduser('~')
+    home = state.home
     _default_assignments(texts, state, home)
     count = 0
     while count < len(texts) and _ASSIGNMENT_WORD.match(texts[count]):
@@ -5566,14 +5746,20 @@ def _simple_command_events(words, state):
     if head in ('break', 'continue', 'return'):
         _jump(head, rest[1:], state)
         return
-    views = _program_views(texts)
+    views = _views(texts, state)
     if views is _UNKNOWN_PROGRAM:
         # A wrapper or runner whose options are not understood (`timeout $T`)
-        # hides its program: refuse when the text could run a delete.
+        # hides its program: its first delete word is taken as the program.
         text = ' '.join(texts)
         if _could_run_delete(text):
             yield 'opaque', text, ShellStructureUnknown(
                 'a wrapper or runner option is not understood', 0)
+            literal = [_literal_command_word(word) for word in texts]
+            for start, word in enumerate(literal):
+                if os.path.basename(word) in _DELETE_COMMANDS:
+                    yield from _program_delete_events(
+                        literal[start:], texts[start:], state, home)
+                    break
         return
     for literal, raw in views:
         yield from _program_delete_events(literal, raw, state, home)
@@ -5719,9 +5905,9 @@ def _function_call_events(name, arguments, prefix, state, home):
     outcomes = []
     for definition in state.functions[name]:
         path = state.branch()
-        if definition is not None:
-            if definition in state.calls:
-                raise _RecursiveFunction(name)  # a body may redefine its own name
+        if definition in state.calls:
+            yield 'recursion', name, path  # a recursive call is not followed
+        elif definition is not None:
             exits = _Exits()
             path.jumps = _Jumps(state.jumps.loops, exits)
             path.calls = state.calls | {definition}
@@ -5748,6 +5934,7 @@ def _program_delete_events(literal, raw, state, home):
         return
     if head not in _DELETE_COMMANDS:
         return
+    kind = 'empty-directory' if head == 'rmdir' else 'operand'
     end_of_options = False
     for literal_word, raw_word in zip(literal[1:], raw[1:]):
         if not end_of_options:
@@ -5756,7 +5943,7 @@ def _program_delete_events(literal, raw, state, home):
                 continue
             if literal_word.startswith('-'):
                 continue
-        yield 'operand', raw_word, state
+        yield kind, raw_word, state
 
 
 def _cd_effect(literal, raw, state, home):
@@ -6015,8 +6202,15 @@ def _repository_metadata_anchors(cwd):
     return tuple(anchors)
 
 
+def _names_something(path):
+    """Whether *path* names an existing file, directory or link; a pattern,
+    whether it matches one."""
+    return bool(_glob(path)) if _has_glob(path) else os.path.lexists(path)
+
+
 class _DeleteJudge:
-    """Depth, anchor and containment rules for one command's delete operands."""
+    """Depth, anchor and containment rules for the paths one command's delete
+    operands name."""
 
     def __init__(self, cwd, ws_real):
         self.home = os.path.expanduser('~')
@@ -6025,6 +6219,9 @@ class _DeleteJudge:
         self.protected = []
         if self.home and os.path.isabs(self.home):
             self.protected.append(('home', os.path.normpath(self.home)))
+        if self.cwd:
+            # The directory the command starts in, not one a cd inside it reaches.
+            self.protected.append(('workspace', self.cwd))
         self._repository = None
 
     def _repository_anchors(self):
@@ -6032,12 +6229,16 @@ class _DeleteJudge:
             self._repository = _repository_metadata_anchors(self.cwd)
         return self._repository
 
-    def _anchor_reason(self, normalized, state):
-        anchors = self.protected + [('workspace', c) for c in state.cwds if c]
-        for label, anchor in anchors:
+    def _anchor_reason(self, normalized):
+        for label, anchor in self.protected:
             if normalized == anchor or anchor.startswith(normalized + os.sep):
                 return (label, f'target is the {label} directory '
                                f'({normalized}) itself or an ancestor of it')
+        if (self.cwd and normalized.startswith(self.cwd.rstrip(os.sep) + os.sep)
+                and '.git' not in normalized.split(os.sep)):
+            return None  # below the working directory: no metadata of its checkout
+        if _has_glob(normalized) or not os.path.lexists(normalized):
+            return None  # no Git metadata at or below it; a pattern never equals an anchor
         repository = self._repository_anchors()
         if repository:
             real = os.path.realpath(normalized)
@@ -6056,21 +6257,16 @@ class _DeleteJudge:
         except _EnvironmentDeferred:
             return None  # the executor's pass knows the environment and cwd
         if expanded is None:
-            return (raw_operand, 'unproven',
-                    'the operand mixes expansions this guard cannot prove '
-                    'statically; use a literal absolute path')
+            return None  # more expansions than this guard follows: no path to name
         for candidate, unproven_names in zip(expanded.candidates, expanded.collapsed):
+            if unproven_names:
+                continue  # it rests on a value this guard cannot know being empty
             glob_marked = candidate.endswith(_GLOB_MARK)
             text = candidate[:-len(_GLOB_MARK)] if glob_marked else candidate
             if not text:
                 continue  # an empty operand deletes nothing
-            if not os.path.isabs(text):
-                if state.cwd_lost and state.cwd_given:
-                    return (raw_operand, 'unproven',
-                            'it is relative to the directory of an earlier cd this '
-                            'guard cannot follow; use an absolute path')
-                if state.cwd_lost or not state.cwds:
-                    continue  # cwd-less caller: the executor's pass judges it
+            if not os.path.isabs(text) and (state.cwd_lost or not state.cwds):
+                continue  # relative to a directory this guard cannot name
             # The glob marker rides on the joined path so _candidate_depth
             # can still collapse a pure-glob tail to its parent.
             marker = _GLOB_MARK if glob_marked else ''
@@ -6079,13 +6275,16 @@ class _DeleteJudge:
             for path in paths:
                 normalized, depth = _candidate_depth(path)
                 verdict_reason = None
-                if depth < _MIN_DELETE_DEPTH:
+                if depth < _MIN_DELETE_DEPTH and (
+                        state.elsewhere or _names_something(normalized)):
+                    # A shallow path that names nothing here holds nothing the
+                    # command did not create itself; another host's may.
                     verdict_reason = (
                         'shallow',
                         f'resolves to {normalized} (<{_MIN_DELETE_DEPTH} '
                         'path components)')
                 if verdict_reason is None:
-                    verdict_reason = self._anchor_reason(normalized, state)
+                    verdict_reason = self._anchor_reason(normalized)
                 if verdict_reason is None and self.ws_real:
                     tgt_real = os.path.realpath(normalized)
                     if not (tgt_real == self.ws_real
@@ -6094,14 +6293,6 @@ class _DeleteJudge:
                                           'target resolves outside the workspace')
                 if verdict_reason is not None:
                     reason, detail = verdict_reason
-                    if unproven_names and reason in ('shallow', 'home'):
-                        names = ', '.join(
-                            n if n.startswith('$') else f'${n}'
-                            for n in sorted(unproven_names))
-                        return (raw_operand, 'unproven',
-                                f'if {names} expand(s) empty, the operand '
-                                f'{detail}; bind a literal path or delete a '
-                                'literal absolute path instead')
                     empty = _empty_names(raw_operand, state)
                     if empty and reason in ('shallow', 'home'):
                         detail += f' when {", ".join(empty)} is empty'
@@ -6125,23 +6316,16 @@ def _unparsed_excerpt(text, error):
     return text[start:start + 40]
 
 
-def _unparsed_delete_verdict(text, error):
-    if not _could_run_delete(text):
-        return None
-    return (_unparsed_excerpt(text, error), 'unproven',
-            'the command runs rm/rmdir/unlink but its shell structure cannot '
-            f'be parsed ({error.reason}); fix the quoting or run the delete '
-            'as its own command with a literal path')
-
-
 def _catastrophic_delete_detail(command, cwd=None, *, environment=os.environ):
     """Judge *command* for catastrophic deletes; return (target, reason, detail).
 
     *target* is the operand text as written, *reason* is one of ``shallow``,
-    ``home``, ``workspace``, ``repository``, ``containment`` or ``unproven``,
-    and *detail* is a short human-readable explanation for the refusal
-    message. Returns None when every delete target the command may touch is
-    provably scoped.
+    ``home``, ``workspace``, ``repository`` or ``containment``, and *detail*
+    is a short human-readable explanation for the refusal message. Returns
+    None unless a delete the command may run names a protected path this
+    guard can resolve: an unknown value, program, directory or shell
+    structure passes (owner decision 2026-11-17, "Catastrophic-delete guard
+    precision" in docs/modules/tools_execution.md).
 
     *environment* is the mapping the command's shell starts with: by default
     this process's, which the children it starts inherit; run_command passes
@@ -6149,7 +6333,7 @@ def _catastrophic_delete_detail(command, cwd=None, *, environment=os.environ):
     (the cwd-less safety pre-hook): an operand that reads a name the command
     never bound, or ``$PWD`` without a cwd, is left to the executor's pass.
     """
-    if not command or not command.strip():
+    if not command or not _could_run_delete(command):
         return None
     # Workspace containment only engages for restricted principals AND when a
     # workspace cwd is known. Import locally to avoid a module import cycle.
@@ -6163,22 +6347,14 @@ def _catastrophic_delete_detail(command, cwd=None, *, environment=os.environ):
         ws_real = None
     try:
         items = parse_shell_structure(command)
-    except ShellStructureUnknown as error:
-        return _unparsed_delete_verdict(command, error)
+    except ShellStructureUnknown:
+        return None
     judge = _DeleteJudge(cwd, ws_real)
-    try:
-        for kind, payload, context in _command_events(
-                items, _DeleteGuardState(cwd, environment)):
-            verdict = (_unparsed_delete_verdict(payload, context) if kind == 'opaque'
-                       else judge(payload, context))
+    for kind, payload, context in _command_events(items, _DeleteGuardState(cwd, environment)):
+        if kind == 'operand':
+            verdict = judge(payload, context)
             if verdict is not None:
                 return verdict
-    except _RecursiveFunction as recursion:
-        if _could_run_delete(command):
-            return (recursion.name, 'unproven',
-                    f'shell function {recursion.name} calls itself and this '
-                    'guard does not follow recursion; run the delete as its '
-                    'own command with a literal path')
     return None
 
 
@@ -6206,15 +6382,13 @@ def resolve_delete_targets(command, cwd=None, *, environment=os.environ):
         return [(_unparsed_excerpt(command, error), None, {'<opaque>'})]
     home = os.path.expanduser('~')
     resolved_targets = []
-    try:
-        for kind, payload, context in _command_events(
-                items, _DeleteGuardState(cwd, environment)):
-            resolved_targets.append(
-                (_unparsed_excerpt(payload, context), None, {'<opaque>'})
-                if kind == 'opaque' else _resolved_target(payload, context, home))
-    except _RecursiveFunction as recursion:
-        if _could_run_delete(command):
-            resolved_targets.append((recursion.name, None, {'<opaque>'}))
+    for kind, payload, context in _command_events(items, _DeleteGuardState(cwd, environment)):
+        if kind in ('operand', 'empty-directory'):
+            resolved_targets.append(_resolved_target(payload, context, home))
+        elif kind == 'opaque':
+            resolved_targets.append((_unparsed_excerpt(payload, context), None, {'<opaque>'}))
+        elif _could_run_delete(command):  # a recursive call, not followed
+            resolved_targets.append((payload, None, {'<opaque>'}))
     return resolved_targets
 
 
@@ -6247,7 +6421,6 @@ _DELETE_REFUSAL_MESSAGES = {
     'workspace': 'refusing to delete the workspace directory',
     'repository': 'refusing to delete the repository metadata',
     'containment': 'refusing to delete outside the workspace',
-    'unproven': 'refusing a delete target it cannot statically prove safe',
 }
 
 
@@ -6256,7 +6429,7 @@ def delete_refusal_message(detail):
 
     Every enforcement point (run_command, the safety pre-hook, the desktop
     agent) shares this so the refusal names the REAL reason — a shallow path,
-    the home/workspace anchor, or an unproven variable — never the generic
+    the home/workspace anchor or the repository metadata — never the generic
     "scope the deletion" advice that misdiagnosed the shell-local ``$BAD``
     case in conv mvl6adj1bcd1r1.
     """

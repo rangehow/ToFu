@@ -781,6 +781,12 @@ def _maybe_wrap_rm_with_trash(command, cwd):
         'for _a in "$@"; do '
         'case "$_a" in -*) continue;; esac; '
         '[ -e "$_a" ] || [ -L "$_a" ] || continue; '
+        # Like rm (POSIX), refuse an operand whose last component is . or ..:
+        # mv cannot rename it, and the cp -a fallback copied the tree into the
+        # bin and reported success.
+        '_b=$_a; while [ "${_b%/}" != "$_b" ] && [ -n "${_b%/}" ]; do _b=${_b%/}; done; '
+        "case \"/$_b\" in */.|*/..) printf \"rm: refusing to remove '.' or '..' directory: "
+        "skipping '%s'\\n\" \"$_a\" >&2; _rc=1; continue;; esac; "
         + outside_branch +
         # A directory tagged per the Cache Directory Tagging spec (every Cargo
         # target) is reconstructible build output: undo would only keep

@@ -117,10 +117,11 @@ class TestInCommandBindings:
         assert _is_catastrophic_delete(
             f'T=$(mktemp -d) || exit 1; {_RM} -rf "$T/"', cwd=WS) is None
 
-    def test_dynamic_binding_empty_collapse_root_blocked(self):
-        # D=$(...) could come back empty: `rm -rf $D/` is then `rm -rf /`.
+    def test_dynamic_binding_is_not_assumed_empty(self):
+        # D=$(...) may come back empty, but the guard refuses only a path it
+        # can name (owner decision 2026-11-17).
         assert _is_catastrophic_delete(
-            f'D=$(some_cmd); {_RM} -rf $D/', cwd=WS) is not None
+            f'D=$(some_cmd); {_RM} -rf $D/', cwd=WS) is None
 
     def test_dynamic_binding_deep_suffix_allowed(self):
         # Even empty, the skeleton keeps two components.
@@ -196,12 +197,13 @@ class TestTokenizationBypasses:
         assert _is_catastrophic_delete(
             f'{_RM} -rf -- /tmp/scoped-x', cwd=WS) is None
 
-    def test_command_substitution_operand_blocked_only_when_shallow(self):
+    def test_command_substitution_operand_refused_only_when_its_output_is_known(self):
         # $(mktemp -d) directly as the operand: dynamic but never shallow.
         assert _is_catastrophic_delete(f'{_RM} -rf $(mktemp -d)', cwd=WS) is None
-        # An arbitrary substitution could print anything — the empty collapse
-        # of `$(x)/` is `/`.
-        assert _is_catastrophic_delete(f'{_RM} -rf $(some_cmd)/', cwd=WS) is not None
+        # An arbitrary substitution's output names no path.
+        assert _is_catastrophic_delete(f'{_RM} -rf $(some_cmd)/', cwd=WS) is None
+        # Output the guard knows is the path it names.
+        assert _is_catastrophic_delete(f'{_RM} -rf "$(echo /)"', cwd=WS) is not None
 
     def test_heredoc_data_body_not_a_command(self):
         cmd = (f"cat > /tmp/tofu_delguard_hint.sh <<'EOF'\n"
@@ -301,12 +303,11 @@ class TestRefusalDetail:
         assert detail is not None
         assert detail[1] == 'shallow'
 
-    def test_unproven_reason_names_variable(self):
-        detail = _catastrophic_delete_detail(
-            f'D=$(some_cmd); {_RM} -rf $D/', cwd=WS)
+    def test_empty_variable_is_named(self):
+        detail = _catastrophic_delete_detail(f'D=; {_RM} -rf "$D/usr"', cwd=WS)
         assert detail is not None
-        assert detail[1] == 'unproven'
-        assert 'D' in detail[2]
+        assert detail[1] == 'shallow'
+        assert '$D' in detail[2]
 
     def test_home_reason(self):
         detail = _catastrophic_delete_detail(f'{_RM} -rf "$HOME"', cwd=WS)

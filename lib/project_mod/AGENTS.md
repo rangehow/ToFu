@@ -186,7 +186,11 @@ runner there with its documented option grammar, never a second view. sudo/doas
 options follow ``_PRIVILEGE_GRAMMARS``, which ``_unwrap_command_parts`` shares. Never reintroduce an ad-hoc string splitter or a
 raw-text match for delete-target or dangerous-command judgement, and never turn
 a parse failure or an unknown wrapper/runner option into a refusal unless the
-text could run rm/rmdir/unlink or matches `DANGEROUS_PATTERNS`. The delete
+text matches `DANGEROUS_PATTERNS`. The delete guard refuses only a protected
+path it can name: an unknown value, program, directory or structure passes and
+a command without an rm/rmdir/unlink word is not parsed (owner decision
+2026-11-17, "Catastrophic-delete guard precision"); never reintroduce an
+"unproven" refusal. The delete
 guard follows ``control_structure`` (the parse's reserved words paired into the
 compound commands a shell runs; ``case`` clauses are ``CaseClause``/``CaseEnd``
 marker items) as an abstract interpreter: each path through a construct runs on
@@ -203,7 +207,8 @@ judged as each command its fields make, never by its raw text. Verify
 `tests/project_mod/test_delete_guard_structure.py`,
 `tests/project_mod/test_delete_guard_control_flow.py`,
 `tests/project_mod/test_delete_guard_shell_semantics.py`,
-`tests/project_mod/test_delete_guard_shell_oracle.py` and
+`tests/project_mod/test_delete_guard_shell_oracle.py`,
+`tests/project_mod/test_delete_guard_precision.py` and
 `tests/project_mod/test_dangerous_command_structure.py`.
 
 `git_guard.py` owns the shared-checkout Git guard: ack-nonce lifecycle,

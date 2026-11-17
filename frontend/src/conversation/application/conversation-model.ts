@@ -23,5 +23,8 @@ export function captureComposerModel(config: any) {
 }
 export function commitComposerModel(conv: any, selection: ReturnType<typeof captureComposerModel>) {
   if (!conv) return;
+  // Depth is the composer's own choice even while the model is only a
+  // provisional display default; a send reads it back from the conversation.
+  conv.thinkingDepth = selection.thinkingDepth;
   if (selection.model) Object.assign(conv, selection);
 }

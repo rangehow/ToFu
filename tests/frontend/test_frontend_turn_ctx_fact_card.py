@@ -179,31 +179,33 @@ function _mkSnap() {
   check('noop_identical_fact_returns_false', changed === false);
 }
 
-// ── 'default' intent token resolves to the actual rung at CAPTURE ─────
-// The composer slider stores 'default' as config.thinkingDepth (follow-the-
-// model intent). The turn-ctx note is a fact card and must name the real
-// rung, not the token. Provide the composer's declared default via the
-// _composerReasoningOptions seam.
+// ── CAPTURE records the depth the turn SUBMITS, never a catalog guess ──
+// The note asks the composer's submission resolver (_routeThinkingDepth, the
+// rung the slider paints). It must not substitute the catalog default or the
+// user's global default on its own: that guess once labelled a turn MAX
+// while the wire carried no effort at all.
 {
   const savedConfig = global.config;
-  const savedOpts = global._composerReasoningOptions;
+  const seen = [];
+  global._routeThinkingDepth = (depth) => { seen.push(depth); return depth === 'default' ? 'max' : depth; };
   global.config = { model: 'kimi-k3', thinkingDepth: 'default', defaultThinkingDepth: 'medium' };
-  global._composerReasoningOptions = () => ({ defaultDepth: 'max', levels: ['default', 'low', 'max'], visible: true });
   global._isThinkingCapable = () => true;
   const snap = buildTurnCtxSnapshot();
-  check('capture_resolves_default_to_declared_rung',
+  check('capture_records_submitted_rung',
         snap && snap.depth === 'max', 'depth=' + (snap && snap.depth));
-  // Without a declared default, fall back to the user's configured default.
-  global._composerReasoningOptions = () => undefined;
+  check('capture_asks_the_submission_resolver', seen[0] === 'default',
+        'seen=' + JSON.stringify(seen));
+  // A route without a declared default rung submits the 'default' token:
+  // the note says so instead of claiming the user's global default.
+  global._routeThinkingDepth = (depth) => depth;
   const snap2 = buildTurnCtxSnapshot();
-  check('capture_falls_back_to_user_default',
-        snap2 && snap2.depth === 'medium', 'depth=' + (snap2 && snap2.depth));
-  // A concrete rung is never rewritten.
+  check('capture_never_guesses_user_default',
+        snap2 && snap2.depth === 'default', 'depth=' + (snap2 && snap2.depth));
   global.config = { model: 'kimi-k3', thinkingDepth: 'high' };
-  global._composerReasoningOptions = savedOpts;
   const snap3 = buildTurnCtxSnapshot();
   check('capture_keeps_concrete_rung',
         snap3 && snap3.depth === 'high', 'depth=' + (snap3 && snap3.depth));
+  delete global._routeThinkingDepth;
   global.config = savedConfig;
   global._isThinkingCapable = () => false;
 }
@@ -229,21 +231,21 @@ function _mkSnap() {
   global.projectState = saved;
 }
 
-// ── 'default' echoed on the DONE frame resolves, never clobbers to bare token ─
+// ── DONE shows the server's depth verbatim, including 'default' ──────────
+// Composer turns submit the painted rung, so a 'default' echo means the turn
+// really ran on the destination default; the note must not re-resolve it
+// against whatever the composer happens to show now.
 {
-  const savedOpts = global._composerReasoningOptions;
   global._composerReasoningOptions = () => ({ defaultDepth: 'max', levels: ['default', 'low', 'max'], visible: true });
   const snap = { model: 'kimi-k3', depth: 'max', modes: [], tools: [], roots: [] };
   const changed = reconcileTurnCtxCapsule(snap, { actualDepth: 'default' });
-  check('done_default_token_resolves_to_rung',
-        snap.depth === 'max', 'depth=' + snap.depth);
-  check('done_default_token_no_spurious_change', changed === false);
-  // A send snapshot that somehow still holds the token is repaired at done.
+  check('done_default_echo_is_verbatim',
+        snap.depth === 'default' && changed === true, 'depth=' + snap.depth);
   const snap2 = { model: 'kimi-k3', depth: 'default', modes: [], tools: [], roots: [] };
-  const changed2 = reconcileTurnCtxCapsule(snap2, { actualDepth: 'default' });
-  check('done_repairs_token_snapshot',
+  const changed2 = reconcileTurnCtxCapsule(snap2, { actualDepth: 'max' });
+  check('done_concrete_echo_overwrites',
         snap2.depth === 'max' && changed2 === true, 'depth=' + snap2.depth);
-  global._composerReasoningOptions = savedOpts;
+  delete global._composerReasoningOptions;
 }
 
 // ── NEUTER: strip the model-overwrite line → fact_overwrite_model flips red ─

@@ -214,7 +214,7 @@ import {
   reviewLaterTurnsDiscard,
 } from '../conversation/application/later-turns-discard';
 import { createConversationProjectController, captureConversationProject, captureProjectStatus, projectStatusMatchesWorkspace, noteConversationProjectChoice, protectHydratingProjectSettings, withProjectHydration } from '../conversation/application/conversation-project';
-import { createThinkingDepthSlider, projectReasoningControl, THINKING_DEPTH_LABELS } from '../features/thinking-depth-slider';
+import { createThinkingDepthSlider, effectiveThinkingDepth, projectReasoningControl, THINKING_DEPTH_LABELS } from '../features/thinking-depth-slider';
 
 import { createProjectContext } from '../features/conversation-bar/project-context';
 import { createContextMeter } from '../features/conversation-bar/context-meter';

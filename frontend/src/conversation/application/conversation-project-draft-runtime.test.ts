@@ -49,6 +49,7 @@ function harness(input = 'work', folder: { name: string; color: unknown } | null
     captureComposerModel: () => ({ model: 'model' }),
 
     commitComposerModel: noop,
+    _routeThinkingDepth: (depth: unknown) => depth,
     captureComposerDraft: (id: string) => ({
       convId: id, commandId: 'command', model: 'model', titleCandidate: 'title',
       inputValue: (document.getElementById('userInput') as HTMLTextAreaElement).value,

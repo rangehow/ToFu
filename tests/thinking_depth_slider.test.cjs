@@ -7,7 +7,7 @@ const moduleUnderTest = { exports: {} };
 new Function('module', 'exports', ts.transpileModule(fs.readFileSync('frontend/src/features/thinking-depth-slider.ts', 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText)(moduleUnderTest, moduleUnderTest.exports);
-const { createThinkingDepthSlider, displayThinkingDepth, THINKING_DEPTH_LEVELS } = moduleUnderTest.exports;
+const { createThinkingDepthSlider, displayThinkingDepth, effectiveThinkingDepth, THINKING_DEPTH_LEVELS } = moduleUnderTest.exports;
 const en = JSON.parse(fs.readFileSync('frontend/src/i18n/locales/en.json', 'utf8'));
 const zh = JSON.parse(fs.readFileSync('frontend/src/i18n/locales/zh.json', 'utf8'));
 
@@ -399,24 +399,91 @@ test('opaque native names preserve declared order without invented effort rankin
 });
 
 
-test('native three levels, independent default, dynamic dots and genuine ultra', t => {
+test('the declared default is a marked native rung, not a separate control', t => {
   const s = setup(t);
   s.controller.sync('default', { levels: ['default', 'low', 'high', 'max'], defaultDepth: 'max' });
   assert.equal(s.inputs[0].max, '2');
   assert.equal(s.inputs[0].value, '2');
   const card = s.inputs[0].closest('[data-thinking-depth-slider]');
-  assert.equal(card.querySelector('.depth-slider-dots').children.length, 3);
-  assert.equal(card.querySelector('[data-depth-default]').getAttribute('aria-pressed'), 'true');
+  assert.equal(card.querySelectorAll('button').length, 0);
+  for (const dots of card.querySelectorAll('.depth-slider-dots')) {
+    assert.deepEqual([...dots.children].map(dot => dot.hasAttribute('data-default')), [false, false, true]);
+  }
+  const marked = `Max · ${en['mobile.default']}`;
+  assert.equal(card.querySelector('[data-depth-value]').textContent, marked);
+  assert.equal(s.inputs[0].getAttribute('aria-valuetext'), `${en['mobile.max']} · ${en['mobile.default']}`);
+  s.language(zh);
+  assert.equal(card.querySelector('[data-depth-value]').textContent, `Max · ${zh['mobile.default']}`);
+  s.language(en);
   s.event(s.inputs[0], 'input', 1);
   s.event(s.inputs[0], 'change');
   assert.deepEqual(s.commits, ['high']);
-  card.querySelector('[data-depth-default]').click();
-  assert.deepEqual(s.commits, ['high', 'default']);
+  // Off the default rung the label is plain; the ring still marks Max.
+  assert.equal(card.querySelector('[data-depth-value]').textContent, 'High');
+  assert.ok(card.querySelector('.depth-slider-dots').children[2].hasAttribute('data-default'));
+  // Returning to the default rung is an ordinary explicit commit.
+  s.event(s.inputs[0], 'input', 2);
+  s.event(s.inputs[0], 'change');
+  assert.deepEqual(s.commits, ['high', 'max']);
+  assert.equal(card.querySelector('[data-depth-value]').textContent, marked);
   s.controller.sync('ultra', { levels: ['default', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] });
   assert.equal(s.inputs[0].max, '5');
   assert.equal(s.inputs[0].value, '5');
   assert.equal(card.querySelector('[data-depth-value]').textContent, 'Ultra');
   assert.equal(card.querySelector('.depth-slider-dots').children.length, 6);
+  assert.equal(card.querySelectorAll('[data-default]').length, 0);
+});
+
+test('a route without a selectable declared default keeps the honest Default label', t => {
+  const s = setup(t);
+  for (const options of [{ levels: ['default', 'off', 'enabled'] },
+    { levels: ['default', 'low', 'high'], defaultDepth: 'xhigh' }]) {
+    s.controller.sync(null, options);
+    assert.equal(s.inputs[0].value, '0');
+    assert.equal(s.inputs[0].getAttribute('aria-valuetext'), en['mobile.default']);
+    assert.equal(s.document.querySelectorAll('[data-default]').length, 0);
+    assert.equal(effectiveThinkingDepth(null, options), 'default');
+  }
+  assert.deepEqual(s.commits, []);
+});
+
+test('the submitted depth is exactly the rung the slider paints', t => {
+  const s = setup(t);
+  const restoration = { fallback: 'default', replacements: { off: 'low', medium: 'low', xhigh: 'high', ultra: 'max' } };
+  const routes = [
+    { levels: ['default', 'low', 'medium', 'high', 'xhigh', 'max'], defaultDepth: 'medium' },
+    { levels: ['default', 'low', 'high', 'max'], defaultDepth: 'max', restoration },
+    { levels: ['default', 'off', 'enabled'] },
+    { levels: ['default', 'low', 'high'], defaultDepth: 'xhigh' },
+    { levels: ['default'], visible: false },
+  ];
+  const painted = (options, depth) => {
+    if (s.inputs[0].getAttribute('aria-valuetext') === en['mobile.default']) return 'default';
+    const native = options.levels.filter(level => level !== 'default');
+    const ladder = native.length ? native : ['default'];
+    const index = Number(s.inputs[0].value);
+    return index < ladder.length ? ladder[index] : depth;
+  };
+  for (const options of routes) {
+    for (const depth of [null, '', 'default', 'off', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'future-token']) {
+      s.controller.sync(depth, options);
+      assert.equal(effectiveThinkingDepth(depth, options), painted(options, depth),
+        `${JSON.stringify(options.levels)} ${depth}`);
+    }
+  }
+  // Concrete cases behind the property: Default follows the declared rung,
+  // an unavailable saved depth submits its parked replacement.
+  assert.equal(effectiveThinkingDepth('default', routes[1]), 'max');
+  assert.equal(effectiveThinkingDepth(null, routes[0]), 'medium');
+  assert.equal(effectiveThinkingDepth('xhigh', routes[1]), 'high');
+  assert.equal(effectiveThinkingDepth('future-token', routes[1]), 'future-token');
+  // Before controls arrive the legacy ladder paints and submits the same rung.
+  for (const depth of [null, 'default', 'high', 'ultra']) {
+    s.controller.sync(depth, true);
+    assert.equal(effectiveThinkingDepth(depth, true), [...THINKING_DEPTH_LEVELS, 'ultra'][Number(s.inputs[0].value)]);
+  }
+  assert.equal(effectiveThinkingDepth('high', false), 'high');
+  assert.deepEqual(s.commits, []);
 });
 
 test('unroutable Opus keeps its native ladder visible, disabled and explained', t => {

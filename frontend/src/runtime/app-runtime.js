@@ -214,7 +214,7 @@ import {
   reviewLaterTurnsDiscard,
 } from '../conversation/application/later-turns-discard';
 import { createConversationProjectController, captureConversationProject, captureProjectStatus, projectStatusMatchesWorkspace, noteConversationProjectChoice, protectHydratingProjectSettings, withProjectHydration } from '../conversation/application/conversation-project';
-import { createThinkingDepthSlider, projectReasoningControl, THINKING_DEPTH_LABELS } from '../features/thinking-depth-slider';
+import { createThinkingDepthSlider, effectiveThinkingDepth, projectReasoningControl, THINKING_DEPTH_LABELS } from '../features/thinking-depth-slider';
 
 import { createProjectContext } from '../features/conversation-bar/project-context';
 import { createContextMeter } from '../features/conversation-bar/context-meter';
@@ -16227,9 +16227,24 @@ function _buildConvSnapshot(conv, isActive) {
 
 function _buildConvConfigInputs(conv) {
   const isActive = (conv.id === activeConvId);
+  const convSettings = _buildConvSnapshot(conv, isActive);
+  const overrides = _buildToolbarOverrides();
+  /* Runtime config carries the rung the slider paints, never the
+   * follow-the-model token while a rung is shown: the active conversation's
+   * from the composer, any other conversation's from its own saved route.
+   * Settings persistence (_buildConvSettingsInputs) keeps the saved depth. */
+  if (isActive) {
+    overrides.thinkingDepth = _routeThinkingDepth(config.thinkingDepth);
+  } else {
+    convSettings.thinkingDepth = _routeThinkingDepth(conv.thinkingDepth, {
+      model: conv.model || serverModel,
+      modelRef: conv.modelRef,
+      preferredProviderId: conv.preferredProviderId,
+    });
+  }
   return {
-    conv_settings: _buildConvSnapshot(conv, isActive),
-    overrides: _buildToolbarOverrides(),
+    conv_settings: convSettings,
+    overrides,
     server_defaults: { serverModel },
     is_active: isActive,
   };
@@ -16259,7 +16274,8 @@ async function _buildConvSubmission(conv, workspace = captureConversationProject
   const submissionConv = { ...conv, ...workspace };
   const configInputs = _buildConvConfigInputs(submissionConv);
   configInputs.overrides.model = conv.model || configInputs.overrides.model;
-  configInputs.overrides.thinkingDepth = conv.thinkingDepth;
+  // The depth captured at send, as the rung the composer painted for it.
+  configInputs.overrides.thinkingDepth = _routeThinkingDepth(conv.thinkingDepth);
   return _conversationSettingsResolution.resolveSubmission(
     configInputs,
     _buildConvSettingsInputs(submissionConv, configInputs.overrides),
@@ -19062,7 +19078,7 @@ if (typeof window !== "undefined") runtimeScope._mobileCompactNow = _mobileCompa
  * Shows/hides the section based on whether the model supports thinking depth.
  */
 function updateMobileDepth() {
-  _updateDepthButtons(config.thinkingDepth || config.defaultThinkingDepth);
+  _updateDepthButtons(_composerDepthIntent(config.thinkingDepth));
 }
 
 /* ── Reflow toolbar on window resize / orientation change ── */
@@ -19660,18 +19676,22 @@ const _DEPTH_ICON_FALLBACK = '';
  * Uses server-provided thinking_default from _registeredModels;
  * falls back to regex before server config loads. */
 let _reasoningControls; // undefined only for rolling-upgrade backends without controls
-function _composerReasoningOptions() {
-  const ref = config.modelRef;
+/* Controls for one route selection ({model, modelRef, preferredProviderId}). */
+function _reasoningOptionsFor(selection) {
+  const ref = selection.modelRef;
   return projectReasoningControl(_reasoningControls,
-    ref?.model_id && ref.model_id !== config.model ? null : ref,
-    config.preferredProviderId || '',
+    ref?.model_id && ref.model_id !== selection.model ? null : ref,
+    selection.preferredProviderId || '',
     /* The composer can display a model with no confirmed v2 ref yet: a
      * provisional server default painted before modelRef is resolved, or a
      * fresh conversation that never stored one. A null ref would project
      * 'unconfigured' even though the displayed model IS the intent, so fall
      * back to the exact model_id (unique across the v2 picker) when no ref
      * matched. */
-    config.model);
+    selection.model);
+}
+function _composerReasoningOptions() {
+  return _reasoningOptionsFor(config);
 }
 function _isThinkingCapable(modelId) {
 
@@ -19682,6 +19702,17 @@ function _isThinkingCapable(modelId) {
   }
   // Fallback regex before server config loads
   return /claude|opus|sonnet|gemini|qwen|doubao|minimax|deepseek/i.test(modelId);
+}
+/* The saved depth the slider renders. An unset depth follows the route's
+ * declared default once controls are known; rendering never rewrites it. */
+function _composerDepthIntent(depth) {
+  return depth || (_reasoningControls === undefined ? config.defaultThinkingDepth : 'default');
+}
+/* The depth a turn submits for a saved depth on a route: the rung the slider
+ * paints for it (thinking-depth-slider.ts effectiveThinkingDepth). */
+function _routeThinkingDepth(depth, selection = config) {
+  return effectiveThinkingDepth(_composerDepthIntent(depth),
+    _reasoningOptionsFor(selection) ?? _isThinkingCapable(selection.model));
 }
 /* Registered model list — replaced by the authenticated v2 projection at boot. */
 let _registeredModels = [];   // [{ model_id, brand, thinking_default, capabilities }]
@@ -19744,7 +19775,7 @@ function _applyModelUI(modelId) {
   /* Ensure thinkingDepth is always set for thinking models, null for non-thinking.
    * This prevents the || "medium" fallback from leaking depth to non-thinking models. */
   // Rendering never rewrites saved depth, including before authority arrives.
-  const depth = config.thinkingDepth || (_reasoningControls === undefined ? config.defaultThinkingDepth : 'default');
+  const depth = _composerDepthIntent(config.thinkingDepth);
   /* Metadata controls available choices; it never rewrites saved intent.
    * During loading/unknown capability, max must not become an explicit off.
    * The compatibility toggle is server-derived from thinkingDepth. */
@@ -22665,40 +22696,24 @@ let backgroundConversationActivity = new Map();
     if (typeof serverModel !== 'undefined' && serverModel) return serverModel;
     return '';
   }
-  /* 'default' is the slider's follow-the-model intent token, not an effort
-   * rung. The note is a FACT card, so it must name the rung the turn actually
-   * targets — not the raw token. Resolve it through the same declaration the
-   * composer slider paints (the model's declared default_effort, exposed as
-   * DepthOptions.defaultDepth), falling back to the user's configured default
-   * depth. Any other token (off/low/medium/high/xhigh/max/enabled/native
-   * effort names) is already an actual value and passes through untouched.
-   * The wire intent (config.thinkingDepth) is never rewritten — this only
-   * affects the human-readable snapshot. */
-  function _displayDepth(depthRaw, fallback) {
-    if (depthRaw !== 'default') return depthRaw;
-    const opts = (typeof _composerReasoningOptions === 'function')
-      ? _composerReasoningOptions() : undefined;
-    const declared = opts && typeof opts.defaultDepth === 'string' ? opts.defaultDepth : '';
-    return declared
-      || (typeof config !== 'undefined' && config && config.defaultThinkingDepth)
-      || fallback
-      || '';
-  }
-
   /**
    * Capture the current context as a plain serializable snapshot.
    * Returns null when there's nothing worth recording.
    */
   function buildTurnCtxSnapshot() {
     const modelId = _resolveModel();
-    const depthRaw = (typeof config !== 'undefined' && config && config.thinkingDepth) || '';
+    const savedDepth = (typeof config !== 'undefined' && config && config.thinkingDepth) || '';
+    /* The note is a FACT card: it names the depth this turn submits — the
+     * rung the slider paints (_routeThinkingDepth) — never a catalog guess. */
+    const depthRaw = (typeof _routeThinkingDepth === 'function'
+      ? _routeThinkingDepth(savedDepth) : savedDepth) || '';
     const _isThink = (typeof _isThinkingCapable === 'function') ? _isThinkingCapable(modelId) : false;
     const snap = {
       roots: _collectRoots().map((r) => ({ short: r.short, path: r.path, ro: r.readOnly })),
       tools: _collectTools(),
       modes: _collectModes(),
       model: modelId,
-      depth: (_isThink && depthRaw) ? _displayDepth(depthRaw) : '',
+      depth: _isThink ? depthRaw : '',
       git: _collectGit(),
       /* The live checklist is attached by the patch path, not here: at
        * send time there is no list yet (the model writes it DURING the
@@ -22996,13 +23011,10 @@ let backgroundConversationActivity = new Map();
       changed = true;
     }
     if (Object.prototype.hasOwnProperty.call(fact, 'actualDepth')) {
-      /* The server's actualDepth echoes the intent token verbatim, so it can
-       * carry 'default' (model_config passes cfg.thinkingDepth through
-       * unchanged). Resolve that token to the actual rung, falling back to
-       * the snapshot's already-resolved depth so the done frame never
-       * degrades a concrete rung back to the bare 'default' label. */
-      const _rawDepth = typeof fact.actualDepth === 'string' ? fact.actualDepth : '';
-      const _newDepth = _displayDepth(_rawDepth, snap.depth);
+      /* The server echoes the depth the turn ran with. Composer turns submit
+       * the painted rung, so a 'default' echo means the turn really ran on
+       * the destination's default and is shown as such, not as a guess. */
+      const _newDepth = typeof fact.actualDepth === 'string' ? fact.actualDepth : '';
       if ((snap.depth || '') !== _newDepth) {
         snap.depth = _newDepth;
         changed = true;

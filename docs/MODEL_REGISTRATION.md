@@ -1137,10 +1137,11 @@ eligible routes; `default_depth` is reported only when their defaults agree.
 The server also projects a bounded `restoration` table for unavailable saved UI
 preferences after that intersection. Native rungs remain unchanged; known effort
 names move downward, unavailable Off/Lowest chooses the lightest native rung,
-and an unknown old token maps to Default. This compatibility table is advisory:
-composer rendering never applies it or commits a replacement. An unavailable
-saved depth remains visible as an unavailable rung, so switching back restores
-the original choice. Only a user gesture changes the saved preference. Unknown
+and an unknown old token maps to Default. The composer parks the thumb on a
+mapped replacement (flagged unavailable) and a turn submits that rung, but
+nothing commits it: the saved depth persists, so switching back restores the
+original choice. An unmapped saved depth stays visible as an unavailable rung.
+Only a user gesture changes the saved preference. Unknown
 capabilities and absent routes omit the table. Explicit request validation
 remains strict and never substitutes an unsupported saved depth.
 Reasoning ability and route availability are separate: `availability=no_route`
@@ -1151,10 +1152,16 @@ non-reasoning models remain hidden. Models declaring only a thinking switch
 offer Off/On rather than fabricated effort rungs; fixed thinking has one setting.
 The exported-configuration audit reports these missing profiles and unavailable
 routes in `requires_attention`, separately from wire-compilation failures.
-The Default button is separate from the slider's native positions, and both
-tick count and labels derive from these controls. Saved defaults resolve to
-the declared default rung when known. Specifications:
+The slider offers only native positions; there is no separate Default control.
+The declared `default_depth` is marked on its rung (a ring tick, and `· Default`
+beside the value while the thumb is on it); tick count and labels derive from
+these controls. A saved or unset `default` paints on the declared default rung
+when it is selectable and otherwise reads Default. A turn submits exactly the
+painted rung (`thinking-depth-slider.ts::effectiveThinkingDepth`), so the
+composer never sends the follow-the-model token while a rung is shown.
+Specifications:
 `tests/model_routing/test_model_reasoning_controls.py`, `tests/thinking_depth_slider.test.cjs`,
+`tests/frontend/test_composer_depth_submission.py`,
 `tests/model_routing/test_model_reasoning_settings_browser.py`.
 
 The bounded exact-identity defaults catalogue accepts at most eight

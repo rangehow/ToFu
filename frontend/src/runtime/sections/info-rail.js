@@ -203,40 +203,24 @@
     if (typeof serverModel !== 'undefined' && serverModel) return serverModel;
     return '';
   }
-  /* 'default' is the slider's follow-the-model intent token, not an effort
-   * rung. The note is a FACT card, so it must name the rung the turn actually
-   * targets — not the raw token. Resolve it through the same declaration the
-   * composer slider paints (the model's declared default_effort, exposed as
-   * DepthOptions.defaultDepth), falling back to the user's configured default
-   * depth. Any other token (off/low/medium/high/xhigh/max/enabled/native
-   * effort names) is already an actual value and passes through untouched.
-   * The wire intent (config.thinkingDepth) is never rewritten — this only
-   * affects the human-readable snapshot. */
-  function _displayDepth(depthRaw, fallback) {
-    if (depthRaw !== 'default') return depthRaw;
-    const opts = (typeof _composerReasoningOptions === 'function')
-      ? _composerReasoningOptions() : undefined;
-    const declared = opts && typeof opts.defaultDepth === 'string' ? opts.defaultDepth : '';
-    return declared
-      || (typeof config !== 'undefined' && config && config.defaultThinkingDepth)
-      || fallback
-      || '';
-  }
-
   /**
    * Capture the current context as a plain serializable snapshot.
    * Returns null when there's nothing worth recording.
    */
   function buildTurnCtxSnapshot() {
     const modelId = _resolveModel();
-    const depthRaw = (typeof config !== 'undefined' && config && config.thinkingDepth) || '';
+    const savedDepth = (typeof config !== 'undefined' && config && config.thinkingDepth) || '';
+    /* The note is a FACT card: it names the depth this turn submits — the
+     * rung the slider paints (_routeThinkingDepth) — never a catalog guess. */
+    const depthRaw = (typeof _routeThinkingDepth === 'function'
+      ? _routeThinkingDepth(savedDepth) : savedDepth) || '';
     const _isThink = (typeof _isThinkingCapable === 'function') ? _isThinkingCapable(modelId) : false;
     const snap = {
       roots: _collectRoots().map((r) => ({ short: r.short, path: r.path, ro: r.readOnly })),
       tools: _collectTools(),
       modes: _collectModes(),
       model: modelId,
-      depth: (_isThink && depthRaw) ? _displayDepth(depthRaw) : '',
+      depth: _isThink ? depthRaw : '',
       git: _collectGit(),
       /* The live checklist is attached by the patch path, not here: at
        * send time there is no list yet (the model writes it DURING the
@@ -534,13 +518,10 @@
       changed = true;
     }
     if (Object.prototype.hasOwnProperty.call(fact, 'actualDepth')) {
-      /* The server's actualDepth echoes the intent token verbatim, so it can
-       * carry 'default' (model_config passes cfg.thinkingDepth through
-       * unchanged). Resolve that token to the actual rung, falling back to
-       * the snapshot's already-resolved depth so the done frame never
-       * degrades a concrete rung back to the bare 'default' label. */
-      const _rawDepth = typeof fact.actualDepth === 'string' ? fact.actualDepth : '';
-      const _newDepth = _displayDepth(_rawDepth, snap.depth);
+      /* The server echoes the depth the turn ran with. Composer turns submit
+       * the painted rung, so a 'default' echo means the turn really ran on
+       * the destination's default and is shown as such, not as a guess. */
+      const _newDepth = typeof fact.actualDepth === 'string' ? fact.actualDepth : '';
       if ((snap.depth || '') !== _newDepth) {
         snap.depth = _newDepth;
         changed = true;

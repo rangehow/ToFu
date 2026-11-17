@@ -4466,6 +4466,76 @@
       "description": "Test-only, not a tuning knob: a local checkout of the FrontierHarness eval repository at its pinned commit; the native adapter's live-corpus spec skips without it (and without node).",
       "owner": "tests/evaluations/test_frontier_harness_native.py",
       "status": "documented"
+    },
+    "FAULTFS_STATS": {
+      "status": "documented",
+      "owner": "benchmarks/agent_storage/faultfs.c",
+      "description": "Optional path of the shim's shared 4 KiB counter file (barrier counts and time, surviving SIGKILL). Benchmark/test-time only; the server never reads it and it tunes no product behavior."
+    },
+    "FAULTFS_COUNT_IO": {
+      "status": "documented",
+      "owner": "benchmarks/agent_storage/faultfs.c",
+      "description": "\"1\" (with FAULTFS_STATS) makes the shim also count in-scope read/write calls, bytes and time, as read by benchmarks/sqlite_write_pattern.py. Benchmark/test-time only; the server never reads it and it tunes no product behavior."
+    },
+    "FAULTFS_ROOT": {
+      "status": "documented",
+      "owner": "benchmarks/agent_storage/faultfs.c",
+      "description": "Absolute path prefix the LD_PRELOAD fault-injection shim acts on; descriptors outside it are untouched and unset disables injection. Benchmark/test-time only; the server never reads it and it tunes no product behavior."
+    },
+    "TOFU_BENCH_CHECKOUT": {
+      "status": "documented",
+      "owner": "benchmarks/startup_recovery_batch.py",
+      "description": "Tree whose lib the startup-recovery benchmark imports (an exported pre-change tree for the before arm); unset measures this checkout. Benchmark/test-time only; the server never reads it and it tunes no product behavior."
+    },
+    "SLIDES_BENCH_MODEL": {
+      "status": "documented",
+      "owner": "evaluations/slides_bench/llm_bridge.py",
+      "description": "Model id the slides-benchmark arms request from the bridge endpoint (default gpt-5.5). Benchmark/test-time only; the server never reads it and it tunes no product behavior."
+    },
+    "OPENAI_API_BASE": {
+      "status": "documented",
+      "owner": "evaluations/slides_bench/competitors/run_pptagent.py",
+      "description": "Base URL the third-party competitor tools (PPTAgent, slide-deck-ai) read in their own isolated venvs; the slides benchmark points it at the running Tofu server's OpenAI-compatible endpoint. Benchmark/test-time only; the server never reads it and it tunes no product behavior."
+    },
+    "SLIDES_BENCH_DATA": {
+      "status": "documented",
+      "owner": "evaluations/slides_bench/corpus.py",
+      "description": "Private data root holding the slides benchmark corpus, tools and runs; unset uses data/ppt-bench under the shared checkout. Benchmark/test-time only; the server never reads it and it tunes no product behavior."
+    },
+    "SLIDES_BENCH_ENDPOINT": {
+      "status": "documented",
+      "owner": "evaluations/slides_bench/llm_bridge.py",
+      "description": "OpenAI-compatible chat endpoint of the running Tofu server through which every slides-benchmark arm, judge and auditor routes model calls. Benchmark/test-time only; the server never reads it and it tunes no product behavior."
+    },
+    "SLIDES_BENCH_SOFFICE": {
+      "status": "documented",
+      "owner": "evaluations/slides_bench/render.py",
+      "description": "LibreOffice binary that renders every arm's exported PPTX for the judge; unset uses the AppImage extracted under the benchmark data root. Benchmark/test-time only; the server never reads it and it tunes no product behavior."
+    },
+    "SLIDES_BENCH_TOFU_BASELINE": {
+      "status": "documented",
+      "owner": "evaluations/slides_bench/run_tofu.py",
+      "description": "\"1\" runs the Tofu arm's recorded baseline variant (lifted outline token budget), recorded in run.json. Benchmark/test-time only; the server never reads it and it tunes no product behavior."
+    },
+    "SLIDES_BENCH_JUDGE_MODEL": {
+      "status": "documented",
+      "owner": "evaluations/slides_bench/score.py",
+      "description": "Model id of the slides-benchmark judge (default gpt-5.5). Benchmark/test-time only; the server never reads it and it tunes no product behavior."
+    },
+    "PYTEST_DEBUG_TEMPROOT": {
+      "status": "documented",
+      "owner": "tests/conftest.py",
+      "description": "pytest's own temporary-root override, defined by pytest; tests/conftest.py reads it to derive the pytest-of-<user> basetemp ceiling. Test-time only."
+    },
+    "TOFU_TEST_CRASH_PROBE_SOURCES": {
+      "status": "documented",
+      "owner": "tests/deploy/test_engine_certify_crash_probe.py",
+      "description": "os.pathsep-separated drill source data roots for the opt-in engine crash-probe test; unset skips it. Test-time only; sources are hard-link-snapshotted, never written."
+    },
+    "LEAD_DELIVERABLES_SHOT_LABEL": {
+      "status": "documented",
+      "owner": "tests/frontend/test_lead_deliverables_browser.py",
+      "description": "Output subdirectory label (default \"after\") for the Lead deliverables visual test's screenshots under output/playwright. Test-time only."
     }
   },
   "legacy_count": 580,

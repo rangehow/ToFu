@@ -23,6 +23,11 @@ from lib.log import get_logger
 
 from .agent_loop_policy import run_guarded_paper_agent_loop
 from .agent_usage import PaperAgentUsageMeter
+from .length_continuation import (
+    OUTPUT_TOKEN_CEILING,
+    LengthContinuation,
+    length_continuation_hook,
+)
 from .qa_runtime import _append_qa_event, _cleanup_stale_qa_tasks, _qa_runtime
 from .tools import (
     PaperToolResultBudgetV2,
@@ -87,6 +92,7 @@ def _run_qa_task(task, messages):
     # draft-discard hook via a mutable holder — same interim-draft fix as the
     # report engine.
     _round = {'content': ''}
+    continuation = LengthContinuation()
 
     def _dispatch(rnd, tools):
         _round['content'] = ''
@@ -108,7 +114,7 @@ def _run_qa_task(task, messages):
             prefer_model=model_name if model else None,
             strict_model=bool(model),
             tools=tools,
-            max_tokens=8000,
+            max_tokens=OUTPUT_TOKEN_CEILING,
             temperature=0,
             thinking_enabled=False,
             log_prefix='[Paper:QA]',
@@ -125,7 +131,8 @@ def _run_qa_task(task, messages):
             _append_qa_event(task, {'type': 'delta_reset'})
         messages.append(msg)
 
-    def _publish_agent_usage(_rnd, _msg, _finish, _usage):
+    def _on_round_result(_rnd, msg, _finish, _usage):
+        continuation.observe_response(msg)
         task['agentUsageV1'] = _agent_usage.snapshot()
 
     _execute_tool = make_paper_task_tool_executor(
@@ -145,8 +152,12 @@ def _run_qa_task(task, messages):
             round_tools=paper_tools,
             dispatch=_dispatch,
             execute_tool=_execute_tool,
-            on_round_result=_publish_agent_usage,
+            on_round_result=_on_round_result,
             on_tool_round=_begin_tool_round,
+            decide_round=length_continuation_hook(
+                continuation, messages, abort_signal,
+                ui_lang=task.get('lang') or 'en', task_id=task_id,
+                log_prefix='[Paper:QA]'),
             on_round_end=_result_budget.finish_round,
         )
         if _outcome.completed:
@@ -164,6 +175,13 @@ def _run_qa_task(task, messages):
                 },
             )
             return
+        if continuation.continued and continuation.terminal_text != full_content:
+            # The joined answer drops a seam line the model repeated while
+            # continuing; converge live pollers onto what is published.
+            full_content = continuation.terminal_text
+            task['full_text'] = full_content
+            _append_qa_event(task, {'type': 'delta_reset'})
+            _append_qa_event(task, {'type': 'delta', 'delta': full_content})
         elapsed = time.time() - t0
         logger.info('[Paper:QA] Task %s complete — %d chars, %.1fs',
                     task['task_id'], len(full_content), elapsed)

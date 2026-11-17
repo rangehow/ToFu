@@ -293,6 +293,35 @@ def test_batched_failure_is_reevaluated_when_its_segment_rolls_back(backend):
     assert committed_record(backend) == {'version': 1, 'value': 'base'}
 
 
+def test_a_batch_whose_transaction_sqlite_rolled_back_names_the_cause_and_reruns_alone(backend, caplog):
+    """SQLite rolls the whole transaction back on an I/O error inside a
+    statement (DolphinFS: SQLITE_IOERR_WRITE on an unlinked temporary file), so
+    ROLLBACK TO the job's savepoint fails. The fallback log names that cause,
+    not only the generic mapped message, and the job reruns on its own."""
+    calls = []
+
+    def io_error_once(session):
+        calls.append('io')
+        if len(calls) == 1:
+            backend._writer._connection.execute('ROLLBACK')
+            error = sqlite3.OperationalError('disk I/O error')
+            error.sqlite_errorcode = 778
+            error.sqlite_errorname = 'SQLITE_IOERR_WRITE'
+            raise error
+        return effect('io', [])(session)
+
+    executor, blocker, (io_job, other), _jobs = batch_behind_blocker(
+        backend, lambda: command(backend, 'io', io_error_once, receipt=False),
+        lambda: command(backend, 'other', effect('other', calls), receipt=False))
+    with caplog.at_level('WARNING', logger='tofu.storage.sidecar.sqlite'), executor:
+        assert blocker.result(5) == 'released'
+        assert io_job.result(5) == 1
+        assert other.result(5) == 1
+    fallback = [r.getMessage() for r in caplog.records if 'batch commit failed' in r.getMessage()]
+    assert fallback and 'SQLITE_IOERR_WRITE' in fallback[0] and 'disk I/O error' in fallback[0]
+    assert totals(backend) == [{'name': 'io', 'total': 1}, {'name': 'other', 'total': 1}]
+
+
 def _disk_full():
     error = sqlite3.OperationalError('database or disk is full')
     error.sqlite_errorcode = sqlite3.SQLITE_FULL

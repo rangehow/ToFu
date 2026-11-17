@@ -748,10 +748,15 @@ class _FairWriter:
                         pending = still_open
                         continue
                     self.metrics['batch_fallbacks'] += 1
+                    # Name the SQLite cause: a rolled-back segment maps to the
+                    # generic message, which hid DolphinFS's SQLITE_IOERR_WRITE.
+                    cause = failure.__cause__
                     logger.warning(
-                        'SQLite batch commit failed (%s); falling back to '
+                        'SQLite batch commit failed (%s; cause %s: %s); falling back to '
                         'per-job transactions for %d job(s)',
-                        mapped.message, len(still_open))
+                        mapped.message,
+                        getattr(cause, 'sqlite_errorname', type(cause).__name__),
+                        cause, len(still_open))
                     for job in still_open:
                         if job.cancelled or time.monotonic() >= job.deadline_at:
                             self._resolve_batch_wait_timeout(job)

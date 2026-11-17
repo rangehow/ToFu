@@ -72,20 +72,35 @@ def test_main_coordinator_card_header_and_health_checks(page, monkeypatch, tmp_p
     group = page.locator(f'#sidebar .coordinator-conversations[data-coordinator-id="{router["conversationId"]}"]')
     expect(group).to_have_count(1)
 
-    health = header.locator('.router-watchdog')
-    summary = health.locator('summary')
-    expect(summary).to_have_text('Health checks: off')
-    summary.click()
-    health.get_by_role('button', name='Turn on health checks', exact=True).click()
-    expect(summary).to_have_text('Health checks: on', timeout=20000)
+    # Opening the main coordinator turned health checks on: their fold has no switch or
+    # schedule, and no portfolio switch sits beside it (owner decision 2026-11-17).
+    health = header.locator('details.router-watchdog')
+    expect(health.locator('summary')).to_have_text('Health checks: on', timeout=20000)
+    expect(health.locator('input')).to_have_count(0)
+    expect(header.locator('.router-portfolio')).to_have_count(0)
+    expect(header.locator('input[role="switch"]:visible')).to_have_count(0)
     watchdog = page.request.get(origin + '/api/v4/router/watchdog').json()['data']
     assert watchdog['availability'] == 'available', watchdog
+    assert watchdog['review']['enabled'] is True, watchdog
     assert page.evaluate('window.activeConvId') == router['conversationId']
+    # The remaining folds open from the shared chevron, never the native triangle.
+    instructions = header.locator('details.router-instructions')
+    instructions.locator('summary').click()
+    expect(instructions).to_have_attribute('open', '')
+    marker = instructions.locator('summary').evaluate("""el => {
+      const chevron = getComputedStyle(el, '::before');
+      return [getComputedStyle(el, '::marker').content, chevron.maskImage || chevron.webkitMaskImage];
+    }""")
+    assert marker[0] in ('none', '""'), marker
+    assert marker[1].startswith('url('), marker
     # No worker chats yet: the group stays hidden through every inventory read, so no "0" chip.
     expect(group).to_be_hidden()
     assert page.evaluate('window.__groupWatch.disconnect() || window.__groupCountsShown') == []
     page.screenshot(path=str(output / 'main-coordinator.png'), animations='disabled')
 
+    health.locator('summary').click()
+    expect(health.locator('.router-watchdog-body')).to_contain_text('say so in the health-check chat')
+    page.screenshot(path=str(output / 'health-checks.png'), animations='disabled')
     health.get_by_role('button', name='Open the health-check chat', exact=True).click()
     page.wait_for_function('(id) => window.activeConvId === id', arg=watchdog['conversationId'])
     watchdog_header = page.locator('.router-watchdog-header')

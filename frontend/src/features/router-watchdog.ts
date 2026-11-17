@@ -1,29 +1,29 @@
 /** Router Watchdog (docs/ROUTER.md R7), shown to the owner as health checks
- * (故障巡检). It owns a compact settings disclosure that the main
- * coordinator's header hosts — turn health checks on (ensures the Watchdog),
- * the periodic review switch and its cron cadence, and a way into the Watchdog
- * conversation — and a one-line header on that conversation with a way back.
- * Other surfaces call the same `ensure` before opening the Watchdog
+ * (故障巡检). Health checks are on by default: the server ensures them with the
+ * main coordinator (owner decision 2026-11-17), so the fold the main
+ * coordinator's header hosts shows their state, one sentence on what they do
+ * and a way into the Watchdog conversation, with nothing to switch or
+ * configure; the owner changes or stops the periodic checks by asking that
+ * conversation. The module also owns a one-line header on the Watchdog
+ * conversation with a way back. Other surfaces call the same `ensure` before opening the Watchdog
  * conversation (e.g. the studio's compute-stall dialog). The Watchdog has no
  * sidebar entry: the owner hears from it through the main coordinator. The
  * server binding and the scheduler task are the only authorities; this module
  * keeps the last read state for presentation, starts no polling or timers and
- * performs no work before the user acts beyond one passive read. Static labels
- * carry data-i18n attributes, so the i18n runtime translates them once the
- * catalog is ready and on every language switch.
+ * reads passively when created and on `reload` (after the main coordinator's
+ * ensure). Static labels carry data-i18n attributes, so the i18n runtime
+ * translates them once the catalog is ready and on every language switch.
  */
-import type { RouterWatchdogReviewRequest, RouterWatchdogState } from '../api/router.generated';
-import { createButton, createChoice, createDisclosureSummary, createField, setFieldError } from '../ui';
+import type { RouterWatchdogState } from '../api/router.generated';
+import { createButton, createDisclosureSummary } from '../ui';
 import { t } from '../i18n';
 import { setStableHidden } from '../conversation/ui/renderers/stable-dom';
 
 export interface RouterWatchdogPorts {
   /** GET /api/v4/router/watchdog: passive, never creates the Watchdog. */
   read(signal?: AbortSignal): Promise<RouterWatchdogState>;
-  /** POST /api/v4/router/watchdog: ensures the Watchdog conversation. */
+  /** POST /api/v4/router/watchdog: ensures health checks (the Watchdog and its review). */
   ensure(): Promise<RouterWatchdogState>;
-  /** POST /api/v4/router/watchdog/review: the owner's review choice. */
-  configureReview(request: RouterWatchdogReviewRequest): Promise<RouterWatchdogState>;
   open(conversationId: string): void;
   /** Returns to the main coordinator conversation. */
   back(): void;
@@ -39,9 +39,9 @@ export interface RouterWatchdogHosts {
 }
 
 // Placeholder-free labels only: the runtime re-applies data-i18n keys without parameters.
-type StaticKey = 'routerWatchdog.summaryOff' | 'routerWatchdog.summaryOn' | 'routerWatchdog.summaryPeriodic'
-  | 'routerWatchdog.enableHint' | 'routerWatchdog.enable' | 'routerWatchdog.review' | 'routerWatchdog.schedule'
-  | 'routerWatchdog.save' | 'routerWatchdog.open' | 'routerWatchdog.headerSubtitle' | 'routerWatchdog.back';
+type StaticKey = 'routerWatchdog.entry' | 'routerWatchdog.summaryOff' | 'routerWatchdog.summaryOn'
+  | 'routerWatchdog.summaryFaultsOnly' | 'routerWatchdog.hint' | 'routerWatchdog.open'
+  | 'routerWatchdog.headerSubtitle' | 'routerWatchdog.back';
 
 /** Current text now; the i18n runtime re-applies the key on ready() and on switches. */
 function localized<E extends HTMLElement>(element: E, key: StaticKey): E {
@@ -50,35 +50,25 @@ function localized<E extends HTMLElement>(element: E, key: StaticKey): E {
   return element;
 }
 
+const failure = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
 export function createRouterWatchdogEntry(ports: RouterWatchdogPorts, hosts: RouterWatchdogHosts) {
   let alive = true, pending = false;
   let state: RouterWatchdogState | null = null;
   // The Watchdog path, known from any read (also while unbound).
   let location = '';
-  const reading = new AbortController();
+  let reading: AbortController | null = null;
 
+  // A fold like its neighbours in the main coordinator's header: the state, what it does, a way in.
   const settings = document.createElement('details');
   settings.className = 'router-watchdog';
-  const summary = localized(createDisclosureSummary(document), 'routerWatchdog.summaryOff');
-  const off = document.createElement('div');
-  off.className = 'router-watchdog-off';
-  const hint = localized(document.createElement('p'), 'routerWatchdog.enableHint');
-  const enable = localized(createButton({ label: '', size: 'sm', variant: 'secondary' }), 'routerWatchdog.enable');
-  off.append(hint, enable);
-  const on = document.createElement('div');
-  on.className = 'router-watchdog-on';
-  on.hidden = true;
-  const review = createChoice({ type: 'switch', label: '' });
-  review.el.classList.add('router-watchdog-review');
-  localized(review.el.querySelector('span')!, 'routerWatchdog.review');
-  const schedule = createField({ label: '' });
-  schedule.el.classList.add('router-watchdog-schedule');
-  localized(schedule.el.querySelector('label')!, 'routerWatchdog.schedule');
-  const save = localized(createButton({ label: '', size: 'sm', variant: 'secondary' }), 'routerWatchdog.save');
+  const summary = localized(createDisclosureSummary(document), 'routerWatchdog.entry');
+  const body = document.createElement('div');
+  body.className = 'router-watchdog-body';
+  const hint = localized(document.createElement('p'), 'routerWatchdog.hint');
   const open = localized(createButton({ label: '', size: 'sm', variant: 'ghost' }), 'routerWatchdog.open');
-  on.append(review.el, schedule.el, save, open);
-  settings.append(summary, off, on);
-  const cron = schedule.control as HTMLInputElement;
+  body.append(hint, open);
+  settings.append(summary, body);
 
   const header = document.createElement('header');
   header.className = 'router-watchdog-header';
@@ -96,14 +86,7 @@ export function createRouterWatchdogEntry(ports: RouterWatchdogPorts, hosts: Rou
     state = next.availability === 'available' ? next : null;
     location = next.projectPath;
     localized(summary, !state ? 'routerWatchdog.summaryOff'
-      : state.review.enabled ? 'routerWatchdog.summaryPeriodic' : 'routerWatchdog.summaryOn');
-    off.hidden = !!state;
-    on.hidden = !state;
-    if (state) {
-      review.input.checked = state.review.enabled;
-      cron.value = state.review.schedule;
-      setFieldError(schedule, null);
-    }
+      : state.review.enabled ? 'routerWatchdog.summaryOn' : 'routerWatchdog.summaryFaultsOnly');
     refresh();
     if (identityChanged) ports.changed?.();
   }
@@ -114,21 +97,8 @@ export function createRouterWatchdogEntry(ports: RouterWatchdogPorts, hosts: Rou
     setStableHidden(header, !state || ports.activeConversationId() !== state.conversationId);
   }
 
-  async function busy(control: HTMLButtonElement | HTMLInputElement, work: () => Promise<void>) {
-    if (pending) return;
-    pending = true; control.disabled = true; control.setAttribute('aria-busy', 'true');
-    try {
-      await work();
-    } finally {
-      pending = false;
-      if (alive) { control.disabled = false; control.removeAttribute('aria-busy'); }
-    }
-  }
-
-  const failure = (error: unknown) => (error instanceof Error ? error.message : String(error));
-
-  /** Ensures the Watchdog conversation and adopts its state; resolves its ID or
-   * rejects with the localized reason it is unavailable. */
+  /** Ensures health checks and adopts their state; resolves the Watchdog
+   * conversation ID or rejects with the localized reason it is unavailable. */
   async function ensure(): Promise<string> {
     let ensured: RouterWatchdogState;
     try {
@@ -136,60 +106,55 @@ export function createRouterWatchdogEntry(ports: RouterWatchdogPorts, hosts: Rou
     } catch (error) {
       throw new Error(t('routerWatchdog.unavailable', { error: failure(error) }));
     }
-    if (alive) adopt(ensured);
+    if (alive) {
+      // The ensure's answer is newer than a read still in flight.
+      reading?.abort(); reading = null;
+      adopt(ensured);
+    }
     if (ensured.availability !== 'available') throw new Error(t('routerWatchdog.unavailable', { error: ensured.availability }));
     return ensured.conversationId;
   }
 
-  // Turning health checks on provisions the Watchdog; the owner stays where they are.
-  enable.addEventListener('click', () => busy(enable, async () => {
-    try {
-      await ensure();
-    } catch (error) {
+  // A known Watchdog opens at once; an unknown one is ensured first, and its
+  // answer opens it only if the owner is still where they clicked.
+  open.addEventListener('click', () => {
+    if (state) { ports.open(state.conversationId); return; }
+    if (pending) return;
+    pending = true;
+    open.disabled = true; open.setAttribute('aria-busy', 'true');
+    const expected = ports.activeConversationId();
+    ensure().then((id) => {
+      if (alive && ports.activeConversationId() === expected) ports.open(id);
+    }, (error) => {
       if (alive) ports.notifyError(failure(error));
-    }
-  }));
-
-  async function configure(control: HTMLButtonElement | HTMLInputElement) {
-    if (!state) return;
-    if (pending) {
-      // The switch shows only server state: a change made while a request runs is not sent.
-      review.input.checked = state.review.enabled;
-      return;
-    }
-    const wanted = review.input.checked;
-    const cadence = cron.value.trim();
-    await busy(control, async () => {
-      try {
-        const next = await ports.configureReview({ enabled: wanted, ...(cadence ? { schedule: cadence } : {}) });
-        if (alive) adopt(next);
-      } catch (error) {
-        if (!alive) return;
-        if (state) review.input.checked = state.review.enabled;
-        setFieldError(schedule, t('routerWatchdog.reviewFailed', { error: failure(error) }));
-      }
+    }).finally(() => {
+      pending = false;
+      if (alive) { open.disabled = false; open.removeAttribute('aria-busy'); }
     });
-  }
-  review.input.addEventListener('change', () => { void configure(review.input); });
-  save.addEventListener('click', () => { void configure(save); });
-  open.addEventListener('click', () => { if (state) ports.open(state.conversationId); });
+  });
   back.addEventListener('click', () => ports.back());
 
-  // One passive read so the settings and header reflect an existing Watchdog;
-  // failure only means health checks show as off until the owner turns them on.
-  ports.read(reading.signal).then(adopt, () => undefined);
+  // A passive read; a failure keeps the last known state until the owner acts.
+  function read() {
+    reading?.abort();
+    const current = reading = new AbortController();
+    ports.read(current.signal).then((next) => { if (reading === current) adopt(next); }, () => undefined);
+  }
+  read();
 
   return {
-    /** The disclosure the main coordinator's header hosts. */
+    /** The fold the main coordinator's header hosts. */
     settings,
     refresh,
     ensure,
+    /** Reads again: ensuring the main coordinator turns health checks on. */
+    reload: read,
     /** The Watchdog path ('' until a read answers); a coordinator there is the Watchdog. */
     location: () => location,
     /** The bound Watchdog conversation the header marks ('' unless available). */
     conversationId: () => state?.conversationId ?? '',
     destroy() {
-      alive = false; reading.abort(); settings.remove(); header.remove();
+      alive = false; reading?.abort(); settings.remove(); header.remove();
     },
   };
 }

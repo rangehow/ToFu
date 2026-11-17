@@ -2,7 +2,9 @@
 
 import pytest
 
-from lib.paper.report_engine._body import join_report_continuation
+from tests.support.paper_report import complete_report_body
+
+from lib.paper.length_continuation import join_length_continuation
 
 
 pytestmark = pytest.mark.unit
@@ -44,7 +46,8 @@ def test_length_partial_is_continued_and_published_whole(report_case):
     run, _, _ = report_case
     seen = []
     first = '# Report\n\n## ⚡ TL;DR\nThe method wor'
-    rest = 'ks well.\n\n## 📝 Technical Reference\nThe end.\n'
+    # The rest carries every required section, so no section repair is due.
+    rest = 'ks well.\n\n' + complete_report_body()
     dispatch, calls = _scripted([(first, 'length', []), (rest, 'stop', [])], seen)
 
     task, published = run(dispatch)
@@ -161,6 +164,12 @@ def test_stop_during_truncated_round_is_not_continued(report_case):
     ('line one\n', '\nnext', '\nnext'),
     ('', 'start', 'start'),
     ('ends\n\n', '\n', '\n'),
+    # Live seam (deepseek-v4-flash): only the cut line's last word repeated.
+    ('- **Berges et', 'et al., "M', ' al., "M'),
+    ('a b c', 'b c d', ' d'),
+    # A tail that is not a whole word in the continuation is not a repeat.
+    ('accuracy of 1', '1,000 samples', '1,000 samples'),
+    ('in the', 'theory', 'theory'),
 ])
-def test_join_report_continuation_seam(prefix, continuation, expected):
-    assert join_report_continuation(prefix, continuation) == expected
+def test_join_length_continuation_seam(prefix, continuation, expected):
+    assert join_length_continuation(prefix, continuation) == expected

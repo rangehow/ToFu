@@ -2023,18 +2023,13 @@ summary.thinking-header::-webkit-details-marker{display:none}
 #globalRouterEntry{flex-shrink:0}
 .global-router-header{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--space-1) var(--space-3);padding:var(--space-2) var(--space-4);border-bottom:var(--control-edge-inset) solid var(--border);color:var(--text-secondary);font:var(--font-size-xs)/var(--leading-body) var(--font-ui)}
 .global-router-header[hidden]{display:none}
-.global-router-header-subtitle{min-width:0;overflow-wrap:anywhere}
+/* The sentence takes its own row, so the controls line up on one row in every language. */
+.global-router-header-subtitle{flex-basis:100%;min-width:0;overflow-wrap:anywhere}
 /* Compact disclosures: the summary is the at-a-glance value; an open one takes the row. */
 .global-router-header>details[open]{flex-basis:100%}
-.router-worker-model,.router-instructions,.router-watchdog,.router-owner-delegation,.router-portfolio{min-width:0;color:var(--text-secondary);font:var(--font-size-xs)/var(--leading-body) var(--font-ui)}
-.router-instructions>summary,.router-watchdog>summary,.router-owner-delegation>summary,.router-portfolio>summary{cursor:pointer;color:var(--text-tertiary);overflow-wrap:anywhere}
-.router-instructions>summary:hover,.router-watchdog>summary:hover,.router-owner-delegation>summary:hover,.router-portfolio>summary:hover{color:var(--text-primary)}
-/* Portfolio ownership (docs/ROUTER.md R10): the proactive-work pause switch and value ledger. */
-.router-portfolio-body{display:flex;flex-direction:column;gap:var(--space-1);padding-top:var(--space-2)}
-.router-portfolio-body>p{margin:0;overflow-wrap:anywhere}
-.router-portfolio-body>[hidden]{display:none}
-.router-portfolio-counts,.router-portfolio-last{color:var(--text-tertiary)}
-.router-portfolio-error{color:var(--error-text)}
+.router-worker-model,.router-instructions,.router-watchdog,.router-owner-delegation{min-width:0;color:var(--text-secondary);font:var(--font-size-xs)/var(--leading-body) var(--font-ui)}
+.router-instructions>summary,.router-watchdog>summary,.router-owner-delegation>summary{cursor:pointer;color:var(--text-tertiary);overflow-wrap:anywhere}
+.router-instructions>summary:hover,.router-watchdog>summary:hover,.router-owner-delegation>summary:hover{color:var(--text-primary)}
 /* "Act for me" (docs/ROUTER.md R9): the grant switch, its state and the last audited use. */
 .router-owner-delegation-body{display:flex;flex-direction:column;gap:var(--space-1);padding-top:var(--space-2)}
 .router-owner-delegation-body>p{margin:0;overflow-wrap:anywhere}
@@ -2060,15 +2055,12 @@ summary.thinking-header::-webkit-details-marker{display:none}
 .router-instruction-actions,.router-instructions-footer{display:flex;flex-wrap:wrap;gap:var(--space-1)}
 .router-instructions-footer:empty{display:none}
 /* Router Watchdog (docs/ROUTER.md R7), shown as health checks: the body of
- * the settings disclosure the main coordinator's header hosts (turn on, the
- * periodic review controls, open the Watchdog conversation) and the one-line
- * header on the Watchdog conversation. Tokens only; shared controls keep their
- * ui-kit styling. */
-.router-watchdog-off,.router-watchdog-on{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-1) var(--space-3);padding-top:var(--space-2)}
-.router-watchdog-off[hidden],.router-watchdog-on[hidden]{display:none}
-.router-watchdog-off>p{flex:1 1 20em;min-width:0;margin:0;overflow-wrap:anywhere}
-.router-watchdog-schedule{flex-direction:row;flex-wrap:wrap;align-items:center;gap:var(--space-1) var(--space-2)}
-.router-watchdog-schedule input{width:12em;max-width:100%}
+ * the fold the main coordinator's header hosts (on by default, nothing to
+ * switch: one sentence and a way into the Watchdog conversation) and the
+ * one-line header on the Watchdog conversation. Tokens only; shared controls
+ * keep their ui-kit styling. */
+.router-watchdog-body{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-1) var(--space-3);padding-top:var(--space-2)}
+.router-watchdog-body>p{flex:1 1 20em;min-width:0;margin:0;overflow-wrap:anywhere}
 .router-watchdog-header{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-1) var(--space-3);padding:var(--space-2) var(--space-4);border-bottom:var(--control-edge-inset) solid var(--border);color:var(--text-secondary);font:var(--font-size-xs)/var(--leading-body) var(--font-ui)}
 .router-watchdog-header[hidden]{display:none}
 .router-watchdog-header-subtitle{flex:1 1 16em;min-width:0;overflow-wrap:anywhere}
@@ -3396,8 +3388,20 @@ body.paper-mode-active #presenceStrip{display:none !important}
 
 /* ── Streaming describe-to-recommend (progressive reveal, aligned with chatInner) ── */
 /* Status line above the list: interpreting → grounding progress. */
-.paper-rec-status{display:flex;align-items:center;gap:var(--space-2);font-size:12.5px;color:var(--text-tertiary);min-height:18px}
+.paper-rec-status{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2);font-size:12.5px;color:var(--text-tertiary);min-height:18px}
 .paper-rec-status[hidden]{display:none}
+.paper-rec-status-text{display:flex;align-items:center;gap:var(--space-2);flex:1 1 auto;min-width:0;border-radius:var(--radius-xs)}
+.paper-rec-status-text:focus{outline:none}
+.paper-rec-status-text:focus-visible{box-shadow:var(--focus-ring)}
+.paper-rec-stop{flex:0 0 auto;margin-inline-start:auto}
+/* Research log follows the results as one folded line ("Searched N times");
+   it stays open while research is the only visible progress. */
+.paper-rec-research[hidden]{display:none}
+.paper-rec-research-summary{display:flex;align-items:center;gap:var(--space-1);min-height:28px;padding:var(--space-1) 0;font-size:12.5px;color:var(--text-tertiary);border-radius:var(--radius-xs)}
+.paper-rec-research-summary:hover{color:var(--text-secondary)}
+.paper-rec-research-summary:focus{outline:none}
+.paper-rec-research-summary:focus-visible{box-shadow:var(--focus-ring)}
+.paper-rec-research[open]>.paper-rec-tools{margin-top:var(--space-2)}
 /* Research tool timeline in the recommend view reuses .paper-report-tools
    (chatInner's unified panel), but the recommend shell is a centered flex
    column with its own gap/padding — neutralize the report-flex insets so the

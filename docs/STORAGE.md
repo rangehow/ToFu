@@ -1092,6 +1092,13 @@ reimplement the fence, restart and validation rules.
   startup latency threshold (formerly `TOFU_STORAGE_PREFLIGHT_MAX_MS`, now
   ignored) is rejected: any threshold refuses all storage on a busier host,
   and a default-off switch gets turned back on.
+- SQLite's temporary files (statement journals, sorters) follow
+  `SQLITE_TMPDIR`/`TMPDIR`, then `/var/tmp`. They must be host-local. SQLite
+  unlinks each one as soon as it opens it, and DolphinFS fails I/O on an
+  unlinked open file with `ENOENT`, so a `TMPDIR` on DolphinFS turns
+  savepointed batch jobs into `SQLITE_IOERR_WRITE` rollbacks and per-job
+  fallbacks. Production sets no `TMPDIR`. The preflight above does not check
+  this ([measurement](STORAGE_PERFORMANCE_CHARTER.md#the-same-comparison-on-the-real-dolphinfs-volume-2026-11-17)).
 - Before reclamation reaches the writer, the adapter checks the observed
   authority topology. Network, generic userspace, and unknown filesystems
   return `offline_required` without executing any SQLite statement: even one

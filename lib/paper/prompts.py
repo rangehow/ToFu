@@ -468,18 +468,19 @@ _REPORT_PROMPT_ZH = """\
 
 
 
-def report_continuation_prompt(ui_lang: str) -> str:
-    """User turn that resumes a report cut off by the model's output-token cap.
+def length_continuation_prompt(ui_lang: str) -> str:
+    """User turn that resumes an answer cut off by the model's output-token cap.
 
-    The worker joins the continuation to the truncated text verbatim, so the
-    model must emit only the remaining characters.
+    Shared by report, Q&A and Deepen (``length_continuation``). The worker
+    joins the continuation to the truncated text verbatim, so the model must
+    emit only the remaining characters.
     """
     if ui_lang == 'zh':
         return (
             "你上一条回复因达到输出长度上限而被截断。请从被截断的**确切位置**继续写，"
             "只输出剩余内容，紧接着最后一个字符开始：不要重复任何已写内容，不要任何开场白、"
             "确认或总结，不要重新开始当前章节。若截断发生在句子、单词、表格行、代码块或公式中间，"
-            "直接无缝续写；之后按原要求写完报告剩余的所有章节。"
+            "直接无缝续写；之后按原要求写完剩余的全部内容。"
         )
     return (
         "Your previous response was cut off by the output length limit. Continue "
@@ -487,6 +488,6 @@ def report_continuation_prompt(ui_lang: str) -> str:
         "the very next character. Do not repeat anything already written, and add "
         "no preamble, acknowledgement or summary; do not restart the current "
         "section. If the cut fell mid-sentence, mid-word, mid-table-row, or inside "
-        "a code or math block, continue it seamlessly, then finish every remaining "
-        "section of the report as originally instructed."
+        "a code or math block, continue it seamlessly, then complete everything "
+        "that remains as originally instructed."
     )

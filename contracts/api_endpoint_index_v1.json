@@ -10285,7 +10285,7 @@
       "path": "/api/v4/router",
       "transport": "http",
       "responseContract": "tofu.api/v4",
-      "summary": "Ensure the owner's Global Router home and conversation exist",
+      "summary": "Ensure the owner's Global Router home and conversation exist, with health checks on",
       "tags": [
         "router"
       ],
@@ -10519,7 +10519,7 @@
       "path": "/api/v4/router/watchdog",
       "transport": "http",
       "responseContract": "tofu.api/v4",
-      "summary": "Ensure the owner's Router Watchdog conversation exists",
+      "summary": "Ensure the owner's health checks: the Router Watchdog conversation and, unless the owner chose otherwise, its periodic review",
       "tags": [
         "router"
       ],

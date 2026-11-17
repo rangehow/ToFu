@@ -28,6 +28,8 @@ export interface GlobalRouterPorts {
   notifyError(message: string): void;
   /** The router home or its conversation became known or changed. */
   changed?(): void;
+  /** An ensure answered with an available router; the server ensures its health checks with it. */
+  ensured?(): void;
   workerModel: RouterWorkerModelPorts;
   instructions: RouterInstructionPorts;
 }
@@ -182,6 +184,7 @@ export function createGlobalRouterEntry(ports: GlobalRouterPorts, hosts: GlobalR
         const active = ports.activeConversationId();
         if (active === expected && active !== state.conversationId) ports.open(state.conversationId);
         refresh();
+        ports.ensured?.();
       } else ports.notifyError(t('globalRouter.unavailable', { error: ensured.availability }));
     } catch (error) {
       if (alive) ports.notifyError(t('globalRouter.unavailable', {

@@ -30,8 +30,8 @@
     },
 
     { "path": "32-agent-sidebar-dock.css", "responsibility": "Keyed background-agent dock and responsive right-hand rail" },
-    { "path": "35-global-router.css", "responsibility": "Main coordinator (Global Router) card slot, its compact conversation header and the compact Router disclosures it hosts: Worker model, standing instructions and health checks" },
-    { "path": "35-router-watchdog.css", "responsibility": "Health checks (Router Watchdog) settings body with the periodic review controls, and the Watchdog conversation header" },
+    { "path": "35-global-router.css", "responsibility": "Main coordinator (Global Router) card slot, its compact conversation header and the compact Router controls it hosts: Worker model, standing instructions, Act for me and health checks" },
+    { "path": "35-router-watchdog.css", "responsibility": "Health checks (Router Watchdog) fold body in the main coordinator's header (one sentence and the way into its chat), and the Watchdog conversation header" },
     { "path": "02-inspector-tool-anchors.css", "responsibility": "inspector tool anchors" },
     {
       "path": "02-composer-geometry.css",

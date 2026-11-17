@@ -38,6 +38,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import re
 import time
 
 from lib.identity import PrincipalContext, require_user_id
@@ -167,6 +168,20 @@ def commitment_identity(owner, coordinator_id, commitments):
         [int(owner), coordinator_id, [{'title': row['title'], 'dueAt': row['dueAt']}
                                       for row in commitments]],
         separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
+
+
+_DUE_LINE = re.compile(r'^- "(?P<title>.*)" \u2014 due ', re.MULTILINE)
+
+
+def due_notice_subject(text):
+    """The due promises' titles of a commitment-due notice, else None.
+
+    Memory selection reads only them (lib/memory/prefetch/_query.py); the
+    rest is this module's fixed instruction.
+    """
+    if not text.lstrip().startswith(_NOTICE_HEADER):
+        return None
+    return '\n'.join(match['title'] for match in _DUE_LINE.finditer(text))
 
 
 def render_due_notice(commitments):

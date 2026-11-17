@@ -146,9 +146,24 @@ def _json(value: Any) -> str:
 
 
 def _executable_catalog(task: dict[str, Any], fallback=None) -> list[dict]:
-    """Return task authority without confusing it with wire exposure."""
+    """Return task authority without confusing it with wire exposure.
+
+    MCP entries are first re-projected onto the owner bridge's live schemas:
+    the task snapshot predates any server restart or upgrade during the turn.
+    """
     if '_executable_tool_catalog' in task:
-        return list(task.get('_executable_tool_catalog') or [])
+        catalog = list(task.get('_executable_tool_catalog') or [])
+        if any(_schema_name(tool).startswith('mcp__') for tool in catalog):
+            from lib.mcp import get_bridge
+            from lib.mcp.live_schemas import project_live_mcp_schemas
+            from lib.tasks_pkg.manager import task_user_id
+            live = project_live_mcp_schemas(
+                get_bridge(task_user_id(task)), catalog,
+                task.get('_toolContractDocumentsByName') or {})
+            if live is not None:
+                catalog, task['_toolContractDocumentsByName'] = live
+                task['_executable_tool_catalog'] = catalog
+        return list(catalog)
     return list(fallback or [])
 
 

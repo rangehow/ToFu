@@ -82,6 +82,7 @@ win.t = global.t = (k, f) => {
     'paper.recommendGrounding': 'Verifying against arXiv ({n}/{total})…',
     'paper.recommendNoResults': 'Could not verify a matching paper on arXiv.',
     'paper.searchBack': 'Back',
+    'paper.recommendResearchSummary': 'Searched {n} times',
   };
   return M[k] || f || k;
 };
@@ -144,6 +145,9 @@ out.timelineShowsQuery = !!panel &&
   panel.textContent.indexOf('global workspace') !== -1;
 out.streamingFlagWhileRunning = _rtrCalls.length > 0 &&
   _rtrCalls[_rtrCalls.length - 1].streaming === true;
+let research = viewer.querySelector('details[data-rec-research]');
+out.openWhileResearching = !!research && research.open === true && research.hidden === false;
+out.summaryIsDisclosure = !!research && !!research.querySelector(':scope > summary.ui-disclosure');
 
 // ── Research round 1 DONE: tool_done carries results + elapsed ──
 applyEv(s, { type: 'tool_done', roundNum: 1, toolName: 'web_search',
@@ -157,10 +161,14 @@ out.round1HasResults = !!s.toolRounds[0] && Array.isArray(s.toolRounds[0].result
 panel = viewer.querySelector('[data-rec-tools] .ptool-panel[data-marker="unified"]');
 out.doneRowRendered = !!panel &&
   !!panel.querySelector('.ptool-row[data-status="done"]');
+// The reader folds the log mid-research; the next event must not reopen it.
+research.open = false;
 
 // ── Second research round, then interpret_done (research complete) ──
 applyEv(s, { type: 'tool_start', roundNum: 2, toolName: 'fetch_url',
              query: 'https://arxiv.org/abs/2103.00001', toolCallId: 'tc2' });
+paint();
+out.readerCloseKeptMidResearch = research.open === false;
 applyEv(s, { type: 'tool_done', roundNum: 2, toolName: 'fetch_url', elapsed: 1.1 });
 applyEv(s, { type: 'interpret_done', query: s.description, candidateCount: 2, correctionPending: false });
 paint();
@@ -172,6 +180,23 @@ out.timelinePersistsAfterInterpret = !!panel &&
 const last = _rtrCalls[_rtrCalls.length - 1];
 out.lastCallHadTwoRounds = !!last && last.n === 2;
 out.lastCallQueries = last ? last.queries : [];
+research = viewer.querySelector('details[data-rec-research]');
+out.collapsedAfterInterpret = !!research && research.open === false;
+const summaryEl = research && research.querySelector('summary');
+out.summaryText = summaryEl ? summaryEl.textContent : null;
+const listEl = viewer.querySelector('[data-rec-list]');
+out.cardsAboveResearch = !!(listEl && research &&
+  (listEl.compareDocumentPosition(research) & win.Node.DOCUMENT_POSITION_FOLLOWING));
+out.skeletonsAboveResearch = listEl.children.length === 2;
+// The reader expands the folded log; later repaints keep it open.
+research.open = true;
+applyEv(s, { type: 'candidate', index: 0, card: { arxiv_id: '2103.00001', title: 'X' } });
+paint();
+s.status = 'done';
+paint();
+out.readerOpenKept = research.open === true &&
+  viewer.querySelector('details[data-rec-research]') === research;
+out.streamingFlagAtDone = _rtrCalls.length ? _rtrCalls[_rtrCalls.length - 1].streaming : null;
 
 console.log('__RESULT__' + JSON.stringify(out));
 })();
@@ -249,6 +274,25 @@ def test_recommend_research_renders_through_unified_tool_timeline():
         f'renderToolRoundsHTML must receive ALL accumulated rounds: {out}'
     assert 'https://arxiv.org/abs/2103.00001' in out['lastCallQueries'], \
         f'the fetch_url round query must reach the renderer: {out}'
+
+
+def test_research_timeline_folds_below_results_once_interpreted():
+    out = _run()
+    assert out['openWhileResearching'] is True, \
+        f'the research log stays expanded while research is the progress: {out}'
+    assert out['summaryIsDisclosure'] is True, \
+        f'the fold uses the shared ui-disclosure summary: {out}'
+    assert out['readerCloseKeptMidResearch'] is True, \
+        f'a reader fold mid-research must survive the next event: {out}'
+    assert out['collapsedAfterInterpret'] is True, \
+        f'interpretation done folds the research log: {out}'
+    assert out['summaryText'] == 'Searched 2 times \u00b7 4.5s', out
+    assert out['cardsAboveResearch'] is True, \
+        f'cards and skeletons render ABOVE the research log: {out}'
+    assert out['skeletonsAboveResearch'] is True, out
+    assert out['readerOpenKept'] is True, \
+        f"the reader's expand choice survives repaints and task completion: {out}"
+    assert out['streamingFlagAtDone'] is False, out
 
 
 def test_NC_tool_round_accumulation_is_load_bearing(tmp_path):

@@ -1677,6 +1677,58 @@ stops the request; unsettled tool effects still block delivery claims. Stop,
 binding withdrawal and missing source evidence refuse further birth. Grants and
 continuation receipts share the segmented project-head CAS.
 
+### Open outcomes cannot disappear from continuation context (2026-11-17)
+
+Problem: the Parallel lead staffed one paper while Paper B had no accountable
+Worker. The wake showed open board rows and actionable Workers, but never asked
+which outcomes lacked a running or queued owner; settled outcomes vanished from
+that view. The Router also blocked every distinct second initiative of a project
+as `project_busy`. A board rewrite could omit an unfinished outcome entirely.
+
+Decision: `coordinator_continuation.py` derives an advisory ownership section
+from the existing board, task history, dispatch history and conversation titles.
+Every automatic wake lists open outcomes whose names no running/queued Worker
+names, and dropped open outcomes separately. Matching uses the shared outcome
+label, never a broad brief or generic infrastructure vocabulary. It grants no
+authority, starts no work and adds no store, knob, threshold or cap.
+`router.portfolio.ranking.start_blockers` no longer serializes distinct
+initiatives of one project; each remains a separate queued request and usage
+account. Duplicate work and unmet dependencies still block.
+
+Alternatives rejected: per-Worker settlement Turns (they split shared judgment);
+steering every initiative into the live request (it merges cost attribution);
+fuzzy text matching or a second outcome-owner registry (false ownership or a
+second authority); automatic dispatch from the warning (visibility must not
+become authority); claiming the replay passed when the historical board omitted
+Paper B (the evidence is in `output/PARALLEL_UNOWNED_REPLAY_2026-11-17.md`).
+
+Durable sources beyond the current board (2026-11-17, second pass): the
+projection also reads every Coordinator request of the binding. Its durable
+Turn's board revisions are parsed and folded by the task history's own
+`boards_from_rounds`/`fold_boards`, recovering dropped outcomes the current
+head never recorded. An unfinished request whose Turn states no outcome at all
+contributes its owner request text; a durable `coordinatorSettlements` finish
+receipt, or a request whose board/history already states its outcomes, adds
+none. Durable task history stays authoritative; the folded transcript is only
+used where it is incomplete or predates it, and the two are merged by history
+key. A Worker owning the board's renamed continuation does not erase the
+dropped row: only a Worker naming the dropped outcome's own title owns it.
+Ownership still reuses existing running/queued Worker titles. No new store,
+heuristic, knob or cap was added.
+
+Replay limitation (second pass): the real 12:29:22 drop is replayed through
+the production projection; its next wake input lists
+`- [dropped] Paper B: cross-harness long-horizon terminal benchmark (was dropped)`
+while Paper B's Worker was running. The 11-09–11-15 replay over every retained
+board in that window flags **no** Paper B outcome: no board named it, no durable
+history record predates 11-17, and the only owner request text naming Paper B
+is the 11-17 12:42 Router forward. The retained lead conversation was created
+11-15 16:06, so this is not evidence about the earlier INS deployment; the
+requested "first continuation after 11-09" remains **not evidenced**.
+Evidence: `output/PARALLEL_UNOWNED_REPLAY_2026-11-17.{md,json}`. Specs:
+`test_coordinator_continuation_context.py`, `test_coordinator_task_history.py`,
+`test_portfolio_review.py`.
+
 ### Continuation context is anchored on the task board (2026-11-15)
 
 Problem: every automatic continuation of the tofu Coordinator

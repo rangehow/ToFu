@@ -13,6 +13,7 @@ import { createButton } from '../../ui';
 import { apiFailure } from '../../api/errors';
 import { appendDeliverables, deliverableAge, deliverableProject, type LeadDeliverable, type LeadDeliverablePage } from './model';
 import { sourceButton, type DeliverableOpener } from './open';
+import { folderIcon } from '../project/folder-icons';
 import './lead-deliverables.css';
 
 export interface LeadDeliverablesTarget { leadId: string; path: string }
@@ -49,7 +50,11 @@ export function createLeadDeliverables(ports: LeadDeliverablesPorts): LeadDelive
   label.className = 'lead-deliverables__label';
   const count = document.createElement('span');
   count.className = 'lead-deliverables__count';
-  toggle.append(label, count);
+  // The archive toggle's chevron (the date groups' down chevron); CSS turns it right while collapsed.
+  const chevron = folderIcon('down');
+  chevron.classList.add('lead-deliverables__chevron');
+  chevron.setAttribute('width', '12'); chevron.setAttribute('height', '12'); chevron.setAttribute('stroke-width', '2.5');
+  toggle.append(chevron, label, count);
   const body = document.createElement('div');
   body.className = 'lead-deliverables__body';
   body.id = `lead-deliverables-${Math.random().toString(36).slice(2)}`;

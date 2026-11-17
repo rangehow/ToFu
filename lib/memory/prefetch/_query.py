@@ -72,31 +72,42 @@ def _selection_text(text: str) -> str:
     by its Coordinator's brief: the brief is its task, and the owner's request
     is only linked, not repeated, in its input. A lead's program-written input
     selects by its subject only: a relayed report or question by what the
-    Project Router said, a continuation brief by its due promises or applied
-    default, and a status notice by nothing. The envelope owners define the
-    markers.
+    Project Router said; a continuation by its due promises or applied default
+    and the state appended to it (open board tasks, unanswered questions,
+    Worker states that need the lead); a scheduled wake by its task's name and
+    note; a commitment-due notice by the due promises; any other status notice
+    by nothing. The envelope owners define the markers.
     """
+    from lib.conversations.coordinator_commitments import due_notice_subject
+    from lib.conversations.coordinator_continuation import continuation_context_subject
     from lib.project_dispatch.continuation import continuation_brief_subject
     from lib.project_dispatch.delegation import follow_up_instruction, worker_input_brief
     from lib.router.forwarding import strip_router_evidence
     from lib.router.relay import relay_notice_subject
+    from lib.scheduler.project_wake import wake_notice_subject
     from lib.turn_initiation import is_nonhuman_notice
     brief = worker_input_brief(text)
     if brief is not None:
         subject = continuation_brief_subject(brief)
-        return brief if subject is None else subject
+        if subject is None:
+            return brief
+        context = continuation_context_subject(text)
+        return '\n'.join(part for part in (subject, context) if part)
     instruction = follow_up_instruction(text)
     if instruction is not None:
         return instruction
-    relayed = relay_notice_subject(text)
-    if relayed is not None:
-        return relayed
+    for notice_subject in (relay_notice_subject, wake_notice_subject, due_notice_subject):
+        subject = notice_subject(text)
+        if subject is not None:
+            return subject
     if is_nonhuman_notice(text):
         # A status notice (restart, scheduled wake, quiet hours, ...) states no
         # task: nothing in it is the owner's words or a brief.
         return ''
     subject = continuation_brief_subject(text)
-    return strip_router_evidence(text) if subject is None else subject
+    if subject is None:
+        return strip_router_evidence(text)
+    return '\n'.join(part for part in (subject, continuation_context_subject(text)) if part)
 
 
 def _extract_current_user_request(messages: list,

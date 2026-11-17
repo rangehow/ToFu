@@ -794,3 +794,170 @@ def test_replayed_forward_with_the_same_command_is_delivered_once(
     assert len(agent_inbox.pending_items('conv-command-inject', modes=['user-steer'])) == 1
     assert len(_round_boundary(executor, 2)) == 1, 'a replayed steer was delivered twice'
     assert not agent_inbox.pending_items('conv-command-inject', modes=['user-steer'])
+
+
+# ── A command already steered is replayed, never queued a second time ──────
+#
+# 2026-11-17: a Global Router continuation forwarded an owner message again
+# (same source, so the same command id) with a new note. The steer receipt
+# refused the changed request, the refusal read as a closed steer window, and
+# each Project Router queued the message as a second request behind a reply
+# that ran for hours.
+
+def _forward(note):
+    return {'role': 'user', 'content': f'{_OWNER_TEXT}\n\n{note}',
+            'origin': {'initiator': 'human', 'forwardedFrom': _FORWARDED}}
+
+
+def _steer_records(first):
+    from lib.turn_lifecycle import get_turn
+    return get_turn('conv-command-inject', first['turn']['turnId'], user_id=1)[
+        'projection'].get('_userSteerInjects') or []
+
+
+@pytest.mark.parametrize('executor_here', [True, False])
+def test_a_forward_resent_with_another_note_replays_its_steer_instead_of_queueing(
+    flask_client, conversation_command_db, monkeypatch, executor_here,
+):
+    from lib import agent_inbox
+    from lib.message_queue import get_queue_depth
+
+    # Receipts are owner-scoped and outlive this fixture's conversation.
+    command_id = f'router-forward:renote:{executor_here}'
+    first, starts = _start_first_turn(flask_client, monkeypatch, executor_here=executor_here)
+    accepted = _steer(command_id, _forward('Router note: first evidence'))
+    assert accepted['steered'] is True and 'idempotentReplay' not in accepted
+
+    resent = _steer(command_id, _forward('Router note: second evidence'))
+    assert resent['steered'] is True and resent['idempotentReplay'] is True
+    assert resent['blockId'] == f'injection:user-steer:{command_id}'
+    assert 'steerFallback' not in resent and 'queued' not in resent
+    assert get_queue_depth('conv-command-inject', user_id=1) == 0
+    assert len(starts) == 1
+    # The first forward stays the command's only delivery.
+    [record] = _steer_records(first)
+    assert record['previews'][0]['text'].endswith('Router note: first evidence')
+    woken = agent_inbox.drain('conv-command-inject', modes=['user-steer'])
+    assert [item['value'] for item in woken] == (
+        [f'{_OWNER_TEXT}\n\nRouter note: first evidence'] if executor_here else [])
+
+
+def test_an_engine_without_the_reuse_literal_still_replays_a_steer_the_live_turn_holds(
+    flask_client, conversation_command_db, monkeypatch,
+):
+    from lib import turn_lifecycle
+    from lib.message_queue import get_queue_depth
+    from lib.storage.errors import StorageError, is_command_id_reuse
+
+    first, _starts = _start_first_turn(flask_client, monkeypatch)
+    real_client = turn_lifecycle._turn_client
+
+    class BareConflictClient:
+        """A native engine predating the literal answers the bare conflict code."""
+
+        def __init__(self, client):
+            self._client = client
+
+        def __getattr__(self, name):
+            return getattr(self._client, name)
+
+        def command(self, *args, **kwargs):
+            try:
+                return self._client.command(*args, **kwargs)
+            except StorageError as exc:
+                if is_command_id_reuse(exc):
+                    raise StorageError('database_conflict', 'database_conflict') from None
+                raise
+
+    monkeypatch.setattr(turn_lifecycle, '_turn_client',
+                        lambda *, write=False: BareConflictClient(real_client(write=write)))
+    assert _steer('router-forward:bare', _forward('first'))['steered'] is True
+    resent = _steer('router-forward:bare', _forward('second'))
+    assert resent['steered'] is True and resent['idempotentReplay'] is True
+    assert get_queue_depth('conv-command-inject', user_id=1) == 0
+    assert len(_steer_records(first)) == 1
+
+
+def test_a_steer_resent_while_a_later_turn_runs_is_not_queued_again(
+    worker_attempts, flask_client, conversation_command_db, monkeypatch,
+):
+    """The receipt answers for the whole conversation: the record lives in the
+    earlier Turn, and the later live Turn holds no evidence of it."""
+    from lib.message_queue import get_queue_depth
+    from lib.turn_lifecycle import list_turns
+
+    first, starts = _start_first_turn(flask_client, monkeypatch)
+    assert _steer('router-forward:earlier', _forward('first'))['steered'] is True
+    assert worker_attempts.publish({
+        '_attemptId': first['attempt']['attemptId'], '_turnId': first['turn']['turnId'],
+        'id': 'internal-task-run', 'status': 'done', 'finishReason': 'stop', 'content': 'answer',
+        'thinking': '', 'toolRounds': [], 'model': 'gpt-4o', 'config': {'model': 'gpt-4o'},
+        'convId': 'conv-command-inject', '_userId': 1,
+    }, {'type': 'done', 'finishReason': 'stop'})
+    second = flask_client.post(
+        '/api/v4/conversations/conv-command-inject/turns',
+        json={'commandId': 'cmd-later', 'inputTurn': {'content': 'later request'},
+              'config': {'model': 'gpt-4o'}})
+    assert second.status_code == 200, second.get_json()
+    assert len(starts) == 2
+
+    resent = _steer('router-forward:earlier', _forward('second'))
+    assert resent['steered'] is True and resent['idempotentReplay'] is True
+    assert get_queue_depth('conv-command-inject', user_id=1) == 0
+    assert len(list_turns('conv-command-inject', user_id=1)['turns']) == 4
+    assert len(starts) == 2
+
+
+def test_a_receipt_without_its_record_never_swallows_a_steer(
+    flask_client, conversation_command_db, monkeypatch,
+):
+    """A conversation id reused after deletion (like a Turn a regenerate
+    discarded) leaves the steer receipt without its record: the resend is new
+    to this conversation and waits as its next request."""
+    from lib import agent_inbox
+    from lib.message_queue import get_queue_depth
+    from lib.tasks_pkg.manager.runtime import chat_task_runtime
+    from tests._seed import delete_conversation, seed_conversation
+
+    first, _ = _start_first_turn(flask_client, monkeypatch)
+    assert _steer('router-forward:orphaned', _forward('first'))['steered'] is True
+    # The conversation goes with its executor and inbox, as a deletion does.
+    chat_task_runtime.discard(first['attempt']['taskId'])
+    agent_inbox.reset_for_test('conv-command-inject')
+    delete_conversation('conv-command-inject', user_id=1)
+    seed_conversation('conv-command-inject', user_id=1, title='Command injection')
+    reborn = flask_client.post(
+        '/api/v4/conversations/conv-command-inject/turns',
+        json={'commandId': 'cmd-reborn', 'inputTurn': {'content': 'first'},
+              'config': {'model': 'gpt-4o'}})
+    assert reborn.status_code == 200, reborn.get_json()
+
+    resent = _steer('router-forward:orphaned', _forward('second'))
+    assert resent['queued'] is True and resent['steerFallback'] is True
+    assert not resent.get('idempotentReplay')
+    assert get_queue_depth('conv-command-inject', user_id=1) == 1
+
+
+def test_scheduled_dispatch_reports_an_accepted_command_as_replayed(
+    flask_client, conversation_command_db, monkeypatch,
+):
+    from lib.message_queue import get_queue_depth
+    from lib.scheduler.conversation_dispatch import dispatch_scheduled_turn
+
+    _start_first_turn(flask_client, monkeypatch)
+
+    def dispatch(command_id, note, inject_mode):
+        return dispatch_scheduled_turn(
+            'conv-command-inject', _forward(note), {}, user_id=1, command_id=command_id,
+            input_actor='human', inject_mode=inject_mode)
+
+    steered = dispatch('router-forward:steer', 'first', 'steer')
+    assert (steered.disposition, steered.replayed) == ('steered', False)
+    resteered = dispatch('router-forward:steer', 'second', 'steer')
+    assert (resteered.disposition, resteered.replayed) == ('steered', True)
+    queued = dispatch('router-forward:queue', 'first', 'queue')
+    assert (queued.disposition, queued.replayed) == ('queued', False)
+    requeued = dispatch('router-forward:queue', 'second', 'queue')
+    assert (requeued.disposition, requeued.replayed) == ('queued', True)
+    assert requeued.queue_id == queued.queue_id
+    assert get_queue_depth('conv-command-inject', user_id=1) == 1

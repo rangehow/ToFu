@@ -32,7 +32,7 @@ def test_dispatch_402_carries_the_refused_route_without_key_material():
 
     slot = Slot(key_name='ephemeral-synthetic', api_key='synthetic-secret-key-value',
                 model='kimi-k3.1-pro', capabilities={'text'}, provider_id='route-group-x',
-                routing_provider_id='example-corp', routing_owner_user_id=1,
+                routing_provider_id='sankuai', routing_owner_user_id=1,
                 route_credential_id='cred-synthetic', route_deployment_id='dep-synthetic')
     policy = DispatchFailurePolicy(DispatchRetryState(), None, capability='text',
                                    strict_model=True, max_429_attempts=3,
@@ -42,7 +42,7 @@ def test_dispatch_402_carries_the_refused_route_without_key_material():
 
     envelope = from_exception(error)
     evidence = envelope['billingStop']
-    assert evidence['providerId'] == 'example-corp', 'public Provider id, not the route group'
+    assert evidence['providerId'] == 'sankuai', 'public Provider id, not the route group'
     assert evidence['credentialId'] == 'cred-synthetic'
     assert evidence['deploymentId'] == 'dep-synthetic'
     assert evidence['model'] == 'kimi-k3.1-pro'

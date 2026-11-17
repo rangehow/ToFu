@@ -53,7 +53,7 @@ def routing_envelope(*, base_url: str = oob_relay.SANDBOX_BASE_URL, model: str =
     """
     creator_id = CREATORS.get(model, 'moonshot')
     model_ref = {'creator_id': creator_id, 'model_id': model}
-    provider_id = 'example-corp'
+    provider_id = 'sankuai'
     access_id, connection_id = f'{provider_id}-access', f'{provider_id}-connection'
     secret_reference, offering_id = f'{provider_id}-secret', f'{provider_id}-offering'
     capabilities = ['text', 'thinking', 'tools']

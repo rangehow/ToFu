@@ -646,3 +646,61 @@ class TestEngineRound:
             width=1080, height=1440, duration=5.0, scene_index=1,
             total_scenes=1)
         assert out == html
+
+
+# ── paired before/after verdict for a repair ─────────────
+
+class TestRepairComparison:
+    _FINDINGS = [
+        {'check': 'typography', 'element': 'title', 'issue': 'Title splits 外采',
+         'severity': 'major', 'fix': 'Rebreak'},
+        {'check': 'claim-scope', 'element': 'title', 'issue': 'Drops 春节前两周',
+         'severity': 'major', 'fix': 'Keep the window'}]
+
+    def _images(self, tmp_path):
+        before, after = tmp_path / 'before.png', tmp_path / 'after.png'
+        before.write_bytes(b'\x89PNG\r\n\x1a\n' + b'\1' * 100)
+        after.write_bytes(b'\x89PNG\r\n\x1a\n' + b'\2' * 100)
+        return str(before), str(after)
+
+    def test_each_finding_is_judged_on_both_images_in_one_request(
+            self, tmp_path, monkeypatch):
+        before, after = self._images(tmp_path)
+        monkeypatch.setattr(
+            'lib.model_info._capabilities.model_supports_vision', lambda m: True)
+        seen = {}
+
+        def _dispatch(messages, **kw):
+            seen['parts'] = messages[0]['content']
+            seen['kwargs'] = kw
+            return ('{"items": [{"id": 1, "before": true, "after": false}, '
+                    '{"id": 2, "before": true, "after": true}]}', {})
+
+        monkeypatch.setattr('lib.llm_dispatch.api.dispatch_chat', _dispatch)
+        out = vqa.qa_compare(before, after, self._FINDINGS, model='vlm-x',
+                             review_context='[M8] 春节前两周 MAPE 31% -> 17%',
+                             owner_user_id=3, provider_pin_id='')
+        assert out == {'ok': True, 'reason': '',
+                       'present': [(True, False), (True, True)]}
+        images = [p for p in seen['parts'] if p.get('type') == 'image_url']
+        assert len(images) == 2
+        text = '\n'.join(p.get('text') or '' for p in seen['parts'])
+        assert 'Title splits 外采' in text and 'Drops 春节前两周' in text
+        assert '春节前两周 MAPE' in text
+        assert seen['kwargs']['owner_user_id'] == 3
+        assert seen['kwargs']['strict_model'] is True
+
+    @pytest.mark.parametrize('reply', [
+        'no json here',
+        '{"items": [{"id": 1, "before": true, "after": false}]}',
+        '{"items": [{"id": 1, "before": "yes", "after": false}, '
+        '{"id": 2, "before": true, "after": true}]}',
+    ], ids=['unparseable', 'missing-item', 'non-boolean'])
+    def test_an_incomplete_verdict_is_not_ok(self, tmp_path, monkeypatch, reply):
+        before, after = self._images(tmp_path)
+        monkeypatch.setattr(
+            'lib.model_info._capabilities.model_supports_vision', lambda m: True)
+        monkeypatch.setattr('lib.llm_dispatch.api.dispatch_chat',
+                            lambda messages, **kw: (reply, {}))
+        out = vqa.qa_compare(before, after, self._FINDINGS, model='vlm-x')
+        assert not out['ok'] and out['present'] == []

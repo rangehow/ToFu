@@ -92,3 +92,37 @@ def test_author_cites_url_source_domains_without_card_ids(lang):
     assert ('页脚标注来源域名' if lang == 'zh'
             else 'cite the source domains') in prompt
     assert _NO_SOURCE_FOOTER[lang] not in prompt
+
+
+#: The wording a title must keep from its evidence, as the visual review
+#: judges it (claim-scope / source-fidelity): the baseline of a relative
+#: number, the scope of a result, before/after versus cause, and attribution.
+_CLAIM_RULES = {'zh': ('对照基线', '时间窗', '因果', '署名', '以证据为准'),
+                'en': ('baseline', 'time window', 'cause', 'attribution',
+                       'evidence wins')}
+
+
+@pytest.mark.parametrize('lang', ['zh', 'en'])
+def test_title_claim_stays_within_its_evidence(lang):
+    brief = {'pageType': 'content',
+             'key_message': 'Rules cut weekly reviews from 340 to 60',
+             'content_notes': 'After 54 rules, weekly reviews 340 -> 60.'}
+    _theme, prompt = _author_prompt(_DECK, brief, 4, 20, lang=lang)
+    for rule in _CLAIM_RULES[lang]:
+        assert rule in prompt
+
+
+@pytest.mark.parametrize('lang', ['zh', 'en'])
+def test_repair_rewords_a_disputed_claim_even_against_the_key_message(lang):
+    """The planned key message is not evidence: a repair told the title
+    overstates its source must be free to reword it, in the page language."""
+    brief = {'pageType': 'content',
+             'key_message': 'Rules cut weekly reviews from 340 to 60',
+             'content_notes': 'After 54 rules, weekly reviews 340 -> 60.'}
+    _theme, prompt = _author_prompt(
+        _DECK, brief, 4, 20, lang=lang, seed_yaml='elements: []\n',
+        extra_findings=['- [major] causal wording without a control'])
+    repair = prompt.split('causal wording without a control', 1)[1]
+    assert {'zh': '核心信息是规划', 'en': 'key message is a plan'}[lang] in repair
+    if lang == 'en':
+        assert re.search(r'[\u4e00-\u9fff]', repair) is None

@@ -307,9 +307,76 @@ class TestExportPptx:
         export_pptx(deck, out)
         with zipfile.ZipFile(out) as z:
             xml = z.read('ppt/slides/slide1.xml').decode()
-        assert '<a:normAutofit' in xml
+        assert '<a:noAutofit/>' in xml
         assert '<a:spAutoFit' not in xml
         assert '<a:spcBef><a:spcPts val="0"/></a:spcBef>' in xml
+
+    def test_line_height_exports_as_the_previewed_line_pitch(self, tmp_path):
+        """The preview's unitless CSS line-height multiplies the font size;
+        PowerPoint's spcPct multiplies the font's own line (Noto Sans CJK:
+        ~1.45 em, PowerPoint single ~1.2 em), so 1.45 became ~2.1 em and
+        native text ran below boxes layout QA had measured to fit (LibreOffice
+        forced-noAutofit render of a live e2e deck: step titles 2.8 pt past
+        their boxes). The exported pitch is exact points."""
+        import re
+        import zipfile
+        import yaml
+        from lib.slides.export_pptx import export_pptx
+        page = {'pageType': 'content', 'elements': [
+            {'elementId': 'spaced', 'elementType': 'text',
+             'bounds': [40, 40, 600, 80],
+             'content': {'text': '统一补货口径', 'fontSize': 23,
+                         'lineHeight': 1.45}},
+            {'elementId': 'single', 'elementType': 'text',
+             'bounds': [40, 140, 600, 80],
+             'content': {'text': '默认行距', 'fontSize': 18}},
+            {'elementId': 'mixed', 'elementType': 'text',
+             'bounds': [40, 240, 600, 80],
+             'content': {'text': '约 <span style="font-size:40px">340</span> 条',
+                         'fontSize': 20, 'lineHeight': 1.2}}]}
+        deck = parse_deck(_write_deck(
+            tmp_path, [yaml.safe_dump(page, allow_unicode=True)]))
+        out = str(tmp_path / 'out.pptx')
+        export_pptx(deck, out, embed_fonts=False)
+        with zipfile.ZipFile(out) as z:
+            xml = z.read('ppt/slides/slide1.xml').decode()
+        assert 'spcPct' not in xml
+        assert re.findall(r'<a:lnSpc><a:spcPts val="(\d+)"/></a:lnSpc>', xml) == [
+            '3335', '1800', '4800']
+
+    def test_no_text_frame_or_table_cell_has_a_bare_norm_autofit(
+            self, tmp_path):
+        """PowerPoint and WPS open a bare ``<a:normAutofit/>`` at 100% and
+        refit only after an edit, while LibreOffice refits on open and hides
+        the overflow. Text is written at its measured fitting size
+        (``noAutofit``); an explicit ``fit: shrink`` states its fitted scale;
+        table cells honour their own ``fit``."""
+        import re
+        import zipfile
+        from lib.slides.export_pptx import export_pptx
+        page = {'pageType': 'content', 'elements': [
+            {'elementId': 'plain', 'elementType': 'text',
+             'bounds': [40, 40, 600, 80], 'content': {'text': '默认'}},
+            {'elementId': 'shrink', 'elementType': 'text',
+             'bounds': [40, 140, 600, 80],
+             'content': {'text': '收缩', 'fit': 'shrink'}},
+            {'elementId': 'grid', 'elementType': 'table',
+             'bounds': [40, 260, 600, 160],
+             'columnWidths': [0.5, 0.5], 'rowHeights': [0.5, 0.5],
+             'rows': [[{'text': 'a', 'fit': 'shrink'}, {'text': 'b'}],
+                      [{'text': 'c', 'fit': 'none'}, {'text': 'd'}]]}]}
+        import yaml
+        deck = parse_deck(_write_deck(
+            tmp_path, [yaml.safe_dump(page, allow_unicode=True)]))
+        out = str(tmp_path / 'out.pptx')
+        export_pptx(deck, out, embed_fonts=False)
+        with zipfile.ZipFile(out) as z:
+            xml = z.read('ppt/slides/slide1.xml').decode()
+        assert not re.search(r'<a:normAutofit\s*/>', xml)
+        fits = re.findall(r'<a:(noAutofit|normAutofit|spAutoFit)\b([^>]*)/>', xml)
+        assert fits == [('noAutofit', ''), ('normAutofit', ' fontScale="100000"'),
+                        ('normAutofit', ' fontScale="100000"'), ('noAutofit', ''),
+                        ('noAutofit', ''), ('noAutofit', '')]
         assert '<a:spcAft><a:spcPts val="0"/></a:spcAft>' in xml
 
 
@@ -1497,13 +1564,41 @@ elements:
         monkeypatch.setattr(
             chromium_env, 'ensure_chromium_env',
             lambda _env: calls.__setitem__('native', calls['native'] + 1))
+        monkeypatch.setattr(
+            chromium_env, 'ensure_headless_shell',
+            lambda: calls.__setitem__('prepare', calls.get('prepare', 0) + 1))
         monkeypatch.setattr(readiness, '_ready_identity', None)
 
         first = readiness.ensure_slides_runtime_ready()
         second = readiness.ensure_slides_runtime_ready()
 
         assert first['cached'] is False and second['cached'] is True
-        assert calls == {'launch': 1, 'close': 1, 'native': 1}
+        assert calls == {'launch': 1, 'close': 1, 'native': 1, 'prepare': 1}
+
+    def test_runtime_readiness_prepares_this_interpreters_browser(
+            self, monkeypatch):
+        """A missing browser build is the platform's to install, not the
+        caller's: readiness installs it for the worker interpreter, and an
+        impossible install names the command for THAT interpreter."""
+        import chromium_env
+        import lib.slides.readiness as readiness
+
+        def unavailable():
+            raise chromium_env.ChromiumUnavailable(
+                'headless Chromium is not installed in /x and installing it '
+                'failed (Error: offline)')
+
+        monkeypatch.setattr(chromium_env, 'ensure_chromium_env',
+                            lambda _env: None)
+        monkeypatch.setattr(chromium_env, 'ensure_headless_shell', unavailable)
+        monkeypatch.setattr(readiness, '_ready_identity', None)
+
+        with pytest.raises(readiness.SlidesRuntimeUnavailable) as caught:
+            readiness.ensure_slides_runtime_ready()
+
+        assert 'Error: offline' in str(caught.value)
+        assert (f'{sys.executable} -m playwright install --only-shell '
+                'chromium') in caught.value.hint
 
     @pytest.mark.parametrize('missing', ['brotli', 'defusedxml.ElementTree'])
     def test_runtime_readiness_rejects_missing_export_dependency(

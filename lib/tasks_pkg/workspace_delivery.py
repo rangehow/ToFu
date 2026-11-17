@@ -1147,11 +1147,13 @@ def command_workspace_refusal(task: dict, command: str, cwd: str) -> str:
     from lib.project_mod.git_command_scope import git_command_scopes, shell_cwd_change
     def forbidden(path):
         return bool(workspace_target_refusal(task, path))
-    def refusal():
-        return ('Error [workspace-isolation]: command writes a canonical or peer '
-                'checkout or READ-ONLY reference instead of a writable task-owned worktree. '
-                'Run it from the start directory (the bound worktree) with relative targets; '
-                'command was not started.')
+    def refusal(path):
+        return (f'Error [workspace-isolation]: command writes {_local_path(path)}, a '
+                'canonical or peer checkout or READ-ONLY reference, not a writable '
+                'task-owned worktree. Run it from the start directory (the bound '
+                'worktree) with relative targets, and name a file in another '
+                'writable root by its absolute path instead of cd-ing into a '
+                'checkout; command was not started.')
     def judge(source, start):
         for scope in git_command_scopes(source, start, environment=os.environ, strict=False):
             if scope.classification == 'readonly':
@@ -1160,8 +1162,10 @@ def command_workspace_refusal(task: dict, command: str, cwd: str) -> str:
                 raise WorkspaceBindingError(
                     'the shell chooses where Git works only when the command runs; '
                     'name the directory literally')
-            if any(forbidden(path) for path in (*scope.paths, *scope.execution_cwds)):
-                return refusal()
+            refused = next((path for path in (*scope.paths, *scope.execution_cwds)
+                            if forbidden(path)), None)
+            if refused is not None:
+                return refusal(refused)
         active = _local_path(start)
         for segment in _split_pipeline(source):
             words = [word.text for word in _shell_words(segment)]
@@ -1185,13 +1189,14 @@ def command_workspace_refusal(task: dict, command: str, cwd: str) -> str:
                     return nested
             if (os.path.basename(words[0]) != 'git'
                     and _command_checkout_mutation(segment, active) and forbidden(active)):
-                return refusal()
+                return refusal(active)
             # Snapshot completeness is not admission evidence: opaque builds can
             # still redirect into a known foreign checkout. Preserve source-aware
             # literal targets (including quoted dollar signs) and expansion parents.
             for target in command_segment_literal_targets(segment):
-                if forbidden(os.path.join(active, os.path.expanduser(target))):
-                    return refusal()
+                path = os.path.join(active, os.path.expanduser(target))
+                if forbidden(path):
+                    return refusal(path)
         return ''
     try:
         return judge(command or '', cwd)

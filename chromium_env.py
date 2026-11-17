@@ -526,6 +526,54 @@ def headless_shell_install_command(python=None):
             '--only-shell', 'chromium']
 
 
+def pinned_headless_shell_revision():
+    """Headless-shell build the importable ``playwright`` package launches.
+
+    Each Playwright release pins one browser build in its driver's
+    ``browsers.json`` (1.61 → 1228, 1.65 → 1255) and ``launch()`` opens only
+    that build, so a different build on disk does not count. Read without
+    importing the package (this module stays stdlib-only). ``None`` when the
+    package or its manifest is absent.
+    """
+    import importlib.util
+    import json
+    try:
+        spec = importlib.util.find_spec('playwright')
+    except (ImportError, ValueError):
+        return None
+    if spec is None or not spec.origin:
+        return None
+    manifest = os.path.join(os.path.dirname(spec.origin), 'driver', 'package',
+                            'browsers.json')
+    try:
+        with open(manifest, encoding='utf-8') as handle:
+            browsers = json.load(handle).get('browsers') or []
+    except (OSError, ValueError, AttributeError):
+        return None
+    for browser in browsers:
+        if isinstance(browser, dict) and \
+                browser.get('name') == 'chromium-headless-shell':
+            return str(browser.get('revision') or '') or None
+    return None
+
+
+def _launchable_headless_shell():
+    """The executable Playwright's headless launch opens, or ``''``."""
+    revision = pinned_headless_shell_revision()
+    if revision is None:
+        return chromium_executable()
+    override = (os.environ.get('HYPERFRAMES_BROWSER_PATH') or '').strip()
+    if override and os.path.isfile(override):
+        return override
+    for root in browsers_root():
+        build = os.path.join(root, f'chromium_headless_shell-{revision}')
+        for rel in _CHROMIUM_REL_PATHS:
+            path = os.path.join(build, *rel.split('/'))
+            if os.path.isfile(path):
+                return path
+    return ''
+
+
 def ensure_headless_shell():
     """Return a Chromium executable, installing the headless shell if none is.
 
@@ -541,7 +589,7 @@ def ensure_headless_shell():
         ChromiumUnavailable: one actionable message naming the install command
             and the host-move restore, with the installer's own output.
     """
-    executable = chromium_executable()
+    executable = _launchable_headless_shell()
     if executable:
         return executable
     registry = playwright_registry(os.environ)
@@ -557,7 +605,7 @@ def ensure_headless_shell():
         failed = completed.returncode != 0
     except OSError as error:
         output, failed = str(error), True
-    executable = '' if failed else chromium_executable()
+    executable = '' if failed else _launchable_headless_shell()
     if executable:
         return executable
     proxy = ('' if any(os.environ.get(name) for name in (

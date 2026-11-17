@@ -49,6 +49,7 @@ _MIN_LEGIBLE_TEXT_PX = 14
 _INLINE_SIZE_RE = re.compile(r'font-size:\s*(\d+(?:\.\d+)?)px')
 _TAG_RE = re.compile(r'<[^>]+>')
 _CJK_RE = re.compile(r'[\u4e00-\u9fff]')
+_CJK_RUN_RE = re.compile(r'[\u4e00-\u9fff]+')
 _LATIN_LABEL_RE = re.compile(r'^[A-Z][A-Z&/·\- ]{3,}$')
 _NUMBER_RE = re.compile(
     r'(?<![A-Za-z0-9_.,])[-+]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)'
@@ -91,11 +92,13 @@ def _llm(messages, *, max_tokens: int, model: str | None = None,
 
 
 def _validate_page_text(deck, page_path: str, text: str,
-                        brief: dict | None = None) -> list:
+                        brief: dict | None = None, *, lang: str = '') -> list:
     """Validate ONE page's YAML in the deck's context. Findings, zero-LLM.
 
     ``brief`` is the page's outline brief; an all-caps Latin label its
     evidence names (a benchmark called "ACMEQA") is a fact, not decoration.
+    ``lang`` is the requested deck language; an English page may show
+    Chinese only where its evidence quotes it.
     """
     import yaml
     from lib.slides.pptd import Deck, Page, validate_deck
@@ -148,6 +151,17 @@ def _validate_page_text(deck, page_path: str, text: str,
                 '中文页面出现装饰性英文大写标签: '
                 + ', '.join(repr(_TAG_RE.sub('', v).strip()) for v in labels[:3])
                 + '。删除它，或改成告诉读者信息的中文小标题。')
+    if lang == 'en':
+        evidence = _brief_evidence_text(brief or {})
+        foreign = sorted({run for value in _visible_text_values(data)
+                          for run in _CJK_RUN_RE.findall(_TAG_RE.sub('', value))
+                          if run not in evidence})
+        if foreign:
+            findings.append(
+                'This deck is written in English, but the page shows Chinese '
+                'text: ' + ', '.join(repr(run) for run in foreign[:3])
+                + '. Write every visible word in English; keep Chinese only '
+                  'where the evidence quotes it.')
     leaked = _INTERNAL_COPY_RE.search(visible_text)
     if leaked:
         findings.append(
@@ -345,7 +359,7 @@ def _series_colour_findings(data: dict) -> list[str]:
     """Two series of one chart drawn in the same colour cannot be told
     apart in the plot or its legend. Uncoloured series take the shared
     palette in order, which repeats after its last colour."""
-    from lib.slides.render_html import CHART_PALETTE_TOKENS
+    from lib.slides.pptd import CHART_PALETTE_TOKENS
     findings = []
     for element in data.get('elements') or []:
         if not isinstance(element, dict) or element.get('elementType') != 'chart':
@@ -517,6 +531,10 @@ def _shared_author_prompt_prefix(deck, total: int, theme_block: str,
 _CONTENT_RULES_ZH = (
     '## 内容纪律（先于版式）\n'
     '- 页标题就是本页的核心判断句（按“核心信息”写），带上最关键的数字；不要用“结果”“概览”这类栏目名。\n'
+    '- 标题和正文的措辞不得超出证据：相对数字（+2.7%、10.8×）写明对照基线；保留结果的时间窗、样本和'
+    '条件（如“春节前两周”“单次”），不扩大成整体；证据只给出前后对比或同期变化时写成“之后/同期”，'
+    '不写成“把……降到”这类因果；证据明确写出原因时才写因果；署名与角色（一作、共同一作、团队结果）'
+    '照证据原样写。“核心信息”与证据不一致时以证据为准。\n'
     '- 正文每一条都要携带具体信息：数字及其对照、条件、样本量、具体做法或反例，只用上方证据和内容素材；'
     '删掉口号、抽象形容和“读法”“要点”之类的元说明。\n'
     '- 一页只讲一件事；放不下时删减次要信息，不要缩小字号。\n'
@@ -531,6 +549,15 @@ _CONTENT_RULES_EN = (
     '## Content discipline (before layout)\n'
     '- The page title IS the key message: one assertion with its decisive '
     'number, never a topic label such as "Results" or "Overview".\n'
+    '- Title and body wording never go beyond the evidence: a relative '
+    'number (+2.7%, 10.8x) names its baseline; a result keeps its time '
+    'window, sample and conditions (e.g. "two weeks before the holiday", '
+    '"single run") instead of growing into a general claim; a before/after '
+    'or concurrent change is stated as "after" or "over the same period", '
+    'never as a cause ("cut X to Y"), unless the evidence states the cause; '
+    'roles and attribution (first author, co-first author, team result) '
+    'are written exactly as in the evidence. Where the key message and the '
+    'evidence disagree, the evidence wins.\n'
     '- Every body item carries specific information (a number and its '
     'comparison, a condition, a sample size, a concrete mechanism or a '
     'counter-example) taken from the evidence and material above; delete '
@@ -654,6 +681,9 @@ def _build_prompt(deck, brief: dict, page_index: int, total: int,
         f'{material_block}'
         f'{sources_block}'
         f'{_CONTENT_RULES_EN}'
+        'Write every visible word on the page in English, the deck '
+        'language. Chinese in the format guide, theme labels or style notes '
+        'above only illustrates the format; never copy it onto the page.\n'
         'Reader task, layout hint, and material are internal inputs; never '
         'render phrases such as "section divider", "transition page", or '
         '"introduce the next page". Research-stage internal source ids such '
@@ -692,18 +722,39 @@ def _author_prompt(deck, brief: dict, page_index: int, total: int, *,
     prompt = _build_prompt(
         deck, brief, page_index, total, context.theme_block,
         context.bible_excerpt, context.cheatsheet, image_urls or [], lang)
+    english = lang == 'en'
     if extra_findings:
-        prompt += ('\n\n## 质检发现的问题(本轮必须修复)\n'
+        prompt += (('\n\n## Review findings (fix them in this round)\n'
+                    if english else '\n\n## 质检发现的问题(本轮必须修复)\n')
                    + '\n'.join(f'- {f}' for f in extra_findings[:8]))
     if seed_yaml:
-        prompt += (
+        prompt += ((
+            '\n\n## Current page source (make the smallest repair)\n'
+            f'```yaml\n{seed_yaml}\n```\n'
+            'Keep the composition, assets and unrelated elements. For a '
+            'layout finding first move or enlarge the element\'s bounds into '
+            'empty space; if it still does not fit, cut its copy to the '
+            'length given above (drop secondary modifiers, repetition and '
+            'examples; keep the assertion and its numbers, and every number '
+            'in the page title), never shrinking type below the legibility '
+            'floor. For a wording finding (source mismatch, a claim beyond '
+            'its evidence: baseline, scope, cause, attribution) rewrite that '
+            'wording from the evidence for this page, the title included, '
+            'even where it then differs from the key message: the key '
+            'message is a plan, the evidence is the authority; keep the '
+            'numbers. allowOverlap is only for deliberately layered '
+            'decorative characters, never to hide body collisions or '
+            'overflow. Output the complete page YAML.') if english else (
             '\n\n## 当前页面源码(在此基础上做最小修复)\n'
             f'```yaml\n{seed_yaml}\n```\n'
-            '保留当前构图、素材和无关元素。先在空白处移动或放大问题元素的 '
+            '保留当前构图、素材和无关元素。版式问题：先在空白处移动或放大问题元素的 '
             'bounds；放不下时删减问题元素的文案到上面给出的长度：删次要的'
             '修饰、重复和例子，保留判断句和其中的数字（页标题的数字必须原样'
-            '保留），不要缩小字号到可读下限以下。allowOverlap 只允许用于确实'
-            '有意叠放的装饰字符，不得用来掩盖正文碰撞或溢出。输出完整页面 YAML。')
+            '保留），不要缩小字号到可读下限以下。措辞问题（与来源不符、结论'
+            '超出证据：基线、范围、因果、署名）：按上方本页证据改写那句文字，'
+            '页标题也照改，即使因此与“核心信息”不同——核心信息是规划，证据'
+            '才是依据；数字保留。allowOverlap 只允许用于确实'
+            '有意叠放的装饰字符，不得用来掩盖正文碰撞或溢出。输出完整页面 YAML。'))
     return theme, prompt
 
 
@@ -781,7 +832,7 @@ def author_page(deck, brief: dict, page_index: int, total: int, *,
         yaml_text = _raise_to_legibility_floor(
             deck, _extract_yaml(content or ''))
         findings = _validate_page_text(deck, f'pages/{page_index + 1:02d}.page',
-                                       yaml_text, brief)
+                                       yaml_text, brief, lang=lang)
         if (usage or {}).get('finish_reason') == 'length':
             # A cut-off reply can still parse (``text: <p><``) and would
             # ship a page that silently lost its last elements.

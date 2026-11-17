@@ -169,6 +169,12 @@ def inspect_pptx_package(path: str, *, expected_pages: int | None = None) -> dic
                 ranks = [allowed.index(tag) for tag in order if tag in allowed]
                 if not order or order[0] != _P + 'cSld' or ranks != sorted(set(ranks)):
                     raise ValueError(f'{name}: invalid slide child order')
+                for fit in root.iter(_A + 'normAutofit'):
+                    if fit.get('fontScale') is None:
+                        raise ValueError(
+                            f'{name}: bare normAutofit (PowerPoint/WPS open it '
+                            'at 100%, LibreOffice refits it); write the '
+                            'fitted fontScale or noAutofit')
                 result['editableTextBoxes'] += len(root.findall('.//' + _P + 'sp/' + _P + 'txBody'))
                 result['nativeTables'] += len(root.findall('.//' + _A + 'tbl'))
                 result['nativeCharts'] += len(root.findall('.//' + _C + 'chart'))

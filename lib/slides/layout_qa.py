@@ -32,7 +32,7 @@ __all__ = ['inspect_deck_layout', 'findings_text', 'relayout_repairs',
            'line_break_repairs', 'apply_relayout']
 
 _MEASURE_JS = r"""
-() => {
+(headings = []) => {
   const round = value => Math.round(value * 10) / 10;
   const rectJSON = rect => ({
     left: round(rect.left), top: round(rect.top),
@@ -88,33 +88,37 @@ _MEASURE_JS = r"""
   // word) or a word split across two lines. Words come from the browser's
   // own segmenter (dictionary-based for CJK), lines from glyph positions: a
   // glyph starts a new line below the current line's middle.
+  const blockLines = block => {
+    const lines = [];
+    const lineOf = [];
+    let text = '';
+    const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      for (let i = 0; i < node.data.length; i++) {
+        const range = document.createRange();
+        range.setStart(node, i); range.setEnd(node, i + 1);
+        const rect = range.getClientRects()[0];
+        range.detach();
+        text += node.data[i];
+        if (!rect) { lineOf.push(lines.length - 1); continue; }
+        const line = lines[lines.length - 1];
+        if (!line || rect.top > (line.top + line.bottom) / 2) {
+          lines.push({top: rect.top, bottom: rect.bottom, text: node.data[i]});
+        } else {
+          line.text += node.data[i];
+          line.bottom = Math.max(line.bottom, rect.bottom);
+        }
+        lineOf.push(lines.length - 1);
+      }
+    }
+    return {lines, lineOf, text};
+  };
   const lineBreaks = root => {
     const out = {widow: false, split: false, lines: 0};
     const blocks = [...root.querySelectorAll('p, li')];
     for (const block of (blocks.length ? blocks : [root])) {
-      const lines = [];
-      const lineOf = [];
-      let text = '';
-      const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
-      let node;
-      while ((node = walker.nextNode())) {
-        for (let i = 0; i < node.data.length; i++) {
-          const range = document.createRange();
-          range.setStart(node, i); range.setEnd(node, i + 1);
-          const rect = range.getClientRects()[0];
-          range.detach();
-          text += node.data[i];
-          if (!rect) { lineOf.push(lines.length - 1); continue; }
-          const line = lines[lines.length - 1];
-          if (!line || rect.top > (line.top + line.bottom) / 2) {
-            lines.push({top: rect.top, bottom: rect.bottom, text: node.data[i]});
-          } else {
-            line.text += node.data[i];
-            line.bottom = Math.max(line.bottom, rect.bottom);
-          }
-          lineOf.push(lines.length - 1);
-        }
-      }
+      const {lines, lineOf, text} = blockLines(block);
       out.lines += lines.length;
       if (lines.length < 2) continue;
       const last = [...words.segment(lines[lines.length - 1].text)]
@@ -128,6 +132,112 @@ _MEASURE_JS = r"""
       }
     }
     return out;
+  };
+  // A wrapped CJK heading breaks where a reader pauses: after clause
+  // punctuation (not the enumeration comma 、 inside a list) or before an opening bracket, never inside a word the
+  // browser's dictionary does not know (外|采) nor between a number and its
+  // measure word (5 | 处). Only if no such boundary can hold the line count
+  // does it fall back to boundaries between two dictionary words of two or
+  // more characters. Among the feasible breaks it takes the most balanced
+  // set (smallest widest line) and returns it as the count of non-space
+  // characters before each break; null when the browser's own wrapping is
+  // already that plan or no plan keeps the line count.
+  const CJK = /[\u2E80-\u9FFF\uF900-\uFAFF\u3040-\u30FF\uAC00-\uD7AF]/;
+  const AFTER = new Set([...'，。；：！？,;:!?）)」』”’】》·｜|—…']);
+  const BEFORE = new Set([...'（(「『“‘【《']);
+  const HAN = /\p{Script=Han}/u;
+  const LATIN = /[A-Za-z]/;
+  const phrasePlan = inner => {
+    const blocks = [...inner.querySelectorAll('p, li')];
+    if (blocks.length > 1 || inner.querySelector('br')) return null;
+    const block = blocks[0] || inner;
+    const {lines, lineOf, text} = blockLines(block);
+    if (lines.length < 2 || !CJK.test(text)) return null;
+    const isSpace = c => /\s/.test(c);
+    const prevSolid = i => { let j = i - 1; while (j >= 0 && isSpace(text[j])) j--; return j; };
+    const phrase = [];
+    for (let i = 1; i < text.length; i++) {
+      const c = text[i];
+      const j = prevSolid(i);
+      if (isSpace(c) || j < 0) continue;
+      const p = text[j];
+      if ((AFTER.has(p) && !AFTER.has(c)) || (BEFORE.has(c) && !BEFORE.has(p)) ||
+          (j < i - 1 && LATIN.test(p) && LATIN.test(c))) phrase.push(i);
+    }
+    const known = [];
+    const segs = [...words.segment(text)].filter(s => s.isWordLike);
+    const single = s => s.segment.length === 1 && HAN.test(s.segment);
+    for (let k = 1; k < segs.length; k++) {
+      const a = segs[k - 1], b = segs[k];
+      if (text.slice(a.index + a.segment.length, b.index).trim()) continue;
+      if (single(a) || single(b)) continue;
+      if (/\d$/.test(a.segment) && /^\d/.test(b.segment)) continue;
+      known.push(b.index);
+    }
+    const clone = block.cloneNode(true);
+    clone.style.cssText += ';position:absolute;visibility:hidden;' +
+      'white-space:nowrap;width:auto;max-width:none;left:0;top:0';
+    block.parentElement.appendChild(clone);
+    const nodes = [];
+    const walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT);
+    let node, offset = 0;
+    while ((node = walker.nextNode())) {
+      nodes.push({node, start: offset}); offset += node.data.length;
+    }
+    const at = i => {
+      let k = nodes.length - 1;
+      while (k > 0 && nodes[k].start > i) k--;
+      return [nodes[k].node, Math.min(i - nodes[k].start, nodes[k].node.data.length)];
+    };
+    const widths = new Map();
+    const width = (a, b) => {
+      const key = a + ':' + b;
+      if (!widths.has(key)) {
+        let s = a, e = b;
+        while (s < e && isSpace(text[s])) s++;
+        while (e > s && isSpace(text[e - 1])) e--;
+        const range = document.createRange();
+        range.setStart(...at(s)); range.setEnd(...at(e));
+        widths.set(key, range.getBoundingClientRect().width);
+        range.detach();
+      }
+      return widths.get(key);
+    };
+    const avail = block.getBoundingClientRect().width + 0.5;
+    const solve = cands => {
+      const points = [0, ...cands, text.length];
+      // best[n][k]: smallest widest line of n lines ending at points[k].
+      let best = points.map((_, k) => {
+        const w = k ? width(0, points[k]) : Infinity;
+        return w <= avail ? {cost: w, breaks: []} : null;
+      });
+      for (let n = 2; n <= lines.length; n++) {
+        best = points.map((end, k) => {
+          let pick = null;
+          for (let j = 1; j < k; j++) {
+            if (!best[j]) continue;
+            const w = width(points[j], end);
+            if (w > avail) continue;
+            const cost = Math.max(best[j].cost, w);
+            if (!pick || cost < pick.cost) {
+              pick = {cost, breaks: [...best[j].breaks, points[j]]};
+            }
+          }
+          return pick;
+        });
+      }
+      return best[points.length - 1];
+    };
+    let plan = solve(phrase);
+    if (!plan) plan = solve([...new Set([...phrase, ...known])].sort((a, b) => a - b));
+    clone.remove();
+    if (!plan) return null;
+    const current = [];
+    for (let i = 1; i < text.length; i++) {
+      if (!isSpace(text[i]) && lineOf[i] !== lineOf[prevSolid(i)]) current.push(i);
+    }
+    if (current.join() === plan.breaks.join()) return null;
+    return plan.breaks.map(i => [...text.slice(0, i)].filter(c => !isSpace(c)).length);
   };
   // The narrowest text width keeping the line count: the browser's own
   // text-wrap: balance, measured, then restored.
@@ -163,9 +273,11 @@ _MEASURE_JS = r"""
     const inner = el.firstElementChild || el;
     const innerStyle = getComputedStyle(inner);
     const breaks = lineBreaks(inner);
+    const phrase = headings.includes(el.dataset.elementId) ? phrasePlan(inner) : null;
     const flawed = breaks.widow || breaks.split;
     const balanced = flawed ? balancedWidth(inner) : 0;
     return {
+      phraseBreaks: phrase,
       widow: breaks.widow,
       split: breaks.split,
       painted: innerStyle.backgroundColor !== 'rgba(0, 0, 0, 0)' ||
@@ -472,10 +584,10 @@ def _rect_distance(point, box: dict) -> float:
     return math.hypot(dx, dy)
 
 
-def _ray_entry(tip, source, line_id, boxes) -> float | None:
+def _ray_entry(tip, source, line_id, boxes) -> tuple[float, str] | None:
     """How far beyond ``tip`` the ray from ``source`` through it first
-    enters another element's box (0 when a box holds the tip); ``None``
-    when it reaches none."""
+    enters another element's box (0 when a box holds the tip), and that
+    element's id; ``None`` when it reaches none."""
     length = math.hypot(tip[0] - source[0], tip[1] - source[1])
     if not length:
         return None
@@ -494,11 +606,11 @@ def _ray_entry(tip, source, line_id, boxes) -> float | None:
                 continue
             a, b = (lo - origin) / step, (hi - origin) / step
             low, high = max(low, min(a, b)), min(high, max(a, b))
-        if low <= high and high > 0 and (best is None or low < best):
-            best = low
+        if low <= high and high > 0 and (best is None or low < best[0]):
+            best = (low, box_id)
     if best is None:
         return None
-    return max(best, 0.0)
+    return max(best[0], 0.0), best[1]
 
 
 def _arrow_findings(page_index: int, graphics: list, boxes: list) -> list:
@@ -522,16 +634,31 @@ def _arrow_findings(page_index: int, graphics: list, boxes: list) -> list:
             # or the line's own direction reaches one within an arrowhead.
             # A panel holding the whole arrow is its background, not a target.
             entry = _ray_entry(tip, source, graphic['id'], boxes)
-            if entry is not None and entry <= reach:
+            if entry is not None and entry[0] <= reach:
                 continue
-            findings.append({
+            finding = {
                 'type': 'arrow_to_nothing', 'page': page_index + 1,
                 'elements': [graphic['id']], 'end': end,
                 'tip': list(tip),
                 'message': (f'page {page_index + 1}: the arrow '
                             f'"{graphic["id"]}" ends at x={tip[0]:.0f}, '
                             f'y={tip[1]:.0f}, pointing at no element'),
-            })
+            }
+            if entry is not None:
+                # It points at an element but stops short of what is drawn
+                # there (a text's measured lines, not its box bounds).
+                gap, target = entry
+                length = math.hypot(tip[0] - source[0], tip[1] - source[1])
+                finding.update({
+                    'target': target, 'gap': round(gap),
+                    'reach_point': [tip[0] + (tip[0] - source[0]) / length * gap,
+                                    tip[1] + (tip[1] - source[1]) / length * gap],
+                    'message': (f'page {page_index + 1}: the arrow '
+                                f'"{graphic["id"]}" ends at x={tip[0]:.0f}, '
+                                f'y={tip[1]:.0f} and stops {gap:.0f}px short '
+                                f'of "{target}"'),
+                })
+            findings.append(finding)
     return findings
 
 
@@ -858,7 +985,8 @@ def inspect_deck_layout(deck: Deck, *, timeout_ms: int = 20000,
                             "reject(new Error('slide fonts readiness timed out')), limit))])",
                             timeout_ms)
                         _settle_render_page(browser_page, timeout_ms)
-                        measurement = browser_page.evaluate(_MEASURE_JS)
+                        measurement = browser_page.evaluate(
+                            _MEASURE_JS, _heading_ids(slide_page))
                         records = measurement.get('texts') or []
                         findings = _page_findings(
                             records, index, tolerance=tolerance,
@@ -1050,14 +1178,19 @@ def _page_line_breaks(records: list, page_index: int) -> list:
     """
     out = []
     for record in records:
+        phrase = record.get('phraseBreaks') or []
         if not record.get('visible') or not (record.get('widow')
-                                             or record.get('split')):
+                                             or record.get('split') or phrase):
             continue
         kinds = [kind for kind, flag in (('a single-word last line',
                                           record.get('widow')),
                                          ('a word split across lines',
-                                          record.get('split'))) if flag]
+                                          record.get('split')),
+                                         ('heading lines not broken at their '
+                                          'most balanced phrase boundaries',
+                                          phrase)) if flag]
         out.append({
+            'phraseBreaks': [int(count) for count in phrase],
             'type': 'text_line_break', 'page': page_index + 1,
             'elements': [record['id']],
             'widow': bool(record.get('widow')),
@@ -1072,7 +1205,11 @@ def _page_line_breaks(records: list, page_index: int) -> list:
 
 
 def line_break_repairs(page_data: dict, breaks: list) -> dict:
-    """Narrow each badly broken text box so its lines break cleanly.
+    """Re-break each badly broken text so its lines break cleanly.
+
+    A heading with a measured phrase plan (``phraseBreaks``) gets explicit
+    ``<br/>`` breaks there: both renderings then break at the same reader
+    pauses, whatever each one's font metrics. Other texts are narrowed.
 
     The target text width is the widest one at which the line count holds
     with no widow and no split word (measured pixel by pixel down to the
@@ -1090,6 +1227,10 @@ def line_break_repairs(page_data: dict, breaks: list) -> dict:
         if element is None:
             continue
         content = element['content']
+        if flaw.get('phraseBreaks'):
+            repairs[element_id] = {'text': _with_line_breaks(
+                str(content.get('text') or ''), flaw['phraseBreaks'])}
+            continue
         align = content.get('align')
         halign = align[0] if isinstance(align, list) and align else 'left'
         if halign not in ('left', 'center', 'right') or flaw.get('painted'):
@@ -1109,6 +1250,40 @@ def line_break_repairs(page_data: dict, breaks: list) -> dict:
         repairs[element_id] = {'bounds': [round(v, 1) for v in (x, y, narrowed, height)],
                                'valign': _valign(element)}
     return repairs
+
+
+_SOURCE_TOKEN_RE = re.compile(r'<[^>]*>|&(?:#\d+|#x[0-9a-fA-F]+|\w+);|.', re.S)
+
+
+def _with_line_breaks(text: str, counts: list) -> str:
+    """``text`` with ``<br/>`` right after each of ``counts`` non-space
+    visible characters (tags are invisible, an entity is one character).
+    Whitespace after a break is dropped, so the new line starts flush in
+    both renderings."""
+    targets = {int(count) for count in counts if int(count) > 0}
+    out: list = []
+    seen = 0
+    at_break = False
+    for token in _SOURCE_TOKEN_RE.findall(text):
+        visible = not token.startswith('<')
+        space = visible and html.unescape(token).isspace()
+        if at_break and space:
+            continue
+        out.append(token)
+        if visible and not space:
+            seen += 1
+            at_break = seen in targets
+            if at_break:
+                out.append('<br/>')
+    return ''.join(out)
+
+
+def _heading_ids(page) -> list:
+    """Text elements set in the deck's title style."""
+    return [str(element.get('elementId')) for element in page.elements
+            if isinstance(element, dict) and element.get('elementType') == 'text'
+            and isinstance(element.get('content'), dict)
+            and element['content'].get('style') == '$title']
 
 
 def _text_elements(page_data: dict) -> dict:
@@ -1289,6 +1464,8 @@ def apply_relayout(page_data: dict, repairs: dict) -> None:
             continue
         if 'color' in repair:
             element['content']['color'] = repair['color']
+        if 'text' in repair:
+            element['content']['text'] = repair['text']
         if 'bounds' not in repair:
             continue
         element['bounds'] = repair['bounds']
@@ -1401,6 +1578,12 @@ def findings_text(findings: list, page_data: dict | None = None) -> str:
                 f'{finding["required"]}:1 on that background ($ink on light, '
                 '$bg on dark), or move the text onto a background it '
                 'contrasts with.')
+        elif kind == 'arrow_to_nothing' and finding.get('target'):
+            x, y = finding['reach_point']
+            lines.append(
+                f'{message}, whose drawn content starts at x={x:.0f}, '
+                f'y={y:.0f} along it: end the arrow there (or move '
+                f'"{finding["target"]}" up to its tip), keeping its direction.')
         elif kind == 'arrow_to_nothing':
             lines.append(
                 f'{message}. End it on the element it points to; if it is an '

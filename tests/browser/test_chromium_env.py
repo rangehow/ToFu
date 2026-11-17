@@ -962,6 +962,8 @@ def empty_registry(tmp_path, monkeypatch):
     monkeypatch.setenv('HTTPS_PROXY', 'http://proxy.test:8080')
     monkeypatch.delenv('HYPERFRAMES_BROWSER_PATH', raising=False)
     monkeypatch.setattr(chromium_env, '_SYSTEM_BROWSERS', ())
+    monkeypatch.setattr(chromium_env, 'pinned_headless_shell_revision', lambda: None,
+                        raising=False)
     real_command = chromium_env.headless_shell_install_command
     monkeypatch.setattr(chromium_env, 'headless_shell_install_command',
                         lambda python=None: [sys.executable, str(installer),
@@ -981,6 +983,33 @@ def test_missing_browser_is_installed_into_the_launch_registry_through_the_proxy
     record.unlink()
     assert chromium_env.ensure_headless_shell() == executable
     assert not record.exists(), 'an installed browser is never reinstalled'
+
+
+@pytest.mark.skipif(not sys.platform.startswith('linux'), reason='linux layout')
+def test_a_build_this_playwright_does_not_launch_is_not_installed(empty_registry, monkeypatch):
+    """An env upgrade moved Playwright to a newer browser build (1.61 → 1.65:
+    build 1228 → 1255). The old build on disk is not what ``launch()`` opens,
+    so the pinned build is installed instead of reporting the stale one."""
+    registry, record = empty_registry
+    stale = registry / 'chromium_headless_shell-1228' / 'chrome-headless-shell-linux64'
+    stale.mkdir(parents=True)
+    (stale / 'chrome-headless-shell').write_text('')
+    monkeypatch.setattr(chromium_env, 'pinned_headless_shell_revision', lambda: '1234')
+    executable = chromium_env.ensure_headless_shell()
+    assert 'chromium_headless_shell-1234' in executable
+    assert json.loads(record.read_text())['argv'][:2] == ['playwright', 'install']
+
+
+def test_the_pinned_revision_is_read_from_the_importable_playwright_package(tmp_path, monkeypatch):
+    package = tmp_path / 'playwright'
+    (package / 'driver' / 'package').mkdir(parents=True)
+    (package / '__init__.py').write_text('raise RuntimeError("never imported")')
+    (package / 'driver' / 'package' / 'browsers.json').write_text(json.dumps({
+        'browsers': [{'name': 'chromium', 'revision': '1255'},
+                     {'name': 'chromium-headless-shell', 'revision': '1256'}]}))
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delitem(sys.modules, 'playwright', raising=False)
+    assert chromium_env.pinned_headless_shell_revision() == '1256'
 
 
 def test_impossible_install_is_one_actionable_line(empty_registry, monkeypatch):

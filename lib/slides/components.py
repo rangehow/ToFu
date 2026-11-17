@@ -172,13 +172,16 @@ def _sequence(component: dict, component_id: str, bounds, *, process: bool) \
             raise ValueError('timeline/process item needs label')
         prefix = f'{component_id}--item-{index + 1}'
         if process:
+            # $ink on $bg is the one pair every theme keeps readable (body
+            # text); $bg on a $primary fill is dark-on-dark wherever
+            # $primary is a dark fill colour on a dark ground.
             out.append(_shape(
                 f'{prefix}-shape',
                 (item_x + slot * 0.04, y + height * 0.10,
                  slot * 0.88, height * 0.48),
-                fill='$primary', border='', shape='chevron',
+                fill='$bg', border='$primary', shape='chevron',
                 adjustments=[25000]))
-            text_color = '$bg'
+            text_color = '$ink'
         else:
             diameter = min(24.0, height * 0.12)
             out.append(_shape(

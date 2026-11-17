@@ -59,8 +59,8 @@ components:
     style: "$title"            # optional theme style
     align: [left, middle]      # [left|center|right, top|middle|bottom]
     wrap: true                 # false for single-line labels
-    fit: shrink                # default: fixed bounds + PowerPoint native shrink
-                               # none | resize (resize may change authored geometry)
+    fit: none                  # default: fixed bounds at the authored (measured) size
+                               # shrink | resize (resize may change authored geometry)
     fontSize: 40               # overrides the style
     color: "$ink"
     lineHeight: 1.2
@@ -188,8 +188,9 @@ tune.
 3. `$token` must exist: colors = bg/ink/primary/accent/muted/hairline,
    textStyles = title/body/caption/bignum, tableStyles = default.
 4. Text is a COMPLETE phrase — rewrite to fit, never truncate mid-thought.
-   Text boxes default to `fit: shrink`; do not use `resize` when later content
-   depends on the box boundary.
+   Text boxes default to `fit: none`: layout QA measures the authored size to
+   fit, and PowerPoint/WPS open text at that size. Table cells honour `fit`
+   too. Do not use `resize` when later content depends on the box boundary.
 5. `columnWidths`/`rowHeights` sum to 1 (±0.02), one rowHeights entry per row.
 6. Charts use the `chart` element (bar/column/line/pie/area/doughnut/radar); complex
    structural diagrams are still built from shapes/lines.

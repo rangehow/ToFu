@@ -201,3 +201,43 @@ def test_review_context_does_not_blame_a_page_for_conflicting_sources():
     context = json.loads(build_review_context(
         {'title': 't', 'pages': [{'key_message': 'm'}]}, page_index=0))
     assert 'never a major or blocker' in context['source_conflicts']
+
+
+def test_review_of_an_english_page_asks_for_english_fixes(tmp_path, monkeypatch):
+    """The reviewer's ``fix`` is fed verbatim to the repair author. A Chinese
+    review prompt answered an English page with Chinese replacement titles, so
+    repaired English decks mixed Chinese and English (slides-bench judge)."""
+    image = tmp_path / 'page.png'
+    image.write_bytes(b'page-pixels')
+    prompts = []
+    monkeypatch.setattr('lib.model_info._capabilities.model_supports_vision',
+                        lambda _model: True)
+    monkeypatch.setattr('lib.llm_dispatch.api.dispatch_chat',
+                        lambda messages, **_kwargs: (
+                            prompts.append(messages[0]['content'][0]['text'])
+                            or '{"findings": []}', {}))
+    english = vqa.qa_frame(str(image), model='vlm-test', lang='en')
+    chinese = vqa.qa_frame(str(image), model='vlm-test', lang='zh')
+    assert 'English' in prompts[0] and 'English' not in prompts[1]
+    assert english['input_sha256'] == vqa.qa_frame_input_sha256(
+        str(image), model='vlm-test', lang='en')
+    assert english['input_sha256'] != chinese['input_sha256']
+
+
+def test_slide_visual_review_passes_the_deck_language(tmp_path, monkeypatch):
+    from tests.slides.test_slides import TestRecipe
+
+    monkeypatch.setattr(vqa, 'visual_qa_available', lambda: (True, ''))
+    monkeypatch.setattr('lib.design_sys.contact_sheet.build_contact_sheet',
+                        lambda _previews, output, **_kwargs: output)
+    seen = set()
+
+    def qa_frame(_path, **kwargs):
+        seen.add(kwargs.get('lang'))
+        return {'ok': True, 'findings': []}
+
+    monkeypatch.setattr(vqa, 'qa_frame', qa_frame)
+    ctx = TestRecipe._visual_qa_context(tmp_path)
+    ctx['lang'] = 'en'
+    recipe._run_visual_qa(ctx)
+    assert seen == {'en'}

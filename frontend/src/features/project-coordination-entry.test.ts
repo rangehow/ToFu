@@ -5,11 +5,14 @@ import pushSource from '../runtime/sections/push.js?raw';
 import { createProjectCoordinationSurface } from './project-coordination-surface';
 import { createSameTaskReadJoin } from './project-coordination-read-join';
 import { createCoordinatorConversationGroups } from './coordinator-conversation-group';
+import { backgroundAgentContextHost } from '../agent-sidebar-dock';
 import type { ProjectCoordinationPorts } from './project-coordination';
 
 import { createProjectConversationNavigation } from './project-conversation-navigation';
 import { LANDING_STORAGE_KEY, rememberLanding } from '../application-shell/landing';
 vi.mock('../i18n', () => ({ t: (key: string) => key }));
+// The composed runtime's prelude import every presence.js harness below resolves as a free identifier.
+Object.assign(globalThis, { backgroundAgentContextHost });
 const passiveReads = { coordinatorReports: async () => undefined, coordinatorBudget: async () => null, coordinatorProgress: async () => null,
   workerConversations: async () => ({ conversations: [], nextCursor: null, coverage: 'complete' }) };
 // presence.js also bridges the Global Router, its owner delegation and the Watchdog entries; these coordination specs stub them.
@@ -350,7 +353,7 @@ function presencePorts(project: Record<string, unknown>): ProjectCoordinationPor
     'openProjectCoordinationWorkspace', 'getActiveConv', 'Api', 'getFolders', 'getActiveFolderId',
     'loadConversation', '_projectConversationNavigation', 'createCoordinatorConversationGroups', 'const conversations = [];\n' + routerStub + 'const mergeConversationCatalogRows = () => 0; const renderConversationList = () => {};\n' + source)(
     {}, vi.fn(), vi.fn(), (ports: { scope(): ProjectCoordinationPorts | null }) => {
-      mounted.push(ports); return { refresh() {}, destroy() {} };
+      mounted.push(ports); return { refresh() {}, destroy() {}, coordinatorId() { return ''; } };
     }, createSameTaskReadJoin, vi.fn(), () => ({ id: 'leader', projectPath: '/project' }), { project },
     () => [{ id: 'folder', projectPaths: ['/project'] }], () => 'folder', vi.fn(), createProjectConversationNavigation(), createCoordinatorConversationGroups,
   );
@@ -458,8 +461,8 @@ it.each([
 
 /** presence.js over a mutable folder list, with the main coordinator card and the folder settings opener. */
 function mountFolderView(folders: { id: string; name: string; projectPaths: string[] }[], selected: () => string,
-  reads: Record<string, unknown>, conversations: unknown[] = []) {
-  document.body.innerHTML = '<div id="convList"></div><div id="presenceStrip"></div>';
+  reads: Record<string, unknown>, conversations: unknown[] = [], active: () => unknown = () => null, chatHtml = '') {
+  document.body.innerHTML = '<div id="convList"></div><div id="presenceStrip"></div>' + chatHtml;
   const runtime: Record<string, any> = {}, settings = vi.fn();
   const stub = 'const createGlobalRouterEntry = () => ({ refresh() {}, destroy() {}, home() { return "/data/router/1"; }, conversationId() { return "coordinator-router"; } });\n'
     + 'const createRouterWatchdogEntry = () => ({ refresh() {}, destroy() {}, location() { return ""; }, conversationId() { return ""; } });\n'
@@ -468,7 +471,7 @@ function mountFolderView(folders: { id: string; name: string; projectPaths: stri
     'openProjectCoordinationWorkspace', 'getActiveConv', 'Api', 'getFolders', 'getActiveFolderId',
     'loadConversation', '_projectConversationNavigation', 'createCoordinatorConversationGroups', '_promptRenameFolder', 'conversations',
     stub + 'const mergeConversationCatalogRows = () => 0; const renderConversationList = () => {};\n' + source)(
-    runtime, vi.fn(), vi.fn(), createProjectCoordinationSurface, createSameTaskReadJoin, vi.fn(), () => null, { project: reads },
+    runtime, vi.fn(), vi.fn(), createProjectCoordinationSurface, createSameTaskReadJoin, vi.fn(), active, { project: reads },
     () => folders, selected, vi.fn(), createProjectConversationNavigation(), createCoordinatorConversationGroups, settings, conversations,
   );
   return { runtime, settings };
@@ -557,6 +560,31 @@ it.each(['chat', 'world'] as const)('shows a lead\'s work as plain rows in the s
     expect(document.querySelector('.lead-office-slot, .lead-office')).toBeNull();
     expect(group!.hidden).toBe(false);
   } finally { window.dispatchEvent(new Event('pagehide')); localStorage.removeItem(LANDING_STORAGE_KEY); }
+});
+
+// Owner request 2026-11-17: a lead's reports and files read on its task board, each task expanding to its
+// own; neither the sidebar nor the conversation's right-hand context panel holds a list of them.
+it('mounts no reports and files list in the open lead conversation\'s context panel or the sidebar', async () => {
+  const reads = coordinatorReads();
+  let active = { id: 'leader' };
+  const chat = '<div id="chatInner"><div class="conversation-surface" data-conversation-id="leader">'
+    + '<div class="conversation-turn" data-lane-id="main" data-turn-role="user" data-turn-id="t1">'
+    + '<div class="conversation-block--context"></div>'
+    + '<div data-conversation-part="turn-context-rail"><div data-conversation-part="turn-context-card"><div class="tctx-head"></div>'
+    + '<section class="agent-dock"></section></div></div></div></div></div>';
+  const { runtime } = mountFolderView([{ id: 'folder', name: 'Project', projectPaths: ['/project'] }], () => 'folder', reads, [],
+    () => active, chat);
+  const card = document.querySelector<HTMLElement>('[data-conversation-part="turn-context-card"]')!;
+  try {
+    await vi.waitFor(() => expect(document.querySelector('#projectCoordinatorEntry [data-coordinator-id="leader"]')).not.toBeNull());
+    runtime.presenceRefresh();
+    await nextTask();
+    expect(card.querySelector('.lead-deliverables')).toBeNull();
+    expect(document.querySelector('.coordination-conversation-column .lead-deliverables')).toBeNull();
+    expect(runtime.mountLeadDeliverables).toBeUndefined();
+    active = { id: 'ordinary' };
+    runtime.presenceRefresh();
+  } finally { window.dispatchEvent(new Event('pagehide')); }
 });
 
 it('issues each coordination read once per push frame for the canvas and sidebar together', async () => {

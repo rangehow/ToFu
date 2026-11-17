@@ -19,6 +19,11 @@ def _storage(*, write=False):
     return get_storage_client(write=write)
 
 
+# The execution host installs its process's claim gate here before boot
+# (serverctl_pkg/execution_shards.py); other compositions claim ungated.
+CLAIM_GATE_EXTENSION = 'tofu_execution_claim_gate'
+
+
 def create_service(*, client_factory=_storage, registry=None, max_workers=None,
                    now_ms=None, environ=None, application=None):
     from runtime_guards import UNLIMITED, resolve_resource_budget
@@ -36,9 +41,13 @@ def create_service(*, client_factory=_storage, registry=None, max_workers=None,
              conversation_registration(application=application))
     control = PrincipalContext.system(subject_id='durable-worker:' + uuid.uuid4().hex,
                                       scopes={policy['controlScope']})
-    return DurableWorkerService(principal=control, client_factory=client_factory,
+    gate = (getattr(application, 'extensions', None) or {}).get(CLAIM_GATE_EXTENSION)
+    service = DurableWorkerService(principal=control, client_factory=client_factory,
         registrations=kinds, max_workers=max_workers, now_ms=now_ms, policy=policy,
-        wake_source=StorageWorkerWakeSource(client_factory, policy))
+        wake_source=StorageWorkerWakeSource(client_factory, policy), claim_gate=gate)
+    if gate is not None:
+        gate.bind(service.wake)
+    return service
 
 
 def ensure_workers_started(app, *, environ=None):

@@ -36,6 +36,10 @@ class CoordinatorWorkerPolicy:
     config: dict
     coordinator_tools: tuple[str, ...]
     coordinator_model: str
+    # MCP servers (owner configuration names) the Workers are granted: their
+    # tools are admitted whenever they connect, so a Coordinator assembled
+    # before MCP auto-connect finished still grants the servers the owner enabled.
+    mcp_servers: tuple[str, ...] = ()
 
 
 class CoordinatorModelMissing(PermissionError):
@@ -159,6 +163,7 @@ def issued_worker_policy(repository, task):
         return replace(issued, model=_live_worker_model(task, issued.model or ''))
     request = prior['request']; policy = request['delegation']['policy']
     controls = policy.get('continuation') or {}
+    servers = tuple(controls.get('workerMcpServers', request['profile'].get('mcpServers', ())))
     # The Workers' model is the owner's current setting, not a replay of the
     # value this request's earlier delegation pinned (the owner may have changed
     # it after a provider refusal). Without a Coordinator scope there is no
@@ -168,7 +173,15 @@ def issued_worker_policy(repository, task):
     # controls record the Coordinator's own model.
     return CoordinatorWorkerPolicy(tuple(controls.get('workerTools', request['profile']['tools'])),
         model, deepcopy(policy['config']), tuple(controls.get('tools', ())),
-        controls.get('model', request['model']))
+        controls.get('model', request['model']), servers)
+
+
+def worker_profile(issued: CoordinatorWorkerPolicy) -> dict:
+    """The ``project`` profile a Worker of this issued policy is granted."""
+    profile = {'mode': 'project', 'tools': list(issued.tools), 'readPaths': ['.'], 'writePaths': ['.']}
+    if issued.mcp_servers:
+        profile['mcpServers'] = list(issued.mcp_servers)
+    return profile
 
 
 def worker_control(repository, task, row, *, session=False):
@@ -225,11 +238,14 @@ def audited_coordinator_control(record, act, accepted=lambda result: {}):
     return result
 
 
-def capture_worker_policy(task, config, catalog, model, *, worker_model=None):
+def capture_worker_policy(task, config, catalog, model, *, worker_model=None, enabled_mcp_servers=()):
     """Called before the Coordinator's own planning-only tool projection.
 
     ``model`` is the Coordinator's own model. ``worker_model`` pins the Workers'
     model; omitted, the first delegation resolves it with resolve_worker_model.
+    ``enabled_mcp_servers`` are the servers the owner enabled for this Turn's
+    assembly; with the servers of the catalog's MCP tools they are the servers
+    the Workers are granted, connected yet or not.
     """
     from .continuation import current_continuation
     continuation = current_continuation(task)
@@ -239,7 +255,8 @@ def capture_worker_policy(task, config, catalog, model, *, worker_model=None):
         # Grants issued before separate Worker models recorded one shared model.
         task['_coordinatorWorkerPolicy'] = CoordinatorWorkerPolicy(
             tuple(controls['workerTools']), continuation_worker_model(task, controls),
-            deepcopy(policy['config']), tuple(controls['tools']), controls['model'])
+            deepcopy(policy['config']), tuple(controls['tools']), controls['model'],
+            tuple(controls.get('workerMcpServers', ())))
         return
     denied = set(CONTRACT['workerDeniedTools'])
     # A Worker has the capabilities of an ordinary conversation of this human:
@@ -259,7 +276,11 @@ def capture_worker_policy(task, config, catalog, model, *, worker_model=None):
     controls = tuple(name for name in CONTRACT['continuationTools'] if name in visible)
     if worker_model is not None:
         task['_coordinatorWorkerModel'] = worker_model
-    task['_coordinatorWorkerPolicy'] = CoordinatorWorkerPolicy(names, worker_model, selected, controls, model)
+    from lib.mcp.types import parse_namespaced_name
+    servers = tuple(sorted(set(enabled_mcp_servers) | {
+        parsed[0] for parsed in map(parse_namespaced_name, names) if parsed is not None}))
+    task['_coordinatorWorkerPolicy'] = CoordinatorWorkerPolicy(
+        names, worker_model, selected, controls, model, servers)
 
 
 def _active_scope(repository, task, *, for_budget):
@@ -449,6 +470,7 @@ def policy_for_task(repository, task, attempt):
     if {'delegate_project_work', 'get_project_workers', 'finish_project_request', 'report_to_user'} <= set(policy.coordinator_tools):
         result['continuation'] = {'version': 1, 'model': policy.coordinator_model,
             'workerModel': policy.model or resolve_worker_model(task), 'workerTools': list(policy.tools),
+            **({'workerMcpServers': list(policy.mcp_servers)} if policy.mcp_servers else {}),
             'tools': list(policy.coordinator_tools),
             'maxStalledTurns': CONTRACT['delegationDefaults']['maxStalledTurns']}
     _validate_schema(result, 'workerPolicy')

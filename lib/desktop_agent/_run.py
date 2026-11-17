@@ -132,16 +132,28 @@ def _ensure_agent_id():
     The id lives in the agent config file (TOFU_DESKTOP_CONFIG or
     ~/.tofu/desktop_agent.json) so restarts keep the same identity — the
     server-side registry and command addressing key on it (RWA P0).
+    The file keeps one id per host (``agent_ids``, keyed by
+    :func:`host_identity.host_key`), so hosts sharing one home directory stay
+    distinct nodes. The legacy single ``agent_id`` goes to the first host that
+    claims it, so an existing paired node keeps its identity.
     """
+    from lib.desktop_agent.host_identity import host_key
+    host = host_key()
     candidate = uuid.uuid4().hex
     outcome = {'agent_id': candidate}
 
     def _mutate(cfg):
-        existing = (cfg.get('agent_id') or '').strip()
-        if existing:
-            outcome['agent_id'] = existing
+        ids = cfg.get('agent_ids') if isinstance(cfg.get('agent_ids'), dict) else {}
+        mine = str(ids.get(host) or '').strip()
+        if mine:
+            outcome['agent_id'] = mine
             return None
-        cfg['agent_id'] = candidate
+        legacy = str(cfg.get('agent_id') or '').strip()
+        if legacy and legacy not in ids.values():
+            outcome['agent_id'] = legacy
+        cfg['agent_ids'] = {**ids, host: outcome['agent_id']}
+        if not legacy:
+            cfg['agent_id'] = outcome['agent_id']
         return cfg
 
     try:

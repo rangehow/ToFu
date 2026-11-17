@@ -107,6 +107,11 @@ class SegmentedDispatch:
         return row
 
     def pages(self, prefix):
+        for page in self.index_pages(prefix):
+            yield from page
+
+    def index_pages(self, prefix):
+        """The index rows under ``prefix``, one list per stored page."""
         after = ''
         while True:
             page = self.query('list', collection='indexes', prefix=prefix, after_key=after,
@@ -119,7 +124,7 @@ class SegmentedDispatch:
                 if not isinstance(row.get('key'), str) or row['key'] <= after:
                     raise StorageError('database_integrity', 'Invalid dispatch page cursor')
                 after = row['key']
-                yield row['value']
+            yield [row['value'] for row in page]
 
     def _legacy(self):
         from .repository import NAMESPACE
@@ -193,9 +198,13 @@ class SegmentedDispatch:
 
         def indexed(field, prefix, *, budget=None, source=None):
             count = 0
-            for item in self.pages(prefix):
-                indexed_row(field, item, budget=budget, source=source)
-                count += 1
+            for page in self.index_pages(prefix):
+                prefetched.update(self.get_many(
+                    (field, item['id']) for item in page
+                    if (field, item['id']) not in documents and (field, item['id']) not in prefetched))
+                for item in page:
+                    indexed_row(field, item, budget=budget, source=source)
+                    count += 1
             return count
 
         walked = selected is None
@@ -290,16 +299,20 @@ class SegmentedDispatch:
                     {row['sourceAttemptId'] for row in value.get('coordinatorSettlements', [])})
         counts = head['value']['state']['counts']
         assignments, seen = [], set()
-        for item in self.pages('assignments:order:'):
-            row = self.query('get', collection='assignments', id=key(item['id']))
-            envelope = (row or {}).get('value') or {}
-            record = envelope.get('record')
-            if (not isinstance(record, dict) or record.get('id') != item['id'] or item['id'] in seen
-                    or envelope.get('sequence') != item['sequence']):
-                raise StorageError('database_integrity', 'Dispatch index has dangling/changed evidence')
-            _validate_stored_row(record, 'assignment', record['id'], decoded=True)
-            seen.add(item['id'])
-            assignments.append(record)
+        for page in self.index_pages('assignments:order:'):
+            rows = self.get_many(('assignments', item['id']) for item in page)
+            for item in page:
+                row = rows[('assignments', item['id'])]
+                if isinstance(row, StorageError):
+                    raise row
+                envelope = (row or {}).get('value') or {}
+                record = envelope.get('record')
+                if (not isinstance(record, dict) or record.get('id') != item['id'] or item['id'] in seen
+                        or envelope.get('sequence') != item['sequence']):
+                    raise StorageError('database_integrity', 'Dispatch index has dangling/changed evidence')
+                _validate_stored_row(record, 'assignment', record['id'], decoded=True)
+                seen.add(item['id'])
+                assignments.append(record)
         settled = {item['id'] for item in self.pages('settlements:order:')}
         if len(assignments) < counts['assignments'] or len(settled) < counts['coordinatorSettlements']:
             raise StorageError('database_integrity', 'Dispatch history index is incomplete')

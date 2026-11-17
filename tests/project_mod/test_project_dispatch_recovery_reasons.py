@@ -44,7 +44,10 @@ class _Repository:
     def discover(self):
         return self.rows, set()
 
-    def restart_resume(self, assignment):
+    def read_attempts(self, attempt_ids):
+        return {}
+
+    def restart_resume(self, assignment, *, attempt=None):
         if assignment['id'] not in self.paused:
             return None
         verdict, option = self.verdicts.get(assignment['id'], (_TAIL, {'operation': 'continue'}))
@@ -116,7 +119,7 @@ def test_a_restart_paused_lane_with_a_call_cut_off_mid_effect_waits_for_review(c
     effects = [{'toolName': 'run_command', 'toolCallId': 'call-write', 'operationId': 'op-1'}]
 
     class Repository(_Repository):
-        def restart_resume(self, assignment):
+        def restart_resume(self, assignment, *, attempt=None):
             resume = super().restart_resume(assignment)
             return None if resume is None else {**resume, 'option': None, 'review': effects}
 
@@ -151,3 +154,47 @@ def test_a_restart_paused_lane_its_own_records_follow_is_resumed(caplog):
             service=Service(), was_aborted_after=lambda *a: False, clock=lambda: NOW)
     assert stats['accepted'] == 1 and stats['skipped'] == 0 and dispatched == ['followed']
     assert _lines(caplog) == set()
+
+
+def test_a_pass_reads_the_attempts_of_every_lane_it_decides_in_one_exchange():
+    """Boot recovery read each lane's execution attempt in its own round trip."""
+    rows = [{**_assignment(name), 'execution': {'turnId': 't', 'attemptId': 'attempt-' + name}}
+            for name in ('one', 'two', 'three')]
+    rows.append({**_assignment('lead'), 'request': {**rows[0]['request'], 'profile': {'mode': 'coordinator'}}})
+    batches, seen = [], {}
+
+    class Repository(_Repository):
+        def read_attempts(self, attempt_ids):
+            batches.append(list(attempt_ids))
+            return {attempt_id: {'attemptId': attempt_id, 'status': 'completed'} for attempt_id in batches[-1]}
+
+        def restart_resume(self, assignment, *, attempt=None):
+            seen[assignment['id']] = attempt
+            return None
+
+    stats = recovery.recover_project_dispatch(
+        1, '/project', repository=Repository(rows, set()), service=object(),
+        was_aborted_after=lambda *a: False, clock=lambda: NOW)
+    assert batches == [['attempt-one', 'attempt-two', 'attempt-three']]
+    assert seen == {name: {'attemptId': 'attempt-' + name, 'status': 'completed'}
+                    for name in ('one', 'two', 'three')}
+    assert stats['skipped'] == 4 and stats['failed'] == 0
+
+
+def test_an_attempt_the_batch_could_not_read_fails_only_its_own_lane():
+    rows = [{**_assignment(name), 'execution': {'turnId': 't', 'attemptId': 'attempt-' + name}}
+            for name in ('lost', 'kept')]
+
+    class Repository(_Repository):
+        def read_attempts(self, attempt_ids):
+            return {'attempt-lost': LookupError('Attempt not found'),
+                    'attempt-kept': {'attemptId': 'attempt-kept', 'status': 'completed'}}
+
+        def restart_resume(self, assignment, *, attempt=None):
+            assert attempt is not None
+            return None
+
+    stats = recovery.recover_project_dispatch(
+        1, '/project', repository=Repository(rows, set()), service=object(),
+        was_aborted_after=lambda *a: False, clock=lambda: NOW)
+    assert stats['failed'] == 1 and stats['skipped'] == 1

@@ -266,7 +266,11 @@ def run_workload(directory, *, split):
                 turns = [wait_turn(client, path, {'completed', 'failed', 'interrupted'}) for path in paths]
                 lost = admit(client, project, 99, goal=False)
                 assert provider.crash_entered.wait(45)
-                os.kill(execution_pid, signal.SIGKILL)
+                # The execution plane is the host and the shards it started
+                # for the concurrent items; the call may run in either.
+                from serverctl_pkg.execution_shards import live_shard_pids
+                for pid in (execution_pid, *live_shard_pids(execution_pid)):
+                    os.kill(pid, signal.SIGKILL)
 
                 def released():
                     # Recover like the manager: only after the killed host's lease is free.

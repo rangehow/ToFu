@@ -114,8 +114,9 @@ it('tasks that left the board and items of no task stay reachable below the boar
   toggle(OTHER_TASKS)!.click();
   await flush();
   // An item of another project names its project.
-  expect(document.querySelector(`.coordinator-task-deliverables[data-task="${OTHER_TASKS}"] .lead-deliverable__meta`)!
-    .textContent).toMatch(/^parallel · /);
+  const project = document.querySelector<HTMLElement>(`.coordinator-task-deliverables[data-task="${OTHER_TASKS}"] .lead-deliverable__project`)!;
+  expect(project.hidden).toBe(false);
+  expect(project.textContent).toBe('parallel');
 });
 
 it("a deliverable push for this lead re-reads the counts and every open task; other pushes read nothing", async () => {

@@ -72,11 +72,12 @@ class InstanceClient:
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip('/')
 
-    def request(self, method: str, path: str, body=None, *, timeout: float = 60.0):
+    def request(self, method: str, path: str, body=None, *, timeout: float = 60.0,
+                headers: dict | None = None):
         data = None if body is None else json.dumps(body).encode()
         request = urllib.request.Request(self.base_url + path, data=data, method=method,
                                          headers={'Content-Type': 'application/json',
-                                                  'Accept': 'application/json'})
+                                                  'Accept': 'application/json', **(headers or {})})
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 raw = response.read()

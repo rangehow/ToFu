@@ -131,6 +131,7 @@ __pycache__/
 !/benchmarks/AGENTS.md
 !/benchmarks/startup_idle_dispatch.py
 !/benchmarks/startup_recovery_batch.py
+!/benchmarks/startup_dispatch_recovery.py
 !/benchmarks/settled_turn_retention.py
 !/benchmarks/agent_round_overhead.py
 !/benchmarks/mcp_live_schema_projection.py
@@ -689,7 +690,8 @@ uploads/images/*
 static/posters/
 
 # Vite production output is content-addressed and rebuilt from frontend/src.
-static/vite/
+# No trailing slash: a symlink to another checkout's build is ignored too.
+/static/vite
 # Interrupted Vite builds leave temporary siblings beside the final output.
 /static/.vite-build-*/
 /static/tmp/

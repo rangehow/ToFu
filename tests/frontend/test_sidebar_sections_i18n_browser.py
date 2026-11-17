@@ -51,6 +51,10 @@ def test_sidebar_reports_and_task_board_read_in_the_ui_language(page, monkeypatc
     row = page.locator('#projectCoordinatorEntry .coordination-leader')
     # An unread report previews in its display translation, as the conversation shows it.
     expect(row.locator('.coordination-leader-meta')).to_have_text(TRANSLATED_TITLE)
+    _settle(page)
+    page.locator('#sidebar').screenshot(path=str(OUTPUT / f'{language}-sidebar.png'), animations='disabled')
+    expect(page.locator('#sidebar .lead-deliverables, #sidebar .lead-deliverable')).to_have_count(0)
+
     # The task board pinned atop the Coordinator's conversation.
     row.click()
     page.wait_for_function('(id) => window.activeConvId === id', arg=leader)
@@ -73,8 +77,8 @@ def test_sidebar_reports_and_task_board_read_in_the_ui_language(page, monkeypatc
     expect(rows.first.locator('.lead-deliverable__title')).to_have_text(copy['title'])
     # The tooltip keeps the title as written beneath the translation.
     assert rows.first.locator('.lead-deliverable__open').get_attribute('title').split('\n')[:2] == [TRANSLATED_TITLE, TITLE]
-    expect(rows.first.locator('.lead-deliverable__meta')).to_have_text(re.compile(r'^(' + copy['age'] + r')$'))
-    expect(rows.first.locator('.lead-deliverable__source')).to_have_text(copy['source'])
+    expect(rows.first.locator('.lead-deliverable__age')).to_have_text(re.compile(r'^(' + copy['age'] + r')$'))
+    expect(rows.first.locator('.lead-deliverable__source')).to_have_attribute('aria-label', copy['source'])
     in_progress = card.locator('.coordinator-progress-task-toggle', has_text='Polish the resume')
     in_progress.click()
     expect(card.locator(f'.coordinator-task-deliverables[data-task="{in_progress.get_attribute("data-task")}"] '

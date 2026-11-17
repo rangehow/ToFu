@@ -556,6 +556,7 @@ def start_optional_production_services(
 ) -> tuple[dict[str, Any], bool]:
     """Start best-effort integrations after the required bootstrap succeeds."""
     from lib.process_roles import (
+        CAPABILITY_ATTEMPT_EXECUTION,
         CAPABILITY_EVENT_MAINTENANCE,
         CAPABILITY_REQUEST_SERVICES,
         CAPABILITY_TASK_WORKERS,
@@ -590,7 +591,7 @@ def start_optional_production_services(
     feishu_ok = False
     if process_role_has_any(process_role, (
         CAPABILITY_REQUEST_SERVICES,
-        CAPABILITY_TASK_WORKERS,
+        CAPABILITY_ATTEMPT_EXECUTION,
     )):
         mcp_config, feishu_ok = _start_network_integrations(
             logger=logger, boot=boot,

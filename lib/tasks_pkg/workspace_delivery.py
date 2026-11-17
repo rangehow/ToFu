@@ -653,6 +653,7 @@ def bind_worker_workspace(task: dict) -> dict | None:
         _check_workspace_cancelled(task)
         with measure_task_startup('workspace_identity', identity=identity):
             info = _checkout(path, cancel=stop)
+        task.setdefault(_ADMITTED_CHECKOUT_ROOTS, {})[path] = info[0] if info else ''
         if info is None:
             continue
         with measure_task_startup('workspace_root_binding', identity=identity):
@@ -731,6 +732,19 @@ def bind_worker_workspace(task: dict) -> dict | None:
         task['_workspaceRootPolicy'] = policy
         register_root_policy(str(task['id']), policy)
     return _remember(task, list(rows.values()))
+
+
+_ADMITTED_CHECKOUT_ROOTS = '_admittedCheckoutRoots'
+
+
+def admitted_checkout_root(task: dict, path: str) -> str | None:
+    """The checkout top level worker admission identified for ``path``.
+
+    ``''`` when admission found no checkout there, ``None`` when it did not
+    inspect ``path``. Binding reads each writable root's checkout identity once;
+    later consumers of the same attempt reuse it instead of asking Git again.
+    """
+    return (task.get(_ADMITTED_CHECKOUT_ROOTS) or {}).get(_local_path(path))
 
 
 def execution_repositories(task: dict) -> list:

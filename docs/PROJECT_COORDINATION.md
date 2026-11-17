@@ -87,7 +87,10 @@ capability boundary of an ordinary conversation of that human, inside its
 isolated workspace. Request ingress keeps the human's submitted tool settings
 beside the role's (`_coordinatorSubmittedToolSettings`);
 `delegation.capture_worker_policy` grants those settings and the gateway's
-`execute_program`. Admission fences a Worker's `tools` to exactly that policy.
+`execute_program`. Admission fences a Worker's `tools` to exactly that policy,
+plus every tool of the MCP servers its profile's `mcpServers` names
+(`scope.GrantedTools`; decision "A Worker grant names its MCP servers" in
+[tools_execution](modules/tools_execution.md)).
 `workerDeniedTools` keeps only the Coordinator/Router/Watchdog role tools and
 deferred wakes (timers, `await_device`, `create_conversation`,
 `integration_submit`), which would start work outside the grant and its Stop
@@ -2443,7 +2446,13 @@ viewer), a report as the conversation's own `report_to_user` card in a dialog,
 a merge at its Worker's result Turn. The secondary action ("Go to message")
 opens the lead's message at that exact Turn. In the classic view the items
 live on the lead's task board ("Each task expands to its reports and files"
-below); the sidebar holds no deliverables list. In the studio, a delivery on the desk and a trophy on the shelf build the
+below); neither the sidebar nor the conversation's right-hand panel holds a
+deliverables list. Each row shows a type glyph (report kind, deck, PDF,
+document, sheet, image, file, merge), the whole title wrapped at word
+boundaries, then its kind in the glyph's ink, project and relative time,
+previews the report's opening paragraph on hover, and opens its attached files
+from chips (owner request 2026-11-17: the sidebar list was cramped, titles cut
+mid-word). In the studio, a delivery on the desk and a trophy on the shelf build the
 same item (same identity) and call the same opener, whose Turn port docks the
 office's conversation column; other desk documents still open their author's brief.
 
@@ -2486,9 +2495,15 @@ reconnect re-read the summary and each open task. The sidebar's deliverables
 section and its bridge are deleted; the lead's entry keeps its unread report
 preview.
 
+The same evening a delivery moved the list from the sidebar into the context
+card of the lead conversation's latest round (the right-hand panel); the owner
+then asked for the board instead, to remove the redundant section, so that
+mount is deleted and its row design is the board's (`lead-deliverables/rows.ts`).
+
 Alternatives rejected: matching reports to tasks by title text in the browser
 (titles change and collide; the key is the history identity); keeping the
-sidebar list beside the board (two places to look, the owner's complaint);
+sidebar list, or the right-hand panel list, beside the board (two places to
+look, the owner's complaint);
 moving every item onto the board with no "other" group (older reports would
 vanish); a per-task deliverables store (the projection already holds the
 facts).

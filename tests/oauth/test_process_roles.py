@@ -31,6 +31,7 @@ def test_roles_have_disjoint_split_process_ownership():
         'network_configuration',
         CAPABILITY_TASK_RECOVERY,
         CAPABILITY_TASK_WORKERS,
+        'attempt_execution',
     })
     assert capabilities_for_role('scheduler') == frozenset({
         CAPABILITY_SCHEDULED_JOBS,

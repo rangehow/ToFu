@@ -114,6 +114,16 @@ liveness for an exempt human wait. Alternatives rejected: a thread ceiling or
 admission queue (forbidden above) and automatic retry, which adds load to an
 exhausted host.
 
+**Execution shards follow concurrent jobs.** The resident execution host
+starts one `execution_shard` process per job it had to claim beside another
+(`serverctl_pkg/execution_shards.py`); no launch setting, CPU count or memory
+probe sizes them, and none refuses a job: with no idle shard the host claims
+the job itself. An idle shard retires itself after the existing evict-only
+`TOFU_EXECUTOR_IDLE_SECONDS`, so idle RSS returns to the single host. Measured
+on 2026-11-17: a shard is ready about 5 s after demand and holds about 210-230 MB
+while serving; 20 concurrent sessions ran 20 processes for the retention window
+(docs/HARNESS_PERFORMANCE.md, "Execution shards").
+
 **Alternatives rejected.**
 
 - Raising each ceiling to a larger probe-derived number keeps the shape that

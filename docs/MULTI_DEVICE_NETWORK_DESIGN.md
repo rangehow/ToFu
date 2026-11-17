@@ -1,7 +1,7 @@
 # Multi-device network design: one Home, equal nodes
 
 Status: **proposal, awaiting owner decisions** (section 11), written
-2026-11-17. This document changes no product code. The running node model
+2026-11-17. Phase 0 (section 10) is done; the later phases change no code yet. The running node model
 is described in [remote execution](modules/remote_execution.md#nodes-and-pairing);
 when a phase below lands, its behavior moves into that authority and this
 proposal shrinks accordingly.
@@ -27,7 +27,7 @@ Wireframes: `output/multi_device_design/devices_mockups.html` (rendered as
 - **界面**：做一个顶层“设备”页面，侧边栏底部有一个状态胶囊（“5/7 在线”）点进去；
   设置里的“设备”页签变成指向它的链接。页面里：家的说明卡、按类型分组的设备列表、统一“添加设备”向导
   （电脑/服务器容器/浏览器/手机/另一个 Tofu），每台设备的健康状态与权限（家这边的上限 ∩ 设备自己的开关）。
-- **迁移不推倒重来**：先修两个现有缺陷（API/执行双进程下执行进程看不到桌面节点；共享家目录可能让两台主机用同一个节点 ID），
+- **迁移不推倒重来**：先修两个现有缺陷（API/执行双进程下执行进程看不到桌面节点；共享家目录可能让两台主机用同一个节点 ID；第 0 阶段已完成），
   再加一个只读的统一设备列表，再上页面和向导，最后再考虑按标签路由（“在任意 gpu 节点上跑”）和中继。
 - **需要你拍板的 8 件事见第 11 节**，每条都有推荐默认值。
 
@@ -107,10 +107,12 @@ document states that the desktop bridge "has the same process-local registry
 and is not yet relayed", and at this HEAD `lib/desktop/` contains no relay
 while the execution host imports `lib.desktop.bridge` directly
 (`lib/tasks_pkg/context_composer/_providers.py`,
-`lib/tasks_pkg/handlers/misc/_agents.py`). **Adjacent defect (not verified at
-runtime):** in a split deployment the execution host's registry is empty, so
-desktop tools and the environment device list can see no nodes even while
-Settings shows them online.
+`lib/tasks_pkg/handlers/misc/_agents.py`). **Adjacent defect:** in a split
+deployment the execution host's registry is empty, so desktop tools are not
+even offered there (`is_desktop_agent_connected` gates them) and the
+environment device list sees no nodes while Settings shows them online.
+*Fixed in phase 0:* the desktop bridge now has the same relay
+([remote execution](modules/remote_execution.md#bridge-owner-across-the-apiexecution-split)).
 
 **Storage authority.** One selected authority per server with an exclusive
 process lease; no runtime store switching ([storage](STORAGE.md#one-authority)).
@@ -149,7 +151,9 @@ by a sibling assignment; this design defines where it returns.
 `~/.tofu/desktop_agent.json` (`lib/desktop_agent/config.py`). Where several
 hosts share one home directory (possible on shared DolphinFS setups; not
 verified for the owner's containers) they would present the same node ID and
-overwrite each other's registry entry.
+overwrite each other's registry entry. *Fixed in phase 0:* the config keeps
+one node ID per host
+([remote execution](modules/remote_execution.md#one-node-id-per-host)).
 
 ### Gaps this design must close
 
@@ -161,7 +165,7 @@ overwrite each other's registry entry.
 4. Many servers: nothing names a server's role; the web UI has no server
    switcher (Android does).
 5. The two defects above (unrelayed desktop registry; shared-home identity
-   collision).
+   collision). Closed by phase 0.
 
 ## 3. Evaluation criteria
 
@@ -373,12 +377,16 @@ before device selection; revocation is immediate.
 
 Proposed additions, in order of value:
 
-1. **Collision detection** (phase 0). The Home records, per node ID, a
-   per-process boot nonce sent as a new optional poll-frame field; two live boot nonces
-   for one ID within the liveness window mark the entry "identity conflict"
-   and refuse commands to it, instead of silently alternating.
-   Host-scoped config (`$XDG_STATE_HOME` or a path keyed by the host's
-   machine ID) removes the shared-home cause.
+1. **Host-scoped node ID** (phase 0, done). The node config keeps one ID per
+   host, keyed by a digest of the machine ID (plus the hostname on Linux,
+   where containers of one image share `/etc/machine-id`), so hosts sharing
+   one home get distinct IDs and an existing node keeps its own
+   ([remote execution](modules/remote_execution.md#one-node-id-per-host)).
+   **Collision detection** (deferred to phase 3): the Home would record a
+   per-process boot nonce sent as a new optional poll-frame field and mark an
+   ID with two live nonces "identity conflict". It remains the remedy for a
+   config file copied between machines; it needs a wire change and cannot pick
+   which twin keeps the ID, so phase 0 removed the shared-home cause instead.
 2. **Confirm on join** (owner decision 5). Redeeming a link creates a *pending*
    node that the owner confirms on the Devices page (name, OS, route,
    a short fingerprint shown on both sides). A leaked link then cannot
@@ -463,10 +471,10 @@ Each phase is independently shippable and keeps all current contracts.
 
 | Phase | Change | Owners | Done when |
 |---|---|---|---|
-| **0. Fix the substrate** | (a) Relay the desktop bridge from the execution host to the API host's owner, the way `lib/browser/bridge_relay.py` does for the browser (one owner, loopback relay, per-incarnation token). (b) Node identity collision detection + host-scoped node config. | `lib/desktop/bridge.py`, new relay beside it; `lib/desktop_agent/config.py`, `_run.py` | a split-role test lists a node from the execution host and round-trips a command; two processes with one ID are flagged |
+| **0. Fix the substrate — done 2026-11-17** | (a) Relay the desktop bridge from the execution host to the API host's owner over the transport shared with the browser relay (`lib/runtime/loopback_relay.py`; one owner, loopback relay, per-incarnation token). (b) Host-scoped node ID (one ID per host in the shared config; the legacy ID stays with the first host). Boot-nonce collision detection moved to phase 3. | `lib/desktop/bridge.py`, `lib/desktop/bridge_relay.py`; `lib/desktop_agent/host_identity.py`, `config.py`, `_run.py` | Met: `tests/desktop/test_desktop_bridge_relay.py` lists a node from a separate owner process and round-trips a command through the desktop tool handler; `tests/desktop/test_desktop_node_identity.py` gives two hosts sharing one `desktop_agent.json` distinct stable IDs and keeps a paired node's ID |
 | **1. One device projection** | `GET /api/v1/devices`: self node, desktop/headless nodes, browser extensions, signed-in clients, each with kind, status, route, version, effective tiers. Read-only projection over existing registries. | `routes/api_v1/`, `contracts/` (new `devices_v1` schema) | contract test; owner isolation; no stored liveness |
 | **2. Devices page + wizard** | Top-level page, sidebar pill, add-device wizard over the existing pair-code API, device drawer, `page:devices` jump target; Settings → Devices links to it. Computer control returns to the frontend here. | `frontend/src/features/devices/`, `ui-nav.ts` | browser test of pairing a headless node end to end; i18n |
-| **3. Capability ceiling + confirm on join** | Durable owner-scoped Home ceiling per node; enqueue checks ceiling ∩ declared; `--allow` for headless join; pending state + confirmation. | `lib/desktop/pairing.py`, `bridge._tier_enqueue_error`, storage domain, `node_protocol.py` | both ends refuse; ceiling never raises a device tier |
+| **3. Capability ceiling + confirm on join** | Durable owner-scoped Home ceiling per node; enqueue checks ceiling ∩ declared; `--allow` for headless join; pending state + confirmation; boot-nonce identity-conflict flag (section 7). | `lib/desktop/pairing.py`, `bridge._tier_enqueue_error`, storage domain, `node_protocol.py` | both ends refuse; ceiling never raises a device tier |
 | **4. Routing by tag / default; route health shown** | `tag:` selector and owner default; per-node route kind and latest round trip in the projection; `via` internal address advertised for container joins. | `resolve_device_target`, desktop tool schemas, pairing link builder | selection tests for ambiguity/any/default |
 | **5. Multi-Home switcher** | Web UI lists the owner's Homes (like Android kernels) and switches origin; no sync. "Move this Home" links to `migrate_host`. | frontend shell; `docs/ANDROID_KERNELS.md` vocabulary | — |
 | Deferred | Device-held keys; Home-to-Home relay (federation); phones as executors of another Home. | — | only on owner request |
@@ -522,10 +530,11 @@ Each has a recommended default that phases 0–2 assume.
 
 - Code facts were read at `66147d70ab`; file and symbol names are cited
   inline.
-- Not verified at runtime: the unrelayed desktop registry's effect in the
-  owner's split deployment; whether the owner's CodeLab containers share a home
+- Not verified at runtime: whether the owner's CodeLab containers share a home
   directory; whether CodeLab containers can reach each other's internal
-  Tofu port. Phase 0 and phase 4 each start by checking these.
+  Tofu port (phase 4 starts by checking it). Phase 0 is verified by its tests
+  against a real separate owner process; it is live only after the API and
+  execution hosts restart.
 - External facts were read from the vendors' own pages listed below; GitHub's
   long-poll mechanism and Kubernetes' exact grace-period default were not
   confirmed and are not relied on.

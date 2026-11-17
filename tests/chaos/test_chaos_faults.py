@@ -570,3 +570,77 @@ def test_mcp_server_connecting_after_a_restart_serves_resumed_and_new_turns(chao
     calls = _mcp_calls(chaos)
     assert calls.count('record resumed') == 1, _mcp_results(chaos, resumed[1])
     assert calls.count('record new') == 1, _mcp_results(chaos, new[1])
+
+
+def _bind_coordinator(chaos) -> str:
+    """Make the workspace a Git project and bind a Project Coordinator to it."""
+    import subprocess
+    from tests.chaos.fake_provider import MODEL_ID
+    workspace = str(chaos.workspace)
+    if not (chaos.workspace / '.git').exists():
+        for argv in (['init', '-q'], ['-c', 'user.name=chaos', '-c', 'user.email=chaos@example.invalid',
+                                      'commit', '-q', '--allow-empty', '-m', 'chaos project']):
+            subprocess.run(['git', '-C', workspace, *argv], check=True, capture_output=True)
+    folder = chaos.client.request('POST', '/api/v4/folders', {
+        'name': 'Chaos project', 'projectPaths': [workspace]})
+    folder = folder.get('data', folder)
+    key = {'Idempotency-Key': f'chaos-{uuid.uuid4().hex}'}
+    binding = chaos.client.request('POST', '/api/v4/project/coordination/create', {
+        'path': workspace, 'folderId': folder['id'], 'expectedRevision': 0}, headers=key)
+    binding = binding.get('data', binding)
+    chaos.client.request('POST', '/api/v4/router/worker-model', {
+        'path': workspace, 'workerModel': MODEL_ID},
+        headers={'Idempotency-Key': f'chaos-{uuid.uuid4().hex}'})
+    return binding['conversationId']
+
+
+def test_worker_delegated_by_a_coordinator_that_started_before_mcp_connected_reaches_it(chaos_mcp):
+    """Found 2026-11-17: a Worker's grant was the tool names its Coordinator's
+    Turn held when it delegated. A Coordinator that started after a restart,
+    before MCP auto-connect finished, granted no MCP tool, so its Workers
+    never reached a server the owner had enabled, connected or not. The grant
+    now names the enabled servers, and the Worker reaches them once they connect."""
+    chaos = chaos_mcp
+    _wait_mcp_reachable(chaos)
+    state = _mcp_state(chaos)
+    coordinator = _bind_coordinator(chaos)
+    worker_release = threading.Event()
+    worker_nonce = chaos.provider.script([
+        fp.hold('Waiting for MCP. ', worker_release, fp.tool('run_command', {'command': 'echo waited'})),
+        fp.tool('execute_tools', {'calls': [{'name': 'mcp__chaos__chaos_record',
+                                             'arguments': {'note': 'worker'}}]}),
+        fp.text('Recorded worker. [END_TURN: done]')])
+    coordinator_nonce = chaos.provider.script([
+        fp.tool('delegate_project_work', {
+            'title': 'Record through the chaos MCP server',
+            'brief': f'Use the chaos MCP server. [chaos turn={worker_nonce}]',
+            'idempotency_key': 'chaos-mcp-worker'}),
+        fp.text('Delegated. [END_TURN: done]')])
+
+    def wait_requests(nonce, count, what):
+        deadline = time.monotonic() + SETTLE_DEADLINE_S
+        while len(chaos.provider.requests(nonce)) < count:
+            assert time.monotonic() < deadline, what
+            time.sleep(0.05)
+
+    (state / 'hold-initialize').touch()
+    try:
+        chaos.instance.recover_execution_host()
+        coordinator_text = f'Delegate the MCP work. [chaos turn={coordinator_nonce}]'
+        chaos.client.create_turn(coordinator, coordinator_text, workspace=str(chaos.workspace),
+                                 first=False)
+        # Both the Coordinator's Turn and its Worker's first round are
+        # assembled while the server's initialize is still held.
+        chaos.assert_contract(coordinator, coordinator_text, outcomes={'completed'})
+        wait_requests(worker_nonce, 1, 'the delegated Worker never reached the provider')
+        (state / 'hold-initialize').unlink()
+        _wait_mcp_reachable(chaos)
+    finally:
+        (state / 'hold-initialize').unlink(missing_ok=True)
+        worker_release.set()
+    wait_requests(worker_nonce, 3, 'the Worker never finished its MCP call round')
+    deadline = time.monotonic() + SETTLE_DEADLINE_S
+    while 'record worker' not in _mcp_calls(chaos):
+        assert time.monotonic() < deadline, _mcp_results(chaos, worker_nonce)
+        time.sleep(0.1)
+    assert _mcp_calls(chaos).count('record worker') == 1, _mcp_results(chaos, worker_nonce)

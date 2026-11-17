@@ -24,7 +24,7 @@ from lib.project_dispatch.repository import (
     one_decision)
 from lib.project_dispatch.delegation import (
     admit_in_memory, issued_worker_policy, origin_attempt, policy_for_task, source_for_task,
-    validate_delegation_policy)
+    validate_delegation_policy, worker_profile)
 from lib.project_dispatch.service import ProjectDispatchService
 from lib.log import get_logger
 
@@ -365,7 +365,7 @@ def _delegation_request(task, scope, arguments, repository):
         'recipientId': original['request']['recipientId'] if original else 'pending-worker',
         'authorizationSource': source, 'brief': arguments['brief'], 'model': issued.model,
         'budget': {},
-        'profile': {'mode': 'project', 'tools': list(issued.tools), 'readPaths': ['.'], 'writePaths': ['.']},
+        'profile': worker_profile(issued),
         'delegation': origin}
     if arguments.get('dependencies'):
         request['dependencies'] = deepcopy(arguments['dependencies'])

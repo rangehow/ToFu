@@ -4,6 +4,7 @@ Definitions live in bootstrap_pkg.process_roles so launcher validation never
 loads application configuration merely to validate a lifecycle owner.
 """
 from bootstrap_pkg.process_roles import (
+    CAPABILITY_ATTEMPT_EXECUTION,
     CAPABILITY_EVENT_MAINTENANCE,
     CAPABILITY_FRONTEND,
     CAPABILITY_NETWORK_CONFIGURATION,
@@ -20,6 +21,7 @@ from bootstrap_pkg.process_roles import (
 )
 
 __all__ = [
+    'CAPABILITY_ATTEMPT_EXECUTION',
     'CAPABILITY_EVENT_MAINTENANCE',
     'CAPABILITY_FRONTEND',
     'CAPABILITY_NETWORK_CONFIGURATION',

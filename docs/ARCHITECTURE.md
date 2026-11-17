@@ -306,7 +306,11 @@ The delivery dependencies and completion evidence are:
    composition now prepares and supervises the execution host, preserving it
    across API-only restarts. Host recovery shares the manager failure budget;
    default admission now uses the common worker. Item 5 records the first
-   whole-system qualification.
+   whole-system qualification. The execution host is itself the manager of
+   on-demand `execution_shard` processes (`serverctl_pkg/execution_shards.py`):
+   same generation (its frozen pins, exported once), process-bound claims of
+   the same durable jobs, one job per shard, command controls fanned out from
+   the host, idle retirement after `TOFU_EXECUTOR_IDLE_SECONDS`.
 4. **Execution facts and read projections.** Keep committed execution facts and
    their accounting authoritative while projection/delivery can drain and
    reconstruct independently. Browser observation, reconnect and transcript

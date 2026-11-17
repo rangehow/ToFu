@@ -87,6 +87,7 @@ def start_background_services(
     healthy ~4s phase 7 into 147-190s (2026-09-22 boot profile).
     """
     from lib.process_roles import (
+        CAPABILITY_ATTEMPT_EXECUTION,
         CAPABILITY_NETWORK_CONFIGURATION,
         CAPABILITY_REQUEST_SERVICES,
         CAPABILITY_TASK_WORKERS,
@@ -118,6 +119,8 @@ def start_background_services(
         process_role, CAPABILITY_REQUEST_SERVICES)
     owns_task_workers = process_role_has(
         process_role, CAPABILITY_TASK_WORKERS)
+    owns_attempt_execution = process_role_has(
+        process_role, CAPABILITY_ATTEMPT_EXECUTION)
 
     try:
         _timed(
@@ -143,7 +146,7 @@ def start_background_services(
         from lib.conversation_sync.delivery_runtime import ensure_started
         _timed(log, 'conversation-delivery', lambda: ensure_started(app))
 
-    if owns_task_workers:
+    if owns_attempt_execution:
         try:
             from lib.durable_worker.runtime import ensure_workers_started
 
@@ -152,6 +155,7 @@ def start_background_services(
         except Exception as exc:
             log.warning('[Server] durable worker start failed: %s', exc)
 
+    if owns_task_workers:
         try:
             from lib.integration_control import ensure_worker_started
 
@@ -325,14 +329,20 @@ def start_registered_background_services(app, *, process_role='all'):
     extensions['tofu_registered_background_services_role'] = process_role
     started = 0
 
-    # The split API/execution hosts share one browser bridge: the API owns
-    # extension polls, the execution host relays its queue verbs there.
+    # The split API/execution hosts share one browser bridge and one desktop
+    # bridge: the API owns device polls, the execution host relays its verbs there.
     try:
         from lib.browser.bridge_relay import configure_bridge_owner
         if configure_bridge_owner(process_role=process_role, environ=os.environ) == 'owner':
             started += 1
     except Exception as e:
         _log.warning('Browser bridge relay unavailable for role %s: %s', process_role, e)
+    try:
+        from lib.desktop.bridge_relay import configure_bridge_owner as configure_desktop_owner
+        if configure_desktop_owner(process_role=process_role, environ=os.environ) == 'owner':
+            started += 1
+    except Exception as e:
+        _log.warning('Desktop bridge relay unavailable for role %s: %s', process_role, e)
 
     # ── Start the sole durable scheduler (including daily-report backfill) ──
     if process_role_has(process_role, CAPABILITY_SCHEDULED_JOBS):
@@ -714,6 +724,17 @@ def stop_registered_background_services(app, *, timeout: float = 2.0) -> int:
         late.append(LateBackgroundOwner('browser bridge relay', writes_storage=False,
                                         reason=f'{type(exc).__name__}: {exc}'[:200]))
         log.warning('browser bridge relay shutdown failed: %s', exc)
+
+    try:
+        from lib.desktop.bridge_relay import stop_bridge_owner as stop_desktop_owner
+        if not stop_desktop_owner(timeout=timeout):
+            late.append(LateBackgroundOwner('desktop bridge relay', writes_storage=False,
+                                            reason='still running'))
+            log.warning('desktop bridge relay did not stop within %.1fs', timeout)
+    except Exception as exc:
+        late.append(LateBackgroundOwner('desktop bridge relay', writes_storage=False,
+                                        reason=f'{type(exc).__name__}: {exc}'[:200]))
+        log.warning('desktop bridge relay shutdown failed: %s', exc)
 
     import importlib
     for label, module_name, stop_name, capability, writes_storage, _begin in _process_background_owners():

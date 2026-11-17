@@ -162,6 +162,14 @@ class ResidentService:
     def working_directory(self, plan: dict) -> Path:
         return self.project
 
+    def launch_command(self, plan: dict) -> list[str]:
+        """Interpreter arguments that run ``host_module``; it stays a visible argv entry."""
+        return ['-m', self.host_module]
+
+    def launch_extras(self) -> tuple[list[str], tuple[int, ...]]:
+        """Extra host arguments and child-only descriptors; launch closes those descriptors."""
+        return [], ()
+
     def record(self) -> dict:
         record = read_record(self.state_path, record_format=self.record_format)
         if (record.get('projectPath') != str(self.project)
@@ -239,15 +247,21 @@ class ResidentService:
             # Reuse the manager's rotated console family; no unbounded new log.
             log = self.project / 'logs/server-console.log'
             log.parent.mkdir(parents=True, exist_ok=True)
-            with log.open('ab') as output:
-                process = subprocess.Popen([
-                    self.launch_python(plan), '-m', self.host_module, '--service-id', service_id,
-                    '--manager-pid', str(os.getpid()), '--manager-start', str(manager_ticks),
-                    '--manager-fd', str(manager_read),
-                    '--lease-fd', str(descriptor), '--state-file', str(self.state_path),
-                ], cwd=self.working_directory(plan), env=env, stdin=subprocess.DEVNULL,
-                    stdout=output, stderr=subprocess.STDOUT,
-                    start_new_session=True, close_fds=True, pass_fds=(descriptor, manager_read))
+            extra_args, extra_fds = self.launch_extras()
+            try:
+                with log.open('ab') as output:
+                    process = subprocess.Popen([
+                        self.launch_python(plan), *self.launch_command(plan), '--service-id', service_id,
+                        '--manager-pid', str(os.getpid()), '--manager-start', str(manager_ticks),
+                        '--manager-fd', str(manager_read),
+                        '--lease-fd', str(descriptor), '--state-file', str(self.state_path),
+                        *extra_args,
+                    ], cwd=self.working_directory(plan), env=env, stdin=subprocess.DEVNULL,
+                        stdout=output, stderr=subprocess.STDOUT, start_new_session=True,
+                        close_fds=True, pass_fds=(descriptor, manager_read, *extra_fds))
+            finally:
+                for extra in extra_fds:
+                    os.close(extra)
             self._process = process
             record = {
                 'format': self.record_format, 'host': socket.gethostname(),

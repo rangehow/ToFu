@@ -648,9 +648,10 @@ to any Router or Worker of the owner (nonhuman context at the recipient's next
 step), or one peer notice to the Global Router, which decides whether, when and
 where the owner hears about it. The Watchdog never executes, delegates, cancels,
 holds a grant or speaks as the owner; correction, re-delegation and
-cancellation stay with each Worker's Coordinator and the human. The owner turns
-health checks on, and opens the Watchdog to ask it questions like any
-conversation, from the main coordinator's header (R8).
+cancellation stay with each Worker's Coordinator and the human. Health checks
+are on by default (below); the owner opens the Watchdog to ask it questions
+like any conversation from the main coordinator's header (R8), and changes or
+stops its periodic review by asking it.
 
 **Alternatives rejected:** monitoring inside the Global Router (routine health
 floods its indefinite context and a failing router cannot watch itself); a
@@ -659,9 +660,36 @@ state machine, constraint 4); fixed-interval model polling regardless of state
 (paid turns while idle, so idle reviews end without a model turn); letting the
 Watchdog cancel or re-delegate Workers (it would need grants, and synthetic
 input never gains human authority); a Watchdog-private timer or backoff (a new
-interval knob; the owner-visible scheduler is the one timer); creating the
-review enabled when the Watchdog is first opened (a standing paid schedule the
-owner did not choose, through a route that lacks the scheduler scope).
+interval knob; the owner-visible scheduler is the one timer).
+
+**On by default (owner decision 2026-11-17).** Problem: health checks stayed
+off until the owner found their setting, turned them on and then enabled the
+periodic review with a cron expression, so faults went unwatched in the
+meantime. The owner asked for them on by default, with nothing to configure
+and the permission they need granted, and for fewer switches in the main
+coordinator's header ("Don't make me configure it; just enable it and grant
+this permission"). Decision: health checks come with the main coordinator.
+`ensure_health_checks` (`lib/router/watchdog/review.py`) provisions the
+Watchdog and, for an owner whose periodic review was never installed, installs
+it enabled at the contract cadence under the Watchdog's least-privilege
+scheduling identity (`watchdog_principal`, scope `agents:scheduler`): that is
+the permission the owner granted, so neither the owner nor the calling route
+needs the scheduler scope. It runs when the main coordinator is ensured
+(`POST /api/v4/router`; a failure there is logged and never keeps the owner
+out of the main coordinator, and the next ensure retries), on
+`POST /api/v4/router/watchdog`, and at scheduler boot for the process owner
+whose main coordinator exists, so an existing owner needs no click either. An
+installed review row is the owner's choice: one turned off or given another
+cadence (by asking the Watchdog, through the API or in the scheduler list)
+keeps that choice through every later ensure, which writes nothing once the
+row exists (and installs with `reconcile_enabled=False`). The header shows
+health checks as a fold with their state, one sentence on what they do and a
+way into the Watchdog chat; it has no switch or cron field. Alternatives
+rejected: keeping the opt-in setting (the owner's request turned into a chore,
+with faults unwatched until he found it); re-enabling the review on every
+ensure (it would override an owner who turned it off); keeping a header
+switch to turn it off (the owner asked for fewer switches, and the Watchdog
+chat and the scheduler list already change it).
 
 **Current state.** Signal sources and identities (`lib/router/watchdog/signals.py`):
 
@@ -706,11 +734,12 @@ activity, the settled Turn's error); outbox items in `failed`/`unknown`;
 channel account and bridge state; and a page of open signals. Pages follow
 the project dispatch history page. The periodic review is the owner's keyed
 task `system-<owner>-router-watchdog-review` (`scheduler.task.ensure`, so
-retries converge): off until the owner enables it in the health-check settings,
-`POST /api/v4/router/watchdog/review` (scope `agents:scheduler`) or by asking the
-Watchdog (`watchdog_configure_review`, admitted only while the current request
-is the owner's own genuine message, resolved like delegation authority); the
-contract default cadence is `7,37 * * * *`. A review whose snapshot holds no
+retries converge), installed on by default (above). The owner changes it by
+asking the Watchdog (`watchdog_configure_review`, admitted only while the
+current request is the owner's own genuine message, resolved like delegation
+authority), through `POST /api/v4/router/watchdog/review` (scope
+`agents:scheduler`) or on its row in the scheduler list; the contract default
+cadence is `7,37 * * * *`. A review whose snapshot holds no
 active, failed or held Worker, open signal, outbox item, unhealthy channel or
 unreadable router ends without a model turn.
 
@@ -776,9 +805,10 @@ cards had removed the ordinary row's diagnostic action; reintroducing a second
 conversation row was rejected. Copy reads the current binding without opening
 or creating a conversation, and a clipboard failure exposes the exact ID for
 manual copying. The Watchdog has no entry of its own: health checks
-(故障巡检) are a compact setting in the main coordinator's header next to the
-Worker model and standing instructions, where the owner turns them on, sets
-the periodic review and opens the Watchdog chat (which offers a way back). The
+(故障巡检) are on by default (R7) and appear as a compact fold in the main
+coordinator's header next to the Worker model, standing instructions and "Act
+for me": their state, one sentence on what they do and the way into the
+Watchdog chat (which offers a way back), with nothing to switch or schedule. The
 server's fixed role titles are language-neutral sentinels the browser shows
 through the same localized names, and a router-managed chat (router home,
 Watchdog location, router Workers) shows no project location, since its
@@ -797,8 +827,7 @@ coordinators); showing the main coordinator card above the project card in
 project folders (two stacked cards for one concept); a sidebar icon for the
 main coordinator (hides the owner's primary entry); renaming the server titles
 (language-specific durable data, and existing conversations keep the old
-titles anyway); provisioning the Watchdog with the router so it needs no
-setting (event-driven model turns the owner did not choose).
+titles anyway).
 
 ### R9. The owner's delegation: the Global Router acts for the owner (owner decision 2026-11-06)
 
@@ -1425,12 +1454,21 @@ merge with the owner's own request).
 proactively, and his standing authority covers work that needs no new
 approval, so the review is on unless he pauses it: a review never installed
 reads as on, the scheduler installs it on, and the first proposal installs it
-where the scheduler has no implicit owner. The main coordinator's header has
-the visible pause/resume switch; a pause persists across reinstallation and
-stops new starts, not admitted work. Quiet hours start nothing.
+where the scheduler has no implicit owner. The owner pauses or resumes it on
+its row in the scheduler list (Portfolio review) or through
+`POST /api/v4/router/portfolio/review`; a pause persists across reinstallation
+and stops new starts, not admitted work. Quiet hours start nothing.
 Alternative rejected: off until the owner opts in (the owner already asked for
 the behavior; an opt-in default turns his request into an extra chore and the
 mechanism into a dormant one).
+
+**No header switch (owner decision 2026-11-17).** Problem: the main
+coordinator's header carried a "Portfolio: on" pause switch the owner could
+not place ("I don't know what this project portfolio is, but in any case, we
+need fewer switches"). Decision: the header has no portfolio control; the
+review stays on by default and is paused where every other scheduled task is.
+Alternative rejected: renaming the switch (still one more switch for a
+mechanism that is on by default and needs no routine attention).
 
 **Reporting.** The existing daily digest (no new push) reports, only when it
 has something to say: approvals only the owner can give; each start since the
@@ -1444,9 +1482,9 @@ deferred with its measured reason.
 
 **Current state.** `lib/router/portfolio/` owns registry, ranking, capacity,
 review, router tool and read-only views; `router_portfolio` is
-Global-Router-only. `routes/api_v1/router.py` and the typed frontend disclosure
-expose only the review switch, actual counts and ledger, never another
-registry writer. Specs: `tests/router/test_portfolio.py`,
+Global-Router-only. `routes/api_v1/router.py` exposes only the review
+pause/resume, actual counts and ledger, never another registry writer; the
+browser has no portfolio control. Specs: `tests/router/test_portfolio.py`,
 `test_portfolio_review.py` (more than three eligible candidates all start in
 value order; duplicate, conflict and dependency cases; a rate-limited provider
 defers until its own reset; an executor start failure leaves the candidate
@@ -1455,8 +1493,7 @@ digest's reason, cost and expected outcome), `test_portfolio_authority.py`
 (registry, admission, ledger and deferrals survive a stop and reopen of
 isolated SQLite and native authorities; the default-on switch and lasting
 pause), `tests/llm_dispatch/test_subscription_quota_phase.py`
-(`route_admission`), `tests/api/test_api_v4_router.py` and
-`frontend/src/features/router-portfolio.test.ts`. Production activation needs
+(`route_admission`) and `tests/api/test_api_v4_router.py`. Production activation needs
 the API and execution (scheduler) processes restarted by the owner.
 
 **Current state (2026-11-08).** Implemented: commitments on the board
@@ -2163,10 +2200,14 @@ target execution authority. See
   "Act for me" (代我操作, R9) to that header: the grant switch, its state, an
   advisory note for an open-mode grant and the last audited use (read when
   created and when opened, no polling). `router-watchdog.ts` contributes the
-  health-check disclosure to that header (off: turn on, which ensures the
-  Watchdog; on: the periodic review switch, cron cadence and a button that
-  opens the Watchdog conversation) and, on the Watchdog conversation, a
-  one-line header with a way back; its `location()` lets presence omit the
+  health-check fold to that header (its state: on, on failures only once the
+  owner stopped the periodic review, or off while no Watchdog is known; one
+  sentence on what it does; a button that opens the Watchdog conversation,
+  ensuring health checks first when no Watchdog is known) and, on the Watchdog
+  conversation, a one-line header with a way back. It reads when created and
+  again after each main coordinator ensure (`ensured()` of
+  `global-router.ts`), since that ensure turns health checks on; its
+  `location()` lets presence omit the
   Worker model control and the task board there, since the Watchdog never
   delegates and authors no board. Both owners are created before the locale
   catalog loads, so labels carry `data-i18n`/`data-i18n-title` keys that
@@ -2189,8 +2230,8 @@ target execution authority. See
   localized names. The presence section bridges these owners to the API
   (`Api.project.routerWorkerModel`, `setRouterWorkerModel`,
   `routerInstructions`, `pause|resume|cancelRouterInstruction`,
-  `routerWatchdog`, `ensureRouterWatchdog`, `configureRouterWatchdogReview`)
-  and to the composer model picker's catalog.
+  `routerWatchdog`, `ensureRouterWatchdog`) and to the composer model picker's
+  catalog.
 
 ## Verification
 
@@ -2217,16 +2258,18 @@ stay paired by `tests/router/test_role_title_sentinels.py` and are rendered
 as specified in `tests/i18n/test_shell_localization.py`. The real-browser
 journey `tests/frontend/test_main_coordinator_browser.py` covers R8 end to
 end: the single leader slot in both scopes and in a folder that names no
-directory, the header, health checks on,
-the Watchdog chat and back, no project location and no rows or counts for
-router chats, in English and Chinese. The Watchdog suites are
+directory, the header with health checks on by default and no switch beside
+them, the shared chevron on its folds, the Watchdog chat and back, no project
+location and no rows or counts for router chats, in English and Chinese. The Watchdog suites are
 `tests/router/test_watchdog_policy.py` (ceiling, role, registry, worker denial,
 fault kinds, the terminal hook, review paging) and
 `tests/router/test_watchdog_authority.py` (SQLite and native: provisioning, one
 signal and one wake per fault and episode, the failing-Watchdog rule,
 owner-scoped snapshots, resolution, messages and notices, the keyed review,
-idle-skipping reviews and re-checks, owner-only review changes, and a real idle
-start without a request account), plus
+the default-on install that keeps the owner's later choice, idle-skipping
+reviews and re-checks, owner-only review changes, and a real idle start
+without a request account), `tests/api/test_api_v4_router.py` (the main
+coordinator's ensure turns health checks on and never fails on them), plus
 `frontend/src/features/router-watchdog.test.ts` and the Watchdog bridge in
 `project-coordination-entry.test.ts`. The
 end-to-end acceptance: a human message in the Global Router forwards to a

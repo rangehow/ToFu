@@ -159,7 +159,6 @@ import { createProjectCoordinationSurface } from '../features/project-coordinati
 import { createGlobalRouterEntry } from '../features/global-router';
 import { createRouterWatchdogEntry } from '../features/router-watchdog';
 import { createRouterOwnerDelegation } from '../features/router-owner-delegation';
-import { createRouterPortfolio } from '../features/router-portfolio';
 import { createSameTaskReadJoin } from '../features/project-coordination-read-join';
 import { createCoordinatorConversationGroups } from '../features/coordinator-conversation-group';
 

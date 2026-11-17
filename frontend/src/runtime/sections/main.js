@@ -41,18 +41,22 @@ const _DEPTH_ICON_FALLBACK = '';
  * Uses server-provided thinking_default from _registeredModels;
  * falls back to regex before server config loads. */
 let _reasoningControls; // undefined only for rolling-upgrade backends without controls
-function _composerReasoningOptions() {
-  const ref = config.modelRef;
+/* Controls for one route selection ({model, modelRef, preferredProviderId}). */
+function _reasoningOptionsFor(selection) {
+  const ref = selection.modelRef;
   return projectReasoningControl(_reasoningControls,
-    ref?.model_id && ref.model_id !== config.model ? null : ref,
-    config.preferredProviderId || '',
+    ref?.model_id && ref.model_id !== selection.model ? null : ref,
+    selection.preferredProviderId || '',
     /* The composer can display a model with no confirmed v2 ref yet: a
      * provisional server default painted before modelRef is resolved, or a
      * fresh conversation that never stored one. A null ref would project
      * 'unconfigured' even though the displayed model IS the intent, so fall
      * back to the exact model_id (unique across the v2 picker) when no ref
      * matched. */
-    config.model);
+    selection.model);
+}
+function _composerReasoningOptions() {
+  return _reasoningOptionsFor(config);
 }
 function _isThinkingCapable(modelId) {
 
@@ -63,6 +67,17 @@ function _isThinkingCapable(modelId) {
   }
   // Fallback regex before server config loads
   return /claude|opus|sonnet|gemini|qwen|doubao|minimax|deepseek/i.test(modelId);
+}
+/* The saved depth the slider renders. An unset depth follows the route's
+ * declared default once controls are known; rendering never rewrites it. */
+function _composerDepthIntent(depth) {
+  return depth || (_reasoningControls === undefined ? config.defaultThinkingDepth : 'default');
+}
+/* The depth a turn submits for a saved depth on a route: the rung the slider
+ * paints for it (thinking-depth-slider.ts effectiveThinkingDepth). */
+function _routeThinkingDepth(depth, selection = config) {
+  return effectiveThinkingDepth(_composerDepthIntent(depth),
+    _reasoningOptionsFor(selection) ?? _isThinkingCapable(selection.model));
 }
 /* Registered model list — replaced by the authenticated v2 projection at boot. */
 let _registeredModels = [];   // [{ model_id, brand, thinking_default, capabilities }]
@@ -125,7 +140,7 @@ function _applyModelUI(modelId) {
   /* Ensure thinkingDepth is always set for thinking models, null for non-thinking.
    * This prevents the || "medium" fallback from leaking depth to non-thinking models. */
   // Rendering never rewrites saved depth, including before authority arrives.
-  const depth = config.thinkingDepth || (_reasoningControls === undefined ? config.defaultThinkingDepth : 'default');
+  const depth = _composerDepthIntent(config.thinkingDepth);
   /* Metadata controls available choices; it never rewrites saved intent.
    * During loading/unknown capability, max must not become an explicit off.
    * The compatibility toggle is server-derived from thinkingDepth. */

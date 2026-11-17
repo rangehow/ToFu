@@ -207,6 +207,42 @@ class ThinkingDepthBrowser(unittest.TestCase):
                         page.evaluate('depthOwner.destroy()')
                         page.context.close()
 
+    def test_declared_default_rung_is_marked_without_a_control(self):
+        options = {'levels': ['default', 'low', 'medium', 'high', 'xhigh', 'max'], 'defaultDepth': 'medium'}
+        for width in [1100, 320]:
+            for theme in ['tofu', 'dark']:
+                for lang in ['en', 'zh', 'ru']:
+                    with self.subTest(width=width, theme=theme, lang=lang):
+                        page, selector = self.open_surface(width, theme, lang)
+                        page.evaluate('options=>depthOwner.sync("default",options)', options)
+                        result = page.locator(selector).evaluate('''el=>{
+                          const card=el.closest('[data-thinking-depth-slider]'),c=card.getBoundingClientRect();
+                          const value=card.querySelector('[data-depth-value]'),v=value.getBoundingClientRect();
+                          const rings=[...card.querySelectorAll('.depth-slider-dots span')].filter(d=>d.hasAttribute('data-default'));
+                          const ring=getComputedStyle(rings[0]),dot=getComputedStyle(card.querySelector('.depth-slider-dots span:not([data-default])'));
+                          const r=rings[0].getBoundingClientRect(),b=el.getBoundingClientRect();
+                          const th=parseFloat(getComputedStyle(el).getPropertyValue('--depth-thumb-size'));
+                          return {buttons:card.querySelectorAll('button').length,rings:rings.length,
+                            ringWidth:parseFloat(ring.width),dotWidth:parseFloat(dot.width),ringShadow:ring.boxShadow,
+                            ringCenter:r.x+r.width/2,expectedCenter:b.x+th/2+(b.width-th)/4,
+                            valueText:value.textContent,value:+el.value,
+                            unclipped:v.left>=c.left&&v.right<=c.right&&v.right<=innerWidth,
+                            oneLine:v.height<=parseFloat(getComputedStyle(value).lineHeight)*1.5};
+                        }''')
+                        locale = json.loads((ROOT / f'frontend/src/i18n/locales/{lang}.json').read_text())
+                        self.assertEqual(result['buttons'], 0, result)
+                        self.assertEqual(result['rings'], 2, result)
+                        self.assertGreater(result['ringWidth'], result['dotWidth'], result)
+                        self.assertIn('inset', result['ringShadow'], result)
+                        self.assertAlmostEqual(result['ringCenter'], result['expectedCenter'], delta=1, msg=str(result))
+                        self.assertEqual(result['value'], 1)
+                        self.assertEqual(result['valueText'], f"Med · {locale['mobile.default']}")
+                        self.assertTrue(result['unclipped'], result)
+                        self.assertTrue(result['oneLine'], result)
+                        page.locator(selector).locator('xpath=../..').screenshot(path=str(self.artifacts/f'{width}-{theme}-{lang}-default-rung.png'))
+                        page.evaluate('depthOwner.destroy()')
+                        page.context.close()
+
 
 if __name__ == '__main__':
     raise SystemExit(pytest.main([__file__, '-q']))

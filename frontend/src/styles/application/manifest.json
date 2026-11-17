@@ -502,8 +502,7 @@
     },
     {
       "path": "14-thinking-controls.css",
-      "responsibility": "Reasoning effort controls and dropdown footer",
-      "legacyTokenSha256": "fb01038811c8d263410fb048bc3732072417f638a9bd7cfdb7b170d759df8b28"
+      "responsibility": "Reasoning effort controls and dropdown footer"
     },
     {
       "path": "15-queue-mobile-my-day.css"

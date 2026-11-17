@@ -543,7 +543,7 @@ if (typeof window !== "undefined") runtimeScope._mobileCompactNow = _mobileCompa
  * Shows/hides the section based on whether the model supports thinking depth.
  */
 function updateMobileDepth() {
-  _updateDepthButtons(config.thinkingDepth || config.defaultThinkingDepth);
+  _updateDepthButtons(_composerDepthIntent(config.thinkingDepth));
 }
 
 /* ── Reflow toolbar on window resize / orientation change ── */

@@ -784,9 +784,24 @@ function _buildConvSnapshot(conv, isActive) {
 
 function _buildConvConfigInputs(conv) {
   const isActive = (conv.id === activeConvId);
+  const convSettings = _buildConvSnapshot(conv, isActive);
+  const overrides = _buildToolbarOverrides();
+  /* Runtime config carries the rung the slider paints, never the
+   * follow-the-model token while a rung is shown: the active conversation's
+   * from the composer, any other conversation's from its own saved route.
+   * Settings persistence (_buildConvSettingsInputs) keeps the saved depth. */
+  if (isActive) {
+    overrides.thinkingDepth = _routeThinkingDepth(config.thinkingDepth);
+  } else {
+    convSettings.thinkingDepth = _routeThinkingDepth(conv.thinkingDepth, {
+      model: conv.model || serverModel,
+      modelRef: conv.modelRef,
+      preferredProviderId: conv.preferredProviderId,
+    });
+  }
   return {
-    conv_settings: _buildConvSnapshot(conv, isActive),
-    overrides: _buildToolbarOverrides(),
+    conv_settings: convSettings,
+    overrides,
     server_defaults: { serverModel },
     is_active: isActive,
   };
@@ -816,7 +831,8 @@ async function _buildConvSubmission(conv, workspace = captureConversationProject
   const submissionConv = { ...conv, ...workspace };
   const configInputs = _buildConvConfigInputs(submissionConv);
   configInputs.overrides.model = conv.model || configInputs.overrides.model;
-  configInputs.overrides.thinkingDepth = conv.thinkingDepth;
+  // The depth captured at send, as the rung the composer painted for it.
+  configInputs.overrides.thinkingDepth = _routeThinkingDepth(conv.thinkingDepth);
   return _conversationSettingsResolution.resolveSubmission(
     configInputs,
     _buildConvSettingsInputs(submissionConv, configInputs.overrides),

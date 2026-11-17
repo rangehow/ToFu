@@ -1,6 +1,7 @@
 /** Composer depth projection: native keyboard range, continuous pointer preview,
  * discrete commit through selectThinkingDepth. No persistence or provider policy.
- * Entry: createThinkingDepthSlider; dependencies: DOM, localization, commit port. */
+ * Entries: createThinkingDepthSlider, and effectiveThinkingDepth — the one rule
+ * for the rung a turn submits. Dependencies: DOM, localization, commit port. */
 // Rolling-upgrade fallback only. Current backends supply the complete ladder.
 import type { ReasoningControls } from '../api/api-v1-model-routing.generated';
 export const THINKING_DEPTH_LEVELS = ['off', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -66,6 +67,30 @@ function restoredDepth(depth: string, selectable: readonly string[], restoration
   const replacement = restoration?.replacements?.[depth] ?? restoration?.fallback;
   return replacement && selectable.includes(replacement) ? replacement : depth;
 }
+/* Slider positions are native rungs; 'default' remains the only position when
+ * the route declares no native rung at all. */
+function selectableLevels(levels: readonly string[]): readonly string[] {
+  const native = levels.filter(depth => depth !== 'default');
+  return native.length ? native : ['default'];
+}
+/* The rung painted for a saved depth: a saved 'default' sits on the declared
+ * default rung and stays the provider default only when no declared default
+ * is selectable; an unavailable saved depth parks on its replacement. */
+function paintedRung(depth: string, selectable: readonly string[],
+  defaultDepth: string | null | undefined, restoration: DepthOptions['restoration'] | undefined): string {
+  if (depth === 'default') return defaultDepth && selectable.includes(defaultDepth) ? defaultDepth : 'default';
+  return restoredDepth(depth, selectable, restoration);
+}
+/** The depth a turn submits for a saved depth: exactly the rung the slider
+ * paints for it on this route (`capable` is what `sync` receives), so the wire
+ * never carries the follow-the-model token while a concrete rung is shown.
+ * Unknown capabilities and unmapped tokens pass through verbatim. */
+export function effectiveThinkingDepth(depth: string | null | undefined,
+  capable: boolean | DepthOptions): string | null | undefined {
+  if (typeof capable === 'boolean') return capable ? displayThinkingDepth(depth) : depth;
+  return paintedRung(depth || 'default', selectableLevels([...new Set(capable.levels)]),
+    capable.defaultDepth, capable.restoration);
+}
 export function createThinkingDepthSlider(ports: {
   document: Document;
   translate: (key: string) => string;
@@ -78,8 +103,8 @@ export function createThinkingDepthSlider(ports: {
   let defaultDepth: string | null | undefined;
   let notice = '';
   let restoration: DepthOptions['restoration'] | undefined;
-  const committedIndex = () => Math.max(0, levels.indexOf(committed === 'default'
-    ? defaultDepth ?? '' : restoredDepth(committed, selectable, restoration)));
+  const committedIndex = () => Math.max(0, levels.indexOf(
+    paintedRung(committed, selectable, defaultDepth, restoration)));
   let position = 2;
   let enabled = false;
   let drag: {
@@ -99,29 +124,23 @@ export function createThinkingDepthSlider(ports: {
     const restored = restoredDepth(committed, selectable, restoration);
     const parked = !drag && restored !== committed && depth === restored;
     const displayDepth = parked ? committed
-      : committed === 'default' && !drag && !defaultDepth && position === committedIndex() ? 'default' : depth;
+      : !drag && position === committedIndex()
+        && paintedRung(committed, selectable, defaultDepth, restoration) === 'default' ? 'default' : depth;
     /* The parked thumb still marks the saved intent as unavailable, even
      * though its painted rung is selectable — the rung is the mapped
      * replacement, not the stored choice. */
     const available = !parked && selectable.includes(depth);
-    const display = THINKING_DEPTH_LABELS[displayDepth] || displayDepth;
+    // The declared default is a marked rung, not a separate choice.
+    const defaultIndex = defaultDepth && selectable.includes(defaultDepth) ? levels.indexOf(defaultDepth) : -1;
+    const marker = available && depth === defaultDepth && defaultIndex >= 0
+      ? ` · ${ports.translate('mobile.default')}` : '';
+    const display = (THINKING_DEPTH_LABELS[displayDepth] || displayDepth) + marker;
     const label = (THINKING_DEPTH_LABELS[displayDepth] ? ports.translate(`mobile.${displayDepth}`) : displayDepth)
-      + (available ? '' : ` — ${ports.translate('mobile.depthUnavailable')}`);
+      + marker + (available ? '' : ` — ${ports.translate('mobile.depthUnavailable')}`);
     for (const control of controls()) {
       const input = control.querySelector<HTMLInputElement>('input[type="range"]');
       if (!input) continue;
       const valueEl = control.querySelector<HTMLElement>('[data-depth-value]');
-      let reset = control.querySelector<HTMLButtonElement>('[data-depth-default]');
-      if (!reset) {
-        reset = ports.document.createElement('button');
-        reset.type = 'button'; reset.dataset.depthDefault = '';
-        reset.className = 'depth-default-button';
-        control.querySelector('.depth-slider-heading')?.append(reset);
-      }
-      reset.textContent = ports.translate('mobile.default');
-      reset.setAttribute('aria-pressed', String(committed === 'default' && !drag));
-      reset.hidden = !drag && committed !== 'default' && !selectable.includes(committed)
-        && restoredDepth(committed, selectable, restoration) !== committed;
       let note = control.querySelector<HTMLElement>('[data-depth-notice]');
       if (!note) {
         note = ports.document.createElement('p'); note.dataset.depthNotice = '';
@@ -139,6 +158,7 @@ export function createThinkingDepthSlider(ports: {
             return dot;
           }));
         }
+        Array.from(dots.children).forEach((dot, index) => dot.toggleAttribute('data-default', index === defaultIndex));
       }
       const visibleValue = available ? display : `${display} — ${ports.translate('mobile.depthUnavailable')}`;
       if (valueEl && valueEl.textContent !== visibleValue) valueEl.textContent = visibleValue;
@@ -160,13 +180,6 @@ export function createThinkingDepthSlider(ports: {
   function target(event: Event) {
     const input = event.target as HTMLInputElement | null;
     return input?.matches?.('[data-thinking-depth-slider] input[type="range"]') ? input : null;
-  }
-  function resetDefault(event: Event) {
-    const target = event.target as HTMLElement | null;
-    if (!target?.closest?.('[data-thinking-depth-slider] [data-depth-default]')) return;
-    committed = 'default';
-    paint(committedIndex());
-    ports.commit('default');
   }
   function begin(event: PointerEvent) {
     const input = target(event);
@@ -278,7 +291,6 @@ export function createThinkingDepthSlider(ports: {
   ports.document.defaultView?.addEventListener('tofu:language-change', localize);
   ports.document.defaultView?.addEventListener('blur', cancel);
   ports.document.addEventListener('pointerdown', begin);
-  ports.document.addEventListener('click', resetDefault);
 
   ports.document.addEventListener('pointermove', move);
   ports.document.addEventListener('lostpointercapture', pointercancel);
@@ -296,8 +308,7 @@ export function createThinkingDepthSlider(ports: {
       defaultDepth = legacy ? undefined : capable.defaultDepth;
       notice = legacy ? '' : capable.notice ?? '';
       const offered = legacy ? THINKING_DEPTH_LEVELS : [...new Set(capable.levels)];
-      const native = offered.filter(depth => depth !== 'default');
-      const nextSelectable = native.length ? native : ['default'];
+      const nextSelectable = selectableLevels(offered);
       const nextEnabled = legacy ? capable : capable.available !== false && nextSelectable.length > 1;
       // Background toolbar refreshes often re-project identical state. They
       // must not cancel pointer capture or snap an in-progress gesture back.
@@ -313,14 +324,15 @@ export function createThinkingDepthSlider(ports: {
       // select stays committed: the server restoration table maps it onto an
       // executable rung when one exists (parked, flagged); only an unmapped
       // depth is appended as an unavailable, flagged rung. sync() persists
-      // nothing: persistence is gesture-only (finish/resetDefault), so the
+      // nothing: persistence is gesture-only (finish), so the
       // choice survives a later rebinding back to a ladder that can
       // represent it.
       committed = nextCommitted;
       restoration = legacy ? undefined : capable.restoration;
       /* levels drive the native range's indices. The native ladder excludes
-       * the non-positional 'default' intent rung (it is the reset button),
-       * so the parked replacement's index aligns with the physical thumb. */
+       * the non-positional 'default' intent (it paints on the declared
+       * default rung), so a parked replacement's index aligns with the
+       * physical thumb. */
       levels = committed === 'default' || selectable.includes(committed)
         || restoredDepth(committed, selectable, restoration) !== committed
         ? selectable : [...selectable, committed];
@@ -339,7 +351,6 @@ export function createThinkingDepthSlider(ports: {
       paint(committedIndex());
       ports.document.defaultView?.removeEventListener('tofu:language-change', localize);
       ports.document.defaultView?.removeEventListener('blur', cancel);
-      ports.document.removeEventListener('click', resetDefault);
       ports.document.removeEventListener('pointerdown', begin);
 
       ports.document.removeEventListener('pointermove', move);

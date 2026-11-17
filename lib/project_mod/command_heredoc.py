@@ -39,6 +39,28 @@ def shell_input_source(words):
     --norc is not a short -c cluster; option values are not script paths. Unknown
     shell options cannot prove stdin inert. This is intent, never admission.
     """
+    found = _shell_source_operand(words)
+    if found is None:
+        return None
+    kind, index, words = found
+    if kind == 'command':
+        return 'command', words[index] if index < len(words) else None
+    return kind, None
+
+
+def shell_command_operand(words):
+    """Index in *words* of the command string a shell's ``-c`` runs (the words
+    after it are its ``$0`` and positional parameters); None when *words* run
+    no command string or leave it out."""
+    found = _shell_source_operand(words)
+    if found is None or found[0] != 'command':
+        return None
+    _kind, index, unwrapped = found
+    return index + len(words) - len(unwrapped) if index < len(unwrapped) else None
+
+
+def _shell_source_operand(words):
+    """``(kind, operand index, unwrapped words)`` of a shell invocation."""
     words = _unwrap_command_parts(list(words))
     if not words or os.path.basename(words[0]) not in _SHELLS:
         return None
@@ -65,10 +87,10 @@ def shell_input_source(words):
             continue
         break  # options after a script/positional operand are not shell flags
     if command:
-        return 'command', words[index] if index < len(words) else None
+        return 'command', index, words
     if force_stdin or index >= len(words) or words[index] in {'-', '/dev/stdin'}:
-        return 'stdin', None
-    return 'script', None
+        return 'stdin', index, words
+    return 'script', index, words
 
 
 def _shell_reads_stdin(words):

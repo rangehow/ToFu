@@ -711,12 +711,104 @@ seeded subset whose value sets cannot overflow, so the property holds
 exactly; it fails when a branch stops joining, a derived value loses its
 collapse, or an `&&`/`||` operand is taken as certain.
 
-Known limits: positional parameters (`$1`, `"$@"`) inside function bodies are
-not bound at calls; `trap` strings, sourced files and `export -f` are not
-followed; `set`, `read`, `unset`, `source` and `eval` still reset bindings to
-the starting environment; `cd` to a wholly unproven directory keeps the old
-cwd; a configured `SHELL_PREFIX` may change the environment before the
-command.
+Known limits: see "Catastrophic-delete guard shell semantics" below.
+
+## Catastrophic-delete guard shell semantics
+
+Problem (2026-11-17): with control flow followed, the guard still read words,
+builtins and program words more simply than a shell. Checked against dash
+and bash, it never saw deletes of `/` reached through a `trap` action
+(`trap 'rm -rf /' EXIT`), a function's positional parameters (`f() { rm -rf
+"$1"; }; f /`), a child shell's environment (`export D=/; sh -c 'rm -rf
+"$D"'`), a program word with an expansion (`X=rm; $X -rf /`, `run() { "$@";
+}; run rm -rf /`, `sudo $RM -rf /`, `/bin/r? -rf /`), an alias (`alias
+x='rm -rf /'`, then `x` on the next line), a quoted shell name (`"bash" -c
+'rm -rf /'`), `echo`/`printf` output piped into a shell, or a bash brace word
+(`rm -rf /{tmp/x,}`). The other way, `set -e`, `read`, `printf -v`, `let` and
+`typeset` reset every binding to the starting environment, refusing scoped
+deletes after them, and an unknown number of positional parameters spliced
+into more text crashed the guard with a `TypeError`.
+
+Decision (2026-11-17): the guard expands words and runs builtins the way the
+shell does (`_expand_word`, `_BUILTIN_EFFECTS`), and treats a parameter list
+of unknown length like any unknown unquoted value.
+
+- A word's expansions: the `${…}` operators, field splitting and pathname
+  expansion of unquoted values, `$'…'`, `$((…))` and the substitutions whose
+  output `_PRODUCERS` model (`echo`, `printf`, `pwd`, `dirname`, `basename`,
+  `cd DIR && pwd`, `git rev-parse --show-toplevel`). bash makes a word of each
+  brace-expression variant, each judged as an operand of its own; dash keeps
+  the braces.
+- A builtin changes only what it changes: `unset` empties a name; `set --`,
+  `shift` and a function call set the positional parameters; `read`,
+  `printf -v`, `getopts` and `mapfile` assign the names they take; `eval` and a
+  `trap` action run their text in this shell, a trap with every state reached
+  after it was set; `cd` follows its destinations (`$CDPATH`, `-`, `$HOME`)
+  and loses the working directory at one it cannot know; `source` may change
+  every binding.
+- A child shell (`sh -c`, a shell reading a heredoc or a pipe) starts with the
+  exported names, the assignments and `env` options in front of it, the
+  functions of `export -f`, its own `$0` and positional parameters, and no
+  aliases. A shell's program word and options are read dequoted, its `-c`
+  string as written.
+- A program word with expansions (`_expanding_program_word`: the command word
+  or the program a wrapper runs) is expanded like an operand, and each field
+  list it may make is judged as the command it makes, with the item's
+  heredocs and redirects. A pattern is judged as each delete command it
+  matches. Where the program may be one the guard cannot name, the command
+  also refuses when its text could run a delete, the policy for a wrapper
+  option it does not understand.
+- `alias` records the texts an alias may hold. A command word that may be an
+  alias (dash and `bash --posix` expand aliases in scripts) is judged as the
+  alias text, a value ending in a blank expanding the next word too, and as
+  the word itself. An alias is never expanded inside its own text.
+- What `echo` or `printf` prints into a pipeline stage that may be a shell
+  reading its stdin (a program word with an expansion may name one) is that
+  shell's script, run with the environment of the shell's own stage.
+
+The dangerous-command guard judges an alias value where it is defined, as it
+does a trap action.
+
+Alternatives rejected: refusing every command whose program word has an
+expansion (blocks `$PYTHON`, `"$EDITOR"` and every `"$@"` wrapper); judging
+the operands of a program the guard cannot name as a delete's (the
+containment rule would refuse every outside-workspace path given to
+`$(command -v python3)`); expanding only aliases defined on an earlier line,
+as dash does (needs the shell's line-read order through compound commands
+and function bodies, while judging the alias text and the word itself is a
+superset that costs ordinary aliases nothing); taking the product of a brace
+word's variants for an operand (a multi-valued `$O` in `rm -rf "$O"/{a,b,c}`
+overflowed into a refusal, though each variant is a word of its own);
+rebuilding the command as text from its expanded words (loses the heredocs
+and redirects the substituted item keeps).
+
+Verification: `tests/project_mod/test_delete_guard_shell_semantics.py` holds
+the cases above, refused and allowed. Against the guard before this change,
+every refusal case of its program-word, alias, shell-input and brace classes
+passes unrefused. `tests/project_mod/test_delete_guard_shell_oracle.py` adds
+a second differential property: seeded scripts reach `rm` through program
+words, `"$@"` wrappers, `command`, `env`, aliases (a chained one included),
+`echo`/`printf` piped into `sh`, `sh -c` and brace words, and run in dash,
+`bash --posix` and bash with a PATH holding only an `rm` that prints its
+operands. Every operand it receives must be among the guard's candidates for
+the same script, and each delete's operand carries a mark of its own so only
+its own events can account for it. Of its 720 runs per pass, 405 hand `rm` a
+marked operand. It fails when program words are not expanded (33 of 80
+seeds), piped output is not judged (13), brace words are not expanded (3) or
+aliases are not recorded (2), and against the guard before this change (48
+of 80). A one-line command still takes under 0.1 ms; a 100-line script of 500
+commands, every fifth a program word, took 24 ms against 16 ms without
+program-word expansion, on a loaded host.
+
+Known limits: a program word whose value the guard cannot know (`X=$(command
+-v rm); $X -rf /`) is not judged as `rm` unless the command's text names a
+delete; the output of other programs is unknown, so `cat script | sh` is not
+judged; a sourced file is not read; the guard does not know when the shell
+reads a line, so an alias also counts on the line that defines it and in
+plain bash, which expands none; a brace word with more variants than
+`_DELETE_BINDING_CAP` is refused as unproven; the dangerous-command guard
+binds no variables, so `X=reboot; $X` and wrapper functions pass it; a
+configured `SHELL_PREFIX` may change the environment before the command.
 
 ## Dangerous-command guard structure
 

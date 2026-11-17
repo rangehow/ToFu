@@ -35,7 +35,7 @@ def _environment(tmp_path: Path) -> dict[str, str]:
     home = tmp_path / 'home'
     home.mkdir()
     env.update(HOME=str(home), PYTHONPATH=str(ROOT), PYTHONUNBUFFERED='1',
-               PYTHONNOUSERSITE='1')
+               PYTHONNOUSERSITE='1', PYTHONFAULTHANDLER='1')
     return env
 
 
@@ -98,6 +98,24 @@ def _process_tree(pid: int) -> list[int]:
     return tree
 
 
+def _exiting(pid: int) -> bool:
+    """True once ``pid`` is gone or past releasing its memory in exit.
+
+    An exiting child has no mm any more: its ``exe`` link no longer resolves
+    and, on Linux, its ``fd`` and ``environ`` deny even their owner
+    (EACCES), as if it belonged to root. Such a child holds neither a socket
+    nor an environment.
+    """
+    try:
+        state = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[0]
+        if state in ('Z', 'X', 'x'):
+            return True
+        os.readlink(f'/proc/{pid}/exe')
+    except (FileNotFoundError, ProcessLookupError):
+        return True
+    return False
+
+
 def _socket_inodes(pid: int) -> set[str]:
     inodes = set()
     for fd in Path(f'/proc/{pid}/fd').iterdir():
@@ -129,8 +147,8 @@ def _assert_no_listener_off_loopback(pid: int) -> None:
             inodes = _socket_inodes(member)
             tables = [(table, Path(f'/proc/{member}/net/{table}').read_text())
                       for table in ('tcp', 'tcp6', 'udp', 'udp6')]
-        except (FileNotFoundError, ProcessLookupError):
-            if member == pid:
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            if member == pid or not _exiting(member):
                 raise
             continue
         for table, text in tables:
@@ -150,8 +168,8 @@ def _assert_secret_never_left_memory(pid: int, tmp_path: Path) -> None:
         for name in ('cmdline', 'environ'):
             try:
                 content = Path(f'/proc/{member}/{name}').read_bytes()
-            except (FileNotFoundError, ProcessLookupError):
-                if member == pid:
+            except (FileNotFoundError, ProcessLookupError, PermissionError):
+                if member == pid or not _exiting(member):
                     raise
                 continue
             assert _SECRET.encode() not in content
@@ -168,6 +186,20 @@ def _assert_secret_never_left_memory(pid: int, tmp_path: Path) -> None:
 
 def _stderr_tail(path: Path) -> str:
     return path.read_text(errors='replace')[-4000:] if path.exists() else ''
+
+
+def _terminate(process: subprocess.Popen, stderr: Path) -> int:
+    """SIGTERM a CLI kernel; one that outlives its drain fails with its thread stacks."""
+    if process.poll() is None:
+        process.send_signal(signal.SIGTERM)
+    try:
+        return process.wait(timeout=180)
+    except subprocess.TimeoutExpired:
+        # PYTHONFAULTHANDLER (see _environment) dumps every thread on SIGABRT.
+        process.send_signal(signal.SIGABRT)
+        process.wait(timeout=60)
+        raise AssertionError('the kernel did not exit within 180s of SIGTERM:\n'
+                             + stderr.read_text(errors='replace')[-12000:]) from None
 
 
 def test_cli_reads_the_secret_from_stdin_and_reports_its_loopback_port(tmp_path):
@@ -195,9 +227,7 @@ def test_cli_reads_the_secret_from_stdin_and_reports_its_loopback_port(tmp_path)
             _assert_no_listener_off_loopback(process.pid)
             _assert_secret_never_left_memory(process.pid, tmp_path)
         finally:
-            if process.poll() is None:
-                process.send_signal(signal.SIGTERM)
-            exit_code = process.wait(timeout=180)
+            exit_code = _terminate(process, stderr)
     assert exit_code == 0, _stderr_tail(stderr)
 
 
@@ -234,9 +264,7 @@ def test_a_second_kernel_on_the_same_data_directory_exits_before_serving(tmp_pat
 
             _wait_ready(port)
         finally:
-            if first.poll() is None:
-                first.send_signal(signal.SIGTERM)
-            exit_code = first.wait(timeout=180)
+            exit_code = _terminate(first, first_log)
     assert exit_code == 0, _stderr_tail(first_log)
 
 

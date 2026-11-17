@@ -158,6 +158,7 @@ __pycache__/
 !/benchmarks/conversation_compare.py
 !/benchmarks/tofudb_context_read.py
 !/benchmarks/tofudb_context_progression.py
+!/benchmarks/harness_perf/
 !/benchmarks/tofudb_cached_read.py
 !/benchmarks/tofudb_context_controls.py
 !/benchmarks/harness_sqlite_reference.rs

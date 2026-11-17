@@ -259,6 +259,10 @@ class CoordinatorReports:
                 or turn['kind'] != 'coordinator_report.' + pointer['kind']):
             raise StorageError('database_integrity', 'Coordinator report message is unavailable')
         result['latest'] = {**pointer, 'content': turn['projection'].get('content', '')}
+        translated = ' '.join(str(turn['projection'].get('translatedContent') or '').partition('\n\n')[0].split())
+        if translated:
+            limit = CONTRACT['$defs']['reportState']['properties']['latest']['anyOf'][1]['properties']['translatedTitle']['maxLength']
+            result['latest']['translatedTitle'] = translated if len(translated) <= limit else translated[:limit - 1] + '\u2026'
         result['unread'] = pointer['ordinal'] > head['readOrdinal']
         validate_report(result, 'reportState')
         return result

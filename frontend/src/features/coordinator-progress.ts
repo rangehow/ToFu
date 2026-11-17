@@ -245,6 +245,7 @@ export function createCoordinatorProgress(ports: CoordinatorProgressPorts): Coor
       }
     }
     commandNodes.push(createButton({ label: t('coordinatorProgress.history'), size: 'sm', variant: 'ghost', onClick: actionPorts.history }));
+    originalToggle.textContent = t('chat.bilingualOriginal');
     originalToggle.hidden = !translated;
     originalToggle.setAttribute('aria-pressed', String(translated && original));
     head.replaceChildren(...headNodes);

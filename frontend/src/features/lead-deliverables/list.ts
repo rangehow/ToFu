@@ -14,7 +14,7 @@
 import { t } from '../../i18n';
 import { createButton } from '../../ui';
 import { apiFailure } from '../../api/errors';
-import { appendDeliverables, deliverableAge, deliverableProject, type LeadDeliverable, type LeadDeliverablePage } from './model';
+import { appendDeliverables, deliverableAge, deliverableCopy, deliverableProject, type LeadDeliverable, type LeadDeliverablePage } from './model';
 import { sourceButton, type DeliverableOpener } from './open';
 import { folderIcon } from '../project/folder-icons';
 import '../../styles/application/36-lead-deliverables.css';
@@ -87,6 +87,14 @@ export function createLeadDeliverables(ports: LeadDeliverablesPorts): LeadDelive
     if (frame?.kind === 'lead_deliverable' && target && frame.conversationId === target.leadId) void load(true);
   });
   const releaseReconnect = ports.onReconnect(() => { if (target) void load(true); });
+  // Rows are kept across paints, so a language switch rebuilds them and relabels the fixed controls.
+  const relabel = () => {
+    more.textContent = t('leadDeliverables.more');
+    retry.textContent = t('leadDeliverables.retry');
+    list.replaceChildren();
+    paint();
+  };
+  window.addEventListener('tofu:language-change', relabel);
 
   toggle.addEventListener('click', () => {
     expanded = !expanded;
@@ -147,14 +155,18 @@ export function createLeadDeliverables(ports: LeadDeliverablesPorts): LeadDelive
       ? t(`leadDeliverables.reportKind.${item.reportKind}`) : t(`leadDeliverables.kind.${item.kind}`);
     const title = document.createElement('span');
     title.className = 'lead-deliverable__title';
-    title.textContent = item.title;
+    const copy = deliverableCopy(item);
+    title.textContent = copy.title;
     const meta = document.createElement('span');
     meta.className = 'lead-deliverable__meta';
     const project = deliverableProject(item.projectPath);
     const age = deliverableAge(item.createdAt, now(), document.documentElement.lang);
     meta.textContent = [project, age].filter(Boolean).join(' · ');
     if (item.projectPath) meta.title = item.projectPath;
-    if (item.createdAt) open.title = `${item.title}\n${new Date(item.createdAt).toLocaleString(document.documentElement.lang || undefined)}`;
+    // A translated title keeps the original as written in its tooltip.
+    const written = copy.title === item.title ? [item.title] : [copy.title, item.title];
+    if (item.createdAt) written.push(new Date(item.createdAt).toLocaleString(document.documentElement.lang || undefined));
+    open.title = written.join('\n');
     open.append(kind, title, meta);
     open.addEventListener('click', () => { ports.opener.open(item); });
     li.append(open);
@@ -232,6 +244,7 @@ export function createLeadDeliverables(ports: LeadDeliverablesPorts): LeadDelive
       flight?.abort();
       releasePush();
       releaseReconnect();
+      window.removeEventListener('tofu:language-change', relabel);
       root.remove();
     },
   };

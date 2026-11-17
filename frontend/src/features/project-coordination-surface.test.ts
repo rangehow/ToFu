@@ -3,7 +3,8 @@ import { expect, it, vi } from 'vitest';
 import { createProjectCoordinationSurface } from './project-coordination-surface';
 import type { ProjectCoordinationPorts } from './project-coordination';
 import type { CoordinatorProgressBoard, CoordinatorProgressState, CoordinatorReportState } from '../api/project-coordination.generated';
-vi.mock('../i18n', () => ({ t: (key: string) => key }));
+const locale = vi.hoisted(() => ({ language: 'en' }));
+vi.mock('../i18n', () => ({ t: (key: string) => (locale.language === 'en' ? key : `${locale.language}:${key}`) }));
 const BOARD: CoordinatorProgressBoard = { revision: 3, updatedAt: Date.UTC(2026, 10, 2, 8, 30), summary: 'Folder fix verified; trip research underway.',
   tasks: [{ title: 'Fix folder creation', status: 'completed', progress: 'Merged and verified.' },
     { title: 'Research New Year homestays', status: 'in_progress', progress: 'Comparing four platforms.' }] };
@@ -754,4 +755,25 @@ it("names the shown project's bound Coordinator only from that project's settled
   expect(f.surface.coordinatorId()).toBe('');
   f.surface.destroy();
   expect(f.surface.coordinatorId()).toBe('');
+});
+
+it('a language switch repaints the sidebar row and the pinned task board in the new language', async () => {
+  const f = fixture(); await f.surface.refresh();
+  const card = f.canvas.querySelector<HTMLDetailsElement>('.coordinator-progress')!;
+  expect(card.querySelector('.coordinator-progress-title')?.textContent).toBe('coordinatorProgress.title');
+  locale.language = 'zh';
+  try {
+    window.dispatchEvent(new CustomEvent('tofu:language-change', { detail: { language: 'zh' } }));
+    await vi.waitFor(() => expect(card.querySelector('.coordinator-progress-title')?.textContent).toBe('zh:coordinatorProgress.title'));
+    // The same card stays mounted (fold and scroll survive); only its copy changes.
+    expect(f.canvas.querySelector('.coordinator-progress')).toBe(card);
+    expect(card.querySelector('.coordinator-progress-tally')?.textContent).toBe('zh:coordinatorProgress.sidebar.active');
+    expect(card.querySelector('.coordinator-progress-glyph')?.getAttribute('aria-label')).toMatch(/^zh:coordinatorProgress\.status\./);
+    expect([...card.querySelectorAll('.coordinator-progress-commands button')].map(button => button.textContent))
+      .toEqual(['zh:chat.bilingualOriginal', 'zh:coordinatorProgress.history']);
+    const row = f.sidebar.querySelector<HTMLElement>('.coordination-leader')!;
+    expect(row.querySelector('.coordination-leader-label')?.textContent).toBe('zh:projectCoordination.coordinator');
+    expect(row.querySelector('.coordination-leader-meta')?.textContent).toBe('zh:coordinatorProgress.sidebar.active');
+    expect(row.title).toMatch(/^zh:projectCoordination\.openCoordinator/);
+  } finally { locale.language = 'en'; f.surface.destroy(); }
 });

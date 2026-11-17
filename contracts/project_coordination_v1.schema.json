@@ -82,7 +82,7 @@
       }
     },
     "deliverableItem": {
-      "description": "One deliverable of one lead conversation (docs/PROJECT_COORDINATION.md, Lead deliverables). Opening it shows the artifact (artifactId), the report (summary is its message) or the Worker result Turn (result). source is the message in the lead's conversation that produced it, when known. A report carries its reportKind and the files its report_to_user call attached; those files are not listed again as items of their own.",
+      "description": "One deliverable of one lead conversation (docs/PROJECT_COORDINATION.md, Lead deliverables). Opening it shows the artifact (artifactId), the report (summary is its message) or the Worker result Turn (result). source is the message in the lead's conversation that produced it, when known. A report carries its reportKind and the files its report_to_user call attached; those files are not listed again as items of their own. translation is a report's display translation (its Turn's auto-translated title and message, the copy the conversation shows by default); reconstructible display data, absent when the Turn has none.",
       "type": "object",
       "additionalProperties": false,
       "required": ["id", "kind", "title", "projectPath", "createdAt", "source"],
@@ -98,7 +98,16 @@
         "summary": {"type": "string", "maxLength": 4000},
         "result": {"$ref": "#/$defs/deliverableTurn"},
         "reportKind": {"enum": ["progress", "decision", "blocked", "delivery"]},
-        "files": {"type": "array", "items": {"$ref": "#/$defs/reportFile"}}
+        "files": {"type": "array", "items": {"$ref": "#/$defs/reportFile"}},
+        "translation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["title", "summary"],
+          "properties": {
+            "title": {"type": "string", "minLength": 1, "maxLength": 300},
+            "summary": {"type": "string", "maxLength": 4000}
+          }
+        }
       }
     },
     "deliverablePage": {
@@ -406,6 +415,13 @@
                 "content": {
                   "type": "string",
                   "maxLength": 4250
+                },
+                "translatedTitle": {
+                  "description": "The title of the report Turn's display translation (its auto-translated title line), as the conversation shows it; absent when the Turn has none.",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 120,
+                  "pattern": "^[^\\r\\n]+$"
                 }
               }
             }

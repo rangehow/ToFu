@@ -127,9 +127,11 @@ class NonhumanRequest(SyntheticSource):
     code = 'nonhuman_request'
     execution_started = False
     recovery = ('Nothing was started, and repeating the call fails the same way. Worker actions need '
-                'the owner\u2019s own message: one they send into this conversation while this turn runs '
-                'authorizes it; otherwise their next message does, and an open request continues on its '
-                'own. Here, read Workers, report_to_user or ask_human instead.')
+                'the owner\u2019s own message or the owner\u2019s delegation to every lead ("Act for me" '
+                'in the main coordinator\u2019s header, docs/ROUTER.md R9): an owner message sent into this '
+                'conversation while this turn runs authorizes it; otherwise their next message does, and '
+                'an open request continues on its own. Here, read Workers, report_to_user or ask_human '
+                'instead.')
 
 
 class DispatchGrantRevoked(ProjectDispatchError):
@@ -946,6 +948,9 @@ class ProjectDispatchRepository:
         if 'steerId' in source:
             self._validate_steered_source(source, admitted=admitted)
             return
+        if 'ownerDelegation' in source:
+            self._validate_delegated_source(source, admitted=admitted)
+            return
         turn = self.read_turn(source['conversationId'], source['turnId'])
         if (not isinstance(turn, Mapping)
                 or turn.get('conversationId') != source['conversationId']
@@ -979,6 +984,35 @@ class ProjectDispatchRepository:
             require_human_turn(steered_input_turn(turn, source['steerId']), user_id=self.owner)
         except ValueError as exc:
             raise SyntheticSource(str(exc)) from exc
+
+    def _validate_delegated_source(self, source, *, admitted):
+        """A lead reply that acted under the owner's delegation (docs/ROUTER.md R9, ``lead_authority``).
+
+        A birth (not ``admitted``) re-checks the gate's audit record and the live
+        grant, so a revocation refuses every Worker not yet born; an admitted
+        grant is fenced by its reply Turn's identity and owner, as a steer is.
+        """
+        turn = self.read_turn(source['conversationId'], source['turnId'], projection=False)
+        if (not isinstance(turn, Mapping) or turn.get('conversationId') != source['conversationId']
+                or turn.get('turnId') != source['turnId'] or turn.get('actor') != 'assistant'):
+            raise ProjectDispatchError('Authorization source changed or is not a lead reply')
+        if not evidence_owner_matches(turn, self.owner):
+            raise ProjectDispatchError('Authorization source owner changed')
+        if admitted:
+            return
+        from lib import lifecycle_approval as gate
+        record = gate.delegated_action(self.owner, source['ownerDelegation'])
+        target = (record or {}).get('target') or {}
+        if (not record or record.get('scope') != 'lead_authority'
+                or record.get('status') not in ('accepted', 'completed')
+                or record['requester'].get('conversationId') != source['conversationId']
+                or target.get('turnId') != source['turnId']):
+            raise SyntheticSource('The owner\u2019s delegation record for this lead reply is unavailable')
+        try:
+            gate.check_delegation(self.owner, record['requester'], 'lead_authority')
+        except gate.DelegationRefused as refusal:
+            raise DispatchGrantRevoked(f'The owner\u2019s delegation no longer covers this lead: {refusal}') \
+                from refusal
 
     def command_identity(self, command_id):
         _identifier(command_id)
@@ -1122,7 +1156,7 @@ class ProjectDispatchRepository:
         # widens the CAS window or repeats on each lost head CAS. Only the
         # snapshot (open request, policy, replay) is fenced by the CAS itself.
         with one_decision():
-            principal, source, attempt = source_for_task(self, task, issued=issued)
+            principal, source, attempt = source_for_task(self, task, issued=issued, delegated=True)
             policy = policy_for_task(self, task, attempt)
             issued = issued_worker_policy(self, task)
             expected = original_delegation(task, policy, repository=self)
@@ -1137,7 +1171,7 @@ class ProjectDispatchRepository:
             validate_profile(request)
             granter = original_granter(task, principal)
             def check(value):
-                source_for_task(self, task, issued=issued)
+                source_for_task(self, task, issued=issued, delegated=True)
                 ensure_open(value, expected['attemptId'])
                 validate_delegation_policy(self, value, request)
             return self._authorize_request(copy.deepcopy(request), granter, self.command_identity(command_id),

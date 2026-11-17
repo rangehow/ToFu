@@ -344,7 +344,7 @@ def _born(task, scope, arguments, repository, service, create, command):
 
 def _delegation_request(task, scope, arguments, repository):
     """The Worker request this Coordinator attempt may delegate, refused before any effect."""
-    _, source, attempt = source_for_task(repository, task, issued=True)
+    _, source, attempt = source_for_task(repository, task, issued=True, delegated=True)
     policy = policy_for_task(repository, task, attempt)
     from lib.project_dispatch.continuation import original_delegation, ensure_open
     origin = original_delegation(task, policy, repository=repository)

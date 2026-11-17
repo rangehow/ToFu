@@ -885,7 +885,9 @@ point. Scope:
   (reversible owner settings through the Settings UI's own backend, and channel
   enable/disable; R11), `project_lifecycle` (creating and configuring
   projects and their Project Routers, R12), `project_repair` (opening one
-  repair conversation in a project whose Project Router cannot run, below) and
+  repair conversation in a project whose Project Router cannot run, below),
+  `lead_authority` (every lead acts on Workers without an owner message of its
+  own, below) and
   `scheduler` (pause or resume one of the owner's own, service or system
   scheduled tasks, such as the nightly storage backup, through
   `schedule_manage(action='disable'|'enable', owner_delegation=…, idempotency_key=…)`;
@@ -919,6 +921,68 @@ point. Scope:
   grant can stay narrow); a switch per scope (the owner asked for full
   permission, not more switches); rewriting stored grants at boot (a write to
   the approval store for a fact derivable on read).
+- **The delegation reaches every lead (owner decision 2026-11-18).** The owner:
+  「多去分析一下各个负责人的轨迹，看看我们现在机制有没有什么不足之处，我的权限要全部下放给负责人们，也就是说，负责人的能力边界要尽可能扩展开。」
+  **Problem.** The trajectory audit of 2026-11-18 (Global Router
+  `coordinator-f2f00ea0…`, Project Routers tofu `coordinator-4950501b…`,
+  knowledge `coordinator-43376e1c…`, parallel `coordinator-723a42af…`)
+  found the grant reaching only the Global Router and only for actions an
+  owner message asks for. Wake, relay and notice Turns of every lead could read
+  Workers but every delegate, follow_up, continue and cancel was refused
+  `nonhuman_request: … Synthetic authorization origin denied` (METRICS M3: 14
+  of 30 Worker-start refusals; the Router's restart-outcome wake at 11-16 16:17
+  could not continue the failed tofu lead and asked the owner for one
+  sentence; its 11-17 17:07 keepalive could not delegate a landing Worker and
+  relayed it to the tofu lead, whose Worker ran `git_land`). Project Routers
+  had no restart at all, and the Router asked the owner to reply 「重启」
+  for 5.7 hours although the grant covering restart was active.
+  **Decision.** One grant, the same switch, the same audit; a **full** grant
+  now covers every lead of the owner:
+  - The requester is `global_router` or `project_lead`
+    (`lifecycle_approval.LEAD_KINDS`, `owner_delegation.router_requester`). A
+    `project_lead` is the bound Coordinator its scope was resolved from
+    (coordination binding, never an argument); only a `full` grant covers it,
+    an `enumerated` grant names only the Global Router.
+  - Scope `lead_authority`: a lead Turn without an owner message of its own
+    (a wake, a relayed report, a notice) acts on Workers on the lead's own
+    judgment: delegate, follow_up, continue/stop, review (which publishes an
+    accepted checkpoint), cancel and finish. `delegation.source_for_task(
+    delegated=True)` falls back to `lead_source` after the owner's own input and
+    a steered owner message: the gate checks the live grant, then records one
+    `lead_authority` action per lead Attempt (idempotency key
+    `lead-turn:<attemptId>`, trigger `owner_delegation` with the owner's words
+    above, target `project_request`) before any effect. The Worker's
+    `authorizationSource` is `{conversationId, turnId: <the lead reply>,
+    projectionRevision: 1, ownerDelegation: <action id>}`; its birth re-checks
+    the record and the live grant (`ProjectDispatchRepository._validate_delegated_source`).
+    Callers that need the owner's own words keep the old refusal: forwarding
+    (`route_to_project` still forwards only owner text), standing instructions,
+    request accounts and the Watchdog's review changes.
+  - `restart_server` is in every lead's ceiling (`COORDINATOR_TOOLS`), through
+    the same gate and Settings path. Trigger `under_delegation: true`, alone,
+    is the lead's own judgment (for example merged fixes that are live only
+    after a restart); the owner's message, steer or standing instruction stay
+    valid triggers (`ownerDelegationTrigger`).
+  - **Revocation** refuses the next call of every lead at once: every
+    `lead_source` and every Worker birth re-checks the grant. Workers born
+    before the revocation keep running (their admitted grant is fenced by the
+    reply Turn's identity, like a steered source); the owner stops them with Stop.
+  - Still human-only, explicitly: granting the delegation, credentials and
+    secrets, payment, login approvals and QR pairing, external publication and
+    channel drafts (`channel_outbox_approve`, `human_turn_required`),
+    answering the owner's questions, approving owner prompts, and forwarding
+    text as the owner's words.
+  **Alternatives rejected:** treating nonhuman input as a human request
+  (hidden synthetic authority, unaudited and unrevocable); one grant per
+  Project Router (more switches, which the owner rejected on 2026-11-10);
+  minting an owner message into the wake (the owner did not write it);
+  revoking running Workers on revocation (an unasked mass Stop with partial
+  effects; Stop remains the owner's explicit tool).
+  Specifications: `tests/router/test_lead_delegation.py` (real storage, SQLite
+  and native: a Project Router's commitment wake dispatches a Worker under the
+  grant, a revoked grant refuses the next dispatch and an earlier source's
+  birth, an enumerated grant does not reach Project Routers) and
+  `tests/router/test_owner_delegation.py::test_a_project_lead_restarts_under_the_full_grant_on_its_own_judgment`.
 - **Granting needs the owner in the Tofu UI.** `POST /api/v4/router/owner-delegation
   {"granted": true}` (scope `admin`) admits only a user principal over the UI
   session cookie, or the loopback open-mode UI, with same-origin browser
@@ -2068,7 +2132,7 @@ PC: Project Coordinator):
 | `search_memories` | PC, GR | accident | in the ceiling so a model sees it has memory; never listed |
 | `schedule_create`, `schedule_list`, `schedule_manage` | PC, GR | accident; SCHEDULE-AUTHORITY-1 (`07e871bbb7`) derived the family per grant, now part of the role catalog | [scheduling](modules/scheduling_ops.md#agent-created-schedules) |
 | `channel_send`, `channel_read`, `channel_threads`, `channel_outbox`, `channel_outbox_approve`, `channel_configure_thread`, `channel_subscribe`, `channel_unsubscribe` | GR | accident | `CHANNEL_TOOLS` joined `ROUTER_TOOLS` (CHANNELS.md C3) and were never listed |
-| `restart_server` | GR | accident | R9 serves Router Turns without an owner message of their own (standing instructions); HARNESS-1A-2 diagnosis `91e7b05323` |
+| `restart_server` | PC, GR | accident; every lead's since 2026-11-18 (R9, "The delegation reaches every lead") | R9 serves lead Turns without an owner message of their own (standing instructions, `under_delegation`); HARNESS-1A-2 diagnosis `91e7b05323` |
 | `route_to_project` | GR | accident | R2: a forward's authority is verified at execution |
 | `get_router_projects`, `router_instruction_create`, `router_instruction_list`, `router_instruction_cancel`, `router_portfolio`, `router_project`, `owner_settings`, `repair_project` | GR | accident | R4, R10, R11 and R12 added them to `ROUTER_ONLY_TOOLS`; each has its own execution gate |
 
@@ -2090,15 +2154,15 @@ Turn's catalog, wire and direct core. No owner setting narrows a role's catalog
 (`disabledTools` governs MCP tools only). The catalog carries no authority; every
 owner-only decision is refused at execution with a typed reason:
 
-- `restart_server` stays the Global Router's (`ROUTER_ONLY_TOOLS`,
-  `execute_router_tool`, `workerDeniedTools`) and runs only through R9: the owner's
-  grant (`owner_delegation_not_granted`), then the owner's explicit approval of that
-  restart, which is the owner's own message of the request the continuation
-  continues, an owner message steered into it or an active standing instruction
-  (`owner_delegation_trigger_missing`, `_malformed`, `_invalid`), restart protection
-  and the gate's acceptance. The approval is recorded verbatim in the delegated
-  action; as for every R9 action, the gate verifies that the words are the owner's,
-  not what they ask.
+- `restart_server` is every lead's (`COORDINATOR_TOOLS`; still in
+  `workerDeniedTools`) and runs only through R9: the owner's full grant
+  (`owner_delegation_not_granted`, `owner_delegation_scope` for an enumerated grant
+  reaching a Project Router), then its trigger: the owner's own message of the
+  request the continuation continues, an owner message steered into it, an active
+  standing instruction or `under_delegation` (the lead's own judgment, owner
+  decision 2026-11-18) (`owner_delegation_trigger_missing`, `_malformed`,
+  `_invalid`), restart protection and the gate's acceptance. The trigger is recorded
+  verbatim in the delegated action.
 - `channel_send`: the owner's command chat always receives the Global Router's
   message; for other people, a Turn without the owner's own request (a
   continuation's input is nonhuman) only drafts, which the owner approves (C5, C11).

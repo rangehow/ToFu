@@ -87,7 +87,9 @@ lives in `docs/PROJECT_COORDINATION.md`.
 
 `delegation.py` derives worker policy from the current accepted human Coordinator
 Turn (or, in a Turn whose input is nonhuman, the first owner message steered into
-it that its model received) and pre-role tool assembly, using the same grant CAS
+it that its model received, else, for callers acting on Workers
+(`delegated=True`), the owner's delegation to every lead: `lead_source`, scope
+`lead_authority`, docs/ROUTER.md R9) and pre-role tool assembly, using the same grant CAS
 and physical accounting.
 Its review pins exact results/checkpoints as Coordinator judgment, never human
 acceptance. `project` workers use normal tools in owned isolated workspaces;

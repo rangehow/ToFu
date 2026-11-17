@@ -207,7 +207,7 @@ def linkable_requests(owner: int, *, projects: Callable[[int], list] | None = No
                 'projectPath': project, 'coordinatorId': coordinator_id, 'sourceAttemptId': source,
                 'requestTurnId': request['authorizationSource']['turnId'], 'createdAt': created,
                 'workers': 0, '_brief': request.get('brief', ''),
-                '_steered': 'steerId' in request['authorizationSource']})
+                '_steered': bool({'steerId', 'ownerDelegation'} & set(request['authorizationSource']))})
             group['workers'] += 1
             group['createdAt'] = min(group['createdAt'], created)
         for group in groups.values():

@@ -278,6 +278,8 @@ def _stated_outcomes(repository, requests, recorded_keys):
 
 def _source_request(repository, source):
     """The owner's words of the request this wake serves."""
+    if 'ownerDelegation' in source:
+        return ''  # A lead acted on its own judgment: no owner words to quote.
     turn = repository.turn_get(source['conversationId'], source['turnId'], user_id=repository.owner)
     if 'steerId' in source:
         from lib.turn_initiation import steered_input_turn

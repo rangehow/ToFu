@@ -42,6 +42,9 @@ COORDINATOR_TOOLS = frozenset({
     # report bound to its Turn and role (lib/tasks_pkg/handlers/memory.py).
     # Correcting, deleting and merging lessons stay with Workers.
     'create_memory',
+    # Every lead restarts under the owner's full delegation (docs/ROUTER.md R9,
+    # owner decision 2026-11-18); the gate refuses without it.
+    'restart_server',
 })
 # The Project Coordinator's direct core: its role tools in recorded-use order until
 # core plus the discovery pair fill the Sankuai Claude tool-name budget. Recorded

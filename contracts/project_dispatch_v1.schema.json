@@ -944,7 +944,7 @@
         "turnId",
         "projectionRevision"
       ],
-      "description": "The owner's message that authorizes a request: a genuine human input Turn, or with steerId a message the owner steered into Coordinator reply Turn turnId, whose own input is not human. A steer's committed author is immutable, so a steered source has projectionRevision 1.",
+      "description": "The owner's message that authorizes a request: a genuine human input Turn, or with steerId a message the owner steered into Coordinator reply Turn turnId, whose own input is not human, or with ownerDelegation that reply itself acting under the owner's delegation to every lead (the lifecycle gate's lead_authority audit record id; docs/ROUTER.md R9). A steer's committed author is immutable, so a steered source has projectionRevision 1.",
       "properties": {
         "conversationId": {
           "$ref": "#/$defs/id"
@@ -958,20 +958,46 @@
         },
         "steerId": {
           "$ref": "#/$defs/id"
+        },
+        "ownerDelegation": {
+          "$ref": "#/$defs/id"
         }
       },
-      "if": {
-        "required": [
-          "steerId"
-        ]
-      },
-      "then": {
-        "properties": {
-          "projectionRevision": {
-            "const": 1
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "steerId"
+            ]
+          },
+          "then": {
+            "properties": {
+              "projectionRevision": {
+                "const": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "ownerDelegation"
+            ]
+          },
+          "then": {
+            "properties": {
+              "projectionRevision": {
+                "const": 1
+              }
+            },
+            "not": {
+              "required": [
+                "steerId"
+              ]
+            }
           }
         }
-      }
+      ]
     },
     "budget": {
       "type": "object",
@@ -2676,7 +2702,6 @@
     "delete_timer",
     "dispatch_project_assignment",
     "finish_project_request",
-    "integration_submit",
     "register_responsibility",
     "report_to_user",
     "review_project_work",

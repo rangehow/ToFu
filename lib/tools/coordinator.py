@@ -277,6 +277,26 @@ COORDINATOR_TOOLS.append(_tool('list_project_leads',
 # owner's bound router. Arguments come from contracts/router_v1.schema.json.
 from lib.router.contract import tool_arguments as _router_arguments
 ROUTER_TOOL_SCHEMAS = []
+# Every lead restarts under the owner's full delegation (docs/ROUTER.md R9, owner
+# decision 2026-11-18); the gate refuses without the grant.
+COORDINATOR_TOOLS.append(_tool('restart_server', (
+    'Restart the Tofu server under the delegation the owner granted in Tofu ("Act for me"), which reaches '
+    'every lead. Name what asks for it: the owner\'s message (source_turn_id, or source_steer_id for one sent '
+    'while you reply), an active standing instruction (instruction_id with exactly one of event_id or '
+    'source_turn_id for what triggered it), or under_delegation=true alone when no owner message asks and you '
+    'judge a restart necessary (for example merged fixes that are live only after a restart); give the reason. '
+    'It takes the Settings restart path, detached from your turn: the frontend is built first and the old '
+    'server stops only if that succeeds. It waits for a protected step (a git_land landing or an export) and '
+    'refuses while other conversations run unless the restart should interrupt them '
+    '(interrupt_running_conversations=true; they resume from their checkpoint by themselves afterwards). '
+    'Without the grant it refuses and nothing is pending: tell the owner to turn on "Act for me" in the main '
+    'coordinator\'s header or to restart in Settings. Only status accepted means a restart is under way: an '
+    'error result (execution_started=false) restarted nothing and no notice follows. The grant lets you act '
+    'for the owner, never speak for them: it answers no question and approves no prompt meant for the owner. '
+    'Every call is in the owner\'s audit log; a retry with the same idempotency_key never restarts twice. When '
+    'the restart ends, completed or not, you receive one nonhuman restart-complete notice as a new turn; '
+    'report the outcome from it.'),
+    _router_arguments('restartServer')['properties'], _router_arguments('restartServer')['required']))
 for _name, _definition, _description in (
     ('route_to_project', 'routeToProject',
      'Forward work to the Project Router (the bound Project Coordinator) of one project. Without instruction_id, '
@@ -335,22 +355,6 @@ for _name, _definition, _description in (
      'message. Human-only actions (secrets, login approval, QR pairing) return '
      'needs_owner_action with the Settings remedy; destructive or external actions are refused, never inferred. '
      'Every change is in the owner\'s audit log; revoking "Act for me" stops it.'),
-    ('restart_server', 'restartServer',
-     'Restart the Tofu server for the owner, under the delegation the owner granted you in Tofu ("Act for me"). '
-     'Use it only when the owner asks for a restart: name their message (source_turn_id, or source_steer_id for '
-     'one sent while you reply) or an active standing instruction that covers it (instruction_id with exactly '
-     'one of event_id or source_turn_id for what triggered it), and give the reason. It takes '
-     'the Settings restart path, detached from your turn: the frontend is built first and the old server stops '
-     'only if that succeeds. It refuses while a protected step (a git_land landing or an export) runs, and while '
-     'other conversations run unless the owner asked to restart anyway (interrupt_running_conversations=true; '
-     'they resume from their checkpoint by themselves afterwards). Without the grant it refuses and nothing is '
-     'pending: tell the owner to turn on "Act for me" in your header or to restart in Settings. Only status '
-     'accepted means a restart is under way: an error result (execution_started=false) restarted nothing and no '
-     'notice follows. The grant lets you '
-     'act for the owner, never speak for them: it answers no question and approves no prompt meant for the '
-     'owner. Every call is in the owner\'s audit log; a retry with the same idempotency_key never restarts '
-     'twice. When the restart ends, completed or not, you receive one nonhuman restart-complete notice as a new '
-     'turn; report the outcome to the owner from it.'),
     ('repair_project', 'projectRepair',
      'Open and start one repair conversation in a project whose Project Router cannot run, under the owner\'s '
      'delegation ("Act for me"). It is refused unless that Router cannot run: its binding is unavailable, or its '

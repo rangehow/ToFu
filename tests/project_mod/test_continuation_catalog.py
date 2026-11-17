@@ -207,20 +207,20 @@ def test_a_router_continuation_restarts_only_through_the_gate_with_the_owners_ap
     assert action['requester']['turnId'] == r.task['_turnId'] and len(lifecycle.detached) == 1
 
 
-def test_restart_server_stays_the_global_routers(run, monkeypatch):
-    """A Project Coordinator's continuation holds no restart_server, and a call is refused."""
-    from lib.llm.llm_errors import ToolAdmissionRefused
+def test_a_project_coordinator_continuation_restarts_only_under_the_owner_grant(run, monkeypatch, tmp_path):
+    """Owner decision 2026-11-18 (docs/ROUTER.md R9): every lead holds restart_server; the
+    owner's grant decides at execution, so without it the call is a typed refusal."""
+    from lib import lifecycle_approval as gate
     from lib.project_dispatch.repository import CONTRACT
-    from lib.project_dispatch.scope import admit_tool
     from lib.tasks_pkg.coordinator_policy import coordinator_call_rejection
+    monkeypatch.setattr(gate, '_APPROVALS_FILE', str(tmp_path / 'lifecycle_approvals.json'))
+    monkeypatch.setattr(gate, '_STATE_FILE', str(tmp_path / 'lifecycle_state.json'))
     r = continuation(run, monkeypatch, 'coordinator')
     assemble(r.task)
-    assert 'restart_server' not in names(r.task['_executable_tool_catalog'])
-    assert 'dispatch-only' in coordinator_call_rejection(r.task, 'restart_server', {})
-    with pytest.raises(ToolAdmissionRefused, match='original continuation policy'):
-        admit_tool(r.task, 'restart_server', {})
-    refused = r.call('restart_server', reason='x', idempotency_key='k', source_turn_id='human-turn')
-    assert 'Only the owner' in refused['error'] and refused['execution_started'] is False
+    assert 'restart_server' in names(r.task['_executable_tool_catalog'])
+    assert coordinator_call_rejection(r.task, 'restart_server', {}) is None
+    refused = r.call('restart_server', reason='x', idempotency_key='k', under_delegation=True)
+    assert refused['code'] == 'owner_delegation_not_granted' and refused['execution_started'] is False
     assert 'restart_server' in CONTRACT['workerDeniedTools']
 
 

@@ -84,6 +84,7 @@
         "source_steer_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/source_steer_id"},
         "instruction_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/instruction_id"},
         "event_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/event_id"},
+        "under_delegation": {"$ref": "#/$defs/ownerDelegationAuthority/properties/under_delegation"},
         "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S",
                             "description": "One delegated action per key: a retry returns the recorded outcome and never repeats the change."}
       },
@@ -499,28 +500,29 @@
     "ownerDelegationReason": {"type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S",
       "description": "Why you act for the owner, naming what they asked for; it is kept in the owner's audit log."},
     "ownerDelegationTrigger": {
-      "description": "The owner trigger of an action under the owner's delegation (docs/ROUTER.md R9): exactly one of source_turn_id or source_steer_id names the owner's message, or instruction_id names an active standing instruction together with exactly one of event_id or source_turn_id for what triggered it. Provider tool schemas cannot carry this cross-field rule, so the delegated tools state it in their descriptions and lib.router.owner_delegation.resolve_trigger validates it before any effect; a violation is a recorded refusal (owner_delegation_trigger_missing when no trigger is named, else owner_delegation_trigger_malformed).",
+      "description": "The owner trigger of an action under the owner's delegation (docs/ROUTER.md R9): exactly one of source_turn_id or source_steer_id names the owner's message, or instruction_id names an active standing instruction together with exactly one of event_id or source_turn_id for what triggered it, or under_delegation=true alone acts on the lead's own judgment under the owner's full delegation (owner decision 2026-11-18). Provider tool schemas cannot carry this cross-field rule, so the delegated tools state it in their descriptions and lib.router.owner_delegation.resolve_trigger validates it before any effect; a violation is a recorded refusal (owner_delegation_trigger_missing when no trigger is named, else owner_delegation_trigger_malformed).",
       "type": "object",
       "properties": {
         "source_turn_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/source_turn_id"},
         "source_steer_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/source_steer_id"},
         "instruction_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/instruction_id"},
-        "event_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/event_id"}
+        "event_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/event_id"},
+        "under_delegation": {"$ref": "#/$defs/ownerDelegationAuthority/properties/under_delegation"}
       },
       "if": {"required": ["instruction_id"]},
       "then": {
         "description": "With instruction_id, give exactly one of event_id or source_turn_id (the event that triggered the standing instruction, or the Turn that carried it) and no source_steer_id.",
         "oneOf": [{"required": ["event_id"]}, {"required": ["source_turn_id"]}],
-        "not": {"required": ["source_steer_id"]}
+        "not": {"anyOf": [{"required": ["source_steer_id"]}, {"required": ["under_delegation"]}]}
       },
       "else": {
-        "description": "Name the owner's message that asks for this with exactly one of source_turn_id or source_steer_id, or an active standing instruction with instruction_id; event_id only accompanies instruction_id.",
-        "oneOf": [{"required": ["source_turn_id"]}, {"required": ["source_steer_id"]}],
+        "description": "Name the owner's message that asks for this with exactly one of source_turn_id or source_steer_id, or an active standing instruction with instruction_id, or act on your own judgment with under_delegation=true alone; event_id only accompanies instruction_id.",
+        "oneOf": [{"required": ["source_turn_id"]}, {"required": ["source_steer_id"]}, {"required": ["under_delegation"]}],
         "not": {"required": ["event_id"]}
       }
     },
     "ownerDelegationAuthority": {
-      "description": "Act under the owner's delegation (docs/ROUTER.md R9). Name exactly one trigger: source_turn_id (the owner's own message of your current request), source_steer_id (an owner message sent while you were replying) or instruction_id with exactly one of event_id or source_turn_id (an active standing instruction and what triggered it). Any other combination is refused before anything runs (ownerDelegationTrigger).",
+      "description": "Act under the owner's delegation (docs/ROUTER.md R9). Name exactly one trigger: source_turn_id (the owner's own message of your current request), source_steer_id (an owner message sent while you were replying) or instruction_id with exactly one of event_id or source_turn_id (an active standing instruction and what triggered it), or under_delegation=true alone (no owner message asks for it: you act on your own judgment under the owner's full delegation, recorded with your reason). Any other combination is refused before anything runs (ownerDelegationTrigger).",
       "type": "object",
       "additionalProperties": false,
       "required": ["reason"],
@@ -533,7 +535,9 @@
         "instruction_id": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S",
           "description": "An active standing instruction of the owner that covers this. Give it with exactly one of event_id or source_turn_id naming what triggered it; instruction_id alone is refused before anything runs."},
         "event_id": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S",
-          "description": "With instruction_id: the event that triggered it, instead of source_turn_id. Never without instruction_id."}
+          "description": "With instruction_id: the event that triggered it, instead of source_turn_id. Never without instruction_id."},
+        "under_delegation": {"const": true,
+          "description": "true: no owner message asks for this; act on your own judgment under the owner's full delegation to every lead (owner decision 2026-11-18). Give it alone, never with another trigger; reason says why."}
       }
     },
     "restartServer": {
@@ -547,6 +551,7 @@
         "source_steer_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/source_steer_id"},
         "instruction_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/instruction_id"},
         "event_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/event_id"},
+        "under_delegation": {"$ref": "#/$defs/ownerDelegationAuthority/properties/under_delegation"},
         "interrupt_running_conversations": {"type": "boolean", "default": false,
           "description": "The Settings restart's force: true interrupts other running conversations (they resume from their checkpoint by themselves afterwards). Set it only when the owner asked to restart even though work is running. Protected steps (a git_land landing or an export) refuse the restart either way."},
         "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S",
@@ -573,6 +578,7 @@
         "source_steer_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/source_steer_id"},
         "instruction_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/instruction_id"},
         "event_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/event_id"},
+        "under_delegation": {"$ref": "#/$defs/ownerDelegationAuthority/properties/under_delegation"},
         "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S",
                             "description": "One setting change per key: a retry with the same key returns the recorded change and never applies it twice."}
       }
@@ -594,6 +600,7 @@
         "source_steer_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/source_steer_id"},
         "instruction_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/instruction_id"},
         "event_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/event_id"},
+        "under_delegation": {"$ref": "#/$defs/ownerDelegationAuthority/properties/under_delegation"},
         "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S",
                             "description": "One repair conversation per key: a retry with the same key returns the recorded repair and never starts a second one."}
       }
@@ -618,7 +625,7 @@
       "additionalProperties": false,
       "required": ["kind", "conversationId", "bindingRevision", "tenant"],
       "properties": {
-        "kind": {"const": "global_router"},
+        "kind": {"enum": ["global_router", "project_lead"], "description": "global_router: the grantee. project_lead: one of the owner's Project Routers, resolved from its current coordination binding; a full grant covers it (owner decision 2026-11-18, docs/ROUTER.md R9)."},
         "conversationId": {"$ref": "#/$defs/id"},
         "bindingRevision": {"type": "integer", "minimum": 1},
         "tenant": {"anyOf": [{"type": "string"}, {"type": "null"}]},
@@ -639,8 +646,8 @@
         "revision": {"type": "integer", "minimum": 0},
         "coverage": {"enum": ["full", "enumerated"],
                      "description": "full: every scope the delegation can cover, including one added later; the owner's switch grants it. enumerated: exactly the scopes listed when it was granted, never more."},
-        "scopes": {"type": "array", "items": {"enum": ["restart", "conversation_control", "owner_settings", "project_lifecycle", "project_repair", "scheduler"]},
-                   "description": "The scopes this grant covers now (lib.lifecycle_approval.covered_scopes): restart, conversation_control (Continue, checkpoint resume and Stop of an exact Attempt), owner_settings (reversible owner settings, R11), project_lifecycle (creating and configuring projects, R12), project_repair (one repair conversation in a project whose Project Router cannot run) and scheduler (pause or resume an owner, service or system scheduled task)."},
+        "scopes": {"type": "array", "items": {"enum": ["restart", "conversation_control", "owner_settings", "project_lifecycle", "project_repair", "scheduler", "lead_authority"]},
+                   "description": "The scopes this grant covers now (lib.lifecycle_approval.covered_scopes): restart, conversation_control (Continue, checkpoint resume and Stop of an exact Attempt), owner_settings (reversible owner settings, R11), project_lifecycle (creating and configuring projects, R12), project_repair (one repair conversation in a project whose Project Router cannot run), scheduler (pause or resume an owner, service or system scheduled task) and lead_authority (a lead's Turn without an owner message of its own dispatches and controls Workers, owner decision 2026-11-18)."},
         "grantee": {"anyOf": [{"$ref": "#/$defs/ownerDelegationRouter"}, {"type": "null"}]},
         "grantedAt": {"anyOf": [{"type": "number", "minimum": 0}, {"type": "null"}]},
         "grantedBy": {"anyOf": [{"$ref": "#/$defs/ownerDelegationProvenance"}, {"type": "null"}]},
@@ -659,7 +666,7 @@
       "properties": {
         "id": {"$ref": "#/$defs/id"},
         "owner": {"type": "integer", "minimum": 1},
-        "scope": {"enum": ["restart", "conversation_control", "owner_settings", "project_lifecycle", "project_repair", "scheduler"]},
+        "scope": {"enum": ["restart", "conversation_control", "owner_settings", "project_lifecycle", "project_repair", "scheduler", "lead_authority"]},
         "requester": {"$ref": "#/$defs/ownerDelegationRouter"},
         "reason": {"type": "string"},
         "trigger": {"anyOf": [{
@@ -667,7 +674,7 @@
           "additionalProperties": false,
           "required": ["kind", "turnId", "text"],
           "properties": {
-            "kind": {"enum": ["owner_message", "owner_steer", "standing_instruction"]},
+            "kind": {"enum": ["owner_message", "owner_steer", "standing_instruction", "owner_delegation"]},
             "turnId": {"$ref": "#/$defs/id"},
             "steerId": {"$ref": "#/$defs/id"},
             "instructionId": {"$ref": "#/$defs/id"},
@@ -680,7 +687,7 @@
           "additionalProperties": false,
           "required": ["kind"],
           "properties": {
-            "kind": {"enum": ["server", "conversation", "owner_settings", "project", "scheduled_task"]},
+            "kind": {"enum": ["server", "conversation", "owner_settings", "project", "scheduled_task", "project_request"]},
             "conversationId": {"$ref": "#/$defs/id"},
             "turnId": {"$ref": "#/$defs/id"},
             "attemptId": {"$ref": "#/$defs/id"},

@@ -92,9 +92,13 @@ plus every tool of the MCP servers its profile's `mcpServers` names
 (`scope.GrantedTools`; decision "A Worker grant names its MCP servers" in
 [tools_execution](modules/tools_execution.md)).
 `workerDeniedTools` keeps only the Coordinator/Router/Watchdog role tools and
-deferred wakes (timers, `await_device`, `create_conversation`,
-`integration_submit`), which would start work outside the grant and its Stop
-fence. Alternative rejected: a separate Worker toggle, which would reintroduce a
+deferred wakes (timers, `await_device`, `create_conversation`), which would
+start work outside the grant and its Stop fence. A Worker submits its own
+checkpoint for review (owner decision 2026-11-18): in its isolated task
+workspace `integration_submit` only saves the final checkpoint for the automatic
+task delivery the Coordinator's accepting review publishes, and starts nothing.
+Problem: Workers told to "submit when done" were refused and their leads
+re-ran the step by hand. Alternative rejected: a separate Worker toggle, which would reintroduce a
 second capability ceiling diverging from ordinary conversations.
 
 Scheduling is governed, not denied (owner request 2026-11-10;
@@ -1169,7 +1173,29 @@ account (an account covers its request from the first model call, which came
 before the message), its Worker objectives quote the steered words, and the
 Global Router forwards it only by `source_steer_id`. Without such a message the
 refusal is `NonhumanRequest` (`code: nonhuman_request`, `execution_started:
-false`), whose recovery says that repeating the call fails the same way.
+false`), whose recovery says that repeating the call fails the same way,
+unless the owner's delegation reaches the lead (below).
+
+**Lead Turns act under the owner's delegation (owner decision 2026-11-18).**
+Problem: wake, relay and notice Turns of every lead could only read Workers;
+the owner's commitment wakes, restart notices and keepalives stalled on
+`nonhuman_request` and waited for an owner sentence. Decision: under the
+owner's full grant ([ROUTER.md R9](ROUTER.md), "The delegation reaches every
+lead", scope `lead_authority`) `source_for_task(delegated=True)` takes, after the
+Turn's own human input and a steered owner message, the delegation itself as
+the source: `{conversationId, turnId: <the lead reply>, projectionRevision: 1,
+ownerDelegation: <gate action id>}` (`$defs.source`). The callers that act on
+Workers pass `delegated=True`: delegation and its birth
+(`authorize_from_coordinator`), `worker_control`, session control, review,
+cancel, `finish_project_request` and `request_user_decision`. Request accounts,
+forwarding, standing instructions and the Watchdog's review switch keep needing
+the owner's words. The gate records one audit action per lead Attempt before
+any effect; a Worker's birth re-checks that record and the live grant, so a
+revocation refuses at once; an admitted grant's live gate reads only the reply
+Turn's metadata. Such a request opens no request account (as a steered one), and
+its Worker objective links the reply and the audit record instead of quoting
+owner words. Specification: `tests/router/test_lead_delegation.py`.
+
 Alternatives rejected: queuing the owner's message behind such a Turn (it
 reaches the model only after that Turn ends, and the Global Router could no
 longer forward owner messages steered into its relay replies); counting a steer
@@ -1674,8 +1700,9 @@ project report relay, a Watchdog notice: most Global Router Turns) has no
 request of its own until the owner's own message reaches it ("The owner's
 message steered into a Turn without a request"). It reads its binding's project page (`scope=project`,
 `source_attempt_id: null`, every row `current_request: false`, no
-`request_usage`) once the project, binding and attempt fences pass, and it still
-authorizes no Worker or finish. Problem: on 2026-11-11 every such read on the
+`request_usage`) once the project, binding and attempt fences pass; it authorizes
+Workers only under the owner's delegation ("Lead Turns act under the owner's
+delegation"). Problem: on 2026-11-11 every such read on the
 Router's wakes failed with "Synthetic authorization origin denied" because
 the read resolved the wake's input as a request source. Alternatives rejected:
 accepting a nonhuman source as a request (it would authorize delegation);

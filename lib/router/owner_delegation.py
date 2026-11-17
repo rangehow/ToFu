@@ -18,10 +18,14 @@ live-server lifecycle actions; this module adds what only the router knows:
   own (standing instructions, nonhuman turns), limited to Continue, Stop and a
   session model change (``set_model``, docs/ROUTER.md R5).
 
-The grant never lets the Router answer for the owner, approve a prompt meant
-for the owner, forward its own text as the owner's or start Workers: those
-keep their human-only gates (``require_human_turn``, ``source_for_task``,
-lifecycle approvals) and no model tool can write the grant. The one
+The grant never lets a lead answer for the owner, approve a prompt meant
+for the owner or forward its own text as the owner's: those keep their
+human-only gates (``require_human_turn``, lifecycle approvals) and no model
+tool can write the grant. A full grant reaches every lead (owner decision
+2026-11-18): a Project Router acts as ``project_lead`` (``restart_server``,
+and ``lead_authority`` for Workers in ``lib.project_dispatch.delegation``),
+and ``under_delegation`` is the trigger of an action a lead takes on its own
+judgment, recorded with its reason. The one
 conversation it can start is a repair conversation in a project whose
 Project Router cannot run, with the owner's own words as its request
 (``lib.router.project_repair``, owner decision 2026-11-12).
@@ -59,13 +63,26 @@ def _refused(code: str, message: str):
     return DelegationRefused(code, message)
 
 
+# The owner's words that delegate to every lead; the trigger of an action a lead
+# takes on its own judgment (``under_delegation``) records them.
+LEAD_DELEGATION_WORDS = ('多去分析一下各个负责人的轨迹，看看我们现在机制有没有什么不足之处，我的权限要全部下放给'
+                         '负责人们，也就是说，负责人的能力边界要尽可能扩展开。')
+
+
 def router_requester(task: dict, scope: dict) -> dict:
-    """The acting Global Router: conversation, binding revision, tenant, Turn and Attempt."""
+    """The acting lead: conversation, binding revision, tenant, Turn and Attempt.
+
+    ``kind`` is ``global_router`` for the owner's Global Router, else
+    ``project_lead``: a Project Router, identified by the coordination binding
+    its scope was resolved from (owner decision 2026-11-18, docs/ROUTER.md R9).
+    """
     from lib.identity import PrincipalContext
+    from .policy import is_router_scope
     principal = PrincipalContext.from_payload(task.get('_principalContext') or {})
     if principal.owner_user_id not in (None, scope['user_id']):
         raise PermissionError('The task principal belongs to another owner')
-    return {'kind': 'global_router', 'conversationId': scope['conversation_id'],
+    return {'kind': 'global_router' if is_router_scope(scope) else 'project_lead',
+            'conversationId': scope['conversation_id'],
             'bindingRevision': scope['binding_revision'], 'tenant': principal.tenant_id,
             'turnId': task.get('_turnId'), 'attemptId': task.get('_attemptId')}
 
@@ -93,6 +110,13 @@ def resolve_trigger(task: dict, scope: dict, arguments: dict) -> dict:
                     for name in CONTRACT['$defs']['ownerDelegationTrigger']['properties'])
         raise _refused('owner_delegation_trigger_malformed' if named else 'owner_delegation_trigger_missing',
                        f'Refused before anything ran: {error}') from error
+    if arguments.get('under_delegation') is True:
+        try:
+            _live_router_attempt(task, scope)
+        except (PermissionError, ValueError) as error:
+            raise _refused('owner_delegation_trigger_invalid',
+                           f'Only your current executing reply acts under the delegation: {error}') from error
+        return {'kind': 'owner_delegation', 'turnId': task['_turnId'], 'text': LEAD_DELEGATION_WORDS}
     instruction_id = arguments.get('instruction_id')
     steer_id = arguments.get('source_steer_id')
     turn_id = arguments.get('source_turn_id')

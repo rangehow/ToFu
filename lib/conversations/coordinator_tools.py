@@ -329,6 +329,10 @@ def execute_coordinator_tool(task: dict, name: str, arguments: dict, *, runtime_
         elif name == 'list_project_leads':
             from lib.router.projects import project_leads
             result = project_leads(scope['user_id'], scope['conversation_id'], arguments)
+        elif name == 'restart_server':
+            # Every lead restarts under the owner's full delegation (docs/ROUTER.md R9).
+            from lib.router.owner_delegation import restart_server
+            result = restart_server(task, scope, arguments)
         elif name in _router_only_tools():
             from lib.router.tools import execute_router_tool
             result = execute_router_tool(task, scope, name, arguments)

@@ -588,6 +588,34 @@ jobs:
 
           [Run]
           Filename: "{app}\\Tofu.exe"; Description: "Launch Tofu"; Flags: nowait postinstall skipifsilent
+
+          [Code]
+          // CloseApplications alone is not enough: the Restart Manager
+          // cannot close the app's windowless server child (also
+          // Tofu.exe), and the copy then died on "DeleteFile failed;
+          // code 5" (owner report 2026-11-17). Take the whole tree down
+          // first, hidden, exactly like the NSIS TOFU_CLOSE_RUNNING_APP.
+          procedure TofuKillRunningApp();
+          var
+            ResultCode: Integer;
+          begin
+            Exec(ExpandConstant('{sys}\\taskkill.exe'), '/IM Tofu.exe /T /F', '',
+              SW_HIDE, ewWaitUntilTerminated, ResultCode);
+            if ResultCode = 0 then
+              Sleep(1200);
+          end;
+
+          function PrepareToInstall(var NeedsRestart: Boolean): String;
+          begin
+            TofuKillRunningApp();
+            Result := '';
+          end;
+
+          function InitializeUninstall(): Boolean;
+          begin
+            TofuKillRunningApp();
+            Result := True;
+          end;
           INNO_EOF
 
           echo "── Generated installer.iss ──"

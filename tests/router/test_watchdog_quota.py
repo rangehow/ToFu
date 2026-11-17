@@ -53,7 +53,7 @@ def _episode(owner):
     delivered = []
     watch = QuotaWatch(clock=lambda: clock[0], deliver=delivered.append)
     slot = Slot(key_name=f'{CREDENTIAL}:deployment-claude', api_key=API_KEY, model='claude-opus-5.5',
-                capabilities={'text'}, provider_id='example-corp', route_credential_id=CREDENTIAL)
+                capabilities={'text'}, provider_id='sankuai', route_credential_id=CREDENTIAL)
     rejection = RateLimitError('API HTTP 429: {"status":429,"message":"App:**0733在模型:claude-opus-5.5'
                                '每分钟请求次数超过限制","data":null}', status_code=429, is_shared_contention=True)
     original, quota_watch._WATCH = quota_watch._WATCH, watch
@@ -109,7 +109,7 @@ def test_quota_reports_never_raise_into_the_watch(world):
     from lib.router.watchdog.quota import report_quota_episode, resolve_quota_episode
     opened, _closed = _episode(world.owner)
     # An owner without a Watchdog records nothing; an unknown signal is not resolved.
-    assert report_quota_episode(world.owner + 1, provider_id='example-corp', lane=opened['lane'], key_tail='0733',
+    assert report_quota_episode(world.owner + 1, provider_id='sankuai', lane=opened['lane'], key_tail='0733',
                                 model='claude-opus-5.5', opened_at_ms=1, detail='x', dispatch=world.dispatch) is None
     assert resolve_quota_episode(world.owner, 'unknown-signal', 'Recovered.') is False
     assert world.woken == []

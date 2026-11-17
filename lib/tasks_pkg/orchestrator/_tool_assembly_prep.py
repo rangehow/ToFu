@@ -20,6 +20,7 @@ def _disable_tools_for_turn(task) -> None:
 
     task.pop('_rootToolAssemblyConfig', None)
     task.pop('_rootMcpToolNames', None)
+    task.pop('_rootMcpPendingServers', None)
     task['_tool_gateway_names'] = []
     task['_tool_schema'] = []
     task['_toolInitialVisibleNames'] = []
@@ -174,8 +175,41 @@ def assemble_round_tools(cfg, task, mcfg):
     resolved model-config dict from Section 1). Returns the 2-tuple
     ``(tool_list, has_real_tools)``. Wire visibility remains stable for the
     entire turn. Root MCP authority refreshes before each request within the
-    initial capability ceiling, independently of the frozen declarations.
+    initial capability ceiling, independently of the frozen declarations:
+    the MCP names assembled now, plus every tool of a server the owner had
+    enabled but that was not connected yet (a restarted execution host runs
+    Turns while its MCP auto-connect is still starting servers).
     """
+    result = _assemble_round_tools(cfg, task, mcfg)
+    if '_rootToolAssemblyConfig' in task:
+        task['_rootMcpPendingServers'] = _pending_mcp_servers(
+            cfg, task['_rootMcpToolNames'])
+    return result
+
+
+def _pending_mcp_servers(cfg, assembled_names):
+    """Servers the owner enabled whose tools this assembly could not see."""
+    owner = int(cfg.get('userId') or cfg.get('_turnOwnerUserId') or 0)
+    if owner < 1 or not cfg.get('mcpEnabled', True):
+        return []
+    from lib.mcp.config import load_mcp_config
+    from lib.mcp.types import parse_namespaced_name
+    try:
+        config = load_mcp_config(user_id=owner)
+    except Exception as error:
+        # No ceiling beyond the assembled names: unreadable configuration
+        # never grants a server.
+        logger.warning('[ToolAssembly] owner MCP configuration unreadable; '
+                       'late-connecting servers stay unavailable this turn: %s',
+                       type(error).__name__)
+        return []
+    assembled = {(parse_namespaced_name(name) or ('',))[0] for name in assembled_names}
+    return sorted(
+        server for server, row in config.items()
+        if isinstance(row, dict) and row.get('enabled', True) and server not in assembled)
+
+
+def _assemble_round_tools(cfg, task, mcfg):
     from lib.tasks_pkg.execution_profile import is_third_party_text
     if is_third_party_text(task):
         # Third-party text is answered by a plain model reply, whatever the config.
@@ -328,6 +362,7 @@ def assemble_round_tools(cfg, task, mcfg):
     if not result[1]:
         task.pop('_rootToolAssemblyConfig', None)
         task.pop('_rootMcpToolNames', None)
+        task.pop('_rootMcpPendingServers', None)
         return result
     task['_rootToolAssemblyConfig'] = dict(mcfg)
 
@@ -346,24 +381,31 @@ def refresh_root_mcp_authority(task):
     """Refresh live grants for the root's existing MCP surface, never its wire.
 
     Startup can precede asynchronous MCP connection. Reuse ordinary assembly
-    on detached carriers so plan/selection/owner policy still decides grants.
+    on detached carriers so plan/selection/owner policy still decides grants;
+    a dispatched Worker's or Coordinator's assembly also intersects its grant.
     Child authority is an immutable parent intersection, not a root inventory.
     """
     from lib.tasks_pkg.invocation import is_child_invocation
-    from lib.project_dispatch.admission import is_dispatch_task
+    from lib.mcp.types import parse_namespaced_name
     mcfg = task.get('_rootToolAssemblyConfig')
-    if not isinstance(mcfg, dict) or is_child_invocation(task) or is_dispatch_task(task):
+    if not isinstance(mcfg, dict) or is_child_invocation(task):
         return
 
     def name(tool):
         return str((tool.get('function') or {}).get('name') or '')
 
-    eligible = set(task.get('_rootMcpToolNames') or [])
-    if not eligible:
+    names = set(task.get('_rootMcpToolNames') or [])
+    pending = set(task.get('_rootMcpPendingServers') or [])
+    if not names and not pending:
         return
+
+    def eligible(tool_name):
+        return tool_name in names or (
+            parse_namespaced_name(tool_name) or ('',))[0] in pending
+
     cfg = dict(task.get('config') or {})
     shadow = dict(task, config=cfg)
-    assemble_round_tools(cfg, shadow, mcfg)
+    _assemble_round_tools(cfg, shadow, mcfg)
     from lib.tasks_pkg.delegate_mode import DELEGATION_VIEW_KEY, delegate_mode_active
     target, source = task, shadow
     if delegate_mode_active(task):
@@ -374,7 +416,7 @@ def refresh_root_mcp_authority(task):
             return
     original = target.get('_executable_tool_catalog') or []
     refreshed = [tool for tool in source.get('_executable_tool_catalog', [])
-                 if name(tool) in eligible]
+                 if eligible(name(tool))]
     live_names = {name(tool) for tool in refreshed}
     # Publish the complete catalog + associated policy projection before any
     # request/streaming ingestion begins. Nothing below adds wire declarations.

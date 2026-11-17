@@ -43,6 +43,7 @@ from .scheduler import api_v1_scheduler_bp
 from .swarm import api_v1_swarm_bp
 from .activity import api_v1_activity_bp
 from .desktop import api_v1_desktop_bp
+from .devices import api_v1_devices_bp
 from .browser import api_v1_browser_bp
 from .auth_sources import api_v1_auth_sources_bp
 from .site_packs import api_v1_site_packs_bp
@@ -115,6 +116,7 @@ ALL_V1_BLUEPRINTS = [
     api_v1_swarm_bp,
     api_v1_activity_bp,
     api_v1_desktop_bp,
+    api_v1_devices_bp,
     api_v1_browser_bp,
     api_v1_auth_sources_bp,
     api_v1_site_packs_bp,

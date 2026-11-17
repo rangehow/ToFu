@@ -135,6 +135,10 @@
       "guard": "tests/compute_patrol/test_rules.py"
     },
     {
+      "path": "contracts/device_routing_v1.schema.json",
+      "guard": "tests/desktop/test_device_routing.py"
+    },
+    {
       "path": "contracts/device_waits_v1.schema.json",
       "guard": "tests/desktop/test_device_waits.py"
     },

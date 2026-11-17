@@ -208,6 +208,15 @@ class ShardPool:
                               deadline_unix_ms=deadline_unix_ms)
                 scheduled = scheduled and answer['scheduled']
             return {'scheduled': scheduled}
+        if method == 'device_policy_reconcile':
+            # The device policy cache is process-local too: every process that
+            # runs Turns drops it, or the answer is not applied.
+            applied = local['applied']
+            for endpoint in endpoints:
+                answer = call(endpoint, method, task_id, user_id=user_id, params=params,
+                              deadline_unix_ms=deadline_unix_ms)
+                applied = applied and answer['applied']
+            return {'applied': applied}
         if method == 'background_activity':
             views = [local]
             for endpoint in endpoints:

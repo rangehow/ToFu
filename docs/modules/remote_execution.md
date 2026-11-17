@@ -98,7 +98,9 @@ The agent executes ordinary commands, paper builds and egress streams outside of
 
 ## Permissions
 
-The agent reconstructs its permission floor on startup. Read, write, execute,
+Effective permissions are the Home ceiling AND the device switch; see
+[Device routing and permissions](#device-routing-and-permissions) for the Home
+half. The agent reconstructs its permission floor on startup. Read, write, execute,
 GUI, egress and Codex-login tiers are enforced twice from the one command-tier
 map in `contracts/desktop_node_v1.schema.json` (`x-command-tiers`,
 `x-command-param-tiers`): the server refuses to enqueue a command whose tier
@@ -323,6 +325,12 @@ selection.
   enqueue.
 - Wrong device/owner result or stream frame: ignore and audit; never settle.
 - Pickup/result timeout: typed bridge transport failure.
+- Device lost (no poll within the liveness window) while it held or was
+  addressed by a call: the call settles `device_unavailable` at once; it is
+  never retried on another device, and the node's journal answers a repeated
+  idempotency key without re-running it.
+- Tier outside Home ceiling AND device switch: `permission_denied` before
+  enqueue; a ceiling lowered after enqueue withdraws the unclaimed command.
 - Remote path outside declared root or insufficient device capability: local
   denial returned as tool failure.
 - Device offline while its conversation could wait: the tool error names
@@ -345,6 +353,8 @@ selection.
 - Egress uses exact target classes and defense-in-depth checks.
 - There is one desktop artifact; node permissions default to read-only and
   are enforced on both the server and the device.
+- Every device tool call names or resolves to exactly one device before it is
+  sent; nothing selects the most recently seen device.
 - Artifact serving never maps untrusted path text directly to the filesystem.
 
 ## Change routing
@@ -358,6 +368,7 @@ selection.
 | Egress host/route | both server and agent egress owners | allow-list, failover, redaction |
 | Adapter lifecycle | both adapter owners | loopback policy, account/catalog sync |
 | Pairing/node protocol | `lib/desktop_wire/node_protocol.py`, pairing service, attachments | expiry, one-use, owner binding, link parsing, migration (`tests/desktop/test_desktop_node_protocol.py`, `test_desktop_pairing.py`) |
+| Device placement / Home ceiling / defaults | `lib/desktop/routing.py`, `lib/desktop/device_policy.py`, `contracts/device_routing_v1.schema.json`, `routes/api_v1/devices.py` | `tests/desktop/test_device_routing.py`, `tests/desktop/test_device_routing_faults_slow.py` (real processes, `-m slow`) |
 | Device-online wake | `lib/desktop/device_waits.py`, `register_agent` epochs | exactly-once wake, owner isolation, restart |
 | Installer/artifact | `lib/desktop_dist/`, workflow/spec | kind, checksum, smoke, traversal |
 
@@ -481,6 +492,94 @@ name and ID never resolve; ambiguity; offline refusal; old frame without
 `system`; malformed/oversized facts dropped; agent frame detection on simulated
 Windows/POSIX hosts; schema; environment lines). Real Windows hosts are not
 exercised.
+
+## Device routing and permissions
+
+Owner decisions 6 and 7 of [the multi-device design](../MULTI_DEVICE_NETWORK_DESIGN.md);
+authority `contracts/device_routing_v1.schema.json`.
+
+Problem: the Home decided neither placement nor permissions. An unaddressed
+call ran on the owner's only device or failed, there was no default device,
+the device switch was the only permission authority (a compromised or
+misconfigured node could grant itself anything), a node lost mid-call left its
+caller waiting with no settlement, and the node's in-memory replay set died
+with the process, so a resumed call could run its side effect twice.
+
+Decision:
+- Placement (`lib/desktop/routing.py::route_device_call`), applied by the
+  desktop tool executor before anything is sent: a named device runs there or
+  is refused (`device_not_found`, `device_ambiguous`, `device_offline` with the
+  listing); an unnamed call runs on the owner-marked default of its kind
+  (`computer` for desktop tools, `browser` for unpinned browser tools in
+  `lib/browser/dispatch.py`), else on the only online device, else is refused
+  (`device_ambiguous`, `device_none`). An offline default is refused, never
+  replaced. Kinds: `computer`, `server` (headless node, `NodeKind` in the
+  node registry or the poll frame's optional `kind`), `browser`.
+- Permissions (`lib/desktop/device_policy.py`): one owner-scoped record in
+  portable record CAS (`desktop.device_policy.v1`) holds per-node ceilings and
+  per-kind defaults; its version is the `rev`. A node without a stored ceiling
+  is read-only, so a newly paired device starts read-only. The one Home
+  boundary is `bridge._tier_enqueue_error` (ceiling AND declared tiers, default
+  deny, a policy read failure counts as read-only); `take_pending_commands`
+  withdraws a queued command whose tier the ceiling no longer allows, and puts
+  the ceiling on the wire (`home_tiers`, `contracts/desktop_bridge_v3`); the
+  node refuses a command outside `home_tiers` or its own switch
+  (`lib/desktop_agent/_dispatch.py::home_tier_refusal`, `permission_refusal`).
+- Live changes: `PUT /api/v4/devices/<id>/ceiling` and
+  `PUT /api/v4/devices/defaults` commit the record, drop the API process's
+  cached copy, then send the owner command control `device_policy_reconcile`
+  (`contracts/command_control_v1.json`), which the execution incarnation
+  repeats on every execution shard (the `mcp_reconcile` path), and publish
+  `devices.changed`. Enforcement runs in the bridge owner (the API process,
+  phase 0 relay), so a running Turn's next command already sees the change;
+  the reconcile keeps placement defaults and the environment listing current
+  on the execution host and shards. `GET /api/v4/devices/permissions` lists
+  `{home, device, effective}` per node.
+- Node loss: the bridge owner runs one liveness watcher that wakes at the
+  earliest `last_seen + 15 s` (`x-liveness-window-seconds`, the existing
+  window). A device whose window lapsed settles its unclaimed addressed
+  commands (withdrawn, will not run) and its claimed ones (outcome unknown)
+  with `device_unavailable`, once per connection epoch, and publishes
+  `devices.changed`; it never re-targets them. The Turn continues with the
+  typed tool result (and `await_device` when it can wait).
+- Idempotency: the desktop tool call's command id is its idempotency key
+  (`call_idempotency_key`: owner, conversation, task, round, tool call id,
+  tool). The Home attaches a repeated key to the command already queued; the
+  node journals every non-read command id durably beside its config
+  (`lib/desktop_agent/_journal.py`) before it runs and answers a repeated id
+  from the journal (the recorded outcome, or `device_unavailable` when it died
+  mid-run) instead of running it again, also after a node restart. Records
+  retire after `x-idempotency-journal-retention-seconds` (7 days).
+- Computer-control tools return only through this routing: the owner's own
+  attended Turn resolves `desktopEnabled` true server-side (the composer toggle
+  is removed until the Devices page lands, `lib/conv_config/_resolve.py`) and
+  the family is offered only while one of the owner's devices is online
+  (`lib/tools/registry/_build.py::_build_desktop`). Scheduled, delegated and
+  Worker turns keep their explicit `desktopEnabled=false`.
+
+Alternatives considered:
+- Home-only permissions for headless nodes: simpler, but a compromised Home
+  could then raise any node (decision 6 rejected it).
+- Picking the most recently seen device when several are online: silently
+  runs on the wrong machine (decision 7).
+- Re-sending a lost call to another online device: duplicates side effects
+  and violates the named-device rule.
+- A durable Home command queue for deduplication: a Home restart is already an
+  honest failure of the caller; the node is the only party that knows whether
+  it ran the command, so the node holds the journal.
+- Polling the stored policy on every command: a storage read per device call;
+  explicit invalidation through the existing control path costs nothing idle.
+
+Verification: `tests/desktop/test_device_routing.py` (policy, placement,
+boundary, claim-time withdrawal, node re-check, loss settlement, idempotent
+attach, journal, browser default, shard fan-out, routes),
+`tests/desktop/test_desktop_bridge_relay.py` (identical routing and admission
+on an `execution` and an `execution_shard` process against a real bridge-owner
+process), and `tests/desktop/test_device_routing_faults_slow.py` (real Home and
+node processes: Home read-only default, ceiling raise, node-side refusal of a
+smuggled command, SIGKILL of the node's process group mid-command with a second
+node online, return with the same identity and repeated idempotency key; no
+hang, no retry elsewhere, no duplicate side effect, no surviving process).
 
 ## Waiting for an offline device
 

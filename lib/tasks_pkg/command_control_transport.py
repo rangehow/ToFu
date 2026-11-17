@@ -93,6 +93,8 @@ def _valid_result(method, result):
             and isinstance(agents, list) and all(isinstance(row, dict) for row in agents))
     if method == 'mcp_reconcile':
         return isinstance(result, dict) and set(result) == {'scheduled'} and type(result['scheduled']) is bool
+    if method == 'device_policy_reconcile':
+        return isinstance(result, dict) and set(result) == {'applied'} and type(result['applied']) is bool
     if method in OWNER_METHODS:
         return (isinstance(result, dict) and set(result) == {'swarms', 'backgroundCommands'}
                 and all(isinstance(rows, list) and all(isinstance(row, dict) for row in rows)

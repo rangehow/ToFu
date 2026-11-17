@@ -14,6 +14,22 @@ import pytest
 from lib.desktop_agent._dispatch import COMMANDS as AGENT_COMMANDS
 from lib.desktop_tools import DESKTOP_TOOL_NAMES
 
+OWNER = '7'
+
+
+@pytest.fixture(autouse=True)
+def _one_online_device():
+    """The Home places every call on a device first (lib.desktop.routing)."""
+    from lib.desktop import bridge
+    with bridge.command_queue_lock:
+        saved = dict(bridge._agents)
+        bridge._agents.clear()
+    bridge.register_agent('parity-node', {'name': 'parity'}, user_id=OWNER)
+    yield
+    with bridge.command_queue_lock:
+        bridge._agents.clear()
+        bridge._agents.update(saved)
+
 
 def _capture_enqueued_cmd_type(monkeypatch, fn_name):
     """经 task-loop 路径(_run_desktop)入队一条命令,回传 wire 上的 cmd_type."""
@@ -23,7 +39,7 @@ def _capture_enqueued_cmd_type(monkeypatch, fn_name):
     captured = {}
 
     def fake_send_desktop_command(cmd_type, params=None, timeout=30,
-                                  target_agent_id=None, user_id=''):
+                                  target_agent_id=None, user_id='', **_options):
         captured['cmd_type'] = cmd_type
         captured['params'] = params
         return {'ok': True}, None
@@ -32,7 +48,7 @@ def _capture_enqueued_cmd_type(monkeypatch, fn_name):
     # 因此 patch lib.desktop 模块属性即可拦截。
     monkeypatch.setattr(lib.desktop, 'send_desktop_command',
                         fake_send_desktop_command)
-    _agents._run_desktop(fn_name, {})
+    _agents._run_desktop(fn_name, {}, user_id=OWNER)
     return captured
 
 
@@ -70,16 +86,16 @@ def test_desktop_tool_does_not_manufacture_a_wait_deadline(monkeypatch):
         assert options['cancellation'].is_set()
         return {'entries': []}, None
     monkeypatch.setattr(lib.desktop, 'send_desktop_command', send)
-    _agents._run_desktop('desktop_list_files', {}, user_id='owner', cancellation=cancellation)
+    _agents._run_desktop('desktop_list_files', {}, user_id=OWNER, cancellation=cancellation)
     assert captured['timeout'] is None
-    assert captured['user_id'] == 'owner'
+    assert captured['user_id'] == OWNER
 
 
 @pytest.mark.unit
 def test_desktop_handler_binds_task_stop_to_its_wait(monkeypatch):
     import lib.desktop
     from lib.tasks_pkg.handlers.misc import _agents
-    task = {'aborted': False, '_userId': 'owner'}
+    task = {'aborted': False, '_userId': OWNER}
     captured = {}
     def send(cmd_type, params, **options):
         captured.update(options)
@@ -94,4 +110,4 @@ def test_desktop_handler_binds_task_stop_to_its_wait(monkeypatch):
     result = _agents._handle_desktop_tool(
         task, {}, 'desktop_list_files', 'tool', {}, 1, {}, {}, None, False)
     assert 'cancelled' in result
-    assert captured['timeout'] is None and captured['user_id'] == 'owner'
+    assert captured['timeout'] is None and captured['user_id'] == OWNER

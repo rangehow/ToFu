@@ -316,6 +316,44 @@ def _terminal_access_error(
     ).to_envelope_text()
 
 
+def _route_unpinned_client(owner_user_id, owned):
+    """Device routing for a browser tool call that names no client (decision 7).
+
+    The owner's only connected browser runs it; with several connected, the
+    owner-marked default browser (contracts/device_routing_v1.schema.json)
+    runs it when connected, otherwise the call is refused. Never the most
+    recently polled client.
+    """
+    if len(owned) == 1:
+        return str(owned[0].get('client_id') or ''), None
+    from lib.desktop import device_policy
+    try:
+        default = device_policy.defaults(owner_user_id).get('browser')
+    except Exception as error:
+        logger.warning('[Browser] default browser unavailable: %s', error)
+        default = None
+    names = ', '.join(sorted(f"{row.get('name') or row['client_id']} ({row['client_id']})"
+                             for row in owned))
+    if default and any(str(row.get('client_id') or '') == default for row in owned):
+        return default, None
+    if default:
+        return None, typed_tool_error(
+            'device_offline', retryable=True,
+            message=(f'Your default browser {default} is not connected; it is not replaced '
+                     f'by another one. Connected browsers: {names}.'),
+            next_action=('Report this connection blocker, or ask the owner to change the '
+                         'default browser on the Devices page.'),
+        ).to_envelope_text()
+    return None, typed_tool_error(
+        'device_ambiguous', retryable=False,
+        message=(f'{len(owned)} of your browsers are connected ({names}), the conversation '
+                 'pins none and no default browser is marked, so nothing was sent.'),
+        next_action=('Ask the owner to mark a default browser on the Devices page '
+                     '(PUT /api/v4/devices/defaults) or to pin one browser for this '
+                     'conversation.'),
+    ).to_envelope_text()
+
+
 def execute_browser_tool(
     fn_name,
     fn_args,
@@ -375,7 +413,9 @@ def execute_browser_tool(
                 'repeat calls until the connection changes or switch devices implicitly.'),
         ).to_envelope_text()
     if not client_id and owned:
-        client_id = _pick_connected_client(caller_owner, owned)
+        client_id, refusal = _route_unpinned_client(caller_owner, owned)
+        if refusal is not None:
+            return refusal
     if not client_id:
         return typed_tool_error(
             'browser_extension_disconnected', retryable=True,

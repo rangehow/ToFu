@@ -4558,6 +4558,70 @@
       "handler": "desktop_token_revoke"
     },
     {
+      "method": "PUT",
+      "path": "/api/v4/devices/<node_id>/ceiling",
+      "transport": "http",
+      "responseContract": "tofu.api/v4",
+      "summary": "Set the Home permission ceiling of one of the caller's devices",
+      "tags": [
+        "capabilities"
+      ],
+      "scope": "",
+      "public": false,
+      "requiredScopes": null,
+      "documented": true,
+      "owner": "routes/api_v1/devices.py",
+      "handler": "device_ceiling"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/devices/defaults",
+      "transport": "http",
+      "responseContract": "tofu.api/v4",
+      "summary": "The caller's default device per kind",
+      "tags": [
+        "capabilities"
+      ],
+      "scope": "",
+      "public": false,
+      "requiredScopes": null,
+      "documented": true,
+      "owner": "routes/api_v1/devices.py",
+      "handler": "device_defaults"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v4/devices/defaults",
+      "transport": "http",
+      "responseContract": "tofu.api/v4",
+      "summary": "Mark or clear the caller's default device per kind",
+      "tags": [
+        "capabilities"
+      ],
+      "scope": "",
+      "public": false,
+      "requiredScopes": null,
+      "documented": true,
+      "owner": "routes/api_v1/devices.py",
+      "handler": "update_device_defaults"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/devices/permissions",
+      "transport": "http",
+      "responseContract": "tofu.api/v4",
+      "summary": "The Home ceiling, device switch and effective permissions of the caller's devices",
+      "tags": [
+        "capabilities"
+      ],
+      "scope": "",
+      "public": false,
+      "requiredScopes": null,
+      "documented": true,
+      "owner": "routes/api_v1/devices.py",
+      "handler": "device_permissions"
+    },
+    {
       "method": "GET",
       "path": "/api/v4/dispatch/endpoint-metrics",
       "transport": "http",

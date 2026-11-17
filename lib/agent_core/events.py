@@ -3173,6 +3173,31 @@ PUSH_FRAME_SPECS: tuple[PushFrameSpec, ...] = (
         ),
     ),
     PushFrameSpec(
+        type='devices.changed',
+        channel='notify',
+        task='__devices__',
+        purpose='Wake hint: the owner\'s device policy committed a new '
+                'revision (Home ceiling or default device, '
+                'contracts/device_routing_v1.schema.json), the Home node '
+                'registry changed (pair, confirm, reject, rename, remove, '
+                'identity conflict; '
+                'contracts/desktop_node_registry_v1.schema.json), or one of '
+                'the owner\'s devices came online or its liveness window '
+                'lapsed.  Clients re-read GET /api/v4/devices/permissions '
+                'and the node listing; a lost or duplicated hint never '
+                'loses data.',
+        fields={
+            'userId': 'Owner user id; the browser frame-ownership check is '
+                      'mandatory.',
+            'rev': 'Committed policy revision or registry change stamp '
+                   '(milliseconds); absent on a liveness transition.',
+        },
+        schema=(
+            FieldSpec('userId', 'int', required=True),
+            FieldSpec('rev', 'int'),
+        ),
+    ),
+    PushFrameSpec(
         type='codex.reset_offer.updated',
         channel='oauth',
         task='codex-reset',

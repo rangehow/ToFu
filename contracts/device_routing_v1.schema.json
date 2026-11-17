@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "tofu.device-routing/v1",
+  "title": "Device routing and Home permission ceilings",
+  "description": "Authority for where a device tool call runs and what it may do (docs/MULTI_DEVICE_NETWORK_DESIGN.md decisions 6 and 7; docs/modules/remote_execution.md, 'Device routing and permissions'). The Home resolves every device tool call to exactly one of the owner's devices before enqueue (lib/desktop/routing.py) and admits it only when the command's tier is in the effective grant: the Home ceiling stored here AND the tiers the device declared in its latest poll. The node re-checks the same intersection from the home_tiers the command carries (contracts/desktop_bridge_v3.schema.json Command). One owner-scoped policy record per owner lives in the storage authority's portable record namespace below; its record version is the policy rev.",
+  "type": "object",
+  "x-namespace": "desktop.device_policy.v1",
+  "x-record-key": "The owner user id as a decimal string.",
+  "x-kinds": ["computer", "server", "browser"],
+  "x-kind-semantics": {
+    "computer": "A desktop-app node (contracts/desktop_node_v1 NodeKind computer). Desktop tools (desktop_*) resolve an unaddressed call to this kind's default.",
+    "server": "A headless node joined with the one-line command (NodeKind server).",
+    "browser": "A browser extension client (lib/browser). Owner-marked default for unaddressed browser tool calls."
+  },
+  "x-liveness-window-seconds": 15,
+  "x-idempotency-journal-retention-seconds": 604800,
+  "x-resolution": [
+    "A call that names a device (agent ID, else case-insensitive name) runs there or is refused: unknown, ambiguous and offline targets fail before enqueue with the owner's online-device listing. A named device is never replaced by another one.",
+    "A call that names no device runs on the owner-marked default for the tool's kind when one is marked; an offline default is refused (device_offline), never replaced by another device.",
+    "Without a marked default it runs on the owner's only online device when exactly one is online; with several online it is refused (device_ambiguous) with the listing; with none it is refused (device_none). Never 'most recently seen'."
+  ],
+  "x-permission-semantics": {
+    "ceiling": "The Home ceiling per node: tiers the owner allows on this Home. A node with no stored ceiling is read-only (default deny), so a newly paired device starts read-only. read is the floor of every grant and cannot be removed.",
+    "device": "The tiers the node declared in its latest poll (its own switch, set only on the device). The Home never raises them.",
+    "effective": "ceiling AND device, tier by tier. Enqueue refuses a command whose tier is outside it (lib.desktop.bridge._tier_enqueue_error, the one Home boundary); a command already queued is checked again when the node claims it; the node refuses it again from home_tiers.",
+    "change": "A ceiling or default change commits to the record, invalidates the policy cache of the API process at once and of the execution incarnation and every execution shard through the owner command control device_policy_reconcile (contracts/command_control_v1.json), then publishes the notify wake hint devices.changed. Running Turns observe it on their next device call; no restart."
+  },
+  "x-errors": {
+    "device_none": "No device of the owner is online.",
+    "device_not_found": "No device of the owner has the named ID or name.",
+    "device_ambiguous": "Several devices match, or several are online and no default is marked for the tool's kind.",
+    "device_offline": "The named or default device is offline.",
+    "device_unavailable": "The device was lost (no poll within the liveness window) after the call was sent. Before the device claimed it, the call was withdrawn and never runs; after, its outcome is unknown and it is never retried elsewhere.",
+    "permission_denied": "The command's tier is outside ceiling AND device."
+  },
+  "$defs": {
+    "Tiers": {
+      "description": "Identical to contracts/desktop_node_v1.schema.json $defs/Tiers (tests/desktop/test_device_routing.py pins the equality).",
+      "type": "object",
+      "required": ["read", "write", "exec", "gui", "egress", "codex_login"],
+      "properties": {
+        "read": {"type": "boolean"}, "write": {"type": "boolean"}, "exec": {"type": "boolean"},
+        "gui": {"type": "boolean"}, "egress": {"type": "boolean"}, "codex_login": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "Kind": {"enum": ["computer", "server", "browser"]},
+    "NodeId": {"type": "string", "minLength": 1, "maxLength": 256},
+    "Ceiling": {
+      "type": "object",
+      "description": "Stored Home ceiling: the non-read tiers; read is implied.",
+      "required": ["write", "exec", "gui", "egress", "codex_login"],
+      "properties": {
+        "write": {"type": "boolean"}, "exec": {"type": "boolean"}, "gui": {"type": "boolean"},
+        "egress": {"type": "boolean"}, "codex_login": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "Defaults": {
+      "type": "object",
+      "required": ["computer", "server", "browser"],
+      "properties": {
+        "computer": {"type": ["string", "null"], "minLength": 1, "maxLength": 256},
+        "server": {"type": ["string", "null"], "minLength": 1, "maxLength": 256},
+        "browser": {"type": ["string", "null"], "minLength": 1, "maxLength": 256}
+      },
+      "additionalProperties": false
+    },
+    "PolicyRecord": {
+      "type": "object",
+      "required": ["version", "owner", "ceilings", "defaults"],
+      "properties": {
+        "version": {"const": 1},
+        "owner": {"type": "integer", "minimum": 1},
+        "ceilings": {"type": "object", "maxProperties": 4096,
+                     "propertyNames": {"minLength": 1, "maxLength": 256},
+                     "additionalProperties": {"$ref": "#/$defs/Ceiling"}},
+        "defaults": {"$ref": "#/$defs/Defaults"}
+      },
+      "additionalProperties": false
+    },
+    "DevicePermissions": {
+      "type": "object",
+      "required": ["node_id", "home", "device", "effective", "rev"],
+      "properties": {
+        "node_id": {"$ref": "#/$defs/NodeId"},
+        "home": {"$ref": "#/$defs/Tiers"},
+        "device": {"oneOf": [{"$ref": "#/$defs/Tiers"}, {"type": "null"}],
+                   "description": "null while this Home process has never received a poll from the node."},
+        "effective": {"$ref": "#/$defs/Tiers"},
+        "rev": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "PermissionsListing": {
+      "type": "object",
+      "required": ["permissions", "rev", "liveness_window_s"],
+      "properties": {
+        "permissions": {"type": "object", "additionalProperties": {"$ref": "#/$defs/DevicePermissions"}},
+        "rev": {"type": "integer", "minimum": 0},
+        "liveness_window_s": {"const": 15}
+      },
+      "additionalProperties": false
+    },
+    "CeilingRequest": {
+      "type": "object",
+      "required": ["tiers"],
+      "properties": {
+        "tiers": {
+          "type": "object",
+          "properties": {
+            "read": {"const": true}, "write": {"type": "boolean"}, "exec": {"type": "boolean"},
+            "gui": {"type": "boolean"}, "egress": {"type": "boolean"}, "codex_login": {"type": "boolean"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "DefaultsRequest": {
+      "type": "object",
+      "properties": {
+        "computer": {"type": ["string", "null"], "minLength": 1, "maxLength": 256},
+        "server": {"type": ["string", "null"], "minLength": 1, "maxLength": 256},
+        "browser": {"type": ["string", "null"], "minLength": 1, "maxLength": 256}
+      },
+      "additionalProperties": false
+    },
+    "DefaultsResponse": {
+      "type": "object",
+      "required": ["defaults", "rev"],
+      "properties": {"defaults": {"$ref": "#/$defs/Defaults"}, "rev": {"type": "integer", "minimum": 0}},
+      "additionalProperties": false
+    }
+  }
+}

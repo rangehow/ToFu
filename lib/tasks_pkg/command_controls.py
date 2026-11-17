@@ -146,6 +146,14 @@ def reconcile_mcp_server(*, user_id: int, server: str, action: str,
     return {'scheduled': request_mcp_reconcile(user_id, server, action)}
 
 
+def reconcile_device_policy(*, user_id: int, deadline_unix_ms: int | None = None):
+    """Drop this process's cached device policy of the owner (contracts/device_routing_v1)."""
+    _admit(deadline_unix_ms)
+    from lib.desktop.device_policy import invalidate
+    invalidate(user_id)
+    return {'applied': True}
+
+
 def merge_background_activity(*views):
     """Union per-process views; one swarm run or command appears once."""
     merged = {'swarms': [], 'backgroundCommands': []}
@@ -183,4 +191,6 @@ def apply_command_control(method, task_id, *, user_id, deadline_unix_ms=None, **
         return storage_rpc_metrics(user_id=user_id, deadline_unix_ms=deadline_unix_ms)
     if method == 'mcp_reconcile' and set(params) == {'server', 'action'} and task_id == '':
         return reconcile_mcp_server(user_id=user_id, deadline_unix_ms=deadline_unix_ms, **params)
+    if method == 'device_policy_reconcile' and not params and task_id == '':
+        return reconcile_device_policy(user_id=user_id, deadline_unix_ms=deadline_unix_ms)
     raise ValueError('Unsupported execution command control')

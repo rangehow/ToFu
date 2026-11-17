@@ -15,7 +15,9 @@ liveness judge read the one registry Settings shows. Poll-side verbs
 
 import asyncio
 from functools import lru_cache
+import json
 import math
+from pathlib import Path
 import threading
 import time
 import uuid
@@ -88,8 +90,10 @@ _agents: dict = {}
 _streams: dict = {}
 
 # Connection window: the agent is "connected" if it polled within this many
-# seconds.
-_CONNECTED_WINDOW_S = 15
+# seconds (contracts/device_routing_v1.schema.json x-liveness-window-seconds).
+_CONNECTED_WINDOW_S = json.loads(
+    (Path(__file__).resolve().parents[2] / 'contracts/device_routing_v1.schema.json')
+    .read_text(encoding='utf-8'))['x-liveness-window-seconds']
 # Pending commands older than this are expired (agent never picked them up).
 _COMMAND_TTL_S = limit('replay_retention_seconds')
 # Long-poll wait window (seconds) for the async poll route. Env-overridable
@@ -361,6 +365,10 @@ def register_agent(agent_id, meta=None, user_id='', key_id='') -> dict | None:
             # known facts; a malformed one clears them.
             'system': (_system_facts(meta['system']) if 'system' in meta
                        else prev.get('system')),
+            # Optional NodeKind (contracts/desktop_node_v1); absent keeps the
+            # previous value, routing reads absent as computer.
+            'kind': (meta['kind'] if meta.get('kind') in ('computer', 'server')
+                     else prev.get('kind')),
             'user_id': owner,
             'key_id': str(key_id or ''),
             'registered_at': prev.get('registered_at') or now,
@@ -378,13 +386,16 @@ def register_agent(agent_id, meta=None, user_id='', key_id='') -> dict | None:
             connection = {'agent_id': agent_id, 'user_id': owner,
                           'name': _agents[agent_id]['name'],
                           'connection_epoch': epoch, 'connected_at': connected_at}
+            _liveness_wake_locked()
+    if connection is not None:
+        _notify_devices_changed(owner)
     return connection
 
 
 def _public_agent(agent):
     return {key: value for key, value in agent.items()
             if key not in ('active_command_ids', 'execution_slots', 'protocol_version',
-                           'connection_epoch', 'connected_at')}
+                           'connection_epoch', 'connected_at', 'lost_epoch')}
 
 
 def online_agents() -> list:
@@ -569,22 +580,44 @@ def _addressing_enqueue_error(target_agent_id, user_id=''):
 
 
 def _tier_enqueue_error(cmd_type, params, target_agent_id, user_id=''):
-    """Server-side half of the node permission tiers (contracts/desktop_node_v1).
+    """The one Home permission boundary (contracts/device_routing_v1.schema.json).
 
-    The target (or the owner's sole online node) must have declared the tier
-    the command needs in its latest poll frame. A node that declared nothing
-    is read-only. The node re-checks locally before executing.
+    The command's tier must be in the target's effective grant: the owner's
+    Home ceiling for that node (absent = read-only, default deny) AND the tiers
+    the node declared in its latest poll frame. The node re-checks the same
+    intersection from the command's ``home_tiers`` before executing.
     """
-    from lib.desktop_wire.node_protocol import granted_tiers, tier_refusal
     user_id = str(user_id or '')
     online = [a for a in online_agents() if (a.get('user_id') or '') == user_id]
     agent = next((a for a in online if a['agent_id'] == target_agent_id), None) \
         if target_agent_id else (online[0] if len(online) == 1 else None)
     if agent is None:
         return None
+    return _permission_refusal(cmd_type, params, agent, user_id)
+
+
+def _permission_refusal(cmd_type, params, agent, user_id):
+    from lib.desktop import device_policy
+    from lib.desktop_wire.node_protocol import required_tier, tier_refusal
     label = f"device {agent.get('name') or agent['agent_id']} (agent {agent['agent_id']})"
-    return tier_refusal(cmd_type, params or {}, granted_tiers(agent.get('capabilities')),
-                        node_label=label)
+    device = device_policy.device_tiers(agent.get('capabilities'))
+    refusal = tier_refusal(cmd_type, params or {}, device, node_label=label)
+    if refusal:
+        return 'permission_denied: ' + refusal
+    tier = required_tier(cmd_type, params or {})
+    home = device_policy.home_tiers(user_id, agent['agent_id'])
+    if tier not in (None, 'control') and not home.get(tier):
+        return (f'permission_denied: {cmd_type} needs the {tier} permission, which this Home '
+                f'does not allow on {label} (new devices start read-only). The owner can '
+                'raise the Home ceiling on the Devices page '
+                f"(PUT /api/v4/devices/{agent['agent_id']}/ceiling).")
+    return None
+
+
+def _home_tiers_for(cmd, agent_id):
+    """The Home ceiling a claimed command carries to the node for its own re-check."""
+    from lib.desktop import device_policy
+    return device_policy.home_tiers(cmd.get('user_id') or '', agent_id)
 
 
 def disconnect_credential(key_id, user_id) -> list:
@@ -649,31 +682,37 @@ def send_desktop_command(cmd_type, params=None, timeout=None, target_agent_id=No
     if relay is not None:
         return _send_via_relay(relay, cmd_type, params, timeout, target_agent_id,
                                user_id, cmd_id, ttl, cancellation)
-    err = (_addressing_enqueue_error(target_agent_id, user_id=user_id)
-           or _tier_enqueue_error(cmd_type, params, target_agent_id, user_id=user_id))
-    if err:
-        logger.warning('[Desktop] refusing %s: %s', cmd_type, err)
-        return None, err
-    cmd_id = cmd_id or str(uuid.uuid4())
-    event = threading.Event()
-    cmd = {
-        'id': cmd_id,
-        'type': cmd_type,
-        'params': params or {},
-        'created_at': time.time(),
-        'event': event,
-        'result': None,
-        'error': None,
-    }
-    if target_agent_id:
-        cmd['target_agent_id'] = target_agent_id
-    cmd['user_id'] = str(user_id or '')
-    if ttl:
-        cmd['ttl'] = float(ttl)
+    attached = _attach_existing(cmd_id, cmd_type, target_agent_id, user_id)
+    if isinstance(attached, str):
+        return None, attached
+    if attached is not None:
+        cmd, event = attached, attached['event']
+    else:
+        err = (_addressing_enqueue_error(target_agent_id, user_id=user_id)
+               or _tier_enqueue_error(cmd_type, params, target_agent_id, user_id=user_id))
+        if err:
+            logger.warning('[Desktop] refusing %s: %s', cmd_type, err)
+            return None, err
+        cmd_id = cmd_id or str(uuid.uuid4())
+        event = threading.Event()
+        cmd = {
+            'id': cmd_id,
+            'type': cmd_type,
+            'params': params or {},
+            'created_at': time.time(),
+            'event': event,
+            'result': None,
+            'error': None,
+        }
+        if target_agent_id:
+            cmd['target_agent_id'] = target_agent_id
+        cmd['user_id'] = str(user_id or '')
+        if ttl:
+            cmd['ttl'] = float(ttl)
 
-    with command_queue_lock:
-        command_queue[cmd_id] = cmd
-    _wake_async_waiters(cmd)
+        with command_queue_lock:
+            command_queue[cmd_id] = cmd
+        _wake_async_waiters(cmd)
 
     deadline = time.monotonic() + timeout if timeout is not None else None
     cancelled = False
@@ -706,6 +745,104 @@ def send_desktop_command(cmd_type, params=None, timeout=None, target_agent_id=No
         return None, 'Desktop agent timeout — is the agent running?'
 
     return cmd.get('result'), cmd.get('error')
+
+
+def _attach_existing(cmd_id, cmd_type, target_agent_id, user_id):
+    """The queued command a repeated idempotency key names, else None.
+
+    A tool call's command id is its idempotency key (``lib.desktop.routing``):
+    a replayed call waits for the command already queued or running instead of
+    sending it again. Returns an error string when the key belongs to another
+    owner, device or command type.
+    """
+    if not cmd_id:
+        return None
+    with command_queue_lock:
+        cmd = command_queue.get(cmd_id)
+        if cmd is None:
+            return None
+        if (cmd.get('user_id') != str(user_id or '') or cmd['type'] != cmd_type
+                or (target_agent_id or None) != cmd.get('target_agent_id')):
+            return 'Desktop command id is already used by another command'
+        cmd.pop('caller_detached', None)
+        return cmd
+
+
+# ── Liveness watcher (bridge owner) ───────────────────────────────────────
+# One daemon thread wakes exactly when the earliest online device's window
+# lapses (last_seen + _CONNECTED_WINDOW_S), so a lost device is noticed
+# without a polling interval. It settles the lost device's unsettled commands
+# with device_unavailable (never retried elsewhere) and publishes the
+# devices.changed wake hint; register_agent publishes it on reconnect.
+_liveness_condition = threading.Condition(command_queue_lock)
+_liveness_thread = [None]
+
+
+def _liveness_wake_locked() -> None:
+    """Start the watcher on first use, or make it recompute its deadline."""
+    thread = _liveness_thread[0]
+    if thread is None or not thread.is_alive():
+        thread = threading.Thread(target=_liveness_loop, name='desktop-liveness', daemon=True)
+        _liveness_thread[0] = thread
+        thread.start()
+    _liveness_condition.notify_all()
+
+
+def _expire_lost_agents_locked(now) -> list:
+    """Settle commands of devices whose window lapsed this epoch; returns their owners."""
+    owners = []
+    for agent_id, agent in _agents.items():
+        if now - agent['last_seen'] < _CONNECTED_WINDOW_S:
+            continue
+        if agent.get('lost_epoch') == agent.get('connection_epoch'):
+            continue
+        agent['lost_epoch'] = agent.get('connection_epoch')
+        owners.append(agent['user_id'])
+        label = f"{agent.get('name') or agent_id} (agent {agent_id})"
+        for cmd_id, cmd in list(command_queue.items()):
+            if cmd['event'].is_set() or cmd.get('user_id') != agent['user_id']:
+                continue
+            if cmd.get('claimed_agent_id') == agent_id:
+                cmd['error'] = (
+                    f'device_unavailable: device {label} stopped answering (no poll for '
+                    f'{_CONNECTED_WINDOW_S} s) while it held this command. Its outcome is '
+                    'unknown; it was not retried on any device. Check the device before '
+                    'repeating the action.')
+            elif not cmd.get('claimed_agent_id') and cmd.get('target_agent_id') == agent_id:
+                cmd['error'] = (
+                    f'device_unavailable: device {label} went offline before it took this '
+                    'command; it was withdrawn and will not run.')
+            else:
+                continue
+            cmd['device_lost'] = True
+            cmd['event'].set()
+            if cmd.get('fire_and_forget') or cmd.get('caller_detached'):
+                command_queue.pop(cmd_id, None)
+        logger.info('[Desktop] device %s lost; its unsettled commands were settled', agent_id[:8])
+    return owners
+
+
+def _liveness_loop() -> None:
+    while True:
+        with command_queue_lock:
+            owners = _expire_lost_agents_locked(time.time())
+        for owner in dict.fromkeys(owners):
+            _notify_devices_changed(owner)
+        with command_queue_lock:
+            now = time.time()
+            deadlines = [agent['last_seen'] + _CONNECTED_WINDOW_S for agent in _agents.values()
+                         if agent.get('lost_epoch') != agent.get('connection_epoch')]
+            if not deadlines:
+                _liveness_condition.wait()
+            else:
+                remaining = min(deadlines) - now
+                if remaining > 0:
+                    _liveness_condition.wait(timeout=remaining)
+
+
+def _notify_devices_changed(owner) -> None:
+    from lib.desktop.device_policy import notify_devices_changed
+    notify_devices_changed(owner)
 
 
 def _send_via_relay(relay, cmd_type, params, timeout, target_agent_id, user_id, cmd_id,
@@ -886,7 +1023,11 @@ def take_pending_commands(*, agent_id: str, user_id: str) -> list:
     ``agent_id`` and ``user_id`` identify the authenticated poller. Commands
     are claimed before projection so only that agent may settle them.
     """
+    from lib.desktop import device_policy
+    from lib.desktop_wire.node_protocol import required_tier
     pending = []
+    # Read before the queue lock: a policy cache miss reads storage.
+    home = device_policy.home_tiers(user_id, agent_id)
     now = time.time()
     with command_queue_lock:
         online_ids = _online_ids_locked(user_id)
@@ -913,6 +1054,19 @@ def take_pending_commands(*, agent_id: str, user_id: str) -> list:
             if negotiated and not control:
                 if cmd_id in active or cmd.get('delivery_acknowledged'):
                     continue
+            tier = required_tier(cmd['type'], cmd['params'])
+            if not cmd.get('claimed_agent_id') and tier not in (None, 'control') \
+                    and not home.get(tier):
+                # The Home ceiling was lowered after this command was queued:
+                # it never reaches the node. (The node re-checks its own
+                # switch and the home_tiers it receives.)
+                cmd['error'] = (f"permission_denied: {cmd['type']} needs the {tier} "
+                                'permission, which the Home no longer allows on this '
+                                'device; it was withdrawn before the device received it.')
+                cmd['event'].set()
+                if cmd.get('fire_and_forget') or cmd.get('caller_detached'):
+                    command_queue.pop(cmd_id, None)
+                continue
             cmd['claimed_agent_id'] = agent_id
             if cmd.get('fire_and_forget'):
                 command_queue.pop(cmd_id, None)
@@ -920,6 +1074,7 @@ def take_pending_commands(*, agent_id: str, user_id: str) -> list:
                 'id': cmd_id,
                 'type': cmd['type'],
                 'params': cmd['params'],
+                'home_tiers': dict(home),
             }
             if cmd.get('target_agent_id'):
                 wire['target_agent_id'] = cmd['target_agent_id']

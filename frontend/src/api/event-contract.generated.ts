@@ -3633,6 +3633,15 @@ export interface ModelRoutingChangedPushFrame {
   rev?: number;
 }
 
+/** Wake hint: the owner's device policy committed a new revision (Home ceiling or default device, contracts/device_routing_v1.schema.json), the Home node registry changed (pair, confirm, reject, rename, remove, identity conflict; contracts/desktop_node_registry_v1.schema.json), or one of the owner's devices came online or its liveness window lapsed. Clients re-read GET /api/v4/devices/permissions and the node listing; a lost or duplicated hint never loses data. (push channel `notify`, task `__devices__`) */
+export interface DevicesChangedPushFrame {
+  type: 'devices.changed';
+  /** Owner user id; the browser frame-ownership check is mandatory. */
+  userId: number;
+  /** Committed policy revision or registry change stamp (milliseconds); absent on a liveness transition. */
+  rev?: number;
+}
+
 /** Passive completion receipt: the bounded earned-reset daemon settled. reset_offer is byte-compatible with the projection on GET /api/v1/oauth/status (length-bounded, no token or raw account id). Never durable authority: consumers keep a bounded HTTP reconciliation path and must never redeem a credit from the frame. (push channel `oauth`, task `codex-reset`) */
 export interface CodexResetOfferUpdatedPushFrame {
   type: 'codex.reset_offer.updated';
@@ -3697,6 +3706,7 @@ export type ContractedPushFrame =
   ConvDeletedPushFrame |
   FoldersChangedPushFrame |
   ModelRoutingChangedPushFrame |
+  DevicesChangedPushFrame |
   CodexResetOfferUpdatedPushFrame |
   OfficeFactPushFrame;
 
@@ -3706,6 +3716,7 @@ export const CONTRACTED_PUSH_FRAME_TYPES = [
   'conv_deleted',
   'folders_changed',
   'model_routing.changed',
+  'devices.changed',
   'codex.reset_offer.updated',
   'office.fact',
 ] as const satisfies readonly ContractedPushFrame['type'][];

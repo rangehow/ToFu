@@ -117,6 +117,8 @@ class TestCommandRouting:
             'id': 'cmd-1',
             'type': 'desktop_list_files',
             'params': {'path': '~'},
+            'home_tiers': {'read': True, 'write': True, 'exec': True, 'gui': True,
+                           'egress': True, 'codex_login': True},
             'target_agent_id': 'agent-A',
         }]
         assert command['claimed_agent_id'] == 'agent-A'

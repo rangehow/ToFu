@@ -25,8 +25,12 @@ AGENT = 'node-relay-1'
 
 _OWNER_SCRIPT = textwrap.dedent('''
     import os, sys, threading, time
-    from lib.desktop import bridge, bridge_relay
+    from lib.desktop import bridge, bridge_relay, device_policy
+    from tests.channels.conftest import RecordClient
     path = sys.argv[1]
+    # The owner (API) process holds the Home policy: allow exec on this node.
+    device_policy._default_client = RecordClient()
+    device_policy.set_ceiling(int(%(owner)r), %(agent)r, {'exec': True})
     server = bridge_relay.RelayServer(bridge_relay.record_path(path))
     def node():
         held = set()
@@ -239,3 +243,20 @@ def test_role_selection_keeps_all_in_one_local(tmp_path, isolated_bridge):
     with pytest.raises(RuntimeError):
         bridge_relay.configure_bridge_owner(process_role='execution', environ={})
 
+
+
+@pytest.mark.parametrize('process_role', ['execution', 'execution_shard'])
+def test_routing_and_home_ceiling_are_identical_on_the_execution_host_and_a_shard(
+        tmp_path, owner_process, isolated_bridge, process_role):
+    """A Turn on an execution shard places and admits device calls exactly like the host."""
+    from lib.desktop import bridge_relay
+    from lib.tasks_pkg.handlers.misc._agents import _run_desktop
+    assert bridge_relay.configure_bridge_owner(
+        process_role=process_role, environ={'TOFU_PROJECT_PATH': str(tmp_path)}) == 'relay'
+    # No device named, one online: the Home places it there.
+    text = _run_desktop('desktop_list_files', {'path': '~'}, user_id=OWNER)
+    assert f'pid: {owner_process.pid}' in text
+    # The owner's Home ceiling allows exec on this node; gui is outside it.
+    text = _run_desktop('desktop_gui_action', {'action': 'click', 'x': 1, 'y': 1},
+                        user_id=OWNER)
+    assert 'permission_denied' in text

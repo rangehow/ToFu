@@ -59,6 +59,15 @@
         "deadline_enforced": {
           "type": "boolean",
           "description": "True only for an explicit pickup TTL. Missing means legacy enforced expiry; false uses expires_at only for acknowledged replay-record retirement."
+        },
+        "home_tiers": {
+          "type": "object",
+          "description": "The Home ceiling for this node (contracts/device_routing_v1.schema.json $defs/Tiers). The node runs a non-read command only when its tier is true here AND in its own switch; absent means a Home that predates ceilings.",
+          "properties": {
+            "read": {"type": "boolean"}, "write": {"type": "boolean"}, "exec": {"type": "boolean"},
+            "gui": {"type": "boolean"}, "egress": {"type": "boolean"}, "codex_login": {"type": "boolean"}
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -173,7 +182,7 @@
   "x-semantics": {
     "negotiation": "Agent advertises protocol_version=3. Missing version selects legacy v2; explicit unsupported versions fail with 426 before registration or acknowledgement. Once v3 is observed, the agent refuses downgrade within that connection run.",
     "expiry": "Default commands have no pickup deadline. deadline_enforced=false makes expires_at a stable replay-retention horizon starting at first dispatch; completion and all output ACKs are required before retirement. Explicit TTLs retain creation-based enforced pickup expiry. Missing deadline_enforced preserves legacy server semantics.",
-    "replay": "Keep running and unacknowledged IDs. Reclaim only expired finite-deadline IDs after completion and acknowledgement. Legacy IDs remain pinned until restart without changing legacy demand-driven admission. This is process-local deduplication, not durable exactly-once execution.",
+    "replay": "Keep running and unacknowledged IDs. Reclaim only expired finite-deadline IDs after completion and acknowledgement. Legacy IDs remain pinned until restart without changing legacy demand-driven admission. In-memory deduplication is process-local; a command whose tier is not read/control is also journaled durably by the node (lib/desktop_agent/_journal.py), so a repeated command id is answered from the journal and never re-run, also after a node restart. A command id the device routing produces is the tool call's idempotency key.",
     "flow_control": "Agent reports execution_slots on every poll. Server delivers no more normal work than those slots, counting claimed nonterminal work; cancellation bypasses execution slots. Every response stays within command_batch. Resident outboxes scale independently; wire prefixes and per-frame limits retain the result/stream floors. Uploads with output acknowledge without long-poll delay, and the agent drains a remaining prefix immediately. Slots are resource-derived advisory server delivery credits; the agent does not reject already-issued work for a local worker quota. Memory overflow spools privately, preserving output until acknowledgement or joined shutdown.",
     "authority": "The authenticated server owner and device claim remain the settlement authority. The agent independently validates target_agent_id before acknowledging a batch or dispatching controls. Credentials never authorize a discovered route.",
     "admission": "Commands execute under actual demand. execution_slots is a compatibility poll-window hint, never a CPU/memory or replay-count admission permit. Bounded rotating active-ID pages acknowledge delivery; the server retains owner/device-bound acknowledgements until settlement, so omitted IDs cannot block later jobs."

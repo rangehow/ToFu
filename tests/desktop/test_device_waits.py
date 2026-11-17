@@ -655,11 +655,11 @@ def test_offline_device_errors_name_await_device_only_when_the_task_can_wait(mon
     assert dw.offline_hint({**task, 'convId': ''}) == ''
     assert dw.offline_hint(_task(**{KEY: {'assignmentId': 'a'}})) == ''
     monkeypatch.setattr(lib.desktop, 'send_desktop_command',
-                        lambda *args, **kwargs: (None, 'Desktop command cancelled'))
+                        lambda *args, **kwargs: pytest.fail('nothing is sent without a device'))
     assert 'call await_device' in _agents._run_desktop('desktop_list_files', {},
                                                        user_id=str(OWNER), task=task)
     assert _agents._run_desktop('desktop_list_files', {}, user_id=str(OWNER)) == (
-        'Desktop Agent Error: Desktop command cancelled')
+        'Desktop Agent Error: device_none: None of your devices is online; nothing was sent.')
     remote = {'root': 'src', 'agent_id': 'laptop-1'}
     assert "'laptop-1' is offline" in _remote_error_text(task, remote, 'not online')
     _connect()

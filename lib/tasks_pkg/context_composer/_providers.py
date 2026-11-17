@@ -690,8 +690,26 @@ def _desktop_devices_context(request: ComposeRequest) -> str:
     if not devices:
         return ''
     return ('\n - Desktop devices online (desktop tools take device = agent ID or name; '
-            'write commands for that device\'s default shell):'
-            + ''.join(f'\n   {device_summary(agent)}' for agent in devices))
+            'a call naming none runs on the default computer, else the only online '
+            'device, else it is refused; write commands for that device\'s default shell):'
+            + ''.join(f'\n   {device_summary(agent)}{_device_policy_note(request.user_id, agent)}'
+                      for agent in devices))
+
+
+def _device_policy_note(user_id: int, agent: dict) -> str:
+    """'; default computer; allowed: read, write' from the Home's device policy."""
+    from lib.desktop import device_policy
+    from lib.agent_core.storage_errors import StorageError
+    try:
+        record, _rev = device_policy.policy(user_id)
+    except (StorageError, ValueError) as error:
+        logger.debug('[Context] device policy unavailable for the device listing: %s', error)
+        return '; permissions unavailable (read-only until the Home policy answers)'
+    tiers = device_policy.intersect(device_policy.ceiling_tiers(record, agent['agent_id']),
+                                    device_policy.device_tiers(agent.get('capabilities')))
+    kinds = [kind for kind, node in record['defaults'].items() if node == agent['agent_id']]
+    default = ''.join(f'; default {kind}' for kind in kinds)
+    return default + '; allowed: ' + ', '.join(tier for tier, on in tiers.items() if on)
 
 
 def _tool_search_guidance_available(request: ComposeRequest) -> bool:

@@ -59,10 +59,10 @@ def test_slide_director_screens_two_candidates_and_obeys_critic(monkeypatch):
     assert artifact['title'] == 'Candidate B'
     assert artifact['creative_mode'] == 'director'
     assert artifact['director']['candidate_count'] == 2
-    assert artifact['director']['winner_lens'] == 'spatial-narrative'
+    assert artifact['director']['winner_lens'] == 'audience-argument'
     assert calls == [
         '[Slides:outline:evidence-editorial]',
-        '[Slides:outline:spatial-narrative]',
+        '[Slides:outline:audience-argument]',
         '[Slides:outline-critic]',
     ]
 

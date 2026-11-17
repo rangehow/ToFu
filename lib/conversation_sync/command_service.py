@@ -479,7 +479,8 @@ def restore_accepted_attempt_config(turn, attempt, *, user_id, accepted_config=N
     # the account records the paid lower bound, keeps the receipt
     # incomplete, and only an explicit finite cap stops spend.
     config["_unknownUsagePolicy"] = "continue"
-    projection = turn.get("projection") or {}
+    projection = _without_repeatable_restart_cut(
+        operation, turn, turn.get("projection") or {}, config)
     config.update(_resume_executor_config(
         operation, projection, config.get("_humanGuidanceAnswer")))
     if operation in ('continue', 'checkpoint_resume', 'answer_guidance'):
@@ -495,6 +496,37 @@ def restore_accepted_attempt_config(turn, attempt, *, user_id, accepted_config=N
         config.update(_journal_resume_file_fields(turn, config))
     restore_execution_identity(config)
     return config
+
+
+#: Executor config naming the calls a resume dropped from its replay
+#: (``_without_repeatable_restart_cut``); the model issues them again.
+RESTART_REPEATED_CALLS_KEY = '_restartRepeatedCallIds'
+
+
+def _without_repeatable_restart_cut(operation, turn, projection, config):
+    """The projection a restart resume replays: its repeatable cut batch removed.
+
+    A restart (or storage fence) interruption whose last tool batch is cut and
+    harmless to run again resumes from the request that produced that batch,
+    so the model reads no cut receipt and re-issues the calls itself
+    (docs/RUN_CONTINUITY.md, "A restart-cut batch the model simply issues
+    again"). The suspended working view applies the same rule
+    (``compaction._resume_projection``), so the witnessed view still matches.
+    """
+    if (operation not in ('continue', 'checkpoint_resume')
+            or (turn.get('settlement') or {}).get('cause') != 'server_restart'):
+        return projection
+    from lib.conversation_sync.worker_recovery import isolated_worktree
+    from lib.tools.restart_effect_class import repeatable_restart_cut_batch, without_positions
+    rounds = projection.get('toolRounds')
+    batch = repeatable_restart_cut_batch(rounds, worktree=isolated_worktree({'config': config}))
+    if not batch:
+        return projection
+    config[RESTART_REPEATED_CALLS_KEY] = [rounds[index]['toolCallId'] for index in batch]
+    logger.info('[RestartResume] turn=%s replays without its cut batch: %s', turn.get('turnId'),
+                ', '.join(f"{rounds[index].get('toolName')} {rounds[index]['toolCallId']}"
+                          for index in batch))
+    return {**projection, 'toolRounds': without_positions(rounds, batch)}
 
 
 def _refuse_turn_after_shutdown_quiesce() -> None:

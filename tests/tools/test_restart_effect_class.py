@@ -71,3 +71,66 @@ def test_without_an_isolated_worktree_only_a_reading_command_resumes():
 def test_unreadable_arguments_need_a_decision():
     assert cut_call_effect_class('run_command', 'not json', declared='reconcile', worktree=WORKTREE) == 'unknown'
     assert cut_call_effect_class('run_command', '[]', declared='reconcile', worktree=WORKTREE) == 'unknown'
+
+
+def _row(call_id, tool='read_files', *, llm_round=3, attempt='a1', content='ok', **extra):
+    row = {'toolCallId': call_id, 'toolName': tool, 'toolArgs': '{}', 'llmRound': llm_round,
+           'attemptId': attempt}
+    if content is not None:
+        row['toolContent'] = content
+    row.update(extra)
+    return row
+
+
+def test_a_cut_batch_of_repeatable_calls_is_dropped_whole():
+    """The model re-issues the batch itself and reads no cut receipt (docs/RUN_CONTINUITY.md)."""
+    from lib.tools.restart_effect_class import repeatable_restart_cut_batch
+    rows = [_row('a', llm_round=1), {'type': 'progress'},
+            _row('b', 'poll', _restartCut=True), _row('c', 'read_files')]
+    assert repeatable_restart_cut_batch(rows, worktree=None) == (2, 3)
+
+
+def test_a_batch_the_restart_did_not_cut_is_kept():
+    """The model already read it: dropping it would rerun finished work."""
+    from lib.tools.restart_effect_class import repeatable_restart_cut_batch
+    assert repeatable_restart_cut_batch([_row('a'), _row('b')], worktree=None) == ()
+    assert repeatable_restart_cut_batch([], worktree=None) == ()
+
+
+def test_a_dead_process_cut_counts_as_cut():
+    from lib.tools.restart_effect_class import repeatable_restart_cut_batch
+    rows = [_row('a', llm_round=1), _row('b', 'read_files', content=None)]
+    assert repeatable_restart_cut_batch(rows, worktree=None) == (1,)
+
+
+def test_one_unrepeatable_call_keeps_the_whole_batch():
+    from lib.tools.restart_effect_class import repeatable_restart_cut_batch
+    write = _row('w', 'write_file', executionEffect={'state': 'returned', 'recovery': 'reconcile',
+                                                     'operationId': 'op'})
+    rows = [_row('r', 'read_files', _restartCut=True), write]
+    assert repeatable_restart_cut_batch(rows, worktree=None) == ()
+    never_started = {**write, 'executionEffect': {'state': 'not_started', 'recovery': 'reconcile'}}
+    assert repeatable_restart_cut_batch([rows[0], never_started], worktree=None) == (0, 1)
+
+
+@pytest.mark.parametrize('command, repeatable', [
+    ('git status', True),
+    ('.venv/bin/python3 -m pytest -q tests/a.py', True),
+    ('make test TESTS="tests/a.py"', True),
+    ('git reset --hard HEAD~1', False),
+    ('mv a b', False),
+    ('git push origin HEAD', False),
+])
+def test_only_reads_and_confined_test_runs_repeat(command, repeatable):
+    """A verifiable Git or file write changes state again when it runs twice."""
+    from lib.tools.restart_effect_class import repeatable_cut_call
+    row = {'toolName': 'run_command', 'toolArgs': {'command': command},
+           'executionEffect': {'state': 'entered', 'recovery': 'reconcile'}}
+    assert repeatable_cut_call(row, worktree=WORKTREE) is repeatable
+
+
+def test_a_test_run_outside_an_isolated_worktree_does_not_repeat():
+    from lib.tools.restart_effect_class import repeatable_cut_call
+    row = {'toolName': 'run_command', 'toolArgs': {'command': 'pytest -q'},
+           'executionEffect': {'state': 'entered', 'recovery': 'reconcile'}}
+    assert repeatable_cut_call(row, worktree=None) is False

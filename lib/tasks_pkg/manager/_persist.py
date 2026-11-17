@@ -1041,9 +1041,9 @@ def persist_task_result(task, *, _defer_heavy_release: bool = False):
 
     try:
         from lib.tasks_pkg.compaction._resume_projection import (
-            preserve_suspended_working_view, retire_suspended_working_view,
+            durable_turn_text, preserve_suspended_working_view, retire_suspended_working_view,
         )
-        preserve_suspended_working_view(task)
+        preserve_suspended_working_view(task, turn_text=durable_turn_text)
         retire_suspended_working_view(task)
     except Exception as exc:
         from lib.agent_core.storage_errors import describe_storage_failure

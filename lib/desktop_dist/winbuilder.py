@@ -507,7 +507,9 @@ def _conda_tools_add(package: str, log_fh) -> None:
     wipe one that is, so the verb follows the prefix: msitools is needed
     before nsis on a cold cache, so neither may assume the other ran.
     """
-    conda = shutil.which('mamba') or shutil.which('conda')
+    # conda first: miniforge's mamba 2.3.3 segfaulted (rc=-11) on `create`
+    # where conda (same libmamba solver) succeeded, measured 2026-11-17.
+    conda = shutil.which('conda') or shutil.which('mamba')
     if not conda:
         raise RuntimeError(f'{package} not provisioned and no conda/mamba '
                            'to install it with')

@@ -29,6 +29,7 @@
 
    Public API:
      runtimeScope.updateBackgroundActivity() — force one snapshot tick.
+     runtimeScope.backgroundActivitySwarms() — the last snapshot's live swarm rows.
    ═══════════════════════════════════════════════════════════════════ */
 // One snapshot-derived index shared with the retained sidebar adapter. Deleted
 // with this adapter when background chrome is composed as a typed surface.
@@ -402,6 +403,7 @@ let backgroundConversationActivity = new Map();
   }
 
   runtimeScope.updateBackgroundActivity = updateBackgroundActivity;
+  runtimeScope.backgroundActivitySwarms = () => _last.swarms || [];
 
   // Render/mount only: commits and the rail track pass never start reads.
   runtimeScope.renderBackgroundAgents = _updateDock;

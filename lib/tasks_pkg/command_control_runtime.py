@@ -7,7 +7,10 @@ owner. Reading that record neither creates tasks nor selects a storage backend.
 import sys
 
 from lib.tasks_pkg.command_controls import apply_command_control, merge_background_activity
+from lib.log import get_logger
 from lib.tasks_pkg.command_control_transport import CommandControlUnavailable, call
+
+logger = get_logger(__name__)
 
 _CLIENT_KEY = 'tofu_command_controls'
 
@@ -137,17 +140,30 @@ def swarm_status(app, task_id, *, user_id, swarm_run_id='', agent_ids=()):
         return status is not None and (
             not swarm_run_id or status.get('swarm_run_id') == swarm_run_id)
 
-    status = execute(app, 'swarm_status', task_id, user_id=user_id)
-    if answers(status):
-        return status
+    resident = execute(app, 'swarm_status', task_id, user_id=user_id)
+    if answers(resident):
+        return resident
+    status = resident
     if status is None:
         # The durable row belongs to the session a process would hold.
         status = persisted_swarm_status(task_id, user_id=user_id)
         if answers(status):
             return status
     if not swarm_run_id:
-        return status
-    if not agent_ids:
-        return None
-    return recorded_run_status(task_id, swarm_run_id=swarm_run_id,
-                               agent_ids=agent_ids, user_id=user_id)
+        answer = status
+    elif not agent_ids:
+        answer = None
+    else:
+        answer = recorded_run_status(task_id, swarm_run_id=swarm_run_id,
+                                     agent_ids=agent_ids, user_id=user_id)
+    if answer is None or answer.get('known') is False:
+        # The browser settles a panel after repeated unknown answers; name
+        # what was asked and what the resident session held at that moment.
+        durable = status if status is not resident else None
+        logger.info('[Swarm] status unknown task=%s run=%s agents=%s '
+                    'resident_run=%s resident_active=%s durable_run=%s',
+                    task_id, swarm_run_id or '-', ','.join(agent_ids) or '-',
+                    (resident or {}).get('swarm_run_id', '-'),
+                    (resident or {}).get('active', '-'),
+                    (durable or {}).get('swarm_run_id', '-'))
+    return answer

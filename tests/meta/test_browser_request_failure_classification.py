@@ -68,3 +68,36 @@ def test_page_capture_reports_real_failures_and_drops_cancellations(engine):
     failed(_Request('http://127.0.0.1:1/static/vite/assets/main.js', real))
     assert page._tofu_js_errors == [
         f'request failed: http://127.0.0.1:1/static/vite/assets/main.js ({real})']
+
+
+_PRESENTATIONS = '/api/v4/automations/conversations/c1/attempts/a1/presentations'
+
+
+@pytest.mark.parametrize('reported', [
+    f'/127.0.0.1:40907{_PRESENTATIONS} due to access control checks.',
+    f'Fetch API cannot load http://127.0.0.1:40907{_PRESENTATIONS} due to access control checks.',
+])
+def test_webkit_same_origin_access_control_report_is_its_navigation_cancel(reported):
+    """A same-origin load never runs CORS: WebKit uses this text for a load it cancelled."""
+    page = _Page('webkit')
+    page.url = 'http://127.0.0.1:40907/'
+    _attach_js_error_capture(page)
+    page.handlers['pageerror'](Exception(reported))
+    assert page._tofu_js_errors == []
+
+
+@pytest.mark.parametrize('engine, page_url, reported', [
+    ('webkit', 'http://127.0.0.1:40907/',
+     'Fetch API cannot load https://api.example.com/v1 due to access control checks.'),
+    ('webkit', 'http://127.0.0.1:40907/',
+     f'/127.0.0.1:1{_PRESENTATIONS} due to access control checks.'),
+    ('webkit', 'http://127.0.0.1:40907/', "TypeError: undefined is not an object (evaluating 'x.y')"),
+    ('chromium', 'http://127.0.0.1:40907/',
+     f'/127.0.0.1:40907{_PRESENTATIONS} due to access control checks.'),
+])
+def test_every_other_uncaught_exception_stays_hard(engine, page_url, reported):
+    page = _Page(engine)
+    page.url = page_url
+    _attach_js_error_capture(page)
+    page.handlers['pageerror'](Exception(reported))
+    assert page._tofu_js_errors == [f'uncaught exception: {reported}']

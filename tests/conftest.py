@@ -21,6 +21,7 @@ import sys
 import tempfile
 import threading
 import time
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -2149,6 +2150,23 @@ def _is_cancelled_request_failure(browser_name, failure):
     return failure in _CANCELLED_REQUEST_FAILURES[browser_name]
 
 
+#: WebKit also raises a load it cancelled (navigation, reload, close) as a page
+#: error worded ``<url> due to access control checks.`` (observed on CI for an
+#: in-flight same-origin ``/api/v4`` read). A same-origin request never runs
+#: CORS, so for the page's own host that text can only be the cancellation;
+#: a cross-origin access-control failure stays a hard finding.
+_WEBKIT_ACCESS_CONTROL_REPORT = re.compile(
+    r'^(?:Fetch API cannot load )?(?:https?:)?/{1,2}(?P<host>[^/\s]+)/\S* '
+    r'due to access control checks\.$')
+
+
+def _is_webkit_same_origin_cancel(browser_name, page_url, message):
+    if browser_name != 'webkit':
+        return False
+    match = _WEBKIT_ACCESS_CONTROL_REPORT.match(message)
+    return bool(match) and match.group('host') == urlsplit(page_url or '').netloc
+
+
 def _attach_js_error_capture(pg):
     """Record uncaught JS exceptions + unexpected console errors on ``pg``.
 
@@ -2185,6 +2203,8 @@ def _attach_js_error_capture(pg):
     browser_name = pg.context.browser.browser_type.name
 
     def _on_pageerror(exc):
+        if _is_webkit_same_origin_cancel(browser_name, getattr(pg, 'url', ''), str(exc)):
+            return
         hard.append(f'uncaught exception: {str(exc)[:300]}')
 
     def _on_console(msg):

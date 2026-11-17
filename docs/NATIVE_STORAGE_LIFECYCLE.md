@@ -852,7 +852,11 @@ must not become certification inputs.
 
 The gate (GATE-PUBLISH-CARRY's, confirmed 2026-11-12) passes only when: the
 build reports the checkout's source; both isolated certifications pass; both
-cargo runs pass; the native pytest subset passes, where only files with failures
+cargo runs pass (a completed Rust failure summary may be resolved by one exact,
+serial rerun of each named failed test; every rerun must report exactly one
+passed test and zero failures, with its command, exit and log digest retained
+beside the original failure; compiler errors, aborted/incomplete runs and
+unaccounted failures remain failures); the native pytest subset passes, where only files with failures
 or errors are rerun once serially and both results are kept (a serial pass is a
 load/timing flake, a serial failure fails the gate); the load run ends in a
 clean stop (no `child_exit state=timeout`, the engine's

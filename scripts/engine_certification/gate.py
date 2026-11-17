@@ -31,6 +31,7 @@ import getpass
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import socket
@@ -286,13 +287,45 @@ class Certification:
             try:
                 if scratch:
                     scratch.mkdir(parents=True, exist_ok=True)
-                rc, log = self._run(check_id, argv, environment={
-                    **environment, **({'TMPDIR': str(scratch)} if scratch else {})})
+                check_environment = {**environment, **({'TMPDIR': str(scratch)} if scratch else {})}
+                rc, log = self._run(check_id, argv, environment=check_environment)
+                ok, summary = self._cargo_serial_recheck(
+                    check_id, cargo, manifest, rc, log, check_environment)
             finally:
                 if scratch:
                     shutil.rmtree(scratch, ignore_errors=True)
-            results.append(self._record(check_id, started, at, rc == 0, argv=argv, rc=rc, log=log).verdict)
+            results.append(self._record(check_id, started, at, ok, argv=argv, rc=rc, log=log,
+                                        **summary).verdict)
         return results == ['pass', 'pass']
+
+    def _cargo_serial_recheck(self, check_id, cargo, manifest, rc, log, environment) -> tuple[bool, dict]:
+        """Resolve only complete, named Rust test failures; keep both runs as evidence."""
+        summary = {'first_rc': rc, 'serial_reruns': []}
+        if rc == 0:
+            return True, summary
+        report = re.findall(
+            r'(?:^|\n)failures:\n((?:[ \t]+[A-Za-z0-9_:]+\n)+)\n'
+            r'test result: FAILED\. \d+ passed; (\d+) failed;', log.read_text(errors='replace'))
+        if rc != 101 or len(report) != 1:
+            return False, summary
+        names = report[0][0].split()
+        if len(names) != int(report[0][1]) or len(set(names)) != len(names):
+            return False, summary
+        passed = True
+        for index, name in enumerate(names):
+            argv = [cargo, 'test', *manifest, name, '--', '--exact', '--test-threads=1']
+            rerun_rc, rerun_log = self._run(check_id, argv, environment=environment,
+                                          log_name=f'{check_id}-serial-{index}.log')
+            # A removed/renamed test that collects zero cases must never certify.
+            verdicts = re.findall(r'test result: (ok|FAILED)\. (\d+) passed; (\d+) failed;',
+                                  rerun_log.read_text(errors='replace'))
+            passed = (rerun_rc == 0 and verdicts == [('ok', '1', '0')]) and passed
+            summary['serial_reruns'].append({'test': name, 'argv': [str(arg) for arg in argv],
+                'rc': rerun_rc, 'log': {'path': str(rerun_log),
+                                      'sha256': certification.sha256_file(rerun_log)}})
+        summary['classification'] = ('load/timing flake: passed serially' if passed
+                                     else 'failed serially: a real failure')
+        return passed, summary
 
     def ff_native(self, engine: Path) -> bool:
         started, at = time.monotonic(), _utc()

@@ -9,6 +9,7 @@ desk opens the same report card. Screenshots land in output/playwright/lead-deli
 (LEAD_DELIVERABLES_SHOT_LABEL, default "after").
 """
 import os
+import re
 from pathlib import Path
 import uuid
 
@@ -84,7 +85,8 @@ def test_classic_sidebar_lists_and_opens_a_leads_deliverables(page, monkeypatch,
     # Newest first: the report, then the file, then the deck published first.
     assert rows.evaluate_all('rows => rows.map(row => row.dataset.kind)') == ['report', 'file', 'deck']
     expect(rows.first.locator('.lead-deliverable__title')).to_have_text(TITLE)
-    expect(rows.first.locator('.lead-deliverable__meta')).to_contain_text('Shop')
+    # Title, project and time ("now" / "1 minute ago" for items just published).
+    expect(rows.first.locator('.lead-deliverable__meta')).to_have_text(re.compile(r'^Shop · \S.*'))
     _settle(page)
     page.locator('#sidebar').screenshot(path=str(OUTPUT / 'classic-sidebar-expanded.png'), animations='disabled')
 
@@ -99,6 +101,8 @@ def test_classic_sidebar_lists_and_opens_a_leads_deliverables(page, monkeypatch,
     dialog.get_by_role('button', name='Go to message').click()
     page.wait_for_function('(id) => window.activeConvId === id', arg=leader)
     expect(page.locator(f'#chatInner [data-turn-id="{report_turn}"], #chatInner [data-report-turn-id="{report_turn}"]').first).to_be_visible()
+    _settle(page)
+    page.screenshot(path=str(OUTPUT / 'classic-report-source-turn.png'), animations='disabled')
 
     # A published deck opens in the artifact panel.
     rows.nth(2).locator('.lead-deliverable__open').click()
@@ -108,6 +112,8 @@ def test_classic_sidebar_lists_and_opens_a_leads_deliverables(page, monkeypatch,
     # And its link back to the message that published it.
     rows.nth(2).locator('.lead-deliverable__source').click()
     expect(page.locator(f'#chatInner [data-turn-id="{deck_turn}"]').first).to_be_visible()
+    _settle(page)
+    page.screenshot(path=str(OUTPUT / 'classic-deck-source-turn.png'), animations='disabled')
 
 
 def test_studio_desk_opens_the_delivery_itself(browser, live_server, monkeypatch, tmp_path):
@@ -120,16 +126,20 @@ def test_studio_desk_opens_the_delivery_itself(browser, live_server, monkeypatch
     try:
         page.goto(live_server, wait_until='domcontentloaded')
         _dismiss_onboarding_modals(page)
-        _, leader, _, _, _ = _seed(page, tmp_path, monkeypatch)
+        _, leader, report_turn, _, _ = _seed(page, tmp_path, monkeypatch)
         OUTPUT.mkdir(parents=True, exist_ok=True)
         page.evaluate('() => { localStorage.setItem("tofu_ui_lang", "en"); localStorage.setItem("tofu_landing_workspace", "world"); }')
         page.goto(live_server + '/#/world', wait_until='domcontentloaded')
         page.reload(wait_until='domcontentloaded')  # A hash change alone keeps the earlier locale.
-        desk = page.locator('.w-doc[data-kind="deliverable"]').first
+        # The office is painted on the game stage's canvas; each desk document is mirrored by its
+        # accessible hit button, which carries the document's kind.
+        desk = page.locator('.evo-target[data-kind="deliverable"]').first
         desk.wait_for(timeout=30000)
         page.wait_for_timeout(800)
         page.screenshot(path=str(OUTPUT / 'studio-desk.png'), animations='disabled')
-        desk.click()
+        # A pointer click lands on the canvas, which hit-tests the document under it.
+        box = desk.bounding_box()
+        page.mouse.click(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
         dialog = page.locator('dialog.lead-deliverable-dialog')
         expect(dialog).to_be_visible()
         expect(dialog.locator('[data-tool-card="report_to_user"]')).to_contain_text('no longer drops on Safari')
@@ -140,5 +150,8 @@ def test_studio_desk_opens_the_delivery_itself(browser, live_server, monkeypatch
         dialog.get_by_role('button', name='Go to message').click()
         page.wait_for_function("document.body.dataset.conversationDock === 'chat'")
         page.wait_for_function('(id) => window.activeConvId === id', arg=leader)
+        expect(page.locator(f'[data-turn-id="{report_turn}"], [data-report-turn-id="{report_turn}"]').first).to_be_visible()
+        _settle(page)
+        page.screenshot(path=str(OUTPUT / 'studio-source-turn.png'), animations='disabled')
     finally:
         context.close()

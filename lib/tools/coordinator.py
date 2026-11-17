@@ -104,9 +104,10 @@ COORDINATOR_TOOLS = [
            'expected_revision': {'type': 'integer', 'minimum': 1}},
           ['assignment_id', 'expected_revision']),
     _tool('get_project_assignment',
-          'Read one owned same-project worker assignment, execution state and result links. '
-          'Passive only: never starts, retries, resumes or wakes a task. Follow its '
-          'target_conversation_id with get_conversation for evidence and outcomes.',
+          'Read one owned same-project worker assignment: its brief and acceptance checks, execution '
+          'state, the Worker\'s whole final answer (execution.result.content), review, publication and '
+          'delivery. Passive only: never starts, retries, resumes or wakes a task. Its tool rounds and '
+          'reasoning are in the Worker conversation (request.recipientId) through get_conversation.',
           {'assignment_id': {'type': 'string', 'minLength': 1}}, ['assignment_id']),
 ]
 

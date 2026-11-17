@@ -127,7 +127,7 @@ def test_input_ends_a_wait_between_two_worker_reads_however_many_it_polls(
     assert [item['id'] for item in value['waiting']] == [question['id']]
     # Every Worker not known settled, read or not, is still named pending.
     assert len(reads) < len(ids) and value['pending']['running'] == ids
-    assert all(identity in value['instruction'] for identity in ids)
+    assert not any(identity in value['instruction'] for identity in ids)
 
 
 def test_a_settlement_outside_this_process_wakes_the_wait_within_one_recheck(runtime, monkeypatch):

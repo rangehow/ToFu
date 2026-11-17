@@ -27,6 +27,10 @@ logger = get_logger(__name__)
 
 # The list projection of a request: exact lookups keep every request field.
 HISTORY_REQUEST_FIELDS = tuple(CONTRACT['$defs']['historyRequest']['properties'])
+# A lead's projections of request and execution.result (docs/PROJECT_COORDINATION.md,
+# "A lead reads each result once").
+COORDINATOR_REQUEST_FIELDS = tuple(CONTRACT['$defs']['coordinatorRequest']['properties'])
+COORDINATOR_RESULT_FIELDS = tuple(CONTRACT['$defs']['coordinatorResult']['properties'])
 # A history row shows this prefix of its execution content (docs/PROJECT_COORDINATION.md).
 HISTORY_PREVIEW_CHARACTERS = 2000
 
@@ -469,9 +473,11 @@ class ProjectDispatchService:
     def view_for_coordinator(self, assignment_id, *, scope, settlement_only=False):
         """Passive evidence, including expired/stopped work, for the live role.
 
-        settlement_only keeps every authority check but reads Turn metadata
-        instead of the projection and skips dependency evidence: execution
-        status and the delivery receipt for waits, never a presentable result.
+        The view carries the contract's coordinatorRequest and coordinatorResult
+        projections: the Worker's answer, never its execution telemetry or the
+        frozen grant. settlement_only keeps every authority check but reads Turn
+        metadata instead of the projection and skips dependency evidence:
+        execution status and the delivery receipt for waits, never a presentable result.
         """
         # A settlement view reads status and delivery only: the row itself suffices.
         assignment = (self.repository.read_point(assignment_id) if settlement_only
@@ -481,7 +487,7 @@ class ProjectDispatchService:
             raise PermissionError('Assignment belongs to another Coordinator')
         self.repository.validate_binding(scope['conversation_id'], scope['binding_revision'])
         self.repository.validate_grant_binding(assignment)
-        return self._view(assignment, settlement_only=settlement_only)
+        return self._view(assignment, settlement_only=settlement_only, coordinator=True)
 
     def review_for_coordinator(self, task, scope, arguments):
         """Coordinator judgment is distinct from human review and actual delivery."""
@@ -541,8 +547,11 @@ class ProjectDispatchService:
             return turn, (_preview_version(turn), turn['contentPreview'])
         return self.turn_get(conversation_id, turn_id, user_id=owner), None
 
-    def _view(self, assignment, *, settlement_only=False, previews=None, snapshot=None, evidence=None):
+    def _view(self, assignment, *, settlement_only=False, previews=None, snapshot=None, evidence=None,
+              coordinator=False):
         """previews: a history page's (previous, current) maps of exact previews.
+
+        coordinator: reduce request and execution.result to a lead's projections.
 
         Only a history row passes them; that row also carries the contract's
         historyRequest projection of the request instead of the complete one.
@@ -581,7 +590,9 @@ class ProjectDispatchService:
                         previews[1][identity] = remembered
                     result = {} if remembered[1] is None else {'content': remembered[1]}
                 elif not settlement_only:
-                    result = deepcopy(turn.get('projection') or {})
+                    projection = turn.get('projection') or {}
+                    result = deepcopy({name: projection[name] for name in COORDINATOR_RESULT_FIELDS
+                                       if name in projection} if coordinator else projection)
                 execution = {'turnId': association['turnId'], 'attemptId': association['attemptId'],
                     'taskId': attempt.get('taskId') or '', 'status': attempt.get('status') or 'unknown',
                     'resultRevision': model_context_revision(turn),
@@ -602,6 +613,8 @@ class ProjectDispatchService:
             review['acceptanceCounts'] = counts(checks, review.get('acceptanceResults'))
         if previews is not None:
             request = {name: request[name] for name in HISTORY_REQUEST_FIELDS if name in request}
+        elif coordinator:
+            request = {name: request[name] for name in COORDINATOR_REQUEST_FIELDS if name in request}
         return {**dependency_view, 'assignmentId': assignment['id'], 'request': deepcopy(request),
             'grantRevision': assignment['grant']['revision'], 'revoked': assignment['grant']['revoked'],
             'execution': execution, 'review': review,

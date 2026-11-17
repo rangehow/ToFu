@@ -789,6 +789,72 @@
         }
       }
     },
+    "coordinatorRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "projectPath",
+        "coordinatorId",
+        "recipientId",
+        "authorizationSource",
+        "brief"
+      ],
+      "description": "A lead's projection of request (get_project_assignment, poll): what was asked, of whom and under which checks. The frozen grant (profile tool names, delegation policy and model config) is admission authority the lead never acts on and is omitted.",
+      "properties": {
+        "projectPath": {
+          "$ref": "#/$defs/request/properties/projectPath"
+        },
+        "coordinatorId": {
+          "$ref": "#/$defs/request/properties/coordinatorId"
+        },
+        "recipientId": {
+          "$ref": "#/$defs/request/properties/recipientId"
+        },
+        "authorizationSource": {
+          "$ref": "#/$defs/request/properties/authorizationSource"
+        },
+        "brief": {
+          "$ref": "#/$defs/request/properties/brief"
+        },
+        "acceptance": {
+          "$ref": "#/$defs/request/properties/acceptance"
+        },
+        "model": {
+          "$ref": "#/$defs/request/properties/model"
+        },
+        "budget": {
+          "$ref": "#/$defs/request/properties/budget"
+        },
+        "reworkOf": {
+          "$ref": "#/$defs/request/properties/reworkOf"
+        },
+        "dependencies": {
+          "$ref": "#/$defs/request/properties/dependencies"
+        },
+        "coordinatorWake": {
+          "$ref": "#/$defs/request/properties/coordinatorWake"
+        },
+        "attachments": {
+          "$ref": "#/$defs/request/properties/attachments"
+        }
+      }
+    },
+    "coordinatorResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A lead's projection of execution.result: the Worker's final answer and the background-command output delivered into its Turn. Execution telemetry (tool and API rounds, timing, usage, routing) stays with get_conversation.",
+      "properties": {
+        "content": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "_bgCommandInjects": {
+          "type": "array"
+        }
+      }
+    },
     "assignmentLookup": {
       "type": "object",
       "additionalProperties": false,

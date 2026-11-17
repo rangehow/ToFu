@@ -197,7 +197,7 @@ def test_native_delegate_execute_await_report_and_restart(native_dispatch_author
     worker = ConversationRepository().get(first['conversation_id'], user_id=owner, include_messages=False)
     assert worker.metadata['settings']['folderId'] == 'native-folder'
     evidence = json.loads(execute_coordinator_tool(task, 'poll', {'ids': [first['assignment_id']], 'wait_s': 1500}))
-    assert evidence['wait'] == 'settled' and evidence['workers'][0]['result_excerpt'] == 'Verified independent worker bytes'
+    assert evidence['wait'] == 'settled' and evidence['workers'][0]['result'] == 'Verified independent worker bytes'
     row = repo.read(first['assignment_id'])
     assert row['request']['brief'] == brief
     assert row['modelAttempts'][0]['reported_tokens'] == 10

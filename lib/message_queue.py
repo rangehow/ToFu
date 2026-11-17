@@ -36,7 +36,6 @@ retired on the next drain instead of being re-leased into an infinite
 conflict loop.
 """
 
-import json
 import os
 import threading
 import time
@@ -49,7 +48,7 @@ from lib.turn_source_queue_contract import (
     KIND_AUTOPILOT,
     KIND_BACKGROUND_RECEIPT,
     KIND_GOAL_CONTINUATION,
-    KIND_PEER_MSG,
+    KIND_PEER_MSG as KIND_PEER_MSG,
     KIND_REAL,
     KIND_WORKFLOW as KIND_WORKFLOW,
     DEFAULT_BACKGROUND_RECEIPT_PAGE_ROWS,
@@ -562,195 +561,6 @@ def redispatch_orphaned_queue_on_startup() -> list[str]:
         logger.info(
             "[Queue] redispatch-on-startup: spawned %d task(s) from "
             "orphaned queue rows",
-            len(spawned),
-        )
-    return spawned
-
-
-def list_conversations_with_pending_peer_messages() -> list[dict]:
-    """Return every conv_id that currently holds a pending ``KIND_PEER_MSG`` row.
-
-    The durable source of truth for "which conversations have a peer message
-    that no running task will ever drain". A peer message (``project_message`` /
-    ``project_intervene``) is written as a ``KIND_PEER_MSG`` row and drained by
-    ``dispatch_next_queued`` — which fires ONLY on task-completion, a human
-    send, startup orphan-redispatch, or the brain KIND_WORKFLOW idle-drain. The
-    workflow idle-drain (``project_dispatch._reconcile_stranded_kickoffs`` /
-    ``_has_queued_kickoff``) filters STRICTLY on ``KIND_WORKFLOW``, so a peer
-    row landing in an IDLE, non-board conversation is drained by nothing — it
-    sits in the queue widget forever until a restart or a human types. This scan
-    is what the steady-state peer idle-drain consumes to close that gap.
-
-    Best-effort — returns [] on any failure.
-    """
-    try:
-        return _queue_client().query(
-            "queue.conversations.list_all", {"kind": KIND_PEER_MSG}
-        )
-    except Exception as e:
-        logger.warning(
-            "[Queue] list_conversations_with_pending_peer_messages failed: %s",
-            e,
-        )
-        return []
-
-
-def _conv_has_wake_peer_row(conv_id: str, *, user_id: int) -> bool:
-    """True iff the conv holds a pending ``KIND_PEER_MSG`` row allowed to WAKE
-    an idle conversation.
-
-    Codex ``trigger_turn`` port: a peer note sent with ``wake=False`` carries
-    ``_peerNoWake`` in its payload — mailbox-only delivery, it must NEVER spin
-    up a fresh turn on an idle target (it rides the target's next NATURAL
-    turn instead). A conv whose pending peer rows are ALL no-wake is skipped
-    by the heartbeat idle-drain; one wake-capable row is enough to justify
-    the turn (the no-wake rows then ride along in queue order — free mailbox
-    batching).
-
-    Fails OPEN (True) on a probe error: a storage hiccup must not strand a
-    wake-intended message forever — the pre-flag behaviour (always drain) is
-    the safe fallback.
-    """
-    try:
-        rows = (
-            _queue_client().query(
-                "queue.list", {"conv_id": conv_id, "user_id": int(user_id),
-                               "mode": "dispatchable"}
-            )
-            or []
-        )
-        payloads = [r.get("payload") for r in rows if r.get("kind") == KIND_PEER_MSG]
-    except Exception as e:
-        logger.warning(
-            "[Queue] wake-peer-row probe failed conv=%s (fail-open: "
-            "treating as wake): %s",
-            conv_id,
-            e,
-        )
-        return True
-    for raw in payloads:
-        try:
-            data = json.loads(raw) if isinstance(raw, str) else (raw or {})
-        except (json.JSONDecodeError, TypeError) as e:
-            logger.debug(
-                "[Queue] wake probe payload parse failed conv=%s: %s", conv_id, e
-            )
-            data = {}
-        if not data.get("_peerNoWake"):
-            return True
-    return False
-
-
-def drain_idle_peer_messages() -> list[str]:
-    """Steady-state idle-drain for peer messages — the brain heartbeat's peer
-    analogue of :func:`redispatch_orphaned_queue_on_startup`.
-
-    THE Symptom-A root fix. A ``KIND_PEER_MSG`` row that lands in an IDLE
-    conversation (no live task, and not the owner of a board epic the workflow
-    idle-drain would reconcile) is drained by nothing in steady state — so an
-    advisory peer note to an idle sibling is shown ONLY as a pending item in the
-    queue widget and never rendered as a turn. This pass, run on the existing
-    brain 30s heartbeat (NO new thread/global), drains ONE such row per idle
-    conv via the SAME ``dispatch_next_queued`` seam every other caller uses —
-    which appends the peer turn to ``conversations.messages`` (giving it the
-    ``.peer-msg-banner`` fresh-turn rendering) and spawns a task to answer it.
-
-    This is a deliberate, backend-owned dispatch of a DURABLE, RATE-CAPPED,
-    explicitly-sent signal — NOT the frontend age-heuristic auto-fire
-    anti-pattern (Case-E). The per-(sender,target) send-time rate cap bounds how
-    many peer rows can ever exist; the busy-guard + one-drain-per-conv-per-tick
-    bound the work this pass starts.
-
-    Safety (mirrors ``redispatch_orphaned_queue_on_startup``):
-      • Skip a conv that has a live non-aborted task — a live drain-eligible
-        turn already receives the fast-path inbox twin (delivered at its next
-        round boundary), and its completion hook drains the durable row anyway;
-        force-draining would double-dispatch. A conv with a live endpoint/VU
-        task is likewise "busy" so it keeps queue-lane (cycle-end) delivery.
-      • Skip a conv whose row is absent (a concurrent drain already popped it).
-      • ``dispatch_next_queued`` takes the non-reentrant ``_dispatch_lock``
-        itself, so we must NOT hold it here.
-      • Best-effort per conv: one failure never aborts the batch.
-
-    Returns the list of task_ids spawned (one per idle conv drained).
-    """
-    spawned: list[str] = []
-    try:
-        conversations = list_conversations_with_pending_peer_messages()
-    except Exception as e:
-        logger.warning("[Queue] peer idle-drain: scan failed: %s", e)
-        return spawned
-    if not conversations:
-        return spawned
-
-    for conversation in conversations:
-        conv_id = str(conversation["convId"])
-        user_id = int(conversation["userId"])
-        if not conv_id:
-            continue
-        # Busy guard: never force-drain a conv that has a FAST-PATH-ELIGIBLE
-        # live task — its inbox twin / round-boundary drain (or the completion
-        # hook) owns delivery there, so force-draining would double-dispatch.
-        # The predicate MUST mirror project_peer._live_drain_eligible_task
-        # (running + not aborted, matched on convId OR _peer_drain_key): a VU
-        # sub-task runs with convId='' and carries the parent conv in
-        # _peer_drain_key, so a bare convId==conv_id check would MISS it and let
-        # idle-drain wrongly pre-empt the VU loop's in-turn delivery. A conv
-        # whose only live task is NOT eligible (aborted / non-running) falls
-        # through and IS drained here — the intended strand-closing behaviour.
-        try:
-            from lib.tasks_pkg.manager.runtime import chat_task_runtime
-
-            _live = any(
-                    (t.get("convId") == conv_id or t.get("_peer_drain_key") == conv_id)
-                    and t.get("status") == "running"
-                    and not t.get("aborted")
-                    for t in chat_task_runtime.snapshot_owned(user_id=user_id)
-                )
-            if _live:
-                continue
-        except Exception as e:
-            logger.debug(
-                "[Queue] peer idle-drain live-task probe failed conv=%s (skipping): %s",
-                conv_id,
-                e,
-            )
-            continue
-        # wake=False (mailbox-only) rows never justify waking an idle conv —
-        # skip when EVERY pending peer row is no-wake (Codex trigger_turn
-        # semantics: send_message delivers mail, it does not start a turn).
-        if not _conv_has_wake_peer_row(conv_id, user_id=user_id):
-            logger.debug(
-                "[Queue] peer idle-drain: conv=%s holds only no-wake "
-                "peer row(s) — leaving for its next natural turn",
-                conv_id,
-            )
-            continue
-        try:
-            tid = dispatch_next_queued(conv_id, user_id=user_id)
-        except Exception as e:
-            logger.warning(
-                "[Queue] peer idle-drain: dispatch failed for conv=%s: %s",
-                conv_id,
-                e,
-                exc_info=True,
-            )
-            continue
-        if tid:
-            spawned.append(tid)
-            from lib.log import audit_log
-
-            audit_log("peer_message_idle_drain", conv_id=conv_id, task_id=tid)
-            logger.info(
-                "[Queue] peer idle-drain: woke idle conv=%s → task %s "
-                "(pending peer message delivered as a fresh turn)",
-                conv_id,
-                task_log_tag(tid),
-            )
-    if spawned:
-        logger.info(
-            "[Queue] peer idle-drain: woke %d idle conv(s) holding a "
-            "pending peer message",
             len(spawned),
         )
     return spawned

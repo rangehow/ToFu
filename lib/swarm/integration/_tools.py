@@ -248,7 +248,7 @@ def _idle_coordinator_action(task: dict) -> str:
     or redirects the root (docs/AGENT_LIFECYCLE.md, "An idle root is reached
     only by a final result").
     """
-    from lib.swarm.routing import tool_schema_name
+    from lib.tools.contracts import tool_schema_name
     controls = {tool_schema_name(tool) for tool in task.get('_executable_tool_catalog') or ()
                 } & {'poll', 'kill'}
     action = (
@@ -785,7 +785,7 @@ def _handle_spawn_agents(fn_args: dict, *,
 
         parent_cfg['_swarmParentTaskId'] = task_id
 
-        from lib.swarm.routing import tool_schema_name
+        from lib.tools.contracts import tool_schema_name
         parent_cfg['_swarmToolNames'] = [tool_schema_name(tool) for tool in all_tools]
         parent_cfg['_principalContext'] = task['_principalContext']
         parent_cfg['_transientRuntime'] = bool(

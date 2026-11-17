@@ -61,18 +61,6 @@ def normalize_measurement_scope(scope):
     return dict(scope)
 
 
-def scientific_inference_instruction(protocol):
-    """Explain the exact statistical scope shared by executor and reviewer."""
-    if not isinstance(protocol, Mapping) or 'decision_rule' not in protocol:
-        return ''
-    return ('The frozen decision rule compares a direction-adjusted paired mean '
-            'and a chosen multiple of its sample standard error against minimum_effect. '
-            'Supported/refuted refer to that rule. This SE margin alone does not establish '
-            'a confidence level or significance test. Claims about confidence levels '
-            'or statistical significance require separately inspected calculations, '
-            'their method and assumptions; missing evidence remains unknown.\n')
-
-
 def measured_outcome(mean, standard_error, rule):
     """Apply a frozen SE margin, not a confidence interval/significance test."""
     try:

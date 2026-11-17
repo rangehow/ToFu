@@ -36,23 +36,16 @@ from collections.abc import Iterable
 from typing import Any
 
 from lib.mcp.types import MCP_TOOL_PREFIX
+from lib.tools.contracts import tool_schema_name
 
 
 def is_mcp_tool_name(name: Any) -> bool:
     return isinstance(name, str) and name.startswith(MCP_TOOL_PREFIX)
 
 
-def _schema_name(tool: Any) -> str:
-    if not isinstance(tool, dict):
-        return ''
-    function = tool.get('function')
-    return str((function.get('name') if isinstance(function, dict) else '')
-               or tool.get('name') or '')
-
-
 def without_mcp_tools(tools: Iterable[Any] | None) -> list[Any]:
     """Return ``tools`` without MCP schemas, preserving order and identity."""
-    return [tool for tool in tools or () if not is_mcp_tool_name(_schema_name(tool))]
+    return [tool for tool in tools or () if not is_mcp_tool_name(tool_schema_name(tool))]
 
 
 def without_mcp_names(names: Iterable[Any] | None) -> list[Any]:
@@ -63,9 +56,9 @@ def without_mcp_names(names: Iterable[Any] | None) -> list[Any]:
 def withholds_mcp_tools(authority: Iterable[Any] | None,
                         visible: Iterable[Any] | None = ()) -> bool:
     """Whether ``authority`` holds an MCP tool the ``visible`` schemas lack."""
-    shown = {_schema_name(tool) for tool in visible or ()}
+    shown = {tool_schema_name(tool) for tool in visible or ()}
     return any(is_mcp_tool_name(name) and name not in shown
-               for name in map(_schema_name, authority or ()))
+               for name in map(tool_schema_name, authority or ()))
 
 
 __all__ = ['is_mcp_tool_name', 'withholds_mcp_tools', 'without_mcp_names',

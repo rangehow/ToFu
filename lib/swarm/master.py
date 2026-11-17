@@ -239,7 +239,7 @@ def _prepare_assignment_context(*, parent_task: dict, parent_config: dict,
     from lib.tasks_pkg.child_invocation import (
         inherit_child_config, snapshot_conversation_child_policy,
     )
-    from lib.swarm.routing import tool_schema_name
+    from lib.tools.contracts import tool_schema_name
 
     principal = PrincipalContext.from_payload(parent_task['_principalContext'])
     if principal.require_owner(context='retained assignment') != parent_task['_userId']:
@@ -319,7 +319,7 @@ def _prepare_assignment_context(*, parent_task: dict, parent_config: dict,
 def _retained_assignment_proxy(spec: SubTaskSpec, session_parent: dict) -> tuple[dict, dict]:
     """Reconstruct only known frozen authority; missing restart grants deny."""
     from lib.identity import PrincipalContext
-    from lib.swarm.routing import tool_schema_name
+    from lib.tools.contracts import tool_schema_name
 
     context = spec.retained_execution_context
     if (not isinstance(context, dict) or context.get('schema') not in {

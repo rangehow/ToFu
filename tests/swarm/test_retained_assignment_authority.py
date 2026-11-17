@@ -8,7 +8,7 @@ import pytest
 from lib.identity import PrincipalContext
 from lib.swarm.master import MasterOrchestrator, bind_retained_assignment_context
 from lib.swarm.protocol import SubTaskSpec
-from lib.swarm.routing import tool_schema_name
+from lib.tools.contracts import tool_schema_name
 from tests.goals import test_goal_invocation_integration as goal_fixture
 from tests.goals.test_goal_invocation_integration import TOOL
 

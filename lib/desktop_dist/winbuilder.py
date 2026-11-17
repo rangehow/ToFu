@@ -61,6 +61,8 @@ import time
 from lib.log import get_logger, log_context
 
 from . import store, wintoolchain
+# One repository reader for both platform builders (VERSION and git).
+from .builder import _git, _read_version
 
 logger = get_logger(__name__)
 
@@ -533,8 +535,9 @@ def _build_tofudb_exe(src: str, log_fh) -> None:
     cross-compiler: zig via cargo-zigbuild targets windows-gnu with no
     SDK (measured 2026-11-17: PE32+ x86-64, 22 MB). zig's clang turns
     mimalloc's __DATE__ into -Werror=date-time, hence the CFLAGS. The
-    target dir lives in the persistent cache so later builds reuse every
-    compiled dependency.
+    target dir lives on the toolchain's LOCAL disk so later builds reuse
+    every compiled dependency: on the FUSE cache lld-link's mmapped output
+    hung in uninterruptible sleep for 25+ minutes (measured 2026-11-17).
     """
     from . import builder as _linux_builder
     tools_bin = os.path.join(wintoolchain.cache_dir(), 'tools', 'bin')
@@ -543,7 +546,7 @@ def _build_tofudb_exe(src: str, log_fh) -> None:
             _conda_tools_add(package, log_fh)
     cargo_home = os.environ.get('CARGO_HOME') or os.path.expanduser(
         '~/.cargo')
-    target_dir = os.path.join(wintoolchain.cache_dir(), 'tofudb-target')
+    target_dir = os.path.join(wintoolchain.local_root(), 'tofudb-target')
     env = dict(os.environ,
                PATH=os.pathsep.join([tools_bin,
                                      os.path.join(cargo_home, 'bin'),
@@ -656,22 +659,6 @@ def _tofu_search_source(workdir: str) -> str:
         shutil.copy2(wheels[-1], dest)
         return dest
     return 'tofu-search'
-
-
-def _read_version() -> str:
-    with open(os.path.join(_REPO_ROOT, 'VERSION'), encoding='utf-8') as f:
-        v = f.read().strip()
-    if not v:
-        raise RuntimeError('VERSION file is empty')
-    return v
-
-
-def _git(*args) -> str:
-    out = subprocess.run(['git', '-C', _REPO_ROOT, *args],
-                         capture_output=True, timeout=60)
-    if out.returncode != 0:
-        raise RuntimeError(f'git {args[0]} failed: {out.stderr[:200]!r}')
-    return out.stdout.decode('utf-8', 'replace')
 
 
 def _sh(cmd: str, log_fh, *, shell: bool = False,

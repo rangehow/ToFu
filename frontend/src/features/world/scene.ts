@@ -15,25 +15,29 @@
  * - Looping cells run on each person's own beat offset and tempo; a lit screen fades on and off; a document
  *   that arrives drops onto the desk with a small overshoot.
  * - The floor art fades in as it decodes (procedural floor first, then furniture, then each sheet's people).
- * The loop asks for frames only while something moves, on the art's beat while only loops play, and otherwise
- * on the next hour (the window skies). Reduced motion settles every transition at once.
+ * Rooms are furnished dioramas lit by the local hour (diorama.ts); over the grade every person shows what they are
+ * doing (life.ts: name tag and status light, screen glow, bubbles, raised hand, confetti). While anyone is on the
+ * floor the office draws every frame; reduced motion settles every transition at once, draws every loop at time
+ * zero and wakes once a minute for the wall clocks.
  * Entry point: createWorldScene. */
 import { PALETTE as UI } from '../office-game/engine/paint';
-import { clampCamera, resetCamera, screenToWorld, type Camera } from '../office-game/engine/camera';
+import { cameraScale, clampCamera, resetCamera, screenToWorld, type Camera } from '../office-game/engine/camera';
 import type { Scene, SceneFrame, StageTarget } from '../office-game/engine/stage';
 import { CELL, PROPS, STATES, type WorldTheme } from './assets/manifest.generated';
 import { actorPose, BEAT_MS, createActor, isMoving, setHome, setRest, settleActor, startErrand, stepActor, type Actor, type Pose, type Rest, type Transition } from './actors';
 import { ART_SCALE, spriteArt, type SpriteName, type WorldArt } from './art';
 import {
   allocateSlots, BOARD_GRID, fitOffice, SEATED_SHOWN, SEATS_PER_POD, shelfSlots, TROPHY_H, TROPHY_W,
-  waitingSpots, type OfficeLayout, type Rect, type Seat, type TeamShape,
+  waitingSpots, type OfficeLayout, type Rect, type Seat, type TeamShape, type ZoneLayout,
 } from './layout';
 import { stableHash } from './hash';
 import { firstLine, type DeskDocument, type Office, type Person, type Team, type Trophy } from './model';
 import {
-  CLUTTER_CHOICES, drawFloor, drawFurniture, drawInside, drawLighting, drawRug, drawWall, FLOOR_TILE, NOISE_SIZE, PALETTE, paintFloorTile,
-  paintNoiseTile, paintPod, paintWindow, POD_BLEED, rr, seeded, windowSlots, type Atlas,
+  CLUTTER_CHOICES, drawFloor, drawFurniture, drawInside, drawWall, FLOOR_TILE, mix, PALETTE, paintFloorTile,
+  paintPod, paintWindow, POD_BLEED, rr, seeded, windowSlots, type Atlas,
 } from './paint';
+import { drawGrade, drawRoom, drawRoomDecor, gradeAt, paintRoomTile, roomLights, roomMaterial, wallClock } from './diorama';
+import { alarmRing, createParticles, flicker, glow, nameTag, packLines, steam, tagBox, thinking, type Status } from './life';
 import { LEAD_SLOT, samePlace, seatAt, type Place } from './routes';
 import { FEET, sheetFor } from './sprites';
 import { advanceChange, easeOutBack, settledBlend, showChange, type Blend, type FloorChange } from './tween';
@@ -66,6 +70,8 @@ export interface WorldScenePorts {
 
 /** A floor-plan transition, the art fading in, a tooltip appearing and a document landing (presentation). */
 const TWEEN_MS = 650;
+/** One minute: the wall clocks' resolution under reduced motion (they show the local time). */
+const MINUTE_MS = 60_000;
 const ART_FADE_MS = 400;
 const TIP_MS = 140;
 const DROP_MS = 450;
@@ -74,8 +80,14 @@ const HOUR_MS = 3_600_000;
 interface HitBox { id: string; kind: 'person' | 'document' | 'extra'; x: number; y: number; w: number; h: number; label: string; detail: string; data: Record<string, string> }
 /** `room`: the opacity of the room or pod the person sits in while it arrives or leaves in a floor-plan blend,
  * and the room's box to clip to while their pod fades (null: no clip). */
-interface Drawn { actor: Actor; pose: Pose; sheet: CanvasImageSource | null; fade: number; room: { alpha: number; clip: Rect | null } }
+interface Drawn { actor: Actor; pose: Pose; sheet: CanvasImageSource | null; fade: number; room: { alpha: number; clip: Rect | null };
+  /** Sideways jolt of someone with an exception (units). */
+  shake: number }
 const SETTLED_ROOM = { alpha: 1, clip: null };
+/** Where a tag goes (its centre); `above`: over the head, so marks go above it; `to`: the person a leader points at. */
+interface TagAnchor { x: number; y: number; above: boolean; to?: { x: number; y: number } | null }
+/** A desk tag's line outward from its desk row and its centre along that line. */
+interface TagPlace { line: number; x: number }
 /** A full-view layer in device pixels: `key` names what it holds, `pending` the key the previous frame wanted;
  * the counts say how often frames blitted it, rebuilt it or drew the content directly. */
 interface CachedLayer { canvas: HTMLCanvasElement | null; key: string; pending: string; hits: number; builds: number; direct: number }
@@ -141,9 +153,13 @@ export function createWorldScene(ports: WorldScenePorts) {
   const podLayers = new Map<string, HTMLCanvasElement>();
   const windowLayers = new Map<string, HTMLCanvasElement>();
   const sheetLayers = new Map<string, HTMLCanvasElement>();
-  let patterns: { key: string; planks: CanvasPattern | null; pile: CanvasPattern | null } | null = null;
+  let patterns: { key: string; planks: CanvasPattern | null } | null = null;
   const floorLayer: CachedLayer = { canvas: null, key: '', pending: '', hits: 0, builds: 0, direct: 0 };
   const lightLayer: CachedLayer = { canvas: null, key: '', pending: '', hits: 0, builds: 0, direct: 0 };
+  const roomPatterns = new Map<string, CanvasPattern | null>();
+  /** Each team's sign, painted for its current content and resolution. */
+  const signLayers = new Map<string, { key: string; layer: HTMLCanvasElement }>();
+  const particles = createParticles();
 
   const layoutNow = () => shown?.layout ?? null;
 
@@ -273,12 +289,20 @@ export function createWorldScene(ports: WorldScenePorts) {
     const next: HitBox[] = [];
     if (layout && office) {
       const beat = 0;
+      const lines = tagLines(layout, 1 / cameraScale(camera));
       for (const actor of actors.values()) {
         if (actor.rest.kind === 'gone' || actor.alpha <= 0.05) continue;
         const pose = actorPose(actor, layout, beat, true);
         if (!pose) continue;
         const words = text.person(actor.person, actor.at?.kind === 'spot');
-        next.push({ id: actor.id, kind: 'person', ...boxOf(pose), label: words.label,
+        const body = boxOf(pose);
+        const anchor = tagAnchor(actor, pose, layout, lines);
+        const tag = anchor ? tagBox(ports.fontFamily, actor.person.name, actor.person.role !== 'worker', anchor.x, anchor.y, 1 / cameraScale(camera)) : null;
+        const box = tag ? {
+          x: Math.min(body.x, tag.x), y: Math.min(body.y, tag.y),
+          w: Math.max(body.x + body.w, tag.x + tag.w) - Math.min(body.x, tag.x), h: Math.max(body.y + body.h, tag.y + tag.h) - Math.min(body.y, tag.y),
+        } : body;
+        next.push({ id: actor.id, kind: 'person', ...box, label: words.label,
           detail: `${actor.person.detail ? `${actor.person.detail} · ` : ''}${words.state}`,
           data: { person: actor.id, role: actor.person.role, ...(actor.person.emphasis ? { emphasis: actor.person.emphasis } : {}) } });
       }
@@ -327,7 +351,7 @@ export function createWorldScene(ports: WorldScenePorts) {
 
   /* ------------------------------------------------------------------ painting */
 
-  /** The plank and carpet-pile patterns for a look and resolution (patterns are not bound to a context). */
+  /** The plank pattern for a look and resolution (patterns are not bound to a context). */
   function prepare(ctx: CanvasRenderingContext2D, level: number, look: WorldTheme) {
     const key = `${look}|${level}`;
     if (patterns?.key === key) return patterns;
@@ -342,13 +366,21 @@ export function createWorldScene(ports: WorldScenePorts) {
       planks = ctx.createPattern(tile, 'repeat');
       planks?.setTransform(new DOMMatrix([1 / level, 0, 0, 1 / level, 0, 0]));
     }
-    const noise = document.createElement('canvas');
-    noise.width = noise.height = NOISE_SIZE;
-    const noiseCtx = noise.getContext('2d');
-    if (noiseCtx) paintNoiseTile(noiseCtx, palette);
-    const pile = noiseCtx ? ctx.createPattern(noise, 'repeat') : null;
-    patterns = { key, planks, pile };
+    patterns = { key, planks };
     return patterns;
+  }
+
+  /** A room's floor material as a pattern in scene units, anchored to the room so it rides with it in a blend. */
+  function roomPattern(ctx: CanvasRenderingContext2D, zone: ZoneLayout, color: string, look: WorldTheme, level: number): CanvasPattern | null {
+    const material = roomMaterial(zone);
+    const key = `${material}|${color}|${look}|${level}`;
+    let pattern = roomPatterns.get(key);
+    if (pattern === undefined) {
+      pattern = ctx.createPattern(paintRoomTile(material, color, PALETTE[look], level), 'repeat');
+      roomPatterns.set(key, pattern);
+    }
+    pattern?.setTransform(new DOMMatrix([1 / level, 0, 0, 1 / level, zone.x, zone.y]));
+    return pattern;
   }
 
   /** Draws a full-view layer from its cache when `key` (camera transform and content) is unchanged; rebuilds the
@@ -434,9 +466,16 @@ export function createWorldScene(ports: WorldScenePorts) {
     const scale = (sheet as { width: number }).width / (CELL.w * CELL.columns);
     const sx = pose.column * CELL.w * scale, sy = STATES[pose.state].row * CELL.h * scale;
     const box = boxOf(pose);
+    box.x += item.shake;
     const alpha = ctx.globalAlpha;
     const room = item.room.clip;
     ctx.globalAlpha = alpha * pose.alpha * item.fade * item.room.alpha;
+    if (pose.lift > 0) {
+      // A hop leaves the shadow on the floor, smaller the higher the hop.
+      ctx.fillStyle = 'rgba(40, 24, 12, 0.22)';
+      ctx.beginPath(); ctx.ellipse(pose.x, pose.y - 0.6, 9 - pose.lift * 0.5, 2.4, 0, 0, Math.PI * 2); ctx.fill();
+      box.y -= pose.lift;
+    }
     const carry = pose.carry && pose.hand ? `carry-${pose.carry}` as SpriteName : null;
     const carryArt = carry ? spriteArt(carry) : null;
     if (carry && carryArt && !pose.front) sprite(ctx, carry, box.x + pose.hand!.x, box.y + pose.hand!.y, carryArt.size[0], carryArt.size[1], room);
@@ -457,22 +496,34 @@ export function createWorldScene(ports: WorldScenePorts) {
     return { sheet: sheetLayer(used, sheet, level), fade: sheetFade.get(used)! };
   }
 
-  /** A sheet at the pod layers' resolution (`level`), painted once per sheet and level like a mip level, so each
-   * person is drawn from it at about one to one: resampling the full-resolution sheet for every person on every
-   * frame costs more than the rest of the frame together (a software-rasterized canvas stalls for whole frames). */
+  /** A sheet at the pod layers' resolution (`level`, at most the art's own), painted once per sheet and level like a
+   * mip level, so each person is drawn from it at about one to one: resampling the full-resolution sheet for every
+   * person on every frame costs more than the rest of the frame together (a software-rasterized canvas stalls for
+   * whole frames). The layer also gives every figure its die-cut sticker edge, a cream outline that separates people
+   * from any floor in either theme. */
   function sheetLayer(url: string, sheet: CanvasImageSource & { width: number; height: number }, level: number): CanvasImageSource {
     const own = sheet.width / (CELL.w * CELL.columns);
-    if (level >= own) return sheet;
-    const key = `${url}|${level}`;
+    const scale = Math.min(level, own);
+    const key = `${url}|${scale}`;
     let layer = sheetLayers.get(key);
     if (layer) return layer;
+    const width = Math.max(1, Math.round(CELL.w * CELL.columns * scale)), height = Math.max(1, Math.round(sheet.height * scale / own));
+    const plain = document.createElement('canvas');
+    plain.width = width; plain.height = height;
+    const plainCtx = plain.getContext('2d');
     layer = document.createElement('canvas');
-    layer.width = Math.max(1, Math.round(CELL.w * CELL.columns * level));
-    layer.height = Math.max(1, Math.round(sheet.height * level / own));
+    layer.width = width; layer.height = height;
     const ctx = layer.getContext('2d');
-    if (!ctx) return sheet;
-    ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(sheet, 0, 0, layer.width, layer.height);
+    if (!ctx || !plainCtx) return sheet;
+    plainCtx.imageSmoothingQuality = 'high';
+    plainCtx.drawImage(sheet, 0, 0, width, height);
+    const edge = 1.15 * scale;
+    for (let k = 0; k < 8; k += 1) ctx.drawImage(plain, Math.cos((k * Math.PI) / 4) * edge, Math.sin((k * Math.PI) / 4) * edge);
+    ctx.globalCompositeOperation = 'source-in';
+    ctx.fillStyle = url.includes('.dark.') ? '#f1e2c6' : '#fffaf0';
+    ctx.fillRect(0, 0, width, height);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.drawImage(plain, 0, 0);
     sheetLayers.set(key, layer);
     return layer;
   }
@@ -485,40 +536,64 @@ export function createWorldScene(ports: WorldScenePorts) {
     ctx.fillText(label, x + 8, y + 10.5);
   }
 
-  /** A team's sign: a walnut nameplate edged in the team colour with its name, board tally and idle count. */
-  function banner(ctx: CanvasRenderingContext2D, team: Team, x: number, y: number) {
+  /** A team's sign on its back wall: a backlit walnut plaque whose name glows like a neon tube in the team colour,
+   * with the board tally and idle count. Painted once per content and resolution, so the glow costs nothing per
+   * frame. */
+  function banner(ctx: CanvasRenderingContext2D, team: Team, x: number, y: number, level: number) {
     const name = team.kind === 'router' ? team.lead.name : team.name;
     const board = team.board && team.board.total ? team.board : null;
     const routine = team.routine ? text.routine(team.routine, team.history) : '';
-    ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
-    ctx.font = font(13, 700);
-    const nameWidth = ctx.measureText(name).width;
-    ctx.font = font(10, 600);
     const tally = board ? `${board.done}/${board.total}` : '';
-    const tallyWidth = board ? 38 + ctx.measureText(tally).width : 0;
-    const routineWidth = routine ? ctx.measureText(routine).width : 0;
-    const width = 14 + nameWidth + (board ? 10 + tallyWidth : 0) + (routine ? 10 + routineWidth : 0) + 12;
+    const key = `${name}|${team.color}|${tally}|${routine}|${team.failed}|${level}`;
+    const margin = 10, height = 26;
+    let layer = signLayers.get(team.key)?.key === key ? signLayers.get(team.key)!.layer : null;
+    if (!layer) {
+      const measure = document.createElement('canvas').getContext('2d');
+      if (!measure) return;
+      measure.font = font(14, 800);
+      const nameWidth = measure.measureText(name).width;
+      measure.font = font(10.5, 700);
+      const tallyWidth = board ? 38 + measure.measureText(tally).width : 0;
+      const routineWidth = routine ? measure.measureText(routine).width : 0;
+      const width = 14 + nameWidth + (board ? 12 + tallyWidth : 0) + (routine ? 10 + routineWidth : 0) + 12;
+      layer = document.createElement('canvas');
+      layer.width = Math.ceil((width + margin * 2) * level); layer.height = Math.ceil((height + margin * 2) * level);
+      const g = layer.getContext('2d');
+      if (!g) return;
+      g.scale(level, level);
+      g.translate(margin, margin);
+      const neon = mix(team.color, '#ffffff', 0.5);
+      // The backlight on the wall behind the plaque.
+      g.shadowColor = team.color; g.shadowBlur = 9 * level;
+      rr(g, 0, 0, width, height, 7); g.fillStyle = 'rgba(30, 20, 13, 0.95)'; g.fill();
+      g.shadowBlur = 0;
+      const fill = g.createLinearGradient(0, 0, 0, height);
+      fill.addColorStop(0, '#3d2c1f'); fill.addColorStop(1, '#1f150e');
+      rr(g, 0, 0, width, height, 7); g.fillStyle = fill; g.fill();
+      g.strokeStyle = team.color; g.lineWidth = 1.2;
+      if (team.failed) g.setLineDash([3, 3]);
+      rr(g, 0.6, 0.6, width - 1.2, height - 1.2, 6.5); g.stroke(); g.setLineDash([]);
+      g.fillStyle = 'rgba(255, 255, 255, 0.08)'; rr(g, 2, 2, width - 4, height / 2 - 2, 5); g.fill();
+      g.textBaseline = 'middle'; g.textAlign = 'left';
+      let left = 12;
+      g.font = font(14, 800);
+      g.shadowColor = team.color; g.shadowBlur = 6 * level;
+      g.fillStyle = neon; g.fillText(name, left, height / 2 + 0.5);
+      g.shadowBlur = 2 * level; g.fillStyle = mix(neon, '#ffffff', 0.55); g.fillText(name, left, height / 2 + 0.5);
+      g.shadowBlur = 0;
+      left += nameWidth + 12;
+      if (board) {
+        rr(g, left, height / 2 - 2.5, 34, 5, 2.5); g.fillStyle = 'rgba(251, 241, 218, 0.16)'; g.fill();
+        if (board.done) { rr(g, left, height / 2 - 2.5, 34 * board.done / board.total, 5, 2.5); g.fillStyle = UI.good; g.fill(); }
+        g.font = font(10.5, 700); g.fillStyle = 'rgba(251, 241, 218, 0.95)'; g.fillText(tally, left + 38, height / 2 + 0.5);
+        left += tallyWidth + 10;
+      }
+      if (routine) { g.font = font(10.5, 600); g.fillStyle = 'rgba(251, 241, 218, 0.86)'; g.fillText(routine, left, height / 2 + 0.5); }
+      signLayers.set(team.key, { key, layer });
+    }
     const alpha = ctx.globalAlpha;
     if (team.failed) ctx.globalAlpha = alpha * 0.72;
-    rr(ctx, x + 1, y + 2, width, 24, 6); ctx.fillStyle = 'rgba(20, 12, 6, 0.28)'; ctx.fill();
-    const fill = ctx.createLinearGradient(0, y, 0, y + 24);
-    fill.addColorStop(0, '#3a2a1e'); fill.addColorStop(1, '#22170f');
-    rr(ctx, x, y, width, 24, 6); ctx.fillStyle = fill; ctx.fill();
-    ctx.strokeStyle = team.color; ctx.globalAlpha *= 0.6; ctx.lineWidth = 1;
-    if (team.failed) ctx.setLineDash([3, 3]);
-    rr(ctx, x + 0.5, y + 0.5, width - 1, 23, 6); ctx.stroke(); ctx.setLineDash([]);
-    ctx.globalAlpha = team.failed ? alpha * 0.72 : alpha;
-    ctx.save(); rr(ctx, x, y, width, 24, 6); ctx.clip(); ctx.fillStyle = team.color; ctx.fillRect(x, y, 4, 24); ctx.restore();
-    let left = x + 14;
-    ctx.font = font(13, 700); ctx.fillStyle = UI.cream; ctx.fillText(name, left, y + 12.5);
-    left += nameWidth + 10;
-    if (board) {
-      rr(ctx, left, y + 10.5, 34, 4, 2); ctx.fillStyle = 'rgba(251, 241, 218, 0.16)'; ctx.fill();
-      if (board.done) { rr(ctx, left, y + 10.5, 34 * board.done / board.total, 4, 2); ctx.fillStyle = UI.good; ctx.fill(); }
-      ctx.font = font(10, 600); ctx.fillStyle = 'rgba(251, 241, 218, 0.72)'; ctx.fillText(tally, left + 38, y + 12.5);
-      left += tallyWidth + 10;
-    }
-    if (routine) { ctx.font = font(10, 600); ctx.fillStyle = 'rgba(251, 241, 218, 0.62)'; ctx.fillText(routine, left, y + 12.5); }
+    ctx.drawImage(layer, x - margin, y - margin - 4, layer.width / level, layer.height / level);
     ctx.globalAlpha = alpha;
   }
 
@@ -623,11 +698,11 @@ export function createWorldScene(ports: WorldScenePorts) {
     level: number, hour: number, teams: ReadonlyMap<string, Team>) {
     const palette = PALETTE[look];
     const zoneAlpha = (key: string) => blend.zoneAlpha.get(key) ?? 1;
-    const { planks, pile } = prepare(ctx, level, look);
+    const { planks } = prepare(ctx, level, look);
     const glass = PROPS.window.slots?.glass ?? [0, 0, 196, 44];
     const windows = windowSlots(layout.width, glass);
     ctx.globalAlpha = reveal;
-    drawFloor(ctx, layout, planks, palette, hour, windows);
+    drawFloor(ctx, layout, planks, palette);
     drawWall(ctx, layout, palette);
     if (atlas) {
       ctx.globalAlpha = reveal * furniture;
@@ -639,8 +714,11 @@ export function createWorldScene(ports: WorldScenePorts) {
     }
     for (const zone of layout.zones) {
       ctx.globalAlpha = reveal * zoneAlpha(zone.key);
-      drawRug(ctx, zone, teams.get(zone.key)?.color || '#8f7ae6', palette, pile);
+      const color = teams.get(zone.key)?.color || '#8f7ae6';
+      drawRoom(ctx, zone, color, palette, roomPattern(ctx, zone, color, look, level));
+      drawRoomDecor(ctx, atlas, zone, color, palette);
     }
+
     if (atlas) {
       ctx.globalAlpha = reveal * furniture;
       const routers = new Set([...teams.values()].filter(team => team.kind === 'router').map(team => team.key));
@@ -648,6 +726,10 @@ export function createWorldScene(ports: WorldScenePorts) {
       for (const zone of layout.zones) {
         zone.pods.forEach((pod, index) => {
           const layer = podLayer(atlas, look, zone.key, index, level, layout);
+          // A soft shadow the pod casts away from the window wall, so the desks stand on the floor.
+          ctx.globalAlpha = reveal * furniture * zoneAlpha(zone.key) * (blend.podAlpha.get(`${zone.key}:${index}`) ?? 1);
+          ctx.fillStyle = `rgba(${palette.shade}, ${palette.daylight ? 0.045 : 0.1})`;
+          for (const grow of [10, 6, 2]) { rr(ctx, pod.x + 6 - grow, pod.y + 26 - grow / 2, pod.w - 12 + grow * 2, pod.h - 40 + grow * 1.5, 14); ctx.fill(); }
           if (!layer) return;
           const fading = blend.podAlpha.get(`${zone.key}:${index}`);
           ctx.globalAlpha = reveal * furniture * zoneAlpha(zone.key) * (fading ?? 1);
@@ -660,6 +742,83 @@ export function createWorldScene(ports: WorldScenePorts) {
     ctx.globalAlpha = 1;
   }
 
+  /** What a person is doing, as their tag's light and the scene's signals show it. */
+  function statusOf(actor: Actor): Status {
+    if (actor.person.emphasis) return actor.person.emphasis;
+    if (actor.errand && actor.errand.phase !== 'return') return 'delivering';
+    return actor.person.state;
+  }
+
+  /** Where a person's name tag goes: over the head of someone facing the viewer (pod top rows and head desks), under
+   * the chair of someone with their back to the viewer, under the feet of someone standing. The
+   * Watchdog's station has its own plate. `above`: the tag sits over the head, so marks go above the tag. */
+  function tagAnchor(actor: Actor, pose: Pose, layout: OfficeLayout, lines: ReadonlyMap<string, TagPlace>): TagAnchor | null {
+    if (actor.person.role === 'watchdog') return null;
+    // A tag's height at the current zoom: the step between tag lines, so lines never overlap.
+    const line = tagBox(ports.fontFamily, '', true, 0, 0, 1 / cameraScale(camera)).h + 1.5;
+    // The line at the owner's door is tighter than any tag, so each person there gets a line of their own.
+    if (pose.kind === 'standing') return { x: pose.x, y: pose.y + 8 + (actor.at?.kind === 'spot' ? actor.at.index * line : 0), above: false };
+    const seat = seatAt(layout, actor.home);
+    if (!seat) return null;
+    const place = lines.get(actor.id);
+    const outward = (place?.line ?? 0) * line, x = place?.x ?? seat.x;
+    // A tag moved off its desk (an outer line, or slid to stay in the room) keeps a leader to its person.
+    const led = outward > 0 || Math.abs(x - seat.x) > 1;
+    if (seat.facing === 'down') {
+      const top = pose.y - CELL.h * SEATED_SHOWN;
+      return { x, y: top - 5 - (seat.desk.w > 60 ? 0 : outward), above: true, to: led ? { x: seat.x, y: top + 3 } : null };
+    }
+    return { x, y: seat.y + 21 + outward, above: false, to: led ? { x: seat.x, y: seat.y + 13 } : null };
+  }
+
+  /** The line each desk's tag takes, outward from its desk row: the tags of a pod row are placed left to right, each
+   * on the innermost line where it clears the tags already there by a few pixels. Names are shown whole, a row of
+   * short names stays on one line, and lines are added only where neighbours would touch. A tag wider than its desk
+   * slides along its line to stay inside the room. */
+  function tagLines(layout: OfficeLayout, pixel: number): Map<string, TagPlace> {
+    const rows = new Map<string, { id: string; x: number; left: number; right: number }[]>();
+    const margin = 4 * pixel;
+    for (const actor of actors.values()) {
+      const home = actor.home;
+      if (home.kind !== 'seat' || home.slot < 0 || actor.rest.kind === 'gone') continue;
+      const seat = seatAt(layout, home);
+      if (!seat) continue;
+      const zone = layout.zones.find(each => each.key === home.zone);
+      const w = tagBox(ports.fontFamily, actor.person.name, actor.person.role !== 'worker', 0, 0, pixel).w;
+      const x = zone ? Math.max(zone.x + w / 2 + margin, Math.min(zone.x + zone.w - w / 2 - margin, seat.x)) : seat.x;
+      const key = `${home.zone}|${seat.facing}|${seat.y}`;
+      const row = rows.get(key) ?? [];
+      row.push({ id: actor.id, x, left: x - w / 2, right: x + w / 2 });
+      rows.set(key, row);
+    }
+    const lines = new Map<string, TagPlace>();
+    for (const row of rows.values()) packLines(row, margin).forEach((line, index) => lines.set(row[index].id, { line, x: row[index].x }));
+    return lines;
+  }
+
+  /** The grade is always drawn into its own layer (the night cuts its pools with destination-out, which must never
+   * touch the scene); the layer is rebuilt when `key` changes, and every frame while it is empty (floor moving). */
+  function drawGradeLayer(ctx: CanvasRenderingContext2D, key: string, paint: (target: CanvasRenderingContext2D) => void) {
+    const slot = lightLayer;
+    if (!key || slot.key !== key || !slot.canvas) {
+      const canvas = slot.canvas ?? document.createElement('canvas');
+      slot.canvas = canvas;
+      if (canvas.width !== ctx.canvas.width || canvas.height !== ctx.canvas.height) { canvas.width = ctx.canvas.width; canvas.height = ctx.canvas.height; }
+      const target = canvas.getContext('2d');
+      if (!target) return;
+      target.setTransform(1, 0, 0, 1, 0, 0);
+      target.clearRect(0, 0, canvas.width, canvas.height);
+      target.setTransform(ctx.getTransform());
+      paint(target);
+      slot.key = key;
+      if (key) slot.builds += 1; else slot.direct += 1;
+    } else slot.hits += 1;
+    const transform = ctx.getTransform();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(slot.canvas, 0, 0);
+    ctx.setTransform(transform);
+  }
+
   function draw(frame: SceneFrame) {
     const { ctx } = frame;
     const layout = layoutNow();
@@ -670,8 +829,9 @@ export function createWorldScene(ports: WorldScenePorts) {
     // The look follows the art actually shown, so a theme change reskins floor, furniture and people at once.
     const look = art.theme() ?? theme;
     const palette = PALETTE[look];
-    const hour = new Date(performance.timeOrigin + frame.now).getHours();
-    const night = !palette.daylight || hour < 7 || hour >= 19;
+    const date = new Date(performance.timeOrigin + frame.now);
+    const hour = date.getHours();
+    const grade = gradeAt(hour);
     const atlas: Atlas | null = atlasSource && art.theme() ? { image: atlasSource, props: PROPS } : null;
     const blend = shown!;
     const zoneAlpha = (key: string) => blend.zoneAlpha.get(key) ?? 1;
@@ -706,9 +866,14 @@ export function createWorldScene(ports: WorldScenePorts) {
     // People, back to front, with their lit screens beneath them.
     const drawn: Drawn[] = [];
     const sceneStill = still || frame.still;
+    const t = sceneStill ? 0 : frame.now;
     for (const actor of actors.values()) {
       const pose = actorPose(actor, layout, beat, sceneStill);
-      if (pose) drawn.push({ actor, pose, ...sheetOf(actor, level), room: roomOf(actor) });
+      if (!pose) continue;
+      // Someone with an exception jolts for a moment every two seconds.
+      const jolt = (t + actor.phase * 250) % 2000;
+      const shake = actor.person.emphasis === 'exception' && t && jolt < 360 ? Math.sin(jolt * 0.11) * 1.3 : 0;
+      drawn.push({ actor, pose, ...sheetOf(actor, level), room: roomOf(actor), shake });
     }
     drawn.sort((a, b) => a.pose.y - b.pose.y);
     if (atlas) {
@@ -722,6 +887,12 @@ export function createWorldScene(ports: WorldScenePorts) {
     }
     const hoverId = frame.hover, focusId = frame.focus;
     for (const item of drawn) {
+      const status = statusOf(item.actor);
+      if (status === 'exception' && item.sheet) {
+        ctx.globalAlpha = reveal * item.pose.alpha * item.room.alpha;
+        const seat = item.pose.kind === 'seated' ? seatAt(layout, item.actor.home) : null;
+        alarmRing(ctx, item.pose.x, seat ? seat.y + 9 : item.pose.y - 1, t);
+      }
       if (item.actor.id === selected || item.actor.id === hoverId) {
         const ring = boxOf(item.pose);
         ctx.globalAlpha = reveal * item.pose.alpha * item.room.alpha * (item.actor.id === selected ? 1 : 0.55);
@@ -733,27 +904,86 @@ export function createWorldScene(ports: WorldScenePorts) {
     }
     ctx.globalAlpha = reveal * furniture;
     if (atlas) drawDocuments(ctx, layout);
-    drawCached(ctx, lightLayer, settled ? `${view}|${night}` : '', target => {
+    if (atlas) for (const zone of layout.zones) { ctx.globalAlpha = reveal * furniture * zoneAlpha(zone.key); wallClock(ctx, zone, date, palette.daylight); }
+    ctx.globalAlpha = 1;
+    drawGradeLayer(ctx, settled ? `${view}|${hour}` : '', target => {
       target.globalAlpha = reveal;
-      drawLighting(target, layout, palette, night, layout.zones);
+      drawGrade(target, layout, palette, grade, roomLights(layout), windowSlots(layout.width, PROPS.window.slots?.glass ?? [0, 0, 196, 44]), hour);
       target.globalAlpha = 1;
     });
-    // Signals over the light: the Watchdog's beacon and the marks above heads.
+    // Light the scene adds over the grade: screens glow and flicker while their person works, brighter at night.
+    if (atlas) {
+      for (const item of drawn) {
+        const seat = seatAt(layout, item.actor.home);
+        if (!seat || item.actor.screen <= 0) continue;
+        const box = screenBox(seat, item.actor.home.kind === 'watchdog' ? layout.watchdog?.station ?? null : null);
+        const red = item.actor.person.emphasis === 'exception';
+        const strength = (0.28 + 0.22 * grade.dark) * (t ? 0.7 + 0.45 * flicker(t, item.actor.phase * 1.7) : 0.9);
+        ctx.globalAlpha = reveal * furniture * item.room.alpha;
+        glow(ctx, red ? '#ff5a4a' : '#6cc8ff', box.x + box.w / 2, box.y + box.h / 2, 22 + 6 * grade.dark, item.actor.screen * strength);
+      }
+    }
+    ctx.globalAlpha = 1;
+    // Dust drifting in the window light while the sun is up.
+    if (!sceneStill && palette.daylight && grade.sun >= 0.5) {
+      const lean = hour < 12 ? 70 : -70;
+      const panes = windowSlots(layout.width, PROPS.window.slots?.glass ?? [0, 0, 196, 44]);
+      particles.motes(panes.map(pane => ({ x: pane.x + Math.min(0, lean), y: layout.wall, w: pane.w + Math.abs(lean), h: 150 })), panes.length * 8);
+    } else particles.motes([], 0);
+    particles.draw(ctx);
+    // Signals over the light: the Watchdog's beacon, tags, bubbles and the marks above heads.
     const watchdog = office.teams.find(team => team.kind === 'watchdog')?.lead;
     if (layout.watchdog && watchdog?.emphasis === 'exception') {
       const [sx, sy] = PROPS['watchdog-station'].slots!.alarm;
-      const glow = spriteArt('alarm');
-      sprite(ctx, 'alarm', layout.watchdog.station.x + sx - glow.anchor[0], layout.watchdog.station.y + sy - glow.anchor[1], glow.size[0], glow.size[1]);
+      const beacon = spriteArt('alarm');
+      ctx.globalAlpha = t ? 0.6 + 0.4 * Math.abs(Math.sin(t / 300)) : 1;
+      sprite(ctx, 'alarm', layout.watchdog.station.x + sx - beacon.anchor[0], layout.watchdog.station.y + sy - beacon.anchor[1], beacon.size[0], beacon.size[1]);
+    }
+    const tagsShown = new Map<string, { y: number; above: boolean }>();
+    const lines = tagLines(layout, frame.pixel);
+    for (const item of drawn) {
+      if (!item.sheet) continue;
+      const anchor = tagAnchor(item.actor, item.pose, layout, lines);
+      if (!anchor) continue;
+      const status = statusOf(item.actor);
+      ctx.globalAlpha = reveal * item.pose.alpha * item.fade * item.room.alpha;
+      if (status === 'idle' && item.pose.kind === 'seated') {
+        const seat = seatAt(layout, item.actor.home);
+        if (seat) steam(ctx, seat.desk.x + seat.desk.w - 9, seat.desk.y + (seat.facing === 'up' ? 2 : 8), t + item.actor.phase * 300);
+      }
+      const pulse = status === 'working' || status === 'decision' ? (t ? 0.5 + 0.5 * Math.sin(t / 420 + item.actor.phase) : 1) : 0;
+      if (anchor.to) {
+        const half = tagBox(ports.fontFamily, '', false, 0, 0, frame.pixel).h / 2;
+        const end = anchor.above ? anchor.y + half : anchor.y - half;
+        const alpha = ctx.globalAlpha;
+        ctx.globalAlpha = alpha * 0.6;
+        ctx.strokeStyle = '#1e150f'; ctx.lineWidth = frame.pixel;
+        ctx.beginPath(); ctx.moveTo(anchor.x, end); ctx.lineTo(anchor.to.x, anchor.to.y); ctx.stroke();
+        ctx.fillStyle = '#1e150f'; ctx.beginPath(); ctx.arc(anchor.to.x, anchor.to.y, 1.4 * frame.pixel, 0, Math.PI * 2); ctx.fill();
+        ctx.globalAlpha = alpha;
+      }
+      const at = frame.project({ x: anchor.x + item.shake, y: anchor.y - item.pose.lift });
+      frame.screen();
+      nameTag(ctx, ports.fontFamily, item.actor.person.name, status, item.actor.person.role !== 'worker', teams.get(item.actor.person.team)?.color ?? UI.gold,
+        at.x, at.y, pulse, frame.pixel);
+      frame.world();
+      const height = tagBox(ports.fontFamily, '', item.actor.person.role !== 'worker', 0, 0, frame.pixel).h;
+      tagsShown.set(item.actor.id, { y: anchor.y - height / 2, above: anchor.above });
     }
     for (const item of drawn) {
+      if (!item.sheet) continue;
+      const status = statusOf(item.actor);
+      const box = boxOf(item.pose);
+      const tag = tagsShown.get(item.actor.id);
+      const top = tag?.above ? tag.y - 1 : box.y - item.pose.lift;
+      ctx.globalAlpha = reveal * item.pose.alpha * item.fade * item.room.alpha;
+      if (status === 'waiting' && item.pose.kind === 'seated') { thinking(ctx, box.x + box.w / 2 + 6, top + 2, t + item.actor.phase * 120); continue; }
       const emphasis = item.actor.person.emphasis;
-      if (!emphasis || !item.sheet) continue;
+      if (!emphasis) continue;
       const name: SpriteName = emphasis === 'exception' ? 'emblem-exception' : sceneStill ? 'emblem-decision-still' : 'emblem-decision';
       const mark = spriteArt(name);
-      const box = boxOf(item.pose);
-      const bob = emphasis === 'decision' && !sceneStill ? Math.sin(((beat + item.actor.phase) * Math.PI) / 6) * 1.6 : 0;
-      ctx.globalAlpha = reveal * item.pose.alpha * item.fade * item.room.alpha;
-      sprite(ctx, name, box.x + box.w / 2 - mark.anchor[0], box.y - mark.size[1] + bob, mark.size[0], mark.size[1]);
+      const bob = emphasis === 'decision' && t ? Math.sin(t / 380 + item.actor.phase) * 1.8 : 0;
+      sprite(ctx, name, box.x + box.w / 2 - mark.anchor[0] + item.shake, top - mark.size[1] + bob, mark.size[0], mark.size[1]);
     }
     ctx.globalAlpha = reveal;
     // Labels after the light, so they stay legible at night.
@@ -766,7 +996,7 @@ export function createWorldScene(ports: WorldScenePorts) {
       const team = teams.get(zone.key);
       if (!team) continue;
       ctx.globalAlpha = reveal * zoneAlpha(zone.key);
-      banner(ctx, team, zone.banner.x, zone.banner.y);
+      banner(ctx, team, zone.banner.x, zone.banner.y, level);
     }
     ctx.globalAlpha = 1;
     const focused = focusId ? hits.find(hit => hit.id === focusId) : undefined;
@@ -816,6 +1046,7 @@ export function createWorldScene(ports: WorldScenePorts) {
         }
       }
       for (const [id, age] of landed) { if (age >= DROP_MS) landed.delete(id); else landed.set(id, age + dt); }
+      particles.step(dt);
       const tipId = lastHover || lastFocus;
       if (tip.id !== tipId) tip = { id: tipId, alpha: 0 };
       if (tip.id && tip.alpha < 1) tip.alpha = Math.min(1, tip.alpha + dt / TIP_MS);
@@ -830,13 +1061,12 @@ export function createWorldScene(ports: WorldScenePorts) {
       if (!layoutNow()) return Infinity;
       if (reveal < 1 || (art.theme() !== null && furniture < 1) || [...sheetFade.values()].some(value => value < 1)) return 0;
       if (moving || landed.size || (tip.id && tip.alpha < 1) || (lastHover || lastFocus) !== tip.id) return 0;
-      let looping = false;
-      for (const actor of actors.values()) {
-        if (isMoving(actor)) return 0;
-        if (actor.person.emphasis === 'decision' || actor.at?.kind === 'spot' || (actor.person.state === 'working' && actor.at && samePlace(actor.at, actor.home))) looping = true;
-      }
-      if (motionless || still || !looping) return hour;
-      return Math.min(hour, BEAT_MS - (now % BEAT_MS));
+      if (particles.busy) return 0;
+      for (const actor of actors.values()) if (isMoving(actor)) return 0;
+      // Under reduced motion only the wall clocks change, once a minute.
+      if (motionless || still) return Math.min(hour, MINUTE_MS - ((performance.timeOrigin + now) % MINUTE_MS));
+      // Otherwise the office is alive while anyone is in it: screens flicker, bubbles think, tags breathe, dust drifts.
+      return actors.size || particles.size ? 0 : hour;
     },
     hit(point) { return hitAt(point)?.id ?? ''; },
     targets() {
@@ -915,6 +1145,8 @@ export function createWorldScene(ports: WorldScenePorts) {
         if (!still) landed.set(plan.document.id, 0);
         targetsDirty = true;
         dropped?.();
+        const layout = layoutNow();
+        if (!still && layout) particles.burst(layout.owner.desk.x + layout.owner.desk.w / 2, layout.owner.desk.y + 8);
       };
       const actor = actors.get(plan.person);
       const layout = layoutNow();
@@ -954,7 +1186,8 @@ export function createWorldScene(ports: WorldScenePorts) {
     },
     dispose() {
       disposed = true;
-      actors.clear(); podLayers.clear(); windowLayers.clear(); sheetLayers.clear(); patterns = null; hits = []; targetList = [];
+      actors.clear(); podLayers.clear(); windowLayers.clear(); sheetLayers.clear(); roomPatterns.clear(); signLayers.clear(); particles.clear();
+      patterns = null; hits = []; targetList = [];
       floorLayer.canvas = lightLayer.canvas = null;
     },
   };

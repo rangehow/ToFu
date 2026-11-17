@@ -161,6 +161,7 @@ __pycache__/
 !/benchmarks/conversation_compare.py
 !/benchmarks/tofudb_context_read.py
 !/benchmarks/tofudb_context_progression.py
+!/benchmarks/harness_perf/
 !/benchmarks/tofudb_cached_read.py
 !/benchmarks/tofudb_context_controls.py
 !/benchmarks/harness_sqlite_reference.rs
@@ -472,6 +473,7 @@ __pycache__/
 # referenced CHANGELOG.md, so no check could observe the drift.
 !/scripts/changelog_gate.py
 !/scripts/check_architecture.py
+!/scripts/code_structure_metrics.py
 # Cache-waste distribution report. The measurement discipline it encodes —
 # rates DERIVED from lib.cost rather than hand-written, non-waste classes
 # (TTL expiry / cold start) excluded from the recoverable denominator,

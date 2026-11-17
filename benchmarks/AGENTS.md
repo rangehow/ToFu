@@ -436,6 +436,17 @@ Measurements: `docs/RESOURCE_CONTROL.md`, "Settled task retention".
 process using token_ingress_measure --cold-only. Verify distinct PIDs, zero warm
 calls, both clocks, identical fixtures/instrumentation and unchanged sources.
 
+`harness_perf/run.py` boots the engine, execution host and API host in a
+private root against `stub_provider.py` (zero-latency scripted Chat/Responses/
+Anthropic faces) and drives v4 Turns: TTFR, per-round and tool round-trip
+overhead, settle, request bytes and prefix stability, idle/concurrent RSS and
+CPU, cold start, py-spy profiles. `--references all` runs the same scripts on
+codex, claude-code, opencode and pi (`references.py`). Scripts vary tool
+arguments per round so no loop breaker fires; a run with interventions or extra
+requests is not a clean measurement. `--smoke` is the CI size (under 2 min).
+Verify `tests/meta/test_harness_perf_measure.py`; baseline, hotspots and
+targets live in `docs/HARNESS_PERFORMANCE.md`.
+
 - Keep datasets, manifests, pricing inputs, random seeds, model/provider
   identity, and acceptance criteria explicit enough to reproduce a result.
 - Default runs must be bounded and dry-run/offline when practical. Live model

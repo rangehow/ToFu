@@ -430,6 +430,8 @@ def test_tofudb_exe_lands_where_tofu_spec_looks(tmp_path, monkeypatch):
     for name in ('zig', 'cargo-zigbuild'):
         (tools_bin / name).write_text('')
     monkeypatch.setattr(wb.wintoolchain, 'cache_dir', lambda: str(cache))
+    local = tmp_path / 'local'
+    monkeypatch.setattr(wb.wintoolchain, 'local_root', lambda: str(local))
     monkeypatch.setattr(wb, '_conda_tools_add',
                         lambda *a: pytest.fail('tools already present'))
     cmds = []
@@ -437,7 +439,7 @@ def test_tofudb_exe_lands_where_tofu_spec_looks(tmp_path, monkeypatch):
     def fake_sh(cmd, log_fh, *, cwd=None, env=None, **kw):
         cmds.append((cmd, env))
         if cmd.startswith('cargo zigbuild'):
-            out = (cache / 'tofudb-target' / wb._TOFUDB_WIN_TARGET
+            out = (local / 'tofudb-target' / wb._TOFUDB_WIN_TARGET
                    / 'release')
             out.mkdir(parents=True)
             (out / 'tofu-db.exe').write_bytes(b'MZ')
@@ -449,7 +451,8 @@ def test_tofudb_exe_lands_where_tofu_spec_looks(tmp_path, monkeypatch):
     built = src / 'packages' / 'tofu-db' / 'target' / 'release' / 'tofu-db.exe'
     assert built.read_bytes() == b'MZ'
     env = cmds[-1][1]
-    assert env['CARGO_TARGET_DIR'] == str(cache / 'tofudb-target')
+    # Local disk, never the FUSE cache: lld-link's mmapped output hangs there.
+    assert env['CARGO_TARGET_DIR'] == str(local / 'tofudb-target')
     assert env['PATH'].split(os.pathsep)[0] == str(tools_bin)
     assert '-Wno-error=date-time' in env['CFLAGS_x86_64_pc_windows_gnu']
 

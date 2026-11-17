@@ -3,8 +3,11 @@
 
 Inputs: explicit retired paths plus authored Python/JavaScript/TypeScript under
 lib/, routes/, and frontend/src/.
+Also enforces the code-structure owners of docs/ARCHITECTURE.md ("Code
+structure"): one registered-project owner and the frozen import-cycle baseline.
 Output: a bounded list of violations and a non-zero exit status.
-Dependencies: standard library only; generated delivery artifacts are excluded.
+Dependencies: standard library and scripts/code_structure_metrics.py (also
+standard library only); generated delivery artifacts are excluded.
 """
 
 from __future__ import annotations
@@ -337,6 +340,129 @@ def lib_toplevel_ratchet_violations(*, maximum: int = _LIB_TOPLEVEL_MAX_FILES) -
     return []
 
 
+# One owner answers "is this a registered project root?": lib/router/
+# registered_projects.py (folder roots + coordination bindings). The recent-
+# project list is navigation history; reading it, or the folder store, to
+# admit a project created the 2026-11-17 attachment refusal. Each name below
+# may appear only in its listed owners (definition, facade, HTTP adapter).
+_PROJECT_REGISTRY_READERS = {
+    "get_recent_projects": frozenset({
+        "lib/project_mod/config.py",
+        "lib/project_mod/__init__.py",
+        "routes/api_v1/project.py",
+        "healthcheck.py",
+    }),
+    "owner_folders": frozenset({
+        "lib/conversations/folders.py",
+        "lib/router/project_lifecycle.py",
+        "lib/router/registered_projects.py",
+        "routes/api_v1/folders.py",
+    }),
+}
+_PROJECT_REGISTRY_PATTERN = re.compile(
+    r"\b(" + "|".join(map(re.escape, _PROJECT_REGISTRY_READERS)) + r")\b"
+)
+
+# Module-level import cycles among lib/ and routes/ (strongly connected
+# components of load-time imports; scripts/code_structure_metrics.py). These
+# two are the measured 2026-11-17 baseline: the handler registry, which the
+# executor imports for its decorator side effects, and the optimizer
+# analyzer's monkeypatch-parity facade. No other cycle may form and these may
+# not grow; when one shrinks or disappears, tighten it here in the same change.
+_FROZEN_IMPORT_CYCLES = (
+    frozenset({
+        "lib.tasks_pkg.executor", "lib.tasks_pkg.handlers",
+        "lib.tasks_pkg.handlers._adapter", "lib.tasks_pkg.handlers.browser",
+        "lib.tasks_pkg.handlers.channels", "lib.tasks_pkg.handlers.code_exec",
+        "lib.tasks_pkg.handlers.local_serve", "lib.tasks_pkg.handlers.mcp",
+        "lib.tasks_pkg.handlers.memory", "lib.tasks_pkg.handlers.misc._agents",
+        "lib.tasks_pkg.handlers.misc._brain", "lib.tasks_pkg.handlers.misc._human",
+        "lib.tasks_pkg.handlers.motion_video", "lib.tasks_pkg.handlers.paper_build",
+        "lib.tasks_pkg.handlers.paper_citations", "lib.tasks_pkg.handlers.paper_edits",
+        "lib.tasks_pkg.handlers.paper_quality", "lib.tasks_pkg.handlers.poll",
+        "lib.tasks_pkg.handlers.project", "lib.tasks_pkg.handlers.retained_agents",
+        "lib.tasks_pkg.handlers.search._handlers", "lib.tasks_pkg.handlers.search._settings",
+        "lib.tasks_pkg.handlers.skills", "lib.tasks_pkg.handlers.tool_effect_inspection",
+        "lib.tasks_pkg.handlers.tool_gateway", "lib.tasks_pkg.handlers.tool_result_artifacts",
+    }),
+    frozenset({
+        "lib.optimizer.analyzer", "lib.optimizer.analyzer._audit",
+        "lib.optimizer.analyzer._cache", "lib.optimizer.analyzer._domains",
+        "lib.optimizer.analyzer._issues", "lib.optimizer.analyzer._logs",
+        "lib.optimizer.analyzer._metrics", "lib.optimizer.analyzer._model",
+        "lib.optimizer.analyzer._signals",
+    }),
+)
+
+
+def project_registry_owner_violations(paths: list[Path], *, root: Path | None = None) -> list[str]:
+    """Reject reading recent projects or the folder store outside their owners."""
+    root = root or ROOT
+    violations: list[str] = []
+    for path in paths:
+        if path.suffix != ".py":
+            continue
+        relative = path.resolve().relative_to(root.resolve()).as_posix()
+        try:
+            source = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for line_number, line in enumerate(source.splitlines(), start=1):
+            for match in _PROJECT_REGISTRY_PATTERN.finditer(line):
+                if relative not in _PROJECT_REGISTRY_READERS[match.group(1)]:
+                    violations.append(
+                        f"{relative}:{line_number}: {match.group(1)} is read only by its "
+                        "owners; ask lib.router.registered_projects whether a path is a "
+                        "registered project (recent projects are navigation history)"
+                    )
+    return violations
+
+
+def import_cycle_violations(
+    cycles: list[list[str]] | None = None,
+    *,
+    frozen: tuple[frozenset[str], ...] = _FROZEN_IMPORT_CYCLES,
+) -> list[str]:
+    """Every load-time import cycle must be one frozen baseline cycle, exactly."""
+    if cycles is None:
+        import sys
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        from scripts.code_structure_metrics import import_cycles
+        try:
+            cycles = import_cycles(ROOT)
+        except (OSError, subprocess.CalledProcessError) as exc:
+            detail = getattr(exc, 'stderr', b'') or str(exc)
+            if b'not a git repository' in (detail if isinstance(detail, bytes) else detail.encode()).lower():
+                # Isolated harness trees have no module graph to compare (as lib_toplevel).
+                return []
+            return [f"cannot enumerate modules for the import-cycle check: {exc}"]
+    violations: list[str] = []
+    for cycle in cycles:
+        members = frozenset(cycle)
+        if members in frozen:
+            continue
+        known = next((base for base in frozen if members <= base), None)
+        if known is None:
+            violations.append(
+                "new module-level import cycle: " + " -> ".join(sorted(members))
+                + "; move the shared piece to a leaf module or import lazily at the use site"
+            )
+        else:
+            violations.append(
+                f"import cycle shrank to {sorted(members)}; tighten _FROZEN_IMPORT_CYCLES "
+                "in scripts/check_architecture.py in the same change"
+            )
+    present = {frozenset(cycle) for cycle in cycles}
+    for base in frozen:
+        if not any(members & base for members in present):
+            violations.append(
+                f"frozen import cycle {sorted(base)[0]}... is gone; remove it from "
+                "_FROZEN_IMPORT_CYCLES in scripts/check_architecture.py"
+            )
+    return violations
+
+
 def lib_init_ratchet_violations(
     *,
     init_path: Path | None = None,
@@ -636,6 +762,9 @@ def main() -> int:
     violations.extend(module_facade_mutation_violations(sources))
     violations.extend(lib_init_ratchet_violations())
     violations.extend(lib_toplevel_ratchet_violations())
+    violations.extend(project_registry_owner_violations(
+        sources + sorted(ROOT.glob("bundles/*/tofu_*/**/*.py"))))
+    violations.extend(import_cycle_violations())
     checked_sources = 0
     for path in sources:
         try:

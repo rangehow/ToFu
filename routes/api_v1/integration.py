@@ -22,10 +22,8 @@ def _integration_api(name):
 
 
 def _project_path(explicit: str = '') -> str:
-    if explicit:
-        return explicit
-    from lib.project_mod.config import _state
-    return _state.get('path', '') or ''
+    from lib.project_mod.config import get_project_path
+    return explicit or get_project_path() or ''
 
 
 def _error(exc: Exception):

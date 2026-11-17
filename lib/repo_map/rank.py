@@ -62,23 +62,6 @@ def ensure_scores(repo: RepoMap, scores: dict[str, float]) -> dict[str, float]:
             out[rel_path] = neutral
     return out
 
-def per_tag_score(repo: RepoMap, file_scores: dict[str, float]) -> dict[str, list[float]]:
-    """Spread a file's importance across its tags.
-
-    Mirrors aider: each definition in a heavily-tagged file gets a
-    smaller slice, so a 200-function utility dump does not crowd out a
-    central 3-class module.
-    """
-    out: dict[str, list[float]] = {}
-    for rel_path, tags in repo.tags.items():
-        score = file_scores.get(rel_path, 0.0)
-        if not tags:
-            continue
-        per = score / max(len(tags), 1)
-        out[rel_path] = [per] * len(tags)
-    return out
-
-
 def _fallback_scores(repo: RepoMap,
                      defined_idents: set[str],
                      references: dict[str, set[str]],

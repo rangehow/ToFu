@@ -76,7 +76,6 @@ def test_real_async_stream_sends_snapshot_after_budget_dispatch_and_closes(monke
     plan=SimpleNamespace(body=sealed,url='https://fixture.invalid',
                          hdrs={'Content-Type':'application/json'},model_budget_lease=Lease())
     monkeypatch.setattr('lib.proxy.subscription_route_candidates',lambda url:[])
-    monkeypatch.setattr(module,'_resolve_async_route',lambda url:(None,{'mode':'fixture'}))
     async def execute():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
             monkeypatch.setattr(module,'get_async_client',lambda **_:client)

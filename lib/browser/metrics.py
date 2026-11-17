@@ -60,21 +60,3 @@ def measure_browser(collector=None):
         yield collector
     finally:
         _current.reset(token)
-
-
-def record_command(cmd, *, failed=False):
-    import time
-    collector = _current.get()
-    if collector is None:
-        return
-    started = cmd.get('started_monotonic', time.monotonic())
-    finished = time.monotonic()
-    claimed = cmd.get('claimed_monotonic', finished)
-    command = cmd.get('type')
-    phase = ('navigation' if command in ('navigate', 'create_tab') else
-             'read' if command in ('read_tab', 'read_page_bundle', 'page_state', 'page_snapshot', 'fetch_url', 'research_url') else
-             'cleanup' if command in ('close_tab', 'network_capture_stop') else
-             'interaction' if command in ('page_click', 'page_fill', 'page_press', 'execute_js') else 'other')
-    collector.record(queue_ms=(claimed - started) * 1000,
-                     total_ms=(finished - started) * 1000,
-                     execution_ms=cmd.get('execution_ms'), failed=failed, phase=phase)

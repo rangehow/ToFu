@@ -5,9 +5,7 @@ enabled, mirror one verified snapshot to the configured stable directory
 once every 24 h. The serving lifespan starts and stops it through
 ``lib/server/server_background_services.py``; assembly never does.
 
-HTTP activity is fed by a single ``before_request`` hook registered in
-``lib/app/app_assembly.py``; the hook and the loop are both fully guarded so a
-panel failure can never break request serving.
+The loop is fully guarded so a backup failure can never break request serving.
 """
 
 from __future__ import annotations
@@ -27,20 +25,6 @@ _started = False
 _thread: threading.Thread | None = None
 _start_lock = threading.Lock()
 _stop = threading.Event()
-_activity_lock = threading.Lock()
-_last_http_activity = time.time()  # boot counts as activity: no instant idle run
-
-
-def note_http_activity() -> None:
-    """Record one HTTP request; called from the app before_request hook."""
-    global _last_http_activity
-    with _activity_lock:
-        _last_http_activity = time.time()
-
-
-def _seconds_since_http_activity() -> float:
-    with _activity_lock:
-        return time.time() - _last_http_activity
 
 
 def _storage_ready() -> bool:

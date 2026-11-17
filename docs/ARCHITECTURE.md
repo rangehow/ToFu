@@ -1356,6 +1356,78 @@ call `lib.llm_dispatch.reset_dispatcher` so the next pick rebuilds slots from
 v2. Routes still must not import dispatch execution symbols or in-package
 helpers such as `health_local._rebuild_dispatcher_slots`.
 
+## Code structure: single owners and measured baseline
+
+`scripts/code_structure_metrics.py` measures the tree (tracked plus untracked
+non-ignored files; `--json` for the full report): non-blank Python LOC by
+package, the largest modules and functions, module-level import cycles among
+`lib/` and `routes/` (strongly connected components of load-time imports;
+function-level, `TYPE_CHECKING` and submodule-only `from pkg import sub`
+imports excluded), duplicate implementations (identical normalized function
+bodies across modules, and private helper names defined in three or more
+modules) and dead-code candidates (modules nothing imports or names; top-level
+functions whose identifier occurs once in all tracked text). Candidates are
+evidence for a decision, never deleted automatically: dynamic loaders such as
+`storage_authority_sql/operation_registry.py` import `operation_domains/*` by
+computed name, and tests may patch a module attribute by string.
+
+`scripts/check_architecture.py` keeps the cleaned structure from regressing:
+
+- **One registered-project owner.** "Is this a registered project root?" is
+  answered only by `lib/router/registered_projects.py` (folder roots and
+  coordination bindings; never the router home, the Watchdog or the
+  recent-project navigation history). `get_recent_projects` and
+  `owner_folders` may appear only in their listed owners
+  (`_PROJECT_REGISTRY_READERS`). Problem: three sources (recent projects,
+  `folders.json`, Router bindings) disagreed; channel attachments read the
+  recent list and refused a project registered in three folders, and the
+  Feishu bridge selected projects from the same history. Decision: one
+  resolver both admitting surfaces call, plus a gate. Alternative rejected:
+  fixing each reader in place (what the first attachment fix did) left the
+  Feishu copy on the old source.
+- **No new import cycles.** Every load-time cycle must equal one entry of
+  `_FROZEN_IMPORT_CYCLES`: the task handler registry (`lib.tasks_pkg.executor`
+  imports `handlers` for its decorator side effects, 26 modules) and the
+  optimizer analyzer's monkeypatch-parity facade (9 modules). A new or grown
+  cycle fails; a shrunk or vanished one must be tightened in the same change.
+- **One tool-schema-name reader.** `lib.tools.contracts.tool_schema_name`
+  reads a provider schema's name in either wire dialect; Swarm routing, paper
+  and research executors, MCP exposure, direct-call retention and background
+  guidance call it (`tests/tools/test_tool_schema_name.py`).
+
+Specs: `tests/meta/test_architecture_structure_owners.py`,
+`tests/router/test_registered_projects.py`.
+
+Baseline and cleanup, 2026-11-17 (measured at `68e87e704b`, before the cleanup):
+
+| Measure | Before | After |
+|---|---|---|
+| Python files / non-blank LOC (whole tree) | 9,155 / 2,008,955 | cleanup diff: `lib/` +171 −716, `routes/` +4 −11 (net −552 production lines); `scripts/` +438 (metrics and gates), `tests/` +176 −11 |
+| Largest LOC packages | tests 1,013,121; lib 677,411 (tasks_pkg 112,419; storage_authority_sql 63,315; lib root files 48,199; project_mod 46,316) | unchanged order |
+| Largest modules | `storage_authority_sql/migration/tofudb_migration_import.py` 7,108; `project_mod/command_analysis.py` 5,986; `turn_lifecycle.py` 4,336 | unchanged |
+| Largest functions | `tofu_search ... _perform_web_search_impl` 660; `tasks_pkg/manager/_stream.py:stream_llm_response` 648 (budgets in `scripts/check_function_sizes.py`) | unchanged |
+| Module-level import cycles | 2 (35 modules) | 2 (35 modules), frozen |
+| Identical function bodies across modules | 20 groups | 13 groups |
+| Dead modules (static, excluding dynamically loaded `operation_domains`) | 1 (`lib/provider/provider_balance.py`) | 0 |
+| Dead top-level functions | 24 (+4 second-order after deletion) | 5, all in hot-path packages below |
+| Registered-project resolvers | 3 (attachments: folders+bindings; Feishu: recent projects; get_router_projects: bindings) | 1 owner, gated |
+| Tool-schema-name readers outside `tasks_pkg` | 6 | 1 |
+
+Remaining findings, left for their owners: dead
+`agent_core/execution_limits.count_tool_calls`,
+`tasks_pkg/background_commands.task_effect_snapshot`,
+`tasks_pkg/compaction/_layer2` `_user_message_text` and
+`_summary_covers_state_value`, `tasks_pkg/manager/prepared.read_interrupted_birth`;
+three `tasks_pkg/compaction` `_human_size` copies and the
+`tasks_pkg` tool-name readers (agent-loop hot path); and about 25 module-local
+bounded environment-number readers (`_env_int`, `_env_float`, `_env_seconds`).
+Those stay local because `scripts/check_config_knobs.py` infers env knobs from
+module-local adapters only; one shared reader needs that scanner to recognise
+it (as it does `proc_env_value`) in the same change. The deleted
+`message_queue.drain_idle_peer_messages` (a steady-state idle drain for peer
+messages) had no caller since the 2026-10-22 history rebuild; peer delivery to
+an idle conversation relies on the remaining drain paths.
+
 ## Request lifecycle
 
 ```text

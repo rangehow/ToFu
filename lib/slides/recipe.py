@@ -43,6 +43,7 @@ from lib.slides.contracts import (
 )
 from lib.production.llm_policy import (
     abort_check_from_event,
+    context_abort_check,
     production_llm_dispatch_kwargs,
     production_llm_max_429_attempts,
 )
@@ -103,15 +104,8 @@ def _llm_chat(messages, **kwargs):
     return dispatch_chat(messages, **kwargs)
 
 
-def _context_abort_check(ctx: dict):
-    callback = ctx.get('abort_check')
-    if callable(callback):
-        return callback
-    return abort_check_from_event(ctx.get('abort_event'))
-
-
 def _raise_if_aborted(ctx: dict, stage: str) -> None:
-    abort_check = _context_abort_check(ctx)
+    abort_check = context_abort_check(ctx)
     if abort_check is not None and abort_check():
         raise StageAborted(f'aborted during slides {stage}')
 
@@ -460,7 +454,7 @@ def _critic_choice(ctx: dict, candidates: list[dict]) -> tuple[int, str, dict]:
         strict_model=bool(ctx.get('model')),
         owner_user_id=ctx.get('owner_user_id'),
         **production_llm_dispatch_kwargs(
-            abort_check=_context_abort_check(ctx),
+            abort_check=context_abort_check(ctx),
             max_429_attempts=ctx.get('max_429_attempts')),
         log_prefix='[Slides:outline-critic]')
     _raise_if_aborted(ctx, 'outline critic')
@@ -512,7 +506,7 @@ def _source_coverage(ctx: dict, research: dict) -> dict:
         strict_model=bool(ctx.get('model')),
         owner_user_id=ctx.get('owner_user_id'),
         **production_llm_dispatch_kwargs(
-            abort_check=_context_abort_check(ctx),
+            abort_check=context_abort_check(ctx),
             max_429_attempts=ctx.get('max_429_attempts')),
         log_prefix='[Slides:coverage]')
     _raise_if_aborted(ctx, 'coverage inventory')
@@ -579,7 +573,7 @@ def _fill_coverage_gaps(ctx: dict, candidate: dict, gaps: list[str], *,
         strict_model=bool(ctx.get('model')),
         owner_user_id=ctx.get('owner_user_id'),
         **production_llm_dispatch_kwargs(
-            abort_check=_context_abort_check(ctx),
+            abort_check=context_abort_check(ctx),
             max_429_attempts=ctx.get('max_429_attempts')),
         log_prefix='[Slides:outline-coverage]')
     _raise_if_aborted(ctx, 'outline coverage fill')
@@ -646,7 +640,7 @@ def _run_outline(ctx: dict) -> dict:
                 strict_model=bool(ctx.get('model')),
                 owner_user_id=ctx.get('owner_user_id'),
                 **production_llm_dispatch_kwargs(
-                    abort_check=_context_abort_check(ctx),
+                    abort_check=context_abort_check(ctx),
                     max_429_attempts=ctx.get('max_429_attempts')),
                 log_prefix=f'[Slides:outline:{lens_name}]')
             _raise_if_aborted(ctx, f'outline candidate {lens_name}')
@@ -796,7 +790,7 @@ def _revise_outline_with_feedback(ctx: dict, outline: dict,
             strict_model=bool(ctx.get('model')),
             owner_user_id=ctx.get('owner_user_id'),
             **production_llm_dispatch_kwargs(
-                abort_check=_context_abort_check(ctx),
+                abort_check=context_abort_check(ctx),
                 max_429_attempts=ctx.get('max_429_attempts')),
             log_prefix='[Slides:outline-gate]')
         research = ctx.get('artifacts', {}).get('research') or {}
@@ -851,8 +845,8 @@ def _run_outline_gate(ctx: dict) -> dict:
     from lib.tasks_pkg.human_guidance import request_human_guidance
     response = request_human_guidance(
         guidance_id, owner_user_id=ctx.get('owner_user_id'),
-        on_registered=publish_request, abort_check=_context_abort_check(ctx))
-    if response is None or _context_abort_check(ctx)():
+        on_registered=publish_request, abort_check=context_abort_check(ctx))
+    if response is None or context_abort_check(ctx)():
         raise StageAborted('cancelled or unavailable outline gate')
     feedback = str(response or '').strip()
     if emit:
@@ -1119,7 +1113,7 @@ def _run_author(ctx: dict) -> dict:
     try:
         from lib.slides._asset_preflight import prepare_deck_assets
         asset_preflight = prepare_deck_assets(
-            outline, deck_dir, abort_check=_context_abort_check(ctx),
+            outline, deck_dir, abort_check=context_abort_check(ctx),
             max_429_attempts=ctx.get('image_max_429_attempts'),
             owner_user_id=ctx.get('owner_user_id'),
             tenant_id=ctx.get('tenant_id'))
@@ -1132,7 +1126,7 @@ def _run_author(ctx: dict) -> dict:
                                    + input_findings)
     _raise_if_aborted(ctx, 'authoring')
     emit = ctx.get('emit')
-    abort_check = _context_abort_check(ctx)
+    abort_check = context_abort_check(ctx)
     max_429_attempts = ctx.get('max_429_attempts')
     lang = ctx.get('lang', 'zh')
     model = ctx.get('model') or None
@@ -1509,7 +1503,7 @@ def _run_assets(ctx: dict) -> dict:
             size, _content_type, sha256 = download_file_bounded(
                 src, path, max_bytes=min(MAX_SLIDE_IMAGE_BYTES, remaining),
                 min_bytes=1024, timeout=60,
-                abort_check=_context_abort_check(ctx))
+                abort_check=context_abort_check(ctx))
         except InterruptedError as exc:
             raise StageAborted('aborted during slides asset localisation') from exc
         except Exception as e:
@@ -1611,7 +1605,7 @@ def _run_render(ctx: dict) -> dict:
 
     manifest = render_previews(deck, os.path.join(ctx['deck_dir'], 'preview'),
                                scale=2.0,
-                               abort_check=_context_abort_check(ctx),
+                               abort_check=context_abort_check(ctx),
                                on_page=_on_page)
     return {'previews': [p['png'] for p in manifest['pages']],
             'failed': manifest['failed']}
@@ -1704,7 +1698,7 @@ def _repair_line_breaks(ctx: dict, deck, measured: dict) -> set:
         with open(path, encoding='utf-8') as fh:
             original = fh.read()
         text, _trial = _repair_page_line_breaks(
-            deck, index, original, abort_check=_context_abort_check(ctx))
+            deck, index, original, abort_check=context_abort_check(ctx))
         if text != original:
             write_text_atomic(path, text)
             kept.add(index)
@@ -1784,7 +1778,7 @@ def _relayout_pages(ctx: dict, deck, measured: dict) -> set:
         try:
             result = inspect_deck_layout(
                 parse_deck(manifest), page_indexes=tuple(sorted(variants)),
-                abort_check=_context_abort_check(ctx))
+                abort_check=context_abort_check(ctx))
         finally:
             for index in variants:
                 write_text_atomic(paths[index], originals[index])
@@ -1829,7 +1823,7 @@ def _tighten_pages(ctx: dict, deck, measured: dict) -> set:
     by_page = _findings_by_page(measured)
     originals = {}
     candidates = set()
-    abort_check = _context_abort_check(ctx)
+    abort_check = context_abort_check(ctx)
     for index, findings in sorted(by_page.items()):
         _raise_if_aborted(ctx, 'layout QA')
         page_path = os.path.join(ctx['deck_dir'], deck.pages[index].path)
@@ -2019,7 +2013,7 @@ def _run_page_visual_reviews(ctx: dict, previews: list, *, theme, vqa,
     """Review independent page previews on owned demand workers."""
     if not previews:
         return []
-    abort_check = _context_abort_check(ctx)
+    abort_check = context_abort_check(ctx)
     max_429_attempts = ctx.get('max_429_attempts')
     from lib.slides.pptd import parse_deck
     from lib.slides.review_context import build_review_context
@@ -2139,7 +2133,7 @@ def _run_visual_qa(ctx: dict) -> dict:
         raise ValueError('visual QA requires one preview for every page')
     author_artifact = ctx['artifacts'].get('author') or {}
     assets_by_page = author_artifact.get('assets_by_page') or {}
-    abort_check = _context_abort_check(ctx)
+    abort_check = context_abort_check(ctx)
     cache_path = os.path.join(ctx['deck_dir'], _VISUAL_QA_CACHE_NAME)
     cache = _load_visual_qa_cache(ctx['deck_dir'])
     allowed_keys = {'deck'} | {f'page:{i}' for i in range(len(previews))}

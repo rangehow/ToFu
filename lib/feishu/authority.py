@@ -9,8 +9,9 @@ Entry points: :func:`resolve_sender`, :func:`is_admitted`,
 :func:`registered_projects`, :func:`matching_registered_projects`,
 :func:`authorized_project`.
 Dependencies: ``lib.feishu._state`` (allowlist), ``lib.feishu.conversation``
-(selected project), ``lib.project_mod.config.get_recent_projects`` (the owner's
-registered projects).
+(selected project), ``lib.router.registered_projects`` (the owner's registered
+projects: folder roots and coordination bindings, never the recent-project
+navigation history).
 
 Policy (``docs/modules/integrations_api.md``, "Feishu bridge authority"):
 
@@ -114,23 +115,18 @@ def resolve_sender(open_id: str) -> FeishuSender | None:
 
 
 def registered_projects(owner_user_id: int) -> list[str]:
-    """The owner's registered project paths (``/api/v1/project/recent``)."""
-    from lib.project_mod.config import get_recent_projects
-    return [row['path'] for row in get_recent_projects(user_id=owner_user_id)
-            if isinstance(row, dict) and isinstance(row.get('path'), str) and row['path']]
-
-
-def _same_directory(left: str, right: str) -> bool:
-    return os.path.realpath(os.path.expanduser(left)) == os.path.realpath(os.path.expanduser(right))
+    """The owner's registered project roots (``lib.router.registered_projects``)."""
+    from lib.router.registered_projects import registered_project_roots
+    return registered_project_roots(owner_user_id)
 
 
 def matching_registered_projects(owner_user_id: int, requested: str) -> list[str]:
     """Registered projects named by exact path or by directory name."""
-    projects = registered_projects(owner_user_id)
-    exact = [path for path in projects if _same_directory(path, requested)]
+    from lib.router.registered_projects import registered_project
+    exact = registered_project(owner_user_id, requested) if os.path.isabs(os.path.expanduser(requested)) else None
     if exact:
-        return exact[:1]
-    return [path for path in projects
+        return [exact]
+    return [path for path in registered_projects(owner_user_id)
             if os.path.basename(os.path.normpath(path)) == requested]
 
 
@@ -139,10 +135,9 @@ def authorized_project(sender: FeishuSender) -> str | None:
     if not sender.is_owner:
         return None
     from lib.feishu.conversation import get_project
+    from lib.router.registered_projects import registered_project
     selected = get_project(sender.open_id)
     if not selected:
         return None
-    for path in registered_projects(sender.owner_user_id):
-        if _same_directory(path, selected) and os.path.isdir(path):
-            return path
-    return None
+    path = registered_project(sender.owner_user_id, selected)
+    return path if path and os.path.isdir(path) else None

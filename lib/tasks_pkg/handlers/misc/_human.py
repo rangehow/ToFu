@@ -142,6 +142,17 @@ def _relay_to_global_router(task, tc_id, round_entry, blocking):
                        task_log_tag(task.get('id', '?')), exc_info=True)
 
 
+def _record_owner_answer(task, guidance_id):
+    """The answer reached this task's model: the owner's request for this reply (docs/ROUTER.md R9).
+
+    Only the owner's durable answer command resolves a card, so the project
+    dispatch source admits it like a steered owner message
+    (``lib.project_dispatch.delegation._answered_owner_source``).
+    """
+    from lib.project_dispatch.delegation import OWNER_ANSWERS_KEY
+    task[OWNER_ANSWERS_KEY] = (*(task.get(OWNER_ANSWERS_KEY) or ()), guidance_id)
+
+
 def _finalize_nonblocking(task, fn_name, rn, round_entry, title, extra):
     """Settle a shown question at once; its reply arrives as a chat message."""
     round_entry['guidanceBlocking'] = False
@@ -320,6 +331,7 @@ def _handle_ask_human(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, p
         tool_content = _finalize_superseded(
             task, fn_name, rn, round_entry, question[:2000], guidance_meta)
         return tc_id, tool_content, False
+    _record_owner_answer(task, guidance_id)
     tool_content = f'Human response: {user_response}'
     logger.info('[Executor] ask_human received response: '
                 'guidance_id=%s, response_len=%d, task=%s',
@@ -526,6 +538,7 @@ def _handle_ask_human_batch(task, tc, fn_name, tc_id, fn_args, rn,
         result_parts.append(f'A{i + 1}: {answer_text}')
         result_parts.append('')
 
+    _record_owner_answer(task, guidance_id)
     tool_content = 'Human responses (batch):\n' + '\n'.join(result_parts)
     logger.info('[Executor] ask_human batch received %d answers: '
                 'guidance_id=%s, task=%s',

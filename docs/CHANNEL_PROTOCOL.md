@@ -620,11 +620,17 @@ private verified copy; adapters never read caller paths. Admissible:
    `get_router_projects` lists; not the router home or watchdog), read
    with the same no-follow snapshot and limits, recorded on the item with
    that project as its provenance and shown in 代发记录: the path by which a
-   project's file reaches the Global Router.
+   project's file reaches the Global Router;
+4. `{path, worker}`: a regular file in the registered checkout of a Worker the
+   sending lead dispatched, read the same way (ROUTER.md R9, "Leads reach the
+   owner directly", where a Project Router also sends, to the owner's command
+   chat only).
 
-Every refusal names the supported path: send with `channel_send` from the
-Global Router; a project conversation reports the file's path to the Global
-Router and asks it to send; nothing sends through a login of its own.
+No file that leaves may carry a credential (`lib/conversations/attachment_secrets.py`).
+Every refusal names the supported path: send with `channel_send` from a lead
+(the Global Router to any thread, a Project Router to the owner's command
+chat); another project conversation reports the file's path to its lead and
+asks it to send; nothing sends through a login of its own.
 Platform limits (types, sizes) stay the descriptor's.
 
 In code (`lib/channels/attachments.py`): `channel_send` takes

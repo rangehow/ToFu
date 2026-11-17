@@ -147,9 +147,12 @@ Channel batches, relayed reports and other nonhuman steers share that lane but
 never do (they are evidence, R2; the steer seam records an author only for
 human input), so they wait at the round boundary. A Project Router's question,
 blocking or not, also reaches the owner's Global Router as one passive notice
-(R3), so an owner who talks only to the Global Router sees it; the router puts
-it to the owner where they talk to it and forwards their answer verbatim with
-`route_to_project`. Such a forward is the owner's own message only when
+(R3), so an owner who talks only to the Global Router sees it; with the owner's
+大象 command chat enabled the question itself goes there directly and the router
+is only copied (R9, "Leads reach the owner directly"), else the router puts it to
+the owner where they talk to it; either way it forwards their answer verbatim with
+`route_to_project`. The owner's answer on the card is the Project Router's own
+request for that reply (R9), so a wake that asked can act on it. Such a forward is the owner's own message only when
 `require_human_turn` verifies it (R2): steered into the waiting reply, it ends
 the wait exactly like the owner typing in the project chat, while an
 unverifiable forward waits like any nonhuman steer. Cards render only in Tofu:
@@ -175,6 +178,15 @@ genuine human Turn of the same owner in the owner's bound Global Router and the
 text is identical; it rejects every other cross-conversation origin as before.
 The router's optional `note` is nonhuman context of that same request and never
 becomes authority. Forwarding is idempotent per (source turn, project).
+The Router's role text names the current request's source on every Turn whose
+input is the owner's own message (`project_coordination._request_lines`,
+resolved as delegation resolves it): `route_to_project(source_turn_id="<Turn>")`,
+or `source_steer_id` for a steered message. Problem: the 2026-11-18 lead audit
+(T4) counted 11 `list_conversations` calls by the Global Router searching for
+its own owner message (1,791 s, 4 tool timeouts), one of which then passed its
+own reply's Turn ID and was refused `owner_message_required`. Alternative
+rejected: defaulting `source_turn_id` when omitted (the call would no longer
+state which words it forwards).
 
 **Alternatives rejected:** cross-conversation grant sources (every grant reader
 would change); synthetic forwards (cannot delegate, so useless); letting the
@@ -318,7 +330,15 @@ report message (already bounded by the report contract). The command id hashes
 (owner, Project Router conversation, report Turn), so replays deliver once.
 Reports of the router home, and owners without an available Global Router,
 relay nothing: relaying never creates a router. A relay failure is logged and
-never fails publication. A relayed notice, like a colleague's channel event, is
+never fails publication. The notice is self-contained (owner request
+2026-11-18): it tells the Router to decide from the title, message, tasks and
+files it carries and to read the report Turn with `get_conversation` only for
+evidence the message does not hold, and a question notice to ask without
+re-reading the Project Router conversation. Problem: the 2026-11-18 lead audit
+(D1) found every question relay and 14 of 22 report relays re-reading the
+source conversation (24 reads, about 121k result characters) because the
+notice told it to. Alternative rejected: dropping the pointer (the report Turn
+stays the canonical record for evidence). A relayed notice, like a colleague's channel event, is
 a nonhuman request: it opens no request account (`bind_source_account` returns
 nothing for a `SyntheticSource`), so an idle router starts its turn normally,
 and delegation from that request is refused as before. Problem: the account
@@ -391,7 +411,9 @@ in its own chat, so an owner who talks only to the Global Router (mostly from
 request ended with a `needs_user` report. A waiting question also ended for any
 steered author with actor `human`, so a forged or edited forward answered it
 like the owner. Decision: every question a Project
-Router posts, blocking or not, relays one passive notice by the report seam.
+Router posts, blocking or not, relays one passive notice by the report seam
+(and, since the lead audit of 2026-11-18, goes straight to the owner's command
+chat, below).
 The `ask_human` handler (single and form) calls `relay_project_question` once
 the card is set up and the task is a bound Coordinator (`coordinator_scope`);
 the notice is stamped `peer` with `origin.sourceConversationId`, steers a
@@ -416,10 +438,16 @@ auto-reply does not return it; but `channel_send` needs only the Global Router
 conversation, not a human Turn, and the owner's command chat is `queued` at
 enqueue without approval or disclosure label, while third-party threads keep
 their reply policy and draft outbox (CHANNELS.md C5). Existing tools already
-reach the owner, so the decision is instruction only: when the owner's 大象
-account is enabled with a command chat, the notice names it and says to send
-the question there with `channel_send(thread=<command chat>,
-idempotency_key=<question id>)`; otherwise it says to ask in the router's
+reach the owner. When the owner's 大象 account is enabled with a command chat,
+`relay_project_question` puts the question there itself (outbox origin
+`project_question`, authority `nonhuman`, identity the question's relay command id,
+so a replay queues it once; the command chat sends without approval) and the
+notice tells the router it is copied: never ask again, forward the owner's
+answer. Measured 2026-11-15..18: 13 questions took a median 48.5 min end to end,
+49.8 min of it added by the router surfacing the question and forwarding the
+answer (lead audit A6). Only when that post fails does the notice say to send the
+question with `channel_send(thread=<command chat>, idempotency_key=<question id>)`
+as before; without a command chat it says to ask in the router's
 reply (with `ask_human` only as `blocking=false`, so the owner's answer arrives
 as a forwardable message, not a card result). The owner's command-chat reply
 reaches the router as human input with byte-identical text (a Turn, or a
@@ -429,9 +457,10 @@ Project Router, `_human_message_pending` judges each steered author with
 wait as superseded by a chat message, so the model reads the owner's words as
 the answer; a forged or edited forward waits like any nonhuman steer.
 
-Alternatives considered: the Project Router sending questions to 大象 itself
-(bypasses the router's judgment and channel norms; the answer would arrive
-outside the router's forwarding authority); relaying only blocking questions
+Alternatives considered: the Project Router choosing to send its questions to 大象
+with its own `channel_send` (each lead would re-derive the form; the relay seam
+already holds the question, its identity and the quiet-hours hold); keeping the
+router as the only asker (the measured half hour per question); relaying only blocking questions
 (the default of a `blocking=false` question would be decided without an owner
 who never opens the project); an owner-thread exception in the outbox or a new
 tool (the command chat already sends without approval); a structured `default`
@@ -663,17 +692,20 @@ through `dispatch_scheduled_turn(..., inject_mode='steer')`:
 - **Periodic review.** An owner-visible keyed scheduler task (type
   `router_watchdog_review`). Its run builds the deterministic health snapshot
   and wakes the Watchdog (`proactive`, one command id per task and minute)
-  only when something needs judgment.
+  only on a fault: a stalled lead, an open signal, an outbox item, an
+  unhealthy channel or an unreadable router. Workers making progress are not
+  a fault.
 - **Re-checks.** The Watchdog arms one-shot `once:` scheduler tasks for
   intermittent faults and keeps re-arming until recovery; a re-check always
   wakes it.
 
 Interventions use only existing authority-safe paths: a project-mailbox message
 to any Router or Worker of the owner (nonhuman context at the recipient's next
-step), or one peer notice to the Global Router, which decides whether, when and
-where the owner hears about it. The Watchdog never executes, delegates, cancels,
-holds a grant or speaks as the owner; correction, re-delegation and
-cancellation stay with each Worker's Coordinator and the human. Health checks
+step), one peer notice to the Global Router, which decides whether, when and
+where the owner hears about it, and one narrow audited repair: waking a stalled
+lead (`resume_stalled_continuation`, below). The Watchdog never executes,
+delegates, cancels, holds a grant or speaks as the owner; correction,
+re-delegation and cancellation stay with each Worker's lead and the human. Health checks
 are on by default (below); the owner opens the Watchdog to ask it questions
 like any conversation from the main coordinator's header (R8), and changes or
 stops its periodic review by asking it.
@@ -682,7 +714,7 @@ stops its periodic review by asking it.
 floods its indefinite context and a failing router cannot watch itself); a
 separate monitor runtime, daemon or polling loop (a second model loop and task
 state machine, constraint 4); fixed-interval model polling regardless of state
-(paid turns while idle, so idle reviews end without a model turn); letting the
+(paid turns while idle, so reviews without a fault end without a model turn); letting the
 Watchdog cancel or re-delegate Workers (it would need grants, and synthetic
 input never gains human authority); a Watchdog-private timer or backoff (a new
 interval knob; the owner-visible scheduler is the one timer).
@@ -753,9 +785,11 @@ signal still wakes it, so a failure cannot silence it for good. A wake lost
 after its signal committed surfaces at the next review or snapshot.
 `health_snapshot` (`snapshot.py`) is a deterministic read with no model call or
 side effect: the Global Router and a page of Project Routers (availability,
-last activity, open signal IDs) with their Workers of the current binding
-epoch that are active, failed or have a held delivery (objective, status, last
-activity, the settled Turn's error); outbox items in `failed`/`unknown`;
+last activity, open signal IDs, the main lane's newest Turn as `lead_turn`,
+`stalled` with its `stall_reason`) with only the Workers of the current binding
+epoch that need their lead (objective, phase, when their result settled, last
+activity, the settled Turn's error) and a count `running_workers`; outbox items
+in `failed`/`unknown`;
 channel account and bridge state; and a page of open signals. Pages follow
 the project dispatch history page. The periodic review is the owner's keyed
 task `system-<owner>-router-watchdog-review` (`scheduler.task.ensure`, so
@@ -765,8 +799,70 @@ current request is the owner's own genuine message, resolved like delegation
 authority), through `POST /api/v4/router/watchdog/review` (scope
 `agents:scheduler`) or on its row in the scheduler list; the contract default
 cadence is `7,37 * * * *`. A review whose snapshot holds no
-active, failed or held Worker, open signal, outbox item, unhealthy channel or
-unreadable router ends without a model turn.
+stalled lead, open signal, outbox item, unhealthy channel or unreadable router
+ends without a model turn.
+
+**Fault-driven reviews and the stalled-lead repair (audit 2026-11-18).**
+Problem: over 58 h of lead trajectories the Watchdog cost $132.87 in 79
+Turns, more than the Global Router's keepalives. 50 scheduled reviews cost
+$95.19 and led to action 4 times: `needs_review` counted active Workers, so a
+review woke the model whenever any Worker ran (nearly always), and the role
+told it to read every active Worker's conversation on every wake (median 232k
+input tokens per request, snapshots averaging 18.6k characters); every review
+also counted 15-24 held deliveries the leads had long seen. Meanwhile a real
+stall went unrepaired: a Project Router whose continuation a restart stranded
+sat dead 197 minutes with Workers waiting, and the Watchdog had no power to
+wake it. Decision: a review wakes only on faults, and the one new fault is a
+stalled lead, defined structurally with no time threshold: the lead's main
+lane is idle (its newest main-lane Turn is settled, or it has none) while a
+Worker of its binding needs it and is new to it: a result awaiting review, a
+held delivery, or a Worker that ended (failed, interrupted, truncated), whose
+result settled after the lead's newest Turn did. A review or ended result is
+dated by its Attempt's `settledAt`, a held delivery by its workspace receipt's
+`updatedAt`, the lead by its newest Turn's Attempt `settledAt`. A result the
+lead already saw and left is its own choice (its continuation's stall rule
+owns that), and a running lead handles its own Workers. The snapshot lists
+only those Workers; the role judges open signals and stalled leads, reads a
+conversation only when a signal, a stall or the owner's question needs
+evidence, and otherwise ends silently. `resume_stalled_continuation`
+(`conversation_id`, `reason`, `idempotency_key`; contract
+`watchdogResumeStalledContinuation`) is the Watchdog's one repair power. It
+(a) admits only one of the owner's current leads (`lead_role`), never the
+Watchdog; (b) re-reads the stall from durable state with the snapshot's
+predicate (`lead_router_entry`) and answers `not_stalled` with that evidence
+otherwise; (c) requires the owner's full delegation to cover the lead
+(`check_delegation`, scope `lead_authority`, requester `global_router` for the
+router home, else `project_lead`, built from the lead's coordination binding)
+and otherwise refuses with the gate's typed code; (d) runs the structural
+recovery `recover_coordinator` for the lead's project, which births the
+continuation wake an open request derives, and only if the lead's lane is
+still idle starts one nonhuman `peer` notice Turn
+(`dispatch_scheduled_turn`, default mode: a busy lane answers `busy`,
+nothing is steered and the outcome is `not_stalled`) naming the Workers that
+need it and stating that it may act on Workers under the owner's delegation
+to every lead; that notice Turn carries no owner message, so the lead acts
+under `lead_source` (R9). Its command id hashes (owner, lead, idempotency
+key), so a replay never wakes twice. (e) Every call writes one
+`watchdog_resume_stalled_continuation` audit record naming owner, Watchdog
+conversation, lead, reason, idempotency key, outcome
+(`resumed_by_continuation`, `notice_started`, `not_stalled`, `refused`) and
+the evidence. Replay over the Watchdog's 25 h transcript: no review woke on
+active Workers alone (all 50 also counted held deliveries), so dropping that
+count alone saves nothing; with held and failed Workers waking only as a new
+result of an idle lead, at most the 22 reviews that counted an open signal or
+an outbox fault still wake on those ($46.50 of $95.19; Watchdog total $132.87
+→ at most $84.18 plus the stalled-lead reviews the transcript cannot show),
+and the 2.6M raw characters of `get_conversation` and snapshot results the role
+asked for on every wake (1.34M and 1.29M) leave its context. Alternatives
+rejected: a time threshold for "stalled" (a tuning
+knob, constraint 5, and wrong both for long Worker runs and for a lead that
+decided to wait); keeping held or failed Worker counts as review triggers
+(the replay showed they are almost always old receipts the lead already saw);
+a cheaper model or a longer cadence for reviews (still paid turns on healthy
+state, and slower to see a real stall); letting the Watchdog review, follow up
+or re-delegate Workers itself (it would hold Worker authority; waking the
+lead keeps judgment with the lead under the owner's existing grant); steering
+the notice into a busy lane (a running lead is not stalled).
 
 Every periodic review that ran writes `logs/watchdog-heartbeat-<owner>.json`
 last (`heartbeat.py`, on disk, never TofuDB). The file records when the next
@@ -955,6 +1051,14 @@ point. Scope:
     `authorizationSource` is `{conversationId, turnId: <the lead reply>,
     projectionRevision: 1, ownerDelegation: <action id>}`; its birth re-checks
     the record and the live grant (`ProjectDispatchRepository._validate_delegated_source`).
+    Each lead act that took its source from `lead_source` (one acting
+    Coordinator tool call, or one Worker birth, which completes after
+    `delegate_project_work` returned) settles the record with its outcome
+    (`delegation.lead_act`): `completed`, or `failed` with the refusal's code
+    and error, as every other delegated action settles. The record holds the
+    Attempt's latest act; a failed act is no revocation (a later birth of the
+    same Attempt is admitted while the grant lives), and every act also joins
+    the durable lead-audit stream (docs/LOGGING.md, `owner_delegation_action`).
     Callers that need the owner's own words keep the old refusal: forwarding
     (`route_to_project` still forwards only owner text), standing instructions,
     request accounts and the Watchdog's review changes.
@@ -981,8 +1085,94 @@ point. Scope:
   Specifications: `tests/router/test_lead_delegation.py` (real storage, SQLite
   and native: a Project Router's commitment wake dispatches a Worker under the
   grant, a revoked grant refuses the next dispatch and an earlier source's
-  birth, an enumerated grant does not reach Project Routers) and
-  `tests/router/test_owner_delegation.py::test_a_project_lead_restarts_under_the_full_grant_on_its_own_judgment`.
+  birth, an enumerated grant does not reach Project Routers),
+  `tests/router/test_owner_delegation.py::test_a_project_lead_restarts_under_the_full_grant_on_its_own_judgment`
+  and, in separate OS processes (storage, execution and API hosts, the public
+  v4 API and a scripted provider),
+  `tests/chaos/test_lead_delegation_processes.py`: the owner grants from the
+  browser, a Project Router's real commitment-due wake (a nonhuman Turn)
+  dispatches a Worker under the grant, that Worker calls `integration_submit`
+  from its isolated task workspace, and after the owner revokes mid-Turn the
+  same Turn's next dispatch and its `restart_server` are refused while the
+  server keeps serving.
+- **Cross-project action (owner decision 2026-11-18).** **Problem.** A lead
+  asked to help another project's work could only message that project's lead
+  (`send_project_message`) or, for the Global Router, `repair_project`: a
+  Project Router could neither read nor continue/stop a session outside its
+  project ("Conversation belongs to another project"), so help waited for the
+  other lead's next Turn. **Decision.** `control_conversation` with
+  `owner_delegation` is the one audited, delegation-checked cross-project
+  action of every lead (`owner_delegation.delegated_conversation_control`):
+  continue, checkpoint_resume, stop and set_model of an exact Attempt in any of
+  the owner's projects. A Project Router uses it only under the full grant
+  (scope `conversation_control`, requester `project_lead`), with any owner
+  trigger or `under_delegation: true`. For a Project Router's action on another
+  project's session (the Global Router's reach is every project already) the
+  audit record names the target project (`target.path`); after the effect,
+  that project's current lead receives one cross-lead `report` (R13 mailbox, idempotent by the audit
+  record id; the result's `target_lead_notified` names it, or null when the
+  project has no available lead or the lead is the caller). Reading such a
+  session (`get_conversation_status`) checks the same grant
+  (`session_control._target` `reach`). A replay acts and reports once.
+  Landing another project's checkpoint stays with its own lead (its review
+  publishes the accepted checkpoint; `lead_authority` lets that lead's wake do
+  it): the cross-project action continues that lead or its Worker rather than
+  reviewing another binding's assignment. **Alternatives rejected:** a new
+  cross-project tool (a second session-control path beside the one the owner's
+  Continue/Stop already uses); reviewing another binding's Worker (the review
+  belongs to the lead that holds its acceptance checks and request); widening
+  Project Routers' reach without the grant (unaudited authority). Specification:
+  `tests/conversation/test_coordinator_session_control.py::test_a_project_lead_acts_on_another_projects_session_under_the_full_delegation`
+  (refused without the grant and under an enumerated grant; under the full
+  grant it reads, continues, records `target.path` and notifies the target lead
+  once).
+- **Leads reach the owner directly (lead audit 2026-11-18, #5).** **Problem.**
+  The audit of the four leads (A5, A6) found every owner round trip passing
+  through the Global Router: a Project Router's question took a median 48.5 min
+  end to end (49.8 min of router-added latency over 13 questions), its files
+  reached 大象 only after a copy Worker moved them into the router home
+  (`attachment_project_unknown` ×3, about 60 min for one set of PDFs), owner
+  screenshots were refused as attachments (`attachment_refused` ×3), and a wake
+  that asked the owner could not act on the answer it received.
+  **Decision.** Same grant, no new switch:
+  - `channel_send` is in every lead's ceiling (`COORDINATOR_TOOLS`). A Project
+    Router sees it when the owner has a command chat (`visible_tools(owner, conv,
+    project_path)`) and `lib.channels.tools._require_owner_chat` admits only a
+    thread that is the owner's command chat (`owner_chat_only` otherwise; the
+    Global Router keeps every thread and its reply policies). Every Project Router
+    send, refusals included, is a `lead_channel_send` audit record.
+  - Attachments: a lead (`lead_attachments.lead_scope`) attaches files of every
+    registered project root (`registered_projects.registered_project_roots`) and
+    of its own Workers' registered checkouts: `worker:<assignment_id>/<path>` on
+    lead messages, `{path, worker}` on `channel_send`, resolved by
+    `lead_attachments.lead_worker_checkout` from the assignment's registered
+    integration workspace (another lead's Worker or a discarded checkout is
+    refused). Every such file, and every file `channel_send` carries, passes
+    `lib/conversations/attachment_secrets.py` first: a credential file by name, the exact value
+    of a vault entry, or an issuer-documented credential format refuses it
+    (`attachment_secret`), naming the rule and line, never the value.
+  - A verified owner answer to the lead's `ask_human` card is the Turn's owner
+    request, like a steered owner message: `delegation._answered_owner_source`
+    admits the durable answer receipt (`guidanceAnswerCommandId`) of a question of
+    that same reply whose answer reached the model (the handler's result, or an
+    `answer_guidance` resume). Source `{conversationId, turnId, projectionRevision: 1,
+    guidanceId}`; the repository re-reads the receipt at birth. Only the owner's
+    answer command writes a receipt; no lead tool answers a card.
+  - A Project Router's question goes to the owner's command chat directly, the
+    Global Router copied (R3 "Questions").
+  **Kept owner-only:** login approvals (CIBA/SSO/QR), credentials, payments,
+  external publication and messages to anyone but the owner from a Project
+  Router; `tests/meta/test_lead_owner_only_boundaries.py` is their executable
+  form. **Alternatives rejected:** a per-lead channel account (one live session
+  per account, CHANNELS.md C14); letting Project Routers write any thread under
+  the reply policy (messages to other people stay the Global Router's, with the
+  owner's drafts); content heuristics (`key = value` shapes) in the secret scan
+  (source code is full of them; only exact proofs refuse); treating any card
+  answer text as authority without its durable receipt (a relay could quote it).
+  Specifications: `tests/channels/test_lead_owner_chat.py`,
+  `tests/project_mod/test_lead_attachments.py`,
+  `tests/project_mod/test_coordinator_workers.py::test_the_owners_answer_to_a_wakes_question_is_its_request`,
+  `tests/router/test_question_relay.py`, `tests/router/test_question_answer_seam.py`.
 - **Granting needs the owner in the Tofu UI.** `POST /api/v4/router/owner-delegation
   {"granted": true}` (scope `admin`) admits only a user principal over the UI
   session cookie, or the loopback open-mode UI, with same-origin browser
@@ -1037,7 +1227,23 @@ point. Scope:
   stopped, the manager always completes the replacement.
   Every transition also writes `audit.log` (`owner_delegation_*`). The
   document keeps the newest 50 records, the approval records' existing bound;
-  `audit.log` keeps every event. The owner reads them under "Act for me".
+  a record leaves it only after its final state is appended, with fsync, to
+  the durable history beside it (`lifecycle_approvals.delegated-history.jsonl`,
+  `lifecycle_approval._prune_actions`, inside the document's update lock: a
+  failed append aborts the write and drops nothing). `GET
+  /api/v4/router/owner-delegation/history` (`delegated_action_history`) returns
+  every record ever written, newest first, filtered by acting lead
+  (`requester`), `scope`, `status` and `since`; an unreadable history line
+  fails the read (`owner_delegation_unavailable`) rather than hiding a record.
+  Problem: with one `lead_authority` record per lead Attempt (2026-11-18) the
+  bound dropped records within hours, leaving only rotated `audit.log` lines.
+  Alternatives rejected: raising the bound (still drops, and a knob); moving
+  the records to `audit.log` alone (rotated by log retention, not queryable per
+  contract). Growth: one JSON line per record moved out (measured 1.3 KB for a
+  `lead_authority` record with the owner's quoted words and grant provenance),
+  durable user state, never reclaimed. Specification:
+  `tests/router/test_delegation_audit_history.py` and the history case in
+  `tests/api/test_api_v4_router.py`. The owner reads them under "Act for me".
 - **Session model change (`set_model`, R5).** `conversation_control` also
   covers `control_conversation(action=set_model, owner_delegation=…)`: the
   grant, the owner trigger and one record precede `set_session_model`, exactly
@@ -2042,6 +2248,23 @@ projects. Nothing else changes.
   conversation as its tool call.
 - **No new knobs**: no per-project quota, rate or allow-list. Owner scope and
   the existing message bounds are the only limits.
+- **Global Router broadcast (2026-11-18).** Problem: the independent lead
+  audit of 2026-11-18 (recommendation 4) found one fix or workaround relayed
+  lead by lead, and running Workers heard of it only after their own lead's
+  next Turn. Decision: `broadcast_project_message` (Global Router only,
+  `lib/router/broadcast.py`; arguments `broadcastProjectMessage`) submits one
+  original to the current lead of every bound project (`targets: ["all"]`) or
+  of the named projects, and to each of their running Workers (not revoked,
+  not reviewed, execution not ended), through the same passive mailbox:
+  labelled nonhuman context at the next step, kind `steer` by default, never
+  a wake and never authority. Each lead also receives a `report` naming the
+  Workers of its project that received it, and `audit.log` records each
+  broadcast (`router_broadcast`: key, kind, reason, counts, content digest).
+  One message per recipient per `idempotency_key`. Alternatives rejected:
+  looping `send_project_message` (refuses Workers of other projects, no
+  owning-lead report, one tool call per recipient); a wake per recipient (a
+  broadcast must not start Turns nobody asked for). Specification:
+  `tests/router/test_router_broadcast.py` (real storage, SQLite and native).
 
 ### R16. Owner off-limits Hope queues (Global Router)
 
@@ -2060,7 +2283,14 @@ rerun, clone and background retry reads the file again. A missing, unreadable,
 or unparsable file enforces exactly the v1 `m17` fail-safe default and warns;
 it never disables m17 or refuses all jobs. The `run_command` environment also
 prepends generated `hope`/`mlp` launchers (after any project `.venv`) which
-check the same file before executing the real CLI. A refusal is typed
+check the same file before executing the real CLI. Locating the real CLIs
+searches every PATH directory; a command reuses the previous command's answer
+while the PATH, working directory and every searched directory's identity and
+mtime are unchanged (adding, removing or renaming an entry changes the
+directory mtime; a directory modified in the current second is searched
+again, as in Git's racy-clean rule). Residual: `chmod +x` on an existing,
+previously non-executable `hope` file does not change its directory and is
+seen once any searched directory changes. A refusal is typed
 (`queue_off_limits`, with the policy path and entry id) and names the entry.
 The compute provider maps it to a definitive `hope_queue_off_limits`, never an
 unknown write.
@@ -2166,8 +2396,8 @@ owner-only decision is refused at execution with a typed reason:
 - `channel_send`: the owner's command chat always receives the Global Router's
   message; for other people, a Turn without the owner's own request (a
   continuation's input is nonhuman) only drafts, which the owner approves (C5, C11).
-  Only the Global Router sends: a Project Router and a Worker report a file to it,
-  and their refusal is unchanged.
+  A Project Router sends too, only to the owner's command chat (R9, "Leads reach
+  the owner directly"); a Worker reports a file to its lead.
 - `route_to_project` carries authority only for a verified owner message: the one of
   the request the continuation continues (its authorization source, a steered one
   read in that request's own reply Turn), an owner message steered into the reply,
@@ -2278,7 +2508,8 @@ target execution authority. See
   model view; `lib/turn_initiation.py` owns `steer_author` and
   `steered_input_turn`.
 - `lib/router/relay.py` — `relay_project_report(owner, report, *, client, dispatch)`,
-  `relay_project_question(owner, question, *, client, dispatch)`; the `ask_human`
+  `relay_project_question(owner, question, *, client, dispatch, post)` (posts the
+  question to the owner's command chat, then copies the router); the `ask_human`
   handler (`lib/tasks_pkg/handlers/misc/_human.py`) relays questions and judges
   steered authors with `require_human_turn`.
 - `lib/project_dispatch/delegation.py` — `resolve_worker_model`,

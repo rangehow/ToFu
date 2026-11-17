@@ -94,9 +94,10 @@ def _executor_idle_seconds(
 class ServingLoopRuntime:
     """Own executors and periodic jobs installed on one serving loop.
 
-    The loop owns its default executor and closes it as part of
-    ``asyncio.run`` teardown. This object owns the separate agent executor and
-    every task it creates, so they can be detached before that final teardown.
+    It creates the loop's default executor and, at ``stop``, retires the
+    generation that served requests without joining its running jobs. This
+    object owns the separate agent executor and every task it creates, so they
+    can be detached before ``asyncio.run`` teardown.
     """
 
     def __init__(
@@ -419,6 +420,35 @@ class ServingLoopRuntime:
             # futures and return promptly; the process hard deadline remains
             # the backstop for an already-running provider call.
             executor.shutdown(wait=False, cancel_futures=True)
+
+        self._retire_sync_executor()
+
+    def _retire_sync_executor(self) -> None:
+        """Hand loop teardown a fresh default executor; abandon orphaned jobs.
+
+        A job still running here belongs to no owner: Hypercorn cancelled its
+        request, and the lifespan owners that ran first have joined their own
+        work. ``asyncio.run`` teardown joins the default executor, so the job
+        held the process for its whole duration (2026-11-18 02:12:28: an API
+        host idle 57 s after its lifespan until the hard deadline exited 1).
+        Later shutdown handlers and teardown use the replacement; queued jobs
+        are cancelled and running ones end with the process.
+        """
+        retired = self.sync_executor
+        if retired is None:
+            return
+        replacement = InstrumentedThreadPoolExecutor(
+            max_workers=retired._max_workers,
+            thread_name_prefix='tofu-sync',
+            metric_pool='sync',
+        )
+        try:
+            self.loop.set_default_executor(replacement)
+        except BaseException:
+            replacement.shutdown(wait=False, cancel_futures=True)
+            raise
+        self.sync_executor = None
+        retired.shutdown(wait=False, cancel_futures=True)
 
 
 __all__ = [

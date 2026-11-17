@@ -67,6 +67,7 @@ from lib.tasks_pkg.orchestrator._tool_call_prelude import (
 from lib.tasks_pkg.orchestrator._tool_dispatch_round import run_tool_dispatch
 from lib.tasks_pkg.orchestrator._tool_loop_breaker import (
     finish_after_background_task_acceptance,
+    finish_after_idle_coordinator_wait,
     guide_nonretryable_tool_recovery,
     handle_tool_loop_circuit_breaker,
 )
@@ -587,8 +588,12 @@ class _RootLoopHooks:
         _tool_calls: list,
     ) -> dict:
         from lib.tasks_pkg.persistence_wait import checkpoint_invocation
-        # The same barrier precedes every agent's external effects.
-        checkpoint_invocation(self.task, self.messages, round_num, phase='tools_in_flight')
+        from lib.tasks_pkg.tool_dispatch._flags import batch_is_effect_free
+        # The same barrier precedes every agent's external effects. A batch
+        # with none (only result-reusable reads) leaves its events to the next
+        # pre-request or terminal barrier, which persists them while it runs.
+        checkpoint_invocation(self.task, self.messages, round_num, phase='tools_in_flight',
+                              defer_events=batch_is_effect_free(self.task, _tool_calls))
         stream_accumulator = self.round_context['stream_accumulator']
         execution_statuses = {}
 
@@ -687,6 +692,10 @@ class _RootLoopHooks:
             return LoopDirective.halt(EXIT_REASON)
         if finish_after_background_task_acceptance(
                 self.task, self.state, round_num=round_num,
+                tid=self.request.tid):
+            return LoopDirective.halt(self.state.exit_reason)
+        if finish_after_idle_coordinator_wait(
+                self.task, self.state, message=_message, round_num=round_num,
                 tid=self.request.tid):
             return LoopDirective.halt(self.state.exit_reason)
         if stop_awaiting_user_action(

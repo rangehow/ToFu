@@ -329,6 +329,26 @@
         "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S"}
       }
     },
+    "broadcastProjectMessage": {
+      "description": "broadcast_project_message arguments (docs/ROUTER.md R13, Global Router broadcast).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["targets", "content", "reason", "idempotency_key"],
+      "properties": {
+        "targets": {"type": "array", "minItems": 1, "uniqueItems": true,
+                    "items": {"type": "string", "minLength": 1, "maxLength": 4096, "pattern": "\\S"},
+                    "description": "[\"all\"] for every bound project of the owner, else the absolute project paths get_router_projects lists."},
+        "content": {"type": "string", "minLength": 1, "maxLength": 3900, "pattern": "\\S",
+                    "description": "The fix, workaround or instruction with its evidence; the project mailbox's 4096-character original less the broadcast label."},
+        "kind": {"enum": ["steer", "reference"], "default": "steer"},
+        "include_workers": {"type": "boolean", "default": true,
+                            "description": "false reaches only the leads."},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 2048, "pattern": "\\S",
+                   "description": "Why every target needs this now; recorded in audit.log."},
+        "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S",
+                            "description": "One message per recipient per key: a retry never sends twice."}
+      }
+    },
     "watchdogNotifyRouter": {
       "type": "object",
       "additionalProperties": false,
@@ -337,6 +357,18 @@
         "message": {"type": "string", "minLength": 1, "pattern": "\\S",
                     "description": "The anomaly, its evidence and what the owner may need to decide or do."},
         "signal_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+        "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S"}
+      }
+    },
+    "watchdogResumeStalledContinuation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["conversation_id", "reason", "idempotency_key"],
+      "properties": {
+        "conversation_id": {"$ref": "#/$defs/id",
+                            "description": "The stalled lead: the Global Router or a Project Router the snapshot marks stalled."},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S",
+                   "description": "Why the lead must resume, with the evidence (Worker and Turn IDs); it is audited."},
         "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S"}
       }
     },
@@ -731,7 +763,27 @@
           }
         },
         "actions": {"type": "array", "items": {"$ref": "#/$defs/ownerDelegatedAction"},
-                    "description": "Retained delegated actions, newest first; audit.log keeps every event."}
+                    "description": "Retained delegated actions (the newest 50), newest first; every older one is in ownerDelegationHistory."}
+      }
+    },
+    "ownerDelegationHistoryQuery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "requester": {"$ref": "#/$defs/id", "description": "Only actions of this acting lead conversation."},
+        "scope": {"enum": ["restart", "conversation_control", "owner_settings", "project_lifecycle", "project_repair", "scheduler", "lead_authority"]},
+        "status": {"enum": ["accepted", "restarting", "completed", "refused", "failed"]},
+        "since": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?$", "description": "Only actions requested at or after this Unix time (seconds)."}
+      }
+    },
+    "ownerDelegationHistory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actions"],
+      "properties": {
+        "actions": {"type": "array", "items": {"$ref": "#/$defs/ownerDelegatedAction"},
+                    "description": "Every delegated action of the owner ever recorded that matches the query, newest first: the retained records and the durable history older ones moved to before the document dropped them (docs/ROUTER.md R9, Audit)."}
       }
     },
     "ownerDelegationRequest": {

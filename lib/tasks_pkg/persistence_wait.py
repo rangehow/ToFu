@@ -193,10 +193,11 @@ def checkpoint_invocation(task: dict, messages: list, round_num: int, *, phase: 
     A child's lane holds only its Request Inspector snapshots, so its ``ready``
     boundary (before the next paid request) behaves the same way; its tool
     intent and terminal settle still drain them.
-    ``defer_events`` (the root's ``ready`` round end, with no domain sink)
-    records the events accepted so far; the next pre-request boundary awaits
-    exactly those before the paid request, so the next round's preparation
-    overlaps their persistence. Any awaited checkpoint before it covers them.
+    ``defer_events`` (the root's ``ready`` round end, and its ``tools_in_flight``
+    boundary before an effect-free batch, with no domain sink) records the
+    events accepted so far; the next pre-request boundary awaits exactly those
+    before the paid request, so the tools and the next round's preparation
+    overlap their persistence. Any awaited checkpoint before it covers them.
     Returns how many accepted task events the durability barrier awaited.
     """
     from lib.tasks_pkg.event_delivery import task_event_backlog, task_event_position

@@ -15,6 +15,7 @@ Both helpers log at INFO on entry / exit and ERROR on failure per CLAUDE.md
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable
 from concurrent.futures import Future, as_completed
@@ -133,6 +134,7 @@ def simple_call(
         logger.warning('[Task %s] [%s] %s returned an error result in %.1fs '
                        '(result_len=%d): %.200s',
                        tid, tag, fn_name, elapsed, _content_len, tool_content)
+        _record_lead_refusal(task, fn_name, tool_content)
     else:
         logger.info('[Task %s] [%s] %s completed in %.1fs (result_len=%d)',
                     tid, tag, fn_name, elapsed, _content_len)
@@ -150,6 +152,24 @@ def simple_call(
                            tid, tag, fn_name, e, exc_info=True)
     _finalize_tool_round(task, rn, round_entry, [meta])
     return tc_id, tool_content, False
+
+
+def _record_lead_refusal(task, fn_name, tool_content) -> None:
+    """A lead's structured tool refusal ({"error", "code"}) joins the lead-audit stream."""
+    from lib.logging_pkg import lead_audit
+    if not lead_audit.is_lead_conversation(task.get('convId')) or not isinstance(tool_content, str):
+        return
+    try:
+        payload = json.loads(tool_content)
+    except ValueError:
+        return
+    if not isinstance(payload, dict) or not isinstance(payload.get('error'), str):
+        return
+    lead_audit.record('authority_refusal', {
+        'task': str(task.get('id') or ''), 'conv': task['convId'],
+        'turn': str(task.get('_turnId') or ''), 'tool': fn_name,
+        'code': str(payload.get('code') or ''), 'error': payload['error'],
+    })
 
 
 def run_batch_concurrent(

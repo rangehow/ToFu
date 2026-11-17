@@ -30,6 +30,9 @@ from lib.utils import sha256_holding_gil
 CONTRACT = json.loads((Path(__file__).resolve().parents[2] /
                        'contracts/project_dispatch_v1.schema.json').read_text())
 NAMESPACE = CONTRACT['namespace']
+# The dependency reasons that withdraw a born Worker's prerequisite (lib.project_dispatch.dependencies):
+# an explicit revocation or Stop. Every other unready state only defers an unborn Worker.
+WITHDRAWN_DEPENDENCY_REASONS = frozenset({'revoked', 'stopped'})
 LIMITS = CONTRACT['limits']
 
 
@@ -951,6 +954,9 @@ class ProjectDispatchRepository:
         if 'ownerDelegation' in source:
             self._validate_delegated_source(source, admitted=admitted)
             return
+        if 'guidanceId' in source:
+            self._validate_answered_source(source, admitted=admitted)
+            return
         turn = self.read_turn(source['conversationId'], source['turnId'])
         if (not isinstance(turn, Mapping)
                 or turn.get('conversationId') != source['conversationId']
@@ -985,6 +991,25 @@ class ProjectDispatchRepository:
         except ValueError as exc:
             raise SyntheticSource(str(exc)) from exc
 
+    def _validate_answered_source(self, source, *, admitted):
+        """The owner's answer to a Coordinator reply's own ask_human question (``guidanceId``).
+
+        Only the owner's answer command writes the receipt and it never changes,
+        so an admitted grant is fenced by its reply Turn's identity and owner, as
+        a steer is; a birth reads the receipt in the reply's projection.
+        """
+        turn = self.read_turn(source['conversationId'], source['turnId'], projection=not admitted)
+        if (not isinstance(turn, Mapping) or turn.get('conversationId') != source['conversationId']
+                or turn.get('turnId') != source['turnId'] or turn.get('actor') != 'assistant'):
+            raise ProjectDispatchError('Authorization source changed or is not human')
+        if not evidence_owner_matches(turn, self.owner):
+            raise ProjectDispatchError('Authorization source owner changed')
+        if admitted:
+            return
+        from .delegation import answered_question
+        if answered_question(turn.get('projection'), source['guidanceId']) is None:
+            raise SyntheticSource('The owner has not answered this question of the reply')
+
     def _validate_delegated_source(self, source, *, admitted):
         """A lead reply that acted under the owner's delegation (docs/ROUTER.md R9, ``lead_authority``).
 
@@ -1004,7 +1029,9 @@ class ProjectDispatchRepository:
         record = gate.delegated_action(self.owner, source['ownerDelegation'])
         target = (record or {}).get('target') or {}
         if (not record or record.get('scope') != 'lead_authority'
-                or record.get('status') not in ('accepted', 'completed')
+                # A settled act of the same lead Attempt (even a failed one) is no revocation;
+                # the live grant below decides.
+                or record.get('status') not in ('accepted', 'completed', 'failed')
                 or record['requester'].get('conversationId') != source['conversationId']
                 or target.get('turnId') != source['turnId']):
             raise SyntheticSource('The owner\u2019s delegation record for this lead reply is unavailable')
@@ -1377,11 +1404,28 @@ class ProjectDispatchRepository:
         return copy.deepcopy(assignment)
 
     def validate(self, admission, *, value=None):
+        """Own authority, plus prerequisite readiness while the Worker is unborn.
+
+        Readiness gates only starting a Worker (docs/PROJECT_COORDINATION.md,
+        "Dependency readiness gates starting only"): a born Worker consumed its
+        prerequisites, so its stop, continue, checkpoint resume, follow-up and
+        tool admissions need its own authority; only a prerequisite withdrawn
+        after the birth (revoked or stopped) still fences it.
+        """
         if value is None:
             value = self._load(self._selection(assignments=[admission['assignmentId']]))[0]
         assignment = self.validate_own(admission, value=value)
-        if any(state['status'] != 'ready' for state in self.dependency_states(assignment, value=value)):
-            raise ProjectDispatchError('Dispatch dependencies are not ready')
+        states = self.dependency_states(assignment, value=value)
+        if assignment['execution'] is None:
+            if any(state['status'] != 'ready' for state in states):
+                raise ProjectDispatchError('Dispatch dependencies are not ready')
+        else:
+            withdrawn = [state for state in states
+                         if state['status'] == 'invalid' and state['reason'] in WITHDRAWN_DEPENDENCY_REASONS]
+            if withdrawn:
+                raise ProjectDispatchError(
+                    f'A prerequisite of this Worker was withdrawn ({withdrawn[0]["reason"]}: assignment '
+                    f'{withdrawn[0]["reference"]["assignmentId"]})')
         return assignment
 
     def mutate(self, assignment_id, update_callback, *, check=None):

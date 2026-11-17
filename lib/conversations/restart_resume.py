@@ -307,8 +307,16 @@ def automatic_resume_pause() -> dict | None:
     return _pause(_PREVIOUS_SHUTDOWN)
 
 
-def _result(owner, conversation_id, outcome, reason='', **fields) -> dict:
+# Where one candidate's work stands after the pass. ``lost`` work stays
+# interrupted until its owner acts; every other disposition is accounted for.
+DISPOSITIONS = ('resumed', 'already_continued', 'handed_off', 'superseded', 'not_interrupted', 'lost')
+
+
+def _result(owner, conversation_id, outcome, reason='', *, disposition=None, **fields) -> dict:
+    if disposition is None:
+        disposition = {'resumed': 'resumed', 'superseded': 'superseded'}.get(outcome, 'lost')
     return {'owner': owner, 'conversationId': conversation_id, 'outcome': outcome, 'reason': reason,
+            'disposition': disposition,
             'turnId': fields.get('turnId'), 'attemptId': fields.get('attemptId'),
             'operation': fields.get('operation'), 'supersededBy': fields.get('supersededBy')}
 
@@ -436,17 +444,19 @@ def resume_conversation(owner: int, conversation_id: str, *, turn_id: str | None
     turn, later = _interrupted_turn(owner, conversation_id, turn_id)
     if turn is None:
         return skip('its interrupted Turn no longer exists' if turn_id else 'no Turn on its main lane',
-                    turnId=turn_id, attemptId=attempt_id)
+                    disposition='not_interrupted', turnId=turn_id, attemptId=attempt_id)
     ids = {'turnId': turn.get('turnId'), 'attemptId': turn.get('currentAttemptId')}
     if (turn.get('laneId') or 'main') != 'main':
         return skip(f'it runs on lane {turn.get("laneId")}, not the main lane', **ids)
     if attempt_id and turn.get('currentAttemptId') != attempt_id:
-        return skip(f'already continued in Attempt {turn.get("currentAttemptId")}', **ids)
+        return skip(f'already continued in Attempt {turn.get("currentAttemptId")}',
+                    disposition='already_continued', **ids)
     settlement = turn.get('settlement') or {}
     if turn.get('status') != 'interrupted':
-        return skip(f'its Turn is {turn.get("status")}, not interrupted', **ids)
+        return skip(f'its Turn is {turn.get("status")}, not interrupted', disposition='not_interrupted', **ids)
     if settlement.get('cause') != 'server_restart':
-        return skip(f'interrupted by {settlement.get("cause") or "an unknown cause"}, not by the restart', **ids)
+        return skip(f'interrupted by {settlement.get("cause") or "an unknown cause"}, not by the restart',
+                    disposition='not_interrupted', **ids)
     attempt = turns.get_attempt(turn['currentAttemptId'], user_id=owner, include_execution_config=True)
     verdict = lane_tail_verdict(turn, later, interrupted_at=attempt.get('settledAt'))
     if verdict['supersededBy']:
@@ -466,9 +476,10 @@ def resume_conversation(owner: int, conversation_id: str, *, turn_id: str | None
     if not isinstance(config, Mapping):
         return skip('its accepted execution config is unavailable', **ids)
     if turn_dispatch(conversation_id, turn, config, user_id=owner) is not None:
-        return skip('a project dispatch grant runs it; project dispatch recovery continues it', **ids)
+        return skip('a project dispatch grant runs it; project dispatch recovery continues it',
+                    disposition='handed_off', **ids)
     if config.get('autopilot') is True:
-        return skip('a Goal run owns it; Goal continuity resumes it', **ids)
+        return skip('a Goal run owns it; Goal continuity resumes it', disposition='handed_off', **ids)
     if any(config.get(key) for key in ('activeFlow', 'flowDefinition', 'flowBuiltin', 'flowId')):
         return skip('a Flow run owns it; Flow runs resume on request (orchestration continuity)', **ids)
     return _resume_accepted_turn(owner, conversation_id, turn, option, config,
@@ -574,16 +585,21 @@ def resume_failed_notice_turn(owner: int, conversation_id: str, turn_id: str | N
 
 
 def _log_summary(results: list[dict]) -> None:
-    """One line naming every candidate: each resumed conversation, each skipped one with
-    its reason. A skip is usually a hand-off (project dispatch recovery, Goal continuity)
-    or a settled/superseded Turn; without the reason it reads as lost work."""
-    resumed = [item['conversationId'] for item in results if item['outcome'] == 'resumed']
-    skipped = [f"{item['conversationId']}: {item['reason'] or item['outcome']}"
-               for item in results if item['outcome'] != 'resumed']
-    logger.log(logging.WARNING if skipped else logging.INFO,
-               '[RestartResume] summary: %d of %d interrupted conversation(s) resumed; '
-               'resumed=[%s] skipped=[%s]', len(resumed), len(results),
-               ', '.join(resumed), ', '.join(skipped))
+    """One line accounting for every candidate: the count per disposition, then each
+    conversation with its disposition and reason. A skip is usually work another owner
+    already continued or will continue, or a Turn that was settled or superseded;
+    only ``lost`` work waits for its owner, so only lost work makes the line a warning
+    (2026-11-18 02:15: '1 of 21 resumed' read as 20 losses; all 20 were already continued)."""
+    counts = {name: 0 for name in DISPOSITIONS}
+    named = []
+    for item in results:
+        counts[item['disposition']] += 1
+        reason = item['reason'] if item['disposition'] != 'resumed' else ''
+        named.append(f"{item['conversationId']}: {item['disposition']}" + (f' ({reason})' if reason else ''))
+    logger.log(logging.WARNING if counts['lost'] else logging.INFO,
+               '[RestartResume] summary: %d of %d interrupted conversation(s) resumed; %s; '
+               'conversations=[%s]', counts['resumed'], len(results),
+               ' '.join(f'{name}={count}' for name, count in counts.items()), ', '.join(named))
 
 
 def resume_restart_paused_turns(*, previous_shutdown=None, boot_recovered=None) -> list[dict]:

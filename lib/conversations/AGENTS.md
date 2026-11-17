@@ -48,7 +48,9 @@ the owner's project leads across projects, `docs/ROUTER.md` R13) and
 consideration receipts; `contracts/project_messages_v1.json` is the shared tool/wire authority
 and its `history` section the durable segment layout (verify both
 `test_project_message_history.py` suites, unit and three-authority).
-Neither module dispatches work or extends ProjectWorkItem lifecycle. Optional
+Neither module dispatches work or extends ProjectWorkItem lifecycle; `wake_idle_lead`
+only starts an idle lead's ordinary Turn ("Messages wake an idle lead" in
+`docs/PROJECT_COORDINATION.md`). Optional
 input budget and exact physical-request witnesses live in
 `lib/tasks_pkg/message_input_{budget,receipts}.py`; do not copy those policies
 into queue, HTTP, UI or message handlers. Regenerate coordination TypeScript
@@ -57,7 +59,11 @@ with `scripts/gen_project_coordination_contract.py` after schema changes.
 `lead_attachments.py` is the one admission boundary for files a sender attaches to
 a delegation brief, follow_up instruction or project message: default deny, only
 files the sending task can read, stored through `lib.media_attachments`; never a
-second attachment store. Verify `test_lead_attachments.py` (real Sidecar) and
+second attachment store. A lead also reads registered project roots and its own
+Workers' registered checkouts (`lead_scope`, `lead_worker_checkout`, shared with
+channel attachments). `attachment_secrets.py` is the one credential refusal for lead
+and channel attachments (exact proofs only: names, vault values, issuer formats).
+Verify `test_lead_attachments.py` (real Sidecar) and
 `test_lead_attachment_delivery.py`.
 
 `coordinator_reports.py` publishes human-facing reports through canonical

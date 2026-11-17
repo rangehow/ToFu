@@ -129,7 +129,7 @@ def test_a_billing_stop_signal_names_the_refused_key_not_the_last_good_round(wor
         source='llm-stream', retryable=False,
         detail='API HTTP 402: {"status":402,"message":"credit exhausted"}',
         extensions={'billingStop': {
-            'providerId': 'sankuai', 'credentialId': 'cred-synthetic',
+            'providerId': 'example-corp', 'credentialId': 'cred-synthetic',
             'deploymentId': 'dep-synthetic', 'model': 'kimi-k3.1-pro',
             'keyTail': 'x1y2', 'statusCode': 402, 'scope': 'key',
             'observedAtMs': 1794232054000}},
@@ -290,7 +290,8 @@ def test_message_reaches_a_router_or_worker_of_any_project_as_nonhuman_context(w
     confirm(recipient, 1)
     [confirmed] = ProjectMailbox(world.owner, world.project, world.worker).read()
     assert confirmed['id'] == message['id'] and confirmed['state'] == 'input_confirmed'
-    assert confirmed['decision'] is None
+    # Accepted on delivery (decisionAuto); a rejection or deferral stays the recipient's decision.
+    assert confirmed['decision'] == 'accepted' and confirmed['decisionAuto'] is True
     for target in ('plain-chat', world.watchdog['conversationId']):
         with pytest.raises(PermissionError):
             execute_watchdog_tool({'id': 't'}, _scope(world), 'watchdog_message',
@@ -539,3 +540,129 @@ def test_signal_wake_starts_an_idle_watchdog_turn_through_the_turn_command(world
     inputs = [turn for turn in turns if turn['actor'] == 'human']
     assert [resolve_turn_initiator(turn) for turn in inputs] == ['peer']
     assert signal['signalId'] in inputs[0]['projection']['content']
+
+
+def _lead_turn(world, conversation, command_id, status=None):
+    """A main-lane Turn of a lead: settled with ``status``, or left running."""
+    from lib.turn_lifecycle import create_turn_pair
+    pair = create_turn_pair(conversation, user_id=world.owner, command_id=command_id,
+                            input_projection={'content': f'input {command_id}'}, config={})
+    if status is not None:
+        world.client(write=True).command('turn.event.record', {
+            'attempt_id': pair['attempt']['attemptId'], 'user_id': world.owner, 'terminal': True,
+            'status': status, 'projection': {'content': 'Lead reply.'},
+            'settlement': {'outcome': status, 'cause': 'test'}}, 'settle-' + command_id)
+    return pair['attempt']['turnId']
+
+
+@pytest.fixture
+def stall(world, monkeypatch, tmp_path):
+    """The Project Router of ``world`` with one result it has not seen, and the owner's grant switch."""
+    from lib import lifecycle_approval as gate
+    from lib.router.watchdog import snapshot
+    monkeypatch.setattr(gate, '_APPROVALS_FILE', str(tmp_path / 'lifecycle_approvals.json'))
+    monkeypatch.setattr(gate, '_STATE_FILE', str(tmp_path / 'lifecycle_state.json'))
+    world.grant = lambda: gate.set_delegation(world.owner, True, grantee={
+        'kind': 'global_router', 'conversationId': world.router['conversationId'],
+        'bindingRevision': world.router['revision'], 'tenant': None}, provenance={
+        'kind': 'human-ui', 'ownerUserId': world.owner, 'subject': 'session-key', 'credential': 'session',
+        'browser': 'fetch-metadata', 'userAgent': 'Mozilla/5.0', 'remoteAddr': '127.0.0.1'})
+    worker = {'assignment_id': 'assignment-1', 'conversation_id': world.worker, 'objective': 'Fix the parser',
+              'status': 'completed', 'phase': 'needs_review', 'request_turn_id': 'turn-request'}
+    # The Worker projection is continuation's (its own suites); the lead's lane is real Turns here.
+    coordinator = world.coordinator['conversationId']
+    monkeypatch.setattr(snapshot, '_workers', lambda owner, project, binding, lane, client: {
+        'workers': [dict(worker)] if lane['idle'] and binding['conversationId'] == coordinator else [],
+        'running_workers': 0, 'workers_coverage': 'complete'})
+    world.audits = []
+    monkeypatch.setattr('lib.router.watchdog.tools.audit_log',
+                        lambda event, **fields: world.audits.append((event, fields)))
+    world.lead = world.coordinator['conversationId']
+    return world
+
+
+def _resume(world, key='resume-1', **kwargs):
+    from lib.identity import PrincipalContext
+    from lib.router.watchdog.tools import _resume_stalled_continuation
+    kwargs.setdefault('dispatch', world.dispatch)
+    kwargs.setdefault('recover', lambda: [])
+    principal = PrincipalContext.user(subject_id=f'user:{world.owner}', owner_user_id=world.owner, scopes=[])
+    return _resume_stalled_continuation(
+        {'id': 'watchdog-task', '_principalContext': principal.to_payload()}, _scope(world),
+        {'conversation_id': world.lead, 'reason': 'Worker result unreviewed since the restart.',
+         'idempotency_key': key}, **kwargs)
+
+
+def test_a_stalled_lead_wakes_a_fault_review_and_is_resumed_with_one_audited_notice(stall):
+    """Audit 2026-11-18: a lead stranded by a restart sat dead 197 min while its Workers waited."""
+    from lib.router.watchdog.snapshot import health_snapshot, needs_review
+    _lead_turn(stall, stall.lead, 'lead-done', 'completed')
+    snapshot = health_snapshot(stall.owner)
+    [project] = snapshot['projects']
+    assert project['stalled'] is True and 'needs_review' in project['stall_reason']
+    assert needs_review(snapshot)['stalled_leads'] == 1
+    stall.grant()
+    recoveries = []
+    result = _resume(stall, recover=lambda: recoveries.append('pass') or ['deferred'])
+    assert result['outcome'] == 'notice_started' and recoveries == ['pass']
+    assert result['recovery'] == ['deferred'] and result['replayed'] is False
+    [(conversation, message, sent)] = stall.woken
+    assert conversation == stall.lead and sent['inject_mode'] == ''
+    assert sent['command_id'] == result['command_id'] and message['origin'] == {
+        'initiator': 'peer', 'sourceConversationId': stall.watchdog['conversationId']}
+    assert stall.worker in message['content'] and 'delegation to every lead' in message['content']
+    [(event, audit)] = stall.audits
+    assert event == 'watchdog_resume_stalled_continuation'
+    assert (audit['owner'], audit['lead'], audit['idempotency_key'], audit['outcome']) == (
+        stall.owner, stall.lead, 'resume-1', 'notice_started')
+    assert audit['watchdog_conversation_id'] == stall.watchdog['conversationId']
+    assert audit['evidence']['workers'][0]['assignment_id'] == 'assignment-1'
+    # A replay carries the same command id, so the turn command never starts a second Turn.
+    _resume(stall)
+    assert stall.woken[1][2]['command_id'] == sent['command_id']
+    _resume(stall, key='resume-2')
+    assert stall.woken[2][2]['command_id'] != sent['command_id']
+
+
+def test_a_continuation_the_recovery_restarts_needs_no_notice(stall):
+    _lead_turn(stall, stall.lead, 'lead-done', 'completed')
+    stall.grant()
+    result = _resume(stall, recover=lambda: [_lead_turn(stall, stall.lead, 'continuation-wake')] and ['accepted'])
+    assert result['outcome'] == 'resumed_by_continuation' and result['recovery'] == ['accepted']
+    assert stall.woken == [] and [fields['outcome'] for _, fields in stall.audits] == ['resumed_by_continuation']
+
+
+def test_a_busy_or_unneeded_lead_is_not_stalled(stall):
+    from lib.router.watchdog.snapshot import health_snapshot, needs_review
+    stall.grant()
+    _lead_turn(stall, stall.lead, 'lead-running')
+    [project] = health_snapshot(stall.owner)['projects']
+    assert 'stalled' not in project and project['workers'] == [] and project['lead_turn']['status'] != 'completed'
+    assert needs_review(health_snapshot(stall.owner))['stalled_leads'] == 0
+    result = _resume(stall, recover=lambda: pytest.fail('a running lead is never recovered'))
+    assert result['outcome'] == 'not_stalled' and stall.woken == []
+    assert [fields['outcome'] for _, fields in stall.audits] == ['not_stalled']
+
+
+def test_a_lane_that_turns_busy_before_the_notice_is_not_steered(stall):
+    from lib.scheduler.conversation_dispatch import ScheduledTurnDispatch
+    _lead_turn(stall, stall.lead, 'lead-done', 'completed')
+    stall.grant()
+    result = _resume(stall, dispatch=lambda *args, **kwargs: ScheduledTurnDispatch('busy'))
+    assert result['outcome'] == 'not_stalled' and result['disposition'] == 'busy'
+
+
+def test_resume_needs_the_owners_full_delegation_and_a_current_lead(stall):
+    from lib.lifecycle_approval import DelegationRefused
+    _lead_turn(stall, stall.lead, 'lead-done', 'completed')
+    with pytest.raises(DelegationRefused) as refused:
+        _resume(stall, recover=lambda: pytest.fail('nothing runs without the grant'))
+    assert refused.value.code == 'owner_delegation_not_granted' and stall.woken == []
+    stall.grant()
+    for target in (stall.worker, 'plain-chat', stall.watchdog['conversationId']):
+        stall.lead = target
+        with pytest.raises(PermissionError, match='current leads'):
+            _resume(stall, key='not-a-lead-' + target)
+    assert stall.woken == []
+    outcomes = [(fields['outcome'], fields['evidence'].get('code')) for _, fields in stall.audits]
+    assert outcomes == [('refused', 'owner_delegation_not_granted')] + [('refused', 'not_a_lead')] * 3

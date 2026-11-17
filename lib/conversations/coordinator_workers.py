@@ -251,9 +251,7 @@ def delegate(task, scope, arguments, *, repository=None, service=None, create=No
         digest=hashlib.sha256(json.dumps(arguments, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
         # Unchanged arguments replay the same Worker, so contention reruns the
         # birth instead of leaving an uncertain outcome.
-        run=lambda: reread_on_contention(task, lambda: _born(task, scope, arguments, repository, service,
-                                                             create, command),
-                                         label='coordinator delegation'),
+        run=lambda: _settled_birth(task, scope, arguments, repository, service, create, command),
         refusal=lambda error: refusal_payload('delegate_project_work', error),
         conflict=lambda: CommandReused('Command identity reused with changed request/granter',
                                        repository.command_identity(command)),
@@ -267,6 +265,15 @@ def delegate(task, scope, arguments, *, repository=None, service=None, create=No
             'next_step': 'The Worker is starting. Delegate other independent work now, then poll the '
                          'assignment IDs with wait_s for results; poll also reports a Worker that could not '
                          'start. Review the actual evidence before reporting delivery.'}
+
+
+def _settled_birth(task, scope, arguments, repository, service, create, command):
+    # A birth under the owner's delegation to every lead settles its lead_authority record.
+    from lib.project_dispatch.delegation import lead_act
+    with lead_act('delegate_project_work'):
+        return reread_on_contention(task, lambda: _born(task, scope, arguments, repository, service,
+                                                        create, command),
+                                    label='coordinator delegation')
 
 
 def _withdraw_unadopted(task, repository, service, birth):
@@ -792,11 +799,50 @@ def _await_born(task, scope, ids, *, deadline, mode, interruption, repository, s
               else 'progress' if running or delivering else 'settled')
     if status == 'pending_input':
         result['waiting'] = interruption.waiting()
+    yields = status == 'timeout' and _settlement_resumes(task, repository, running + delivering)
+    if yields:
+        # The round's end decides (``finish_after_idle_coordinator_wait``): the Turn
+        # ends there only when every call of the round is such a wait.
+        task.setdefault(IDLE_WAITS_KEY, []).append(time.time())
     return {**result, 'wait': status, 'instruction': _wait_instruction(status, settled, running, delivering,
-                                                                       unchanged, named)}
+                                                                       unchanged, named, yields=yields)}
 
 
-def _wait_instruction(status, settled, running, delivering, unchanged, named):
+# Per Coordinator task: the polls of the current round that timed out with nothing
+# new while every pending Worker's settlement resumes the Coordinator by itself.
+IDLE_WAITS_KEY = '_coordinatorIdleWaits'
+
+
+def _settlement_resumes(task, repository, pending_ids) -> bool:
+    """Whether each pending Worker's next settlement wakes this Coordinator without it.
+
+    True when every one belongs to an open request (no finish receipt) whose
+    issued policy holds result-driven continuation: its settlement or delivery
+    change derives a Coordinator wake once the Coordinator's Turn has ended
+    (``continuation.recover_coordinator``). Any doubt keeps the model's next round.
+    """
+    if not pending_ids:
+        return False
+    try:
+        rows = [reread_on_contention(task, lambda identity=identity: repository.read(identity),
+                                     label='coordinator worker lookup', effect_free=True)
+                for identity in pending_ids]
+        sources = {(row['request'].get('delegation') or {}).get('attemptId') for row in rows}
+        if None in sources or not all(
+                (row['request']['delegation'].get('policy') or {}).get('continuation') for row in rows):
+            return False
+        value, _ = reread_on_contention(
+            task, lambda: repository._load(repository._selection(sources=sorted(sources))),
+            label='coordinator request settlements', effect_free=True)
+    except (ProjectDispatchError, PermissionError, ValueError):
+        logger.info('[Coordinator] task=%s timeout keeps its model round: Worker requests unreadable',
+                    task.get('id'), exc_info=True)
+        return False
+    settled = {receipt['sourceAttemptId'] for receipt in value.get('coordinatorSettlements', [])}
+    return not sources & settled
+
+
+def _wait_instruction(status, settled, running, delivering, unchanged, named, *, yields=False):
     """What the Coordinator does next with a wait's news and what is still pending.
 
     It refers to the result's fields by name and never repeats their IDs: those
@@ -822,6 +868,10 @@ def _wait_instruction(status, settled, running, delivering, unchanged, named):
                         'steer, a project message, or a background completion. The waiting list names its kind, '
                         'source and preview. Answer or act on that input first; Workers keep running. Ending a '
                         'wait for input is not failure.')
+    elif status == 'timeout' and yields:
+        parts.append('Nothing new settled; a timeout is not failure. When every call of this round is a wait '
+                     'like this one, your Turn ends here without another model request: the next settlement '
+                     'or delivery change of these Workers, or a message to you, resumes you with their states.')
     elif status == 'timeout':
         parts.append('Nothing new settled; a timeout is not failure.')
     elif not settled:
@@ -838,7 +888,7 @@ def _wait_instruction(status, settled, running, delivering, unchanged, named):
                      'canonical or held delivery is reported here once.')
     if unchanged:
         parts.append('unchanged were already reported: leave them out of later polls.')
-    if running or delivering:
+    if (running or delivering) and not yields:
         parts.append('Poll pending.running and pending.delivering again with wait_s to wait for the next '
                      'settlement; a settlement of any Worker of yours ends that wait.')
     return ' '.join(parts)

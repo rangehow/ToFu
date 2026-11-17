@@ -147,6 +147,20 @@ def _paper_flow(event_count: int) -> tuple[dict[str, Any], int]:
     return page, len(page['events'])
 
 
+def _interpreter_reference() -> tuple[dict[str, Any], int]:
+    """Fixed pure-Python work that touches no product code.
+
+    Its time measures only the host's interpreter speed, so the ratio gate
+    (scripts/check_perf_regression.py) can compare workloads recorded on one
+    runner class with a run on another (GitHub's hosted runners differ by
+    ~1.5x between regions on identical code).
+    """
+    records = [{'index': index, 'text': 'x' * (index % 24)} for index in range(8_000)]
+    records.sort(key=lambda record: (len(record['text']), -record['index']))
+    total = sum(len(json.dumps(record)) for record in records[:2_500])
+    return {}, total
+
+
 def run_benchmarks(*, scale: float = 1.0, iterations: int = 5) -> dict:
     counts = {
         'short_conversation': max(8, round(64 * scale)),
@@ -165,10 +179,12 @@ def run_benchmarks(*, scale: float = 1.0, iterations: int = 5) -> dict:
                  lambda op=operations[name], n=count: op(n))
         for name, count in counts.items()
     ]
+    reference = _measure('interpreter_reference', 0, iterations, _interpreter_reference)
     return {
         'format': 'tofu.task-replay-benchmark/v1',
         'scale': scale,
         'iterations': iterations,
+        'reference_ms': reference.median_ms,
         'workloads': [asdict(row) for row in rows],
     }
 

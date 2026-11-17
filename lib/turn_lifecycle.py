@@ -2324,6 +2324,10 @@ def _drain_queue_after_settlement(task: dict[str, Any], conversation_id: str,
                     from lib.project_dispatch.recovery import recover_conversation_dispatch
                     recover_conversation_dispatch(
                         conversation_id, user_id=owner_user_id)
+                    # A message that arrived after this lead Turn's last round
+                    # wakes it now; a continuation the pass started is busy.
+                    from lib.conversations.project_messages import wake_idle_lead
+                    wake_idle_lead(owner_user_id, conversation_id)
             except Exception as exc:
                 # A settlement whose successor could not start is a fault, not
                 # a DEBUG line: dispatch/continuation recovery is the only

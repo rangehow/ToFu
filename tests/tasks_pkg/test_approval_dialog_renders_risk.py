@@ -144,6 +144,7 @@ CASES: dict[str, tuple[dict, str]] = {
     'watchdog_message': ({'conversation_id': 'conversation-7', 'content': 'The build has failed for an hour; rebuild with a clean cache', 'kind': 'reference', 'idempotency_key': 'watchdog-message-7'}, 'The build has failed for an hour; rebuild with a clean cache'),
     'watchdog_notify_router': ({'message': 'The payments Worker is stuck on a provider outage', 'signal_ids': ['signal-7'], 'idempotency_key': 'watchdog-notify-7'}, 'The payments Worker is stuck on a provider outage'),
     'watchdog_configure_review': ({'enabled': True, 'schedule': '0 */2 * * *'}, '0 */2 * * *'),
+    'resume_stalled_continuation': ({'conversation_id': 'conversation-7', 'reason': 'Its Worker result waits unreviewed since the restart', 'idempotency_key': 'resume-7'}, 'Its Worker result waits unreviewed since the restart'),
     'await_device': ({'device': 'work-laptop', 'reason': 'Run the signed release build on the work laptop'}, 'Run the signed release build on the work laptop'),
 
     'record_working_fact': ({'revision': 3, 'text': 'The payment was accepted',

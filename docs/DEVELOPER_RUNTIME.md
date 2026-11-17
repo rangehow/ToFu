@@ -636,7 +636,9 @@ its wall time per stage so a slow restart can be located in one grep:
   back …` means no restart happened and a retry is safe.
 - `logs/server-manager.log` (supervisor + manager, shutdown and boot
   bands): quiescence outcome and wait, `worker pid=N SIGTERM sent`,
-  `worker pid=N exited cleanly Ns after SIGTERM` (or the SIGKILL
+  `worker pid=N exited cleanly Ns after SIGTERM` only for exit code 0;
+  a worker its hard-deadline backstop ended logs a warning
+  `exited Ns after SIGTERM with exit code 1` (or the SIGKILL
   escalation warning), sidecar drain/reap, `frontend preflight starting /
   passed in Ns` (a rebuild prints timestamped `Frontend artifact is stale…
   / rebuilt and validated in Ns` lines inline), `worker spawned pid=N

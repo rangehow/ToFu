@@ -65,9 +65,9 @@ def _handle_conv_ref_tool(
                'list_project_leads',
                'route_to_project', 'get_router_projects', 'router_instruction_create', 'router_instruction_list', 'router_instruction_cancel',
                'router_portfolio',
-               'restart_server', 'owner_settings', 'repair_project',
+               'restart_server', 'owner_settings', 'repair_project', 'broadcast_project_message',
                'watchdog_snapshot', 'watchdog_resolve_signals', 'watchdog_schedule_recheck', 'watchdog_message',
-               'watchdog_notify_router', 'watchdog_configure_review'}),
+               'watchdog_notify_router', 'watchdog_configure_review', 'resume_stalled_continuation'}),
     category='coordination', description='Independent worker conversations and authorized dispatch')
 def _handle_coordinator_tools(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg,
                               project_path, project_enabled, all_tools=None):

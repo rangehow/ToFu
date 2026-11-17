@@ -31,8 +31,20 @@ def text(body: str) -> dict:
     return {'kind': 'text', 'text': body}
 
 
-def tool(name: str, arguments: dict, *, preface: str = '') -> dict:
+def tool(name: str, arguments, *, preface: str = '') -> dict:
+    """A tool call. ``arguments`` may be a callable of the texts of every tool result in the
+    request's history (oldest first), for arguments naming what earlier calls returned."""
     return {'kind': 'tool', 'name': name, 'input': arguments, 'text': preface}
+
+
+def result_texts(results: list[dict]) -> list[str]:
+    """The texts of a recorded request's ``tool_results`` blocks, in order."""
+    texts = []
+    for block in results:
+        content = block.get('content')
+        texts.append(content if isinstance(content, str) else ''.join(
+            part.get('text', '') for part in content or [] if isinstance(part, dict)))
+    return texts
 
 
 def http_error(status: int, *, error_type: str = 'overloaded_error', retry_after: str | None = None) -> dict:
@@ -119,6 +131,12 @@ class ScriptedProvider:
             step = steps[min(len(seen), len(steps) - 1)]
             results = [block for block in (messages[-1].get('content') if messages else None) or []
                        if isinstance(block, dict) and block.get('type') == 'tool_result']
+            if step['kind'] == 'tool' and callable(step['input']):
+                history = [block for message in messages if message.get('role') == 'user'
+                           and isinstance(message.get('content'), list)
+                           for block in message['content']
+                           if isinstance(block, dict) and block.get('type') == 'tool_result']
+                step = {**step, 'input': step['input'](result_texts(history))}
             seen.append({'step': step['kind'], 'tool_results': results, 'messages': len(messages),
                          'last': json.dumps(messages[-1] if messages else None)[:2000],
                          'tools': sorted(t.get('name', '') for t in body.get('tools') or [] if isinstance(t, dict))})

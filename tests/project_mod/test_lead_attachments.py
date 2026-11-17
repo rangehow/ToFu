@@ -205,3 +205,80 @@ def test_another_owners_attachment_is_refused(lead):
     [record] = _admit(task, ['mine.md'])
     with pytest.raises(AttachmentRefused):
         admit({**task, '_userId': 2}, 2, [f'att_media_{record["attachmentId"]}'])
+
+
+@pytest.fixture
+def project_lead(lead, tmp_path, monkeypatch):
+    """The lead task is a Project Router: it reads registered projects and its own Workers' checkouts."""
+    from lib.conversations import attachment_secrets
+    from lib.conversations import lead_attachments
+    task, root = lead
+    scope = {'user_id': OWNER, 'project_path': str(root), 'conversation_id': 'lead', 'binding_revision': 1}
+    monkeypatch.setattr(lead_attachments, 'lead_scope', lambda t: dict(scope) if t.get('convId') == 'lead' else None)
+    other = tmp_path / 'knowledge'
+    other.mkdir()
+    monkeypatch.setattr('lib.router.registered_projects.registered_project_roots',
+                        lambda owner, client=None: [str(root), str(other)])
+    checkout = tmp_path / 'checkouts' / 'own'
+    checkout.mkdir(parents=True)
+    rows = {'own': {'id': 'own', 'request': {'coordinatorId': 'lead'}},
+            'theirs': {'id': 'theirs', 'request': {'coordinatorId': 'another-lead'}}}
+
+    class Repository:
+        def __init__(self, owner, project):
+            self.owner, self.project = owner, project
+
+        def read(self, assignment_id):
+            from lib.project_dispatch.repository import ProjectDispatchError
+            if assignment_id not in rows:
+                raise ProjectDispatchError('Dispatch assignment not found in owned project')
+            return rows[assignment_id]
+
+        def workspace_task_id(self, row):
+            return 'project-worker:' + row['id']
+
+        def get_workspace(self, project_root, task_id, *, user_id):
+            return {'workspace_path': str(checkout), 'state': 'active'} if task_id.endswith(':own') else None
+    monkeypatch.setattr('lib.project_dispatch.repository.ProjectDispatchRepository', Repository)
+    monkeypatch.setattr(attachment_secrets, '_vault_values', lambda: [('hope_token', b'vault-secret-0042')])
+    return task, root, other, checkout
+
+
+def test_a_lead_attaches_files_of_any_registered_project_and_its_own_workers_checkout(project_lead):
+    """Lead audit 2026-11-18 #5 (A5): leads copied files into their own home through Workers first."""
+    from lib.conversations.lead_attachments import AttachmentRefused
+    task, root, other, checkout = project_lead
+    (other / 'paper.md').write_text('# Paper A\n', encoding='utf-8')
+    (checkout / 'mockup.md').write_text('# Mockup\n', encoding='utf-8')
+    paper, mockup = _admit(task, [str(other / 'paper.md'), 'worker:own/mockup.md'])
+    assert (paper['name'], mockup['name']) == ('paper.md', 'mockup.md')
+    for reference in ('worker:theirs/mockup.md', 'worker:missing/mockup.md', 'worker:own/../../secret.txt'):
+        with pytest.raises(AttachmentRefused):
+            _admit(task, [reference])
+
+
+def test_a_worker_or_ordinary_conversation_gains_no_registered_roots(project_lead):
+    from lib.conversations.lead_attachments import AttachmentRefused
+    task, root, other, checkout = project_lead
+    (other / 'paper.md').write_text('# Paper A\n', encoding='utf-8')
+    with pytest.raises(AttachmentRefused):
+        _admit({**task, 'convId': 'worker-a'}, [str(other / 'paper.md')])
+    with pytest.raises(AttachmentRefused):
+        _admit({**task, 'convId': 'worker-a'}, ['worker:own/mockup.md'])
+
+
+@pytest.mark.parametrize('name, content', [
+    ('.env', b'MODE=prod\n'), ('deploy.pem', b'harmless'), ('id_ed25519', b'key'),
+    ('run.log', b'using vault-secret-0042 for the job\n'),
+    ('notes.txt', b'-----BEGIN RSA PRIVATE KEY-----\nMIIE\n'),
+])
+def test_a_lead_never_attaches_a_file_carrying_a_credential(project_lead, name, content):
+    from lib.conversations.lead_attachments import AttachmentRefused
+    from lib.knowledge import list_documents
+    task, root, other, checkout = project_lead
+    (other / name).write_bytes(content)
+    with pytest.raises(AttachmentRefused) as refused:
+        _admit(task, [str(other / name)])
+    assert 'credential' in str(refused.value) or 'key' in str(refused.value)
+    assert 'vault-secret-0042' not in str(refused.value)
+    assert not list_documents(user_id=OWNER)

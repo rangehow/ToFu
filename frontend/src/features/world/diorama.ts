@@ -4,13 +4,14 @@
  * clock, glass partitions on the sides and a glass front with the doorway where the aisle leaves. Spare floor
  * fills with furniture placed only where nobody walks (along the back wall beside the head desk, the strip right of
  * the pods, the band under them), so a tall justified room reads as a furnished room, not an empty rug.
- * Light is one grade per local hour (night, dawn, morning, day, golden hour, dusk) plus practical lights: a pendant
- * pool over every pod, desk lamps at the head desks, floor lamps in the lounges, the coffee bar. At night the
- * darkness is cut away under each light and the pools are warmed, so the floor reads like a lit miniature.
+ * Light is one grade per local hour (night, dawn, morning, day, golden hour, dusk). The office lights stay on at
+ * every hour, as a real office's do, so the grade only cools and dims the floor a little; the hour shows in the
+ * window skies, the wall clocks and the floor lamps, which glow softly once it is dark.
  * Pure drawing over layout geometry, no DOM or state. Entry points: gradeAt, roomLights, drawRoom, drawRoomDecor,
  * roomFurniture, drawGrade, wallClock. */
+import { COMMONS_MIN_H, COMMONS_MIN_W, furnishArea, groupOf } from './commons';
 import { stableHash } from './hash';
-import type { OfficeLayout, Rect, ZoneLayout } from './layout';
+import type { DecorKind, OfficeLayout, Rect, ZoneLayout } from './layout';
 import { mix, rr, seeded, stamp, type Atlas, type Ctx, type Palette } from './paint';
 
 /** The room's back wall: the band the team sign hangs in (layout's banner row). */
@@ -21,21 +22,21 @@ const MATERIALS: readonly Material[] = ['carpet', 'parquet', 'terrazzo', 'broadl
 
 /* ------------------------------------------------------------------ light by local time */
 
-/** The grade for an hour: `dark` how much of the room the night takes (0 day .. 1 deep night), `tint` the colour
- * the sky lends the room and `sun` the strength of daylight through the windows. */
+/** The grade for an hour: `dark` how far the evening has gone (0 day .. 1 deep night), `tint` the colour the sky
+ * lends the room and `sun` the strength of daylight through the windows. */
 export interface Grade { phase: 'night' | 'dawn' | 'morning' | 'day' | 'golden' | 'dusk'; dark: number; tint: string; tintAlpha: number; sun: number }
 
 export function gradeAt(hour: number): Grade {
   if (hour >= 21 || hour < 5) return { phase: 'night', dark: 1, tint: '#1c2350', tintAlpha: 0, sun: 0 };
-  if (hour < 7) return { phase: 'dawn', dark: hour < 6 ? 0.75 : 0.45, tint: '#ff9e9e', tintAlpha: 0.07, sun: 0.2 };
-  if (hour < 9) return { phase: 'morning', dark: 0, tint: '#ffd9a0', tintAlpha: 0.06, sun: 0.8 };
-  if (hour < 17) return { phase: 'day', dark: 0, tint: '#ffe2b0', tintAlpha: 0.04, sun: 1 };
-  if (hour < 19) return { phase: 'golden', dark: hour < 18 ? 0.12 : 0.38, tint: '#ff8a2a', tintAlpha: hour < 18 ? 0.12 : 0.16, sun: 0.8 };
-  return { phase: 'dusk', dark: hour < 20 ? 0.62 : 0.85, tint: '#8a4fb0', tintAlpha: 0.12, sun: 0 };
+  if (hour < 7) return { phase: 'dawn', dark: hour < 6 ? 0.75 : 0.45, tint: '#ffb4a0', tintAlpha: 0.04, sun: 0.2 };
+  if (hour < 9) return { phase: 'morning', dark: 0, tint: '#ffd9a0', tintAlpha: 0.03, sun: 0.8 };
+  if (hour < 17) return { phase: 'day', dark: 0, tint: '#ffe2b0', tintAlpha: 0, sun: 1 };
+  if (hour < 19) return { phase: 'golden', dark: hour < 18 ? 0.12 : 0.38, tint: '#ffa04a', tintAlpha: hour < 18 ? 0.05 : 0.07, sun: 0.8 };
+  return { phase: 'dusk', dark: hour < 20 ? 0.62 : 0.85, tint: '#8a5fb0', tintAlpha: 0.05, sun: 0 };
 }
 
-/** A practical light: its centre, reach and warmth (the night keeps a pool of it). */
-export interface Light { x: number; y: number; r: number; warm: boolean }
+/** A lamp on the floor plan: its centre and the reach of its glow once it is dark. */
+export interface Light { x: number; y: number; r: number }
 
 /** Spare floor in a room that nobody walks through, for furniture: beside the head desk under the back wall, right
  * of the pods, and under them. */
@@ -57,7 +58,7 @@ function roomSpaces(zone: ZoneLayout) {
   };
 }
 
-type Piece = { kind: 'shelf' | 'cabinet' | 'sofa' | 'armchair' | 'table' | 'lamp' | 'rug' | 'plant' | 'tall-plant' | 'credenza'; x: number; y: number; w: number; h: number; variant: number };
+type Piece = { kind: DecorKind; x: number; y: number; w: number; h: number; variant: number };
 
 /** The furniture a room has room for, placed by the room's own geometry and seeded by its key. */
 export function roomFurniture(zone: ZoneLayout): Piece[] {
@@ -80,41 +81,17 @@ export function roomFurniture(zone: ZoneLayout): Piece[] {
   };
   along(space.wallLeft, false);
   along(space.wallRight, true);
+  // Spare floor beside and under the pods holds the same furniture groups as the commons, picked by the room.
+  const groups = (area: Rect, start: number) => furnishArea(area, start).map(({ kind, x, y, w, h, variant }) => ({ kind, x, y, w, h, variant }));
   const side = space.side;
-  if (side.w >= 96 && side.h >= 120) {
-    const cx = side.x + side.w / 2, cy = side.y + Math.min(side.h / 2, 110);
-    pieces.push({ kind: 'rug', x: cx - 50, y: cy - 40, w: 100, h: 80, variant: seed });
-    pieces.push({ kind: 'sofa', x: cx - 34, y: cy - 38, w: 68, h: 24, variant: seed });
-    pieces.push({ kind: 'table', x: cx - 18, y: cy - 6, w: 36, h: 20, variant: seed });
-    pieces.push({ kind: 'armchair', x: cx - 44, y: cy + 18, w: 26, h: 22, variant: seed });
-    pieces.push({ kind: 'armchair', x: cx + 18, y: cy + 18, w: 26, h: 22, variant: seed + 1 });
-    pieces.push({ kind: 'lamp', x: cx + 40, y: cy - 34, w: 14, h: 14, variant: seed });
-    if (side.h >= 300) pieces.push({ kind: 'tall-plant', x: side.x + side.w - 30, y: side.y + side.h - 64, w: 30, h: 60, variant: seed + 2 });
-  } else if (side.w >= 40 && side.h >= 70) {
+  if (side.w >= COMMONS_MIN_W && side.h >= COMMONS_MIN_H) pieces.push(...groups(side, seed + 1));
+  else if (side.w >= 40 && side.h >= 70) {
     pieces.push({ kind: 'tall-plant', x: side.x + side.w / 2 - 15, y: side.y + 20, w: 30, h: 60, variant: seed + 1 });
     if (side.h >= 200) pieces.push({ kind: 'plant', x: side.x + side.w / 2 - 12, y: side.y + side.h - 40, w: 24, h: 32, variant: seed + 2 });
   }
   const under = space.under;
-  if (under.w >= 180 && under.h >= 130) {
-    // The room's lounge: a rug with a sofa facing a low table, two armchairs and a floor lamp, plants either side.
-    const cx = under.x + under.w / 2, cy = under.y + Math.min(under.h / 2, 90);
-    pieces.push({ kind: 'rug', x: cx - 80, y: cy - 46, w: 160, h: 92, variant: seed });
-    pieces.push({ kind: 'sofa', x: cx - 40, y: cy - 40, w: 80, h: 26, variant: seed });
-    pieces.push({ kind: 'table', x: cx - 22, y: cy - 4, w: 44, h: 22, variant: seed });
-    pieces.push({ kind: 'armchair', x: cx - 64, y: cy + 2, w: 28, h: 24, variant: seed });
-    pieces.push({ kind: 'armchair', x: cx + 36, y: cy + 2, w: 28, h: 24, variant: seed + 1 });
-    pieces.push({ kind: 'lamp', x: cx + 52, y: cy - 46, w: 14, h: 14, variant: seed });
-    if (under.w >= 300) {
-      pieces.push({ kind: 'tall-plant', x: under.x + 6, y: cy - 30, w: 30, h: 60, variant: seed + 1 });
-      pieces.push({ kind: 'tall-plant', x: under.x + under.w - 36, y: cy - 30, w: 30, h: 60, variant: seed + 2 });
-    }
-    if (under.h >= 260) {
-      const low = under.y + under.h - 30;
-      pieces.push({ kind: 'credenza', x: cx - 70, y: low, w: 140, h: 26, variant: seed + 3 });
-      pieces.push({ kind: 'plant', x: cx - 106, y: low - 6, w: 24, h: 32, variant: seed + 1 });
-      pieces.push({ kind: 'plant', x: cx + 82, y: low - 6, w: 24, h: 32, variant: seed + 2 });
-    }
-  } else if (under.w >= 160 && under.h >= 56) {
+  if (under.w >= COMMONS_MIN_W && under.h >= COMMONS_MIN_H) pieces.push(...groups(under, seed));
+  else if (under.w >= 160 && under.h >= 56) {
     const cx = under.x + under.w / 2, top = under.y + Math.min(24, under.h - 44);
     pieces.push({ kind: 'credenza', x: cx - 70, y: top, w: 140, h: 26, variant: seed });
     pieces.push({ kind: 'plant', x: cx - 106, y: top - 6, w: 24, h: 32, variant: seed + 1 });
@@ -123,79 +100,52 @@ export function roomFurniture(zone: ZoneLayout): Piece[] {
   return pieces;
 }
 
-/** Every practical light on the floor, for the night grade. */
+/** The floor lamps of the room lounges and the commons, for their glow once it is dark. */
 export function roomLights(layout: OfficeLayout): Light[] {
-  const lights: Light[] = [];
-  const { desk } = layout.owner;
-  lights.push({ x: desk.x + desk.w / 2, y: desk.y + desk.h / 2, r: 170, warm: true });
-  for (const zone of layout.zones) {
-    lights.push({ x: zone.lead.desk.x + zone.lead.desk.w / 2, y: zone.lead.desk.y + 10, r: 130, warm: true });
-    for (const pod of zone.pods) lights.push({ x: pod.x + pod.w / 2, y: pod.y + pod.h / 2, r: Math.max(pod.w, pod.h) * 0.62, warm: true });
-    for (const piece of roomFurniture(zone)) if (piece.kind === 'lamp') lights.push({ x: piece.x + 7, y: piece.y + 14, r: 110, warm: true });
-  }
-  if (layout.watchdog) lights.push({ x: layout.watchdog.seat.desk.x + 52, y: layout.watchdog.seat.desk.y, r: 120, warm: false });
-  lights.push({ x: layout.bar.x + layout.bar.w / 2, y: layout.bar.y + 30, r: 170, warm: true });
-  lights.push({ x: layout.lounge.x + layout.lounge.w / 2, y: layout.lounge.y + layout.lounge.h / 2, r: 180, warm: true });
-  lights.push({ x: layout.entrance.x, y: layout.entrance.y - 30, r: 110, warm: false });
-  return lights;
+  const lamps: Array<{ x: number; y: number; w: number; h: number }> = [];
+  for (const zone of layout.zones) for (const piece of roomFurniture(zone)) if (piece.kind === 'lamp') lamps.push(piece);
+  for (const item of layout.decor) if (item.kind === 'lamp' && item.w !== undefined && item.h !== undefined) lamps.push({ x: item.x, y: item.y, w: item.w, h: item.h });
+  return lamps.map(lamp => ({ x: lamp.x + lamp.w / 2, y: lamp.y + lamp.h / 2, r: 44 }));
 }
 
-/** The grade over the whole frame, into its own layer: the night (cut away under every light, its pools warmed),
- * the sky's tint, then the light the room always has (daylight from the window wall, wall and side shade, vignette).
- * Drawing into a layer of its own lets the night cut its pools without touching the scene beneath. */
-export function drawGrade(ctx: Ctx, layout: OfficeLayout, palette: Palette, grade: Grade, lights: ReadonlyArray<Light>,
-  panes: ReadonlyArray<Rect>, hour: number) {
+/** The grade over the whole frame, into its own layer. The office lights stay on at every hour, so the evening
+ * only cools and dims the floor a little (owner, 11-17: the night of cut-out light pools read as light pollution),
+ * the floor lamps glow softly once it is dark and the sky lends the room a faint tint at dawn, golden hour and dusk.
+ * Daylight is a soft wash down from the window wall; the wall and the sides keep their shade. Nothing here is
+ * additive, so no light blooms over people or their labels. */
+export function drawGrade(ctx: Ctx, layout: OfficeLayout, palette: Palette, grade: Grade, lights: ReadonlyArray<Light>) {
   const { width, height, wall } = layout;
   const rgba = (rgb: string, alpha: number) => `rgba(${rgb}, ${alpha})`;
-  const night = grade.dark * (palette.daylight ? 0.62 : 0.5);
-  if (night > 0) {
-    ctx.fillStyle = `rgba(10, 13, 38, ${night})`; ctx.fillRect(0, 0, width, height);
-    ctx.globalCompositeOperation = 'destination-out';
-    for (const light of lights) {
-      const pool = ctx.createRadialGradient(light.x, light.y, 0, light.x, light.y, light.r);
-      pool.addColorStop(0, 'rgba(0,0,0,0.9)'); pool.addColorStop(0.35, 'rgba(0,0,0,0.72)'); pool.addColorStop(0.7, 'rgba(0,0,0,0.26)'); pool.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = pool; ctx.fillRect(light.x - light.r, light.y - light.r, light.r * 2, light.r * 2);
-    }
-    ctx.globalCompositeOperation = 'source-over';
+  const dim = grade.dark * (palette.daylight ? 0.13 : 0.1);
+  if (dim > 0) { ctx.fillStyle = `rgba(22, 28, 64, ${dim})`; ctx.fillRect(0, 0, width, height); }
+  if (grade.dark > 0) {
     for (const light of lights) {
       const glow = ctx.createRadialGradient(light.x, light.y, 0, light.x, light.y, light.r);
-      const color = light.warm ? '255, 190, 110' : '120, 200, 255';
-      glow.addColorStop(0, `rgba(${color}, ${0.16 * grade.dark})`); glow.addColorStop(1, `rgba(${color}, 0)`);
+      glow.addColorStop(0, `rgba(255, 214, 150, ${0.3 * grade.dark})`); glow.addColorStop(1, 'rgba(255, 214, 150, 0)');
       ctx.fillStyle = glow; ctx.fillRect(light.x - light.r, light.y - light.r, light.r * 2, light.r * 2);
     }
   }
-  // Sunbeams: each window throws a long slanting patch of warm light across the floor, leaning with the sun.
-  if (grade.sun > 0 && palette.daylight) {
-    const lean = (hour < 13 ? 1 : -1) * 160, reach = Math.min(height - wall, 620);
-    const beam = ctx.createLinearGradient(0, wall, 0, wall + reach);
-    beam.addColorStop(0, `rgba(255, 240, 200, ${0.34 * grade.sun})`); beam.addColorStop(0.55, `rgba(255, 240, 200, ${0.14 * grade.sun})`); beam.addColorStop(1, 'rgba(255, 236, 190, 0)');
-    ctx.fillStyle = beam;
-    for (const pane of panes) {
-      ctx.beginPath(); ctx.moveTo(pane.x + 10, wall); ctx.lineTo(pane.x + pane.w - 10, wall);
-      ctx.lineTo(pane.x + pane.w + lean + 40, wall + reach); ctx.lineTo(pane.x + lean - 40, wall + reach); ctx.closePath(); ctx.fill();
-    }
-  }
   if (grade.tintAlpha > 0) { ctx.fillStyle = grade.tint; ctx.globalAlpha = grade.tintAlpha; ctx.fillRect(0, 0, width, height); ctx.globalAlpha = 1; }
-  const day = ctx.createLinearGradient(0, wall, 0, wall + 320);
-  day.addColorStop(0, rgba(palette.glow, 0.04 + 0.16 * grade.sun)); day.addColorStop(1, rgba(palette.glow, 0));
-  ctx.fillStyle = day; ctx.fillRect(0, wall, width, 320);
-  const shade = ctx.createLinearGradient(0, wall, 0, wall + 30);
-  shade.addColorStop(0, rgba(palette.shade, 0.28)); shade.addColorStop(1, rgba(palette.shade, 0));
-  ctx.fillStyle = shade; ctx.fillRect(0, wall, width, 30);
-  for (const [from, to] of [[12, 40], [width - 12, width - 40]]) {
-    const side = ctx.createLinearGradient(from, 0, to, 0);
-    side.addColorStop(0, rgba(palette.shade, 0.22)); side.addColorStop(1, rgba(palette.shade, 0));
-    ctx.fillStyle = side; ctx.fillRect(Math.min(from, to), wall, 28, height - wall);
+  if (grade.sun > 0) {
+    const day = ctx.createLinearGradient(0, wall, 0, wall + 260);
+    day.addColorStop(0, rgba(palette.glow, 0.1 * grade.sun)); day.addColorStop(1, rgba(palette.glow, 0));
+    ctx.fillStyle = day; ctx.fillRect(0, wall, width, 260);
   }
-  const radius = Math.hypot(width, height) / 2;
-  const vignette = ctx.createRadialGradient(width / 2, height * 0.45, radius * 0.5, width / 2, height * 0.45, radius);
-  vignette.addColorStop(0, rgba(palette.shade, 0)); vignette.addColorStop(1, rgba(palette.shade, palette.daylight ? 0.22 : 0.42));
-  ctx.fillStyle = vignette; ctx.fillRect(0, 0, width, height);
+  const shade = ctx.createLinearGradient(0, wall, 0, wall + 24);
+  shade.addColorStop(0, rgba(palette.shade, 0.2)); shade.addColorStop(1, rgba(palette.shade, 0));
+  ctx.fillStyle = shade; ctx.fillRect(0, wall, width, 24);
+  for (const [from, to] of [[12, 36], [width - 12, width - 36]]) {
+    const side = ctx.createLinearGradient(from, 0, to, 0);
+    side.addColorStop(0, rgba(palette.shade, 0.14)); side.addColorStop(1, rgba(palette.shade, 0));
+    ctx.fillStyle = side; ctx.fillRect(Math.min(from, to), wall, 24, height - wall);
+  }
 }
 
 /* ------------------------------------------------------------------ room shell */
 
-/** The floor tile of a material in the team's colour, at `level` pixels per unit (a pattern fills the room). */
+/** The floor tile of a material, at `level` pixels per unit (a pattern fills the room). Floors are warm neutrals
+ * with only a hint of the team colour, so the rooms read as one office and the people on them carry the contrast;
+ * the team colour itself is spent on the wall's accent band and the sign. */
 export function paintRoomTile(material: Material, color: string, palette: Palette, level: number): HTMLCanvasElement {
   const size = material === 'terrazzo' ? 96 : 64;
   const canvas = document.createElement('canvas');
@@ -208,11 +158,11 @@ export function paintRoomTile(material: Material, color: string, palette: Palett
   const wrapped = (draw: (dx: number, dy: number) => void) => { for (const dx of [-size, 0, size]) for (const dy of [-size, 0, size]) draw(dx, dy); };
   if (material === 'carpet') {
     // Quiet carpet tiles: the turned pile of alternate tiles shows only as a faint change of tone.
-    const base = mix(color, palette.rugBase, day ? 0.52 : 0.66), alt = mix(base, day ? '#ffffff' : '#000000', 0.05);
+    const base = mix(mix(color, palette.rugBase, day ? 0.88 : 0.86), day ? '#d8cebd' : '#2f2a27', 0.35), alt = mix(base, day ? '#ffffff' : '#000000', 0.045);
     for (let i = 0; i < 2; i += 1) for (let j = 0; j < 2; j += 1) { ctx.fillStyle = (i + j) % 2 ? alt : base; ctx.fillRect(i * 32, j * 32, 32, 32); }
     ctx.fillStyle = `rgba(0,0,0,${day ? 0.045 : 0.1})`; ctx.fillRect(0, 0, size, 0.8); ctx.fillRect(0, 32, size, 0.8); ctx.fillRect(0, 0, 0.8, size); ctx.fillRect(32, 0, 0.8, size);
   } else if (material === 'parquet') {
-    const wood = mix(palette.woodLight, color, day ? 0.14 : 0.1);
+    const wood = mix(palette.woodLight, color, day ? 0.06 : 0.05);
     // Narrow boards running across the room in a staggered bond, close in tone.
     for (let k = 0; k < 8; k += 1) {
       const offset = (k * 23) % 32;
@@ -224,8 +174,8 @@ export function paintRoomTile(material: Material, color: string, palette: Palett
       ctx.fillStyle = palette.seam; ctx.fillRect(0, k * 8 + 7.5, size, 0.5);
     }
   } else if (material === 'terrazzo') {
-    ctx.fillStyle = mix(color, day ? '#f3eee6' : '#3a3734', day ? 0.82 : 0.8); ctx.fillRect(0, 0, size, size);
-    const ground = mix(color, day ? '#f3eee6' : '#3a3734', day ? 0.82 : 0.8);
+    const ground = mix(color, day ? '#efe9df' : '#3a3734', day ? 0.92 : 0.9);
+    ctx.fillStyle = ground; ctx.fillRect(0, 0, size, size);
     const chips = [mix(ground, mix(color, INK, 0.3), 0.28), mix(ground, '#ffffff', 0.4), mix(ground, day ? '#bfb3a3' : '#6a625a', 0.35), mix(ground, mix(color, '#d3925a', 0.5), 0.3)];
     for (let i = 0; i < 22; i += 1) {
       const x = random() * size, y = random() * size, r = 0.5 + random() * 1.2, fill = chips[i % chips.length], turn = random() * Math.PI;
@@ -233,7 +183,7 @@ export function paintRoomTile(material: Material, color: string, palette: Palett
       wrapped((dx, dy) => { ctx.beginPath(); ctx.ellipse(x + dx, y + dy, r, r * 0.6, turn, 0, Math.PI * 2); ctx.fill(); });
     }
   } else {
-    const base = mix(color, palette.rugBase, day ? 0.56 : 0.7);
+    const base = mix(mix(color, palette.rugBase, day ? 0.88 : 0.86), day ? '#ddd3c3' : '#322c29', 0.3);
     ctx.fillStyle = base; ctx.fillRect(0, 0, size, size);
     ctx.fillStyle = `rgba(255,255,255,${day ? 0.045 : 0.02})`;
     for (let y = 0; y < size; y += 16) ctx.fillRect(0, y, size, 6);
@@ -265,19 +215,20 @@ export function drawRoom(ctx: Ctx, zone: Rect, color: string, palette: Palette, 
     side.addColorStop(0, `rgba(${palette.shade}, ${day ? 0.14 : 0.24})`); side.addColorStop(1, `rgba(${palette.shade}, 0)`);
     ctx.fillStyle = side; ctx.fillRect(Math.min(from, to), y + BACK_WALL, 16, h - BACK_WALL);
   }
-  // Back wall: the face in a muted tint of the team colour, a darker cap (the wall's thickness seen from above),
-  // a dado rail and a baseboard.
-  const face = mix(color, day ? '#f6efe2' : '#2c3146', day ? 0.62 : 0.7);
+  // Back wall: a warm neutral face with a hint of the team colour, a darker cap (the wall's thickness seen from
+  // above) with the team's accent band under it, a dado rail and a baseboard.
+  const face = mix(color, day ? '#f6efe2' : '#2c3146', day ? 0.86 : 0.84);
   const wallFill = ctx.createLinearGradient(0, y, 0, y + BACK_WALL);
   wallFill.addColorStop(0, mix(face, '#ffffff', day ? 0.18 : 0.05)); wallFill.addColorStop(1, mix(face, '#000000', day ? 0.06 : 0.18));
   ctx.fillStyle = wallFill; ctx.fillRect(x, y, w, BACK_WALL);
-  ctx.fillStyle = mix(color, INK, day ? 0.55 : 0.7); ctx.fillRect(x - 3, y - 4, w + 6, 6);
-  ctx.fillStyle = mix(color, '#ffffff', 0.25); ctx.globalAlpha *= 0.5; ctx.fillRect(x - 3, y - 4, w + 6, 1); ctx.globalAlpha /= 0.5;
-  ctx.fillStyle = mix(face, INK, 0.25); ctx.fillRect(x, y + BACK_WALL - 13, w, 1.5);
-  ctx.fillStyle = mix(color, INK, day ? 0.5 : 0.72); ctx.fillRect(x, y + BACK_WALL - 4, w, 4);
+  ctx.fillStyle = mix('#7a5a40', INK, day ? 0.35 : 0.7); ctx.fillRect(x - 3, y - 4, w + 6, 6);
+  ctx.fillStyle = '#ffffff'; ctx.globalAlpha *= 0.22; ctx.fillRect(x - 3, y - 4, w + 6, 1); ctx.globalAlpha /= 0.22;
+  ctx.fillStyle = mix(color, day ? '#ffffff' : '#000000', day ? 0.12 : 0.25); ctx.fillRect(x, y + 2, w, 3);
+  ctx.fillStyle = mix(face, INK, 0.22); ctx.fillRect(x, y + BACK_WALL - 13, w, 1.5);
+  ctx.fillStyle = mix('#7a5a40', INK, day ? 0.3 : 0.72); ctx.fillRect(x, y + BACK_WALL - 4, w, 4);
   // Glass partitions: a dark frame, pale glass and a highlight; mullions every so often.
   const glass = day ? 'rgba(214, 236, 246, 0.55)' : 'rgba(120, 160, 200, 0.28)';
-  const frame = mix(color, INK, day ? 0.62 : 0.78);
+  const frame = mix('#8a6a50', INK, day ? 0.45 : 0.78);
   const pane = (px: number, py: number, pw: number, ph: number) => {
     ctx.fillStyle = frame; ctx.fillRect(px, py, pw, ph);
     ctx.fillStyle = glass; ctx.fillRect(px + 1, py + 1, pw - 2, ph - 2);
@@ -292,7 +243,7 @@ export function drawRoom(ctx: Ctx, zone: Rect, color: string, palette: Palette, 
   for (let mx = x + door + 64; mx < x + w - 20; mx += 64) ctx.fillRect(mx, y + h - 4, 2, 7);
   for (let my = y + BACK_WALL + 60; my < y + h - 20; my += 60) { ctx.fillRect(x - 4, my, 7, 2); ctx.fillRect(x + w - 3, my, 7, 2); }
   // Door posts either side of the doorway.
-  ctx.fillStyle = mix(color, INK, 0.4); ctx.fillRect(x - 4, y + h - 5, 6, 8); ctx.fillRect(x + door - 3, y + h - 5, 6, 8);
+  ctx.fillStyle = mix('#8a6a50', INK, 0.3); ctx.fillRect(x - 4, y + h - 5, 6, 8); ctx.fillRect(x + door - 3, y + h - 5, 6, 8);
 }
 
 /** Wall art and furniture of a room (floor layer): framed pictures on the back wall and the pieces of
@@ -325,11 +276,27 @@ function outlined(ctx: Ctx, fill: string, x: number, y: number, w: number, h: nu
   rr(ctx, x, y, w, h, r); ctx.fillStyle = fill; ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 1; ctx.stroke();
 }
 
-function drawPiece(ctx: Ctx, atlas: Atlas | null, piece: Piece, color: string, palette: Palette) {
+/** Muted accents for the commons' fabrics and rugs: it belongs to no team, so it wears none of their colours. */
+const COMMONS_ACCENTS = ['#8fa58a', '#c4a07a', '#8c9fb4', '#b89490'] as const;
+
+/** The commons' furniture (commons.ts: the sized decor pieces), each group in one accent, straight on the office
+ * floor: every group brings its own rug. `alphaOf` fades a piece that comes or goes in a floor-plan blend. */
+export function drawCommons(ctx: Ctx, atlas: Atlas | null, layout: OfficeLayout, palette: Palette, alphaOf: (key: string) => number) {
+  const base = ctx.globalAlpha;
+  for (const item of layout.decor) {
+    if (item.w === undefined || item.h === undefined) continue;
+    ctx.globalAlpha = base * alphaOf(item.key);
+    drawPiece(ctx, atlas, { kind: item.kind, x: item.x, y: item.y, w: item.w, h: item.h, variant: item.variant },
+      COMMONS_ACCENTS[groupOf(item.variant) % COMMONS_ACCENTS.length], palette);
+  }
+  ctx.globalAlpha = base;
+}
+
+export function drawPiece(ctx: Ctx, atlas: Atlas | null, piece: Piece, color: string, palette: Palette) {
   const { x, y, w, h } = piece;
   const day = palette.daylight;
   const wood = day ? '#a8744a' : '#5a3d2b', woodTop = day ? '#c99466' : '#6f4c36';
-  const fabric = mix(color, day ? '#e9dccb' : '#3c3a44', 0.35), fabricDark = mix(fabric, INK, 0.25);
+  const fabric = mix(color, day ? '#e9dccb' : '#3c3a44', 0.5), fabricDark = mix(fabric, INK, 0.25);
   const random = seeded(piece.variant * 7919 + 13);
   switch (piece.kind) {
     case 'shelf': {
@@ -363,11 +330,41 @@ function drawPiece(ctx: Ctx, atlas: Atlas | null, piece: Piece, color: string, p
       if (atlas) stamp(ctx, atlas, 'plant-' + ((piece.variant % 3) + 1), x + w / 2, y + h);
       break;
     case 'rug': {
-      const rug = mix(color, day ? '#fff6e6' : '#2a2630', day ? 0.5 : 0.55);
-      ctx.fillStyle = `rgba(${palette.shade}, 0.12)`; ctx.beginPath(); ctx.ellipse(x + w / 2, y + h / 2 + 2, w / 2, h / 2, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = mix(rug, INK, 0.3); ctx.beginPath(); ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = rug; ctx.beginPath(); ctx.ellipse(x + w / 2, y + h / 2, w / 2 - 3, h / 2 - 3, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = mix(rug, '#ffffff', 0.4); ctx.lineWidth = 1; ctx.beginPath(); ctx.ellipse(x + w / 2, y + h / 2, w / 2 - 9, h / 2 - 8, 0, 0, Math.PI * 2); ctx.stroke();
+      // A flat-woven area rug: a darker border band, a quiet field and a fine inner line.
+      const field = mix(color, day ? '#f4ead8' : '#2e2924', day ? 0.72 : 0.74);
+      ctx.fillStyle = `rgba(${palette.shade}, ${day ? 0.1 : 0.22})`; rr(ctx, x + 1, y + 2, w, h, 8); ctx.fill();
+      ctx.fillStyle = mix(field, INK, day ? 0.22 : 0.3); rr(ctx, x, y, w, h, 8); ctx.fill();
+      ctx.fillStyle = field; rr(ctx, x + 4, y + 4, w - 8, h - 8, 5); ctx.fill();
+      ctx.strokeStyle = mix(field, day ? '#ffffff' : '#000000', 0.35); ctx.lineWidth = 1; rr(ctx, x + 8.5, y + 8.5, w - 17, h - 17, 3); ctx.stroke();
+      break;
+    }
+    case 'round-table': {
+      const cx = x + w / 2, cy = y + h / 2, r = Math.min(w, h) * 0.22;
+      for (let k = 0; k < 4; k += 1) {
+        const angle = Math.PI / 4 + (k * Math.PI) / 2;
+        const px = cx + Math.cos(angle) * r * 1.75, py = cy + Math.sin(angle) * r * 1.6;
+        contact(ctx, palette, px - 6, py + 3, 12, 3);
+        outlined(ctx, fabricDark, px - 7, py - 7, 14, 14, 4.5);
+        outlined(ctx, mix(fabric, '#ffffff', 0.14), px - 5, py - 5, 10, 9, 3);
+      }
+      ctx.fillStyle = `rgba(${palette.shade}, ${day ? 0.2 : 0.36})`; ctx.beginPath(); ctx.ellipse(cx + 1, cy + 4, r + 1, r * 0.8, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = wood; ctx.beginPath(); ctx.arc(cx, cy + 2, r, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 1; ctx.stroke();
+      ctx.fillStyle = woodTop; ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(cx - r * 0.35, cy - r * 0.2, 2.6, 0, Math.PI * 2); ctx.fill(); ctx.lineWidth = 0.8; ctx.stroke();
+      ctx.fillStyle = mix(color, '#ffffff', 0.3); ctx.beginPath(); ctx.arc(cx + r * 0.35, cy + r * 0.25, 2.2, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      break;
+    }
+    case 'meeting':
+      if (atlas) stamp(ctx, atlas, 'meeting-area', x, y);
+      break;
+    case 'bench': {
+      contact(ctx, palette, x, y + h - 2, w, 4);
+      const leg = mix(wood, INK, 0.3);
+      outlined(ctx, leg, x + 5, y + h - 9, 4, 9, 1); outlined(ctx, leg, x + w - 9, y + h - 9, 4, 9, 1);
+      outlined(ctx, wood, x, y + 3, w, h - 10, 3);
+      outlined(ctx, woodTop, x, y, w, h - 13, 3);
+      ctx.strokeStyle = mix(woodTop, INK, 0.3); ctx.lineWidth = 0.8;
+      for (let k = 1; k < 3; k += 1) { const sy = y + ((h - 13) * k) / 3; ctx.beginPath(); ctx.moveTo(x + 3, sy); ctx.lineTo(x + w - 3, sy); ctx.stroke(); }
       break;
     }
     case 'sofa': {

@@ -12,10 +12,16 @@ reaches a running model with that same projection.
 Authorization is decided here once, default deny: the sender attaches only
 what it can already read.
 - a path inside the sending task's verified roots (the read_files roots),
-  read without following symlinks (``lib.artifacts.file_snapshot``);
+  read without following symlinks (``lib.artifacts.file_snapshot``); a lead
+  (Global Router or Project Router, ``lead_scope``) also reads every registered
+  project root of the owner (``lib.router.registered_projects``) and
+  ``worker:<assignment_id>/<path>`` inside the registered checkout of a Worker
+  its binding dispatched (``lead_worker_checkout``), docs/ROUTER.md R9 "Leads
+  reach the owner directly";
 - ``att_media_<id>``: one of the owner's own attachments (owner-scoped lookup);
 - ``/api/images/<file>``: an uploaded image this conversation's messages show,
   including one the owner steered into the running Turn.
+A file that carries a credential (``lib.conversations.attachment_secrets``) is refused too.
 Anything else is refused before any record is written. No size or count limit
 applies beyond the attachment platform's own. An attachment is context only:
 an agent-authored message grants no human authority, attachments included.
@@ -47,9 +53,10 @@ class AttachmentRefused(PermissionError):
 
     code = 'attachment_refused'
     execution_started = False
-    recovery = ('Nothing was sent. Attach only files you can read: a path inside your workspace roots, '
-                'an att_media_<id> attachment of the owner, or an /api/images/ image shown in this '
-                'conversation; then send again.')
+    recovery = ('Nothing was sent. Attach only files you can read: a path inside your workspace roots '
+                '(a lead: also any registered project root, or worker:<assignment_id>/<path> in its own '
+                'Worker\u2019s checkout), an att_media_<id> attachment of the owner, or an /api/images/ image '
+                'shown in this conversation, and never a file carrying a credential; then send again.')
 
 
 def _record(ref: dict) -> dict:
@@ -71,6 +78,59 @@ def _roots(task: dict) -> tuple[list[str], dict[str, str]]:
     return [root for root in roots if isinstance(root, str) and os.path.isabs(root)], labels
 
 
+WORKER_PREFIX = 'worker:'
+
+
+def lead_scope(task: dict) -> dict | None:
+    """The coordinator scope of a lead's task (Global Router or Project Router), else None.
+
+    Workers, the Watchdog and ordinary conversations are not leads.
+    """
+    from lib.router.watchdog.binding import is_watchdog_scope
+    from lib.tasks_pkg.coordinator_policy import coordinator_scope
+    from lib.project_dispatch.admission import is_dispatch_task
+    if is_dispatch_task(task):
+        return None
+    scope = coordinator_scope(task)
+    return None if scope is None or is_watchdog_scope(scope) else scope
+
+
+def lead_worker_checkout(task: dict, assignment_id: str) -> str:
+    """The registered checkout of a Worker this lead's binding dispatched (``AttachmentRefused`` else).
+
+    The checkout is the assignment's registered integration workspace, read by
+    its work id; another lead's Worker, a discarded checkout or one never
+    registered is refused.
+    """
+    from pathlib import Path
+    from lib.project_dispatch.repository import ProjectDispatchError, ProjectDispatchRepository
+    scope = lead_scope(task)
+    if scope is None:
+        raise AttachmentRefused('Only a project lead attaches files of its Workers\u2019 checkouts')
+    repository = ProjectDispatchRepository(scope['user_id'], scope['project_path'])
+    try:
+        row = repository.read(assignment_id)
+    except ProjectDispatchError as error:
+        raise AttachmentRefused(f'{assignment_id} is not an assignment of this lead\u2019s project') from error
+    if row['request']['coordinatorId'] != scope['conversation_id']:
+        raise AttachmentRefused(f'Assignment {assignment_id} belongs to another lead')
+    workspace = repository.get_workspace(str(Path(repository.project).expanduser().resolve()),
+                                         repository.workspace_task_id(row), user_id=repository.owner)
+    path = (workspace or {}).get('workspace_path')
+    if not path or workspace.get('state') == 'discarded' or not os.path.isdir(path):
+        raise AttachmentRefused(f'Assignment {assignment_id} has no registered checkout to read')
+    return os.path.realpath(path)
+
+
+def _registered_roots(task: dict) -> list[str]:
+    """Every registered project root of the owner, for a lead's task only."""
+    scope = lead_scope(task)
+    if scope is None:
+        return []
+    from lib.router.registered_projects import registered_project_roots
+    return registered_project_roots(scope['user_id'])
+
+
 def _route(task: dict, reference: str, labels: dict[str, str]) -> str:
     """The read_files spelling of ``reference`` (file://, rootname:relative, checkout mapping)."""
     from lib.tasks_pkg.workspace_delivery import route_project_tool_args
@@ -82,12 +142,24 @@ def _route(task: dict, reference: str, labels: dict[str, str]) -> str:
 
 
 def _read_workspace_file(task: dict, reference: str) -> tuple[bytes, str]:
-    """Bytes of a regular file inside the task's roots, read without following links."""
+    """Bytes of a regular file inside the task's roots, read without following links.
+
+    A lead also reads every registered project root of the owner, and
+    ``worker:<assignment_id>/<path>`` inside a checkout of its own Worker.
+    """
     from lib.artifacts.file_snapshot import read_project_snapshot
-    roots, labels = _roots(task)
-    if not roots:
-        raise AttachmentRefused(f'{reference}: this conversation has no readable workspace')
-    path = _route(task, reference, labels)
+    if reference.startswith(WORKER_PREFIX):
+        assignment_id, _, relative = reference[len(WORKER_PREFIX):].partition('/')
+        if not assignment_id or not relative:
+            raise AttachmentRefused(f'{reference}: name a Worker file as worker:<assignment_id>/<path>')
+        roots, labels = [lead_worker_checkout(task, assignment_id)], {}
+        path = os.path.join(roots[0], relative)
+    else:
+        roots, labels = _roots(task)
+        roots = list(dict.fromkeys(roots + _registered_roots(task)))
+        if not roots:
+            raise AttachmentRefused(f'{reference}: this conversation has no readable workspace')
+        path = _route(task, reference, labels)
     if not os.path.isabs(path):
         path = os.path.join(roots[0], path)
     # Roots are the owner's configured spellings; inside them nothing is followed.
@@ -113,6 +185,11 @@ def _read_workspace_file(task: dict, reference: str) -> tuple[bytes, str]:
         if error.errno == errno.ENOENT:
             raise AttachmentRefused(f'{reference} does not exist') from error
         raise AttachmentRefused(f'{reference} cannot be read ({error.strerror})') from error
+    from lib.conversations.attachment_secrets import AttachmentSecretRefused, refuse_secrets
+    try:
+        refuse_secrets(snapshot.path, snapshot.content or b'')
+    except AttachmentSecretRefused as refusal:
+        raise AttachmentRefused(str(refusal)) from refusal
     return snapshot.content or b'', os.path.basename(snapshot.path)
 
 

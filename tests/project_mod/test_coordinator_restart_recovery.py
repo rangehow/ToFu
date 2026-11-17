@@ -331,6 +331,48 @@ def test_a_coordinator_turn_with_a_call_cut_off_mid_effect_continues_in_a_wake_t
     assert faults == []
 
 
+def _recovered_unknown_outcome(r, turn_id, attempt_id):
+    """What exit recovery leaves for an execution that ended with nothing to confirm
+    but no restart cause (e.g. a carrier that exited before settling): failed,
+    ``worker_effect_outcome_unknown``, manual retry policy, no cut call."""
+    r.attempts[attempt_id].update(status='failed', settledAt=int(r.c.now[0] * 1000))
+    r.turns[turn_id].update(status='failed', currentAttemptId=attempt_id, settlement={
+        'cause': 'generation_error', 'outcome': 'failed',
+        'error': {'code': 'worker_effect_outcome_unknown',
+                  'retryPolicy': {'mode': 'manual', 'automatic': False}},
+        'resumeOptions': [{'operation': 'regenerate', 'anchor': {'type': 'turn_start'}}]})
+    r.turns[turn_id].setdefault('ordinal', 1)
+    r.turns[turn_id].setdefault('laneId', 'main')
+
+
+def test_a_lead_turn_failed_with_an_unknown_outcome_and_no_cut_call_is_continued_automatically(
+        run, monkeypatch, faults):
+    """Audit 2026-11-18 #10 (P3): a lead's Turn that recovery settled failed with
+    ``worker_effect_outcome_unknown`` and named no call cut off mid-effect never waits
+    for the owner. Its request continues in a new wake (the manual retry policy
+    governs replaying that Attempt, which nothing does), and a wake that fails the
+    same way is retried after the stall backoff, never silently dropped."""
+    from lib.conversations import restart_resume
+    r = run
+    worker = delegate(r)
+    end(r, worker)
+    _recovered_unknown_outcome(r, 'coordinator-turn', 'coordinator-attempt')
+    monkeypatch.setattr(restart_resume, 'resume_conversation', lambda *a, **kw: pytest.fail(
+        'a failed Attempt is never replayed in place'))
+    _never_resume(r, monkeypatch)
+    assert r.wake() == ['accepted']
+    [wake] = controls(r)
+    assert wake['request']['coordinatorWake']['previousAttemptId'] == 'coordinator-attempt'
+    _recovered_unknown_outcome(r, wake['execution']['turnId'], wake['execution']['attemptId'])
+    assert r.wake() == [] and len(r.scheduled) == 1
+    r.c.now[0] = r.scheduled[0] + 1
+    assert r.wake() == ['accepted']
+    rows = controls(r)
+    assert len(rows) == 2
+    assert rows[1]['request']['coordinatorWake']['previousAttemptId'] == wake['execution']['attemptId']
+    assert faults == []
+
+
 def test_a_request_turn_that_posted_a_report_continues_in_place_not_in_a_scoped_wake(
         run, monkeypatch, faults):
     """2026-11-11 18:28, parallel Router: request Turn 8c1d64fe (owner-forwarded input

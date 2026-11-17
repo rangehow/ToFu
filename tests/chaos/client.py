@@ -36,7 +36,7 @@ class ApiError(RuntimeError):
         self.status, self.body = status, body
 
 
-def model_routing_document(provider_url: str, revision: int) -> dict:
+def model_routing_document(provider_url: str, revision: int, *, reasoning: dict | None = None) -> dict:
     model_ref = {'creator_id': CREATOR_ID, 'model_id': MODEL_ID}
     capabilities = ['text', 'tools']
     return {
@@ -48,7 +48,7 @@ def model_routing_document(provider_url: str, revision: int) -> dict:
                     'registration_metadata': {'release_date': '2026-11-17', 'checked_at': '2026-11-17',
                                               'source_urls': ['https://example.invalid/chaos']},
                     'list_pricing': {'input': 1, 'output': 2, 'currency': 'USD', 'unit': 'per_million_tokens'},
-                    'inference_profile': {'reasoning': {'support': 'unsupported'}}}],
+                    'inference_profile': {'reasoning': reasoning or {'support': 'unsupported'}}}],
         'providers': [{'provider_id': 'chaos', 'name': 'Chaos provider', 'scope': 'owner'}],
         'provider_accesses': [{'provider_access_id': 'chaos-access', 'provider_id': 'chaos',
                                'enabled': True, 'quota_policy': {}}],
@@ -90,13 +90,13 @@ class InstanceClient:
                 payload = raw.decode(errors='replace')
             raise ApiError(error.code, payload) from None
 
-    def install_route(self, provider_url: str) -> None:
+    def install_route(self, provider_url: str, *, reasoning: dict | None = None) -> None:
         current = self.request('GET', '/api/v4/model-routing')
         data = current.get('data', current)
         revision = data['revision']
         self.request('PUT', '/api/v4/model-routing', {
             'expected_revision': revision,
-            'model_routing': model_routing_document(provider_url, revision)})
+            'model_routing': model_routing_document(provider_url, revision, reasoning=reasoning)})
 
     def create_turn(self, conversation_id: str, text: str, *, workspace: str, first: bool,
                     command_id: str | None = None, config: dict | None = None) -> dict:

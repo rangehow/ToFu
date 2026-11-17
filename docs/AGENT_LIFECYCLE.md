@@ -117,6 +117,27 @@ that a previous external effect did not occur.
   confirm input. A crash after provider completion and before receipt ACK still
   has no persisted pending-ACK outbox: consumption can remain unknown. Never buy
   another model request solely to manufacture an acknowledgement.
+- Delivered history is not re-authorized each round. A carrier found in a
+  request whose IDs are in the verified physical input of a verified response
+  is recorded by exact signature (family, mailbox, IDs, text). Later sends skip
+  scanning and validating it unless one of its IDs is still pending in the
+  current attempt, so acknowledgement is unchanged: every undelivered or
+  pending carrier is scanned and validated on every send. Carried history still
+  passes the cheap scope checks (current project identity and mailbox key, run
+  target and run key), so a rebound task or stopped child never sends. Matched
+  project IDs are read with one `find` and checked once per distinct sender.
+  **Problem:** every round re-scanned every historical carrier against a
+  ~500k-token body and re-validated each row's sender: 63–88% of lead round
+  preparation, peaking at 422.7 s (2026-11-17, Global Router). Replaying the
+  four leads' real transcripts (scan plus storage-call count, 894–1,420 rounds
+  each) dropped storage reads per round from a median of 10–68 (max 125) to 0
+  (max 5), and scan CPU from a 4–20 ms median (max 1.0 s) to 0.1–0.2 ms; at
+  5 ms per storage read the knowledge lead's median round went from 366 ms to
+  0.2 ms. **Alternatives rejected:** a time- or count-based revalidation
+  interval (a tuning knob); revalidating every carried sender (the cost being
+  removed, and it refuses every later round of a lead whose already-consumed
+  carrier's sender was rebound). Specs:
+  `tests/tasks_pkg/test_message_input_receipt_history.py`.
 
 ## Recovery support is explicit, not universal
 

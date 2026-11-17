@@ -386,6 +386,80 @@ input arrives at the round boundary right after the tool result. When nothing
 is pending any more the call returns `wait=settled` with its news instead, and
 the input still follows.
 
+#### An idle wait ends the Turn (owner request 2026-11-18)
+
+Problem: Worker settlement already resumed a Coordinator whose Turn had ended
+("Result-driven Coordinator continuation"), yet leads held their Turns open in
+`poll` loops. The 2026-11-18 lead audit (C3) counted 1,051 polls in 58 h, 204
+of them timeouts with nothing new (KL+PL empty waits 54.6 h), each followed by
+a model round whose only act was the next poll: 710 poll-only rounds, $319.72.
+Decision: a poll that times out with nothing new records itself on the task
+(`coordinator_workers.IDLE_WAITS_KEY`) only when every pending Worker's
+settlement resumes the Coordinator by itself: each belongs to an open request
+(no finish receipt) whose issued policy holds result-driven continuation
+(`_settlement_resumes`). At the round's end, `finish_after_idle_coordinator_wait`
+ends the Turn cleanly when every call of the round is such a wait, with the
+reply `Waiting for my Workers: …` when the model wrote none; a round with any
+other call keeps its model round. The next settlement or delivery change
+(including a held receipt, below) derives the continuation wake, whose input
+lists the Worker states that need the lead, and a project message wakes it
+("Messages wake an idle lead"). The structure is the bound: no interval, count
+or threshold was added. Replay over the four leads' 58 h transcripts
+(every `wait=timeout` treated as empty; a chain of consecutive polls keeps
+calls up to its first empty timeout): polls 1,051 → 906, empty timeouts that
+cost a model round 204 → 0, poll-only rounds 710 → 565 (87 wake Turns stand
+in), poll-only round cost $319.72 → $183.21, all lead rounds $1,250.15 →
+$1,113.63 (−10.9%); counting only timeouts whose `workers` was empty, $85.19
+(−6.8%). Alternatives rejected: an unbounded wait inside `poll` (the stuck-task
+reaper's silence window bounds a tool call); a shorter `wait_s` cap (more
+rounds, not fewer); ending the Turn on a mixed round (the other results need
+the model). Specifications:
+`tests/project_mod/test_coordinator_workers.py::test_an_idle_wait_ends_the_turn_while_settlement_resumes_the_coordinator`
+and `::test_a_timeout_nothing_would_resume_keeps_the_model_round`.
+
+#### Lead prompts carry no ceremony (owner request 2026-11-18)
+
+Problem: the 2026-11-18 lead audit (D1, D2, D4, T4, T5) found lead prompts at a
+median 124k–417k input tokens per request, filled with reads the prompts
+themselves asked for. Decision, each removing a read or call rather than
+capping one:
+
+- Delivery accepts project messages ("Passive project conversation messages"):
+  `consider_project_message` remains for rejections, deferrals and conflicts.
+- "First check get_project_workers" appears only on a Turn whose input is the
+  owner's own message (`project_coordination.OWNER_TURN_GUIDANCE`); a wake or
+  relay already carries the states it acts on. The same role text tells a lead
+  that a poll's settlement carries the whole final answer, and the Global
+  Router which owner-message Turn its request is (ROUTER.md R2).
+- Relay notices and continuation briefs no longer send the lead back to
+  `get_conversation`/`get_project_assignment` (ROUTER.md R3).
+
+Measured on the four leads' 58 h transcripts (visible result characters):
+
+| Removed per 58 h | Before |
+|---|---|
+| `consider_project_message` calls that only accepted (321 of 321 decisions but 1 deferral) | 321 calls, 621.8k chars |
+| `Message revision changed` refusals | 19 |
+| `get_project_workers` in non-owner Turns | 18 calls, 310.3k chars |
+| `get_conversation` re-reads in relay Turns (Global Router) | 24 calls, 120.8k chars |
+| `list_conversations` searches for the owner's message | GR 11 (1,791 s, 4 timeouts), TL 5 (305 s) |
+
+About 1.05M result characters stop entering lead contexts, each also re-sent
+with every later request until compaction. The role tool schemas are not
+trimmed: every tool a lead never called in the 58 h is a capability the owner
+granted on purpose (R9–R13, and since 2026-11-18 `owner_delegation` and
+`set_model` reach every lead), the Claude route's name budget already hides the
+least used ones, and the projection of a Project Router's `control_conversation`
+without the Router-only part was withdrawn when that part became every lead's.
+Alternatives rejected: shrinking descriptions or result budgets (truncation
+sizes are knobs, AGENTS.md principle 5); removing unused tools from the
+ceilings (`todo_write` writes the same board by owner decision, "One progress
+source"); taking `consider_project_message` out of
+the Project Coordinator's direct core (measured: the name-budget fit then
+admits `await_device` and `create_memory`, 48.6k → 50.7k wire characters).
+Specifications: `tests/project_mod/test_project_coordination.py::test_only_an_owner_turn_rereads_workers_and_the_router_sees_its_request_turn`,
+`tests/router/test_question_relay.py`.
+
 #### Settlement is news, reported once (owner report 2026-11-15)
 
 Problem: the owner saw finished Workers whose next step waited on unrelated
@@ -1219,7 +1293,22 @@ any effect; a Worker's birth re-checks that record and the live grant, so a
 revocation refuses at once; an admitted grant's live gate reads only the reply
 Turn's metadata. Such a request opens no request account (as a steered one), and
 its Worker objective links the reply and the audit record instead of quoting
-owner words. Specification: `tests/router/test_lead_delegation.py`.
+owner words. Specification: `tests/router/test_lead_delegation.py`, and in
+separate OS processes (`tests/chaos/test_lead_delegation_processes.py`) a
+Project Router's real commitment-due wake that dispatches a Worker, whose
+`integration_submit` from its isolated task workspace succeeds (Workers may
+submit their own checkpoint, `workerDeniedTools`), and a revocation mid-Turn
+that refuses the same Turn's next dispatch and `restart_server`.
+
+**A lead acts on another project's sessions under the delegation.** Under the
+full grant a Project Router reads (`get_conversation_status`) and continues,
+resumes, stops or re-models (`control_conversation` with `owner_delegation`) a
+session of another of the owner's projects it is asked to help; without the
+grant both stay refused ("Conversation belongs to another project"). The gate
+records the action with the target project (`target.path`) and the target
+project's lead receives one cross-lead report naming the audit record
+([ROUTER.md R9](ROUTER.md), "Cross-project action"). Accepting and landing
+another binding's assignment stays with that binding's lead.
 
 Alternatives rejected: queuing the owner's message behind such a Turn (it
 reaches the model only after that Turn ends, and the Global Router could no
@@ -1789,12 +1878,28 @@ repositories omit it, so a durable successor could be created but never bound
 back to its assignment. The worker continuation specification exercises both
 reader configurations and preserves the exact predecessor/successor fences.
 
+A background batch's Continue that loses the Turn's attempt create to another
+resume (`lane_busy`, or `database_conflict` when the restart continuation
+created the attempt first, as for worker-7e467e1a at the 2026-11-18 05:14 boot)
+is deferred, not a drain failure: the receipts stay durable, and the winning
+attempt drains them at its next round, or else the maintenance tick does
+(`tests/background/test_restart_duplicate_start.py`).
+
 A background batch's deterministic Continue stays a single wake even after a
 later human attempt supersedes it. Replaying its settled receipt neither moves
 the assignment backward nor reports a new launch; unconsumed command results
 remain available to the next real turn. The ordinary command replay and queue
 owners enforce this without weakening dispatch evidence or creating another
 receipt store.
+
+A held delivery receipt wakes its Coordinator (2026-11-18). Delivered receipts
+already ran recovery through `wake_project_dependents`; a `blocked`, `failed`
+or `preserved` receipt changes no dependency's readiness and woke nobody, so a
+lead polled to see it. `delivery._wake_delivered_dependents` now hands a held
+receipt to `recovery.wake_coordinators`, one `recover_coordinator` pass (a
+failed pass is retained as the `project` pending wake); the receipt is in the
+wake's evidence frontier, so it wakes the request once and never while its Turn
+runs. Spec: `tests/project_mod/test_project_dispatch_wake.py::test_a_held_receipt_wakes_the_idle_coordinator_and_only_delivery_wakes_dependents`.
 
 A continuation that ends without changed work/review/delivery evidence (including
 a failed Coordinator turn) is retried after `stallRetrySeconds` backoff
@@ -3090,7 +3195,8 @@ human-steered or an automatic continuation, controls the sessions of every
 Worker its own binding dispatched, in any request of its project. The owner,
 tenant, Coordinator-identity and binding-epoch fences still apply, so another
 Coordinator's Workers, another project's and the Global Router's are refused as
-before; the Router's owner delegation keeps its own gate. Every
+before; the owner's delegation keeps its own gate (a lead's cross-project
+action, "A lead acts on another project's sessions under the delegation"). Every
 `control_conversation` call, accepted or refused, writes one
 `coordinator_session_control` audit record (owner, project, Coordinator
 conversation/task/Turn, principal kind, action, target conversation/Turn/
@@ -3287,13 +3393,43 @@ ended Turn keeps its attempt, revision and result.
   ("Delivery follows the attempt that completes" in
   [project integration](modules/project_integration.md)), so the accepted checkpoint
   carries the earlier and the follow-up edits.
-- A review is immutable and a `delivered` receipt never reopens (its checkout may
-  already be reclaimed). Such a result continues as a new assignment of the current
-  request in the same conversation, through the ordinary delegation with the
-  conversation reused, with a fresh checkout of the current branch. Its identity is
-  the pinned association, so a retry replays it and another instruction for the same
-  result is refused; an accepted result whose delivery has not landed is refused
-  until it lands.
+- A review is immutable (except for the superseding rework below) and a `delivered`
+  receipt never reopens (its checkout may already be reclaimed). Such a result
+  continues as a new assignment of the current request in the same conversation,
+  through the ordinary delegation with the conversation reused, with a fresh checkout
+  of the current branch. Its identity is the pinned association, so a retry replays
+  it and another instruction for the same result is refused. An accepted result whose
+  delivery has not landed is refused until it lands, except when it never will by
+  itself: a conflict holds it (`delivery.conflict`), or a rework superseded its
+  accept. Then the successor's brief (`successor_brief(held_checkpoint=...)`) first
+  merges the pinned checkpoint into the fresh checkout, and once that lands the held
+  delivery settles as delivered by itself (`checkpoint_contained`); the receipt names
+  `resolves_held_conflict`. A successor of a rework result links to it
+  (`rework_of`, so the graph's `reworkOf` and the repaired work's acceptance checks
+  carry over). Lead audit 2026-11-18 #6 (T6, P2): `follow_up` was refused 5 times
+  with "Its accepted result has not been delivered yet", and 20 of 86 KL/PL
+  delegations existed only to land already-accepted results.
+
+#### A rework supersedes an undelivered review
+
+Problem: a review is immutable, so a lead that accepted a result whose delivery
+then conflicted, or that reconsidered an accept or reject, could neither record a
+rework nor link a repair to it (`rework_of` requires a recorded rework); every such
+case became a new, unlinked repair assignment (lead audit 2026-11-18 D3: 25 TL and
+20 KL+PL repair delegations). Decision: `review_project_work(decision=rework)` of
+the same `result_revision` replaces a recorded accept or reject whose result was not
+delivered; the review keeps the superseded judgment as `review.supersedes`
+(`assignment.review.supersedes` in the contract), so history stays append-only.
+Repeating it returns the recorded review; anything else stays immutable. A rework
+stops a pinned publication: `validate_publication` admits only an accept, and the
+`publication` pin stays as evidence. The repair then links to it with `follow_up`
+(above) or `delegate_project_work(rework_of=...)`. A delivered result keeps its
+review: its work is on the branch, so a repair is new work. Alternatives rejected:
+deleting or rewriting the old review (loses the judgment an audit reads);
+superseding delivered results (the landed commit would contradict the review);
+any decision superseding any other (an accept after a rework needs a new result,
+which follow_up produces).
+Spec: `test_coordinator_workers.py::test_a_rework_supersedes_an_undelivered_review_and_links_its_repair`.
 
 A replay with identical arguments reports the accepted Turn and starts nothing; once
 the session moved on, an older pin is refused. Human messages and steers in the
@@ -3317,7 +3453,11 @@ in `contracts/project_messages_v1.json`): file paths, `att_media_<id>` reference
 `/api/images/<file>` images. `lib/conversations/lead_attachments.py` is the one
 authorization boundary, default deny: a path must be a regular file inside the
 sending task's verified read roots, read without following symlinks
-(`lib.artifacts.file_snapshot`); an `att_media_` reference must be one of the
+(`lib.artifacts.file_snapshot`); a lead (the Global Router or a Project Router,
+`lead_attachments.lead_scope`) also reads every registered project root and, as
+`worker:<assignment_id>/<path>`, the registered checkout of a Worker its binding
+dispatched (ROUTER.md R9, "Leads reach the owner directly"), and no file carrying a
+credential is admitted (`lib/conversations/attachment_secrets.py`); an `att_media_` reference must be one of the
 owner's own attachments (owner-scoped lookup); an image must be shown in the
 sender's conversation: in one of its messages, or in an owner message steered
 into the Turn the sender is running. A steer never enters the task's messages,
@@ -3788,9 +3928,36 @@ Worker navigation at 1440/390/320 in all three themes without provider calls.
 Problem: `_peerNoWake` guards only some legacy queue drains; restoring its sender
 can trigger paid work and default synthetic input to human attribution.
 Decision: portable record CAS stores passive originals and consideration without
-a dispatchable queue source, resident worker, polling thread or automatic wake.
-The existing natural root round acquires optional input after complete tool pairs.
+a dispatchable queue source, resident worker or polling thread. The existing
+natural root round acquires optional input after complete tool pairs.
 Alternative rejected: heartbeat-only guards cannot protect startup/completion drains.
+
+### Messages wake an idle lead (owner request 2026-11-18)
+
+Problem: a message to a lead waited for that lead's next Turn. The 2026-11-18
+lead audit (C1) found 37 of 78 messages to the Global Router arriving while it
+ran no attempt; they waited 678 min in total (median 10.5 min, p90 45.1 min), a
+Project Router's landing consult 38.7 min, and the Router's attempts covered
+19.4% of 57.7 h. Decision: `project_messages.wake_idle_lead` starts one
+nonhuman notice Turn (`[Project message wake: …]`, initiator `peer`) in a
+current lead (`lead_role`) whose mailbox holds pending messages of eligible
+senders; the messages themselves arrive through the ordinary inbox delivery of
+that Turn's rounds. It runs after each `send_project_message` (the result's
+`wake` names the outcome: `started`, `busy`, `next_step` for a Worker recipient,
+`quiet_hours`, `nothing_pending`) and after each lead Turn's settlement drain
+(a message that arrived after its last round). Coalescing is structural: the
+command id names the newest pending message, so one wake exists per lead and
+pending frontier, and the default dispatch mode starts nothing in a busy lane
+(`busy`): a running lead reads the message at its next round and its `poll`
+ends for it ("Waiting for Workers"), so it is never steered a second notice.
+The Global Router is not woken during quiet hours, as its relays are not
+(ROUTER.md R10). The wake Turn acts under the owner's delegation to every lead
+(ROUTER.md R9). Alternatives rejected: a debounce interval or per-lead wake
+budget (a tuning knob; the frontier identity already bounds wakes); steering
+the notice into a running Turn (the inbox already delivers there); waking
+Workers (a Worker reads messages at its next step and is woken by its lead).
+Specifications: `tests/project_mod/test_project_messages.py::test_a_message_wakes_an_idle_lead_once_per_pending_frontier`,
+`tests/router/test_cross_project_lead_messages.py`.
 
 Durable history. Problem: one record per original owner/project/recipient held
 at most 128 originals for its lifetime and rewrote the whole list on every
@@ -3902,9 +4069,23 @@ other conflict, such as a second confirmation whose receipt differs, still
 raises and retries.
 
 `reference/consult/report/question/assign/steer` classify context, not execution
-grants. Explicit accepted/rejected/deferred/conflict decisions use message revision
-CAS, independently of input confirmation. Accepted is a stated commitment, not
-executor birth or delivery. Causal replies must identify an actual incoming
+grants. Accepted is a stated commitment, not executor birth or delivery.
+
+Delivery accepts (owner request 2026-11-18). Problem: the lead audit (C4, D2,
+T5) counted 334 of 335 `consider_project_message` decisions `accepted` (a
+ceremony of 321 calls and 211 message-only model rounds, about $59), and 19
+refusals `Message revision changed`; all 9 of the tofu Project Router's passed
+the revision they read, which input confirmation had already moved from 1 to
+2. Decision: input confirmation records `accepted` with `decisionAuto: true`
+and `deliveredRevision` (the revision the delivery showed) in the same receipt.
+The delivered `<project-message>` block carries `revision="…"`, and a
+rejected, deferred or conflict decision passes it as `expected_revision`; that
+revision stays valid while only the delivery changed the message, after which
+only the current revision decides (revision CAS as before).
+`consider_project_message` left the Project Coordinator's direct core
+(docs/LLM_COST_OPTIMIZATION.md section 6). Alternatives rejected: dropping the
+revision check (a stale decision could overwrite a newer one); not bumping
+the revision at confirmation (readers of the page lose the change signal). Causal replies must identify an actual incoming
 message from the addressed sender. Queries never read private transcripts.
 
 Owned current metadata is checked before send/acquisition, at logical-call
@@ -4065,9 +4246,15 @@ Decision: a restart-paused assignment resumes automatically through the existing
 startup recovery pass and the ordinary Continue command, in its own conversation,
 under the same grant. Each assignment that the pass leaves unresumed is logged
 with its reason: a warning when a restart-paused lane's grant was revoked or its
-deadline passed, info for an in-scope lane that had run (a coordinator profile
-or a grant without the durable-Stop lifecycle), debug for plain filters and
-settled executions. One `skipped` counter used to hide all of these (after the
+deadline passed, info for an in-scope lane that had run (a grant without the
+durable-Stop lifecycle), debug for plain filters and settled executions. A
+Coordinator wake row (`coordinator_profile`) is a filter: its restart-paused wake
+continues through `continuation.recover_coordinator`, so after the 2026-11-18
+05:11 restart the 63 settled or already continued wakes that every pass logged at
+info read as stranded work. A revoked restart-paused lane reports `grant_revoked`
+before its verdict, since nothing can continue it; 97d5197b and cd5774da had
+been warned at every boot as `restart_paused_turn_effect_unknown`, asking their
+Coordinators to check calls before a continuation the grant refuses. One `skipped` counter used to hide all of these (after the
 2026-11-06 restart, four of five interrupted lanes got no attempt and no line
 said why). Verification: `tests/project_mod/test_project_dispatch_recovery_reasons.py`. A new assignment records one deterministic workspace task
 identity (`project-worker:<assignmentId>`) in accepted config and its association;
@@ -5388,6 +5575,24 @@ send or arbitrary external writers. Alternatives rejected: a mutable forward DAG
 adds another scheduler; candidate merge cannot prove delivery; automatic rework
 repeats side effects. Owner: `lib/project_dispatch/dependencies.py`; enforcement:
 `repository.validate`; spec: `test_project_dispatch_dependencies.py`.
+
+**Dependency readiness gates starting only** (lead audit 2026-11-18 #6, T6).
+Problem: after a restart a prerequisite's evidence was briefly unknown, and the
+Global Router's `checkpoint_resume` of its interrupted Worker was refused
+"Dispatch dependencies are not ready" (11-16 23:01), so 57.6 min and 132 tool calls
+of Worker work were redone; the same `validate` fenced stop, continue, follow-up and
+every tool admission of a running Worker. Decision: `repository.validate` checks
+readiness only while the assignment is unborn (`execution` is None: birth and
+`bind_execution`). A born Worker consumed its prerequisites, so its control
+(`TrustedDispatch.checked` in session control and the browser Continue), its
+continuation association and its tool and model admissions need its own authority
+(`validate_own`) plus one fence: a prerequisite withdrawn after the birth
+(`WITHDRAWN_DEPENDENCY_REASONS`: revoked or stopped) still refuses it. Waiting,
+unknown and changed evidence only defer an unborn dependent. Alternatives rejected:
+a control-only bypass (the resumed Worker would stop at its first tool admission);
+dropping the withdrawal fence (cancelling a prerequisite would no longer reach work
+built on it).
+Spec: `test_project_dispatch_dependencies.py::test_a_born_worker_is_controlled_by_its_own_authority_not_dependency_readiness`.
 
 Problem: readiness evaluation read the complete Worker Turn of every reachable
 prerequisite, a projection that grows to megabytes, on each history refresh of a

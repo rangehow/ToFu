@@ -49,13 +49,14 @@ EAGER = frozenset({
     # Eager here means registered on the Router's surface; the Router's own 448-byte
     # direct core still decides which are sent eagerly on a Claude round
     # (docs/LLM_COST_OPTIMIZATION.md section 6), and neither is in it. R9 repair_project
-    # likewise: Router-only and outside the direct core.
-    'owner_settings', 'router_portfolio', 'repair_project',
+    # likewise, and the R13 broadcast: Router-only and outside the direct core.
+    'owner_settings', 'router_portfolio', 'repair_project', 'broadcast_project_message',
     'channel_configure_thread', 'channel_outbox', 'channel_outbox_approve',
     'channel_read', 'channel_send', 'channel_subscribe', 'channel_threads',
     'channel_unsubscribe',
     'watchdog_configure_review', 'watchdog_message', 'watchdog_notify_router',
     'watchdog_resolve_signals', 'watchdog_schedule_recheck', 'watchdog_snapshot',
+    'resume_stalled_continuation',
 })
 # Background lifecycle controls are pinned whenever assembled.
 PINNED = frozenset({'poll', 'kill'})

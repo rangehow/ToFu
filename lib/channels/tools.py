@@ -3,7 +3,10 @@
 Responsibility: decide which channel tools a conversation sees and may call,
 then execute them through ``lib.channels.service`` / ``outbox``. Default deny:
 every tool requires the owner's Global Router conversation, except
-``channel_read`` which a subscriber of the requested thread may also use.
+``channel_read`` which a subscriber of the requested thread may also use, and
+``channel_send`` to the owner's own command chat, which a Project Router may
+also use (docs/ROUTER.md R9, "Leads reach the owner directly"; each such call,
+refusals included, is a ``lead_channel_send`` audit record).
 The owner's decisions (``channel_outbox_approve``, ``channel_configure_thread``,
 ``channel_subscribe``, ``channel_unsubscribe``) additionally require that the
 current Turn's input, and every input steered into it, is genuine human input
@@ -38,7 +41,21 @@ WRITE_TOOLS = frozenset({'channel_send', 'channel_configure_thread', 'channel_su
                          'channel_unsubscribe', 'channel_outbox_approve'})
 
 
-def visible_tools(owner: int, conversation_id: str) -> list[dict[str, Any]]:
+def _is_project_router(owner: int, conversation_id: str, project_path: str) -> bool:
+    """Whether ``conversation_id`` is the bound Project Router of ``project_path`` (never the Watchdog)."""
+    if not project_path:
+        return False
+    from lib.conversations.project_coordination import ProjectCoordinationRepository
+    from lib.conversations.project_identity import normalize_project_path
+    from lib.router.watchdog.binding import is_watchdog_location
+    path = normalize_project_path(project_path)
+    if not path or is_watchdog_location(owner, path):
+        return False
+    binding = ProjectCoordinationRepository(owner).read(path)
+    return binding.get('availability') == 'available' and binding.get('conversationId') == conversation_id
+
+
+def visible_tools(owner: int, conversation_id: str, project_path: str = '') -> list[dict[str, Any]]:
     """Catalog projection of the execution boundary below (fail closed)."""
     if not owner or not conversation_id:
         return []
@@ -49,8 +66,11 @@ def visible_tools(owner: int, conversation_id: str) -> list[dict[str, Any]]:
         from lib.channels.delivery import is_global_router
         if is_global_router(owner, conversation_id):
             return list(CHANNEL_TOOLS)
-        if store.subscribed_threads(conversation_id):
-            return [tool for tool in CHANNEL_TOOLS if tool['function']['name'] in SUBSCRIBER_TOOLS]
+        names = set(SUBSCRIBER_TOOLS) if store.subscribed_threads(conversation_id) else set()
+        from lib.channels.assistant import command_chats
+        if command_chats(store) and _is_project_router(owner, conversation_id, project_path):
+            names.add('channel_send')
+        return [tool for tool in CHANNEL_TOOLS if tool['function']['name'] in names]
     except Exception:
         logger.warning('[Channels] tool visibility lookup failed; hiding channel tools', exc_info=True)
     return []
@@ -149,6 +169,31 @@ def _confine_review(name: str, args: dict[str, Any], authority, owner: int) -> N
             raise _outside_review('write only to the threads under review and the command chat')
 
 
+def _require_owner_chat(task: dict[str, Any], owner: int, conversation_id: str, args: dict[str, Any]) -> None:
+    """A Project Router's ``channel_send`` reaches only the owner's own command chat (R9, "Leads reach
+    the owner directly"); every other conversation, and every other thread, is refused."""
+    from lib.channels.assistant import command_chats
+    from lib.conversations.lead_attachments import lead_scope
+    scope = lead_scope(task)
+    if scope is None or scope['conversation_id'] != conversation_id:
+        raise ChannelError('forbidden', 'Only a project lead sends to channels. Report the file\'s path and its '
+                                        'project to your lead and ask it to send with channel_send; never send '
+                                        'through a platform login of your own (it takes over Tofu\'s session)')
+    thread, _ = _read_target({'thread': args.get('thread')}) if args.get('thread') else (None, None)
+    if thread is None or str(thread) not in set(command_chats(ChannelStore(owner)).values()):
+        raise ChannelError('owner_chat_only', 'A Project Router sends only to the owner\'s own command chat '
+                                              '(its thread is the commandChat of channel_threads); messages '
+                                              'to anyone else go through the Global Router, and need the '
+                                              'owner where they always do')
+
+
+def _audit_lead_send(owner: int, conversation_id: str, args: dict[str, Any], outcome: str, **fields) -> None:
+    from lib.log import audit_log
+    audit_log('lead_channel_send', user_id=owner, conversation_id=conversation_id,
+              thread=str(args.get('thread') or ''), attachments=len(args.get('attachments') or ()),
+              outcome=outcome, **fields)
+
+
 def _authorize(name: str, args: dict[str, Any], task: dict[str, Any]):
     """Return ``(owner, conversation_id, router, authority)``; authority is None for subscribers."""
     if name not in CHANNEL_TOOL_NAMES:
@@ -158,10 +203,9 @@ def _authorize(name: str, args: dict[str, Any], task: dict[str, Any]):
     router = is_global_router(owner, conversation_id)
     if not router:
         if name == 'channel_send':
-            raise ChannelError('forbidden', 'Only the Global Router sends to channels. Report the file\'s path and '
-                                            'its project to the Global Router and ask it to send with channel_send; '
-                                            'never send through a platform login of your own (it takes over '
-                                            'Tofu\'s session)')
+            _require_owner_chat(task, owner, conversation_id, args)
+            from lib.channels.assistant import turn_authority
+            return owner, conversation_id, router, turn_authority(task, owner, conversation_id)
         if name not in SUBSCRIBER_TOOLS:
             raise ChannelError('forbidden', 'Channel tools are available only in the Global Router')
         thread, _ = _read_target(args)
@@ -226,8 +270,25 @@ def _read(owner: int, args: dict[str, Any]) -> dict[str, Any]:
 
 
 def execute(name: str, args: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
-    owner, conversation_id, _, authority = _authorize(name, args or {}, task)
     args = args or {}
+    if name != 'channel_send':
+        return _execute(name, args, task)
+    owner, conversation_id = _identity(task)
+    from lib.channels.delivery import is_global_router
+    if is_global_router(owner, conversation_id):
+        return _execute(name, args, task)
+    # A Project Router's send to the owner's command chat: every call, refusals included, is audited.
+    try:
+        result = _execute(name, args, task)
+    except ChannelError as error:
+        _audit_lead_send(owner, conversation_id, args, 'refused', code=error.code, reason=str(error)[:500])
+        raise
+    _audit_lead_send(owner, conversation_id, args, 'accepted', item_id=(result.get('item') or {}).get('id'))
+    return result
+
+
+def _execute(name: str, args: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
+    owner, conversation_id, _, authority = _authorize(name, args, task)
     turn_id = str(task.get('_turnId') or (task.get('config') or {}).get('_turnId') or '')
     if name == 'channel_threads':
         page = service.thread_page(owner, cursor=str(args.get('cursor') or ''), mode=args.get('mode'),

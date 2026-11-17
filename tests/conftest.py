@@ -1442,18 +1442,26 @@ def pytest_xdist_auto_num_workers(config):
 # from CI.
 _TIER_MARKERS = frozenset({'unit', 'api', 'visual', 'slow', 'live_llm'})
 
+def pytest_addoption(parser):
+    # A command-line option, not an environment variable: the pytest sessions
+    # that tests themselves spawn inherit the environment and would deselect
+    # their own items.
+    parser.addoption('--tofu-shard', default='', metavar='K/N',
+                     help='keep only shard K (1-based) of N whole test files (CI tier split)')
+
+
 def _shard_selection(config, items):
-    """``TOFU_TEST_SHARD=k/n`` keeps only shard k (1-based) of n: CI splits a tier
+    """``--tofu-shard=k/n`` keeps only shard k (1-based) of n: CI splits a tier
     across runners so each completes on its own machine. A file stays whole
     (module fixtures) and a stable hash of its path places it, so every file
     lands in exactly one shard and every xdist node selects the same items."""
     import zlib
-    spec = os.environ.get('TOFU_TEST_SHARD', '').strip()
+    spec = str(config.getoption('--tofu-shard', default='') or '').strip()
     if not spec:
         return
     index, _, count = spec.partition('/')
     if not (index.isdigit() and count.isdigit() and 1 <= int(index) <= int(count)):
-        raise pytest.UsageError(f'TOFU_TEST_SHARD must be k/n with 1 <= k <= n, got {spec!r}')
+        raise pytest.UsageError(f'--tofu-shard must be k/n with 1 <= k <= n, got {spec!r}')
     index, count = int(index), int(count)
     kept, dropped = [], []
     for item in items:

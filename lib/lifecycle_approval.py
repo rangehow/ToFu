@@ -955,11 +955,34 @@ def _actions(document: dict) -> list:
     return actions
 
 
+def _history_file() -> str:
+    """The append-only history of delegated actions, beside the approval document."""
+    return os.path.splitext(_APPROVALS_FILE)[0] + '.delegated-history.jsonl'
+
+
+def _archive_actions(records: list) -> None:
+    """Append ``records`` durably (fsync) before the document drops them; raising aborts the drop."""
+    lines = ''.join(json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(',', ':')) + '\n'
+                    for record in records)
+    descriptor = os.open(_history_file(), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    try:
+        os.write(descriptor, lines.encode('utf-8'))
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def _prune_actions(actions: list) -> list:
-    """The approval records' retention bound; audit.log keeps every event."""
+    """Keep the newest records in the document; every older one moves to the history first.
+
+    Runs inside the document's update lock, so a record leaves the document only
+    after its final state is in the history (docs/ROUTER.md R9 "Audit").
+    """
     if len(actions) <= _KEEP_RECORDS:
         return actions
-    return sorted(actions, key=lambda item: item.get('requestedAt', 0), reverse=True)[:_KEEP_RECORDS]
+    ordered = sorted(actions, key=lambda item: item.get('requestedAt', 0), reverse=True)
+    _archive_actions(ordered[_KEEP_RECORDS:])
+    return ordered[:_KEEP_RECORDS]
 
 
 def delegation_coverage(record: dict) -> str:
@@ -1245,6 +1268,42 @@ def delegated_actions(owner) -> list:
     return sorted(records, key=lambda item: item.get('requestedAt', 0), reverse=True)
 
 
+def delegated_action_history(owner, *, requester: str | None = None, scope: str | None = None,
+                             status: str | None = None, since: float | None = None) -> list:
+    """Every delegated action of the owner ever recorded, newest first, optionally filtered.
+
+    The retained document records and the history they moved to, each id once
+    (the document's copy wins: it is the newer state). ``requester`` is the
+    acting lead's conversation id; ``since`` a lower bound on ``requestedAt``.
+    An unreadable history line fails the read instead of hiding a record.
+    """
+    key = int(_owner_key(owner))
+    found: dict = {}
+    try:
+        with open(_history_file(), encoding='utf-8') as history:
+            for number, line in enumerate(history, 1):
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError as error:
+                    raise DelegationRefused('owner_delegation_unavailable',
+                                            f'Delegated action history line {number} is unreadable') from error
+                if isinstance(record, dict) and record.get('owner') == key:
+                    found[record.get('id')] = record
+    except FileNotFoundError:
+        pass
+    for record in _actions(_read_document()):
+        if record.get('owner') == key:
+            found[record.get('id')] = dict(record)
+    records = [_observed(record) for record in found.values()
+               if (requester is None or (record.get('requester') or {}).get('conversationId') == requester)
+               and (scope is None or record.get('scope') == scope)
+               and (since is None or record.get('requestedAt', 0) >= since)]
+    records = [record for record in records if status is None or record.get('status') == status]
+    return sorted(records, key=lambda item: item.get('requestedAt', 0), reverse=True)
+
+
 def _action_record(action_id, key, requester, scope, *, reason, trigger, target, grant, now, status,
                    code=None, detail=None) -> dict:
     return {'id': action_id, 'owner': int(key), 'scope': scope, 'requester': requester,
@@ -1254,12 +1313,35 @@ def _action_record(action_id, key, requester, scope, *, reason, trigger, target,
             'code': code, 'detail': detail, 'updatedAt': now}
 
 
+def _record_lead_audit(record: dict, *, action: str | None = None, source: str | None = None) -> None:
+    """One delegated action's state joins the durable lead-audit stream (docs/LOGGING.md).
+
+    ``audit.log`` rotates away within about a day under load; the owner's
+    Act-for-me audit needs who acted (``actor``, the lead conversation), on what
+    event (``trigger``: its kind, Turns and the input's ``source``), under which
+    grant revision, and the outcome.
+    """
+    from lib.logging_pkg import lead_audit
+    target = record.get('target') or {}
+    trigger = {key: value for key, value in (record.get('trigger') or {}).items() if key != 'text'}
+    if source:
+        trigger['source'] = source
+    lead_audit.record('owner_delegation_action', {
+        'actionId': record.get('id'), 'scope': record.get('scope'),
+        'action': action or target.get('action') or target.get('kind'),
+        'actor': (record.get('requester') or {}).get('conversationId'),
+        'actorTurn': (record.get('requester') or {}).get('turnId'),
+        'trigger': trigger, 'target': target, 'grantRevision': record.get('grantRevision'),
+        'outcome': record.get('status'), 'code': record.get('code'), 'detail': record.get('detail')})
+
+
 def begin_delegated_action(owner, requester: dict, *, scope: str, key: str, reason: str,
-                           trigger: dict, target: dict) -> tuple[dict, bool]:
+                           trigger: dict, target: dict, trigger_source: str | None = None) -> tuple[dict, bool]:
     """Check the grant and record the accepted action in one transaction.
 
     Returns ``(record, replayed)``; a replay of the same key returns the
     original record and changes nothing, so retrying never acts twice.
+    ``trigger_source``: how the triggering input arrived (lead-audit only).
     """
     owner_key = _owner_key(owner)
     requester = _router_identity(requester, _REQUESTER_FIELDS, 'requester', kinds=LEAD_KINDS)
@@ -1297,10 +1379,13 @@ def begin_delegated_action(owner, requester: dict, *, scope: str, key: str, reas
         raise outcome['refusal']
     record = outcome['record']
     if not outcome['replayed']:
+        # Structured values: audit_log bounds each string inside its value with a marker,
+        # so a long target never leaves a cut JSON fragment in the line.
         audit_log('owner_delegation_action', action_id=action_id, owner=int(owner_key), scope=scope,
                   router=requester['conversationId'], turn=requester.get('turnId') or '',
-                  trigger=(trigger or {}).get('kind') or '', target=json.dumps(target)[:300],
-                  reason=reason[:300], grant_revision=record['grantRevision'])
+                  trigger=(trigger or {}).get('kind') or '', target=target,
+                  reason=reason, grant_revision=record['grantRevision'])
+        _record_lead_audit(record, source=trigger_source)
     return record, outcome['replayed']
 
 
@@ -1330,7 +1415,9 @@ def record_delegated_refusal(owner, requester: dict, *, scope: str, reason: str,
     update_json_atomic(_APPROVALS_FILE, _mut, default=None, strict=True)
     audit_log('owner_delegation_refused', owner=int(owner_key), scope=scope, code=code,
               router=requester['conversationId'], turn=requester.get('turnId') or '',
-              detail=detail[:300])
+              detail=detail)
+    if outcome.get('record'):
+        _record_lead_audit(outcome['record'])
     return outcome.get('record')
 
 
@@ -1352,11 +1439,13 @@ def _update_action(owner, action_id: str, change) -> dict | None:
 
 
 def settle_delegated_action(owner, action_id: str, *, status: str, code: str | None = None,
-                            detail: str | None = None, from_status: str | None = None) -> dict | None:
+                            detail: str | None = None, from_status: str | None = None,
+                            action: str | None = None) -> dict | None:
     """Record the outcome of an accepted delegated action.
 
     With ``from_status`` only a record still in that status changes (a restart
-    observed complete settles its ``restarting`` record once).
+    observed complete settles its ``restarting`` record once). ``action`` names
+    the act settled (a lead tool) in the lead-audit stream.
     """
     if status not in _ACTION_STATUSES:
         raise ValueError(f'unknown delegated action status: {status!r}')
@@ -1373,7 +1462,8 @@ def settle_delegated_action(owner, action_id: str, *, status: str, code: str | N
     if not changed:
         return record
     audit_log('owner_delegation_action_settled', action_id=action_id, status=status, code=code or '',
-              detail=(detail or '')[:2000])
+              detail=detail or '', action=action or '')
+    _record_lead_audit(record, action=action)
     return record
 
 
@@ -1660,7 +1750,7 @@ __all__ = [
     'provenance_assurance',
     'delegation', 'delegation_coverage', 'covered_scopes', 'set_delegation', 'check_delegation',
     'delegated_action_id', 'delegated_action',
-    'delegated_actions', 'begin_delegated_action', 'record_delegated_refusal',
+    'delegated_actions', 'delegated_action_history', 'begin_delegated_action', 'record_delegated_refusal',
     'settle_delegated_action', 'accept_delegated_restart',
     'manager_restart_outcome', 'latest_restart_recovery', 'observed_restart',
     'restart_notices', 'note_restart_notice', 'claim_restart_notice', 'finish_restart_notice',

@@ -1440,6 +1440,63 @@ groups: `execv` incarnation, crashed owner, exited leader with a surviving
 member, live and foreign owners, previous boot, PID reuse, runner record
 lifecycle and failed retirement).
 
+## A restart keeps a Worker's sub-agents, an owner's Stop and an honest summary
+
+*(running contract; owners `lib/swarm/integration/_rehydrate.py`,
+`lib/conversation_sync/worker_recovery.py`, `lib/conversations/restart_resume.py`)*
+
+**Problem:** each of the 2026-11-17 23:48 and 2026-11-18 02:16 restarts cancelled
+the four swarm sub-agents of the dispatched Worker it interrupted ("Project
+dispatch authority is no longer available: File execution requires its
+registered owned isolated worktree"). Continue rebuilds the session parent as a
+detached copy of the resumed Worker that carries the durable execution snapshot
+instead of the Worker's bound delivery rows, and that copy became the children's
+dispatch root: the registered-workspace check found no row naming the
+assignment's work id. A lead Turn whose execution host died with it (the
+2026-11-16 host move, attempt 5234bf17) settled "failed, external outcome
+unknown, Regenerate only" once its owner stopped it, although it had run no call.
+The resume pass logged "1 of 21 resumed" at WARNING when all 20 others had
+already been continued by project dispatch recovery.
+
+**Decision:**
+- The rebuilt session parent borrows the resumed Worker's live dispatch
+  authority (`share_dispatch_root`), as a fresh swarm's parent proxy does. Each
+  child admission revalidates the live Worker: its registered integration row
+  (`owned_workspace`) admits the child, and the Worker's Stop, revocation or
+  settlement fences it.
+- An execution that ended unjoined (its owner process died, or the service was
+  stopping) and then received a Stop settles as that Stop (cause `user_abort`,
+  or the cancellation's recorded reason). What it left is decided by the same
+  cut-call classification as a restart: only a call cut off mid-effect is named
+  for review (`worker_effect_outcome_unknown` with `unknownEffects`). A Stop is
+  never resumed automatically; a restart interruption still resumes by itself.
+- A lead's Turn that recovery settled failed with `worker_effect_outcome_unknown`
+  does not wait for the owner: Coordinator recovery continues the request in a
+  new wake, and a wake failing the same way is retried after the stall backoff
+  (`continuation._proposal`). The failed Attempt itself is never replayed.
+- The `[RestartResume] summary` gives every candidate one disposition
+  (`resumed`, `already_continued`, `handed_off`, `superseded`,
+  `not_interrupted`, `lost`) with counts; only `lost` work, which stays
+  interrupted until its owner acts, makes the line a warning.
+
+**Alternatives rejected:** rebuilding a copy's own delivery rows from storage
+(a copy that passes as a root would still miss the Worker's Stop, which only the
+live task carries); resuming a Turn its owner stopped (a Stop is the owner's
+decision, whatever the process state); keeping "outcome unknown" for a Stop that
+reached a dead process (it hides that nothing was cut off and offers Regenerate
+alone).
+
+**Verification:**
+`tests/project_mod/test_project_dispatch_executor_admission.py::test_restart_continued_worker_swarm_child_borrows_the_resumed_workers_live_grant`,
+`tests/conversation/test_worker_exit_recovery.py` (Stop after a host handoff,
+Stop reaching a dead execution with a cut call),
+`tests/project_mod/test_coordinator_restart_recovery.py::test_a_lead_turn_failed_with_an_unknown_outcome_and_no_cut_call_is_continued_automatically`,
+`tests/conversation/test_restart_resume.py` (summary dispositions) and the
+real-process restarts in `tests/chaos/test_restart_continuity.py` (a dispatched
+Worker's sub-agent resumes after a restart without repeating its effect, and
+fails with the incident's refusal without the fix; a Turn its execution host
+entered before being killed starts again after boot and completes).
+
 ## A background handle outlives its process only through its durable receipt
 
 *(running contract; owners `lib/tasks_pkg/handlers/poll.py`,

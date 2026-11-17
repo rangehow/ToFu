@@ -11,9 +11,11 @@ the periodic review on at the contract cadence for an owner who never chose
 (owner decision 2026-11-17); once installed, the row is the owner's choice
 (off, another cadence) and only ``configure_review`` changes it. Execution
 builds the deterministic health snapshot and wakes the Watchdog with the
-``proactive`` initiator and a command id per task and minute; a periodic review
-whose snapshot holds nothing to judge ends without a model turn, while a
-re-check always wakes (the Watchdog asked for it).
+``proactive`` initiator and a command id per task and minute only on a fault: a
+periodic review whose snapshot holds no stalled lead, open signal, outbox item,
+unhealthy channel or unreadable router ends without a model turn (Workers making
+progress are not a fault), while a re-check always wakes (the Watchdog asked for
+it).
 
 Entry points: ensure_health_checks, review_state, configure_review,
 schedule_recheck, run_scheduled_review (the scheduler's task-type handler),
@@ -79,7 +81,7 @@ def _install_review(owner: int, *, enabled: bool, schedule: str, principal: Prin
     _scheduler().ensure_owner_task(
         principal=principal, system_key=REVIEW_SYSTEM_KEY, name=_REVIEW_NAME, schedule=schedule,
         command=_REVIEW_COMMAND, task_type=REVIEW_TASK_TYPE,
-        description='Wakes the Router Watchdog to judge Worker progress and open faults.',
+        description='Wakes the Router Watchdog when a lead is stalled or a fault is open.',
         max_runtime=REVIEW_MAX_RUNTIME_S, enabled=enabled, reconcile_enabled=reconcile_enabled)
     state = review_state(owner)
     record_configured(owner, state['schedule'], state['enabled'])
@@ -161,8 +163,9 @@ def _review_notice(kind: str, task: dict, counts: dict) -> str:
         lines += ['You armed this re-check. Reason:', task['command'], '']
     lines.append('Snapshot counts: ' + ', '.join(f'{name.replace("_", " ")}={value}'
                                                  for name, value in counts.items()))
-    lines.append('Read watchdog_snapshot, judge each open signal and active Worker, act only where needed, '
-                 'and end silently when nothing needs attention.')
+    lines.append('Read watchdog_snapshot and judge each open signal and stalled lead. Read a conversation only '
+                 'when a signal or stall needs evidence; resume a stalled lead with resume_stalled_continuation; '
+                 'end silently when nothing needs attention.')
     return '\n'.join(lines)
 
 
@@ -193,7 +196,7 @@ def run_scheduled_review(task: dict) -> tuple[bool, str]:
     if periodic and not any(counts.values()):
         # Written last: the review ran and read storage (the out-of-band dead-man signal).
         record_review(owner, str(task.get('schedule') or DEFAULT_REVIEW_SCHEDULE))
-        return True, 'Nothing to review: no active, failed or held Workers, open signals or channel faults.'
+        return True, 'Nothing to review: no stalled lead, open signal, outbox item or channel fault.'
     minute = datetime.now().strftime('%Y-%m-%dT%H:%M')
     command_id = 'router-watchdog-review:' + hashlib.sha256(json.dumps(
         [owner, str(task.get('id') or ''), minute], separators=(',', ':')).encode()).hexdigest()

@@ -451,7 +451,6 @@ class TestStreamingToolAccumulator:
         from lib.tasks_pkg.streaming_tool_executor import StreamingToolAccumulator
 
         acc = StreamingToolAccumulator(self._make_task(), project_path='/tmp')
-        acc._pool.shutdown(wait=False)
         pool = MagicMock()
         acc._pool = pool
         active = Future()
@@ -467,8 +466,20 @@ class TestStreamingToolAccumulator:
         assert discarded.cancelled() is True
         assert acc._futures == {}
         assert acc._discarded_futures == []
-        pool.shutdown.assert_called_once_with(
-            wait=False, cancel_futures=True)
+        # The process-shared prefetch pool outlives every round's accumulator.
+        pool.shutdown.assert_not_called()
+
+    def test_rounds_share_one_prefetch_pool(self):
+        from lib.tasks_pkg.streaming_tool_executor import StreamingToolAccumulator
+
+        first = StreamingToolAccumulator(self._make_task(), project_path='/tmp')
+        first.close(cancel_futures=True, wait=False)
+        second = StreamingToolAccumulator(self._make_task(), project_path='/tmp')
+        try:
+            assert second._pool is first._pool
+            assert second._pool.submit(lambda: 7).result(timeout=10) == 7
+        finally:
+            second.close(wait=True)
 
     def test_equal_calls_with_distinct_ids_prefetch_independently(self):
         """Content equality never collapses distinct response occurrences."""

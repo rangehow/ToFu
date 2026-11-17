@@ -46,6 +46,9 @@ def execute_router_tool(task: dict, scope: dict, name: str, arguments: dict) -> 
     if name == 'repair_project':
         from .project_repair import repair_project
         return repair_project(task, scope, arguments)
+    if name == 'broadcast_project_message':
+        from .broadcast import broadcast_project_message
+        return broadcast_project_message(task, scope, arguments)
     if name == 'owner_settings':
         from . import owner_settings
         arguments = validate(dict(arguments), 'ownerSettings')

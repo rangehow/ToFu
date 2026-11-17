@@ -109,7 +109,8 @@ def store_session_model(conversation_id: str, model: str | None, *, owner: int,
     return {'conversationId': conversation_id, 'modelOverride': value or '', 'previousModel': previous}
 
 
-def set_session_model(task: dict, scope: dict, principal, arguments: Mapping) -> dict:
+def set_session_model(task: dict, scope: dict, principal, arguments: Mapping, *,
+                      delegated: bool = False) -> dict:
     """Change one owned session's model; no attempt is created or rewritten.
 
     The human's current request may route any session in scope (a Coordinator's
@@ -123,7 +124,9 @@ def set_session_model(task: dict, scope: dict, principal, arguments: Mapping) ->
         raise PermissionError('Only the owner can change a session’s model')
     # A principal from another tenant cannot act on this owner's sessions: the
     # tenant is checked against the session's own accepted execution identity.
-    conversation_id, _ = _target(scope, {'conversation_id': conversation_id}, write=True)
+    # ``delegated``: the owner's delegation was checked and recorded; it reaches other projects.
+    conversation_id, _ = _target(scope, {'conversation_id': conversation_id}, write=True,
+                                 reach=(lambda _project: None) if delegated else None)
     _check_tenant(scope, principal, conversation_id, arguments)
     result = store_session_model(conversation_id, model, owner=scope['user_id'],
                                  tenant_id=principal.tenant_id)

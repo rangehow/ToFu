@@ -220,6 +220,95 @@ def test_global_router_continues_and_stops_an_exact_attempt_in_another_project_a
         ['stop', option['operation']])
 
 
+def _interrupted_in_another_project(s, tmp_path):
+    other = tmp_path / 'helped-project'
+    other.mkdir()
+    principal = PrincipalContext.user(subject_id='owner', owner_user_id=1)
+    config = capture_execution_identity({'model': 'other-model', 'projectPath': str(other)}, 1, principal)
+    pair = s.turns.create_turn_pair('helped', command_id='helped:input',
+        input_projection={'content': 'Land the migration'}, config=deepcopy(config), user_id=1,
+        conversation_defaults={'allowCreate': True, 'title': 'helped', 'settings': {'projectPath': str(other)}})
+    s.turns.bind_task(pair['attempt']['attemptId'], 'helped-task', user_id=1)
+    s.turns.record_task_event({
+        'id': 'helped-task', 'convId': 'helped', '_turnId': pair['turn']['turnId'],
+        '_attemptId': pair['attempt']['attemptId'], '_userId': 1, '_attended': True,
+        '_principalContext': principal.to_payload(), 'config': deepcopy(config), 'status': 'running',
+        'model': 'other-model', 'content': '', 'thinking': 'Half way through', 'toolRounds': []},
+        {'type': 'thinking', 'content': 'Half way through'})
+    s.turns.recover_running_attempts(exclude_task_ids=['coordinator-task'])
+    return str(other.resolve()), s.turns.get_turn('helped', pair['turn']['turnId'], user_id=1)
+
+
+def test_a_project_lead_acts_on_another_projects_session_under_the_full_delegation(
+        session_runtime, approvals, monkeypatch, tmp_path):
+    """docs/ROUTER.md R9 "Cross-project action": a Project Router asked to help another project
+    reads and continues/stops that project's session through control_conversation(owner_delegation)
+    only under the owner's full grant; the audit record names the target project and that
+    project's lead receives one cross-lead report. Without the grant both are refused."""
+    from lib.conversations import project_coordination
+    from lib.conversations.project_messages import ProjectMailbox
+    s, gate = session_runtime, approvals
+    project, interrupted = _interrupted_in_another_project(s, tmp_path)
+    own = s.task['config']['projectPath']
+    monkeypatch.setattr(project_coordination, 'ProjectCoordinationRepository',
+        lambda owner, **kwargs: SimpleNamespace(read=lambda path: {
+            'availability': 'available', 'revision': 1, 'projectPath': path,
+            'conversationId': 'helped-lead' if path == project else 'coordinator'}))
+    s.task['_principalContext'] = PrincipalContext.system(
+        subject_id='wake', owner_user_id=1, scopes={'chat'}).to_payload()
+    trigger = {'kind': 'owner_delegation', 'turnId': s.task['_turnId'], 'text': 'delegated to every lead'}
+    monkeypatch.setattr('lib.router.owner_delegation.resolve_trigger', lambda task, scope, args: dict(trigger))
+    option = interrupted['settlement']['resumeOptions'][0]
+    authority = {'reason': 'The helped project asked us to finish its migration', 'under_delegation': True}
+    args = {'conversation_id': 'helped', 'turn_id': interrupted['turnId'],
+            'attempt_id': interrupted['currentAttemptId'], 'action': option['operation'],
+            'expected_revision': interrupted['projectionRevision'], 'idempotency_key': 'help',
+            'owner_delegation': authority, **({'resume_anchor': option['anchor']} if 'anchor' in option else {})}
+
+    status = s.call('get_conversation_status', {'conversation_id': 'helped'})
+    assert status['code'] == 'owner_delegation_not_granted', status
+    plain = s.call('control_conversation', {k: v for k, v in args.items() if k != 'owner_delegation'})
+    assert 'another project' in plain['error'] and not s.started
+    refused = s.call('control_conversation', args)
+    assert refused['code'] == 'owner_delegation_not_granted' and refused['execution_started'] is False
+    assert not s.started and gate.delegated_action_history(1) == []
+
+    gate.set_delegation(1, True, provenance=HUMAN_UI, grantee={
+        'kind': 'global_router', 'conversationId': 'router', 'bindingRevision': 1, 'tenant': None})
+    status = s.call('get_conversation_status', {'conversation_id': 'helped'})
+    assert interrupted['turnId'] in {turn['turnId'] for turn in status['turns']}, status
+    resumed = s.call('control_conversation', args)
+    assert 'error' not in resumed, resumed
+    assert [conversation for conversation, _ in s.started] == ['helped']
+    assert resumed['target_lead_notified'] == 'helped-lead'
+    [action] = gate.delegated_actions(1)
+    assert action['requester']['kind'] == 'project_lead' and action['requester']['conversationId'] == 'coordinator'
+    assert (action['scope'], action['status'], action['target']['path']) == (
+        'conversation_control', 'completed', project)
+    from lib.router.contract import validate
+    validate(action, 'ownerDelegatedAction')
+    [report] = ProjectMailbox(1, project, 'helped-lead').page('')['messages']
+    assert report['sender'] == 'coordinator' and report['kind'] == 'report'
+    assert report['senderProject'] == own and action['id'] in report['content']
+    # A replay acts and reports once.
+    again = s.call('control_conversation', args)
+    assert again['attempt']['attemptId'] == resumed['attempt']['attemptId'] and len(s.started) == 1
+    assert len(ProjectMailbox(1, project, 'helped-lead').page('')['messages']) == 1
+
+    # An enumerated grant names only the Global Router: the Project Router is refused again.
+    import json as _json
+    document = _json.loads(open(gate._APPROVALS_FILE).read())
+    for record in document['delegations'].values():
+        record.update(coverage='enumerated', scopes=['conversation_control'])
+    open(gate._APPROVALS_FILE, 'w').write(_json.dumps(document))
+    stop = {'conversation_id': 'helped', 'turn_id': interrupted['turnId'],
+            'attempt_id': resumed['attempt']['attemptId'], 'action': 'stop', 'idempotency_key': 'stop',
+            'owner_delegation': authority}
+    narrowed = s.call('control_conversation', stop)
+    assert narrowed['code'] == 'owner_delegation_scope', narrowed
+    assert s.turns.get_attempt(resumed['attempt']['attemptId'], user_id=1)['status'] in {'pending', 'running'}
+
+
 @pytest.fixture
 def tool_checkpoint_session(storage, monkeypatch, tmp_path):
     """A long turn that failed on a provider 402 after real tool rounds.

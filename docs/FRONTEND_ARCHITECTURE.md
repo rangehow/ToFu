@@ -2969,11 +2969,16 @@ unless the chat is docked, and a turn in the hidden column has no paint opportun
   `aria-busy`, the HUD shows a loading chip and a loading card over the floor counts the answered reads
   (`world.loading.progress`), so an empty or provisional floor never passes for truth. The Global Router
   and the Watchdog are seated as soon as each answers, without waiting for the folder list.
-- `layout.ts` packs the team rooms into rows beside and below the owner's office. Each row is justified
-  (its rooms share the leftover width and the row's height, desks centred), and pod blocks narrow one
-  column at a time while that shortens the plan, so a team stacks its pods when that lets the next team
-  share its row. Rejected: a greedy ragged layout (holes beside a short last row) and stretching only a
-  lone last room (a near-empty room the width of the floor).
+- `layout.ts` packs the team rooms into rows beside and below the owner's office. Each row reaches the right
+  wall and its rooms share the row's height, desks centred; pod blocks narrow one column at a time while that
+  shortens the plan, so a team stacks its pods when that lets the next team share its row. A row's spare
+  width is a commons (`commons.ts`, art direction below) when a furniture group fits there, else the row's
+  rooms share it; the floor in front of the owner's office (below the line at its door, clear of the walk
+  down from the door) and the bottom strip's free stretch are commons too. Rejected: a greedy ragged layout
+  (holes beside a short last row); stretching rooms over all the spare width (owner, 11-17: a lone team's
+  room ran the width of the floor with five people in it); rooms only as tall as their own desks with a
+  commons below each shorter one (tried 11-17: the floor read as furniture scattered between ragged rooms,
+  where rooms of one height read as one designed block).
 - `office.ts` mounts the office on the shared game stage (`features/office-game/engine`) with camera
   gestures (drag, wheel or pinch, +/-/0), spatial arrow-key focus over people and documents (the stage's
   accessible `.evo-target` buttons; Enter opens, Esc closes the panel) and a camera that fits the whole
@@ -2988,10 +2993,10 @@ unless the chat is docked, and a turn in the hidden column has no paint opportun
   everything is drawn at about one to one: resampling the full-resolution sheet for every person on every
   frame cost more than the rest of the frame together and stalled blends on a software-rasterized canvas.
   The floor and the grade are device-pixel layers keyed by camera transform and content (the floor rebuilt
-  once a key has held for a frame; the grade always in its own layer, because the night cuts its light pools
-  out of it): a settled frame blits two layers and draws the sprites. While anyone is on the floor the
-  office is alive and draws every frame (screens flicker, bubbles think, tags breathe, dust drifts); under
-  reduced motion it sleeps and wakes once a minute for the wall clocks. Rooms never
+  once a key has held for a frame; the grade in its own layer): a settled frame blits two layers and draws
+  the sprites. While anyone is on the floor the office is alive and draws every frame (people type, bubbles
+  think, steam rises, an asking lead's status light breathes); under reduced motion it sleeps and wakes once
+  a minute for the wall clocks. Rooms never
   shrink while the office is open (each team keeps the most desks it has needed), a floor plan that does
   change blends by identity (`tween.ts`: rooms by team, pods and desks by index, decor by the key of its
   place): rooms slide and resize; something leaving fades out over the first half of the blend and something
@@ -3024,39 +3029,54 @@ unless the chat is docked, and a turn in the hidden column has no paint opportun
 ### Office art direction (2026-11-17)
 
 **Problem:** the owner found the office "still far too ugly" (11-17): flat pastel rooms that were mostly
-empty rug, small people on a uniform beige floor, no light, and names readable only by hovering. The office
-must show at a glance what every lead and Worker is doing and be a pleasure to look at.
+empty rug, small people on a uniform beige floor, no light, and names readable only by hovering. The first
+answer, a lit diorama at golden hour, drew the same verdict the same evening, with "light pollution": a navy
+night cut by dozens of warm light pools that ran through walls, additive blue bloom over every working
+screen, neon team signs, sunbeams and drifting dust by day; whole task titles as name tags, stacked into
+towers with leader lines; and rooms stretched over spare floor into near-empty halls. The office must show at
+a glance what every lead and Worker is doing and be a calm pleasure to look at.
 
-**Decision:** a lit miniature office, "diorama at golden hour". References, and what each one lends:
+**Decision:** a calm, furnished miniature office. References, and what each one lends:
 - *Kairosoft (Game Dev Story, Pocket Academy)*: every staff member is visible at a desk and status reads
   from a glance at their head (bubbles, sparks, a celebration when something ships). Here: a name tag with a
   status light on everyone, a thought bubble while assigned work waits, a raised waving hand for an open
   owner question, confetti and a hop when a delivery lands.
 - *Two Point Hospital / Two Point Campus*: each room is a distinct place (its own floor material, wall
-  colour, signage), with chunky saturated props, strong contact shadows and furniture that fills the room.
-  Here: rooms with back walls, glass partitions and a doorway, four floor materials, a backlit sign, framed
-  pictures, a clock, shelves, lounges in the spare floor.
-- *Stardew Valley / Eastward night lighting*: the evening darkens the world while practical lights keep warm
-  pools and screens glow. Here: one grade per local hour, light pools under pod pendants, head-desk and floor
-  lamps, the bar and the entrance, and every working screen glowing cool and flickering.
+  colour, signage), with chunky props, strong contact shadows and furniture that fills the room. Here: rooms
+  with back walls, glass partitions and a doorway, four quiet floor materials, a sign, framed pictures, a
+  clock, shelves, and whole furniture groups on every spare floor.
+- *A real office after dark*: the lights stay on and the hour shows in the windows. Here: the floor reads the
+  same by day and night; the window skies, the wall clocks and the floor lamps carry the hour.
 
 The rules that keep it a status board:
-- **Palette**: materials stay warm and muted (oak, cream, team colour mixed half-way to a neutral);
-  saturation is spent only on signals. Amber `#F4B740` (question), red (exception) and gold `#E8B04A`
+- **Palette**: materials stay warm and muted (oak, cream, room floors in warm neutrals with a hint of the
+  team colour); a team's colour is spent on its sign's chip, the accent band under its back wall's cap and
+  its furniture's fabrics, and the commons wear muted accents of their own (sage, camel, dusty blue, dusty
+  rose). Saturation is spent only on signals. Amber `#F4B740` (question), red (exception) and gold `#E8B04A`
   (delivery) remain reserved; ambient art never uses them. Status lights: green working, periwinkle waiting,
   grey idle, amber question, red exception, gold delivering.
 - **Typography**: the UI font throughout. Tags are bold 8.5 units drawn in screen pixels (never below 10 CSS
-  px) and show the whole name. A desk row's tags are packed left to right, each on the innermost line where it
-  clears the tags already there (`tagLines`), so a row of short names stays on one line and lines are added
-  only where neighbours would touch; a tag wider than its desk slides along its line to stay inside the room,
-  and only a name longer than a whole pod row is cut. Worker tags are lighter than leads' (no drop shadow,
-  slightly translucent pill, full-contrast text) so a crowded floor reads as people first. Each person in the
-  line at the owner's door gets a line of their own; signs are 14-unit heavy type lit like a neon tube in the
-  team colour, painted once per content.
-- **Light**: key light from the window wall. Day: long slanting sunbeams leaning with the hour; golden hour
-  warms; dusk tints violet and darkens; night (21-5) darkens the floor and cuts pools under every practical
-  light. Contact shadows under furniture and pods, ambient occlusion along the back wall and partitions.
-  Labels, tags and signals are drawn after the grade, so they are equally legible at night.
+  px). A Worker's tag says the lead clause of its name (`life.ts` `tagLabels`: the words before its first
+  colon, dash, bracket or sentence break, an all-capitals marker such as "URGENT:" skipped; teammates who
+  share a lead clause read the clause after it), cut at a whole word, and is at most two desks wide. A desk
+  row's tags are packed left to right, each on the innermost line where it clears the tags already there
+  (`tagLines`), so a row of short names stays on one line, neighbours that would touch alternate between two
+  lines, and every tag stays centred on its person with no leader line. The whole name is in the tooltip and
+  the panel. Because tags never shrink below 10 CSS px and the camera never zooms out past the fit, the floor
+  plan keeps room for two lines at the scale it is laid out at (`layout.ts` `tagBands`: under the head desk,
+  between stacked pods, under the last pod), so a narrow window spaces its pods further apart instead of
+  letting tags collide; `layout.ts` owns the tag size and placement (`TAG_*`, `tagUnit`, `deskTagY`) that
+  `life.ts` draws and `scene.ts` places. Pills are cream with ink text in the light theme and walnut with cream text in the dark, so a
+  busy floor is not peppered with dark labels; a lead's pill is edged in its team colour. Each person in the
+  line at the owner's door gets a line of their own. Signs are walnut plaques with the team's colour chip and
+  13-unit heavy cream type, painted once per content; nothing glows.
+- **Light**: the office lights stay on at every hour (owner, 11-17: the night of light pools was light
+  pollution). The grade only shades: a faint warm tint at dawn and golden hour, a faint violet one at dusk,
+  and once the evening comes a slight cool dim (13 % in the light theme, 10 % in the dark) with a soft glow
+  round each floor lamp and a faint, barely flickering glow on each working screen. Daylight is a soft wash
+  down from the window wall. Nothing is additive, so no light blooms over people or labels. Contact shadows
+  under furniture and pods, ambient occlusion along the back wall and partitions. Labels, tags and signals are
+  drawn after the grade.
 - **Characters and assets**: one sticker style everywhere: warm ink contour, flat fill, a highlight on the
   side facing the window, a cel shade on the far side, a contact shadow. People (eleven role silhouettes,
   three palette variants each, assets/README.md) were redrawn in it: a larger chibi head with brows, two-glint
@@ -3064,42 +3084,51 @@ The rules that keep it a status board:
   stay muted), and new cells for a raised hand and a cheer; the scene adds a die-cut cream outline to each
   sheet layer, which separates them from any floor in either theme. Desks (bevelled lit top, grain, drawer
   front), teal upholstered chairs and leaf-by-leaf plants of six species are redrawn in the atlas. Rooms,
-  walls, floors, furniture (shelves, cabinets, sofas, armchairs, tables, floor lamps, credenzas, rugs), signs,
-  clocks, tags, bubbles, the alarm ring, steam and confetti are drawn procedurally in the same style. Room
-  floors are quiet (carpet tiles a 5 % tone apart, narrow boards close in tone, sparse terrazzo, faint
-  broadloom bands), so the people and signals on them carry the contrast. Every asset is original to Tofu
-  (generated by `scripts/gen_world_art.py` or drawn in code; no third-party art; no licence to record).
-- **Camera and composition**: the whole office still fits the view. A window taller than the plan gives its
-  spare height to the rooms (`layout.ts`), not to bare corridor floor, and the head desk and pods sit under
-  the sign, so a room's spare floor is its lounge. Furniture goes only where nobody walks or sits
-  (`roomFurniture`: beside the head desk under the back wall, right of the pods, under them).
-- **Motion**: only state moves. Typing (the sheets' cells) with a flickering screen; waiting: dots travel in a
-  thought bubble; question: the sheet's raised hand waving and a bobbing `?` (at the owner's door, or at the
-  desk when the line is full); exception: a red pulse on the floor and a short jolt every two seconds; idle:
-  steam over the desk; delivering: the carry walk, then two hops with arms thrown up at the top of each, a happy
-  face and confetti at the owner's desk, then the walk back.
-  Ambient: wall clocks show the local time, dust drifts in the sunbeams. Every loop is a function of time and
-  a per-person phase (no two people in step); reduced motion draws time zero and moves nothing.
+  walls, floors, furniture (shelves, cabinets, sofas, armchairs, tables, round café tables with their chairs,
+  benches, floor lamps, credenzas, bordered rugs), signs, clocks, tags, bubbles, the alarm ring, steam and
+  confetti are drawn procedurally in the same style. Room floors are quiet (carpet tiles a 4.5 % tone apart,
+  narrow boards close in tone, sparse terrazzo, faint broadloom bands), so the people and signals on them
+  carry the contrast. Every asset is original to Tofu (generated by `scripts/gen_world_art.py` or drawn in
+  code; no third-party art; no licence to record).
+- **Camera and composition**: the whole office still fits the view. Rooms in a row share its height (a
+  window taller than the plan gives its spare height to the rooms, `layout.ts`) and the head desk and pods sit
+  under the sign. No floor is left bare: a room's spare floor (`roomFurniture`) and the commons (`commons.ts`)
+  hold whole furniture groups, never loose pieces: a lounge (sofa, armchairs, low table, floor lamp on a rug),
+  a library (bookcases on the back edge of a rug, reading chairs, lamp), a reading nook, the meeting table, a
+  café (round tables on a rug) and a green corner (plants behind a bench), in as many bands as the area holds,
+  spread evenly and picked in turn from the area's key, so neighbouring areas differ; each band starts half the
+  cycle further round than the one above, so a group never sits over its twin. Furniture goes only where
+  nobody walks or sits; a commons' pieces are decor keyed by their place, so a floor-plan blend moves and fades
+  them like any decor.
+- **Motion**: only state moves. Typing (the sheets' cells); waiting: dots travel in a thought bubble;
+  question: the sheet's raised hand waving, a bobbing `?` (at the owner's door, or at the desk when the line is
+  full) and a breathing status light; exception: a red pulse on the floor and a short jolt every two seconds;
+  idle: steam over the desk; delivering: the carry walk, then two hops with arms thrown up at the top of each,
+  a happy face and confetti at the owner's desk, then the walk back. Ambient: wall clocks show the local time.
+  Every loop is a function of time and a per-person phase (no two people in step); reduced motion draws time
+  zero and moves nothing.
 
-**Why it is eye-catching yet readable:** contrast is spent on people and signals, not on surfaces, so the
-eye lands on who is doing what; the grade makes time of day legible at once and turns the night office into
-glowing working desks; every person carries their name and state, so nothing needs hovering.
+**Why it is eye-catching yet readable:** contrast is spent on people and signals, not on surfaces or light,
+so the eye lands on who is doing what; the hour shows in the windows without dimming the work; every person
+carries a short name and their state, so nothing needs hovering, and the whole name is one hover away.
 
-**Measured** (headless Chromium 1228, software raster, 1600 x 960, DPR 1, 10 s windows, fixture preview with
-53 people of whom 44 work, after the 11-17 redraw): 60.0 fps, p99 frame 16.8 ms, no frame over 20 ms at 15:00
-and 22:00 in the light theme and 22:00 in the dark; renderer CPU 0.27-0.28 of a core (the office before the
-lit diorama, same fixture: 0.03, because it slept between typing beats; the first diorama pass: 0.25). Reduced
-motion: 60 fps, CPU 0.003. Earlier live-data runs (24 people): 60 fps, CPU 0.19-0.23; DPR 2: 0.52. A run during
-a host load average of 156 once dropped to 34 fps and recovered to 60 fps when repeated.
-The cost is the always-on animation, which is the point of the change; the stage still sleeps when the tab
-is hidden or the office is off screen. A blind vision-model comparison (output/studio-art-redraw-20261117/blind)
-preferred this version in all six pairs (day, night and a 2x close-up, against the pre-diorama office and
-against the first diorama pass).
+**Measured** (2026-11-18, headless Chromium 1228, software raster, 1600 x 960, DPR 1, 10 s windows, the live
+office's recorded reads replayed: 56 people, 25 working; this version against the lit-diorama pass on the same
+data, the pairs run in the same wall-clock windows): in quiet windows both hold 60.0 fps with p99 frame 16.8 ms
+at 15:00 and 22:00, this version at renderer CPU 0.17-0.20 of a core against 0.18-0.22. Under a host load
+average of 30-40 both stall alike (29-34 fps, 100-600 ms compositor commits in `ProduceCanvasResource` with
+about 1 ms of script: the GPU process starved by the host), this version still at the lower CPU (0.22-0.24
+against 0.27). The cost is the always-on animation (typing, bubbles, steam); the stage sleeps when the tab is
+hidden, the office is off screen or motion is reduced.
 
 **Alternatives rejected:**
 - Isometric rebuild: new geometry, depth sorting and hit-testing for the same information (assets/README.md).
 - A darker theme only: the light theme is the owner's, and time of day carries more meaning than a theme.
+- A night of cut-out light pools, additive screen bloom and neon signs (the first pass): light pollution; light
+  that competes with the signals and blooms over labels.
 - Names only on hover: the floor must read as a status board at a glance.
+- Whole names packed onto as many lines as they need: towers of labels over the people, with leader lines.
+- Tags fitted to one desk's width: about four characters at the fit zoom.
 - Throttling the ambient animation to save CPU: a tuning knob; a still office is what reduced motion is for.
 
 ### Owner questions in the office (2026-11-16)

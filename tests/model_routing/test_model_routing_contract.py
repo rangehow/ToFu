@@ -1050,27 +1050,43 @@ def _candidate_product_document(deployments=100, credentials=200):
     return document
 
 
+_MEASURE_RANKING_HEAP = '''
+import gc, json, tracemalloc
+from lib.model_routing import ModelRef, NativeModelSelection
+from lib.model_routing.routing import RouteCandidateCompiler
+from tests.model_routing.test_model_routing_contract import _candidate_product_document
+compiler = RouteCandidateCompiler(_candidate_product_document())
+selection = NativeModelSelection(ModelRef('creator', 'alpha'), None, 'provider-a')
+
+def measure(limit):
+    gc.collect()
+    tracemalloc.start()
+    try:
+        candidates = compiler.compile(selection, max_candidates=limit)
+        peak = tracemalloc.get_traced_memory()[1]
+        return [[c.deployment['deployment_id'], c.credential['credential_id']]
+                for c in candidates], peak
+    finally:
+        tracemalloc.stop()
+
+print(json.dumps([measure(None), measure(64)]))
+'''
+
+
 def test_bounded_candidate_ranking_matches_full_prefix_with_measured_heap():
-    import gc
-    import tracemalloc
-    from lib.model_routing.routing import RouteCandidateCompiler
-    compiler = RouteCandidateCompiler(_candidate_product_document())
-    selection = NativeModelSelection(ModelRef('creator', 'alpha'), None, 'provider-a')
-
-    def measure(limit):
-        gc.collect()
-        tracemalloc.start()
-        try:
-            candidates = compiler.compile(selection, max_candidates=limit)
-            peak = tracemalloc.get_traced_memory()[1]
-            identities = [(c.deployment['deployment_id'], c.credential['credential_id'])
-                          for c in candidates]
-            return identities, peak
-        finally:
-            tracemalloc.stop()
-
-    all_ids, full_peak = measure(None)
-    bounded_ids, bounded_peak = measure(64)
+    import os
+    import subprocess
+    import sys
+    # tracemalloc counts every thread's allocations; threads left by earlier
+    # tests in a shared xdist worker would be charged to the bounded scan.
+    root = Path(__file__).resolve().parents[2]
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(
+        [str(root), *filter(None, [os.environ.get('PYTHONPATH')])]))
+    completed = subprocess.run([sys.executable, '-c', _MEASURE_RANKING_HEAP], cwd=root,
+                               env=env, capture_output=True, text=True, timeout=120)
+    assert completed.returncode == 0, completed.stderr
+    (all_ids, full_peak), (bounded_ids, bounded_peak) = json.loads(
+        completed.stdout.strip().splitlines()[-1])
     assert len(all_ids) == 20_001
     assert bounded_ids == all_ids[:64]
     assert bounded_peak < 512 * 1024

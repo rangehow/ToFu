@@ -150,6 +150,11 @@ class TraceSpanFold:
         self.startup_done = False
         # End of the last model round / flow step: settlement starts there.
         self.settle_from: int | None = None
+        # Rounds that prove a model response happened (their round_usage, or a
+        # tools round end): round key -> (usage ts, streamElapsedMs) or None.
+        self.response_rounds: dict[str, tuple[int, int] | None] = {}
+        # Rounds with a proven response but no surviving request span.
+        self.lost_request_rounds = 0
 
     def make_span(self, span_id, *args, **kwargs):
         # Correlation tokens are not public occurrence identities. Allocate for
@@ -509,6 +514,8 @@ class TraceSpanFold:
         elif reason == 'error':
             st = 'error'
         self._close_round(key, ts, st)
+        if reason == 'tools' and key in self.rounds:
+            self.response_rounds.setdefault(key, None)
         self.settle_from = ts
         return
 
@@ -971,6 +978,8 @@ class TraceSpanFold:
                else str(p.get('roundNum')))
         if key in self.rounds:
             self.usage_by_round.setdefault(key, []).append(rec)
+            if self.current_round_key == key:
+                self.response_rounds[key] = (ts, rec['streamElapsedMs'])
         else:
             self.usage_orphans.append((key, rec))
         return
@@ -1037,6 +1046,13 @@ class TraceSpanFold:
         settlement — tool dispatch, result persistence and loop bookkeeping,
         while tools/waits inside keep their own kinds. Without request
         evidence only the inter-round window is settlement.
+
+        A round that proves a model response (its round_usage or a tools round
+        end) but has no request span lost that evidence (a bounded or reduced
+        event log): its request start is unknown, so no window is carved and
+        its envelope shrinks to the usage-proven request (or nothing). The rest
+        is unattributed, never preparation that silently swallows tool and
+        poll time.
         """
         uses_requests = any(self.round_requests.values())
         last = len(self.round_order) - 1
@@ -1052,6 +1068,9 @@ class TraceSpanFold:
             if requests:
                 prep_to = min(s['tStart'] for s in requests)
                 settle_from = max(s['tEnd'] for s in requests)
+            elif uses_requests and key in self.response_rounds:
+                self._shrink_lost_request_round(rnd, llm, self.response_rounds[key])
+                continue
             elif uses_requests:
                 prep_to = llm['tEnd']  # no request started: still preparing
             settle_to = (self.rounds[self.round_order[index + 1]]['tStart']
@@ -1065,6 +1084,18 @@ class TraceSpanFold:
                                         kind, name, t_start)
                 _close(window, t_end, status)
                 self.spans.append(window)
+
+    def _shrink_lost_request_round(self, rnd, llm, usage):
+        self.lost_request_rounds += 1
+        rnd['attrs']['requestEvidence'] = 'lost'
+        start, end = llm['tStart'], llm['tStart']
+        if usage is not None:
+            usage_end, elapsed = usage
+            if elapsed > 0:
+                start = max(llm['tStart'], min(llm['tEnd'], usage_end - elapsed))
+                end = max(start, min(llm['tEnd'], usage_end))
+        llm['tStart'], llm['tEnd'] = start, end
+        llm['truncated'] = True
 
     def finish(self, boundary_ms):
         settle_ts = boundary_ms

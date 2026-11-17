@@ -480,3 +480,30 @@ def test_office_refuses_an_unauthenticated_reader_before_any_read(flask_client, 
     monkeypatch.setattr(office_facts, 'snapshot', calls.append)
     assert flask_client.get('/api/v4/router/office').status_code == 401
     assert calls == []
+
+
+def test_owner_delegation_history_returns_every_record_and_filters(flask_client, chat_sidecar, tmp_path,
+                                                                    monkeypatch):
+    """docs/ROUTER.md R9 Audit: the history endpoint keeps what the state endpoint's bound drops."""
+    from lib import lifecycle_approval as gate
+    monkeypatch.setattr(gate, '_APPROVALS_FILE', str(tmp_path / 'lifecycle_approvals.json'))
+    monkeypatch.setattr(gate, '_STATE_FILE', str(tmp_path / 'lifecycle_state.json'))
+    router = {'kind': 'global_router', 'conversationId': 'router', 'bindingRevision': 1, 'tenant': None}
+    gate.set_delegation(1, True, grantee=router, provenance={
+        'kind': 'human-ui', 'ownerUserId': 1, 'subject': 'session-key', 'credential': 'session',
+        'browser': 'fetch-metadata', 'userAgent': 'Mozilla/5.0', 'remoteAddr': '127.0.0.1'})
+    total = gate._KEEP_RECORDS + 3
+    for number in range(total):
+        requester = {**router, 'turnId': None, 'attemptId': None} if number % 2 else {
+            'kind': 'project_lead', 'conversationId': 'lead-b', 'bindingRevision': 2, 'tenant': None,
+            'turnId': None, 'attemptId': None}
+        gate.begin_delegated_action(1, requester, scope='lead_authority', key=f'k{number}',
+                                    reason='r', trigger=None, target={'kind': 'project_request'})
+    assert len(flask_client.get('/api/v4/router/owner-delegation').get_json()['actions']) == gate._KEEP_RECORDS
+    every = flask_client.get('/api/v4/router/owner-delegation/history')
+    assert every.status_code == 200, every.get_json()
+    assert len(every.get_json()['actions']) == total
+    lead = flask_client.get('/api/v4/router/owner-delegation/history?requester=lead-b&scope=lead_authority')
+    assert {item['requester']['conversationId'] for item in lead.get_json()['actions']} == {'lead-b'}
+    assert flask_client.get('/api/v4/router/owner-delegation/history?scope=bogus').status_code == 400
+    assert flask_client.get('/api/v4/router/owner-delegation/history?since=x').status_code == 400

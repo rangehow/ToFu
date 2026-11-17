@@ -109,7 +109,7 @@ def router_with_channels(router, monkeypatch):
     """The production Router surface: every channel tool of a configured account."""
     from lib.channels.tools import CHANNEL_TOOLS
     monkeypatch.setattr('lib.channels.tools.visible_tools',
-                        lambda owner, conversation: list(CHANNEL_TOOLS))
+                        lambda owner, conversation, project_path='': list(CHANNEL_TOOLS))
     return router
 
 
@@ -127,24 +127,25 @@ def watchdog(homes, monkeypatch):
     return task, path
 
 
-CLAUDE_HIDDEN = {'dispatch_project_assignment', 'create_conversation', 'await_device',
+CLAUDE_HIDDEN = {'dispatch_project_assignment', 'create_conversation', 'await_device', 'restart_server',
                  'schedule_create', 'schedule_list', 'schedule_manage', 'create_memory'}
 
 
 def test_project_coordinator_human_turn_fits_the_budget_with_leads_and_memory_direct(coordinator):
-    """The 29 role tools join to 534 bytes. list_project_leads and search_memories are
+    """The 30 role tools join to 549 bytes. list_project_leads and search_memories are
     in the core by owner request; to fit, the Claude route hides the three least used
-    tools, the scheduler family and the lesson record, which stay reachable through
-    Tool Search and by exact name."""
+    tools, restart_server, the scheduler family and the lesson record, which stay
+    reachable through Tool Search and by exact name. channel_send is in the catalog only
+    where the owner has a command chat (lib.channels.tools), which this owner has not."""
     task, _ = coordinator
     tools = assemble(task)
-    assert set(_names(tools)) == COORDINATOR_TOOLS - DISCOVERY
-    assert _joined_bytes(_names(tools)) == 534 > BUDGET
+    assert set(_names(tools)) == COORDINATOR_TOOLS - DISCOVERY - {'channel_send'}
+    assert _joined_bytes(_names(tools)) == 549 > BUDGET
     assert set(task['_requiredDirectToolNames']) == COORDINATOR_DIRECT_TOOLS
     body, projection = _wire(task, tools)
     wire = _names(body['tools'])
     assert set(projection.budget_dropped_names) == CLAUDE_HIDDEN
-    assert set(wire) == (COORDINATOR_TOOLS - CLAUDE_HIDDEN)
+    assert set(wire) == (COORDINATOR_TOOLS - CLAUDE_HIDDEN - {'channel_send'})
     assert _joined_bytes(wire) == 440 <= BUDGET
     assert {'list_project_leads', 'search_memories', 'poll', *READERS} <= set(wire)
     assert set(_assert_hidden_tools_reachable(task, body, COORDINATOR_TOOLS)) == CLAUDE_HIDDEN
@@ -301,3 +302,5 @@ def test_a_retired_worker_wait_call_is_repaired_to_poll_and_admitted(coordinator
     assert parsed[0][5].get('status') != 'rejected'
     assert coordinator_call_rejection(task, 'poll', {'ids': [worker], 'wait_s': 600}) is None
     assert coordinator_call_rejection(task, 'await_project_workers', {}) is not None
+
+

@@ -10,7 +10,8 @@ optimization work is judged against.
 
 `python3 benchmarks/harness_perf/run.py [--smoke] [--references all]`
 
-- **Model removed.** `stub_provider.py` answers every request at once from a
+- **Model removed.** `stub_provider.py` answers every request at once (with
+  `TCP_NODELAY`, as provider front ends send) from a
   script on all three wire faces Tofu and the references speak (Chat
   Completions, Responses, Anthropic Messages). A marker in the user message
   (`[harness-perf scenario=S rounds=N session=ID]`) selects the script; round
@@ -193,8 +194,8 @@ re-run in the same session to cancel host load.
 
 | metric | baseline | target (source) |
 |---|---|---|
-| steady round overhead, `noop` | 77.6 ms | ≤ 38 ms (codex) |
-| steady round overhead, `shell` | 89.3 ms, p95 535 ms | ≤ 48 ms, p95 ≤ 100 ms (pi) |
+| steady round overhead, `noop` | 77.6 ms | ≤ 3 ms (pi, since the stub fix; codex 38 ms) |
+| steady round overhead, `shell` | 89.3 ms, p95 535 ms | ≤ 7 ms (pi, since the stub fix) |
 | tool round trip, `run_command true` | 285 ms | ≤ 21 ms (pi) |
 | round overhead at 20 sessions | 2,029 ms | ≤ 1.5x the one-session figure (references: flat) |
 | CPU per model request (all Tofu processes) | 166 ms | ≤ 34 ms (pi) |
@@ -750,6 +751,195 @@ heavy-state release deliberately refuses.
   cheaper: measured 2 ms less cold and 1.2 ms more per warm round at 458
   messages; kept, because Turns with a tool round outnumber single-request
   Turns.
+
+## Round hops (2026-11-18)
+
+Owners: `benchmarks/harness_perf/` (stub, `round_profile.py`),
+`lib/tasks_pkg/manager/_registry.py` (provider abort check),
+`lib/tasks_pkg/streaming_tool_executor.py` (prefetch pool),
+`lib/tasks_pkg/tool_dispatch/_flags.py` (round partitions, effect-free
+batches), `lib/tasks_pkg/round_evidence.py`,
+`lib/tasks_pkg/cache_tracking/_hashing.py`,
+`lib/tools/hope_queue_policy_launcher.py`. Contracts:
+`docs/TASK_EVENT_DELIVERY.md` (effect-free batches), `docs/ROUTER.md` R16
+(PATH search reuse).
+
+### Method
+
+`benchmarks/harness_perf/round_profile.py` boots the deployment of `run.py`,
+runs `noop` Turns (20 read rounds) and `true` Turns, and samples the execution
+host and its shards with `py-spy --idle --subprocesses`, so waits count as
+wall time. Every sample of the thread running the Turn is charged to the
+first matching component (`COMPONENTS`); a share times the Turn's wall time
+per request is that component's wall clock. Profiling slows rounds, so shares
+come from profiled runs and milliseconds from the unprofiled ABAB arms'
+`[TurnTraceSummary]` (`noop` 66.0 / 63.1 ms per request, `true` 173.5 /
+158.0 ms per Turn of two requests, arms A / B). `--no-spy` is the timing
+sample of one ABAB arm.
+
+### The stub charged every client a delayed ACK
+
+The stub wrote headers and body in two sends with Nagle on: on a reused
+connection the body waited for the client's delayed ACK (40 ms) after the stub
+had recorded `finished_ns`, so that wait counted as harness time. A pooled
+`urllib3` client measured 41.0 ms per request against the old stub and 0.22 ms
+with `TCP_NODELAY` (`test_stub_bodies_never_wait_for_a_delayed_ack`). The
+references re-measured with the fixed stub (codex 0.148.0, pi 1.4.0, 3 runs
+each): pi `noop` 44.4 → **3.0 ms**, pi `shell` 47.9 → **6.6 ms**, pi
+`true` 21.4 → 21.5 ms, codex `noop` 37.6 → 38.3 ms, codex `shell` 68.2 →
+68.0 ms, codex `true` 187.8 → 187.9 ms. pi had paid the stall on every
+round; codex and Tofu mostly had not (Tofu's body read was 9.6 % of a profiled
+`noop` round before the fix, 0.1 % after). The baseline tables above predate
+the fix. A `--references-only` run also crashed closing storage it never
+started; it now skips that.
+
+### Where a round goes
+
+`noop` steady round, profiled shares and ms at the unprofiled medians. A =
+`90be3c5a3b` (merged tree with the stub fix), B = this change. Rows under 1 %
+in both arms are omitted (round close, tool loop breaker, prefetch submit,
+other synchronous storage reads, the pre-request barrier: together under 3 %).
+
+| component | A share | A ms | B share | B ms |
+|---|---|---|---|---|
+| provider request preparation (`prepare_request`: seal, Anthropic translation, recount, wire fingerprints, raw-archive capture) | 13.1 % | 8.6 | 18.7 % | 11.8 |
+| post-tool state snapshot (wire sanitize, lineage, frame detach) | 8.3 % | 5.5 | 8.4 % | 5.3 |
+| round context (composer refresh, compaction pipeline, inbox) | 7.6 % | 5.0 | 9.1 % | 5.7 |
+| `tools_in_flight` event barrier | 7.3 % | 4.8 | 0 | 0 |
+| thread creation (abort probe, prefetch carrier, post and watchdog threads, key-stats flusher) | 6.4 % | 4.2 | 1.3 % | 0.8 |
+| tool execution (`read_files` on the prefetch worker, awaited) | 6.1 % | 4.0 | 8.0 % | 5.0 |
+| tool pipeline CPU (parse, settle, budget) | 5.6 % | 3.7 | 6.9 % | 4.4 |
+| per-Turn finalize, spread over 21 requests | 5.6 % | 3.7 | 5.0 % | 3.2 |
+| provider exchange: send and response headers (post thread; stub service 1.6 ms median for a 95 KB body) | 5.2 % | 3.4 | 5.9 % | 3.7 |
+| `build_round_request` and request snapshot | 4.7 % | 3.1 | 5.9 % | 3.7 |
+| slot adaptation, admission count, dispatcher pick | 3.8 % | 2.5 | 4.9 % | 3.1 |
+| prompt admission count | 3.3 % | 2.2 | 3.3 % | 2.1 |
+| MCP relay RPCs from a shard to the execution host | 3.2 % | 2.1 | 1.3 % | 0.8 |
+| SSE parse and stream state | 2.8 % | 1.8 | 2.1 % | 1.3 |
+| event append (projection, detach) | 2.3 % | 1.5 | 2.9 % | 1.8 |
+| storage read: steers (Turn head) | 2.3 % | 1.5 | 3.3 % | 2.1 |
+| cache-break accounting (system-prompt hash) | 2.0 % | 1.3 | 1.1 % | 0.7 |
+| storage reads: Turn requirements, working facts | 2.7 % | 1.8 | 2.7 % | 1.7 |
+| other loop work | 4.6 % | 3.0 | 5.4 % | 3.4 |
+
+The `true` Turn (two requests, 158 ms in B) spends most of its time outside
+the measured round: Turn start-up (context composition, tool assembly) 26 %,
+finalize 17 %. The round itself is the tool batch (`tools_in_flight` barrier
+2.2 %; the awaited command 6.1 %, of which before this change 73 % was the
+`hope`/`mlp` PATH search, about 50 lookups each releasing the GIL; the
+tool-effect intent ACK; the post-tool snapshot 3.2 %) followed by the second
+request's preparation (the `noop` components).
+
+A steady round has no process hop between the API host and the execution
+plane: the Turn runs in one shard (or the primary), and its only
+cross-process calls are storage RPCs to the engine and, from a shard, MCP
+catalog reads relayed to the execution host. No SSE subscriber is attached
+in the benchmark, so fan-out costs only the append-side projection.
+
+Against the references, component by component (their traces are the
+stub's arrival/finish records and bodies): pi's 3.0 ms `noop` round is its
+entire harness (a 6.5 KB request, the read, SSE parse), while Tofu's request
+preparation alone is 12 ms for a 95 KB body with sealed evidence. codex's
+38 ms `noop` and 188 ms `true` are its own loop and its sandboxed (`bwrap`)
+spawn; pi's 21.5 ms `true` is a bash spawn. Neither reference persists
+per-round evidence to another process, takes event barriers, reads storage,
+fans events out or hops processes: those rows are zero for both. In Tofu
+they add up to about 9 ms per `noop` round in B (pre-request barrier 0.8,
+storage reads 3.8, event append 1.8, relay 0.8, post thread 2.1 beyond the
+stub's service time).
+
+### Changes
+
+1. **The stub sends with `TCP_NODELAY`** (above).
+2. **One provider abort check per task.** The check was rebuilt for every
+   request, so its 5 s tombstone throttle never spanned requests: every
+   request started a probe thread and paid one storage read beside its
+   stream. It is now task-owned (`make_provider_abort_check`).
+3. **One prefetch executor per process.** Each round's accumulator created a
+   pool and started (then retired) a carrier thread. Accumulators share one
+   pool and own exactly their futures (`close` cancels or waits for those).
+4. **Tool partitions resolve once per round.** Dispatch and the loop breaker
+   resolved the write/reuse partitions four times per round; in a shard each
+   resolution asked the execution host's MCP bridge twice over the relay.
+   The resolution is memoized per `_activeRoundNum`; a catalog change applies
+   from the next round, as it already did for calls dispatched before it.
+5. **An effect-free batch defers its event barrier**
+   (`docs/TASK_EVENT_DELIVERY.md`): a response of only result-reusable reads
+   leaves the accepted events to the next pre-request (or terminal) barrier,
+   which persists them while the reads and the next round's preparation run.
+6. **State snapshots settle against the previous state snapshot.** Request
+   and post-tool snapshots shared one settled-row baseline; the request
+   wire's injected rows shifted every position, so a state snapshot reused
+   nothing and its frame detach copied the whole history (0.55 → 0.06 ms in
+   the isolated case).
+7. **The system-prompt hash is kept with its text.** The cache-break detector
+   hashed the full system text every round; equal text returns the last
+   digest after a comparison.
+8. **The `hope`/`mlp` PATH search is reused** while the PATH, the working
+   directory and every searched directory's identity and mtime are unchanged
+   (`docs/ROUTER.md` R16). Statting the directories is answered from
+   attribute caches (0.05 ms for 29 entries here against 1.3 ms of lookups,
+   more in the busy execution host).
+
+### ABAB (`round_profile.py --no-spy`, 5 pairs, fresh roots, same engine)
+
+Arm A `90be3c5a3b`, arm B `2542abbf19` (changes 2–8). Each run: 3 `noop`
+Turns of 20 rounds and 12 `true` Turns after warm-up. Pairs 1–2 ran at host
+load 95–127, pairs 3–5 at 17–65. Median / p95 (n), ms; codex and pi from
+the fixed-stub reference run. Artifacts:
+`output/harness_perf/round-hops-abab-20261118/`.
+
+| metric | A | B | codex | pi |
+|---|---|---|---|---|
+| `noop` steady round | 66.6 / 351 (285) | **60.5** / 257 (285) | 38.3 | 3.0 |
+| `run_command true` round | 73.0 / 414 (60) | **66.7** / 293 (60) | 187.9 | 21.5 |
+| `true` TTFR | 96.1 / 623 (60) | 91.2 / 288 (60) | | |
+
+B is faster in every pair (low-load pairs: `noop` 60.9/64.7/65.0 →
+60.2/58.8/59.2, `true` 72.9/70.9/72.1 → 64.1/66.6/65.2). An earlier ABAB of
+changes 2–7 (4 pairs, load 11–33) gave `noop` 65.9 → 60.1 ms and `true`
+72.3 → 71.0 ms (n = 228 / 48 per arm): the `true` gain is change 8.
+
+### What remains (floor)
+
+Tofu's `noop` round is 60 ms against pi's 3 ms and codex's 38 ms; its `true`
+round is 67 ms against pi's 21.5 ms (codex 188 ms). What remains is not one
+component:
+
+- About 35 ms of per-request Python work on the Turn thread: request
+  preparation (12 ms: sealing, translation, recount, wire fingerprints and
+  raw-archive capture of the evidence the Request Inspector and cache
+  accounting rely on), the post-tool state snapshot (5 ms), round context
+  (6 ms), tool pipeline and settlement (4 ms), admission counts (5 ms), the
+  request snapshot (4 ms). It runs under the GIL beside the process's own
+  event-delivery, audit-log and raw-archive threads; every wait on another
+  thread (the provider post thread, the prefetch worker, storage replies)
+  costs a GIL hand-off, which is why lookups and hashes that release the GIL
+  were worth removing.
+- About 9 ms of durable evidence work the references do not do (above). The
+  durability contracts stay: tool intent before effect, ready and tool-round
+  receipts before the next paid request, terminal before settlement.
+- Next structural targets, not changed here: one pipelined storage exchange
+  for the round's three reads (Turn head, requirements, working facts: three
+  owners); deriving the post-tool state snapshot from the previous request
+  snapshot plus the appended rows instead of re-sanitizing the history;
+  reusing a carrier thread for the provider post and the stream watchdog;
+  and the per-request sealing work in `prepare_request`, which incremental
+  request building made near-flat in history length but not cheaper per
+  request.
+
+### Alternatives considered
+
+- **A shorter interpreter switch interval** to shorten GIL hand-offs: a
+  tuning knob that taxes every thread.
+- **Dropping the post-tool state snapshot** as superseded by the next request
+  snapshot: the Request Inspector shows the state snapshot first and labels a
+  request snapshot as the fallback, and a round that halts after its tools
+  has no next request.
+- **A process-wide MCP catalog push to shards** instead of the round memo: a
+  new invalidation protocol for a cost the memo removes.
+- **Caching the PATH search by PATH alone**: misses a CLI installed later and
+  silently disables the guard.
 
 ## Alternatives considered
 

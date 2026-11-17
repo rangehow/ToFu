@@ -169,3 +169,21 @@ def test_http_keep_alive_is_short_configurable_and_bounded(monkeypatch):
     assert server.http_keep_alive_timeout_seconds() == 1.0
     monkeypatch.setenv('TOFU_HTTP_KEEP_ALIVE_SECS', '999')
     assert server.http_keep_alive_timeout_seconds() == 120.0
+
+
+@pytest.mark.parametrize('lifecycle, exits', [
+    ({'status': 'stopped'}, True),
+    ({'status': 'stopped', 'shutdown_errors': (('tofu.production.shutdown', 'X'),)}, False),
+    ({'status': 'stopping'}, False),
+    ({}, False),
+])
+def test_process_exits_promptly_only_after_a_clean_lifespan(lifecycle, exits):
+    from types import SimpleNamespace
+    from lib.server.server_shutdown import exit_after_completed_lifespan
+
+    calls = []
+    app = SimpleNamespace(extensions={'tofu_lifecycle': lifecycle})
+    exit_after_completed_lifespan(
+        app, run_exit_handlers=lambda: calls.append('atexit'),
+        exit_fn=lambda status: calls.append(('exit', status)))
+    assert calls == (['atexit', ('exit', 0)] if exits else [])

@@ -883,6 +883,30 @@ def _log_trace_summary(task, task_id, document, ledger):
     except Exception as e:
         # Diagnostic sinks cannot alter fold/settlement outcomes.
         logger.debug('[TurnTraceSummary] emit dropped: %s', e)
+    _record_lead_trace(task, task_id, document, ledger)
+
+
+def _record_lead_trace(task, task_id, document, ledger):
+    """Lead attempts also keep the summary and per-round rows for 7+ days.
+
+    The bounded document drops spans past ``TRACE_MAX_SPANS``; the per-round
+    aggregates come from the complete fold, so long lead attempts keep them.
+    """
+    from lib.logging_pkg import lead_audit
+    conv_id = task.get('convId')
+    if not lead_audit.is_lead_conversation(conv_id):
+        return
+    identity = {'task': task_id, 'conv': conv_id, 'turn': task.get('_turnId') or ''}
+    summary = {key: value for key, value in (document.get('summary') or {}).items()
+               if key != 'overBudget'}
+    lead_audit.record('turn_trace_summary', {
+        **identity, 'status': document.get('status') or '',
+        'coverage': document.get('coverage') or '',
+        'coverageReason': document.get('coverageReason') or '',
+        'rounds': ledger.get('rounds', 0), 'summary': summary,
+    })
+    if ledger.get('roundAggregates'):
+        lead_audit.record('turn_trace_rounds', {**identity, **ledger['roundAggregates']})
 
 
 def fold_task_trace(
@@ -919,6 +943,56 @@ def fold_task_trace(
         except Exception as e:
             # Diagnostic sinks cannot alter fold/settlement outcomes.
             logger.debug('[TurnTraceTiming] emit dropped: %s', e)
+
+
+_ROUND_AGGREGATE_COLUMNS = (
+    'round', 'startMs', 'totalMs', 'llmMs', 'toolMs', 'waitMs', 'approvalWaitMs',
+    'compactionMs', 'roundPrepMs', 'roundSettleMs', 'unattributedMs', 'requests',
+    'tools', 'requestEvidence',
+)
+
+
+def _round_aggregates(spans, t0, t_end):
+    """Per-round disjoint attribution from the complete fold, before the span cap.
+
+    A round's window runs from its ``round_start`` to the next round's start
+    (the last round: its own end, extended by its tools) and is attributed
+    with the document's priority order over the spans parented to that round.
+    Columns: ``_ROUND_AGGREGATE_COLUMNS``; ``startMs`` is the offset from the
+    trace start.
+    """
+    by_id = {span['spanId']: span for span in spans}
+    rounds = sorted((s for s in spans if s['kind'] == 'round' and s.get('tStart') is not None),
+                    key=lambda s: s['tStart'])
+    owned = {s['spanId']: [] for s in rounds}
+    for span in spans:
+        if span['kind'] in ('round', 'turn'):
+            continue
+        parent = span.get('parent')
+        while parent in by_id and by_id[parent]['kind'] not in ('round', 'turn'):
+            parent = by_id[parent].get('parent')
+        if parent in owned:
+            owned[parent].append(span)
+    rows = []
+    for index, rnd in enumerate(rounds):
+        start = rnd['tStart']
+        end = (rounds[index + 1]['tStart'] if index + 1 < len(rounds)
+               else max(rnd.get('tEnd') or t_end, start))
+        end = max(start, min(end, t_end))
+        kinds = _disjoint_attribution(owned[rnd['spanId']], start, end)
+        children = owned[rnd['spanId']]
+        rows.append([
+            rnd['attrs'].get('roundKey', ''), start - t0, end - start,
+            kinds['llm'] + kinds['llm_ttft'], kinds['tool'],
+            kinds['admission_wait'] + kinds['retry_wait'] + kinds['spawn_wait'],
+            kinds['approval_wait'], kinds['compaction'], kinds['round_prep'],
+            kinds['round_settle'], kinds['unattributedMs'],
+            sum(1 for s in children if s['kind'] == 'llm'
+                and s['attrs'].get('requestLevel') == 'logical'),
+            sum(1 for s in children if s['kind'] == 'tool'),
+            rnd['attrs'].get('requestEvidence', ''),
+        ])
+    return {'columns': list(_ROUND_AGGREGATE_COLUMNS), 'rows': rows}
 
 
 def _first_token_summary(spans):
@@ -1153,7 +1227,7 @@ def _fold_task_trace(
     summary = _disjoint_summary(spans, t0, eff_end, attribution)
     summary['totalMs'] = eff_end - t0
     if ledger_out is not None:
-        ledger_out.update(kindMs=dict(attribution), rounds=len(round_order))
+        ledger_out.update(kindMs=dict(attribution), rounds=len(round_order), roundAggregates=_round_aggregates(spans, t0, eff_end))
     summary['ttftMs'], summary['failedAttemptMs'] = _first_token_summary(spans)
     over = []
     for s in spans:
@@ -1176,8 +1250,8 @@ def _fold_task_trace(
         # fold flat, but the llm structure is not derivable — say so.
         coverage, coverage_reason = 'partial', 'no-round-markers'
 
-    if observer_gap:
-        coverage, coverage_reason = 'partial', 'observer-gap'
+    if observer_gap or span_fold.lost_request_rounds:
+        coverage, coverage_reason = 'partial', 'observer-gap' if observer_gap else 'request-evidence-lost'
     if event_limit:
         coverage, coverage_reason = 'partial', 'event-limit'
     if clock_regressed:

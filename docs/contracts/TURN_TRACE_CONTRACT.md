@@ -135,7 +135,7 @@ GET /api/v1/tasks/by-conv/<conv_id>      (scope: tasks; discovery)
   "status": "done",            // done | error | aborted | running
   "running": false,
   "coverage": "full",          // full | partial
-  "coverageReason": "flow",    // partial: flow | no-round-markers | event-limit | clock-regression | clock-domain-change | clock-unavailable | observer-gap | event-read-failed
+  "coverageReason": "flow",    // partial: flow | no-round-markers | event-limit | clock-regression | clock-domain-change | clock-unavailable | request-evidence-lost | observer-gap | event-read-failed
   "clockSource": "server-monotonic", // server-monotonic | legacy-wall | mixed
   "tStart": 1724000000000,     // epoch 锚定的单调轴；旧记录从首行开始
   "tEnd":   1724000080000,     // epoch ms，终帧；进行中为 null
@@ -212,7 +212,7 @@ GET /api/v1/tasks/by-conv/<conv_id>      (scope: tasks; discovery)
 | `llm` | `round_start` → `round_end` | 轮次级包络段；有逻辑请求证据时其中的准备/结算窗口由 `round_prep`/`round_settle` 认领。`attrs.attempts` 挂本轮 `round_usage` join（`streamElapsedMs` 权威值；`responseHeadersMs`：该结算尝试从请求发出到响应头到达，不含路由准入，来自 usage 私有键 `_response_headers_ms`，旧数据缺省） |
 | `llm`（逻辑请求） | `model_request_start` → `model_request_complete` | `requestLevel:logical`；未标 level 的旧数据同样只证明逻辑请求；归属**开始时打开的轮次** |
 | `startup` | 执行时钟起点 → 首个执行边界（`round_start`/`step_start`/`model_request_start`/`tool_start`/终态） | 父段 + 已命名阶段子段：`dispatch`（首条事件前）、`executor_queue`、`worker_start`、`workspace`、`translation`、`config`、`tools`、`memory_load`、`memory_select`、`context`、`handoff` |
-| `round_prep` | `round_start` → 本轮首个逻辑请求开始（无请求则到 `round_end`/当前） | 仅在轨迹含逻辑请求证据时派生；与 `[RoundPrepTiming]` 同一窗口 |
+| `round_prep` | `round_start` → 本轮首个逻辑请求开始（无请求则到 `round_end`/当前） | 仅在轨迹含逻辑请求证据时派生；与 `[RoundPrepTiming]` 同一窗口。本轮已证明模型响应（本轮 `round_usage` 或 `round_end.reason=tools`）却没有请求段，说明请求证据丢失（有界/精简的事件日志）：不切 `round_prep`/`round_settle`，轮次级 llm 段收缩到用量证明的请求窗口（`round_usage` 时刻减 `streamElapsedMs`，否则为空），其余计入 `unattributedMs`，轮次 `attrs.requestEvidence=lost`，文档 `coverage=partial`/`coverageReason=request-evidence-lost`；工具与 poll 等待从不因此记为准备 |
 | `round_settle` | 本轮末个逻辑请求结束（无请求证据则 `round_end`）→ 下一 `round_start`（末轮到其 `round_end`） | 工具派发、结果落盘与循环簿记；内部工具/等待保留自己的种类 |
 | `finalize` | 末轮 `round_end`（或末个 `step_complete`）→ 终态事件 | 仅已结算任务；收尾结算 |
 | `llm`（dispatcher 子段） | 同上 | `requestLevel:provider_attempt`、`attemptLevel:true`、`attemptScope:dispatcher`；按 `parentSpanId` 挂在逻辑请求下，每次调用独立 ordinal，失败先关闭再等待重试；不宣称覆盖 transport 内部每次 HTTP/路由尝试 |
@@ -438,6 +438,11 @@ roundSettleMs=… finalizeMs=… failedAttemptMs=… coverage=…`。所有数�
 `rounds` 取自 `ledger_out`，故 `admissionWaitMs + retryWaitMs + spawnWaitMs == waitMs`、
 `startupMs + roundPrepMs + roundSettleMs + finalizeMs == orchestrationMs`。同一任务的终态
 投影重建（CAS rebase、保留回执重试）不重复记录。线形与聚合工具见 `docs/LOGGING.md`。
+领导会话（`coordinator-*`）的同一次结算另写持久 lead-audit 流（`docs/LOGGING.md`，
+"Durable lead-audit stream"）：`turn_trace_summary`（文档 summary）与
+`turn_trace_rounds`（`ledger_out.roundAggregates`：在 256 span 上限压缩**之前**、由完整
+fold 按轮次计算的不相交分账行，窗口为本轮 `round_start` 到下一轮 `round_start`），
+故长领导尝试被丢弃的 span 不再让逐轮聚合丢失。
 问题：并行工具同时排队时，各等待 span 的原始求和会超过墙钟，无法与 `waitMs` 对账。
 决定：拆分沿用 summary 的同一优先级不相交分账（单个工具的串行等待与原始求和相等）。
 否决的备选：原始 span 求和（并行重复计）；在 summary 中新增桶（破坏桶的不相交

@@ -464,6 +464,43 @@ def test_physical_task_and_publication_recheck_transitive_dependencies(dependenc
     assert c.repo.read(row['id'])['modelAttempts'] == []
 
 
+@pytest.mark.parametrize('change', ['prerequisite_resumed', 'evidence_unavailable', 'result_changed'])
+def test_a_born_worker_is_controlled_by_its_own_authority_not_dependency_readiness(dependency_context, change):
+    """Audit #6: readiness gates starting only. A born dependent whose prerequisite is no
+    longer ready (evidence lost across a restart, a later result revision) still resumes,
+    stops and runs: its prerequisite was consumed at birth. An unborn one stays deferred."""
+    c = dependency_context
+    prior = completed(c, reviewed=True)
+    row = dependent(c, [reference(prior)])
+    unborn = dependent(c, [reference(prior)], command='unborn-dependent')
+    c.repo.bind_execution(row['id'], 'dependent-turn', 'dependent-attempt')
+    if change == 'evidence_unavailable':
+        c.attempts['attempt-prerequisite'] = None
+    elif change == 'result_changed':
+        c.turns['turn-prerequisite']['projectionRevision'] = 6
+    else:
+        c.turns['turn-prerequisite']['projectionRevision'] = 6
+        c.attempts['attempt-prerequisite']['status'] = 'running'
+    assert state(c, row)['status'] != 'ready'
+    binding = c.repo.admission(row['id'])
+    assert admission.TrustedDispatch(binding).checked()['id'] == row['id']
+    assert c.repo.validate(binding)['id'] == row['id']  # the fence of every tool admission
+    with pytest.raises(ProjectDispatchError, match='not ready'):
+        c.repo.validate(c.repo.admission(unborn['id']))
+    assert c.service.dispatch(unborn['id'], principal=c.principal)['dispatch'] == 'deferred'
+
+
+def test_a_withdrawn_prerequisite_still_fences_a_born_worker(dependency_context):
+    """Readiness is not authority: a prerequisite revoked or stopped after the birth withdraws it."""
+    c = dependency_context
+    prior = completed(c, reviewed=True)
+    row = dependent(c, [reference(prior)])
+    c.repo.bind_execution(row['id'], 'dependent-turn', 'dependent-attempt')
+    record_stop(7, prior['request']['recipientId'], 1001, client=c.client)
+    with pytest.raises(ProjectDispatchError, match='withdrawn'):
+        admission.TrustedDispatch(c.repo.admission(row['id'])).checked()
+
+
 def test_eight_edges_and_128_node_graph_bound(dependency_context):
     c = dependency_context
     prior = [completed(c, 'prior-' + str(n), reviewed=True) for n in range(8)]

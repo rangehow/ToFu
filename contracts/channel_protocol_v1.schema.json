@@ -69,9 +69,11 @@
     "sources": [
       {"id": "conversation_roots", "rule": "A regular file in the sending conversation's verified workspace roots, read without following symlinks."},
       {"id": "own_artifacts", "rule": "An artifact or slide deck the sending conversation published, by its delivery URL."},
-      {"id": "owner_project_roots", "rule": "An attachment {path, project} naming one of the owner's registered project roots and a regular file inside it, read with the same no-follow snapshot and limits, recorded on the item with that project as its provenance: how a project's deliverable reaches the Global Router, the only conversation that sends (docs/CHANNELS.md C7)."}
+      {"id": "owner_project_roots", "rule": "An attachment {path, project} naming one of the owner's registered project roots and a regular file inside it, read with the same no-follow snapshot and limits, recorded on the item with that project as its provenance: how a project's deliverable reaches a chat (docs/CHANNELS.md C7)."},
+      {"id": "lead_worker_checkouts", "rule": "An attachment {path, worker} naming the assignment of a Worker the sending lead dispatched and a regular file in that Worker's registered checkout, read with the same no-follow snapshot and limits, recorded with that assignment as its provenance."},
+      {"id": "no_credentials", "rule": "Every file that leaves is refused when it carries a credential: a credential file by name, the exact value of a vault entry, or an issuer-documented credential format (lib/conversations/attachment_secrets.py)."}
     ],
-    "supportedPath": "Send it with channel_send from the Global Router. A project conversation reports the file's path to the Global Router and asks it to send; nothing sends through a platform login of its own."
+    "supportedPath": "Send it with channel_send from a lead: the Global Router to any thread, a Project Router to the owner's own command chat. Another project conversation reports the file's path to its lead and asks it to send; nothing sends through a platform login of its own."
   },
   "x-remedies": {
     "description": "What each remedy asks of the owner, in English for logs and the model; Settings shows its own translation of the same instruction.",

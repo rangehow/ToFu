@@ -286,6 +286,58 @@ def test_an_owner_message_steered_into_a_nonhuman_wake_is_its_request(runtime, d
         r.c.repo.validate(r.c.repo.admission(delegated['assignment_id']))
 
 
+def _answered_question(r, text, *, answered=True):
+    """The wake reply asked the owner with ask_human; the owner answered on the card."""
+    question = {'toolName': 'ask_human', 'guidanceId': 'hg_owner0001', 'status': 'awaiting_human',
+                'guidanceQuestion': 'Land the Paper A checkpoints now?'}
+    if answered:
+        question.update(status='completed', guidanceAnswerCommandId='answer-command-1', guidanceResponse=text)
+    r.turns['coordinator-turn']['projection'] = {'toolRounds': [question]}
+
+
+@pytest.mark.parametrize('delivery', ['this-attempt', 'answer-resume'])
+def test_the_owners_answer_to_a_wakes_question_is_its_request(runtime, delivery):
+    """Lead audit 2026-11-18 #5 (A6): a lead's nonhuman wake asked the owner, the owner answered
+    the card, and the lead still could not act on the answer. A verified owner answer the model
+    received counts as the Turn's owner request, like a steered owner message."""
+    r = runtime
+    _commitment_wake(r)
+    text = r.c.turn['projection']['content']
+    _answered_question(r, text)
+    if delivery == 'this-attempt':
+        r.task['_ownerGuidanceAnswers'] = ('hg_owner0001',)
+    else:
+        r.attempts['coordinator-attempt']['operation'] = 'answer_guidance'
+    delegated = r.call('delegate_project_work', **r.args)
+    assert delegated.get('dispatch') == 'accepted', delegated
+    row = r.c.repo.read(delegated['assignment_id'])
+    assert row['request']['authorizationSource'] == {
+        'conversationId': 'coordinator', 'turnId': 'coordinator-turn', 'projectionRevision': 1,
+        'guidanceId': 'hg_owner0001'}
+    from lib.project_dispatch.delegation import worker_input
+    assert 'the owner\u2019s answer to question hg_owner0001' in worker_input(r.c.repo, row['request'])
+    r.c.repo.validate(r.c.repo.admission(delegated['assignment_id']))
+    del r.turns['coordinator-turn']
+    from lib.project_dispatch.repository import ProjectDispatchError
+    with pytest.raises(ProjectDispatchError, match='changed or is not human'):
+        r.c.repo.validate(r.c.repo.admission(delegated['assignment_id']))
+
+
+@pytest.mark.parametrize('case', ['unanswered', 'not-delivered', 'another-question', 'not-ask-human'])
+def test_only_a_received_owner_answer_on_the_card_authorizes_a_wake(runtime, case):
+    r = runtime
+    _commitment_wake(r)
+    text = r.c.turn['projection']['content']
+    _answered_question(r, text, answered=case != 'unanswered')
+    if case != 'not-delivered':
+        r.task['_ownerGuidanceAnswers'] = ('hg_other0001',) if case == 'another-question' else ('hg_owner0001',)
+    if case == 'not-ask-human':
+        r.turns['coordinator-turn']['projection']['toolRounds'][0]['toolName'] = 'report_to_user'
+    refused = r.call('delegate_project_work', **r.args)
+    assert refused.get('code') == 'nonhuman_request', refused
+    assert not r.calls and not r.c.repo.list()
+
+
 def test_coordinator_source_reads_carry_turn_metadata_and_keep_the_human_body_fence(runtime):
     r = runtime
     reads, read_turn = [], r.c.repo.turn_get
@@ -1716,6 +1768,50 @@ def test_coordinator_review_is_exact_and_not_human_acceptance(runtime):
         r.service.review_for_coordinator(r.task, scope, arguments)
 
 
+@pytest.mark.parametrize('first', ['accept', 'reject'])
+def test_a_rework_supersedes_an_undelivered_review_and_links_its_repair(runtime, first):
+    """Audit 2026-11-18 #6 (D3): an immutable review turned every second thought into a new,
+    unlinked repair assignment. A rework of the same result supersedes the recorded accept or
+    reject, keeps it, and the repair links to it with rework_of; nothing else may change it."""
+    r = runtime
+    r.c.repo.workspace_get = lambda *a, **kw: None  # no delivery receipt: never delivered
+    result = r.call('delegate_project_work', **r.args)
+    row = r.c.repo.read(result['assignment_id']); execution = row['execution']
+    r.attempts[execution['attemptId']]['status'] = 'completed'
+    r.turns[execution['turnId']]['projectionRevision'] = 2
+    scope = {'user_id': 7, 'project_path': '/project', 'conversation_id': 'coordinator', 'binding_revision': 1}
+    judged = {'assignment_id': row['id'], 'result_revision': 2, 'decision': first, 'note': 'Looked fine'}
+    recorded = r.service.review_for_coordinator(r.task, scope, judged)['review']
+    rework = {**judged, 'decision': 'rework', 'note': 'The publication conflicts; redo on the branch'}
+    viewed = r.service.review_for_coordinator(r.task, scope, rework)
+    assert viewed['review']['decision'] == 'rework' and viewed['review']['supersedes'] == {
+        key: recorded[key] for key in ('actor', 'decision', 'note', 'resultRevision')}
+    assert r.service.review_for_coordinator(r.task, scope, rework) == viewed
+    for changed in (judged, {**rework, 'note': 'another rework'}):
+        with pytest.raises(ValueError, match='immutable'):
+            r.service.review_for_coordinator(r.task, scope, changed)
+    repair = r.call('delegate_project_work', **{**r.args, 'idempotency_key': 'repair', 'rework_of': {
+        'assignmentId': row['id'], 'grantRevision': 1, 'resultRevision': 2}})
+    assert 'error' not in repair, repair
+    assert r.c.repo.read(repair['assignment_id'])['request']['reworkOf']['assignmentId'] == row['id']
+
+
+def test_a_delivered_result_keeps_its_review(runtime, monkeypatch):
+    from lib.project_dispatch import publication
+    r = runtime
+    result = r.call('delegate_project_work', **r.args)
+    row = r.c.repo.read(result['assignment_id']); execution = row['execution']
+    r.attempts[execution['attemptId']]['status'] = 'completed'
+    r.turns[execution['turnId']]['projectionRevision'] = 2
+    scope = {'user_id': 7, 'project_path': '/project', 'conversation_id': 'coordinator', 'binding_revision': 1}
+    judged = {'assignment_id': row['id'], 'result_revision': 2, 'decision': 'accept', 'note': 'Looked fine'}
+    r.service.review_for_coordinator(r.task, scope, judged)
+    monkeypatch.setattr(publication, 'delivery_final', lambda *a: True)
+    with pytest.raises(ValueError, match='delivered'):
+        r.service.review_for_coordinator(r.task, scope, {**judged, 'decision': 'rework', 'note': 'redo'})
+    assert r.c.repo.read(row['id'])['review']['decision'] == 'accept'
+
+
 @pytest.mark.parametrize('violation', ['readonly', 'synthetic', 'unattended', 'source'])
 def test_role_visible_delegation_keeps_request_authority_gates(runtime, violation):
     from tests.tasks_pkg.test_coordinator_tool_surface import assemble, names, wire
@@ -2622,3 +2718,52 @@ def test_a_coordinators_poll_reaches_only_its_workers_whatever_its_catalog(runti
     assert foreign['workers'][0]['status'] == 'failed_to_start', foreign
     assert 'not one of your assignment IDs' in foreign['workers'][0]['error']['error']
     assert [row['assignment_id'] for row in listed['workers']] == [worker['assignment_id']], listed
+
+
+
+
+def _round_end(task, calls):
+    from lib.tasks_pkg.orchestrator._tool_loop_breaker import finish_after_idle_coordinator_wait
+    state = SimpleNamespace(model='model-a', exit_reason='running')
+    return finish_after_idle_coordinator_wait(task, state, message={'tool_calls': calls},
+                                              round_num=0, tid='t'), state
+
+
+_POLL_CALL = {'function': {'name': 'poll'}}
+
+
+def test_a_timeout_nothing_would_resume_keeps_the_model_round(runtime):
+    """Without result-driven continuation in the request's policy, ending the Turn would
+    strand its Workers' results: the model keeps its next round."""
+    r = runtime
+    worker = r.call('delegate_project_work', **r.args)
+    result = r.call('poll', ids=[worker['assignment_id']], wait_s=0.01)
+    assert result['wait'] == 'timeout' and 'Turn ends here' not in result['instruction']
+    assert not r.task.get('_coordinatorIdleWaits')
+    assert _round_end(r.task, [_POLL_CALL])[0] is False
+
+
+def test_an_idle_wait_ends_the_turn_while_settlement_resumes_the_coordinator(runtime):
+    """C3 of the 2026-11-18 lead audit: 204 polls timed out with nothing new and each cost
+    another model round only to poll again (KL+PL 54.6 h of empty waits). A round whose
+    every call is such a wait now ends the Turn; the Workers' settlement resumes it."""
+    from dataclasses import replace
+    from lib.tasks_pkg.orchestrator._tool_loop_breaker import IDLE_COORDINATOR_WAIT_TEXT
+    r = runtime
+    policy = r.task['_coordinatorWorkerPolicy']
+    r.task['_coordinatorWorkerPolicy'] = replace(policy, coordinator_tools=tuple(sorted(
+        set(policy.coordinator_tools) | {'delegate_project_work', 'get_project_workers',
+                                         'finish_project_request', 'report_to_user'})))
+    worker = r.call('delegate_project_work', **r.args)
+    result = r.call('poll', ids=[worker['assignment_id']], wait_s=0.01)
+    assert result['wait'] == 'timeout' and 'your Turn ends here' in result['instruction']
+    assert len(r.task['_coordinatorIdleWaits']) == 1
+    # A round with any other call keeps its model round, and the record is the round's only.
+    finished, _ = _round_end(r.task, [_POLL_CALL, {'function': {'name': 'get_conversation'}}])
+    assert not finished and '_coordinatorIdleWaits' not in r.task
+    r.call('poll', ids=[worker['assignment_id']], wait_s=0.01)
+    r.task['content'] = ''
+    finished, state = _round_end(r.task, [_POLL_CALL])
+    assert finished and state.exit_reason == 'coordinator_idle_wait'
+    assert r.task['content'] == IDLE_COORDINATOR_WAIT_TEXT
+    assert r.task['_toolLoopCleanFinish']['reason'] == 'coordinator_idle_wait'

@@ -9,9 +9,10 @@ round, and a closed steer window queues it. A report notice inlines the chain
 of recall (project path, Project Router conversation, report kind, report Turn
 ID, title and message); the report Turn stays the canonical record. A question
 notice names the question (Turn, question id, blocking flag, text, options),
-tells the router to read the project conversation first, where to put the
-question to the owner (the owner's enabled 大象 command chat, else its own
-reply) and to forward the owner's answer verbatim with ``route_to_project``;
+tells the router to read the project conversation first and to forward the
+owner's answer verbatim with ``route_to_project``. With the owner's enabled
+大象 command chat the question is put there directly and the Router is copied;
+otherwise the notice tells the Router to ask in its own reply;
 the question card stays the canonical record. A deterministic command id per
 report Turn, or per question tool call, makes replay (including boot recovery
 of a pending report and a re-executed tool call) deliver at most once. Notices
@@ -27,9 +28,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 
 from lib.identity import require_user_id
+from lib.log import get_logger
+
+logger = get_logger(__name__)
 
 
 def _command_id(prefix: str, identity: list) -> str:
@@ -135,9 +140,11 @@ def render_notice(report: dict) -> str:
         'Message:',
         report['message'],
         '',
-        'The report Turn in the Project Router conversation is the canonical record; read it and its '
-        'evidence with get_conversation. Decide whether, when and where the owner needs to hear about '
-        'this; output exactly [SILENT] alone when no new owner decision or action is needed.',
+        'The report Turn in the Project Router conversation is the canonical record; this notice already '
+        'holds its title, message, tasks and files, so decide from it and read the conversation with '
+        'get_conversation only for evidence the message does not hold. Decide whether, when and where '
+        'the owner needs to hear about this; output exactly [SILENT] alone when no new owner decision '
+        'or action is needed.',
     ])
 
 
@@ -163,15 +170,23 @@ def _question_lines(question: dict) -> list[str]:
     return lines
 
 
-def render_question_notice(question: dict, command_chat: str | None = None) -> str:
-    """The Global Router's view of one question; ``command_chat`` is the owner's enabled 大象 thread."""
+def render_question_notice(question: dict, command_chat: str | None = None, *, posted: bool = False) -> str:
+    """The Global Router's view of one question; ``command_chat`` is the owner's enabled 大象 thread.
+
+    ``posted``: the question already reached that chat directly (``relay_project_question``), so the
+    Router is only copied: it never asks again and forwards the owner's answer.
+    """
     guidance_id = question['guidanceId']
     if question['blocking']:
         waiting = 'The Project Router is waiting for the answer: that project stops until the owner answers.'
     else:
         waiting = ('The Project Router did not wait: it works on the default its question states until '
                    'the owner answers.')
-    if command_chat:
+    if command_chat and posted:
+        ask = (f'Otherwise do not ask again: the question already went to the owner\'s 大象 command chat '
+               f'({command_chat}) directly from the Project Router, and you are copied. An owner reply '
+               'there reaches you as their message.')
+    elif command_chat:
         ask = (f'Otherwise ask the owner on 大象: send the question with its options to their command '
                f'chat with channel_send(thread="{command_chat}", idempotency_key="{guidance_id}"); '
                'the command chat sends at once without approval, and a turn this notice starts sends '
@@ -187,9 +202,9 @@ def render_question_notice(question: dict, command_chat: str | None = None) -> s
         f'blocking={"true" if question["blocking"] else "false"}. {waiting}',
         *_question_lines(question),
         '',
-        'The question card in the Project Router conversation is the canonical record. First read that '
-        'conversation with get_conversation: if the owner already answered there, output exactly '
-        '[SILENT] alone. ' + ask,
+        'The question card in the Project Router conversation is the canonical record; this notice holds '
+        'the whole question, so ask without re-reading that conversation. If the owner already answered '
+        'the card (an earlier notice or the owner says so), output exactly [SILENT] alone. ' + ask,
         'When the owner answers, forward their own message verbatim with route_to_project('
         f'project_path="{question["projectPath"]}", source_turn_id=<the Turn of their message>, or '
         f'source_steer_id=<id> for a message sent while you were replying, note="Answers question '
@@ -252,11 +267,45 @@ def _command_chat(owner: int, client) -> str | None:
     return account.get('commandChat') if account.get('enabled') else None
 
 
-def relay_project_question(owner: int, question: dict, *, client=None, dispatch=None) -> str | None:
-    """Relay one posted ``ask_human`` question; returns the delivery disposition or None.
+def owner_question_text(question: dict) -> str:
+    """The question as the owner reads it in their command chat (one message per question)."""
+    project = os.path.basename(question['projectPath'].rstrip('/')) or question['projectPath']
+    wait = '该项目在等你的回答' if question['blocking'] else '该项目先按问题里的默认继续'
+    lines = [f'[{project} 负责人提问 · {question["guidanceId"]}]（{wait}）', *_question_lines(question), '',
+             '在 Tofu 中该负责人的对话里回答这张问题卡，或直接在这里回复（总负责人会原样转交）。']
+    return '\n'.join(lines)
+
+
+def _post_to_owner(owner: int, question: dict, command_chat: str, post) -> bool:
+    """Put the question in the owner's command chat at once; False when it could not be queued.
+
+    The command chat always sends (docs/CHANNELS.md C5); the item's identity is the
+    question's tool call, so a replayed relay queues it once.
+    """
+    if post is None:
+        from lib.channels.outbox import enqueue as post
+    try:
+        post(owner, command_chat, owner_question_text(question),
+             idempotency_key=question_relay_command_id(owner, question['coordinatorId'], question['turnId'],
+                                                       question['toolCallId']),
+             origin={'kind': 'project_question', 'conversationId': question['coordinatorId'],
+                     'turnId': question['turnId']}, authority='nonhuman')
+    except Exception:
+        logger.warning('[RouterRelay] owner command chat question post failed; the Global Router asks '
+                       'instead', exc_info=True)
+        return False
+    return True
+
+
+def relay_project_question(owner: int, question: dict, *, client=None, dispatch=None,
+                           post=None) -> str | None:
+    """Put one ``ask_human`` question to the owner, copying the Global Router; returns its disposition.
 
     ``question``: projectPath, coordinatorId, turnId, toolCallId, guidanceId,
-    blocking, question, options and (batch form) questions.
+    blocking, question, options and (batch form) questions. With an enabled
+    大象 command chat the question goes there directly (``post``, default
+    ``outbox.enqueue``) and the Router's notice is a copy (docs/ROUTER.md R9,
+    "Leads reach the owner directly"); otherwise the Router asks.
     During quiet hours the relay is held (docs/ROUTER.md R10 quiet hours).
     """
     owner = require_user_id(owner, context='question relay')
@@ -269,11 +318,13 @@ def relay_project_question(owner: int, question: dict, *, client=None, dispatch=
                                              question['turnId'], question['toolCallId'])
         hold_relay(owner, 'question', identity, question, client=client)
         return 'held'
-    content = render_question_notice(question, _command_chat(owner, client))
+    command_chat = _command_chat(owner, client)
+    posted = bool(command_chat) and _post_to_owner(owner, question, command_chat, post)
+    content = render_question_notice(question, command_chat, posted=posted)
     return _dispatch_notice(owner, router_id, question['coordinatorId'], content,
                             question_relay_command_id(owner, question['coordinatorId'], question['turnId'],
                                                       question['toolCallId']), dispatch)
 
 
-__all__ = ['question_relay_command_id', 'relay_command_id', 'relay_project_question',
+__all__ = ['owner_question_text', 'question_relay_command_id', 'relay_command_id', 'relay_project_question',
            'relay_project_report', 'render_notice', 'render_question_notice']

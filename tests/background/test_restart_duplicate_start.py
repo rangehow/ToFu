@@ -207,6 +207,47 @@ def test_background_continuation_of_a_scheduled_identity_is_a_no_op(
     assert _workflow_wakes(conv_id) == []
 
 
+def test_background_continuation_that_loses_the_turn_to_another_resume_is_deferred(
+        _isolated_runtime, monkeypatch, caplog):
+    """2026-11-18 05:14:23: the restart continuation created the Turn's attempt first;
+    the wake's turn.attempt.create lost the CAS (database_conflict) and the drain
+    raised it as a failure with a traceback, although the winning attempt consumed
+    the durable receipt at its next round."""
+    import logging
+    from lib.conversation_sync.runtime import conversation_turn_commands
+    from lib.project_dispatch import admission
+
+    conv_id = 'worker-background-identity-raced'
+    seed_conversation(conv_id, user_id=1, title='Worker lane')
+    _published_receipt(conv_id, 'bg_receipt')
+    binding = {'assignmentId': '27ce29e9', 'owner': 1}
+    monkeypatch.setattr(message_queue, '_background_receipts', lambda *a, **kw: [{
+        'queueId': 'receipt-1', 'timestamp': 1,
+        'config': {'model': 'test', admission.KEY: binding}}])
+    monkeypatch.setattr('lib.background_command_delivery.settle_closed_dispatch_completion',
+                        lambda *a, **kw: False)
+    execution = {'turnId': 'ed1a211d', 'attemptId': 'bcfcebc9', 'taskId': LANE_TASK_ID}
+    repository = SimpleNamespace(
+        get_attempt=lambda attempt_id: {'attemptId': attempt_id, 'status': 'interrupted'},
+        turn_get=lambda *a, **kw: {'projectionRevision': 3})
+    monkeypatch.setattr(admission.TrustedDispatch, 'checked',
+                        lambda self: {'execution': execution})
+    monkeypatch.setattr(admission.TrustedDispatch, 'repository', property(lambda self: repository))
+    monkeypatch.setattr(admission.TrustedDispatch, 'principal', property(lambda self: None))
+
+    def raced(*args, **kwargs):
+        raise LifecycleConflict('database_conflict', 'database_conflict')
+    monkeypatch.setattr(conversation_turn_commands, 'resume_turn', raced)
+    monkeypatch.setattr(message_queue, 'dispatch_next_queued',
+                        lambda *a, **kw: pytest.fail('no ordinary wake for a bound lane'))
+
+    with caplog.at_level(logging.INFO, logger='lib.message_queue'):
+        assert message_queue.dispatch_completed_background_batch(conv_id, user_id=1) is None
+    assert _workflow_wakes(conv_id) == []
+    assert any('background continuation deferred' in record.getMessage()
+               and record.levelno == logging.INFO for record in caplog.records)
+
+
 def test_registry_never_replaces_a_live_carrier_of_its_identity(
         _isolated_runtime, monkeypatch):
     """A refused duplicate leaves the live carrier, its row and trace intact."""

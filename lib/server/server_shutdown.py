@@ -195,6 +195,38 @@ def request_graceful_shutdown(
     return timer
 
 
+def exit_after_completed_lifespan(
+    app: Any,
+    *,
+    run_exit_handlers: Any = None,
+    exit_fn: Any = None,
+) -> None:
+    """End the serving process once its lifespan stopped every owner cleanly.
+
+    Interpreter exit joins every non-daemon thread, including demand-executor
+    carriers still running work whose request was cancelled and whose owner
+    already stopped (an abandoned sync view, a search fan-out, a boot phase).
+    That join held the 2026-11-18 02:12:28 API host until the hard deadline
+    forced exit 1. After a clean lifespan nothing waits for that work, so the
+    registered exit handlers run (each bounded by its owner) and the process
+    exits 0. A lifespan that failed or never stopped returns and keeps the
+    interpreter's joins under the hard deadline.
+    """
+    lifecycle = getattr(app, 'extensions', {}).get('tofu_lifecycle') or {}
+    if lifecycle.get('status') != 'stopped' or lifecycle.get('shutdown_errors'):
+        return
+    if run_exit_handlers is None:
+        import atexit
+        run_exit_handlers = atexit._run_exitfuncs
+    run_exit_handlers()
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except Exception as exc:
+            _MODULE_LOG.debug('flush %s before exit failed: %s', stream, exc)
+    (os._exit if exit_fn is None else exit_fn)(0)
+
+
 def _shutdown_timing_to_stderr(line: str) -> None:
     """Mirror one shutdown-timing line to the terminal/captured console.
 
@@ -592,6 +624,7 @@ async def shutdown_production_runtime(
 
 
 __all__ = [
+    'exit_after_completed_lifespan',
     'graceful_shutdown_signals',
     'http_keep_alive_timeout_seconds',
     'request_graceful_shutdown',

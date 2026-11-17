@@ -10556,6 +10556,24 @@
     },
     {
       "method": "GET",
+      "path": "/api/v4/router/owner-delegation/history",
+      "transport": "http",
+      "responseContract": "tofu.api/v4",
+      "summary": "Query every delegated action ever recorded for the owner",
+      "tags": [
+        "router"
+      ],
+      "scope": "conversations",
+      "public": false,
+      "requiredScopes": [
+        "conversations"
+      ],
+      "documented": true,
+      "owner": "routes/api_v1/router.py",
+      "handler": "router_owner_delegation_history"
+    },
+    {
+      "method": "GET",
       "path": "/api/v4/router/portfolio",
       "transport": "http",
       "responseContract": "tofu.api/v4",

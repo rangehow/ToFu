@@ -807,9 +807,24 @@ def make_task_abort_check(task: dict, *, nonblocking_storage: bool = False):
     return _check
 
 
+_PROVIDER_ABORT_CHECK_KEY = '_providerAbortCheck'
+
+
 def make_provider_abort_check(task: dict):
-    """Provider-stream abort check with a non-blocking storage observer."""
-    return make_task_abort_check(task, nonblocking_storage=True)
+    """Provider-stream abort check with a non-blocking storage observer.
+
+    One check per task: its ``_DB_TOMBSTONE_POLL_S`` throttle and sticky hit
+    then span every provider request of the task. A check built per request
+    started with no previous probe, so each request spawned a probe thread
+    and paid one storage read (docs/HARNESS_PERFORMANCE.md, "Round hops").
+    """
+    if not isinstance(task, dict):
+        return make_task_abort_check(task, nonblocking_storage=True)
+    check = task.get(_PROVIDER_ABORT_CHECK_KEY)
+    if check is None:
+        check = task.setdefault(_PROVIDER_ABORT_CHECK_KEY,
+                                make_task_abort_check(task, nonblocking_storage=True))
+    return check
 
 
 def list_running_tasks(

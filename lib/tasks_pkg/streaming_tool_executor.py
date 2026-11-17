@@ -45,6 +45,7 @@ import threading
 import time
 from collections.abc import Mapping
 from concurrent.futures import Future
+from concurrent.futures import wait as futures_wait
 from lib.observability import InstrumentedThreadPoolExecutor
 # See _pipeline.py: futures-TimeoutError is a distinct class on 3.10.
 from concurrent.futures import TimeoutError as _FuturesTimeoutError
@@ -172,6 +173,28 @@ def _stream_prefetch_workers() -> int:
                 'falling back to 1 worker: %s', error)
             _stream_prefetch_workers_cache = 1
     return _stream_prefetch_workers_cache
+
+
+_shared_prefetch_pool_instance: InstrumentedThreadPoolExecutor | None = None
+_shared_prefetch_pool_lock = threading.Lock()
+
+
+def _shared_prefetch_pool() -> InstrumentedThreadPoolExecutor:
+    """The process's one prefetch executor, shared by every round's accumulator.
+
+    A pool per accumulator started a new carrier thread on every round's first
+    prefetch and retired it at the round's close. Each accumulator still owns
+    exactly its futures: close() cancels the ones not yet entered and, when
+    asked to wait, waits for those alone.
+    """
+    global _shared_prefetch_pool_instance
+    with _shared_prefetch_pool_lock:
+        if (_shared_prefetch_pool_instance is None
+                or getattr(_shared_prefetch_pool_instance, '_shutdown', False)):
+            _shared_prefetch_pool_instance = InstrumentedThreadPoolExecutor(
+                max_workers=_stream_prefetch_workers(), metric_pool='tool-prefetch',
+                thread_name_prefix='stream-tool')
+        return _shared_prefetch_pool_instance
 
 
 # Speculative prefetch ceiling: at most 8 read-only calls per stream are
@@ -303,9 +326,7 @@ class StreamingToolAccumulator:
         self._tool_round_num = tool_round_num
         self._round_num = round_num
         self._project_enabled = project_enabled
-        self._pool = InstrumentedThreadPoolExecutor(max_workers=_stream_prefetch_workers(),
-                                        metric_pool='tool-prefetch',
-                                        thread_name_prefix='stream-tool')
+        self._pool = _shared_prefetch_pool()
         self._closed = False
         # tc_id → (future, fn_name, fn_args, submit_time)
         self._futures: dict[str, tuple[Future, str, dict, float]] = {}
@@ -357,12 +378,9 @@ class StreamingToolAccumulator:
             for future in self._discarded_futures:
                 future.cancel()
         try:
-            self._pool.shutdown(
-                wait=wait, cancel_futures=cancel_futures)
-        except Exception as error:
-            logger.warning(
-                '[%s] StreamingToolExec: pool shutdown failed: %s',
-                self._tid, error)
+            if wait:
+                futures_wait([future for future, _name, _args, _started in self._futures.values()]
+                             + list(self._discarded_futures))
         finally:
             self._futures.clear()
             self._discarded_futures.clear()

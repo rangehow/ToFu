@@ -108,3 +108,42 @@ def test_api_host_never_shares_the_host_global_heartbeat(tmp_path):
     deployment.args = argparse.Namespace()
     heartbeat = Path(deployment.api_environment()['TOFU_HEARTBEAT_DIR'])
     assert tmp_path in heartbeat.parents
+
+
+def test_stub_bodies_never_wait_for_a_delayed_ack():
+    """A reused connection gets each response in well under the 40 ms delayed-ACK timer."""
+    import time
+    import urllib3
+    stub = stub_provider.StubProvider().start()
+    try:
+        pool = urllib3.HTTPConnectionPool('127.0.0.1', stub.port, maxsize=1)
+        body = json.dumps({'model': 'x', 'stream': True, 'max_tokens': 8, 'messages': [
+            {'role': 'user', 'content': MARK.format('noop', 3)}]}).encode()
+        elapsed = []
+        for _ in range(6):
+            started = time.perf_counter()
+            response = pool.urlopen('POST', '/v1/messages', body=body, preload_content=False,
+                                    headers={'content-type': 'application/json'})
+            b''.join(response.stream(65536))
+            response.release_conn()
+            elapsed.append(time.perf_counter() - started)
+        assert sorted(elapsed)[len(elapsed) // 2] < 0.02
+    finally:
+        stub.close()
+
+
+def test_round_profile_charges_turn_samples_to_the_first_matching_component():
+    import round_profile
+    lines = [
+        'process 1:"x";thread (2): w;run_task (lib/t.py:1);dispatch;prepare_request (lib/llm/_sse_core.py:5) 6',
+        'process 1:"x";thread (2): w;run_task (lib/t.py:1);execute_tools (lib/r.py:9);'
+        'checkpoint_invocation (lib/p.py:3);Condition.wait (threading.py:1) 3',
+        'process 1:"x";thread (2): w;run_task (lib/t.py:1);somewhere_else (lib/s.py:2) 1',
+        'process 1:"x";thread (3): idle;Condition.wait (threading.py:1) 50',
+    ]
+    result = round_profile.attribute(lines, wall_ms_per_request=60.0)
+    rows = {row['component']: row for row in result['rows']}
+    assert result['samples'] == 10
+    assert rows['request prep: prepare_request (seal, translate, recount, fingerprints)']['ms_per_request'] == 36.0
+    assert rows['event barrier: tools_in_flight']['share'] == 0.3
+    assert rows['other loop work']['ms_per_request'] == 6.0

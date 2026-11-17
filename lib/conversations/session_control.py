@@ -24,7 +24,14 @@ def _text(arguments, name):
     return value
 
 
-def _target(scope, arguments, *, write=False):
+def _target(scope, arguments, *, write=False, reach=None):
+    """The owned conversation named by ``arguments`` and its metadata.
+
+    A Project Coordinator's target stays in its project, unless ``reach`` (the
+    owner's full delegation, docs/ROUTER.md R9 "Cross-project action") admits
+    another project's conversation: it is called with that project and raises
+    when the delegation does not cover it.
+    """
     from lib.conversations.project_identity import normalize_project_path
     from lib.conversations.repository import ConversationRepository
     from lib.router.policy import is_router_scope
@@ -39,9 +46,12 @@ def _target(scope, arguments, *, write=False):
         raise PermissionError('Conversation not found in this owner scope')
     metadata = getattr(snapshot, 'metadata', snapshot)
     settings = metadata.get('settings') or {}
-    if (not is_router_scope(scope) and normalize_project_path(settings.get('projectPath') or '')
-            != normalize_project_path(scope['project_path'])):
-        raise PermissionError('Conversation belongs to another project; use its Coordinator or the Global Router')
+    project = normalize_project_path(settings.get('projectPath') or '')
+    if not is_router_scope(scope) and project != normalize_project_path(scope['project_path']):
+        if reach is None:
+            raise PermissionError('Conversation belongs to another project; use its Coordinator or the '
+                                  'Global Router, or act under the owner\u2019s delegation (owner_delegation)')
+        reach(project)
     if write and settings.get('readOnly'):
         raise PermissionError('Read-only conversations cannot be controlled')
     return conversation_id, metadata
@@ -113,7 +123,16 @@ def _status_window(conversation_id, owner, arguments, status, fits):
         before = page['nextBeforeOrdinal']
 
 
-def inspect_session(scope, arguments, *, model=''):
+def _delegated_reach(task, scope):
+    """Reading another project's session needs the owner's full delegation (conversation_control)."""
+    def reach(_project):
+        from lib import lifecycle_approval as gate
+        from lib.router.owner_delegation import router_requester
+        gate.check_delegation(scope['user_id'], router_requester(task, scope), 'conversation_control')
+    return reach
+
+
+def inspect_session(scope, arguments, *, model='', task=None):
     """Return canonical execution facts; no transcript or private executor config.
 
     No read spans the whole conversation, whose history can exceed the
@@ -126,7 +145,8 @@ def inspect_session(scope, arguments, *, model=''):
     from lib.tasks_pkg.compaction.api import fits_tool_result_budget
     from lib.turn_lifecycle import get_attempt, get_turn
 
-    conversation_id, metadata = _target(scope, arguments)
+    conversation_id, metadata = _target(
+        scope, arguments, reach=None if task is None else _delegated_reach(task, scope))
     owner = scope['user_id']
     status = {'conversation_id': conversation_id, 'title': metadata.get('title', ''),
               'read_only': bool((metadata.get('settings') or {}).get('readOnly')),
@@ -176,16 +196,18 @@ def _control_session(task, scope, arguments, *, acting_principal=None):
     action = _text(arguments, 'action')
     if action == 'set_model':
         from .session_model import set_session_model
-        if acting_principal is None:
-            acting_principal = source_for_task(ProjectDispatchRepository(
-                scope['user_id'], scope['project_path']), task, delegated=True)[0]
-        return set_session_model(task, scope, acting_principal, arguments)
+        if acting_principal is not None:
+            return set_session_model(task, scope, acting_principal, arguments, delegated=True)
+        return set_session_model(task, scope, source_for_task(ProjectDispatchRepository(
+            scope['user_id'], scope['project_path']), task, delegated=True)[0], arguments)
     if action not in {'continue', 'checkpoint_resume', 'regenerate', 'stop', 'follow_up'}:
         raise ValueError('action must be continue, checkpoint_resume, regenerate, stop, follow_up '
                          'or set_model')
     if arguments.get('attachments') and action != 'follow_up':
         raise ValueError('attachments go with a follow_up instruction only')
-    conversation_id, _ = _target(scope, arguments, write=True)
+    # Under the owner's delegation the grant was checked and recorded before this call.
+    conversation_id, _ = _target(scope, arguments, write=True,
+                                 reach=None if acting_principal is None else lambda _project: None)
     turn_id, attempt_id = _text(arguments, 'turn_id'), _text(arguments, 'attempt_id')
     key = _text(arguments, 'idempotency_key')
     expected = arguments.get('expected_revision')
@@ -323,7 +345,7 @@ def _successor(task, scope, arguments, row, turn, service):
     retry replays it and a different instruction for the same result is refused.
     """
     from lib.project_dispatch.delegation import successor_brief
-    from lib.project_dispatch.publication import delivery_final
+    from lib.project_dispatch.publication import delivery_final, delivery_view
     from lib.project_dispatch.repository import CommandReused
     from lib.project_dispatch.service import FollowUpRefused
     from .coordinator_workers import delegate
@@ -335,15 +357,27 @@ def _successor(task, scope, arguments, row, turn, service):
         raise FollowUpRefused('The Worker result changed since you read it; read get_conversation_status '
                               'and pin its current projectionRevision.')
     attempt = service.attempt_get(execution['attemptId'], user_id=scope['user_id'])
-    if row.get('publication') and not delivery_final(
-            row, attempt, service.workspace_get or service.repository.get_workspace):
-        raise FollowUpRefused('Its accepted result has not been delivered yet, so a new checkout would '
-                              'miss it. Poll its assignment_id until the delivery is canonical, then follow up.')
+    workspace_get = service.workspace_get or service.repository.get_workspace
+    held, unlanded = None, None
+    rework = (row.get('review') or {}).get('decision') == 'rework'
+    if row.get('publication') and not delivery_final(row, attempt, workspace_get):
+        # A conflict hold is final for this checkout too: only a merge on the current
+        # branch resolves it, which is exactly what the successor's checkout is. A
+        # rework that superseded the accept stopped its publication the same way.
+        held = (delivery_view(row, attempt, workspace_get) or {}).get('conflict')
+        unlanded = row['publication']['checkpointSha'] if held or rework else None
+        if not unlanded:
+            raise FollowUpRefused('Its accepted result has not been delivered yet, so a new checkout would '
+                                  'miss it. Poll its assignment_id until the delivery is canonical (or held '
+                                  'by a conflict, which a follow-up resolves), then follow up.')
     result_key = hashlib.sha256(json.dumps([row['id'], execution['attemptId']]).encode()).hexdigest()
     try:
         worker = delegate(task, scope, {
             'title': 'Follow-up of assignment ' + row['id'],
-            'brief': successor_brief(row, _instruction(arguments)),
+            'brief': successor_brief(row, _instruction(arguments), held_checkpoint=unlanded),
+            # A rework's repair links to the result it reworks (the dependency graph's reworkOf).
+            **({'rework_of': {'assignmentId': row['id'], 'grantRevision': row['grant']['revision'],
+                              'resultRevision': row['review']['resultRevision']}} if rework else {}),
             'idempotency_key': 'follow-up:' + result_key,
             **({'attachments': arguments['attachments']} if arguments.get('attachments') else {}),
         }, create=lambda scope, arguments: {'conversation_id': turn['conversationId']})
@@ -351,7 +385,9 @@ def _successor(task, scope, arguments, row, turn, service):
         raise FollowUpRefused(f'This result already continues in assignment {reused.assignment_id} with '
                               'another instruction; follow up on that session\u2019s latest Turn.') from reused
     return {'assignment_id': worker['assignment_id'], 'continues_assignment': row['id'],
-            'dispatch': worker['dispatch'], 'status': worker['status'], 'task_id': worker['task_id']}
+            'dispatch': worker['dispatch'], 'status': worker['status'], 'task_id': worker['task_id'],
+            **({'resolves_held_conflict': {'checkpoint_sha': row['publication']['checkpointSha'],
+                                           'paths': held['paths']}} if held else {})}
 
 
 def execute_session_tool(task, scope, name, arguments):
@@ -363,7 +399,7 @@ def execute_session_tool(task, scope, name, arguments):
 
     try:
         if name == 'get_conversation_status':
-            result = inspect_session(scope, arguments, model=task.get('model', ''))
+            result = inspect_session(scope, arguments, model=task.get('model', ''), task=task)
         elif arguments.get('owner_delegation') is not None:
             from lib.router.owner_delegation import delegated_conversation_control
             result = delegated_conversation_control(task, scope, arguments, control=control_session)

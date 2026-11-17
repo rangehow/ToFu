@@ -45,6 +45,9 @@ COORDINATOR_TOOLS = frozenset({
     # Every lead restarts under the owner's full delegation (docs/ROUTER.md R9,
     # owner decision 2026-11-18); the gate refuses without it.
     'restart_server',
+    # A Project Router messages the owner's own command chat directly (R9, "Leads reach
+    # the owner directly"); lib.channels.tools refuses every other thread.
+    'channel_send',
 })
 # The Project Coordinator's direct core: its role tools in recorded-use order until
 # core plus the discovery pair fill the Sankuai Claude tool-name budget. Recorded
@@ -186,6 +189,13 @@ def pin_coordinator_request_policy(conversation_id: str, config: dict, owner_use
     ordinary conversation, where it survives untouched). Pinning it keeps an
     owner/scheduled alternation from an authority-bearing drift that used to
     cold-rebuild the whole history on every other request.
+
+    ``desktopEnabled`` is inert for the same reason: the owner's attended Turn
+    resolves it true (lib/conv_config/_resolve.py) while scheduled turns and
+    continuations keep False, yet no desktop tool is in any coordinator-role
+    ceiling and await_device reaches every lead regardless. Pinning it False
+    also keeps the Workers this request delegates at the delegated-turn
+    default (docs/modules/remote_execution.md).
     """
     from lib.project_dispatch.admission import KEY
     if KEY in config:
@@ -200,7 +210,7 @@ def pin_coordinator_request_policy(conversation_id: str, config: dict, owner_use
     if not active:
         return config
     return {**config, 'tools': coordinator_tool_settings(config), 'humanGuidanceEnabled': True,
-            'schedulerEnabled': False,
+            'schedulerEnabled': False, 'desktopEnabled': False,
             SUBMITTED_TOOL_SETTINGS_KEY: submitted_tool_settings(config)}
 
 

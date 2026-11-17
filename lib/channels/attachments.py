@@ -7,7 +7,9 @@ its verified workspace roots, read without following symlinks, one of its own
 published artifacts, or a slide deck it produced) or, given ``{path,
 project}``, is a regular file inside one of the owner's registered project
 roots, read the same way and recorded with that project as its provenance
-(channel protocol P13), and fits 大象's documented upload limits
+(channel protocol P13), or, given ``{path, worker}``, is a regular file in the
+registered checkout of a Worker the sending lead dispatched; carries no
+credential (``lib.conversations.attachment_secrets``); and fits 大象's documented upload limits
 (``x-dxAttachments``) where the platform carries files; find the workspace files a final answer explicitly
 links; and, at send time, re-read an original from its source and refuse bytes
 that changed after the item was queued. Refusals are ``ChannelError`` codes
@@ -195,6 +197,34 @@ def _admit_project_file(owner: int, project: Any, path: Any, *, carried: bool) -
     return record
 
 
+def _admit_worker_file(task: dict[str, Any], worker: Any, path: Any, *, carried: bool) -> dict[str, Any]:
+    """``{path, worker}``: a regular file in the registered checkout of a Worker this lead dispatched.
+
+    ``lib.conversations.lead_attachments.lead_worker_checkout`` decides the
+    checkout (only the sending lead's own Workers); inside it the same no-follow
+    snapshot applies, and the record names the assignment as its provenance.
+    """
+    if not isinstance(worker, str) or not worker.strip() or not isinstance(path, str) or not path.strip():
+        raise ChannelError('invalid_attachments', 'A Worker attachment is {path, worker} with both non-empty')
+    from lib.conversations.lead_attachments import AttachmentRefused, lead_worker_checkout
+    try:
+        root = lead_worker_checkout(task, worker.strip())
+    except AttachmentRefused as error:
+        raise ChannelError('attachment_worker_unknown', str(error)) from error
+    record = _admit_path(path, [root], carried=carried, where=f'the checkout of Worker assignment {worker}')
+    record['source']['worker'] = worker.strip()
+    return record
+
+
+def _refuse_secrets(record: dict[str, Any], owner: int) -> None:
+    """A file that leaves Tofu carries no credential (``lib.conversations.attachment_secrets``)."""
+    from lib.conversations.attachment_secrets import AttachmentSecretRefused, refuse_secrets
+    try:
+        refuse_secrets(record['name'], read_original(record, owner=owner))
+    except AttachmentSecretRefused as refusal:
+        raise ChannelError('attachment_secret', str(refusal)) from refusal
+
+
 def _load_artifact(source: dict[str, Any], owner: int) -> tuple[bytes, str]:
     from lib.artifacts.core import ArtifactNotFoundError
     try:
@@ -322,14 +352,18 @@ def _admitted_entries(task: dict[str, Any], owner: int, conversation_id: str, en
     roots, route, _ = _scope(task)
     records, seen = [], set()
     for entry in entries:
-        if set(entry) not in ({'path'}, {'path', 'project'}):
-            raise ChannelError('invalid_attachments', 'Each attachment is {path} or {path, project}')
+        if set(entry) not in ({'path'}, {'path', 'project'}, {'path', 'worker'}):
+            raise ChannelError('invalid_attachments', 'Each attachment is {path}, {path, project} or {path, worker}')
         reference = entry['path']
         if 'project' in entry:
             record = _admit_project_file(owner, entry['project'], reference, carried=carried)
+        elif 'worker' in entry:
+            record = _admit_worker_file(task, entry['worker'], reference, carried=carried)
         else:
             record = admit(route(reference) if isinstance(reference, str) else reference, roots=roots,
                            owner=owner, conversation_id=conversation_id, carried=carried)
+        if carried:
+            _refuse_secrets(record, owner)
         identity = _identity(record)
         if identity not in seen:
             seen.add(identity)
@@ -379,8 +413,9 @@ def for_final_answer(task: dict[str, Any], owner: int, conversation_id: str,
                 continue  # not a file of this conversation: nothing to attach or to explain
             try:
                 record = admit(target, roots=roots, owner=owner, conversation_id=conversation_id)
+                _refuse_secrets(record, owner)
             except ChannelError as error:
-                if error.code in ('attachment_type_unsupported', 'attachment_too_large'):
+                if error.code in ('attachment_type_unsupported', 'attachment_too_large', 'attachment_secret'):
                     notes.append(str(error))
                     break
                 continue

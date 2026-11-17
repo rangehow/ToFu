@@ -128,3 +128,25 @@ def test_diagnostic_identity_uses_declared_inspector_task():
     restarted = begin_round_evidence(task, 'parent#agent:a', 1)
     assert restarted['turn'] != ref['turn']
     assert round_evidence_turn(task, 1) == restarted['turn']
+
+
+def test_state_snapshots_share_twins_across_interleaved_request_snapshots():
+    """The request wire's injected rows must not shift the state snapshot's reuse."""
+    from lib.tasks_pkg.round_evidence import begin_round_evidence, build_round_evidence
+    task = {'id': 'interleaved-kinds', 'convId': 'interleaved-conv'}
+    history = [{'role': 'system', 'content': 'system'}, {'role': 'user', 'content': 'go'}]
+    states = []
+    for number in range(1, 4):
+        ref = begin_round_evidence(task, 'interleaved-kinds', number)
+        prepared = json.loads(json.dumps(history))
+        prepared.insert(1, {'role': 'user', 'content': f'<context round={number}/>'})
+        build_round_evidence(task, history, ref=ref, kind='request', model='m',
+                             prepared_messages=prepared)
+        history += [{'role': 'assistant', 'content': '', 'tool_calls': [{
+                        'id': f'c{number}', 'type': 'function',
+                        'function': {'name': 'read_files', 'arguments': '{}'}}]},
+                    {'role': 'tool', 'tool_call_id': f'c{number}', 'content': 'ok'}]
+        states.append(build_round_evidence(task, history, ref=ref, kind='state',
+                                           model='m')['messages'])
+    for older, newer in zip(states, states[1:]):
+        assert all(old is new for old, new in zip(older, newer[:len(older)]))

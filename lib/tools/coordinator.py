@@ -17,7 +17,8 @@ COORDINATOR_TOOLS = [
           'Inspect the canonical execution state of an owned conversation: Turns, current Attempts, '
           'running/queued state, errors, settlement and available resume operations. Passive; never wakes it. '
           'Use when the owner delegates management of a concrete Session, then get_conversation for content. '
-          'Project Coordinators inspect their project; the Global Router can inspect any owned conversation. '
+          'Project Coordinators inspect their project, and any owned conversation while the owner\'s full '
+          'delegation is granted; the Global Router can inspect any owned conversation. '
           'Pass turn_id to read exactly one Turn of a conversation of any size. Without it you get the newest '
           'Turns of one lane (default main) that fit one readable result; pass window.next_before_ordinal as '
           'before_ordinal (with the same lane_id) for older Turns. '
@@ -44,25 +45,29 @@ COORDINATOR_TOOLS = [
           'latest settled Turn, Attempt and revision; the instruction becomes that conversation\'s next Turn and '
           'nothing is regenerated. An unreviewed, undelivered result continues under the same assignment, grant '
           'and checkout; a reviewed or delivered one continues as a new assignment in the same conversation '
-          '(the result names assignment_id). attachments sends files of any type with the instruction, '
+          '(the result names assignment_id). An accepted result whose delivery a conflict holds, or whose accept a '
+          'rework superseded, also continues as a new assignment that first merges its checkpoint, and the '
+          'successor of a rework links to it (rework_of). attachments sends files of any type with the instruction, '
           'as a human attaches files to a message. Prefer follow_up to a new Worker for the same goal, and to '
           'review decision=rework when the same Worker should fix its own result; then poll its assignment_id. '
           'Never send a synthetic human message or approve '
           'a human question. Project Coordinators control their project; the Global Router can control any owned '
           'conversation. Any Turn of this Coordinator, an automatic continuation included, controls the Workers '
           'its binding dispatched in any request. '
-          'Global Router only: when your current request has no owner message of its own (a standing instruction '
-          'or a nonhuman notice), pass owner_delegation with the reason and the owner trigger to act under the '
-          'delegation the owner granted you ("Act for me"); it allows continue, checkpoint_resume, stop and '
-          'set_model, never regenerate, and is recorded in the owner\'s audit log. '
+          'Any lead (the Global Router, or a Project Coordinator under the owner\'s full grant): when your current '
+          'request has no owner message of its own (a standing instruction, a nonhuman notice, a wake), or the '
+          'session belongs to another project you were asked to help, pass owner_delegation with the reason and '
+          'the owner trigger (or under_delegation=true) to act under the delegation the owner granted ("Act for '
+          'me"); it allows continue, checkpoint_resume, stop and set_model, never regenerate, is recorded in the '
+          'owner\'s audit log, and a session of another project tells that project\'s lead (target_lead_notified). '
           'set_model changes the model of an existing Session without replacing it: the conversation, context, '
           'grant, checkout and tool checkpoint are preserved, and only the next accepted attempt (Continue, '
           'follow_up or a continuation) uses the new model — an attempt already running is never rewritten. '
           'Use it for a legitimate provider/model routing change (for example a provider content-filter '
           'refusal), with model (a routable model id, or null to return to the session\u2019s original model) and '
           'reason; turn_id and attempt_id pin the session state you read. This changes no permission and '
-          'never rewrites provider output. The owner or, under owner_delegation, the Global Router chooses '
-          'the model; a Coordinator cannot re-route its own request. '
+          'never rewrites provider output. The owner or, under owner_delegation, a lead chooses '
+          'the model; a Coordinator cannot re-route its own request without it. '
           'After a lost response, retry identical arguments and idempotency_key. Acceptance is not completion.',
           {'conversation_id': {'type': 'string', 'minLength': 1},
            'turn_id': {'type': 'string', 'minLength': 1},
@@ -211,7 +216,10 @@ for _name, _definition, _description in (
      'To integrate verified code, include the exact delivery.checkpointSha from get_project_assignment; '
      'this uses the existing isolated-workspace publication checks. This records Coordinator review, '
      'never human acceptance. Publication is asynchronous: poll the assignment_id, which waits until its '
-     'delivery is canonical or held, and confirm canonical_delivery before reporting completion. A review is immutable; repairs use a new assignment. Exception: if delivery reports '
+     'delivery is canonical or held, and confirm canonical_delivery before reporting completion. A review is immutable, '
+     'with one exception: decision=rework of the same result_revision supersedes an accept or reject that was not '
+     'delivered (it keeps the superseded judgment and stops a pinned publication); then repair with follow_up or '
+     'delegate_project_work rework_of. Another exception: if delivery reports '
      'project_publication_result_changed, the Worker result gained a later revision after your accept; re-read it and, '
      'if still correct, accept again with the current result_revision and the same checkpoint_sha. '
      'project_publication_check_unavailable reads as pending: storage or Git did not answer the publication '
@@ -367,6 +375,13 @@ for _name, _definition, _description in (
      'nonhuman evidence. Give reason and idempotency_key: a retry with the same key never opens a second '
      'conversation. When its Turn ends you receive one nonhuman repair-outcome notice. Every call is in the '
      'owner\'s audit log; revoking "Act for me" stops it.'),
+    ('broadcast_project_message', 'broadcastProjectMessage',
+     'Send one fix, workaround or instruction to every Project Router and every running Worker at once '
+     '(targets ["all"]) or to the projects you name, instead of relaying it lead by lead. Each recipient '
+     'receives it as nonhuman context at its next step (kind steer by default); it never wakes anyone, carries '
+     'no authority and never quotes the owner. Each project\'s lead also gets a report naming the Workers of '
+     'its project that received it; include_workers=false reaches only the leads. Give reason (recorded in '
+     'audit.log) and idempotency_key: a retry never sends twice.'),
     ('router_project', 'routerProject',
      'Create a project (a new folder), register an existing folder, read a project or its Project Router, change '
      'the project defaults (update_defaults) and configure the Project Router (configure_router). Every create '
@@ -413,6 +428,12 @@ for _name, _definition, _description in (
     ('watchdog_configure_review', 'watchdogReviewRequest',
      'Enable or disable your periodic review and set its cron cadence, only when the owner asks in their own '
      'message of your current request. Omitting schedule keeps the current cadence.'),
+    ('resume_stalled_continuation', 'watchdogResumeStalledContinuation',
+     'Wake a lead (the Global Router or a Project Router) that the snapshot marks stalled: its main lane is '
+     'idle while its Workers need it. Re-verifies the stall from durable state (not_stalled otherwise), '
+     'requires the owner\'s full delegation to every lead (refused otherwise), resumes the lead\'s own '
+     'continuation and, if it is still idle, starts one notice Turn naming those Workers. Every outcome is '
+     'audited; retrying the same idempotency_key never wakes twice.'),
 ):
     _schema = _router_arguments(_definition)
     WATCHDOG_TOOL_SCHEMAS.append(_tool(_name, _description, _schema['properties'], _schema['required']))

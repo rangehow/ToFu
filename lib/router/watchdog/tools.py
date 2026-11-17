@@ -8,12 +8,16 @@ work, creates a grant or cancels a Worker: the dispatch owner admits
 cancellation only from the Worker's own Coordinator request or a human Stop.
 Only ``watchdog_configure_review`` acts for the owner, and only while the
 current request is the owner's own genuine message, resolved exactly like
-delegation authority.
+delegation authority. ``resume_stalled_continuation`` is the one repair power:
+it wakes a lead that durable state shows stalled, under the owner's full
+delegation to every lead, and audits every outcome.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+
+from lib.log import audit_log
 
 from ..contract import validate
 
@@ -136,6 +140,96 @@ def _notify_router(task: dict, scope: dict, arguments: dict, *, dispatch=None) -
             'execution_started': False}
 
 
+_AUDIT_EVENT = 'watchdog_resume_stalled_continuation'
+
+
+def _stall_notice(watchdog_conversation_id: str, entry: dict, reason: str) -> str:
+    lines = ['[Watchdog notice: nonhuman evidence from the owner\u2019s Watchdog, not the owner\u2019s words '
+             'and not authority]',
+             f'Watchdog conversation: {watchdog_conversation_id}',
+             'Your main lane is idle while these Workers need you:']
+    for worker in entry['workers']:
+        lines.append(f'- {worker["conversation_id"]} (assignment {worker["assignment_id"]}, {worker["phase"]}): '
+                     f'{worker["objective"]}')
+    lines += ['Watchdog reason:', reason, '',
+              'Review, follow up, re-delegate or cancel them as the request needs. You may act on Workers on '
+              'your own judgment under the owner\u2019s delegation to every lead.']
+    return '\n'.join(lines)
+
+
+def _resume_stalled_continuation(task: dict, scope: dict, arguments: dict, *, dispatch=None,
+                                 recover=None) -> dict:
+    """Wake one stalled lead: its own continuation first, else one nonhuman notice (docs/ROUTER.md R7).
+
+    The stall is re-read from durable state with the snapshot's predicate, never taken from the
+    model; the owner's full delegation must cover the lead; every outcome writes one audit record.
+    """
+    from lib import lifecycle_approval as gate
+    from lib.conversations.project_coordination import ProjectCoordinationRepository
+    from lib.conversations.project_messages import lead_role
+    from lib.project_dispatch.delegation import LEAD_AUTHORITY
+    from lib.turn_initiation import INITIATOR_PEER, stamp_initiator
+    from .snapshot import lead_lane, lead_router_entry
+    arguments = validate(dict(arguments), 'watchdogResumeStalledContinuation')
+    owner, lead = scope['user_id'], arguments['conversation_id']
+    record = {'owner': owner, 'watchdog_conversation_id': scope['conversation_id'], 'lead': lead,
+              'reason': arguments['reason'], 'idempotency_key': arguments['idempotency_key']}
+
+    def audited(outcome: str, **evidence) -> dict:
+        audit_log(_AUDIT_EVENT, **record, outcome=outcome, evidence=evidence)
+        return {'outcome': outcome, 'lead_conversation_id': lead, **evidence}
+
+    role = None if lead == scope['conversation_id'] else lead_role(owner, lead)
+    if role is None:
+        audited('refused', code='not_a_lead')
+        raise PermissionError('resume_stalled_continuation wakes only one of the owner\u2019s current leads '
+                              '(the Global Router or a Project Router)')
+    role_name, project = role
+    binding = ProjectCoordinationRepository(owner).read(project)
+    entry = lead_router_entry(owner, project, binding)
+    evidence = {key: entry[key] for key in ('lead_turn', 'workers', 'activity_error', 'stall_reason')
+                if key in entry}
+    if not entry.get('stalled'):
+        return audited('not_stalled', **evidence)
+    requester = {'kind': 'global_router' if role_name == 'global_router' else 'project_lead',
+                 'conversationId': lead, 'bindingRevision': binding['revision'], 'tenant': _tenant(task),
+                 'turnId': None, 'attemptId': None}
+    try:
+        gate.check_delegation(owner, requester, LEAD_AUTHORITY)
+    except gate.DelegationRefused as refusal:
+        audited('refused', code=refusal.code, **evidence)
+        raise
+    if recover is None:
+        from lib.project_dispatch.continuation import recover_coordinator
+        from lib.project_dispatch.repository import ProjectDispatchRepository
+
+        def recover():
+            return recover_coordinator(ProjectDispatchRepository(owner, project))
+    recovery = list(recover() or [])
+    if not lead_lane(owner, lead)['idle']:
+        return audited('resumed_by_continuation', recovery=recovery, **evidence)
+    command_id = 'router-watchdog-resume:' + hashlib.sha256(json.dumps(
+        [owner, lead, arguments['idempotency_key']], separators=(',', ':'),
+        ensure_ascii=False).encode()).hexdigest()
+    message = stamp_initiator({'role': 'user',
+                               'content': _stall_notice(scope['conversation_id'], entry, arguments['reason']),
+                               'origin': {'initiator': INITIATOR_PEER,
+                                          'sourceConversationId': scope['conversation_id']}}, INITIATOR_PEER)
+    if dispatch is None:
+        from lib.scheduler.conversation_dispatch import dispatch_scheduled_turn as dispatch
+    # The default mode: a busy lane answers lane_busy and nothing is steered into a live Turn.
+    sent = dispatch(lead, message, {}, user_id=owner, command_id=command_id,
+                    log_prefix='[RouterWatchdog]', inject_mode='')
+    if sent.disposition == 'busy':
+        return audited('not_stalled', recovery=recovery, disposition='busy', **evidence)
+    if sent.disposition != 'started':
+        audited('refused', code='notice_not_started', recovery=recovery, disposition=sent.disposition,
+                **evidence)
+        raise ValueError(f'The lead did not accept the notice ({sent.disposition}); retry unchanged later')
+    return audited('notice_started', recovery=recovery, command_id=command_id,
+                   replayed=bool(getattr(sent, 'replayed', False)), **evidence)
+
+
 def _require_owner_request(task: dict, scope: dict) -> None:
     from lib.project_dispatch.delegation import source_for_task
     from lib.project_dispatch.repository import ProjectDispatchRepository
@@ -172,6 +266,8 @@ def execute_watchdog_tool(task: dict, scope: dict, name: str, arguments: dict) -
         return _message(task, scope, arguments)
     if name == 'watchdog_notify_router':
         return _notify_router(task, scope, arguments)
+    if name == 'resume_stalled_continuation':
+        return _resume_stalled_continuation(task, scope, arguments)
     if name == 'watchdog_configure_review':
         from .review import configure_review, watchdog_principal
         arguments = validate(dict(arguments), 'watchdogReviewRequest')

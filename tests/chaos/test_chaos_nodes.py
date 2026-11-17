@@ -202,7 +202,7 @@ def fleet(tmp_path_factory):
     provider = fp.ScriptedProvider().start()
     # Desktop tools in the execution host reach the API host's bridge through
     # the relay record both roles find under their one project (production shape).
-    instance = ChaosInstance(root / 'home', faultfs=False)
+    instance = ChaosInstance(root / 'home', faultfs=False, shared_project=True)
     edge = None
     harness = None
     try:
@@ -479,6 +479,9 @@ def test_revoked_default_device_leaves_placement_across_a_home_restart(fleet):
     default_id = fleet.pair(default)
     other = fleet.node('other-dev')
     other_id = fleet.pair(other)
+    # Its own second survivor: the module's fleet may hold no other online node.
+    spare = fleet.node('spare-dev')
+    spare_id = fleet.pair(spare)
     fleet.defaults(computer=default_id)
     # Unaddressed: placed on the marked default, never on another online device.
     conversation, nonce = fleet.unaddressed_turn(_effect_here(fleet))
@@ -496,12 +499,14 @@ def test_revoked_default_device_leaves_placement_across_a_home_restart(fleet):
     assert status == 200 and default_id not in permissions['permissions']
     # With no default and several devices online the call is refused, not sent anywhere.
     fleet.wait_node(other_id, lambda n: n['online'], 'online after the restart')
+    fleet.wait_node(spare_id, lambda n: n['online'], 'online after the restart')
     conversation, nonce = fleet.unaddressed_turn(_effect_here(fleet))
     fleet.settled(conversation)
     assert fleet.where(nonce) == []
     assert 'no default computer is marked' in fleet.tool_result(nonce), fleet.tool_result(nonce)
     default.kill()
     other.kill()
+    spare.kill()
 
 
 def test_an_offline_node_is_found_by_the_routing_boundary_and_keeps_its_ceiling(fleet):

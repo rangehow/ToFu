@@ -473,7 +473,11 @@ codex, claude-code, opencode and pi (`references.py`). Scripts vary tool
 arguments per round so no loop breaker fires; a run with interventions or extra
 requests is not a clean measurement. `--smoke` is the CI size (under 2 min).
 Verify `tests/meta/test_harness_perf_measure.py`; baseline, hotspots and
-targets live in `docs/HARNESS_PERFORMANCE.md`.
+targets live in `docs/HARNESS_PERFORMANCE.md`. `harness_perf/round_profile.py`
+boots the same deployment and runs `noop`/`true` Turns; with py-spy (idle
+threads, shards included) it charges the Turn thread's samples to named round
+components, and with `--no-spy` it is one unperturbed ABAB arm. Shares come
+from profiled runs, milliseconds from unprofiled ones.
 
 `startup_idle_dispatch.py` measures the manager-composed instance
 (`serverctl.py start`: lifecycle manager, API host, execution host) of the

@@ -73,25 +73,32 @@ class ChaosInstance:
     """One private deployment; every path and port is its own."""
 
     def __init__(self, root: Path, *, backend: str = 'sqlite', python: str = sys.executable,
-                 faultfs: bool = True):
+                 faultfs: bool = True, shared_project: bool = False,
+                 settings: dict[str, str] | None = None):
         self.root = Path(root).resolve()
+        # Deployment settings every role reads from its environment (e.g. LLM_MODEL,
+        # the model of Turns started with no config of their own).
+        self.settings = dict(settings or {})
         self.faultfs: Path | None = None
         self._want_faultfs = faultfs
         self.faultfs_control = self.root / 'faultfs.control'
         self.backend = backend
         self.python = python
         self.tag = uuid.uuid4().hex
-        # The production topology: the manager, the API host and the execution
-        # host share ONE project (bootstrap_pkg/launcher.py gives every role
-        # BASE_DIR), so records published under <project>/data -- the bridge
-        # relays among them -- are found by every role. The project is a
-        # private export of this checkout's runtime source, so its data/
-        # belongs to the instance alone. An execution host run from the
-        # checkout itself published <checkout>/data/mcp-bridge-relay.json, so
-        # two instances at once (xdist workers) relayed MCP calls to each
-        # other's servers.
+        # Every role runs from a private export of this checkout's runtime
+        # source taken at start. Run from the checkout itself, the execution
+        # host published <checkout>/data/mcp-bridge-relay.json, so two
+        # instances at once (xdist workers) relayed MCP calls to each other's
+        # servers.
+        # shared_project: the production topology, where the manager, the API
+        # host and the execution host share ONE project (bootstrap_pkg/
+        # launcher.py gives every role BASE_DIR), so records published under
+        # <project>/data -- the bridge relays among them -- are found by every
+        # role; the export's data/ belongs to the instance alone. Without it
+        # the records live under ``state``: right for the storage faults, but
+        # no relay is reachable.
         self.source = self.root / 'source'
-        self.state_root = self.source
+        self.state_root = self.source if shared_project else self.root / 'state'
         self.port = 0
         self.api: subprocess.Popen | None = None
         self.api_generation = 0
@@ -119,6 +126,7 @@ class ChaosInstance:
             # The instance never reaches a network: loopback endpoints only.
             'NO_PROXY': '127.0.0.1,localhost', 'no_proxy': '127.0.0.1,localhost',
         })
+        env.update(self.settings)
         return env
 
     # Trees no runtime role imports or serves.

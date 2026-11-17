@@ -39,12 +39,12 @@ describe('office light and rooms', () => {
     });
   }
 
-  it('lights every pod, head desk and floor lamp for the night', () => {
+  it('glows only real lamps at night: the floor lamps of the room lounges and of the commons', () => {
     const layout = layoutOffice(1920, TEAMS, 1400, 1);
     const lights = roomLights(layout);
-    const pods = layout.zones.reduce((sum, zone) => sum + zone.pods.length, 0);
-    const lamps = layout.zones.reduce((sum, zone) => sum + roomFurniture(zone).filter(piece => piece.kind === 'lamp').length, 0);
-    expect(lamps).toBeGreaterThan(0);
-    expect(lights.length).toBe(1 + layout.zones.length + pods + lamps + (layout.watchdog ? 1 : 0) + 3);
+    const roomLamps = layout.zones.reduce((sum, zone) => sum + roomFurniture(zone).filter(piece => piece.kind === 'lamp').length, 0);
+    const commonsLamps = layout.decor.filter(item => item.kind === 'lamp').length;
+    expect(roomLamps + commonsLamps).toBeGreaterThan(0);
+    expect(lights).toHaveLength(roomLamps + commonsLamps);
   });
 });

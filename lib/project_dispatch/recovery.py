@@ -35,7 +35,9 @@ def _stats():
 
 
 # Filters that only select another lane's pass; they say nothing about this one.
-_RECOVERY_FILTERS = frozenset({'other_scope', 'other_recipient', 'not_a_dependent'})
+# Coordinator wakes belong to continuation.recover_coordinator, never this pass.
+_RECOVERY_FILTERS = frozenset({'coordinator_profile', 'other_scope', 'other_recipient',
+                               'not_a_dependent'})
 
 
 def _filter_reason(assignment, *, owner, project, recipient_id, coordinator_only, affected) -> str:
@@ -74,6 +76,9 @@ def _recovery_skip_reason(assignment, repository, *, owner, project, recipient_i
         resume = repository.restart_resume(assignment, attempt=attempt)
         if resume is None:
             return 'execution_not_restart_paused'
+        if grant['revoked']:
+            # Nothing can continue it, so its cut-off calls await no check.
+            return 'grant_revoked'
         verdict = resume['verdict']
         if verdict['supersededBy']:
             # A newer input owns the lane.
@@ -249,6 +254,29 @@ def wake_project_dependents(owner: int, project: str, assignment_id: str, *,
         return stats
     pending_wakes.complete(owner, project, entry, client=repository.client)
     return stats
+
+
+def wake_coordinators(owner: int, project: str, *, repository=None, service=None) -> list:
+    """Best-effort post-ACK notification of a held delivery receipt to idle Coordinators.
+
+    A held receipt (blocked, failed, preserved) changes no dependency's
+    readiness; it is news only to the Worker's Coordinator, whose continuation
+    derives its wake from that receipt (``continuation.recover_coordinator``:
+    one wake per request and evidence frontier, none while its Turn runs). A
+    pass that fails is retained as the ``project`` pending wake.
+    """
+    from . import pending_wakes
+    from .continuation import recover_coordinator
+    repository = (repository if repository is not None
+                  else ProjectDispatchRepository(owner, normalize_project_path(project)))
+    try:
+        return recover_coordinator(repository, service=service)
+    except Exception as error:
+        logger.warning('[ProjectDispatch] held-delivery Coordinator wake retained for recovery '
+                       'owner=%s project=%s', owner, repository.project, exc_info=True)
+        pending_wakes.retain(owner, repository.project, pending_wakes.PROJECT, 'project', error,
+                             client=repository.client)
+        return ['deferred']
 
 
 def recover_recipient(owner: int, project: str, recipient_id: str, *, coordinator_only=False,

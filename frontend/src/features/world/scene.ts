@@ -27,17 +27,17 @@ import { CELL, PROPS, STATES, type WorldTheme } from './assets/manifest.generate
 import { actorPose, BEAT_MS, createActor, isMoving, setHome, setRest, settleActor, startErrand, stepActor, type Actor, type Pose, type Rest, type Transition } from './actors';
 import { ART_SCALE, spriteArt, type SpriteName, type WorldArt } from './art';
 import {
-  allocateSlots, BOARD_GRID, fitOffice, SEATED_SHOWN, SEATS_PER_POD, shelfSlots, TROPHY_H, TROPHY_W,
-  waitingSpots, type OfficeLayout, type Rect, type Seat, type TeamShape, type ZoneLayout,
+  allocateSlots, BOARD_GRID, deskTagY, fitOffice, SEATED_SHOWN, SEATS_PER_POD, shelfSlots, TAG_GAP, tagStep, TROPHY_H,
+  TROPHY_W, waitingSpots, type OfficeLayout, type Rect, type Seat, type TeamShape, type ZoneLayout,
 } from './layout';
 import { stableHash } from './hash';
 import { firstLine, type DeskDocument, type Office, type Person, type Team, type Trophy } from './model';
 import {
-  CLUTTER_CHOICES, drawFloor, drawFurniture, drawInside, drawWall, FLOOR_TILE, mix, PALETTE, paintFloorTile,
+  CLUTTER_CHOICES, drawFloor, drawFurniture, drawInside, drawWall, FLOOR_TILE, PALETTE, paintFloorTile,
   paintPod, paintWindow, POD_BLEED, rr, seeded, windowSlots, type Atlas,
 } from './paint';
-import { drawGrade, drawRoom, drawRoomDecor, gradeAt, paintRoomTile, roomLights, roomMaterial, wallClock } from './diorama';
-import { alarmRing, createParticles, flicker, glow, nameTag, packLines, steam, tagBox, thinking, type Status } from './life';
+import { drawCommons, drawGrade, drawRoom, drawRoomDecor, gradeAt, paintRoomTile, roomLights, roomMaterial, wallClock } from './diorama';
+import { alarmRing, createParticles, flicker, glow, nameTag, packLines, steam, tagBox, tagLabels, thinking, type Status } from './life';
 import { LEAD_SLOT, samePlace, seatAt, type Place } from './routes';
 import { FEET, sheetFor } from './sprites';
 import { advanceChange, easeOutBack, settledBlend, showChange, type Blend, type FloorChange } from './tween';
@@ -84,10 +84,8 @@ interface Drawn { actor: Actor; pose: Pose; sheet: CanvasImageSource | null; fad
   /** Sideways jolt of someone with an exception (units). */
   shake: number }
 const SETTLED_ROOM = { alpha: 1, clip: null };
-/** Where a tag goes (its centre); `above`: over the head, so marks go above it; `to`: the person a leader points at. */
-interface TagAnchor { x: number; y: number; above: boolean; to?: { x: number; y: number } | null }
-/** A desk tag's line outward from its desk row and its centre along that line. */
-interface TagPlace { line: number; x: number }
+/** Where a tag goes (its centre); `above`: over the head, so marks go above it. */
+interface TagAnchor { x: number; y: number; above: boolean }
 /** A full-view layer in device pixels: `key` names what it holds, `pending` the key the previous frame wanted;
  * the counts say how often frames blitted it, rebuilt it or drew the content directly. */
 interface CachedLayer { canvas: HTMLCanvasElement | null; key: string; pending: string; hits: number; builds: number; direct: number }
@@ -130,6 +128,9 @@ export function createWorldScene(ports: WorldScenePorts) {
   /** Spots in the line at the owner's door, kept like desks: a person waiting keeps their spot. */
   let waiting = new Map<string, number>();
   const actors = new Map<string, Actor>();
+  /** What each Worker's tag says (life.ts tagLabels, per team); a lead's tag says its name. */
+  const labels = new Map<string, string>();
+  const labelOf = (person: Person) => labels.get(person.id) ?? person.name;
   /** Sheets drawn per actor, so a theme change keeps the old sheet until the new one is decoded. */
   const drawnSheet = new Map<string, string>();
   const sheetFade = new Map<string, number>();
@@ -297,7 +298,7 @@ export function createWorldScene(ports: WorldScenePorts) {
         const words = text.person(actor.person, actor.at?.kind === 'spot');
         const body = boxOf(pose);
         const anchor = tagAnchor(actor, pose, layout, lines);
-        const tag = anchor ? tagBox(ports.fontFamily, actor.person.name, actor.person.role !== 'worker', anchor.x, anchor.y, 1 / cameraScale(camera)) : null;
+        const tag = anchor ? tagBox(ports.fontFamily, labelOf(actor.person), actor.person.role !== 'worker', anchor.x, anchor.y, 1 / cameraScale(camera)) : null;
         const box = tag ? {
           x: Math.min(body.x, tag.x), y: Math.min(body.y, tag.y),
           w: Math.max(body.x + body.w, tag.x + tag.w) - Math.min(body.x, tag.x), h: Math.max(body.y + body.h, tag.y + tag.h) - Math.min(body.y, tag.y),
@@ -536,59 +537,52 @@ export function createWorldScene(ports: WorldScenePorts) {
     ctx.fillText(label, x + 8, y + 10.5);
   }
 
-  /** A team's sign on its back wall: a backlit walnut plaque whose name glows like a neon tube in the team colour,
-   * with the board tally and idle count. Painted once per content and resolution, so the glow costs nothing per
-   * frame. */
+  /** A team's sign on its back wall: a walnut plaque with the team's colour chip, its name in cream, the board
+   * tally and the idle count. No glow: the sign is read, not lit (owner, 11-17: the neon signs added to the light
+   * pollution). Painted once per content and resolution. */
   function banner(ctx: CanvasRenderingContext2D, team: Team, x: number, y: number, level: number) {
     const name = team.kind === 'router' ? team.lead.name : team.name;
     const board = team.board && team.board.total ? team.board : null;
     const routine = team.routine ? text.routine(team.routine, team.history) : '';
     const tally = board ? `${board.done}/${board.total}` : '';
     const key = `${name}|${team.color}|${tally}|${routine}|${team.failed}|${level}`;
-    const margin = 10, height = 26;
+    const margin = 10, height = 24;
     let layer = signLayers.get(team.key)?.key === key ? signLayers.get(team.key)!.layer : null;
     if (!layer) {
       const measure = document.createElement('canvas').getContext('2d');
       if (!measure) return;
-      measure.font = font(14, 800);
+      measure.font = font(13, 800);
       const nameWidth = measure.measureText(name).width;
-      measure.font = font(10.5, 700);
-      const tallyWidth = board ? 38 + measure.measureText(tally).width : 0;
+      measure.font = font(10, 700);
+      const tallyWidth = board ? 36 + measure.measureText(tally).width : 0;
+      measure.font = font(10, 600);
       const routineWidth = routine ? measure.measureText(routine).width : 0;
-      const width = 14 + nameWidth + (board ? 12 + tallyWidth : 0) + (routine ? 10 + routineWidth : 0) + 12;
+      const width = 24 + nameWidth + (board ? 12 + tallyWidth : 0) + (routine ? 10 + routineWidth : 0) + 11;
       layer = document.createElement('canvas');
       layer.width = Math.ceil((width + margin * 2) * level); layer.height = Math.ceil((height + margin * 2) * level);
       const g = layer.getContext('2d');
       if (!g) return;
       g.scale(level, level);
       g.translate(margin, margin);
-      const neon = mix(team.color, '#ffffff', 0.5);
-      // The backlight on the wall behind the plaque.
-      g.shadowColor = team.color; g.shadowBlur = 9 * level;
-      rr(g, 0, 0, width, height, 7); g.fillStyle = 'rgba(30, 20, 13, 0.95)'; g.fill();
-      g.shadowBlur = 0;
+      g.fillStyle = 'rgba(40, 24, 12, 0.24)'; rr(g, 0.6, 1.6, width, height, 6); g.fill();
       const fill = g.createLinearGradient(0, 0, 0, height);
-      fill.addColorStop(0, '#3d2c1f'); fill.addColorStop(1, '#1f150e');
-      rr(g, 0, 0, width, height, 7); g.fillStyle = fill; g.fill();
-      g.strokeStyle = team.color; g.lineWidth = 1.2;
-      if (team.failed) g.setLineDash([3, 3]);
-      rr(g, 0.6, 0.6, width - 1.2, height - 1.2, 6.5); g.stroke(); g.setLineDash([]);
-      g.fillStyle = 'rgba(255, 255, 255, 0.08)'; rr(g, 2, 2, width - 4, height / 2 - 2, 5); g.fill();
+      fill.addColorStop(0, '#4a3524'); fill.addColorStop(1, '#2b1e13');
+      rr(g, 0, 0, width, height, 6); g.fillStyle = fill; g.fill();
+      g.strokeStyle = 'rgba(255, 232, 196, 0.16)'; g.lineWidth = 1; rr(g, 0.5, 0.5, width - 1, height - 1, 5.5); g.stroke();
+      if (team.failed) {
+        g.setLineDash([2, 2]); g.strokeStyle = team.color; g.lineWidth = 1.4; rr(g, 8, height / 2 - 4.5, 9, 9, 2.5); g.stroke(); g.setLineDash([]);
+      } else { rr(g, 8, height / 2 - 4.5, 9, 9, 2.5); g.fillStyle = team.color; g.fill(); }
       g.textBaseline = 'middle'; g.textAlign = 'left';
-      let left = 12;
-      g.font = font(14, 800);
-      g.shadowColor = team.color; g.shadowBlur = 6 * level;
-      g.fillStyle = neon; g.fillText(name, left, height / 2 + 0.5);
-      g.shadowBlur = 2 * level; g.fillStyle = mix(neon, '#ffffff', 0.55); g.fillText(name, left, height / 2 + 0.5);
-      g.shadowBlur = 0;
+      let left = 24;
+      g.font = font(13, 800); g.fillStyle = UI.cream; g.fillText(name, left, height / 2 + 0.5);
       left += nameWidth + 12;
       if (board) {
-        rr(g, left, height / 2 - 2.5, 34, 5, 2.5); g.fillStyle = 'rgba(251, 241, 218, 0.16)'; g.fill();
-        if (board.done) { rr(g, left, height / 2 - 2.5, 34 * board.done / board.total, 5, 2.5); g.fillStyle = UI.good; g.fill(); }
-        g.font = font(10.5, 700); g.fillStyle = 'rgba(251, 241, 218, 0.95)'; g.fillText(tally, left + 38, height / 2 + 0.5);
+        rr(g, left, height / 2 - 2, 32, 4, 2); g.fillStyle = 'rgba(251, 241, 218, 0.18)'; g.fill();
+        if (board.done) { rr(g, left, height / 2 - 2, 32 * board.done / board.total, 4, 2); g.fillStyle = UI.good; g.fill(); }
+        g.font = font(10, 700); g.fillStyle = 'rgba(251, 241, 218, 0.9)'; g.fillText(tally, left + 36, height / 2 + 0.5);
         left += tallyWidth + 10;
       }
-      if (routine) { g.font = font(10.5, 600); g.fillStyle = 'rgba(251, 241, 218, 0.86)'; g.fillText(routine, left, height / 2 + 0.5); }
+      if (routine) { g.font = font(10, 600); g.fillStyle = 'rgba(251, 241, 218, 0.7)'; g.fillText(routine, left, height / 2 + 0.5); }
       signLayers.set(team.key, { key, layer });
     }
     const alpha = ctx.globalAlpha;
@@ -718,6 +712,8 @@ export function createWorldScene(ports: WorldScenePorts) {
       drawRoom(ctx, zone, color, palette, roomPattern(ctx, zone, color, look, level));
       drawRoomDecor(ctx, atlas, zone, color, palette);
     }
+    ctx.globalAlpha = reveal;
+    drawCommons(ctx, atlas, layout, palette, key => blend.decorAlpha.get(key) ?? 1);
 
     if (atlas) {
       ctx.globalAlpha = reveal * furniture;
@@ -752,52 +748,42 @@ export function createWorldScene(ports: WorldScenePorts) {
   /** Where a person's name tag goes: over the head of someone facing the viewer (pod top rows and head desks), under
    * the chair of someone with their back to the viewer, under the feet of someone standing. The
    * Watchdog's station has its own plate. `above`: the tag sits over the head, so marks go above the tag. */
-  function tagAnchor(actor: Actor, pose: Pose, layout: OfficeLayout, lines: ReadonlyMap<string, TagPlace>): TagAnchor | null {
+  function tagAnchor(actor: Actor, pose: Pose, layout: OfficeLayout, lines: ReadonlyMap<string, number>): TagAnchor | null {
     if (actor.person.role === 'watchdog') return null;
-    // A tag's height at the current zoom: the step between tag lines, so lines never overlap.
-    const line = tagBox(ports.fontFamily, '', true, 0, 0, 1 / cameraScale(camera)).h + 1.5;
+    const pixel = 1 / cameraScale(camera);
     // The line at the owner's door is tighter than any tag, so each person there gets a line of their own.
-    if (pose.kind === 'standing') return { x: pose.x, y: pose.y + 8 + (actor.at?.kind === 'spot' ? actor.at.index * line : 0), above: false };
+    if (pose.kind === 'standing') return { x: pose.x, y: pose.y + 8 + (actor.at?.kind === 'spot' ? actor.at.index * tagStep(pixel) : 0), above: false };
     const seat = seatAt(layout, actor.home);
     if (!seat) return null;
-    const place = lines.get(actor.id);
-    const outward = (place?.line ?? 0) * line, x = place?.x ?? seat.x;
-    // A tag moved off its desk (an outer line, or slid to stay in the room) keeps a leader to its person.
-    const led = outward > 0 || Math.abs(x - seat.x) > 1;
-    if (seat.facing === 'down') {
-      const top = pose.y - CELL.h * SEATED_SHOWN;
-      return { x, y: top - 5 - (seat.desk.w > 60 ? 0 : outward), above: true, to: led ? { x: seat.x, y: top + 3 } : null };
-    }
-    return { x, y: seat.y + 21 + outward, above: false, to: led ? { x: seat.x, y: seat.y + 13 } : null };
+    // A tag stays centred over its person on whichever line it takes, so it needs no leader; the floor plan keeps
+    // room for two lines (layout.ts tagBands).
+    return { x: seat.x, y: deskTagY(seat, lines.get(actor.id) ?? 0, pixel), above: seat.facing === 'down' };
   }
 
-  /** The line each desk's tag takes, outward from its desk row: the tags of a pod row are placed left to right, each
-   * on the innermost line where it clears the tags already there by a few pixels. Names are shown whole, a row of
-   * short names stays on one line, and lines are added only where neighbours would touch. A tag wider than its desk
-   * slides along its line to stay inside the room. */
-  function tagLines(layout: OfficeLayout, pixel: number): Map<string, TagPlace> {
-    const rows = new Map<string, { id: string; x: number; left: number; right: number }[]>();
-    const margin = 4 * pixel;
+  /** The line each Worker's tag takes, outward from its desk row: the tags of a pod row are placed left to right,
+   * each on the innermost line where it clears the tags already there by a few pixels. A row of short names stays on
+   * one line; a Worker's tag is at most two desks wide (life.ts tagBox), so neighbours that would touch alternate
+   * between two lines and every tag stays centred on its person. */
+  function tagLines(layout: OfficeLayout, pixel: number): Map<string, number> {
+    const rows = new Map<string, { id: string; left: number; right: number }[]>();
     for (const actor of actors.values()) {
       const home = actor.home;
       if (home.kind !== 'seat' || home.slot < 0 || actor.rest.kind === 'gone') continue;
       const seat = seatAt(layout, home);
       if (!seat) continue;
-      const zone = layout.zones.find(each => each.key === home.zone);
-      const w = tagBox(ports.fontFamily, actor.person.name, actor.person.role !== 'worker', 0, 0, pixel).w;
-      const x = zone ? Math.max(zone.x + w / 2 + margin, Math.min(zone.x + zone.w - w / 2 - margin, seat.x)) : seat.x;
+      const w = tagBox(ports.fontFamily, labelOf(actor.person), actor.person.role !== 'worker', 0, 0, pixel).w;
       const key = `${home.zone}|${seat.facing}|${seat.y}`;
       const row = rows.get(key) ?? [];
-      row.push({ id: actor.id, x, left: x - w / 2, right: x + w / 2 });
+      row.push({ id: actor.id, left: seat.x - w / 2, right: seat.x + w / 2 });
       rows.set(key, row);
     }
-    const lines = new Map<string, TagPlace>();
-    for (const row of rows.values()) packLines(row, margin).forEach((line, index) => lines.set(row[index].id, { line, x: row[index].x }));
+    const lines = new Map<string, number>();
+    for (const row of rows.values()) packLines(row, TAG_GAP * pixel).forEach((line, index) => lines.set(row[index].id, line));
     return lines;
   }
 
-  /** The grade is always drawn into its own layer (the night cuts its pools with destination-out, which must never
-   * touch the scene); the layer is rebuilt when `key` changes, and every frame while it is empty (floor moving). */
+  /** The grade is always drawn into its own layer, rebuilt when `key` changes and every frame while it is empty
+   * (floor moving), so a settled frame blits it. */
   function drawGradeLayer(ctx: CanvasRenderingContext2D, key: string, paint: (target: CanvasRenderingContext2D) => void) {
     const slot = lightLayer;
     if (!key || slot.key !== key || !slot.canvas) {
@@ -908,28 +894,23 @@ export function createWorldScene(ports: WorldScenePorts) {
     ctx.globalAlpha = 1;
     drawGradeLayer(ctx, settled ? `${view}|${hour}` : '', target => {
       target.globalAlpha = reveal;
-      drawGrade(target, layout, palette, grade, roomLights(layout), windowSlots(layout.width, PROPS.window.slots?.glass ?? [0, 0, 196, 44]), hour);
+      drawGrade(target, layout, palette, grade, roomLights(layout));
       target.globalAlpha = 1;
     });
-    // Light the scene adds over the grade: screens glow and flicker while their person works, brighter at night.
-    if (atlas) {
+    // Once the evening dims the room, a working screen casts a faint glow on its desk; by day a lit screen is
+    // simply lit. The glow barely moves, so a full floor never shimmers.
+    if (atlas && grade.dark > 0) {
       for (const item of drawn) {
         const seat = seatAt(layout, item.actor.home);
         if (!seat || item.actor.screen <= 0) continue;
         const box = screenBox(seat, item.actor.home.kind === 'watchdog' ? layout.watchdog?.station ?? null : null);
         const red = item.actor.person.emphasis === 'exception';
-        const strength = (0.28 + 0.22 * grade.dark) * (t ? 0.7 + 0.45 * flicker(t, item.actor.phase * 1.7) : 0.9);
+        const strength = 0.32 * grade.dark * (t ? 0.9 + 0.1 * flicker(t, item.actor.phase * 1.7) : 1);
         ctx.globalAlpha = reveal * furniture * item.room.alpha;
-        glow(ctx, red ? '#ff5a4a' : '#6cc8ff', box.x + box.w / 2, box.y + box.h / 2, 22 + 6 * grade.dark, item.actor.screen * strength);
+        glow(ctx, red ? '#ff7a6a' : '#9fd8ff', box.x + box.w / 2, box.y + box.h / 2, 15, item.actor.screen * strength);
       }
     }
     ctx.globalAlpha = 1;
-    // Dust drifting in the window light while the sun is up.
-    if (!sceneStill && palette.daylight && grade.sun >= 0.5) {
-      const lean = hour < 12 ? 70 : -70;
-      const panes = windowSlots(layout.width, PROPS.window.slots?.glass ?? [0, 0, 196, 44]);
-      particles.motes(panes.map(pane => ({ x: pane.x + Math.min(0, lean), y: layout.wall, w: pane.w + Math.abs(lean), h: 150 })), panes.length * 8);
-    } else particles.motes([], 0);
     particles.draw(ctx);
     // Signals over the light: the Watchdog's beacon, tags, bubbles and the marks above heads.
     const watchdog = office.teams.find(team => team.kind === 'watchdog')?.lead;
@@ -951,21 +932,11 @@ export function createWorldScene(ports: WorldScenePorts) {
         const seat = seatAt(layout, item.actor.home);
         if (seat) steam(ctx, seat.desk.x + seat.desk.w - 9, seat.desk.y + (seat.facing === 'up' ? 2 : 8), t + item.actor.phase * 300);
       }
-      const pulse = status === 'working' || status === 'decision' ? (t ? 0.5 + 0.5 * Math.sin(t / 420 + item.actor.phase) : 1) : 0;
-      if (anchor.to) {
-        const half = tagBox(ports.fontFamily, '', false, 0, 0, frame.pixel).h / 2;
-        const end = anchor.above ? anchor.y + half : anchor.y - half;
-        const alpha = ctx.globalAlpha;
-        ctx.globalAlpha = alpha * 0.6;
-        ctx.strokeStyle = '#1e150f'; ctx.lineWidth = frame.pixel;
-        ctx.beginPath(); ctx.moveTo(anchor.x, end); ctx.lineTo(anchor.to.x, anchor.to.y); ctx.stroke();
-        ctx.fillStyle = '#1e150f'; ctx.beginPath(); ctx.arc(anchor.to.x, anchor.to.y, 1.4 * frame.pixel, 0, Math.PI * 2); ctx.fill();
-        ctx.globalAlpha = alpha;
-      }
+      const pulse = status === 'decision' ? (t ? 0.5 + 0.5 * Math.sin(t / 420 + item.actor.phase) : 1) : 0;
       const at = frame.project({ x: anchor.x + item.shake, y: anchor.y - item.pose.lift });
       frame.screen();
-      nameTag(ctx, ports.fontFamily, item.actor.person.name, status, item.actor.person.role !== 'worker', teams.get(item.actor.person.team)?.color ?? UI.gold,
-        at.x, at.y, pulse, frame.pixel);
+      nameTag(ctx, ports.fontFamily, labelOf(item.actor.person), status, item.actor.person.role !== 'worker', teams.get(item.actor.person.team)?.color ?? UI.gold,
+        at.x, at.y, pulse, frame.pixel, palette.daylight);
       frame.world();
       const height = tagBox(ports.fontFamily, '', item.actor.person.role !== 'worker', 0, 0, frame.pixel).h;
       tagsShown.set(item.actor.id, { y: anchor.y - height / 2, above: anchor.above });
@@ -1065,8 +1036,8 @@ export function createWorldScene(ports: WorldScenePorts) {
       for (const actor of actors.values()) if (isMoving(actor)) return 0;
       // Under reduced motion only the wall clocks change, once a minute.
       if (motionless || still) return Math.min(hour, MINUTE_MS - ((performance.timeOrigin + now) % MINUTE_MS));
-      // Otherwise the office is alive while anyone is in it: screens flicker, bubbles think, tags breathe, dust drifts.
-      return actors.size || particles.size ? 0 : hour;
+      // Otherwise the office is alive while anyone is in it: people type, bubbles think, steam rises.
+      return actors.size ? 0 : hour;
     },
     hit(point) { return hitAt(point)?.id ?? ''; },
     targets() {
@@ -1116,9 +1087,13 @@ export function createWorldScene(ports: WorldScenePorts) {
       const quiet = settling || isSettling;
       office = next;
       settling = isSettling;
+      for (const team of next.teams) {
+        tagLabels(team.workers.map(worker => worker.name)).forEach((label, index) => labels.set(team.workers[index].id, label));
+      }
       allocate();
       relayout(false);
       placePeople(firstSight ? new Set(next.teams.map(team => team.key)) : previousTeams, quiet);
+      for (const id of [...labels.keys()]) if (!actors.has(id)) labels.delete(id);
       syncDocuments(!firstSight && !quiet && !still);
       targetsDirty = true;
       ports.wake();

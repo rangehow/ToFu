@@ -388,6 +388,18 @@ def test_preflight_freezes_project_pin_without_overwriting_override(tmp_path, mo
     assert 'TOFUDB_EXPECTED_SHA256' not in os.environ
 
 
+def test_a_settled_restart_outcome_joins_the_durable_lead_audit_stream(tmp_path):
+    project = _project(tmp_path)
+    manager = sm.LifecycleManager(str(project))
+    manager._state['lastRestart'] = {'outcome': 'started', 'source': 'owner-delegation'}
+    manager._refuse_restart('frontend preflight', 'Vite i18n chunks are stale')
+    (stream,) = (project / 'logs' / 'lead-audit').glob('lead-audit-*.jsonl')
+    (row,) = [json.loads(line) for line in stream.read_text().splitlines()]
+    assert (row['kind'], row['outcome'], row['stage']) == (
+        'restart_outcome', 'refused', 'frontend preflight')
+    assert row['source'] == 'owner-delegation' and 'Vite' in row['message']
+
+
 def test_restart_preparation_cannot_undo_concurrent_stop(tmp_path, monkeypatch):
     manager = sm.LifecycleManager(str(_project(tmp_path)))
     manager._state['desired'] = 'running'
@@ -813,31 +825,53 @@ def test_terminate_timeout_mirrors_worker_shutdown_budget(
     assert manager._terminate_timeout_seconds() == 35.0
 
 
-@pytest.mark.skipif(os.name == 'nt', reason='POSIX signal contract')
-def test_terminate_logs_graceful_stop_elapsed(tmp_path, monkeypatch, caplog):
-    child = subprocess.Popen(['sleep', '300'])
+_SIGTERM_CHILDREN = {
+    # A completed graceful drain.
+    'clean': ('import signal, sys\n'
+              'signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))\n'),
+    # The worker's hard-deadline backstop: os._exit(1) after a stuck drain
+    # (the 2026-11-18 02:12:28 restart logged "exited cleanly" for this).
+    'backstop': ('import os, signal\n'
+                 'signal.signal(signal.SIGTERM, lambda *_: os._exit(1))\n'),
+    # No handler: the default action terminates it by the signal.
+    'killed': '',
+}
+
+
+@pytest.mark.skipif(not sys.platform.startswith('linux'), reason='reads /proc exit status')
+@pytest.mark.parametrize('kind, message, clean_logged', [
+    ('clean', 'stopped cleanly', True),
+    ('backstop', 'stopped with exit code 1', False),
+    ('killed', 'stopped with signal SIGTERM', False),
+])
+def test_terminate_reports_the_worker_exit_status_not_its_absence(
+        tmp_path, monkeypatch, caplog, kind, message, clean_logged):
+    child = subprocess.Popen(
+        [sys.executable, '-c', _SIGTERM_CHILDREN[kind]
+         + 'import time\nprint("ready", flush=True)\ntime.sleep(300)\n'],
+        stdout=subprocess.PIPE)
     try:
+        assert child.stdout.readline().strip() == b'ready'
         manager = sm.LifecycleManager(str(_project(tmp_path)))
-        # The timing contract is under test, not identity enforcement.
+        # The exit report is under test, not identity enforcement.
         monkeypatch.setattr(manager, '_identity_error', lambda _s: None)
-        status = {
-            'pid': child.pid,
-            'running': True,
-            'host': sm._hostname(),
-            'sameHost': True,
-            'cmdline': 'python server.py',
-            'projectMatches': True,
-        }
+        status = {'pid': child.pid, 'running': True,
+                  'processStartTime': sm.proc_start_ticks(child.pid)}
         with caplog.at_level(logging.INFO, logger='server_manager'):
-            ok, killed, message = manager._terminate(status)
-        assert ok and not killed and message == 'stopped cleanly'
+            ok, killed, reported = manager._terminate(status, timeout=30.0)
+        assert ok and not killed
+        assert reported == message
         texts = [r.getMessage() for r in caplog.records]
         assert any('SIGTERM sent' in text for text in texts)
-        assert any('exited cleanly' in text and 'after SIGTERM' in text
-                   for text in texts)
+        assert any(re.search(r'exited .*\d+\.\ds after SIGTERM', text) for text in texts)
+        assert any('exited cleanly' in text for text in texts) is clean_logged
+        # The zombie stays unreaped for the exit recording that follows.
+        assert child.wait(timeout=5) == {'clean': 0, 'backstop': 1,
+                                         'killed': -signal.SIGTERM}[kind]
     finally:
-        child.kill()
-        child.wait()
+        if child.poll() is None:
+            child.kill()
+            child.wait()
 
 
 def test_frontend_preflight_logs_stage_elapsed(tmp_path, monkeypatch, caplog):

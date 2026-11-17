@@ -94,6 +94,41 @@ def test_filters_and_settled_lanes_stay_quiet(caplog):
     assert _lines(caplog) == set()
 
 
+def test_coordinator_wake_rows_are_a_filter_and_stay_quiet(caplog):
+    """Coordinator wakes are continued by ``continuation.recover_coordinator``, never by
+    this Worker pass. After the 2026-11-18 05:11 restart every pass logged each of 63
+    wake rows (all settled or already continued) at INFO as 'unresumed', which read
+    as stranded work."""
+    wake = _assignment('wake')
+    wake['request']['profile'] = {'mode': 'coordinator'}
+    with caplog.at_level(logging.INFO, logger='lib.project_dispatch.recovery'):
+        stats = _recover([wake], paused={'wake'})
+        stats_only = _recover([_assignment('lane')], paused={'lane'}, coordinator_only=True)
+
+    assert stats['skipped'] == 1 and stats_only['skipped'] == 1
+    assert _lines(caplog) == set()
+
+
+def test_a_revoked_restart_paused_lane_names_its_revocation_not_its_cut_off_calls(caplog):
+    """A lane whose grant was revoked cannot be continued, so its Coordinator has no
+    cut-off calls to check before continuing it. 97d5197b and cd5774da (revoked,
+    paused on 2026-11-17) were warned as effect_unknown at every later boot."""
+    effects = [{'toolName': 'run_command', 'toolCallId': 'call-write', 'operationId': 'op-1'}]
+
+    class Repository(_Repository):
+        def restart_resume(self, assignment, *, attempt=None):
+            resume = super().restart_resume(assignment)
+            return None if resume is None else {**resume, 'option': None, 'review': effects}
+
+    with caplog.at_level(logging.DEBUG, logger='lib.project_dispatch.recovery'):
+        stats = recovery.recover_project_dispatch(
+            1, '/project', repository=Repository([_assignment('revoked', revoked=True)], {'revoked'}),
+            service=object(), was_aborted_after=lambda *a: False, clock=lambda: NOW)
+    assert stats['skipped'] == 1 and stats['failed'] == 0
+    assert _lines(caplog) == {(logging.WARNING, '[ProjectDispatch] recovery left '
+                               'assignment=revoked owner=1 unresumed: grant_revoked')}
+
+
 def test_a_restart_paused_lane_that_cannot_continue_in_place_names_why(caplog):
     """A Worker Turn a later input superseded (the newer input owns the lane) or one
     whose settlement offers only Regenerate (2026-11-10: parallel 1be49eb0 failed with

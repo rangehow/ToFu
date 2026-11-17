@@ -1744,6 +1744,14 @@ def _record_restart_outcome(args: argparse.Namespace, outcome: dict) -> None:
             handle.write(line)
     except OSError as exc:
         print(f'Warning: the restart outcome could not be logged: {exc}', file=sys.stderr)
+    try:
+        from lib.logging_pkg.lead_audit import record
+        record('restart_outcome', {'outcome': 'cli_succeeded' if outcome['ok'] else 'cli_failed',
+                                   'stage': outcome['stage'], 'message': outcome['reason'],
+                                   'source': args.source},
+               logs_dir=Path(PROJECT) / 'logs')
+    except Exception:  # the command's own output stays authoritative
+        pass
     approval_id = getattr(args, 'lifecycle_approval_id', None)
     if not approval_id:
         return

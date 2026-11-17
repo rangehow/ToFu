@@ -132,12 +132,13 @@ def test_unit_tier_shards_cover_every_file_once_and_gate_all_shard_coverage():
     shards = unit['strategy']['matrix']['shard']
     assert unit['strategy']['fail-fast'] is False
     assert shards == list(range(1, len(shards) + 1))
-    assert unit['env']['TOFU_TEST_SHARD'] == f'${{{{ matrix.shard }}}}/{len(shards)}'
+    run = next(step['run'] for step in unit['steps'] if 'make test-unit' in step.get('run', ''))
+    assert f'SHARD=${{{{ matrix.shard }}}}/{len(shards)}' in run
     gate = next(step['run'] for step in jobs['coverage']['steps'] if 'check_coverage.py' in step.get('run', ''))
     assert 'coverage-unit-*/.coverage' in gate
 
 
-def test_shard_selection_partitions_whole_files(monkeypatch):
+def test_shard_selection_partitions_whole_files():
     from tests.conftest import _shard_selection
 
     class Item:
@@ -152,24 +153,35 @@ def test_shard_selection_partitions_whole_files(monkeypatch):
             self.deselected.extend(items)
 
     class Config:
-        def __init__(self):
+        def __init__(self, shard=''):
             self.hook = Hook()
+            self.shard = shard
+
+        def getoption(self, name, default=None):
+            assert name == '--tofu-shard'
+            return self.shard
 
     every = [Item(f'tests/area{n % 7}/test_{n}.py::test_{case}') for n in range(60) for case in 'ab']
     owner = {}
     for index in (1, 2, 3):
-        monkeypatch.setenv('TOFU_TEST_SHARD', f'{index}/3')
-        items, config = list(every), Config()
+        items, config = list(every), Config(f'{index}/3')
         _shard_selection(config, items)
         assert len(items) + len(config.hook.deselected) == len(every)
         for item in items:
             path = item.nodeid.split('::', 1)[0]
             assert owner.setdefault(path, index) == index
     assert len(owner) == 60
-    monkeypatch.delenv('TOFU_TEST_SHARD')
     items = list(every)
     _shard_selection(Config(), items)
     assert items == every
-    monkeypatch.setenv('TOFU_TEST_SHARD', '4/3')
     with pytest.raises(pytest.UsageError):
-        _shard_selection(Config(), list(every))
+        _shard_selection(Config('4/3'), list(every))
+
+
+def test_unit_tier_shard_reaches_pytest_only_through_its_command_line():
+    """Pytest sessions that tests spawn inherit the environment; a shard there
+    would deselect their own items, so the Makefile passes an option."""
+    makefile = (ROOT / 'Makefile').read_text()
+    assert 'PYTEST_SHARD = $(if $(SHARD),--tofu-shard=$(SHARD))' in makefile
+    unit_recipes = [line for line in makefile.splitlines() if line.startswith('\t') and '-m "unit and' in line]
+    assert unit_recipes and all('$(PYTEST_SHARD)' in line for line in unit_recipes)

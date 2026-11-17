@@ -229,7 +229,17 @@ def test_all_picker_reachable_slots_must_fit_not_just_one(routes):
 
 
 @pytest.mark.parametrize('opt_in', [False, True])
-def test_subscription_never_buys_paid_api_summary_or_claims_token_cost(routes, opt_in):
+def test_subscription_never_buys_paid_api_summary_or_claims_token_cost(routes, monkeypatch, opt_in):
+    from lib.model_routing import ModelRoutingError
+
+    class UnavailableAuthority:
+        def get(self, boundary):
+            raise ModelRoutingError('model-routing authority is temporarily unavailable',
+                                    kind='model_routing_storage_unavailable')
+
+    # The process-wide storage runtime is not this spec's: an unreadable
+    # auxiliary authority must preserve the subscription route.
+    monkeypatch.setattr('lib.model_routing.ModelRoutingRepository', UnavailableAuthority)
     routes.slots[0].oauth = 'codex'
     if not opt_in:
         routes.task['config']['compaction'] = {}

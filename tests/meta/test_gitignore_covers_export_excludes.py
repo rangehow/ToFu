@@ -72,6 +72,7 @@ _EXTRA_KEEPERS = {
     'tests/router/test_router_home_hope_seed.py',
     'tests/export/test_export_git_reads.py',
     'tests/evaluations/test_yourprovider_sandbox_score.py',
+    'tests/evaluations/test_owner_memory_action_time.py',
     'tests/evaluations/test_owner_memory_benchmark.py',
     'tests/evaluations/test_owner_memory_failure_selection.py',
     'tests/evaluations/test_owner_memory_midtask.py',

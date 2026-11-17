@@ -56,7 +56,7 @@ reproduce at its own commit (91b4c7e205 measured the same 800/203/363 KiB
 peaks as HEAD, on this host and on GitHub), so it gated every run red. The
 same change stopped the per-task abort watcher from copying the whole process
 environment (`task_abort_signal._distributed_mode` reads only the mode),
-which halved `short_conversation`'s peak (95.6 → 28.7 KiB). Focused comparison-harness
+which halved `short_conversation`'s peak (95.6 → 28.7 KiB). Time gates are scaled by host speed (2026-11-18). Problem: perf-nightly failed every workload at 1.5-1.7x on code that passed hours earlier; the passing runs were on westus2/us-west-2 runners and the failing ones on eastus, with the same runner image, and a local A/B of public 75083caa against 6efe816c showed no change. Decision: the benchmark also times fixed product-free interpreter work (`reference_ms`), and current times are divided by current/baseline reference before the unchanged 1.5x gate; memory peaks are not scaled. Alternatives rejected: re-recording the baseline on a slower runner hides a real regression on a fast one; raising the ratio is a tuning knob. Focused comparison-harness
 tests run in the ordinary unit suite. Full native/SQLite, actual-volume and
 process-crash receipts remain explicit verification work; no new background
 benchmark service or automatic production restart is introduced.

@@ -51,7 +51,8 @@ def test_default_routed_wire_exposes_core_on_new_turns_and_retries(coordinator):
     from lib.tools.routing import _reset_sticky_exposure_for_tests
 
     original, _ = coordinator
-    expected = COORDINATOR_TOOLS - {'search_tools', 'execute_tools'}
+    # channel_send is in the catalog only where the owner has a command chat (lib.channels.tools).
+    expected = COORDINATOR_TOOLS - {'search_tools', 'execute_tools', 'channel_send'}
     assert normalize_context_experiment_flags(original['config'])['tools']['nativeExposure'] == 'routed'
     for turn, text in enumerate(('开始', '继续', 'Looks good')):
         # No earlier discovery, routing cache or task policy is required.
@@ -91,7 +92,7 @@ def test_discovery_budget_and_replayed_visibility_cannot_hide_the_role_core(coor
     tools = assemble(task, tools={'toolSearch': search_mode, 'schemaBudgetTokens': 1},
                      _toolInitialVisibleNames=['get_conversation'])
     expected = names(task['_executable_tool_catalog'])
-    assert expected == COORDINATOR_TOOLS - {'search_tools', 'execute_tools'}
+    assert expected == COORDINATOR_TOOLS - {'search_tools', 'execute_tools', 'channel_send'}
     assert COORDINATOR_DIRECT_TOOLS <= names(task['_tool_schema'])
     assert COORDINATOR_DIRECT_TOOLS == set(task['_requiredDirectToolNames'])
     assert set(task['_toolDiscoveryPolicyByName'].values()) == {'eager'}

@@ -365,12 +365,16 @@ def delegated_conversation_control(task: dict, scope: dict, arguments: dict, *, 
     the owner's delegation, which stands in for an owner message of the
     current request; the target keeps its own accepted execution identity.
     Its outcome settles the record. Regenerate needs the owner's own request.
+
+    Every lead may call it (a Project Router only under the full grant, which
+    ``check_delegation`` enforces). It reaches a session of another project
+    (docs/ROUTER.md R9 "Cross-project action"): the audit record names the
+    target project (``target.path``) and that project's lead is told.
     """
     from lib import lifecycle_approval as gate
+    from lib.conversations.project_identity import normalize_project_path
+    from lib.conversations.project_messages import scope as conversation_project
     from lib.identity import PrincipalContext
-    from .policy import is_router_scope
-    if not is_router_scope(scope):
-        raise PermissionError('Only the owner\u2019s Global Router can act under the owner\u2019s delegation')
     authority = validate(dict(arguments['owner_delegation']), 'ownerDelegationAuthority')
     for name in ('conversation_id', 'turn_id', 'attempt_id', 'idempotency_key'):
         if not isinstance(arguments.get(name), str) or not arguments[name].strip():
@@ -384,6 +388,15 @@ def delegated_conversation_control(task: dict, scope: dict, arguments: dict, *, 
     requester = router_requester(task, scope)
     target = {'kind': 'conversation', 'conversationId': arguments['conversation_id'],
               'turnId': arguments['turn_id'], 'attemptId': arguments['attempt_id'], 'action': action}
+    # The Global Router acts on every project as its own reach (R9); a Project Router's
+    # session of another project is a cross-project action: recorded with its project,
+    # and that project's lead is told.
+    cross_project = False
+    if requester['kind'] == 'project_lead':
+        target_project = conversation_project(owner, arguments['conversation_id'])
+        cross_project = target_project != normalize_project_path(scope['project_path'])
+        if cross_project:
+            target['path'] = target_project
     if action == 'set_model':
         # Checked before the gate records anything: every record stays an ownerDelegatedAction.
         from lib.conversations.session_model import validate_request
@@ -414,7 +427,38 @@ def delegated_conversation_control(task: dict, scope: dict, arguments: dict, *, 
         raise
     if record['status'] != 'completed':
         gate.settle_delegated_action(owner, record['id'], status='completed')
-    return {**result, 'owner_delegation_action_id': record['id']}
+    result = {**result, 'owner_delegation_action_id': record['id']}
+    if cross_project:
+        result['target_lead_notified'] = _notify_target_lead(
+            task, scope, target_project, record, target, authority['reason'])
+    return result
+
+
+def _notify_target_lead(task: dict, scope: dict, project: str, record: dict, target: dict,
+                        reason: str) -> str | None:
+    """Tell the lead of ``project`` what another lead did there under the delegation.
+
+    One cross-lead report (docs/ROUTER.md R13) per audit record, idempotent by
+    its id. Returns the lead conversation it reached, or None when the project
+    has no available lead (the audit record remains the evidence).
+    """
+    from lib.conversations.project_coordination import ProjectCoordinationRepository
+    from lib.conversations.project_identity import normalize_project_path
+    from lib.conversations.project_messages import ProjectMailbox
+    owner = scope['user_id']
+    binding = ProjectCoordinationRepository(owner).read(project)
+    lead = binding.get('conversationId')
+    if binding.get('availability') != 'available' or not lead or lead == scope['conversation_id']:
+        return None
+    content = (f'Under the owner\u2019s delegation, lead {scope["conversation_id"]} ran {target["action"]} on '
+               f'conversation {target["conversationId"]} (Turn {target["turnId"]}, Attempt '
+               f'{target["attemptId"]}) in your project. Reason: {reason} Audit record: {record["id"]}. '
+               'Read get_conversation_status before acting on that session yourself.')
+    ProjectMailbox(owner, project, lead).submit(
+        scope['conversation_id'], {'content': content, 'kind': 'report',
+                                   'idempotency_key': 'owner-delegation:' + record['id']},
+        task['id'], sender_project=normalize_project_path(scope['project_path']))
+    return lead
 
 
 def delegated_action(task: dict, scope: dict, arguments: dict, *, scope_name: str,

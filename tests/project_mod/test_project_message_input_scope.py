@@ -71,7 +71,7 @@ def test_bound_watchdog_reaches_provider_and_confirms_original(watchdog_message,
     pm.confirm(witness.task, 1)
     confirmed = witness.mailbox.read()[0]
     assert confirmed['state'] == 'input_confirmed'
-    assert confirmed['decision'] is None
+    assert confirmed['decision'] == 'accepted' and confirmed['decisionAuto'] is True
     assert confirmed['inputTaskId'] == witness.task['id']
 
 

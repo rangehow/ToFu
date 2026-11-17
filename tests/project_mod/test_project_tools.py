@@ -568,8 +568,10 @@ class TestIsCatastrophicDelete:
     def test_rm_home(self):
         assert _is_catastrophic_delete('rm -r /home') is not None
 
-    def test_rm_data_trailing_slash(self):
-        assert _is_catastrophic_delete('rm -rf /data/') is not None
+    def test_rm_toplevel_trailing_slash(self):
+        # A shallow path refuses only where it exists (owner decision 2026-11-17,
+        # eaba0e28b8); /data is absent on CI runners, /usr is on every host.
+        assert _is_catastrophic_delete('rm -rf /usr/') is not None
 
     def test_flag_order_does_not_smuggle(self):
         # rm /mnt -r -f  → still blocked (flags after the path)

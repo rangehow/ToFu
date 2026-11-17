@@ -590,7 +590,7 @@ def test_streaming_grep_truncation_sidecar_survives_prefetch_cache(
             future, "grep_search", arguments, time.time())
         assert accumulator.inject_into_cache(task) == 1
     finally:
-        accumulator._pool.shutdown(wait=False)
+        accumulator.close(wait=False)
 
     cache_key = _make_cache_key("grep_search", arguments)
     cached = task["_tool_result_cache"][cache_key]
@@ -962,7 +962,7 @@ def test_streaming_prefetch_carries_batch_read_projection_to_model_context(
             future, "read_files", arguments, time.time())
         assert accumulator.inject_into_cache(task) == 1
     finally:
-        accumulator._pool.shutdown(wait=False)
+        accumulator.close(wait=False)
 
     cache_key = _make_cache_key("read_files", arguments)
     cached = task["_tool_result_cache"][cache_key]

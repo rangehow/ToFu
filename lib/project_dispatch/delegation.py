@@ -12,7 +12,9 @@ and admit_worker_model are that resolver and its route admission.
 from __future__ import annotations
 
 import re
+import threading
 from collections.abc import Mapping
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -20,6 +22,10 @@ from pathlib import Path
 from lib.identity import PrincipalContext
 from lib.agent_core.model_context_revision import model_context_revision
 from .repository import CONTRACT, ProjectDispatchError, _validate_schema
+
+from lib.log import get_logger
+
+logger = get_logger(__name__)
 
 # ``((repository key, request budget id), first row)`` a Coordinator task keeps.
 _FIRST_DELEGATION_KEY = '_coordinatorFirstDelegation'
@@ -409,8 +415,10 @@ def _source_for_task(repository, task, *, for_budget, issued, delegated=False):
         repository.validate_human_source(source)
     except SyntheticSource as refusal:
         source = _steered_owner_source(repository, task, turn)
+        if source is None:
+            source = _answered_owner_source(repository, task, turn, attempt)
         if source is None and delegated:
-            source = lead_source(repository, task, scope, turn, attempt)
+            source = lead_source(repository, task, scope, turn, attempt, human=human)
         if source is None:
             raise _nonhuman_request(human, refusal) from refusal
     from .repository import stopped_after
@@ -451,10 +459,52 @@ def _steered_owner_source(repository, task, turn):
     return None
 
 
+# A lead's task records here each ask_human answer its model received (the handler's result).
+OWNER_ANSWERS_KEY = '_ownerGuidanceAnswers'
+
+
+def answered_question(projection, guidance_id):
+    """The owner's durable answer receipt of ask_human question ``guidance_id`` in a reply projection."""
+    for question in (projection or {}).get('toolRounds') or ():
+        if (isinstance(question, Mapping) and question.get('guidanceId') == guidance_id
+                and question.get('toolName') == 'ask_human' and question.get('guidanceAnswerCommandId')
+                and isinstance(question.get('guidanceResponse'), str) and question['guidanceResponse'].strip()):
+            return question
+    return None
+
+
+def _answered_owner_source(repository, task, turn, attempt):
+    """The owner's answer to this reply's own question, delivered to its model, as a source.
+
+    Audit 2026-11-18 #5 (A6): a lead whose Turn has no owner message of its own
+    asked the owner, received the answer on its question card, and still could
+    not act on it. The answer is the owner's own words for this reply: the card
+    is answered only through the owner's answer command (an agent never answers a
+    question, docs/ROUTER.md R9), and its durable receipt is immutable. Delivery
+    is this executor's own ask_human result, or an answer_guidance resume, whose
+    model replays every answered question of the Turn.
+    """
+    delivered = list(task.get(OWNER_ANSWERS_KEY) or ())
+    resumed = isinstance(attempt, Mapping) and attempt.get('operation') == 'answer_guidance'
+    if not delivered and not resumed:
+        return None
+    reply = repository.read_turn(turn['conversationId'], turn['turnId'])
+    projection = (reply or {}).get('projection') if isinstance(reply, Mapping) else None
+    candidates = delivered or [question.get('guidanceId') for question in (projection or {}).get('toolRounds') or ()
+                               if isinstance(question, Mapping)]
+    for guidance_id in candidates:
+        if isinstance(guidance_id, str) and answered_question(projection, guidance_id) is not None:
+            return {'conversationId': turn['conversationId'], 'turnId': turn['turnId'],
+                    'projectionRevision': 1, 'guidanceId': guidance_id}
+    return None
+
+
 LEAD_AUTHORITY = 'lead_authority'
+# The lead_authority record each thread's current lead act resolved its source from.
+_LEAD_ACT = threading.local()
 
 
-def lead_source(repository, task, scope, turn, attempt):
+def lead_source(repository, task, scope, turn, attempt, *, human=None):
     """The owner's delegation as the source of a lead Turn without an owner message of its own.
 
     Owner decision 2026-11-18 (docs/ROUTER.md R9): 「我的权限要全部下放给负责人们」.
@@ -464,7 +514,8 @@ def lead_source(repository, task, scope, turn, attempt):
     (revocation refuses at once) and records one audit action per lead Attempt
     (the idempotency key), before any effect. Returns ``None`` without a grant
     (the caller keeps its nonhuman refusal; ``audit.log`` records it), and for
-    the Watchdog, which is not a lead.
+    the Watchdog, which is not a lead. The act that used it settles the record
+    with its outcome (``lead_act``).
     """
     from lib import lifecycle_approval as gate
     from lib.router.watchdog.binding import is_watchdog_scope
@@ -483,12 +534,62 @@ def lead_source(repository, task, scope, turn, attempt):
             repository.owner, requester, scope=LEAD_AUTHORITY, key='lead-turn:' + attempt['attemptId'],
             reason='A lead Turn without an owner message of its own acts on Workers under the owner\u2019s '
                    'delegation to every lead.',
-            trigger={'kind': 'owner_delegation', 'turnId': turn['turnId'], 'text': LEAD_DELEGATION_WORDS},
-            target=target)
+            trigger={'kind': 'owner_delegation', 'turnId': turn['turnId'], 'text': LEAD_DELEGATION_WORDS,
+                     **({'triggerTurnId': human['turnId']} if isinstance(human, Mapping)
+                        and isinstance(human.get('turnId'), str) else {})},
+            target=target, trigger_source=_input_source(human))
     except gate.DelegationRefused:
         return None
+    if getattr(_LEAD_ACT, 'used', None) is not None:
+        _LEAD_ACT.used = (repository.owner, record['id'])
     return {'conversationId': turn['conversationId'], 'turnId': turn['turnId'], 'projectionRevision': 1,
             'ownerDelegation': record['id']}
+
+
+def _input_source(human):
+    from lib.turn_initiation import resolve_turn_initiator
+    try:
+        return resolve_turn_initiator(human) if isinstance(human, Mapping) else None
+    except Exception:
+        return None
+
+
+@contextmanager
+def lead_act(action):
+    """Settle the ``lead_authority`` record a lead act used with that act's outcome.
+
+    Audit 2026-11-18 (Global Router verification efb9d9dd): lead records stayed
+    ``accepted`` forever while every other delegated action settles
+    ``completed``/``failed``. A lead act is one acting tool call (or one Worker
+    birth); it settles the record only when its source came from
+    ``lead_source`` in this thread. The record is per lead Attempt, so it holds
+    the latest act's outcome; the lead-audit stream keeps every act. The body
+    calls ``failed(code, detail)`` when the act returns a refusal instead of raising.
+    """
+    previous = getattr(_LEAD_ACT, 'used', None)
+    _LEAD_ACT.used = ()
+    outcome = {}
+
+    def failed(code, detail):
+        outcome.update(code=code, detail=detail)
+
+    try:
+        yield failed
+    except BaseException as error:
+        outcome.setdefault('code', getattr(error, 'code', None) or type(error).__name__)
+        outcome.setdefault('detail', str(error) or type(error).__name__)
+        raise
+    finally:
+        used, _LEAD_ACT.used = _LEAD_ACT.used, previous
+        if used:
+            from lib import lifecycle_approval as gate
+            try:
+                gate.settle_delegated_action(
+                    used[0], used[1], status='failed' if outcome else 'completed',
+                    code=outcome.get('code'), detail=outcome.get('detail'), action=action)
+            except Exception as error:
+                # The act already happened; its audit settlement never changes its result.
+                logger.warning('[LeadAuthority] settlement of %s after %s failed: %s', used[1], action, error)
 
 
 def _nonhuman_request(human, refusal):
@@ -552,7 +653,7 @@ def validate_source(repository, request, *, value=None):
     attempt = repository.get_attempt(delegation['attemptId'])
     # A human input Turn is the delegating reply's parent; a steered owner
     # message is inside that reply itself.
-    inside_reply = {'steerId', 'ownerDelegation'} & set(request['authorizationSource'])
+    inside_reply = {'steerId', 'ownerDelegation', 'guidanceId'} & set(request['authorizationSource'])
     authorized = (source.get('turnId') if inside_reply
                   else source.get('parentTurnId')) if isinstance(source, dict) else None
     if (not isinstance(source, dict) or source.get('actor') != 'assistant'
@@ -607,6 +708,12 @@ def worker_input_source(repository, request):
         except ValueError as error:
             raise PermissionError('Original worker objective changed before dispatch') from error
         where += ' (message ' + source['steerId'] + ' the owner sent while that reply ran)'
+    elif 'guidanceId' in source:
+        turn = repository.turn_get(source['conversationId'], source['turnId'], user_id=repository.owner)
+        if (not turn or turn.get('actor') != 'assistant' or turn.get('turnId') != source['turnId']
+                or answered_question(turn.get('projection'), source['guidanceId']) is None):
+            raise PermissionError('Original worker objective changed before dispatch')
+        where += ' (the owner\u2019s answer to question ' + source['guidanceId'] + ' that reply asked)'
     elif 'ownerDelegation' in source:
         turn = repository.turn_get(source['conversationId'], source['turnId'], user_id=repository.owner,
                                    include_projection=False)
@@ -644,16 +751,26 @@ def follow_up_instruction(text: str) -> str | None:
     return text[len(FOLLOW_UP_INPUT_HEADER):] if text.startswith(FOLLOW_UP_INPUT_HEADER) else None
 
 
-def successor_brief(predecessor, instruction):
+def successor_brief(predecessor, instruction, *, held_checkpoint=None):
     """The brief of a new assignment that continues a final result in its conversation.
 
     Only immutable facts enter it, so a retried follow-up replays the same delegation.
+    ``held_checkpoint`` is the accepted, pinned checkpoint whose delivery a conflict
+    holds or a superseding rework stopped: the successor merges it first, and once that lands the held delivery
+    settles as delivered by itself (``task_delta_delivery.checkpoint_contained``).
     """
+    held = '' if not held_checkpoint else (
+        'Its accepted checkpoint ' + held_checkpoint + ' did not land (a conflict with the shared '
+        'branch holds its delivery, or a rework review stopped it). First merge commit '
+        + held_checkpoint + ' into your '
+        'checkout, resolve each conflicted file keeping both sides\' intent (regenerate generated '
+        'outputs from the merged sources, never hand-merge them) and rerun the checks covering those '
+        'files; once your work lands, the held delivery settles as delivered by itself.\n\n')
     return ('Follow-up in this same conversation: a new assignment continuing assignment '
             + predecessor['id'] + ', whose result is final (reviewed or delivered). You work in a '
             'fresh isolated checkout of the current project branch, your working directory now: it '
             'holds earlier work only where that work was delivered, and checkouts named earlier in '
-            'this conversation are no longer yours.\n\n' + instruction)
+            'this conversation are no longer yours.\n\n' + held + instruction)
 
 
 class ReviewResultChanged(ProjectDispatchError):
@@ -689,6 +806,31 @@ def _registered_checkpoint(repository, row):
     workspace = repository.get_workspace(str(Path(repository.project).expanduser().resolve()),
                                          repository.workspace_task_id(row), user_id=repository.owner)
     return (workspace or {}).get('checkpoint_sha') or None
+
+
+def _superseding_rework(repository, row, attempt, recorded, review):
+    """A rework that supersedes the recorded accept or reject of the same result, else ``review``.
+
+    Audit 2026-11-18 #6: an immutable review forced a new, unlinked repair
+    assignment for every conflict or second thought. A rework of the same
+    result revision may replace an accept or reject whose result was not
+    delivered; it keeps the superseded judgment (``supersedes``) so the history
+    stays append-only, and ``rework_of`` (or a follow_up) then links the repair to
+    it. A rework stops a pinned publication: ``validate_publication`` admits only
+    an accept. A delivered result is final and keeps its review. Repeating the
+    same superseding rework returns the recorded one.
+    """
+    if review['decision'] != 'rework':
+        return review
+    if recorded.get('decision') == 'rework' and 'supersedes' in recorded:
+        return recorded if {key: value for key, value in recorded.items() if key != 'supersedes'} == review else review
+    if recorded.get('decision') not in ('accept', 'reject') or recorded.get('resultRevision') != review['resultRevision']:
+        return review
+    from .publication import delivery_final
+    if delivery_final(row, attempt, repository.get_workspace):
+        raise ValueError('This result was delivered, so its review is final; delegate a new repair '
+                         'assignment on the current branch')
+    return {**review, 'supersedes': deepcopy(recorded)}
 
 
 def review_worker(repository, task, arguments):
@@ -740,13 +882,17 @@ def review_worker(repository, task, arguments):
         reaffirm = accepts and recorded != review and (
             checkpoint == old['checkpointSha'] if old is not None else review['note'] == recorded['note'])
         if recorded is not None and recorded != review and not reaffirm:
+            review = _superseding_rework(repository, row, attempt, recorded, review)
+        if recorded is not None and recorded != review and not reaffirm and 'supersedes' not in review:
             if accepts and old is None:
                 from .publication import PublicationRefused
                 raise PublicationRefused(
                     'the accepted review is immutable and this call changes its note',
                     'Repeat review_project_work with decision=accept, the recorded note '
                     '(get_project_assignment review.note), the current result_revision and checkpoint_sha.')
-            raise ValueError('Worker review is immutable; delegate a new repair assignment')
+            raise ValueError('Worker review is immutable: only decision=rework may supersede an accept or '
+                             'reject of this same result_revision before it is delivered; otherwise delegate '
+                             'a new repair assignment')
         if checkpoint:
             project_root = str(Path(repository.project).expanduser().resolve())
             work_id = repository.workspace_task_id(row)

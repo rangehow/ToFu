@@ -280,23 +280,35 @@ def release_publication_hold(project_path: str, task_id: str, *, user_id: int) -
     return _save(row, receipt, state='pending', reason='')
 
 
+# Receipts that settle a publication without delivering it: news to the
+# Worker's Coordinator only (lib.project_dispatch.continuation.HELD_DELIVERY).
+_HELD_STATES = frozenset({'blocked', 'failed', 'preserved'})
+
+
 def _wake_delivered_dependents(row: dict, receipt: dict | None) -> None:
     """Notify from the receiver's unlocked return, never from its save callback.
 
     Ref publication is insufficient. A successful delivered ACK or a durable
     delivered reread after uncertain ACK/crash is required. Readiness still
     checks exact task association, checkpoint, review and publication pins.
+    A held receipt (blocked, failed, preserved) wakes the Worker's idle
+    Coordinator instead: it is the one who acts on its reason.
     """
     from lib.project_dispatch.admission import KEY
     binding = (row.get('origin') or {}).get(KEY)
-    if not isinstance(binding, dict) or not receipt or receipt.get('state') != 'delivered':
+    state_name = (receipt or {}).get('state')
+    if not isinstance(binding, dict) or state_name not in _HELD_STATES | {'delivered'}:
         return
     try:
         latest = state.get_workspace(row['project_root'], row['task_id'], user_id=int(row['user_id']))
-        if (_receipt(latest).get('state') != 'delivered'
+        if (_receipt(latest).get('state') != state_name
                 or (latest.get('origin') or {}).get(KEY) != binding
                 or binding['owner'] != latest['user_id']
                 or binding['projectPath'] != latest['project_root']):
+            return
+        if state_name != 'delivered':
+            from lib.project_dispatch.recovery import wake_coordinators
+            wake_coordinators(binding['owner'], binding['projectPath'])
             return
         from lib.project_dispatch.recovery import wake_project_dependents
         wake_project_dependents(binding['owner'], binding['projectPath'], binding['assignmentId'])
@@ -308,7 +320,7 @@ def _wake_delivered_dependents(row: dict, receipt: dict | None) -> None:
 
 def _wake_workspace_dependents(project_path: str, task_id: str, user_id: int,
                                receipt: dict | None) -> None:
-    if not receipt or receipt.get('state') != 'delivered':
+    if not receipt or receipt.get('state') not in _HELD_STATES | {'delivered'}:
         return
     try:
         root = str(_control()._repo_root(project_path))

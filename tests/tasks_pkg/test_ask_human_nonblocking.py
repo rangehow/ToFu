@@ -221,9 +221,18 @@ def test_only_an_explicit_false_skips_the_wait(gate, events, turn, flag):
     row = _row()
     events.on_request = lambda event: _accept_answer(turn, event['guidanceId'], 'A')
     args = _args(False) if flag is None else _args(False, blocking=flag)
-    _, content, _ = _ask(_task(), row, args)
+    task = _task()
+    _, content, _ = _ask(task, row, args)
     assert content == 'Human response: A'
     assert len(gate.registered) == 1 and 'guidanceBlocking' not in row
+    # The received answer is the owner's request for this reply (lead audit 2026-11-18 #5).
+    assert task['_ownerGuidanceAnswers'] == (row['guidanceId'],)
+
+
+def test_a_superseded_or_unanswered_question_records_no_owner_answer(gate, events, turn):
+    row, task = _row(), _task()
+    _ask(task, row, _args(False, blocking=False))
+    assert '_ownerGuidanceAnswers' not in task
 
 
 @pytest.mark.parametrize('scope', [None, RuntimeError('role lookup unavailable')])

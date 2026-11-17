@@ -476,9 +476,10 @@ def _coordinator_tool_spec() -> ToolSpec:
             'request_user_decision', 'route_to_project', 'get_router_projects', 'router_instruction_create',
             'router_portfolio',
             'router_instruction_list', 'router_instruction_cancel', 'restart_server', 'owner_settings',
-            'repair_project',
+            'repair_project', 'broadcast_project_message',
             'watchdog_snapshot', 'watchdog_resolve_signals', 'watchdog_schedule_recheck',
-            'watchdog_message', 'watchdog_notify_router', 'watchdog_configure_review'}),
+            'watchdog_message', 'watchdog_notify_router', 'watchdog_configure_review',
+            'resume_stalled_continuation'}),
         write_tools=frozenset({
             'router_project',
             'control_conversation',
@@ -487,9 +488,10 @@ def _coordinator_tool_spec() -> ToolSpec:
             'finish_project_request', 'request_user_decision',
             'route_to_project', 'router_instruction_create', 'router_instruction_cancel',
             'router_portfolio',
-            'restart_server', 'owner_settings', 'repair_project',
+            'restart_server', 'owner_settings', 'repair_project', 'broadcast_project_message',
             'watchdog_resolve_signals', 'watchdog_schedule_recheck', 'watchdog_message',
-            'watchdog_notify_router', 'watchdog_configure_review'}),
+            'watchdog_notify_router', 'watchdog_configure_review',
+            'resume_stalled_continuation'}),
         idempotent_tools=frozenset({
             'router_project',
             'get_conversation_status', 'control_conversation', 'list_project_leads',
@@ -498,9 +500,10 @@ def _coordinator_tool_spec() -> ToolSpec:
             'finish_project_request', 'request_user_decision', 'route_to_project', 'get_router_projects',
             'router_instruction_create', 'router_instruction_list', 'router_instruction_cancel',
             'router_portfolio',
-            'restart_server', 'owner_settings', 'repair_project',
+            'restart_server', 'owner_settings', 'repair_project', 'broadcast_project_message',
             'watchdog_snapshot', 'watchdog_resolve_signals', 'watchdog_schedule_recheck',
-            'watchdog_message', 'watchdog_notify_router', 'watchdog_configure_review'}),
+            'watchdog_message', 'watchdog_notify_router', 'watchdog_configure_review',
+            'resume_stalled_continuation'}),
         cacheable_tools=frozenset(),
         stream_start_by_name={'delegate_project_work': _COORDINATOR_STREAM_START})
 
@@ -592,7 +595,8 @@ def _device_wait_tool_spec() -> ToolSpec:
 
 
 def _build_channels(ctx: ToolContext) -> list[dict]:
-    """Channel tools for the owner's Global Router; channel_read for subscribers.
+    """Channel tools for the owner's Global Router; channel_read for subscribers; channel_send to the
+    owner's command chat for a Project Router.
 
     ``lib.channels.tools`` owns the authority boundary; this projection never
     widens it and every call is checked again at execution.
@@ -601,7 +605,7 @@ def _build_channels(ctx: ToolContext) -> list[dict]:
             or not ctx.owner_user_id or not ctx.conv_id):
         return []
     from lib.channels.tools import visible_tools
-    return visible_tools(ctx.owner_user_id, ctx.conv_id)
+    return visible_tools(ctx.owner_user_id, ctx.conv_id, ctx.project_path or '')
 
 
 def _channel_tool_spec() -> ToolSpec:

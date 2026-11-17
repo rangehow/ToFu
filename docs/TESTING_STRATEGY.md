@@ -200,12 +200,14 @@ removing required plugins would bypass the shared test contract.
 | Supply chain | CycloneDX plus source/image vulnerability, secret and deployment scans | CI `supply-chain` + `container` jobs |
 | Release | All current layers | `make test-all` |
 
-CI runs the unit tier as four shards (`TOFU_TEST_SHARD=k/n`, read by
-`tests/conftest.py`). Problem: from 52cb8c11 on, GitHub shut the single
+CI runs the unit tier as four shards (`make test-unit SHARD=k/n`, the
+`--tofu-shard` option of `tests/conftest.py`). Problem: from 52cb8c11 on, GitHub shut the single
 test-unit runner down at about 44% on every run, so the tier never reported a
 result. Decision: a stable hash of each test file's path places the whole file
 in exactly one shard, every xdist node selects the same items, and the
 coverage gate combines every shard's data (`tests/meta/test_ci_results.py`).
+An option rather than an environment variable, because the pytest sessions
+that tests spawn inherit the environment and would deselect their own items.
 Alternatives rejected: a hand-kept directory split must be maintained as
 directories are added; a pytest-split dependency needs a committed timing
 file that drifts.

@@ -235,6 +235,25 @@ def test_no_change_receiver_wakes_only_after_ack_and_outside_lock(delivery_conte
     assert c.births == ['project-dispatch:' + c.dependent['id']]
 
 
+@pytest.mark.parametrize('state', ['blocked', 'failed', 'preserved', 'delivered', 'pending'])
+def test_a_held_receipt_wakes_the_idle_coordinator_and_only_delivery_wakes_dependents(monkeypatch, state):
+    """C3/#7 of the 2026-11-18 lead audit: a held delivery (blocked, failed, preserved) is
+    news only to the Worker's Coordinator; it woke nobody, so a lead polled to see it."""
+    from lib.project_dispatch.admission import KEY
+    binding = {'owner': 7, 'projectPath': '/project', 'assignmentId': 'assignment-1'}
+    row = {'project_root': '/project', 'task_id': 'task-1', 'user_id': 7,
+           'origin': {KEY: binding, 'delivery': {'state': state}}}
+    monkeypatch.setattr(delivery.state, 'get_workspace', lambda *a, **kw: deepcopy(row))
+    calls = []
+    monkeypatch.setattr(recovery, 'wake_coordinators', lambda owner, project: calls.append(('coordinators', owner, project)))
+    monkeypatch.setattr(recovery, 'wake_project_dependents',
+                        lambda owner, project, assignment: calls.append(('dependents', owner, project, assignment)))
+    delivery._wake_delivered_dependents(row, {'state': state})
+    expected = {'delivered': [('dependents', 7, '/project', 'assignment-1')], 'pending': []}.get(
+        state, [('coordinators', 7, '/project')])
+    assert calls == expected
+
+
 from tests.storage.test_integration_delivery import repo as repo_fixture, automatic_settle
 from tests.project_mod.test_project_dispatch_file_lifecycle import file_context
 repo = repo_fixture

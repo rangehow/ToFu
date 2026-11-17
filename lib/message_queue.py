@@ -800,10 +800,12 @@ def dispatch_completed_background_batch(conv_id: str, *, user_id: int) -> str | 
                     }, request_started_at=time.time(),
                     principal=trusted.principal, trusted_dispatch=trusted)
             except LifecycleConflict as conflict:
-                if conflict.code != 'lane_busy':
+                if conflict.code not in ('lane_busy', 'database_conflict'):
                     raise
-                # Its previous attempt still occupies the lane; the receipts
-                # stay durable for the maintenance tick after it exits.
+                # Its previous attempt still occupies the lane, or another
+                # resume (the restart continuation) created the Turn's attempt
+                # first and consumes the receipts at its next round; they stay
+                # durable for that attempt or the maintenance tick after it.
                 logger.info('[Queue] background continuation deferred conv=%s: %s',
                             conv_id, conflict)
                 return None

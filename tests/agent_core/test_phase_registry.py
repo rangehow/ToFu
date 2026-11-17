@@ -94,6 +94,9 @@ _NON_PHASE_EVENT_VALUES: dict[str, str] = {
     'skipped': 'memory-prefetch trace stage',
     'model_in_flight': 'root execution-budget checkpoint',
     'tools_in_flight': 'root execution-budget checkpoint',
+    # persistence_wait.checkpoint_invocation effect boundary (tool/ready/
+    # terminal); the deferred ready-receipt barrier names it literally.
+    'ready': 'invocation effect-boundary checkpoint',
     'serializing': 'JavaScript executor internal lifecycle',
     # Project Worker state on the Coordinator's poll/continuation board
     # (lib/project_dispatch/continuation.worker_phase family), never a PHASE push.

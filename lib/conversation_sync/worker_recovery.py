@@ -379,10 +379,15 @@ def recover_exited_attempt(context, attempt, turn, *, task=None):
         # the lease), is an interruption, not a human Stop or a failed
         # invocation. Domain checkpoint recovery may continue in a new accepted
         # Attempt; this receipt never authorizes replay.
-        restarted = ((proof == 'process_dead' or stopped_by_shutdown or lease_lost)
-                     and not context.cancellation_requested)
-        cut_calls = (classify_cut_calls(turn, attempt)
-                     if restarted and not preparation_exited else None)
+        ended_unjoined = proof == 'process_dead' or stopped_by_shutdown or lease_lost
+        restarted = ended_unjoined and not context.cancellation_requested
+        # A Stop that reached an execution which had already ended (its owner
+        # died, or the service was stopping) ends it as that Stop. What the
+        # ended execution left is decided from its cut calls exactly as for a
+        # restart, never declared unknown wholesale.
+        stopped_after_exit = (ended_unjoined and not lease_lost
+                              and context.cancellation_requested)
+        cut_calls = classify_cut_calls(turn, attempt) if ended_unjoined else None
         unknown_effects = None if cut_calls is None else [
             {key: item[key] for key in ('toolName', 'toolCallId', 'operationId')}
             for item in cut_calls if item['decision'] == 'needs_decision']
@@ -441,6 +446,13 @@ def recover_exited_attempt(context, attempt, turn, *, task=None):
             # Only the joined original carrier proves this cause; reclaiming
             # a lease alone does not establish why the previous worker exited.
             carrier['_abort_reason'] = 'worker_lease_lost'
+        if stopped_after_exit:
+            from lib.conversation_sync.worker_control import decode_cancellation
+            reason, detail = decode_cancellation(context.cancellation_reason)
+            carrier.update(status='aborted', aborted=True, finishReason='aborted')
+            if reason:
+                carrier.update(_abort_reason=reason, _abortReasonDetail=detail)
+            event_type = 'aborted'
         if restarted:
             # A stopping process starts no successor (``server_shutdown``). A dead
             # owner's Attempt is settled by a serving process, as restart

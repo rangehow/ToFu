@@ -36,7 +36,9 @@ def test_router_ceiling_is_the_coordinator_ceiling_plus_router_and_channel_names
     assert ROUTER_TOOLS == COORDINATOR_TOOLS | ROUTER_ONLY_TOOLS | CHANNEL_TOOLS
     assert {'route_to_project', 'get_router_projects', 'router_instruction_create',
             'router_instruction_list', 'router_instruction_cancel', 'router_portfolio',
-            'owner_settings', 'router_project', 'repair_project'} == ROUTER_ONLY_TOOLS
+            'owner_settings', 'router_project', 'repair_project',
+            # The Global Router broadcast (R13, lead audit recommendation 4, 2026-11-18).
+            'broadcast_project_message'} == ROUTER_ONLY_TOOLS
     # Every lead restarts under the owner's full grant (owner decision 2026-11-18, R9).
     assert 'restart_server' in COORDINATOR_TOOLS
     assert {'channel_send', 'channel_read', 'channel_threads', 'channel_configure_thread',
@@ -46,11 +48,19 @@ def test_router_ceiling_is_the_coordinator_ceiling_plus_router_and_channel_names
     assert coordinator_tool_ceiling(_task('/work/project')['_coordinatorDispatchScope']) == COORDINATOR_TOOLS
 
 
-@pytest.mark.parametrize('name', sorted(ROUTER_ONLY_TOOLS | CHANNEL_TOOLS))
+@pytest.mark.parametrize('name', sorted(ROUTER_ONLY_TOOLS | CHANNEL_TOOLS - {'channel_send'}))
 def test_only_the_router_may_call_router_and_channel_tools(home, name):
     assert coordinator_call_rejection(_task(home, 'router'), name, {}) is None
     refusal = coordinator_call_rejection(_task('/work/project'), name, {})
     assert refusal and 'dispatch-only' in refusal
+
+
+def test_every_lead_may_call_channel_send_whose_owner_chat_fence_is_lib_channels(home):
+    """R9 "Leads reach the owner directly": the role ceiling admits it for every lead;
+    lib.channels.tools admits a Project Router's send only to the owner's command chat."""
+    assert 'channel_send' in COORDINATOR_TOOLS
+    assert coordinator_call_rejection(_task(home, 'router'), 'channel_send', {}) is None
+    assert coordinator_call_rejection(_task('/work/project'), 'channel_send', {}) is None
 
 
 def test_router_stays_dispatch_only_including_batched_calls(home):
@@ -78,7 +88,7 @@ def test_surface_admits_present_router_tools_by_name_and_tolerates_absent_channe
         _task(home, 'router'), cfg, without_channels)] == ['route_to_project', 'report_to_user']
     project = prepare_coordinator_tool_surface(_task('/work/project'),
                                                {'_executableToolCatalog': list(catalog)}, catalog)
-    assert [tool['function']['name'] for tool in project] == ['report_to_user']
+    assert [tool['function']['name'] for tool in project] == ['channel_send', 'report_to_user']
     assert [tool['function']['name'] for tool in filter_coordinator_tools(
         _task(home, 'router'), catalog)] == ['route_to_project', 'channel_send', 'report_to_user']
 

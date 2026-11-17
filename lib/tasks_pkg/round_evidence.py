@@ -116,9 +116,13 @@ def build_round_evidence(task: dict, messages: list, *, ref: dict,
     # Snapshot messages are settled and an unchanged message keeps the previous
     # snapshot's twin, whose memoized digest the event-log delta projector
     # (snapshot_delta) reuses instead of re-encoding the whole history.
+    # Each kind settles against its own previous snapshot: the request wire
+    # carries injections and cache markers at positions the post-tool state
+    # lacks, so alternating kinds left no row interchangeable at its position.
+    previous_key = '_snapshotMessages' if kind == 'request' else '_stateSnapshotMessages'
     snapshot = settle_items(_snapshot_rows(wire, _strip_base64_for_snapshot),
-                            previous=task.get('_snapshotMessages'))
-    task['_snapshotMessages'] = snapshot
+                            previous=task.get(previous_key))
+    task[previous_key] = snapshot
     label = '请求前' if kind == 'request' else '工具结果后'
     event = build_event(
         EventType.MESSAGES_SNAPSHOT, kind=kind, model=model,

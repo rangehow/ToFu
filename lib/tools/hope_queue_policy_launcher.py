@@ -65,17 +65,59 @@ def _private_root() -> Path:
     return root
 
 
+# The last search: (PATH, cwd, directory witnesses, result). A command runs
+# with the same PATH as the previous one; looking ``hope``/``mlp`` up in every
+# PATH directory costs a lookup per entry (a missing name is a slow negative
+# lookup on a network volume, and each releases the GIL), while statting the
+# directories is answered from attribute caches. One entry: bounded, exact.
+_LAST_SEARCH: tuple | None = None
+
+
+def _directory_witnesses(search_path: str, cwd: Optional[str]) -> tuple | None:
+    """Each searched directory's identity and mtime; None when one is racy.
+
+    A directory's mtime changes whenever an entry is added, removed or renamed
+    in it, so equal witnesses prove the same names resolve the same way. As in
+    Git's racy-clean rule, a directory modified in the current second may
+    change again within the same timestamp and is not trusted.
+    """
+    import time
+    now_second = time.time_ns() // 1_000_000_000
+    witnesses = []
+    for entry in search_path.split(os.pathsep):
+        directory = entry if os.path.isabs(entry) or cwd is None else os.path.join(cwd, entry)
+        try:
+            status = os.stat(directory)
+        except OSError:
+            witnesses.append((directory, None))
+            continue
+        if status.st_mtime_ns // 1_000_000_000 >= now_second:
+            return None
+        witnesses.append((directory, (status.st_dev, status.st_ino, status.st_mtime_ns)))
+    return tuple(witnesses)
+
+
 def _real_commands(environment: dict[str, str], cwd: Optional[str]) -> dict[str, str]:
-    from lib.tools.process_environment import resolve_executable
+    global _LAST_SEARCH
+    from lib.tools.process_environment import resolve_executable, validate_environment
     search = dict(environment)
     search['PATH'] = os.pathsep.join(
         entry for entry in environment.get('PATH', os.defpath).split(os.pathsep)
         if _DIRECTORY_PREFIX not in entry)
+    validate_environment(search)
+    witnesses = _directory_witnesses(search['PATH'], cwd)
+    last = _LAST_SEARCH
+    if (witnesses is not None and last is not None and last[0] == search['PATH']
+            and last[1] == cwd and last[2] == witnesses
+            and all(os.access(path, os.X_OK) for path in last[3].values())):
+        return dict(last[3])
     result = {}
     for name in _COMMANDS:
         resolved = resolve_executable(name, search, cwd=cwd)
         if resolved:
             result[name] = resolved
+    if witnesses is not None:
+        _LAST_SEARCH = (search['PATH'], cwd, witnesses, dict(result))
     return result
 
 

@@ -908,7 +908,10 @@ Tool authority is decided once in `lib/channels/tools.py`: every channel tool
 requires the owner's Global Router conversation (resolved through
 `lib.router.binding.global_router`), except `channel_read`, which a subscriber
 of the requested thread may also use (one thread: `thread` and `event_id`,
-when both are given, must name the same thread); `channel_outbox_approve`,
+when both are given, must name the same thread), and `channel_send` to the
+owner's own command chat, which a Project Router may also use (ROUTER.md R9
+"Leads reach the owner directly": any other thread is `owner_chat_only`, and each
+call, refusals included, is a `lead_channel_send` audit record); `channel_outbox_approve`,
 `channel_configure_thread`, `channel_subscribe` and `channel_unsubscribe`
 (the owner's decisions: what Tofu sends and who receives a thread)
 additionally require the executing user attempt
@@ -1157,13 +1160,17 @@ the notification robot keeps posting the text.
   folders, primary or not, or a project with a coordination binding; named
   exactly as `get_router_projects` lists it; never the router home), read the same way and recorded with that
   project as its provenance (`OutboxAttachmentView.project`): how a project's
-  deliverable reaches a chat, since only the Global Router sends (C7;
-  CHANNEL_PROTOCOL.md P13).
+  deliverable reaches a chat (C7; CHANNEL_PROTOCOL.md P13). With
+  `attachments=[{path, worker}]` it is a file in the registered checkout of a
+  Worker the sending lead dispatched (`lead_attachments.lead_worker_checkout`).
+  No carried file may hold a credential (`lib/conversations/attachment_secrets.py`: a
+  credential file by name, a vault entry's exact value, an issuer-documented
+  credential format; `attachment_secret`).
   Traversal, symlinks, absolute paths outside the roots, unregistered
   projects, other conversations' artifacts and decks, undocumented types and
   oversize files are refused with a code and what to do instead, ending with
   the supported path (`{path, project}`, and that a project conversation asks
-  the Global Router to send instead of using a login of its own); nothing is
+  its lead to send instead of using a login of its own); nothing is
   dropped silently. The limits are 大象's
   documented chat upload limits (`x-dxAttachments`; 服务端聊天文件上传接口,
   https://km.internal.example.com/collabpage/684760118): images jpg, jpeg, png, gif,

@@ -434,9 +434,13 @@ def test_the_pass_summary_names_every_conversation_with_its_reason(chats, caplog
     [summary] = [record.getMessage() for record in caplog.records
                  if '[RestartResume] summary:' in record.getMessage()]
     assert '1 of 3 interrupted conversation(s) resumed' in summary
-    assert 'resumed=[chat-prose]' in summary
+    # Each conversation is accounted for: resumed, already continued, lost (waits for its owner)...
+    assert ('resumed=1 already_continued=0 handed_off=0 superseded=0 not_interrupted=2 lost=0'
+            in summary), summary
+    assert 'chat-prose: resumed' in summary
     for name in ('owner-stopped', 'finished-before-stop'):
-        assert f'{name}: {results[name]["reason"]}' in summary, summary
+        assert results[name]['disposition'] == 'not_interrupted'
+        assert f'{name}: not_interrupted ({results[name]["reason"]})' in summary, summary
     assert 'user_abort' in results['owner-stopped']['reason']
 
     # Nothing resumed: the summary still says why each one was left.
@@ -449,8 +453,8 @@ def test_the_pass_summary_names_every_conversation_with_its_reason(chats, caplog
         [item] = restart_resume.resume_restart_paused_turns(previous_shutdown=RESTART)
     [summary] = [record.getMessage() for record in caplog.records
                  if '[RestartResume] summary:' in record.getMessage()]
-    assert 'resumed=[]' in summary
-    assert f'skipped=[owner-stopped-again: {item["reason"]}]' in summary, summary
+    assert '0 of 1 interrupted conversation(s) resumed' in summary
+    assert f'conversations=[owner-stopped-again: not_interrupted ({item["reason"]})]' in summary, summary
 
 
 def test_the_next_generation_resumes_the_chat_then_wakes_the_requester_with_the_result(
@@ -809,3 +813,31 @@ def test_work_other_owners_resume_or_the_owner_must_answer_is_left_alone(monkeyp
         create_attempt=lambda *args, **kwargs: pytest.fail('nothing may resume ' + reason)))
     item = restart_resume.resume_conversation(OWNER, 'c-1')
     assert item['outcome'] == 'not_resumed' and reason in item['reason']
+
+
+def test_the_summary_tells_already_continued_work_from_lost_work(caplog):
+    """2026-11-18 02:15:17: '[RestartResume] summary: 1 of 21 ... resumed' was logged at
+    WARNING although all 20 others had already been continued by project dispatch
+    recovery. The line counts each disposition and warns only for lost work."""
+    import logging
+    results = [
+        restart_resume._result(1, 'chat', 'resumed', turnId='t1', attemptId='a1'),
+        restart_resume._result(1, 'worker-a', 'not_resumed', 'already continued in Attempt a2',
+                               disposition='already_continued'),
+        restart_resume._result(1, 'worker-b', 'not_resumed', 'a project dispatch grant runs it',
+                               disposition='handed_off')]
+    with caplog.at_level(logging.INFO, logger='lib.conversations.restart_resume'):
+        restart_resume._log_summary(results)
+    [record] = [r for r in caplog.records if '[RestartResume] summary:' in r.getMessage()]
+    assert record.levelno == logging.INFO
+    assert ('1 of 3 interrupted conversation(s) resumed; resumed=1 already_continued=1 handed_off=1 '
+            'superseded=0 not_interrupted=0 lost=0; conversations=[chat: resumed, worker-a: '
+            'already_continued (already continued in Attempt a2), worker-b: handed_off '
+            '(a project dispatch grant runs it)]') in record.getMessage()
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger='lib.conversations.restart_resume'):
+        restart_resume._log_summary(results + [restart_resume._result(
+            1, 'held', 'not_resumed', 'only regenerate is offered; regenerate would redo the work')])
+    [record] = [r for r in caplog.records if '[RestartResume] summary:' in r.getMessage()]
+    assert record.levelno == logging.WARNING and 'lost=1' in record.getMessage()
+    assert 'held: lost (only regenerate is offered' in record.getMessage()

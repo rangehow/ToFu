@@ -142,6 +142,26 @@ def test_bound_coordinator_role_is_ordinary_root_guidance(setup, monkeypatch):
     assert not module.prepare_coordinator_role('/project', 'worker', user_id=1, task=task)
 
 
+def test_only_an_owner_turn_rereads_workers_and_the_router_sees_its_request_turn(setup, monkeypatch):
+    """D1/T4 of the 2026-11-18 lead audit: every wake re-read get_project_workers, and the Global
+    Router spent 1,791 s in 11 list_conversations calls searching for its own owner message."""
+    from lib.conversations import project_coordination as module
+    _, _, repository = setup
+    seed_legacy_binding(repository)
+    monkeypatch.setattr(module, 'ProjectCoordinationRepository', lambda owner: repository)
+    task = {'id': 'root', 'convId': 'worker', '_userId': 1, 'config': {}}
+    monkeypatch.setattr(module, '_owner_request', lambda path, owner, task: None)
+    wake = module.prepare_coordinator_role('/project', 'worker', user_id=1, task=task)
+    assert 'get_project_workers (scope=project)' not in wake
+    monkeypatch.setattr(module, '_owner_request', lambda path, owner, task: {'turnId': 'owner-turn'})
+    owner = module.prepare_coordinator_role('/project', 'worker', user_id=1, task=task)
+    assert owner == module.COORDINATOR_ROLE_GUIDANCE + '\n' + module.OWNER_TURN_GUIDANCE
+    lines = module._request_lines('/project', 1, task, router=True)
+    assert 'route_to_project(source_turn_id="owner-turn")' in lines and 'never search for it' in lines
+    monkeypatch.setattr(module, '_owner_request', lambda path, owner, task: {'turnId': 'reply', 'steerId': 's-1'})
+    assert 'route_to_project(source_steer_id="s-1")' in module._request_lines('/project', 1, task, router=True)
+
+
 @pytest.mark.parametrize('model', ['gpt-4o', 'claude-sonnet-4-5', 'glm-4.6', 'deepseek-chat'])
 def test_coordinator_role_fits_its_context_block(model):
     # The composer truncates a block over its budget; a clipped role silently

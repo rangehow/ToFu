@@ -30,6 +30,14 @@ def world(semantic_authority, monkeypatch, tmp_path):
     client, owner, engine = semantic_authority
     monkeypatch.setattr('lib.storage.get_storage_client', client)
     monkeypatch.setattr('lib.router.home.router_home_root', lambda: str(tmp_path / 'router'))
+    wakes = []
+
+    def wake(conversation_id, message, tools, *, user_id, command_id, log_prefix):
+        wakes.append({'conversationId': conversation_id, 'commandId': command_id})
+        return SimpleNamespace(disposition='started')
+    # A message wakes an idle lead (project_messages.wake_idle_lead); no executor runs here.
+    monkeypatch.setattr('lib.scheduler.conversation_dispatch.dispatch_scheduled_turn', wake)
+    monkeypatch.setattr('lib.router.proactive.held.quiet_hours_active', lambda *a, **k: False)
     router = global_router(owner, create=True)
     watchdog = router_watchdog(owner, create=True)
     leads = {}
@@ -44,7 +52,7 @@ def world(semantic_authority, monkeypatch, tmp_path):
     }, 'create-worker-alpha')
     return SimpleNamespace(client=client, owner=owner, router=router, watchdog=watchdog,
                            alpha=leads['alpha'], beta=leads['beta'], worker='worker-alpha',
-                           tmp=tmp_path, native=engine is not None)
+                           tmp=tmp_path, native=engine is not None, wakes=wakes)
 
 
 def _task(world, conversation_id, project):
@@ -93,7 +101,8 @@ def test_leads_message_across_projects_and_the_recipient_receives_and_considers(
     alpha, beta = _lead(world, world.alpha), _lead(world, world.beta)
     sent = _send(alpha, world.beta['conversationId'], kind='question')
     message = sent['message']
-    assert sent['execution_started'] is False and sent['wake'] == 'next_authorized_turn'
+    assert sent['execution_started'] is False and sent['wake'] == 'started'
+    assert world.wakes[-1]['conversationId'] == world.beta['conversationId']
     assert message['sender'] == world.alpha['conversationId'] and message['kind'] == 'question'
     assert message['senderProject'] == world.alpha['projectPath']
     assert _send(alpha, world.beta['conversationId'], kind='question')['message'] == message
@@ -105,7 +114,7 @@ def test_leads_message_across_projects_and_the_recipient_receives_and_considers(
     assert f'sender-project="{world.alpha["projectPath"]}"' in carrier['content']
     assert 'sender-role="project_router"' in carrier['content']
     [received] = execute('get_project_messages', {}, beta)['messages']
-    assert received['state'] == 'input_confirmed' and received['decision'] is None
+    assert received['state'] == 'input_confirmed' and received['decision'] == 'accepted'
     assert received['senderProject'] == world.alpha['projectPath']
 
     considered = execute('consider_project_message', {

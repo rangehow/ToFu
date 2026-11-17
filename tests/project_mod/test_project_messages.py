@@ -40,7 +40,8 @@ def test_submit_replay_and_lost_response(setup, monkeypatch):
         return value
     monkeypatch.setattr(setup.client, 'command', lost)
     first = send(setup)
-    assert first['execution_started'] is False and first['wake'] == 'next_authorized_turn'
+    # The recipient is no lead: it reads the message at its next step.
+    assert first['execution_started'] is False and first['wake'] == 'next_step'
     assert send(setup)['message'] == first['message']
     assert len(commits) == 1
     with pytest.raises(pm.ProjectMessageError, match='changed'):
@@ -120,8 +121,9 @@ def test_nonhuman_boundary_input_and_explicit_consideration_are_distinct(setup):
     setup.recipient['_verifiedMessageInputIds'] = matched_ids(setup.recipient, {'messages': messages})
     pm.confirm(setup.recipient, 1)
     incoming = pm.execute('get_project_messages', {}, setup.recipient)['messages'][0]
-    assert incoming['state'] == 'input_confirmed' and incoming['decision'] is None
-    assert incoming['inputTaskId'] == 'task-r'
+    # Accepted on delivery; a rejection, deferral or conflict stays explicit.
+    assert incoming['state'] == 'input_confirmed' and incoming['decision'] == 'accepted'
+    assert incoming['decisionAuto'] is True and incoming['inputTaskId'] == 'task-r'
     considered = pm.execute('consider_project_message', {'message_id': message['id'], 'decision': 'deferred',
         'note': 'No new work authority; waiting for the user', 'expected_revision': incoming['revision']}, setup.recipient)
     assert considered['message']['decision'] == 'deferred'
@@ -129,6 +131,56 @@ def test_nonhuman_boundary_input_and_explicit_consideration_are_distinct(setup):
     assert pm.execute('get_project_messages', {'direction': 'outgoing', 'conversation_id': 'recipient'}, setup.sender)['messages'][0]['decision'] == 'deferred'
     with pytest.raises(pm.ProjectMessageError, match='revision'):
         pm.execute('consider_project_message', {'message_id': message['id'], 'decision': 'accepted', 'note': 'changed', 'expected_revision': 1}, setup.recipient)
+
+
+def _deliver(setup):
+    message = send(setup)['message']
+    messages = [{'role': 'assistant', 'tool_calls': [{'id': 'one'}]},
+                {'role': 'tool', 'tool_call_id': 'one', 'content': 'result'}]
+    pm.inject(setup.recipient, messages, 1)
+    from lib.tasks_pkg.message_input_receipts import matched_ids
+    setup.recipient['_verifiedMessageInputIds'] = matched_ids(setup.recipient, {'messages': messages})
+    pm.confirm(setup.recipient, 1)
+    return message, messages[-1]['content']
+
+
+def test_a_decision_against_the_delivered_revision_survives_its_input_confirmation(setup):
+    """All 9 Project Router refusals of 2026-11-15..18 passed expected_revision=1 after input
+    confirmation had moved the message to 2; the delivered block now shows the revision it decides."""
+    message, block = _deliver(setup)
+    assert f'revision="{message["revision"]}"' in block and 'accepted on delivery' in block
+    rejected = pm.execute('consider_project_message', {'message_id': message['id'], 'decision': 'rejected',
+                                                       'note': 'Out of scope', 'expected_revision': message['revision']},
+                          setup.recipient)['message']
+    assert rejected['decision'] == 'rejected' and 'decisionAuto' not in rejected
+    # Once explicitly decided, only the current revision decides again.
+    with pytest.raises(pm.ProjectMessageError, match='revision'):
+        pm.execute('consider_project_message', {'message_id': message['id'], 'decision': 'deferred',
+                                                'note': 'later', 'expected_revision': message['revision']},
+                   setup.recipient)
+
+
+def test_a_message_wakes_an_idle_lead_once_per_pending_frontier(setup, monkeypatch):
+    monkeypatch.setattr(pm, 'lead_role', lambda owner, conv: ('project_router', '/project')
+                        if conv == 'recipient' else None)
+    calls = []
+
+    def dispatch(conversation_id, message, tools, *, user_id, command_id, log_prefix):
+        calls.append((conversation_id, command_id, message['content']))
+        return SimpleNamespace(disposition='started' if len(calls) == 1 else 'busy')
+    monkeypatch.setattr('lib.scheduler.conversation_dispatch.dispatch_scheduled_turn', dispatch)
+    first = send(setup)
+    assert first['wake'] == 'started' and first['execution_started'] is False
+    assert calls[0][0] == 'recipient' and '1 project message(s)' in calls[0][2]
+    # The lead's settlement check names the same newest message: the same wake identity.
+    assert pm.wake_idle_lead(1, 'recipient') == 'busy'
+    assert calls[1][1] == calls[0][1]
+    second = send(setup, content='Also beta', idempotency_key='two')
+    assert second['wake'] == 'busy' and calls[2][1] != calls[0][1]
+    assert '2 project message(s)' in calls[2][2]
+    # Delivered and accepted: nothing is pending, nothing wakes.
+    _deliver(setup)
+    assert pm.wake_idle_lead(1, 'recipient') == 'nothing_pending'
 
 
 def test_reply_identity_matches_two_participants(setup):

@@ -141,6 +141,11 @@ PYTEST_PARALLEL = $(if $(filter 0,$(JOBS)),,-n $(JOBS))
 COV ?=
 COV_APPEND ?=
 
+# CI splits the unit tier into matrix shards (SHARD=k/n, tests/conftest.py
+# --tofu-shard); empty runs every file.
+SHARD ?=
+PYTEST_SHARD = $(if $(SHARD),--tofu-shard=$(SHARD))
+
 # Every xdist worker imports NumPy through the app/plugin graph. On a 64-core
 # host, leaving BLAS defaults untouched creates ~64 native threads PER worker;
 # bounded process parallelism alone does not prevent that nested explosion.
@@ -238,11 +243,11 @@ test-bundles: ## Run release-tier bundle tests (bundles/*/tests; internal checko
 
 ifeq ($(JOBS),0)
 test-unit: ## Run unit tests (parallel; override JOBS=N, JOBS=0 for serial)
-	$(PYTEST) $(PYTEST_BASE) $(FRONTEND_UNIT_IGNORES) -m unit --timeout=300 --tb=short -q
+	$(PYTEST) $(PYTEST_BASE) $(FRONTEND_UNIT_IGNORES) -m unit $(PYTEST_SHARD) --timeout=300 --tb=short -q
 else
 test-unit: ## Run unit tests (parallel; override JOBS=N, JOBS=0 for serial)
-	$(PYTEST) $(PYTEST_BASE) $(FRONTEND_UNIT_IGNORES) -m "unit and not serial" $(PYTEST_PARALLEL) --timeout=300 --tb=short -q $(COV)
-	$(PYTEST) $(PYTEST_BASE) $(FRONTEND_UNIT_IGNORES) -m "unit and serial" --timeout=600 --tb=short -q $(COV_APPEND)
+	$(PYTEST) $(PYTEST_BASE) $(FRONTEND_UNIT_IGNORES) -m "unit and not serial" $(PYTEST_SHARD) $(PYTEST_PARALLEL) --timeout=300 --tb=short -q $(COV)
+	$(PYTEST) $(PYTEST_BASE) $(FRONTEND_UNIT_IGNORES) -m "unit and serial" $(PYTEST_SHARD) --timeout=600 --tb=short -q $(COV_APPEND)
 endif
 
 test-collect: ## Collect the CI-visible unit surface without running it (fast collection-health gate)

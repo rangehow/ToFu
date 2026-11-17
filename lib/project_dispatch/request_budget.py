@@ -165,10 +165,11 @@ def bind_source_account(task, *, repository=None, expected_input=None):
         # Report relays, channel events and other nonhuman input authorize no
         # Workers, so their request opens no account; delegation still refuses.
         return None
-    if 'steerId' in source:
-        # The owner's message steered into a nonhuman Turn authorizes it, but an
-        # account covers a request from its first model call, which that Turn
-        # made before the message arrived: such a request opens none.
+    if 'steerId' in source or 'guidanceId' in source:
+        # The owner's message steered into a nonhuman Turn (or their answer to its
+        # question) authorizes it, but an account covers a request from its first
+        # model call, which that Turn made before the message arrived: such a
+        # request opens none.
         return None
     if (expected_input is not None and expected_input[1] is not None
             and (source['turnId'], source['projectionRevision']) != tuple(expected_input)):

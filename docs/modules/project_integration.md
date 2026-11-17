@@ -504,8 +504,14 @@ Recovery of a receipt preserved this way needs no new operation, because a revie
 checkout, which reopens the receipt `working`. Its completion captures the checkout's current
 bytes onto the Worker's own `refs/tofu/checkpoints/u<owner>/<checkout>` ref, which descends from the
 early capture. The early capture equals the branch tip at the Worker's start, so Workers born on
-one tip share it; that is not cross-wiring. Specification:
-`test_a_follow_up_recovers_work_preserved_by_an_early_capture`.
+one tip share it; that is not cross-wiring. A review sent before the follow-up is refused
+("the delivery is preserved") and records nothing. Accept only the follow-up's `checkpointSha`
+that equals that ref, has subject `Tofu checkpoint: project-worker:<assignment>` and descends from
+`baseSha`. A revoked assignment cannot be followed up; a lead who still wants its work delegates
+a new Worker from that ref, never a hand landing. Specifications:
+`test_a_follow_up_recovers_work_preserved_by_an_early_capture` and, end to end through the old
+recovery, review refusal, follow-up, review and publication on both storage authorities,
+`test_a_follow_up_recovers_a_delivery_the_old_recovery_preserved_and_publishes_it`.
 
 Successful automatic settlement immediately merges baseline-to-checkpoint changes into the
 current canonical workspace, including borrowed dirty inputs and compatible concurrent edits.
@@ -762,6 +768,24 @@ the default path anyway); keeping selection to print a test plan (it costs time 
 implies a gate that no longer exists). Reverting the commit that records this decision
 restores the gate. Specifications: the landing and command-line cases in
 `tests/project_mod/test_landing_verification.py`.
+
+**A landing that changes the frontend's inputs refreshes the bundle.** **Problem:** a
+landing that changed locale or frontend sources left the published Vite graph stale, and the
+next restart's preflight rebuilt it before anything stopped (2026-11-18 02:10: "Vite i18n
+chunks are stale", 106.6 s of a 353.8 s restart). **Decision:** `checkout_landing.publish`
+(`git_land` and reviewed project deliveries) hands the landed paths to
+`lib/project_mod/frontend_refresh.py`. When one is a Vite authoring input of a Tofu source
+checkout (`frontend/authoring-inputs.json`), it starts that checkout's own
+`serverctl.py prepare-frontend --parts frontend` detached, without the landing process's
+`TOFU_PROCESS_ROLE` (the checkout's deployment decides whether its lifecycle builds the
+frontend), with output in `logs/frontend-refresh.log`. The preparation owns every policy:
+the build lock, the fast validity check and rebuilding while sources change. A restart that
+follows finds the bundle valid, or waits on that build's lock instead of starting its own.
+Starting it is advice and never fails a published landing; other projects start nothing.
+**Alternatives rejected:** validating the bundle against committed locale bytes instead of
+the working tree (a restart would then serve a graph that differs from the sources it boots
+from); rebuilding inside the landing (it would hold `_repo_lock` and the protected step for
+the whole build). Specification: `tests/project_mod/test_frontend_refresh.py`.
 
 A task-input snapshot is the immutable input tree captured by `create_task_workspace` when the
 selected branch has uncommitted or untracked context in a repository that publishes into its

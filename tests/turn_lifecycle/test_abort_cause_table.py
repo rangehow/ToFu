@@ -156,6 +156,7 @@ _RETURNS_A_REASON = frozenset({'stale_attempt_abort_reason', 'authority_stop_rea
 _PASS_THROUGH_WRITES = frozenset({
     ('lib/agent_core/task_runtime.py', 'TaskRuntime.abort_owned'),
     ('lib/conversation_sync/worker_execution.py', 'cancel_claimed_attempt'),
+    ('lib/conversation_sync/worker_recovery.py', 'recover_exited_attempt'),
     ('lib/tasks_pkg/manager/_persist.py', 'build_result_meta'),
     ('lib/tasks_pkg/manager/_registry.py', '_mark_shutdown_quiesced'),
     ('lib/tasks_pkg/manager/_registry.py', 'abort_running_tasks_for_conv._mark_aborted'),

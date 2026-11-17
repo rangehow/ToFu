@@ -450,7 +450,50 @@ _INITIAL_WRITE_TOOLS = _WRITE_TOOLS
 _INITIAL_IDEMPOTENT_TOOLS = _IDEMPOTENT_TOOLS
 
 
+_ROUND_PARTITIONS_KEY = '_roundToolPartitions'
+
+
 def _task_partitions(task: dict[str, Any]) -> tuple[frozenset, frozenset]:
+    """Per-task write/result-reuse partitions, resolved once per model round.
+
+    Inside a round (``task['_activeRoundNum']``) the dispatch, the effect
+    barrier and the loop breaker classify the same response's calls, so they
+    share one resolution: in an execution shard each resolution asks the
+    execution host's MCP bridge over the relay, which cost four round trips per
+    round. The next round resolves afresh, so a late plugin registration or
+    MCP catalog change applies from the next round on, as it already did for
+    a response whose calls were dispatched before the change.
+    """
+    round_num = task.get('_activeRoundNum') if isinstance(task, dict) else None
+    if not isinstance(round_num, int):
+        return _resolve_task_partitions(task)
+    key = (round_num, id(task.get('_tool_env')), id(_WRITE_TOOLS), id(_IDEMPOTENT_TOOLS))
+    memo = task.get(_ROUND_PARTITIONS_KEY)
+    if memo is not None and memo[0] == key:
+        return memo[1]
+    partitions = _resolve_task_partitions(task)
+    task[_ROUND_PARTITIONS_KEY] = (key, partitions)
+    return partitions
+
+
+def batch_is_effect_free(task: dict[str, Any], tool_calls: list) -> bool:
+    """True when every call of a response is in the result-reuse partition.
+
+    Dispatch may answer such a call from an earlier result instead of running
+    it, so running it is no effect that needs its intent durable first.
+    """
+    if not tool_calls:
+        return False
+    write, reusable = _task_partitions(task)
+    for call in tool_calls:
+        function = call.get('function') if isinstance(call, dict) else None
+        name = function.get('name') if isinstance(function, dict) else None
+        if not isinstance(name, str) or name in write or name not in reusable:
+            return False
+    return True
+
+
+def _resolve_task_partitions(task: dict[str, Any]) -> tuple[frozenset, frozenset]:
     """Per-task write/result-reuse partitions plus the task's custom env.
 
     Registry flags are resolved live so a late plugin registration or hot

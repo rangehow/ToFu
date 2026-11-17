@@ -385,6 +385,33 @@ def router_owner_delegation_read():
         return _typed_error(error)
 
 
+@api_v1_router_bp.route('/api/v1/router/owner-delegation/history', methods=['GET'])
+@require_scope('conversations')
+@api_meta(summary="Query every delegated action ever recorded for the owner",
+          description=('The durable audit history of actions the owner\'s leads took or tried under the '
+                       'delegation, newest first, filtered by acting lead (requester), scope, status and '
+                       'since (docs/ROUTER.md R9, Audit). Unlike owner-delegation, which shows the newest '
+                       'retained records, nothing is dropped.'),
+          tags=['router'], scope='conversations',
+          parameters=query_parameters('ownerDelegationHistoryQuery'))
+def router_owner_delegation_history():
+    from quart import request
+    try:
+        query = {}
+        for name in request.args:
+            if len(request.args.getlist(name)) != 1:
+                raise ValueError('Repeated query field: ' + name)
+            query[name] = request.args[name]
+        validate(query, 'ownerDelegationHistoryQuery')
+        from lib import lifecycle_approval
+        actions = lifecycle_approval.delegated_action_history(
+            _owner(), requester=query.get('requester'), scope=query.get('scope'),
+            status=query.get('status'), since=float(query['since']) if 'since' in query else None)
+        return api_ok(validate({'actions': actions}, 'ownerDelegationHistory'))
+    except _TYPED_FAILURES as error:
+        return _typed_error(error)
+
+
 @api_v1_router_bp.route('/api/v1/router/owner-delegation', methods=['POST'])
 @require_scope('admin')
 @api_meta(summary="Grant or revoke the main coordinator's delegation to act for the owner",

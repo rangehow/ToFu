@@ -848,8 +848,9 @@ _HEAVY_TERMINAL_FIELDS = (
     '_nativePreparedInvocation', '_model_routing_selection',
     '_modelImageReuse', '_acceptedCompactionReceipt', '_requestTextCountMemo',
     '_anthropicToolInputs',
-    # The latest Request Inspector snapshot's settled messages (reuse source).
-    '_snapshotMessages',
+    # The latest Request Inspector request/state snapshots' settled messages
+    # (reuse sources).
+    '_snapshotMessages', '_stateSnapshotMessages',
     # The latest provider request's settled messages and their memos.
     '_wireMessageRows',
 )

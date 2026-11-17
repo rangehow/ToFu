@@ -3111,6 +3111,15 @@ class LifecycleManager:
         if record.get('outcome') not in RESTART_IN_PROGRESS:
             return
         record.update(outcome=outcome, message=message[:2000], settledAt=_now(), **fields)
+        self._record_lead_audit('restart_outcome', record)
+
+    def _record_lead_audit(self, kind: str, fields: dict[str, Any]) -> None:
+        """Restart outcomes outlive server-manager.log rotation (docs/LOGGING.md)."""
+        try:
+            from lib.logging_pkg.lead_audit import record
+        except Exception:
+            return  # a standalone copied manager stays stdlib-only
+        record(kind, fields, logs_dir=self.logs_dir)
 
     def _refuse_restart(self, stage: str, message: str, **fields: Any) -> dict[str, Any]:
         """A refusal decided while the old worker still serves; it keeps serving."""
@@ -3542,10 +3551,8 @@ class LifecycleManager:
         deadline = time.monotonic() + max(0.0, timeout)
         while time.monotonic() < deadline:
             if not pid_is_alive(pid):
-                logger.info(
-                    'worker pid=%s exited cleanly %.1fs after SIGTERM',
-                    pid, time.monotonic() - term_started)
-                return True, False, 'stopped cleanly'
+                return True, False, self._log_terminated_worker_exit(
+                    status, time.monotonic() - term_started)
             time.sleep(0.2)
         logger.warning(
             'worker pid=%s still alive %.1fs after SIGTERM; escalating to '
@@ -3566,6 +3573,36 @@ class LifecycleManager:
                 return True, True, 'stopped with SIGKILL'
             time.sleep(0.1)
         return False, True, f'pid {pid} survived SIGKILL'
+
+    @staticmethod
+    def _log_terminated_worker_exit(status: dict[str, Any], elapsed: float) -> str:
+        """Report how a SIGTERMed worker exited from its own exit status.
+
+        A vanished PID only proves that the process ended. Its graceful-drain
+        backstop (``lib.server.server_shutdown.start_shutdown_hard_deadline``)
+        exits 1, so "clean" is claimed only for exit code 0; the unreaped
+        zombie is read without reaping it, leaving it to exit recording.
+        """
+        pid = status.get('pid')
+        observation = proc_exit_observation(
+            {'pid': pid, 'processStartTime': status.get('processStartTime')})
+        if observation.get('exitCode') == 0:
+            logger.info(
+                'worker pid=%s exited cleanly %.1fs after SIGTERM', pid, elapsed)
+            return 'stopped cleanly'
+        if not observation:
+            logger.info(
+                'worker pid=%s exited %.1fs after SIGTERM; exit status '
+                'unavailable (not an unreaped child of this Supervisor)',
+                pid, elapsed)
+            return 'stopped; exit status unavailable'
+        outcome = (f'exit code {observation["exitCode"]}'
+                   if observation.get('exitCode') is not None
+                   else f'signal {observation.get("signalName") or observation.get("signal")}')
+        logger.warning(
+            'worker pid=%s exited %.1fs after SIGTERM with %s; its graceful '
+            'shutdown did not complete cleanly', pid, elapsed, outcome)
+        return f'stopped with {outcome}'
 
     def stop(self, *, source: str = 'cli', keep_desired_running: bool = False) -> dict[str, Any]:
         with self._lock:
@@ -3944,6 +3981,14 @@ class LifecycleManager:
                             (f' bootTime={boot_elapsed:.1f}s'
                              if boot_elapsed is not None else ''),
                             self._trace_total_suffix())
+                        requested_at = getattr(self, '_trace_requested_at', None)
+                        self._record_lead_audit('restart_outcome', {
+                            'outcome': 'ready', 'pid': status.get('pid'),
+                            'source': self._state.get('launchSource') or 'unknown',
+                            'bootSeconds': (round(boot_elapsed, 1)
+                                            if boot_elapsed is not None else None),
+                            'secondsSinceRequest': (round(time.time() - requested_at, 1)
+                                                    if requested_at else None)})
                         self._settle_runtime_suspect()
                         self._request_pending_runtime_build()
                         self._remember_known_good()

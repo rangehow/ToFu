@@ -151,7 +151,7 @@ def _convert_tools(tools) -> list:
     identity across rounds, so the sealed encode and byte fingerprints that
     memoize per row reuse it. Writers replace converted rows copy-on-write.
     """
-    from lib.conversation_sync.settled_rows import is_settled, memo_get, memo_put, settle
+    from lib.conversation_sync.settled_rows import is_settled, memo_get, memo_put
     out = []
     for tool in tools or []:
         if is_settled(tool):

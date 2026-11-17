@@ -748,6 +748,103 @@ def test_a_resumed_worker_attempt_reopens_settles_and_publishes_its_delivery(pla
     assert _git(p.root, 'show', 'HEAD:result.txt') == 'resumed attempt'
 
 
+def _settle_as_the_old_recovery_did(p, assignment_id, monkeypatch):
+    """Before 6392798f36 the receiver ran in a process that could not see the Worker's
+    attempt (execution shard): no live carrier, no task result yet, and no durable
+    attempt check, so it settled the running attempt 'failed' and captured the checkout
+    as it was then. Live 2026-11-17 23:49 to 2026-11-18 02:03 (tofu 63fa4f57, knowledge
+    7f2492f4, parallel 9e9e9e66, ...)."""
+    from lib import turn_lifecycle
+    from lib.integration_state_repository import find_workspace
+    from lib.project_mod import delivery
+    from lib.tasks_pkg.manager.runtime import chat_task_runtime
+    row = find_workspace(str(p.root), 'project-worker:' + assignment_id, user_id=p.owner)
+    with monkeypatch.context() as other_process:
+        other_process.setattr(chat_task_runtime, 'get', lambda task_id: None)
+        other_process.setattr(turn_lifecycle, 'get_attempt', lambda *a, **kw: {})
+        delivery._recover_working_registration(row)
+    _drain_receiver()
+    return _receipt(p, assignment_id)
+
+
+def test_a_follow_up_recovers_a_delivery_the_old_recovery_preserved_and_publishes_it(
+        platform, monkeypatch):
+    """The lead recovery for the 2026-11-18 preserved deliveries, end to end.
+
+    A review of the preserved record is refused exactly as at 02:16:25/02:16:34
+    (knowledge 7f2492f4, parallel 9e9e9e66: reviews sent before any follow_up). The
+    follow_up then reopens the record for its own attempt, the Worker's own checkpoint
+    ref captures its work (descending from the baseline, never the shared tip), the
+    review pinned to that SHA is accepted and publication lands it.
+    """
+    from lib import turn_lifecycle as turns
+    p = platform
+    _git(p.root, 'config', '--local', 'tofu.linearCheckpoint', 'true')
+    head = _git(p.root, 'rev-parse', 'HEAD')
+    assignment_id, conversation = _delegate(p)
+    first = _execution(p, assignment_id)
+    work_id = 'project-worker:' + assignment_id
+
+    def worker_runs_while_another_process_recovers(task):
+        early = _settle_as_the_old_recovery_did(p, assignment_id, monkeypatch)
+        # The Worker's edits come after the early capture, uncommitted, as live.
+        (Path(task['config']['projectPath']) / 'result.txt').write_text('verified work\n')
+        return early
+
+    ended, plan = _run(p, first['attemptId'], tools=1, outcome='complete',
+                       observe=worker_runs_while_another_process_recovers)
+    assert _settlement(ended)[0] == 'completed', _settlement(ended)
+    early = plan['observed']
+    assert (early['state'], early['taskOutcome']) == ('preserved', 'failed'), early
+    assert early['reason'] == 'Task did not complete; checkpoint retained without publication'
+    # The early capture holds none of the Worker's work: its tree is the baseline's.
+    assert _git(p.root, 'rev-parse', early['checkpointSha'] + '^{tree}') == _git(p.root, 'rev-parse', head + '^{tree}')
+    # The completion cannot change a preserved record.
+    assert _receipt(p, assignment_id) == early
+    checkout = Path(p.plans[first['attemptId']]['task']['config']['projectPath'])
+    own_ref = 'refs/tofu/checkpoints/u%d/%s' % (p.owner, checkout.name)
+    assert _git(p.root, 'rev-parse', own_ref) == early['checkpointSha']
+
+    # 02:16:25 / 02:16:34: a review before any follow_up is refused and records nothing.
+    refused = _accept(p, assignment_id, ended, early['checkpointSha'])
+    assert refused['error'].startswith('Publication cannot start: the delivery is preserved'), refused
+    assert refused['execution_started'] is False and 'control_conversation' in refused['recovery']
+    assert p.repository.read(assignment_id)['review'] is None
+
+    ended = turns.get_turn(conversation, ended['turnId'], user_id=p.owner)
+    receipt = _follow_up(p, conversation, ended, key='recover-preserved',
+                         instruction='Make no further changes; confirm your tree and finish.')
+    assert 'error' not in receipt and receipt['assignment_id'] == assignment_id, receipt
+    successor = receipt['attempt']['attemptId']
+    turn, plan = _run(p, successor, tools=1, outcome='complete',
+                      observe=lambda task: _receipt(p, assignment_id))
+    assert _settlement(turn)[0] == 'completed', _settlement(turn)
+    reopened = plan['observed']
+    assert (reopened['state'], reopened['taskOutcome'], reopened.get('checkpointSha', '')) == (
+        'working', '', ''), reopened
+    assert reopened['executorTaskId'] == 'conversation-attempt:' + successor
+
+    settled = _receipt(p, assignment_id)
+    checkpoint = settled['checkpointSha']
+    assert (settled['state'], settled['taskOutcome']) == ('blocked', 'completed'), settled
+    assert settled['executorTaskId'] == 'conversation-attempt:' + successor
+    # The identity checks the lead runs before accepting.
+    assert checkpoint == _git(p.root, 'rev-parse', own_ref) != early['checkpointSha']
+    assert _git(p.root, 'log', '-1', '--format=%s', checkpoint) == 'Tofu checkpoint: ' + work_id
+    _git(p.root, 'merge-base', '--is-ancestor', head, checkpoint)
+    assert checkpoint != _git(p.root, 'rev-parse', 'HEAD')
+    assert _git(p.root, 'diff', '--name-only', head, checkpoint) == 'result.txt'
+
+    reviewed = _accept(p, assignment_id, turn, checkpoint, note='Recovered preserved delivery checked')
+    assert 'error' not in reviewed, reviewed
+    assert p.repository.read(assignment_id)['publication']['checkpointSha'] == checkpoint
+    _drain_receiver()
+    delivered = _delivery(p, assignment_id)
+    assert (delivered['status'], delivered['checkpointSha']) == ('delivered', checkpoint), delivered
+    assert _git(p.root, 'rev-parse', 'HEAD^') == head
+    assert _git(p.root, 'show', 'HEAD:result.txt') == 'verified work'
+
+
 def test_an_accept_its_delivery_cannot_publish_is_refused_and_never_recorded(platform, monkeypatch):
     """A receipt from before attempt-scoped delivery, and the remedy its refusal names."""
     from lib import integration_control, turn_lifecycle as turns
@@ -784,3 +881,39 @@ def test_an_accept_its_delivery_cannot_publish_is_refused_and_never_recorded(pla
     _drain_receiver()
     assert _delivery(p, assignment_id)['status'] == 'delivered'
     assert (p.root / 'result.txt').read_text() == 'regenerated\n'
+
+
+def test_a_follow_up_on_an_accepted_result_a_conflict_holds_resolves_it_in_a_linked_assignment(platform):
+    """Audit 2026-11-18 #6 (T6, P2): `follow_up` was refused "Its accepted result has not been
+    delivered yet" for results a publication conflict held, which forced a new repair assignment.
+    A conflict hold never delivers by itself, so the follow-up continues the session as a linked
+    assignment whose brief merges the held checkpoint first; any other undelivered accept still waits."""
+    from lib.integration_state_repository import find_workspace
+    p = platform
+    _git(p.root, 'config', '--local', 'tofu.linearCheckpoint', 'true')
+    assignment_id, conversation = _delegate(p)
+    first = _execution(p, assignment_id)
+    ended, _ = _run(p, first['attemptId'], tools=1, outcome='complete', write={'base.txt': 'worker\n'})
+    assert _settlement(ended)[0] == 'completed', _settlement(ended)
+    checkpoint = find_workspace(str(p.root), 'project-worker:' + assignment_id, user_id=p.owner)['checkpoint_sha']
+    assert 'error' not in _accept(p, assignment_id, ended, checkpoint)
+    early = _follow_up(p, conversation, ended, key='too-early', instruction='Also do this.')
+    assert early.get('code') == 'follow_up_refused' and 'not been delivered yet' in early['error'], early
+    # Another writer changed the same line on the shared branch before the receiver ran.
+    (p.root / 'base.txt').write_text('shared\n')
+    _git(p.root, 'commit', '-qam', 'shared change')
+    _drain_receiver()
+    held = _delivery(p, assignment_id)
+    assert held['status'] == 'blocked' and held.get('conflict'), (held, _receipt(p, assignment_id))
+    receipt = _follow_up(p, conversation, ended, key='resolve', instruction='Keep both lines.')
+    assert 'error' not in receipt, receipt
+    assert receipt['continues_assignment'] == assignment_id
+    assert receipt['resolves_held_conflict'] == {'checkpoint_sha': checkpoint, 'paths': ['base.txt']}
+    from lib.conversations import coordinator_births
+    assert not coordinator_births.wait(p.coordinator, [receipt['assignment_id']], deadline=None,
+                                       interrupted=lambda: False)
+    assert not coordinator_births.failures(p.coordinator)
+    successor = p.repository.read(receipt['assignment_id'])
+    assert successor['request']['recipientId'] == conversation
+    assert 'First merge commit ' + checkpoint in successor['request']['brief']
+    assert successor['request']['brief'].endswith('Keep both lines.')

@@ -179,3 +179,37 @@ def test_cli_shim_refuses_banned_and_passes_allowed(tmp_path, monkeypatch):
     assert result.returncode == 2
     result = _invoke_shim(directory, 'hope', ['status', str(banned_conf)], policy, PROJECT, tmp_path)
     assert result.returncode == 0
+
+
+def test_real_cli_search_is_reused_until_a_path_directory_changes(tmp_path, monkeypatch):
+    """Each command searched every PATH entry for hope/mlp; unchanged directories prove the answer."""
+    from lib.tools import hope_queue_policy_launcher as launcher
+    from lib.tools import process_environment
+    searches = []
+    real_resolve = process_environment.resolve_executable
+    monkeypatch.setattr(process_environment, 'resolve_executable',
+                        lambda name, environment, cwd=None: searches.append(name)
+                        or real_resolve(name, environment, cwd=cwd))
+    monkeypatch.setattr(launcher, '_LAST_SEARCH', None)
+    first, second = tmp_path / 'bin-a', tmp_path / 'bin-b'
+    for directory in (first, second):
+        directory.mkdir()
+        os.utime(directory, (1_700_000_000, 1_700_000_000))
+    environment = {'PATH': os.pathsep.join([str(first), str(second)])}
+
+    assert launcher._real_commands(environment, None) == {}
+    assert launcher._real_commands(environment, None) == {}
+    assert searches == ['hope', 'mlp']
+
+    hope = second / 'hope'
+    hope.write_text('#!/bin/sh\n')
+    hope.chmod(0o755)
+    assert launcher._real_commands(environment, None) == {'hope': str(hope)}
+    assert searches == ['hope', 'mlp'] * 2
+
+    os.utime(second, (1_700_000_100, 1_700_000_100))
+    assert launcher._real_commands(environment, None) == {'hope': str(hope)}
+    assert launcher._real_commands(environment, None) == {'hope': str(hope)}
+    assert searches == ['hope', 'mlp'] * 3
+    hope.unlink()
+    assert launcher._real_commands(environment, None) == {}

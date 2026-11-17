@@ -479,7 +479,7 @@ def test_streaming_prefetch_defers_program_children_until_parent_exists():
         assert acc.announced_tc_map == {}
         assert acc.submitted_count == 0
     finally:
-        acc._pool.shutdown(wait=True)
+        acc.close(wait=True)
 
 
 def test_program_continuation_budget_is_per_run():

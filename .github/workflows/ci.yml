@@ -158,14 +158,12 @@ jobs:
     if: ${{ always() && !cancelled() && needs.verification-scope.outputs.profile == 'full' }}
     # One runner for the whole tier was shut down by GitHub at ~44% on every
     # run from 52cb8c11 on; each shard completes on its own runner
-    # (tests/conftest.py, TOFU_TEST_SHARD).
+    # (make SHARD=k/n, tests/conftest.py --tofu-shard).
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
     name: test-unit (${{ matrix.shard }}/4)
-    env:
-      TOFU_TEST_SHARD: ${{ matrix.shard }}/4
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -201,6 +199,10 @@ jobs:
       # Slide/presentation rendering contracts launch headless Chromium.
       - name: Install headless Chromium + system deps
         run: uv run --frozen --extra test python -m playwright install --with-deps --only-shell chromium
+      # Native-engine identity specs build the engine with `cargo --offline`
+      # (unit tests never reach the network); provide its locked crates here.
+      - name: Fetch the native engine's locked crates
+        run: cargo fetch --locked --manifest-path packages/tofu-db/Cargo.toml
       - name: Run unit tests
         # `-n auto` on a 4-vCPU runner = 4 workers, and each worker spawns
         # node/jsdom subprocesses + ML-lib thread pools on top — measured
@@ -211,7 +213,7 @@ jobs:
         # Make owns the exclusion of retired classic-js harnesses and the
         # serial split for timing-sensitive backend contracts.
         run: >-
-          uv run --frozen --extra test make test-unit JOBS=2
+          uv run --frozen --extra test make test-unit JOBS=2 SHARD=${{ matrix.shard }}/4
           COV="--cov=lib --cov=routes --cov-report="
           COV_APPEND="--cov=lib --cov=routes --cov-append --cov-report="
       - name: Publish unit coverage data

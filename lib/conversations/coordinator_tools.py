@@ -176,8 +176,10 @@ def _audited_worker_control(task, scope, name, arguments, act):
 def _review_receipt(view: dict) -> dict:
     decision = view['review']['decision']
     if decision != 'accept':
-        step = ('Repair with delegate_project_work and rework_of {assignmentId, grantRevision, '
-                'resultRevision} copied from this receipt. The review is immutable.')
+        step = ('Repair with control_conversation follow_up on the Worker session (its successor links to '
+                'this result) or delegate_project_work with rework_of {assignmentId, grantRevision, '
+                'resultRevision} copied from this receipt. Only a rework may supersede an undelivered accept '
+                'or reject; otherwise the review is immutable.')
     elif view.get('publication'):
         step = ('Publication is asynchronous: poll this assignment_id with wait_s, which waits until its '
                 'delivery is canonical or held, and confirm canonical_delivery before reporting completion.')
@@ -197,6 +199,22 @@ def _review_receipt(view: dict) -> dict:
 
 
 def execute_coordinator_tool(task: dict, name: str, arguments: dict, *, runtime_context=None) -> str:
+    """One Coordinator tool call; a call under the owner's delegation to every lead settles its record."""
+    from lib.project_dispatch.delegation import lead_act
+    from lib.tools.result_value import tool_result_failure_verdict
+    with lead_act(name) as failed:
+        result = _execute_coordinator_tool(task, name, arguments, runtime_context=runtime_context)
+        if tool_result_failure_verdict(result):
+            try:
+                payload = json.loads(result)
+            except ValueError:
+                payload = None
+            payload = payload if isinstance(payload, dict) else {}
+            failed(payload.get('code') or 'tool_failed', payload.get('error') or str(result))
+        return result
+
+
+def _execute_coordinator_tool(task: dict, name: str, arguments: dict, *, runtime_context=None) -> str:
     """Handle explicit create/dispatch/read; all results preserve owner scope.
 
     Reads, replay-safe delegation and the write tools re-read through dispatch

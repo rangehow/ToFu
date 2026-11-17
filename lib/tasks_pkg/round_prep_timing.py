@@ -164,6 +164,9 @@ def finish_round_prep(task, *, span_id: str = '', request_tag: str = '',
         if total >= ROUND_PREP_LOG_THRESHOLD_SECONDS:
             logger.info('[RoundPrepTiming] %s',
                         json.dumps(record, separators=(',', ':'), default=str))
+            from lib.logging_pkg import lead_audit
+            if lead_audit.is_lead_conversation(record.get('conversation_id')):
+                lead_audit.record('round_prep_timing', record)
         return record
     except Exception as error:
         logger.debug('[RoundPrepTiming] dropped: %s', type(error).__name__)

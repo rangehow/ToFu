@@ -1,7 +1,8 @@
 {
   "format": "tofu.task-replay-benchmark/v1",
   "iterations": 9,
-  "policy": "Committed performance baseline for scripts/check_perf_regression.py. Regenerate deliberately on representative hardware with --write-baseline and name the change that justified the new numbers.",
+  "policy": "Committed performance baseline for scripts/check_perf_regression.py. Regenerate deliberately on representative hardware with --write-baseline and name the change that justified the new numbers. reference_ms (benchmarks/task_replay_bench.py interpreter reference) was added 2026-11-18 without re-measuring the workloads: it is the median, over 8 runs on the host whose workload medians match these, of reference time divided by that run's median workload ratio to these numbers (41.2-51.5 ms), so it states the reference at this baseline's speed.",
+  "reference_ms": 43.7,
   "scale": 1.0,
   "workloads": [
     {

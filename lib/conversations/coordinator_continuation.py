@@ -281,7 +281,11 @@ def _source_request(repository, source):
     if 'ownerDelegation' in source:
         return ''  # A lead acted on its own judgment: no owner words to quote.
     turn = repository.turn_get(source['conversationId'], source['turnId'], user_id=repository.owner)
-    if 'steerId' in source:
+    if 'guidanceId' in source:
+        from lib.project_dispatch.delegation import answered_question
+        answered = answered_question((turn or {}).get('projection'), source['guidanceId'])
+        turn = {'projection': {'content': answered['guidanceResponse'] if answered else ''}}
+    elif 'steerId' in source:
         from lib.turn_initiation import steered_input_turn
         turn = steered_input_turn(turn, source['steerId'])
     content = ((turn or {}).get('projection') or {}).get('content') or ''

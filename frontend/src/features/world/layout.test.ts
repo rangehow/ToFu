@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  allocateSlots, fitOffice, layoutOffice, shelfSlots, waitingSpots, type Rect, type TeamShape,
+  allocateSlots, deskTagY, fitOffice, layoutOffice, SEATS_PER_POD, shelfSlots, TAG_GAP, TAG_PILL, tagUnit, waitingSpots,
+  type Rect, type TeamShape,
 } from './layout';
 
 const TEAMS: TeamShape[] = [
@@ -44,7 +45,14 @@ describe('open-plan floor', () => {
         expect(spot.x).toBeGreaterThanOrEqual(room.x);
         for (const zone of layout.zones) expect(inside(spot, zone)).toBe(false);
       }
+      // The commons in front of the office keeps the line and the walk from the door down to the corridor clear.
+      const lobby = layoutOffice(width, TEAMS, 1400, 1).commons.find(area => area.key === 'commons:owner');
+      if (lobby) {
+        expect(lobby.y).toBeGreaterThan(spots[0].y + 30);
+        expect(lobby.x + lobby.w).toBeLessThan(door.x - 20);
+      }
     }
+    expect(layoutOffice(1920, TEAMS, 1400, 1).commons.some(area => area.key === 'commons:owner')).toBe(true);
   });
 
   it('fits the whiteboard and the trophy shelf inside the owner office, clear of the desk and of each other', () => {
@@ -76,17 +84,83 @@ describe('open-plan floor', () => {
     expect(fitOffice(768, 900, small).scale).toBeCloseTo(0.6, 5);
   });
 
-  it('lays the teams out as justified rows of equal-height rooms that reach the right wall', () => {
+  it('lays the teams out in rows of equal-height rooms that reach the right wall, with room to spare as a commons', () => {
     for (const width of [1920, 1440, 1024]) {
       const layout = layoutOffice(width, TEAMS);
       const rows = new Map<number, typeof layout.zones>();
       for (const zone of layout.zones) rows.set(zone.row, [...(rows.get(zone.row) || []), zone]);
-      for (const zones of rows.values()) {
+      for (const [row, zones] of rows) {
         const last = zones[zones.length - 1];
-        expect(last.x + last.w).toBeCloseTo(layout.width - 40, 5);
+        const area = layout.commons.find(each => each.key === `commons:${row}`);
+        expect(area ? area.x + area.w : last.x + last.w).toBeCloseTo(layout.width - 40, 5);
         for (const zone of zones) expect(zone.h).toBe(zones[0].h);
+        if (area) {
+          expect(area.x).toBeGreaterThan(last.x + last.w);
+          expect(area.h).toBe(last.h);
+        }
       }
     }
+    // A lone small team in the last row keeps a room its desks fill; the rest of the row is the commons.
+    const layout = layoutOffice(1920, TEAMS);
+    const knowledge = layout.zones.find(zone => zone.key === '/knowledge')!;
+    const area = layout.commons.find(each => each.key === `commons:${knowledge.row}`);
+    expect(area).toBeDefined();
+    expect(knowledge.w).toBeLessThan(area!.w);
+  });
+
+  it('furnishes each commons inside its area, clear of the rooms, with furniture keyed by its place', () => {
+    for (const width of [1920, 1440]) {
+      for (const height of [0, 1400]) {
+        const layout = layoutOffice(width, TEAMS, height, 1);
+        const rooms = [layout.owner.room, ...layout.zones];
+        for (const area of layout.commons) {
+          for (const room of rooms) expect(overlap(area, room)).toBe(false);
+          const pieces = layout.decor.filter(item => item.key.startsWith(`${area.key}:`));
+          expect(pieces.length).toBeGreaterThan(0);
+          for (const piece of pieces) {
+            const box = { x: piece.x, y: piece.y, w: piece.w ?? 0, h: piece.h ?? 0 };
+            expect(box.x).toBeGreaterThanOrEqual(area.x);
+            expect(box.y).toBeGreaterThanOrEqual(area.y);
+            expect(box.x + box.w).toBeLessThanOrEqual(area.x + area.w);
+            expect(box.y + box.h).toBeLessThanOrEqual(area.y + area.h);
+          }
+        }
+        expect(new Set(layout.decor.map(item => item.key)).size).toBe(layout.decor.length);
+      }
+    }
+  });
+
+  it('keeps two lines of desk tags clear of each other, of the head desk and of the room edge at every fit zoom', () => {
+    const teams: TeamShape[] = [
+      { key: '/router', kind: 'router', seats: 3 }, { key: '/tofu', kind: 'project', seats: 21 },
+      { key: '/parallel', kind: 'project', seats: 7 }, { key: '/knowledge', kind: 'project', seats: 5 },
+      { key: '/watchdog', kind: 'watchdog', seats: 0 },
+    ];
+    let stacked = 0;
+    for (const [width, height] of [[800, 852], [1024, 700], [1366, 720], [1440, 852], [1920, 1032], [2560, 1400]]) {
+      const { scale, layout } = fitOffice(width, height, teams);
+      // The camera never zooms out past the fit, so the fit zoom is where tags are biggest on the floor.
+      const pixel = 1 / scale, half = (TAG_PILL * tagUnit(pixel)) / 2, clear = TAG_GAP * pixel - 1e-6;
+      for (const zone of layout.zones) {
+        const reach = zone.pods.map((pod, index) => {
+          const seats = zone.seats.slice(index * SEATS_PER_POD, (index + 1) * SEATS_PER_POD);
+          const front = seats.find(seat => seat.facing === 'down')!, back = seats.find(seat => seat.facing === 'up')!;
+          return { pod, top: deskTagY(front, 1, pixel) - half, bottom: deskTagY(back, 1, pixel) + half };
+        });
+        for (const upper of reach) {
+          expect(upper.bottom + clear).toBeLessThanOrEqual(zone.y + zone.h);
+          const lower = reach.find(each => each.pod.x === upper.pod.x && each.pod.y > upper.pod.y);
+          if (lower) { stacked += 1; expect(upper.bottom + clear).toBeLessThanOrEqual(lower.top); }
+          else if (!reach.some(each => each.pod.x === upper.pod.x && each.pod.y < upper.pod.y)) {
+            expect(upper.top - clear).toBeGreaterThanOrEqual(zone.lead.desk.y + zone.lead.desk.h);
+          }
+        }
+        for (const first of reach.filter(each => !reach.some(other => other.pod.x === each.pod.x && other.pod.y < each.pod.y))) {
+          expect(first.top - clear).toBeGreaterThanOrEqual(zone.lead.desk.y + zone.lead.desk.h);
+        }
+      }
+    }
+    expect(stacked).toBeGreaterThan(0);
   });
 
   it('stacks a team\'s pods when that lets the following teams share its row', () => {

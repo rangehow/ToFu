@@ -573,6 +573,8 @@ def publish(top: Path, branch_ref: str, head: str, commit: str,
                 with contextlib.suppress(FileNotFoundError):
                     prepared.unlink()
     announce_branch_moved()
+    from lib.project_mod.frontend_refresh import refresh_after_landing
+    refresh_after_landing(top, [step.path for step in steps])
 
 
 def announce_branch_moved() -> None:

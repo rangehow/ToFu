@@ -119,7 +119,8 @@ export function blendLayout(from: OfficeLayout, to: OfficeLayout, k: number, car
     layout: {
       width: mix(from.width, to.width, k), height: mix(from.height, to.height, k), wall: to.wall, owner: to.owner, zones, watchdog,
       entrance: point(from.entrance, to.entrance, k), lounge: rect(from.lounge, to.lounge, k), bar: rect(from.bar, to.bar, k),
-      spine: to.spine, corridors, decor,
+      // A commons is only the place its furniture (decor, above) was laid out for.
+      spine: to.spine, corridors, decor, commons: to.commons,
     },
     zoneAlpha, podAlpha, decorAlpha, watchdogAlpha,
   };

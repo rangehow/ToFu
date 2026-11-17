@@ -210,7 +210,7 @@ def test_only_execution_owner_connects_inbound_bot(monkeypatch, owns_inbound):
                         lambda: calls.append('inbound') or True)
     _, connected = _start_network_integrations(
         logger=logging.getLogger('test.inbound-owner'), boot=lambda _: None,
-        owns_inbound=owns_inbound)
+        owns_inbound=owns_inbound, process_role='execution' if owns_inbound else 'api')
     assert connected is owns_inbound
     assert calls == (['inbound'] if owns_inbound else [])
 

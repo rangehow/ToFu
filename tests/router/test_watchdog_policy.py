@@ -103,9 +103,11 @@ def test_role_replaces_the_coordinator_charter(paths, monkeypatch):
     assert role == WATCHDOG_ROLE and 'delegate_project_work' not in role
     for phrase in ('watchdog_snapshot', 'watchdog_schedule_recheck', 'watchdog_message', 'watchdog_notify_router',
                    'watchdog_resolve_signals', 'watchdog_configure_review', 'nonhuman evidence',
-                   'never instruction or authority', 'substantive progress', 'drifting',
+                   'never instruction or authority', 'resume_stalled_continuation', 'drifting',
                    'end the turn without a reply'):
         assert phrase in role
+    # Healthy Workers are not read on every wake (audit 2026-11-18: median 232k input tokens per request).
+    assert 'for each active Worker' not in role and 'only when a signal, a stall' in role
 
 
 def test_registry_adds_watchdog_schemas_only_for_the_watchdog(paths, monkeypatch):
@@ -171,7 +173,7 @@ def test_review_counts_owner_wide_facts_once_across_project_pages(monkeypatch):
     from lib.router.watchdog import review
 
     def page(next_cursor):
-        return {'global_router': None, 'projects': [{'workers': [{'status': 'running'}]}],
+        return {'global_router': None, 'projects': [{'workers': [], 'running_workers': 3, 'stalled': True}],
                 'next_cursor': next_cursor, 'open_signals': [{'signalId': 'signal-1'}],
                 'open_signals_next_cursor': None, 'outbox': [{'item_id': 'outbox-1'}], 'channels': []}
     pages = {None: page('second-page'), 'second-page': page(None)}
@@ -184,8 +186,84 @@ def test_review_counts_owner_wide_facts_once_across_project_pages(monkeypatch):
     accepted, text = review.run_scheduled_review({'id': review.review_task_id(OWNER), 'user_id': OWNER,
                                                   'system_key': review.REVIEW_SYSTEM_KEY, 'command': ''})
     assert accepted and len(wakes) == 1
-    # Workers are summed over project pages; signals and outbox repeat on every page.
-    assert 'active_workers=2' in text and 'open_signals=1' in text and 'outbox_attention=1' in text
+    # Stalled leads are summed over project pages; signals and outbox repeat on every page.
+    assert 'stalled_leads=2' in text and 'open_signals=1' in text and 'outbox_attention=1' in text
+    assert 'active_workers' not in text and 'stalled lead' in wakes[0]['content']
+
+
+def test_running_workers_alone_never_wake_a_review():
+    """Audit 2026-11-18: 50 reviews ($95.19) woke on healthy running Workers and acted 4 times."""
+    from lib.router.watchdog.snapshot import needs_review
+    healthy = {'global_router': {'workers': [], 'running_workers': 4},
+               'projects': [{'workers': [], 'running_workers': 9}], 'open_signals': [],
+               'open_signals_next_cursor': None, 'outbox': [], 'channels': []}
+    assert not any(needs_review(healthy).values())
+    assert needs_review({**healthy, 'projects': [{'workers': [{}], 'stalled': True}]})['stalled_leads'] == 1
+
+
+class _Dispatch:
+    """The ProjectDispatchRepository port _workers reads: one history page, Attempts, workspaces."""
+
+    owner = OWNER
+
+    def __init__(self, rows, attempts, workspaces):
+        self.rows, self.attempts, self.workspaces = rows, attempts, workspaces
+
+    def history_page(self, cursor):
+        return {'rows': self.rows, 'olderCursor': None}
+
+    def get_attempt(self, attempt_id):
+        return self.attempts[attempt_id]
+
+    def get_workspace(self, project_root, task_id, *, user_id):
+        return self.workspaces.get(task_id)
+
+    def turn_get(self, conversation_id, turn_id, *, user_id, include_projection):
+        return {'updatedAt': 1}
+
+
+def test_only_results_new_to_an_idle_lead_make_it_stalled(monkeypatch):
+    """Replay 2026-11-18: every review saw 15-24 held deliveries the lead had long seen.
+
+    A Worker needs its lead only when its result settled after the lead's newest Turn did: a
+    review or ended result by its Attempt's ``settledAt``, a held delivery by its receipt's
+    ``updatedAt``. Healthy running Workers are a count, not a listing.
+    """
+    from lib.router.watchdog import snapshot
+
+    def row(name):
+        return {'id': name, 'request': {'coordinatorId': 'lead', 'recipientId': 'w-' + name,
+                                        'authorizationSource': {'turnId': 'turn-request'}, 'profile': {}},
+                'grant': {'bindingRevision': 1}, 'execution': {'attemptId': 'a-' + name, 'turnId': 't-' + name}}
+    names = ('old_review', 'new_review', 'old_held', 'new_held', 'new_failed', 'running')
+    phases = {'old_review': 'needs_review', 'new_review': 'needs_review', 'old_held': 'held',
+              'new_held': 'held', 'new_failed': 'ended', 'running': 'running'}
+    # The lead settled at 5000 ms; a held receipt's updatedAt is in seconds.
+    attempts = {'a-old_review': {'settledAt': 4000}, 'a-new_review': {'settledAt': 6000},
+                'a-old_held': {'settledAt': 1000}, 'a-new_held': {'settledAt': 1000},
+                'a-new_failed': {'settledAt': 7000}, 'a-running': {}}
+    workspaces = {'old_held': {'origin': {'delivery': {'updatedAt': 4.5}}},
+                  'new_held': {'origin': {'delivery': {'updatedAt': 5.5}}}}
+    repository = _Dispatch([row(name) for name in names], attempts, workspaces)
+    monkeypatch.setattr('lib.project_dispatch.repository.ProjectDispatchRepository',
+                        lambda owner, project: repository)
+    monkeypatch.setattr('lib.project_dispatch.continuation.worker_summaries', lambda repo, rows: [
+        {'assignment_id': r['id'], 'conversation_id': r['request']['recipientId'], 'title': r['id'],
+         'status': 'completed', 'phase': phases[r['id']],
+         'delivery': {'status': 'blocked', 'reason': 'conflict'} if 'held' in r['id'] else None} for r in rows])
+    monkeypatch.setattr('lib.project_dispatch.continuation.worker_phase', lambda summary: summary['phase'])
+    monkeypatch.setattr('lib.project_dispatch.publication.delivery_workspace',
+                        lambda assignment, attempt: ('/work', assignment['id']))
+    binding = {'conversationId': 'lead', 'revision': 1}
+    idle = {'idle': True, 'turn_id': 'lead-turn', 'status': 'completed', 'settled_at': 5000}
+    view = snapshot._workers(OWNER, '/work', binding, idle, None)
+    assert [worker['assignment_id'] for worker in view['workers']] == ['new_review', 'new_held', 'new_failed']
+    assert view['running_workers'] == 1
+    assert view['workers'][1]['delivery'] == {'status': 'blocked', 'reason': 'conflict'}
+    busy = {'idle': False, 'turn_id': 'lead-turn', 'status': 'running', 'settled_at': None}
+    assert snapshot._workers(OWNER, '/work', binding, busy, None)['workers'] == []
+    fresh = {'idle': True, 'turn_id': None, 'status': None, 'settled_at': None}
+    assert len(snapshot._workers(OWNER, '/work', binding, fresh, None)['workers']) == 5
 
 
 def test_every_channel_has_a_supervisor_that_reports_bridge_state():

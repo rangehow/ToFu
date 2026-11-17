@@ -71,7 +71,8 @@ def test_every_periodic_review_that_ran_writes_its_heartbeat_last(logs, monkeypa
     accepted, text = _review(monkeypatch)
     assert accepted and text.startswith('Nothing to review') and _beat(logs)['schedule'] == '*/15 * * * *'
     (logs / f'watchdog-heartbeat-{OWNER}.json').unlink()
-    busy = {'global_router': None, 'projects': [{'workers': [{'status': 'running'}]}], 'next_cursor': None,
+    busy = {'global_router': None, 'projects': [{'workers': [{'phase': 'needs_review'}], 'stalled': True}],
+            'next_cursor': None,
             'open_signals': [], 'open_signals_next_cursor': None, 'outbox': [], 'channels': []}
     accepted, text = _review(monkeypatch, page=busy)
     assert accepted and text.startswith('Watchdog woken') and _beat(logs)['enabled'] is True

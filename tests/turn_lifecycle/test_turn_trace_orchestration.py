@@ -179,6 +179,37 @@ def test_a_round_without_a_started_request_is_still_preparing(monkeypatch):
     assert not [s for s in doc['spans'] if s['kind'] == 'finalize']  # still running
 
 
+def test_a_round_that_lost_its_request_evidence_never_charges_its_poll_to_prep(monkeypatch):
+    # A reduced event log (the shape a long lead attempt kept: round markers
+    # and usage survive, request and tool rows do not) once charged the whole
+    # round, a 1500 s poll included, to round_prep.
+    doc = _fold(monkeypatch, [
+        ('round_start', 0, {'roundNum': 0}),
+        ('model_request_start', 200, {'spanId': 'm1', 'requestLevel': 'logical'}),
+        ('model_request_complete', 1_000, {'spanId': 'm1', 'status': 'succeeded'}),
+        ('round_end', 1_100, {'roundNum': 0, 'reason': 'tools'}),
+        ('round_start', 1_100, {'roundNum': 1}),
+        ('round_usage', 9_100, {'roundNum': 2, 'model': 'm',
+                                'usage': {'stream_elapsed_ms': 6_000}}),
+        ('round_end', 1_509_100, {'roundNum': 1, 'reason': 'tools'}),
+        ('round_start', 1_509_100, {'roundNum': 2}),
+        ('round_end', 1_600_000, {'roundNum': 2, 'reason': 'tools'}),
+        ('done', 1_600_000, {}),
+    ])
+    assert _named(doc, 'round_prep') == {('prep', 0, 200)}
+    spans = {s['spanId']: s for s in doc['spans']}
+    assert spans['r1']['attrs']['requestEvidence'] == 'lost'
+    assert (spans['r1.llm']['tStart'] - _ORIGIN, spans['r1.llm']['tEnd'] - _ORIGIN) == (3_100, 9_100)
+    assert spans['r2.llm']['tEnd'] == spans['r2.llm']['tStart']
+    s = doc['summary']
+    assert s['roundPrepMs'] == 200
+    assert s['llmMs'] == 800 + 6_000
+    assert s['unattributedMs'] == 1_600_000 - 200 - 100 - 800 - 6_000
+    assert doc['coverage'] == 'partial'
+    assert doc['coverageReason'] == 'request-evidence-lost'
+    _accounted(s)
+
+
 def test_spawn_wait_names_its_command_without_its_parent_span(monkeypatch):
     doc = _fold(monkeypatch, [
         ('round_start', 0, {'roundNum': 0}),

@@ -134,8 +134,13 @@ def _serve_forks(source, channel_fd):
             if pid == 0:
                 return
 
+    # poll(), not select(): select() refuses descriptors >= FD_SETSIZE
+    # (docs/DEFENSIVE_PATTERNS.md, "Descriptor waits have no select() ceiling").
+    poller = select.poll()
+    poller.register(channel, select.POLLIN)
+    poller.register(wake_read, select.POLLIN)
     while True:
-        readable = select.select([channel, wake_read], [], [])[0]
+        readable = {descriptor for descriptor, _mask in poller.poll()}
         if wake_read in readable:
             while True:
                 try:
@@ -144,7 +149,7 @@ def _serve_forks(source, channel_fd):
                 except BlockingIOError:
                     break
             reap()
-        if channel not in readable:
+        if channel.fileno() not in readable:
             continue
         message, descriptors, _flags, _address = socket.recv_fds(channel, 1 << 16, 8)
         if not message:

@@ -584,6 +584,24 @@ timeout (still waits, and changes durability on expiry); dropping the snapshot
 paid request and refresh a finite budget); draining at the next round's start
 (same serial latency).
 
+Problem (2026-11-18): a response whose calls are all reads still awaited the
+`tools_in_flight` barrier before running them, although no external effect
+followed; on the harness `noop` round that wait was about 7 % of the round.
+Decision: when every call of the response is in the task's result-reuse
+partition (`tool_dispatch._flags.batch_is_effect_free`: dispatch may answer
+such a call from an earlier result instead of running it), the root records
+the boundary like a deferred `ready` round end; the next pre-request boundary
+(or any other paid request, or the terminal barrier) awaits exactly those
+events. A batch with any other call, a domain sink, or a failed lane keeps the
+awaited barrier, and every effectful call still persists its own intent first
+(`begin_tool_effect`). A crash during the reads can lose the round's undurable
+suffix exactly as a crash during the request can. Alternatives rejected:
+skipping the barrier for every non-write tool (`spawn_agents` or
+`generate_image` are not writes, yet start paid model work that must not
+precede the paid response's receipts); a per-tool opt-in flag (a second partition beside
+the existing result-reuse one). Specs: the effect-free cases in
+`tests/tasks_pkg/test_pre_request_checkpoint.py`.
+
 Measurement: `benchmarks/model_dispatch_barrier.py` runs both boundaries over
 the production event entry with a slow authority stub (6 rounds, 2 alternating
 samples, 150 ms preparation, 1.5 s simulated request with 6 deltas; Python

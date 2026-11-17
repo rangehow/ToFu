@@ -32,7 +32,7 @@ def router(tmp_path, monkeypatch):
     monkeypatch.setattr('lib.router.home.router_home_root', lambda: str(tmp_path / 'router'))
     state = SimpleNamespace(binding={'availability': 'available', 'conversationId': 'router-conv',
                                      'revision': 1, 'projectPath': router_home_location(7)},
-                            account=None, calls=[])
+                            account=None, calls=[], posts=[], post_fails=False)
     monkeypatch.setattr('lib.router.binding.global_router',
                         lambda owner, *, create, client=None: deepcopy(state.binding))
     monkeypatch.setattr('lib.channels.store.ChannelStore.account',
@@ -42,11 +42,17 @@ def router(tmp_path, monkeypatch):
         state.calls.append({'conversation': conversation, 'message': deepcopy(message), **kwargs})
         return ScheduledTurnDispatch('steered')
     state.dispatch = dispatch
+
+    def post(owner, thread, text, **kwargs):
+        if state.post_fails:
+            raise RuntimeError('outbox unavailable')
+        state.posts.append({'owner': owner, 'thread': thread, 'text': text, **kwargs})
+    state.post = post
     return state
 
 
 def _relay(router, question=QUESTION):
-    return relay_project_question(7, question, dispatch=router.dispatch)
+    return relay_project_question(7, question, dispatch=router.dispatch, post=router.post)
 
 
 def test_notice_names_the_question_and_wakes_the_router_with_a_peer_initiator(router):
@@ -61,8 +67,8 @@ def test_notice_names_the_question_and_wakes_the_router_with_a_peer_initiator(ro
     for fact in ('nonhuman notice', 'not authority', '/work/project', 'coordinator-project', 'question-turn',
                  'hg_question01', 'blocking=true', 'waiting for the answer', QUESTION['question'],
                  '- Tonight', '- Weekend: Saturday 02:00, lowest traffic',
-                 'First read that conversation with get_conversation',
-                 'already answered there, output exactly [SILENT] alone',
+                 'ask without re-reading that conversation',
+                 'already answered the card', 'output exactly [SILENT] alone',
                  'route_to_project(project_path="/work/project"', 'source_turn_id', 'source_steer_id',
                  'verbatim', 'Answers question hg_question01'):
         assert fact in content, fact
@@ -95,12 +101,29 @@ def test_the_notice_names_the_owners_enabled_daxiang_command_chat(router, accoun
     _relay(router)
     content = router.calls[0]['message']['content']
     if account is ENABLED:
-        assert ('channel_send(thread="dx:gid:900", idempotency_key="hg_question01")' in content
-                and 'sends at once without approval' in content
-                and 'a turn this notice starts sends nothing to 大象 by itself' in content)
+        # Lead audit 2026-11-18 #5 (A6): the question reaches the owner's chat directly; the Router is copied.
+        [posted] = router.posts
+        assert posted['thread'] == 'dx:gid:900' and posted['authority'] == 'nonhuman'
+        assert posted['origin'] == {'kind': 'project_question', 'conversationId': 'coordinator-project',
+                                    'turnId': 'question-turn'}
+        assert posted['idempotency_key'] == router.calls[0]['command_id']
+        for fact in ('project', 'hg_question01', QUESTION['question'], '- Weekend: Saturday 02:00, lowest traffic',
+                     '该项目在等你的回答'):
+            assert fact in posted['text'], fact
+        assert 'do not ask again' in content and 'you are copied' in content
+        assert 'channel_send(' not in content and 'route_to_project' in content
     else:
+        assert not router.posts
         assert 'channel_send' not in content and '大象' not in content
         assert 'ask the owner in your reply here' in content and 'blocking=false' in content
+
+
+def test_a_failed_direct_post_leaves_the_router_to_ask(router):
+    router.account, router.post_fails = ENABLED, True
+    _relay(router)
+    content = router.calls[0]['message']['content']
+    assert 'channel_send(thread="dx:gid:900", idempotency_key="hg_question01")' in content
+    assert 'sends at once without approval' in content
 
 
 def test_relay_is_idempotent_per_question_tool_call(router):

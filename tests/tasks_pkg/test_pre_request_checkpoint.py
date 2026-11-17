@@ -407,3 +407,56 @@ def test_a_domain_sink_keeps_the_ready_boundary_awaited(root):
     assert not close.done.wait(0.2)
     authority.released.set()
     assert close.done.wait(5) and close.error is None and close.value == 1
+
+
+def test_an_effect_free_tool_batch_leaves_its_events_to_the_next_paid_request(root):
+    """Only result-reusable reads: no external effect waits, the next request does."""
+    from lib.tasks_pkg.manager import append_event
+    task, authority = root.task, root.authority
+    authority.hold('model_request_complete')
+    append_event(task, _request_span(1))
+    append_event(task, _request_span(1, complete=True))
+    assert authority.entered.wait(2)
+    tools = _in_thread(lambda: checkpoint_invocation(task, _MESSAGES, 0, phase='tools_in_flight',
+                                                     defer_events=True))
+    assert tools.done.wait(5) and tools.error is None and tools.value == 0, 'reads waited'
+    assert task['_invocationCheckpointPhase'] == 'tools_in_flight'
+
+    _emit_request_snapshot(task, _MESSAGES, 1)
+    dispatch = _in_thread(lambda: checkpoint_model_dispatch(task, _MESSAGES, 1))
+    assert not dispatch.done.wait(0.2), 'a paid request preceded the tool round receipts'
+    authority.released.set()
+    assert dispatch.done.wait(5) and dispatch.error is None and dispatch.value == 2
+    assert [kind for _, kind in authority.committed][:2] == [
+        'model_request_start', 'model_request_complete']
+
+
+def test_only_result_reusable_reads_make_a_batch_effect_free():
+    from lib.tasks_pkg.tool_dispatch._flags import batch_is_effect_free
+
+    def call(name):
+        return {'id': f'call-{name}', 'function': {'name': name, 'arguments': '{}'}}
+
+    task = {'id': 'effect-free-task'}
+    assert batch_is_effect_free(task, [call('read_files'), call('search_files')])
+    assert not batch_is_effect_free(task, [call('read_files'), call('run_command')])
+    assert not batch_is_effect_free(task, [call('write_file')])
+    # Not in the result-reuse partition: a paid or stateful call keeps its barrier.
+    assert not batch_is_effect_free(task, [call('spawn_agents')])
+    assert not batch_is_effect_free(task, [call('no_such_tool')])
+    assert not batch_is_effect_free(task, [])
+
+
+def test_a_round_resolves_its_tool_partitions_once(monkeypatch):
+    from lib.tasks_pkg.tool_dispatch import _flags
+    calls = []
+    real = _flags._resolve_task_partitions
+    monkeypatch.setattr(_flags, '_resolve_task_partitions',
+                        lambda task: calls.append(task.get('_activeRoundNum')) or real(task))
+    task = {'id': 'partition-task', '_activeRoundNum': 3}
+    first = _flags._task_partitions(task)
+    assert _flags._task_partitions(task) is first
+    task['_activeRoundNum'] = 4
+    _flags._task_partitions(task)
+    assert calls == [3, 4]
+    assert _flags._task_partitions({'id': 'outside-a-round'}) == first

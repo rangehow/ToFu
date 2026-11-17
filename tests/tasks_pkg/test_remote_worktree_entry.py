@@ -158,7 +158,9 @@ class TestCommandUserScope:
         _plant()
         cmds = _drain('agent-old')
         assert len(cmds) == 1
-        assert set(cmds[0].keys()) == {'id', 'type', 'params'}
+        # home_tiers is the Home ceiling every delivery carries
+        # (contracts/desktop_bridge_v3.schema.json); no user scope leaks.
+        assert set(cmds[0].keys()) == {'id', 'type', 'params', 'home_tiers'}
 
     def test_scoped_command_never_leaks_user_id_on_wire(self):
         _register('agent-A', user_id='u-alice')
@@ -327,9 +329,13 @@ class TestUserThreading:
         box = {}
 
         def fake_send(cmd_type, params=None, timeout=30,
-                      target_agent_id=None, user_id='', cancellation=None):
+                      target_agent_id=None, user_id='', cancellation=None,
+                      cmd_id=None):
             box['user_id'] = user_id
             return {'ok': True}, None
+
+        # The Home places the call before sending: name alice's device.
+        _register('agent-A', user_id='u-alice')
 
         monkeypatch.setattr(lib.desktop, 'send_desktop_command', fake_send)
         # finalize 链需要完整 task dict(events_lock 等)——与路由套件同范式,
@@ -338,7 +344,7 @@ class TestUserThreading:
         monkeypatch.setattr(adapter, '_finalize_tool_round', lambda *a: None)
         task = {'id': 't1', '_userId': 'u-alice'}
         _agents._handle_desktop_tool(task, {}, 'desktop_list_files',
-                                     'tc-1', {'path': '~'}, 1,
+                                     'tc-1', {'path': '~', 'device': 'agent-A'}, 1,
                                      {'query': 'list my home'}, {}, '', False)
         assert box['user_id'] == 'u-alice'
 

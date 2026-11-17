@@ -717,7 +717,7 @@ def test_a_delegated_set_model_obeys_the_trigger_rule_and_its_refusal_reads_fail
     from lib.conversations import session_model
     from lib.router.contract import validate
     changed = []
-    monkeypatch.setattr(session_model, 'set_session_model', lambda *args: changed.append(args))
+    monkeypatch.setattr(session_model, 'set_session_model', lambda *args, **_: changed.append(args))
     d.grant()
     round_entry, content = _router_pipeline(d, monkeypatch)('control_conversation', {
         **SET_MODEL, 'owner_delegation': {'reason': 'Move it off the refusing provider', **trigger}})
@@ -741,7 +741,7 @@ def test_a_delegated_set_model_the_command_refuses_settles_failed_and_reads_fail
     from lib.conversations import session_model
     from lib.router.contract import validate
 
-    def refuse(task, scope, principal, arguments):
+    def refuse(task, scope, principal, arguments, **_):
         raise ValueError(f"model {arguments['model']!r} is not routable for this owner: unknown model")
     monkeypatch.setattr(session_model, 'set_session_model', refuse)
     d.grant()

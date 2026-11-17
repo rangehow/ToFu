@@ -611,6 +611,44 @@ steps.
 Specs: `tests/tasks_pkg/test_round_prep_timing.py`,
 `tests/storage/test_storage_v2_client.py` (slow RPC warning).
 
+## Durable lead-audit stream
+
+Problem: on 2026-11-18 a lead-trajectory audit could not read app logs older
+than about a day (the global `logs/` budget evicted `app.log.2026-11-17` 24 h
+after it was written), and the 256-span trace cap dropped most per-round detail
+of long lead attempts. Decision: lead evidence also goes to one compact JSONL
+stream, `logs/lead-audit/lead-audit-YYYY-MM-DD.jsonl`
+(`lib/logging_pkg/lead_audit.py`), one file per local day. It is a
+subdirectory, so the global budget, which inventories only direct files of
+`logs/`, never counts or evicts it; it expires by age only: files of today and
+the previous `LEAD_AUDIT_RETENTION_DAYS` (7) local days are kept, older ones
+are deleted (INFO `logging.retention_removed ... reason=lead_audit_retention_days`)
+by the first write of each day in each process. Writes use
+`append_bytes_locked` (cross-process `flock`), never raise, and never alter the
+operation they observe. Every record is one JSON object with `ts` (epoch ms)
+and `kind`:
+
+| `kind` | Written by | Fields |
+|---|---|---|
+| `authority_refusal` | `handlers/_adapter.py`, a lead tool returning a structured `{"error"}` result | `task`, `conv`, `turn`, `tool`, `code`, `error` |
+| `turn_trace_summary` | `turn_trace.finalize_trace_projection`, once per lead task (same fold as `[TurnTraceSummary]`) | `task`, `conv`, `turn`, `status`, `coverage`, `coverageReason`, `rounds`, `summary` (the document summary without `overBudget`) |
+| `turn_trace_rounds` | same settlement | `task`, `conv`, `turn`, `columns`, `rows`: one row per round from the complete fold, before the span cap (`docs/contracts/TURN_TRACE_CONTRACT.md`) |
+| `round_prep_timing` | `round_prep_timing.finish_round_prep`, every lead `[RoundPrepTiming]` record | the record itself |
+| `owner_delegation_action` | `lifecycle_approval`, each delegated action the owner's "Act for me" grant covers (every scope, `lead_authority` included): its acceptance, a refusal recorded under a grant, and each settlement | `actionId`, `scope`, `action` (the settled lead tool, else the target's action/kind), `actor` (the acting lead conversation), `actorTurn`, `trigger` (kind, Turn ids such as `triggerTurnId` of the waking input, `source`: how that input arrived; never the owner's quoted words), `target`, `grantRevision`, `outcome` (accepted/refused/restarting/completed/failed), `code`, `detail` |
+| `restart_outcome` | `server_manager.LifecycleManager._settle_restart` (`outcome` refused/retrying/deferred/spawned/paused with the `lastRestart` fields), its first readiness (`outcome=ready`, `bootSeconds`, `secondsSinceRequest`), and `serverctl restart` (`cli_succeeded`/`cli_failed`, `stage`, `message`) | as listed |
+
+Lead conversations are `coordinator-*` (Project and Global Routers, Router
+Watchdog). Growth measured by replaying the retained logs of 2026-11-17 15:25
+→ 11-18 03:41 (12.3 h, two restarts, heavy load) through the writer: 64 lead
+task summaries with their round tables, 122 slow lead round preparations, 26
+refusals and 3 restart outcomes wrote 243 KB, about 0.5 MB per day and 3.8 MB
+for the eight retained files. Alternatives rejected: a larger global budget
+(a knob that moves the cliff and still evicts by size); an exemption marker
+inside `app.log` (the whole rotation is still evicted); persisting per-round
+rows in the trace document (bounded at 96 KiB per attempt). Specs:
+`tests/log/test_lead_audit_stream.py`, `tests/server/test_server_manager.py`
+(`test_a_settled_restart_outcome_joins_the_durable_lead_audit_stream`).
+
 ## Repeated tool-call evidence
 
 Problem: content-identical calls can represent independent effects. Signature-based

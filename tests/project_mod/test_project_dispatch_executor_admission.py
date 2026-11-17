@@ -415,6 +415,77 @@ def test_worker_swarm_child_runs_ordinary_and_artifact_tools(runtime, monkeypatc
     assert stored.get('toolAttempts', []) == []
 
 
+def test_restart_continued_worker_swarm_child_borrows_the_resumed_workers_live_grant(
+        runtime, monkeypatch, tmp_path):
+    """A swarm resumed by a Worker's restart Continue admits its children under the live Worker.
+
+    Continue rebuilds the session parent as a detached copy of the resumed task that
+    carries the durable execution snapshot instead of the task's bound delivery rows.
+    That copy used to become the children's dispatch root, so the registered-workspace
+    check found no row naming the assignment's work id and cancelled every resumed
+    child with "Project dispatch authority is no longer available" (11-17 23:48 and
+    11-18 02:16, four sub-agents each). The copy borrows the resumed Worker's
+    authority instead, so the Worker's registered row admits the child and the
+    Worker's Stop still fences it.
+    """
+    from lib.project_dispatch.scope import admit_tool
+    from lib.swarm.integration import _rehydrate
+    from lib.swarm.master import MasterOrchestrator
+    from lib.swarm.protocol import SubTaskSpec
+    from lib.tasks_pkg import workspace_delivery
+    from lib.tasks_pkg.child_invocation import close_unstarted_child_invocation
+    from lib.tools.project import READ_FILES_TOOL
+
+    worker, _row = _worker_task(runtime)
+    worker['_tenant_id'] = admission.principal_for(worker['config'][admission.KEY]).tenant_id
+    canonical = str(Path(worker['config']['canonicalProjectPath']).resolve())
+    workspace = (tmp_path / 'worker-checkout').resolve()
+    workspace.mkdir()
+    (workspace / 'notes.txt').write_text('worker copy\n')
+    policy = {'primaryPath': str(workspace), 'roots': {'work': {'path': str(workspace), 'access': 'rw'}}}
+    worker['config']['projectPath'] = str(workspace)
+    worker['_workspaceRootPolicy'] = deepcopy(policy)
+    worker['_workspaceDelivery'] = {'repositories': [{
+        'canonicalRoot': canonical, 'workspacePath': str(workspace),
+        'workId': workspace_delivery.workspace_work_id(worker)}]}
+    monkeypatch.setattr('lib.integration_state_repository.find_workspace',
+                        lambda root, task_id, user_id: {
+                            'user_id': user_id, 'task_id': task_id, 'project_root': root,
+                            'state': 'active', 'workspace_path': str(workspace)})
+    monkeypatch.setattr(workspace_delivery, '_checkout', lambda path, **kw: (
+        (str(workspace), canonical) if str(path) == str(workspace) else None))
+    parent = _rehydrate._continue_execution_parent({
+        'project_path': str(workspace), 'workspace_execution_context': {
+            'schema': 1, '_workspaceRootPolicy': deepcopy(policy),
+            '_workspaceExecution': {'repositories': [
+                {'canonicalRoot': canonical, 'workspacePath': str(workspace)}]}}}, worker)
+    assert parent is not worker and '_workspaceDelivery' not in parent
+    spec = SubTaskSpec(role='general', objective='Inspect notes.txt and share the finding')
+    master = MasterOrchestrator(worker['id'], worker['convId'], [spec], user_id=7,
+                                project_path=str(workspace), model='model-a', all_tools=[READ_FILES_TOOL],
+                                parent_config={**deepcopy(worker['config']), '_transientRuntime': True},
+                                parent_task=parent)
+    decisions = []
+
+    def admit_unstarted(child, **kwargs):
+        try:
+            for _ in range(2):
+                try:
+                    admit_tool(child, 'read_files', {'path': 'notes.txt'},
+                               project_path=child['config']['projectPath'])
+                    decisions.append('admitted')
+                except AbortedError as stopped:
+                    decisions.append(('stopped: ' if worker.get('aborted') else '') + str(stopped))
+                # The resumed Worker's own Stop reaches the borrowed authority.
+                worker['aborted'], worker['_abort_reason'] = True, 'user_abort'
+        finally:
+            close_unstarted_child_invocation(child, reason='Admission spec complete')
+    monkeypatch.setattr('lib.tasks_pkg.child_invocation.run_child_invocation', admit_unstarted)
+    master._make_agent(spec).run()
+    assert decisions[0] == 'admitted', decisions
+    assert decisions[1].startswith('stopped:') and 'aborted by user' in decisions[1], decisions
+
+
 class _CustomEnvironment:
     def __init__(self):
         self.resolved = []

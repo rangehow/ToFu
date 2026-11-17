@@ -259,9 +259,9 @@ def test_any_server_learns_its_session_cookie_without_exposing_values(
         store, browser, audits, caplog):
     caplog.set_level(logging.INFO, logger='lib')
     mcp_config.upsert_server('notes', _custom_row(
-        NOTES_SESSION=NOTES, NOTES_USER='your-username'), user_id=OWNER)
+        NOTES_SESSION=NOTES, NOTES_USER='alice'), user_id=OWNER)
     browser.jar = [_cookie('sid', NOTES, '.notes.example'),
-                   _cookie('user', 'your-username', '.notes.example', http_only=False)]
+                   _cookie('user', 'alice', '.notes.example', http_only=False)]
 
     answered = learn_bindings('notes', owner_user_id=OWNER)
 

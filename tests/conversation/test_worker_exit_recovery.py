@@ -207,8 +207,54 @@ def test_stop_settles_an_attempt_whose_host_handed_off_the_serving_lock(
     assert ok
     cancel_claimed_attempt(context, context.claim.payload)
     turn = turns.get_turn(pair['turn']['conversationId'], pair['turn']['turnId'], user_id=owner)
-    # As for a dead local process: Stop ends it, its external outcome stays unknown.
-    assert turn['status'] == 'failed'
+    # As for a dead local process: the owner's Stop ends it. It ran no call, so
+    # nothing is unknown: it settles as that Stop, never 'failed, outcome unknown'
+    # (audit 2026-11-18 P3: attempt 5234bf17 settled failed, Regenerate alone).
+    settlement = turn['settlement']
+    assert (turn['status'], settlement['cause']) == ('interrupted', 'user_abort')
+    assert settlement.get('error') is None, settlement.get('error')
+
+
+def test_a_stop_reaching_a_dead_execution_names_only_its_cut_call(
+        claimed, process_witness, monkeypatch):
+    """A Stop that reached an execution whose owner had already died settles as
+    that Stop, from the same cut-call decision as a restart: a call cut off
+    mid-effect is named for review; nothing is resumed or replayed."""
+    from lib import turn_lifecycle as turns
+    from lib.conversation_sync.worker_execution import cancel_claimed_attempt
+    from lib.conversations import restart_resume
+    from lib.durable_worker import StorageWorkerJobStore
+    context, pair, factory, owner = claimed
+    process, witness = process_witness
+    enter(claimed, witness)
+    _in_worker_worktree(monkeypatch)
+    row, review = deepcopy(_INTERRUPTED_CALLS['cut_off'])
+    assert review
+    row.update(roundNum=1, llmRound=0, toolArgs=row.get('toolArgs', '{}'))
+    row['executionEffect'].update(operationId=uuid.uuid4().hex, scope='attempt')
+    carrier = {'id': context.claim.task_id, 'convId': pair['turn']['conversationId'],
+               '_attemptId': pair['attempt']['attemptId'], '_turnId': pair['turn']['turnId'],
+               '_userId': owner, '_conversationWorkerContext': context, 'config': {},
+               'status': 'running', 'content': '', 'toolRounds': [row]}
+    turns.record_task_event(carrier, {'type': 'delta', 'content': 'working'})
+    process.kill()
+    process.wait()
+    monkeypatch.setattr('lib.conversation_sync.task_start.start_conversation_attempt_executor',
+                        lambda *a, **kw: pytest.fail('interrupted effects were replayed'))
+    resumed, resumes = _watch_recovered_resume(monkeypatch)
+    turns.abort_attempt(pair['attempt']['attemptId'], user_id=owner, withdraw_dispatch=False)
+    context.observe_claim_state(StorageWorkerJobStore(client_factory=factory).claim_state(
+        context.claim, now_ms=1))
+    assert cancel_claimed_attempt(context, context.claim.payload).status == 'cancelled'
+    turn = turns.get_turn(pair['turn']['conversationId'], pair['turn']['turnId'], user_id=owner)
+    settlement = turn['settlement']
+    assert (turn['status'], settlement['cause']) == ('interrupted', 'user_abort')
+    error = settlement['error']
+    assert error['code'] == 'worker_effect_outcome_unknown'
+    assert error['unknownEffects'] == [{'toolName': 'run_command', 'toolCallId': 'call-write',
+                                        'operationId': row['executionEffect']['operationId']}]
+    assert restart_resume.unknown_effects_to_review(turn) == error['unknownEffects']
+    assert not resumed.wait(1) and resumes == []
 
 
 def test_the_serving_process_runs_dispatch_recovery_for_an_attempt_a_dead_process_left(

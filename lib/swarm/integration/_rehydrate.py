@@ -259,6 +259,10 @@ def _continue_execution_parent(config: dict, task: dict) -> dict:
     share_execution_budget(task, parent)
     from lib.tasks_pkg.native_parent import share_native_parent
     share_native_parent(task, parent)
+    # The copy lacks the task's bound delivery rows; as its own dispatch root it
+    # failed the registered-workspace check and cancelled every resumed child.
+    from lib.project_dispatch.admission import share_dispatch_root
+    share_dispatch_root(task, parent)
     return parent
 
 

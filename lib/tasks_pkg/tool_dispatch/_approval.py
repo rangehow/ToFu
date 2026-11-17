@@ -1005,6 +1005,17 @@ def _approval_meta_repair_project(approval_meta, fn_args):
     )
 
 
+def _approval_meta_broadcast_project_message(approval_meta, fn_args):
+    """``broadcast_project_message`` — one passive message to many leads and Workers."""
+    _risk(
+        approval_meta,
+        ('Targets', ', '.join(fn_args.get('targets') or ())),
+        ('Message', fn_args.get('content')),
+        ('Reason', fn_args.get('reason')),
+        note='Send one nonhuman message to every targeted Project Router and running Worker; recorded in audit.log',
+    )
+
+
 def _approval_meta_router_portfolio(approval_meta, fn_args):
     """``router_portfolio`` — proposes, approves, starts or settles an initiative.
 
@@ -1183,6 +1194,7 @@ _APPROVAL_META_ENRICHERS = {
     'router_project':             _approval_meta_router_project,
     'router_portfolio':           _approval_meta_router_portfolio,
     'repair_project':             _approval_meta_repair_project,
+    'broadcast_project_message':  _approval_meta_broadcast_project_message,
     # ── paper: network download + new workspace directory ──
     'paper_import_arxiv':        _approval_meta_paper_import_arxiv,
     'paper_cite_insert':         _approval_meta_paper_cite_insert,

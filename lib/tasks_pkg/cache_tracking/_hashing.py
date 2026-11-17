@@ -1,6 +1,7 @@
 """Hashing & diffing helpers for cache-break detection.
 
-Pure functions (no shared state): they turn system prompt / tools / message
+Pure functions (their only shared state is an exact one-entry memo of the
+system-text hash): they turn system prompt / tools / message
 prefixes into stable hashes and diff two hash snapshots to name the EXACT
 tool or message-field that changed between rounds.
 """
@@ -42,8 +43,15 @@ def _md5(text: str) -> str:
     return hashlib.md5(text.encode('utf-8', errors='replace')).hexdigest()[:16]
 
 
+# The last (system text, hash) pair. Rounds of a Turn send the same system
+# text; comparing it is a memcmp, while rehashing it (tens of KB) every round
+# released the GIL and waited to take it back behind busy threads.
+_LAST_SYSTEM_HASH: tuple[str, str] = ('', _md5(''))
+
+
 def _hash_system_prompt(messages: list) -> str:
     """Hash the system message content."""
+    global _LAST_SYSTEM_HASH
     for msg in messages:
         if msg.get('role') == 'system':
             content = msg.get('content', '')
@@ -52,8 +60,15 @@ def _hash_system_prompt(messages: list) -> str:
                     b.get('text', '') for b in content
                     if isinstance(b, dict) and b.get('type') == 'text'
                 ]
-                return _md5(''.join(parts))
-            return _md5(str(content))
+                text = ''.join(parts)
+            else:
+                text = str(content)
+            last = _LAST_SYSTEM_HASH
+            if last[0] == text:
+                return last[1]
+            digest = _md5(text)
+            _LAST_SYSTEM_HASH = (text, digest)
+            return digest
     return ''
 
 

@@ -977,7 +977,7 @@
         "turnId",
         "projectionRevision"
       ],
-      "description": "The owner's message that authorizes a request: a genuine human input Turn, or with steerId a message the owner steered into Coordinator reply Turn turnId, whose own input is not human, or with ownerDelegation that reply itself acting under the owner's delegation to every lead (the lifecycle gate's lead_authority audit record id; docs/ROUTER.md R9). A steer's committed author is immutable, so a steered source has projectionRevision 1.",
+      "description": "The owner's message that authorizes a request: a genuine human input Turn, or with steerId a message the owner steered into Coordinator reply Turn turnId, whose own input is not human, or with ownerDelegation that reply itself acting under the owner's delegation to every lead (the lifecycle gate's lead_authority audit record id; docs/ROUTER.md R9). or with guidanceId the owner's answer to that reply's ask_human question (its durable answer receipt, accepted only through the owner's own answer command; docs/ROUTER.md R9 \"Leads reach the owner directly\"). A steer's committed author and an accepted answer are immutable, so a steered or answered source has projectionRevision 1.",
       "properties": {
         "conversationId": {
           "$ref": "#/$defs/id"
@@ -993,6 +993,9 @@
           "$ref": "#/$defs/id"
         },
         "ownerDelegation": {
+          "$ref": "#/$defs/id"
+        },
+        "guidanceId": {
           "$ref": "#/$defs/id"
         }
       },
@@ -1026,6 +1029,34 @@
             "not": {
               "required": [
                 "steerId"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "guidanceId"
+            ]
+          },
+          "then": {
+            "properties": {
+              "projectionRevision": {
+                "const": 1
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "steerId"
+                  ]
+                },
+                {
+                  "required": [
+                    "ownerDelegation"
+                  ]
+                }
               ]
             }
           }
@@ -1468,6 +1499,38 @@
                 "$ref": "#/$defs/acceptanceResult"
               },
               "description": "Coordinator verdicts in check order; a check without one counts as unknown."
+            },
+            "supersedes": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "decision",
+                "note",
+                "resultRevision"
+              ],
+              "description": "The accept or reject of this same result revision a rework superseded before its delivery (docs/PROJECT_COORDINATION.md, \"A rework supersedes an undelivered review\"); history stays append-only.",
+              "properties": {
+                "decision": {
+                  "enum": [
+                    "accept",
+                    "reject"
+                  ]
+                },
+                "note": {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                "resultRevision": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "actor": {
+                  "const": "coordinator"
+                },
+                "acceptanceResults": {
+                  "$ref": "#/$defs/assignment/properties/review/properties/acceptanceResults"
+                }
+              }
             }
           }
         },
@@ -1832,6 +1895,9 @@
             },
             "acceptanceCounts": {
               "$ref": "#/$defs/acceptanceCounts"
+            },
+            "supersedes": {
+              "$ref": "#/$defs/assignment/properties/review/properties/supersedes"
             }
           }
         }
@@ -2757,6 +2823,7 @@
     "restart_server",
     "owner_settings",
     "repair_project",
+    "broadcast_project_message",
     "await_device",
     "watchdog_snapshot",
     "watchdog_resolve_signals",
@@ -2764,6 +2831,7 @@
     "watchdog_message",
     "watchdog_notify_router",
     "watchdog_configure_review",
+    "resume_stalled_continuation",
     "update_task_progress",
     "get_conversation_status",
     "control_conversation"

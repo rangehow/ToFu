@@ -1555,3 +1555,6 @@ if __name__ == '__main__':
         _server_log.critical(
             '[Restart] execv returned without replacing the process image')
         raise SystemExit(1)
+
+    from lib.server.server_shutdown import exit_after_completed_lifespan
+    exit_after_completed_lifespan(app)

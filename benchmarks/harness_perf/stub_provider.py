@@ -244,6 +244,11 @@ def _usage_tokens(prompt: str) -> int:
 def make_handler(recorder: Recorder):
     class Handler(http.server.BaseHTTPRequestHandler):
         protocol_version = 'HTTP/1.1'
+        # Provider front ends send with TCP_NODELAY. With Nagle on, the body
+        # write waits for the client's delayed ACK of the header segment (up
+        # to 40 ms on a reused connection) after ``finished_ns`` is recorded,
+        # and that stall would be charged to the harness as round overhead.
+        disable_nagle_algorithm = True
 
         def log_message(self, *args):
             pass

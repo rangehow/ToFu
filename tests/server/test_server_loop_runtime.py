@@ -151,6 +151,44 @@ def test_runtime_stops_reaper_and_detaches_loop_owned_globals(push_hub):
     asyncio.run(exercise())
 
 
+def test_stopped_runtime_lets_loop_teardown_skip_an_orphaned_sync_job(push_hub):
+    """asyncio.run joins its default executor at teardown. A sync job whose
+    awaiting request was cancelled must not hold that join once the runtime
+    stopped; work started after ``stop`` (later shutdown handlers) still runs."""
+    release = threading.Event()
+    entered = threading.Event()
+    retired = {}
+
+    async def exercise():
+        loop = asyncio.get_running_loop()
+        runtime = ServingLoopRuntime(
+            loop, threading.Event(),
+            environ={'TOFU_SYNC_WORKERS': '2', 'TOFU_AGENT_WORKERS': '1',
+                     'TOFU_TASK_CLEANUP_INTERVAL': '0'},
+        ).start()
+        retired['executor'] = runtime.sync_executor
+
+        def orphan():
+            entered.set()
+            release.wait(30)
+
+        request = asyncio.ensure_future(asyncio.to_thread(orphan))
+        await asyncio.to_thread(entered.wait, 5)
+        request.cancel()
+        await runtime.stop()
+        assert runtime.sync_executor is None
+        assert retired['executor']._demand._shutdown
+        assert await asyncio.to_thread(lambda: 'after stop') == 'after stop'
+
+    started = time.monotonic()
+    try:
+        asyncio.run(exercise())
+        assert time.monotonic() - started < 10
+    finally:
+        release.set()
+        push_hub.stop()
+
+
 def test_runtime_retires_burst_threads_without_reducing_capacity(push_hub):
     import lib.tasks_pkg.spawn as tasks_pkg
     hub = push_hub

@@ -15,6 +15,7 @@ from __future__ import annotations
 WATCHDOG_ONLY_TOOLS = frozenset({
     'watchdog_snapshot', 'watchdog_resolve_signals', 'watchdog_schedule_recheck',
     'watchdog_message', 'watchdog_notify_router', 'watchdog_configure_review',
+    'resume_stalled_continuation',
 })
 WATCHDOG_TOOLS = WATCHDOG_ONLY_TOOLS | frozenset({
     'list_conversations', 'get_conversation', 'search_tools', 'execute_tools', 'search_memories',
@@ -32,12 +33,16 @@ WATCHDOG_ROLE = (
     'network, storage, recovery failures, a disconnected channel, a failed or unknown outbox send): for '
     'an intermittent fault arm watchdog_schedule_recheck and keep re-checking until it has recovered; for '
     'one that needs the owner (credentials, quota, login), tell the Global Router once with '
-    'watchdog_notify_router, naming the cause and the action needed. Progress: for each active Worker, '
-    'read its conversation with get_conversation and judge whether it is making substantive progress on '
-    'its assignment and on the request its Project Router is serving, or is looping, stalled or drifting '
-    'from that goal. When it is, send the evidence and a concrete correction with watchdog_message: to the '
-    'Worker to correct its course (kind=steer), or to its Project Router to re-plan, re-delegate or cancel '
-    'it. A message is delivered at the recipient\u2019s next step and never wakes it. Once you verified '
+    'watchdog_notify_router, naming the cause and the action needed. Stalled leads: a Router the snapshot '
+    'marks stalled is idle while its Workers need it (a result to review, a held delivery, a Worker that '
+    'ended); wake it with resume_stalled_continuation, naming the reason. It re-verifies the stall, '
+    'resumes the lead\u2019s own continuation or gives it one notice, and is audited; a running lead '
+    'handles its own Workers. Healthy running Workers are not your concern: read a conversation with '
+    'get_conversation only when a signal, a stall or the owner\u2019s question needs that evidence. When '
+    'evidence shows a Worker looping, stalled or drifting from its assignment, send it and a concrete '
+    'correction with watchdog_message: to the Worker (kind=steer), or to its Project Router to re-plan, '
+    're-delegate or cancel it. A message is delivered at the recipient\u2019s next step and never wakes '
+    'it. Once you verified '
     'recovery or handled a signal, close it with watchdog_resolve_signals and say what you verified. '
     'Notify the Global Router only about anomalies the owner may need to know about or decide, never about '
     'routine status; it decides whether to tell the owner. While a Router\u2019s own latest turn failed, '

@@ -73,8 +73,10 @@ def test_a_wake_turn_dispatches_a_worker_under_the_owner_delegation(lead):
     repository.validate(repository.admission(row['id']))
     [record] = gate.delegated_actions(lead.owner)
     assert record['id'] == source['ownerDelegation']
+    # The Worker's birth settled the record with its outcome (verification efb9d9dd: it stayed 'accepted').
     assert (record['scope'], record['status'], record['trigger']['kind']) == (
-        'lead_authority', 'accepted', 'owner_delegation')
+        'lead_authority', 'completed', 'owner_delegation')
+    assert record['trigger']['triggerTurnId'] == lead.reply['parentTurnId']
     assert record['requester']['kind'] == 'project_lead'
     assert record['requester']['conversationId'] == lead.target['conversationId']
     assert record['target'] == {'kind': 'project_request', 'conversationId': lead.target['conversationId'],
@@ -125,3 +127,45 @@ def test_an_enumerated_grant_names_only_the_global_router(lead):
     open(path, 'w').write(json.dumps(document))
     with pytest.raises(NonhumanRequest):
         source_for_task(ProjectDispatchRepository(lead.owner, lead.project), lead.wake, delegated=True)
+
+
+def test_a_failed_lead_act_settles_its_record_failed_and_history_shows_the_final_state(lead, tmp_path,
+                                                                                         monkeypatch):
+    """Global Router verification efb9d9dd: lead_authority records stayed 'accepted' forever."""
+    from lib.conversations.coordinator_tools import execute_coordinator_tool
+    from lib.conversations.coordinator_workers import delegate
+    from lib.logging_pkg import lead_audit
+    monkeypatch.setattr(lead_audit, '_default_logs_dir', lambda: tmp_path / 'logs')
+    lead.grant()
+
+    def broken(_scope, _arguments):
+        raise RuntimeError('worker conversation store unavailable')
+    failed = delegate(lead.wake, lead.coordinator_scope,
+                      {'title': 'Fails', 'brief': 'Cannot start', 'idempotency_key': 'f1'}, create=broken)
+    assert _birth(lead.wake, failed).failure
+    [record] = gate.delegated_action_history(lead.owner, scope='lead_authority')
+    assert (record['status'], record['code']) == ('failed', 'RuntimeError'), record
+    assert 'worker conversation store unavailable' in record['detail']
+    # A failed act of the Attempt is no revocation: the next Worker of the same Turn is born.
+    created = []
+    born = delegate(lead.wake, lead.coordinator_scope,
+                    {'title': 'Works', 'brief': 'Starts', 'idempotency_key': 'f2'},
+                    create=_worker_factory(lead, created))
+    assert _birth(lead.wake, born).failure is None and created
+    assert gate.delegated_action(lead.owner, record['id'])['status'] == 'completed'
+    # A failed tool call through the ordinary Coordinator tool path settles it failed again.
+    result = execute_coordinator_tool(lead.wake, 'review_project_work', {
+        'assignment_id': born['assignment_id'], 'decision': 'accept', 'note': 'no result yet',
+        'result_revision': 99})
+    from lib.tools.result_value import tool_result_failure_verdict
+    assert tool_result_failure_verdict(result), result
+    [final] = gate.delegated_action_history(lead.owner, scope='lead_authority')
+    assert final['id'] == record['id'] and final['status'] == 'failed', final
+    rows = [row for path in sorted(lead_audit.stream_directory(tmp_path / 'logs').glob('*.jsonl'))
+            for row in map(__import__('json').loads, path.read_text().splitlines())
+            if row['kind'] == 'owner_delegation_action']
+    assert [(row['action'], row['outcome']) for row in rows] == [
+        ('project_request', 'accepted'), ('delegate_project_work', 'failed'),
+        ('delegate_project_work', 'completed'), ('review_project_work', 'failed')]
+    assert {row['actor'] for row in rows} == {lead.target['conversationId']}
+    assert all(row['grantRevision'] == record['grantRevision'] for row in rows)

@@ -1591,6 +1591,37 @@ def finish_after_background_task_acceptance(
         detector='background_task', event_reason='background_task_accepted')
 
 
+_COORDINATOR_WAIT_TOOLS = frozenset({'poll', 'await_project_workers'})
+IDLE_COORDINATOR_WAIT_TEXT = ('Waiting for my Workers: their next settlement or delivery change, or a message '
+                              'to me, resumes me.')
+
+
+def finish_after_idle_coordinator_wait(
+    task: dict[str, Any], rs: Any, *, message: dict | None, round_num: int, tid: str,
+) -> bool:
+    """End a Coordinator's Turn whose round only waited on Workers and saw nothing new.
+
+    Each poll records itself (``coordinator_workers.IDLE_WAITS_KEY``) only when
+    it timed out with nothing new and every pending Worker's settlement resumes
+    the Coordinator server-side (result-driven continuation). Another model round
+    would only poll again, so the Turn ends cleanly instead and the wake that
+    follows carries the Worker states (docs/PROJECT_COORDINATION.md "An idle
+    wait ends the Turn"). A round with any other call keeps its model round.
+    """
+    waits = task.pop('_coordinatorIdleWaits', None) or []
+    calls = (message or {}).get('tool_calls') or []
+    if not waits or len(waits) != len(calls) or any(
+            (call.get('function') or {}).get('name') not in _COORDINATOR_WAIT_TOOLS for call in calls):
+        return False
+    if not str(task.get('content') or '').strip():
+        task['content'] = IDLE_COORDINATOR_WAIT_TEXT
+    return _force_clean_finish(
+        task, rs, round_num=round_num, tid=tid, reason='coordinator_idle_wait',
+        detail='Every Worker wait of this round timed out with nothing new; the Workers\' settlement '
+               'resumes the Coordinator through its continuation.',
+        signature=f'polls={len(calls)}', detector='coordinator_wait', event_reason='coordinator_idle_wait')
+
+
 def _execute_stagnation_action(
     task: dict[str, Any], rs: Any, state: dict[str, Any],
     messages: list | None, *, action: tuple[str, str], round_num: int,

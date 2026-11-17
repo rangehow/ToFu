@@ -1,8 +1,8 @@
 """A Project Router's question reaches the owner through the Global Router; the forwarded answer ends its wait.
 
 Over a real storage authority (docs/ROUTER.md R1 "Asking the owner", R2, R3): a
-blocking ``ask_human`` of a Project Router relays one peer notice into the
-owner's running Global Router reply, naming the owner's 大象 command chat; the
+blocking ``ask_human`` of a Project Router goes straight to the owner's 大象 command
+chat and copies the owner's running Global Router reply with one peer notice; the
 owner's command-chat answer reaches the router as human input; and
 ``route_to_project`` forwards it verbatim through the real steer seam, where the
 verified forward ends the wait exactly like the owner typing in the project
@@ -156,8 +156,15 @@ def test_the_owners_forwarded_daxiang_answer_ends_the_project_routers_wait(waiti
         waiting.owner, waiting.target, waiting.project_turn, 'call-ask')
     assert notice['steerAuthor'] is None
     for fact in (waiting.project, waiting.target, waiting.project_turn, row['guidanceId'], 'blocking=true',
-                 ASK['question'], '- Weekend: Saturday 02:00', f'channel_send(thread="{COMMAND_CHAT}"'):
+                 ASK['question'], '- Weekend: Saturday 02:00', 'do not ask again', 'you are copied',
+                 COMMAND_CHAT):
         assert fact in notice['value'], fact
+    # Lead audit 2026-11-18 #5 (A6): the question itself is already in the owner's command chat.
+    from lib.channels.model import ThreadKey
+    from lib.channels.store import ChannelStore
+    [asked] = ChannelStore(waiting.owner).active_outbox(ThreadKey.parse(COMMAND_CHAT))
+    assert asked.origin['kind'] == 'project_question' and asked.origin['conversationId'] == waiting.target
+    assert ASK['question'] in asked.text and row['guidanceId'] in asked.text
 
     steer_id = _owner_answers_on_daxiang(waiting)
     forwarded = route_to_project(waiting.router_task, waiting.router_scope, {

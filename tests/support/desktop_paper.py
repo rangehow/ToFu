@@ -27,6 +27,15 @@ def desktop_paper_device(tmp_path, monkeypatch, request):
     monkeypatch.setenv('TOFU_DESKTOP_CONFIG', str(config))
     monkeypatch.setenv('TOFU_REMOTE_WORKTREE', '1')
     monkeypatch.setattr(_run, '_ensure_agent_id', lambda: 'device')
+    # The Home ceiling is default-deny (docs/modules/remote_execution.md,
+    # "Permissions"): the owner allows this device what its switch allows.
+    from lib.desktop import device_policy
+    from tests.channels.conftest import RecordClient
+    device_policy.invalidate()
+    monkeypatch.setattr(device_policy, '_default_client', RecordClient())
+    device_policy.set_ceiling(int(owner), 'device', {
+        'exec': True, 'write': bool(options.get('allow_write'))})
+    request.addfinalizer(device_policy.invalidate)
     from lib.desktop_agent import _paper, _project
     monkeypatch.setattr(_project, '_freshness', {})
     temporary = tmp_path / 'device-temporary'

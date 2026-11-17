@@ -187,8 +187,9 @@ export function paintPod(ctx: Ctx, atlas: Atlas, pod: Pod, seats: ReadonlyArray<
 export const CLUTTER_CHOICES = CLUTTER.length + 1;
 
 /** Furniture that is not part of a pod: the owner's office with its whiteboard and trophy shelf, each zone's
- * head desk, the Watchdog's station, the lounge, bar and entrance, and the plants and appliances. `alpha`
- * fades items that are appearing or leaving in a layout transition. */
+ * head desk, the Watchdog's station, the lounge, bar and entrance, and the plants and appliances placed by their
+ * anchor point (a sized piece of a commons is drawn with the commons, diorama.ts drawCommons). `alpha` fades items
+ * that are appearing or leaving in a layout transition. */
 export function drawFurniture(ctx: Ctx, atlas: Atlas, layout: OfficeLayout, routerZones: ReadonlySet<string>,
   zoneAlpha: (key: string) => number, decorAlpha: (key: string) => number, watchdogAlpha: number) {
   const { room, whiteboard, shelf } = layout.owner;
@@ -210,6 +211,7 @@ export function drawFurniture(ctx: Ctx, atlas: Atlas, layout: OfficeLayout, rout
   stamp(ctx, atlas, 'coffee-bar', layout.bar.x, layout.bar.y);
   stamp(ctx, atlas, 'entrance', layout.entrance.x, layout.entrance.y);
   layout.decor.forEach((item: DecorItem) => {
+    if (item.w !== undefined) return;
     ctx.globalAlpha = base * decorAlpha(item.key);
     const variant = (item.variant % 3) + 1;
     if (item.kind === 'plant') stamp(ctx, atlas, `plant-${variant}`, item.x, item.y);

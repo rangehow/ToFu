@@ -1867,7 +1867,8 @@ on `/dev/shm` with `benchmarks/agent_storage/faultfs.c`; both stores paid it
 (36-38 k injected barriers each). Cold-read and metadata latency of the real
 volume are not emulated.
 
-Reproduce (from a checkout; engine = the admitted production binary):
+Reproduce the 2026-11-15 session. This predates the tmpfs-root refusal; use
+the 2026-11-17 command below for new runs:
 
 ```sh
 cc -O2 -shared -fPIC -o /tmp/faultfs.so benchmarks/agent_storage/faultfs.c -ldl
@@ -1898,14 +1899,124 @@ TofuDB leg.
 At 1x/3x the optimized Sidecar matches TofuDB throughput, removes the
 ~60 ms p99 floor on every point read (the per-RPC connect), and stays within
 1.1-2x of TofuDB p50 on reads; TofuDB still wins writer-bound claims,
-completions and the settlement herd. **5x is not certified.** Sidecar A at
-5x: 6,954 events, 0 failures, event p99 218 ms; TofuDB strict 5x: 3,663
-events, 2 failures; the repeat Sidecar B 5x: 2,095 events, 1,351 failures
-with a 36 s writer stall. The host load average was 40-258 (other
-workloads) through those legs, and an interleaved before/after 5x repeat
-failed for both the old and the new Sidecar alike, so 5x differences in this
-session are host noise, not engine evidence. Raw reports:
-`/dev/shm/rj-sc/{lt-before,rec-sidecar-a,rec-tofudb,rec-sidecar-b}` (volatile).
+completions and the settlement herd. The 5x leg of that session (host load
+40-258) was inconclusive and is superseded by the record below.
+
+### Comparison of record at 1x/3x/5x (2026-11-17)
+
+Host: 180-CPU, 203 GB CodeLab, load average 2.8-8.6 through every leg
+(sampled every 5 s; per-leg min/median/max below). Medium: local XFS
+(`$TMPDIR`) plus `faultfs` injecting 0.77 ms per `fdatasync`; the harness
+now refuses tmpfs roots (`_refuse_memory_root`), so `/dev/shm` is no longer
+used. Sidecar = this source (WAL, `synchronous=FULL`); TofuDB = engine built
+from this source (`source_sha256` 5cb942c407fe, `--durability strict`,
+certified with `serverctl_pkg.native_engine --prepare-only`). Seed 0.2x
+(1,404 Turns, 229 MB), 90 s phases, fresh root per leg, legs ABAB:
+Sidecar r1, TofuDB r1, Sidecar r2, TofuDB r2. Values are p50/p99 ms; each
+cell is r1 · r2.
+
+| leg | load1 min/median/max | injected barriers |
+|---|---|---|
+| Sidecar r1 | 2.8 / 4.2 / 6.1 | 15,306 |
+| TofuDB r1 | 3.3 / 4.4 / 8.6 | 31,984 |
+| Sidecar r2 | 2.8 / 3.3 / 5.5 | 15,336 |
+| TofuDB r2 | 2.9 / 4.6 / 8.2 | 32,198 |
+
+| op | scale | Sidecar | TofuDB strict |
+|---|---|---|---|
+| turn.event.record | 1x | 2.39/90 · 2.31/102 | 2.00/48 · 1.97/46 |
+| | 3x | 2.42/109 · 2.40/53 | 2.02/74 · 2.03/65 |
+| | 5x | 2.68/108 · 2.70/156 | 2.08/112 · 2.08/108 |
+| turn.sync.changes | 1x | 0.57/2.3 · 0.58/1.9 | 0.36/1.3 · 0.34/1.3 |
+| | 3x | 0.62/24 · 0.59/2.9 | 0.36/2.3 · 0.35/1.8 |
+| | 5x | 0.64/10 · 0.65/5.6 | 0.38/2.3 · 0.38/2.2 |
+| record.get | 1x | 0.26/0.69 · 0.25/0.59 | 0.19/0.52 · 0.19/0.51 |
+| | 3x | 0.23/2.4 · 0.22/1.3 | 0.21/0.68 · 0.21/0.64 |
+| | 5x | 0.23/3.4 · 0.23/3.1 | 0.23/0.85 · 0.23/0.85 |
+| turn.get:metadata | 5x | 0.32/5.0 · 0.32/4.7 | 0.32/1.5 · 0.31/1.6 |
+| worker_job.heartbeat | 5x | 1.73/13 · 1.68/16 | 1.38/3.2 · 1.35/2.9 |
+| turn.create_pair | 1x | 27/35 · 27/57 | 18/23 · 19/22 |
+| | 5x | 74/118 · 69/124 | 71/83 · 69/81 |
+| worker_job.claim_next | 1x | 13/17 · 16/34 | 6.5/11 · 8.2/11 |
+| | 3x | 42/52 · 43/78 | 22/32 · 22/27 |
+| | 5x | 89/101 · 74/98 | 39/61 · 36/71 |
+| worker_job.complete | 1x | 31/134 · 15/122 | 16/20 · 16/19 |
+| | 3x | 75/213 · 70/561 | 59/64 · 59/63 |
+| | 5x | 279/482 · 104/865 | 105/109 · 104/109 |
+| conversation.list | 5x | 7.4/20 · 6.4/7.6 | 2.6/3.2 · 2.7/3.6 |
+| phase-stop settlement herd | 1x | 173/204 · 187/194 | 42/87 · 37/82 |
+| | 3x | 575/603 · 983/1,016 | 117/132 · 108/127 |
+| | 5x | 629/922 · 1,400/1,450 | 181/217 · 185/219 |
+| completed ops/s | 1x / 3x / 5x | 340/1,006/1,679 · 341/1,010/1,673 | 341/1,016/1,690 · 341/1,017/1,690 |
+| events (5x) | | 6,953 · 6,946 | 6,967 · 6,978 |
+| failed requests | every phase | 0 · 0 | 0 · 0 |
+| store CPU cores (5x) | | 0.43 · 0.93 | 0.41 · 0.42 |
+
+Verdict:
+
+- **Throughput: tie at every scale.** Both stores keep up with the offered
+  load through 5x (1,670-1,690 completed ops/s, 109 Turns) with zero
+  failures; neither saturates on this host.
+- **Point reads (`record.get`, `turn.get:metadata`): tie at p50; TofuDB
+  wins p99** (0.85 vs 3.1-3.4 ms at 5x). `turn.sync.changes` p50 is
+  0.38 vs 0.65 ms.
+- **Streamed events: TofuDB is ~20% faster at p50** (2.1 vs 2.7 ms at 5x);
+  the p99 is the same, 108-156 ms in both.
+- **Writer-bound steps: TofuDB wins clearly.** `claim_next` p50 is about
+  half, `complete` p99 109 vs 482-865 ms, and the end-of-phase settlement
+  herd takes 181-219 ms vs 629-1,450 ms. `create_pair` ties at p50, and
+  TofuDB's p99 is lower.
+- **The Sidecar wins no operation.** Its closest result is parity on
+  point-read p50, `create_pair` p50 and throughput. TofuDB does this while
+  paying 2.1x the durable barriers (about 32 k vs about 15.3 k injected).
+  The emulated medium charges only barrier latency, not cold reads or
+  metadata, so the real volume's read costs are not covered.
+
+**The failed 2026-11-15 5x Sidecar run ("B": 1,351 failures, 36 s writer
+stall) was host CPU starvation, not a Sidecar defect.** Its raw reports were
+on a volatile `/dev/shm` of the previous host and are gone. What survives is
+its summary (event p50 34 ms / p99 8.2 s, `sync.changes` p99 719 ms) and the
+same session's four interleaved 5x repeats. All four failed with
+`StorageError: Storage request timed out`, the pre-change Sidecar
+(`/tmp/sc-before`) and the final one alike, at load averages 95-258 with 1-3
+writer stalls each. Evidence:
+
+1. The same Sidecar source passes 5x with 0 failures in four fresh-root
+   legs on this host: r1/r2 above, and two earlier legs at load
+   8-123 (6,932 and 6,958 events).
+2. Controlled starvation reproduces the signature. The Sidecar 5x leg plus
+   32 busy loops, all pinned with `taskset` to 8 CPUs: event p50/p99
+   175 ms / 10.2 s, `sync.changes` 45 ms / 9.9 s, `record.get` 23 ms / 3.4 s,
+   6,139 events. With 96 loops on the same CPUs: 2 `worker_job.complete`
+   `database_timeout` failures after 26 s (plus 2 retried query timeouts).
+3. Throughout both starved runs, the writer's own commit latency stayed
+   normal: p50 33 ms, max 364-424 ms, 0 `stall_interrupts`. The time is lost
+   to request and agent threads waiting for a CPU, not to SQLite, the WAL or
+   the writer queue.
+4. The failure is independent of this change: the pre-change Sidecar failed
+   the same way on the same overloaded host.
+
+Not reproduced: run B's specific 36 s writer-watchdog stall. The starved
+runs here never crossed the 15 s stall grace. No Sidecar code change
+follows from this diagnosis.
+
+Reproduce the record. Run it from a checkout, with `$TOFUDB_BIN` built from
+that checkout's engine source and certified as above. The root must be on
+disk:
+
+```sh
+cc -O2 -shared -fPIC -o $TMPDIR/faultfs.so benchmarks/agent_storage/faultfs.c -ldl
+for b in "--backend sqlite" "--backend tofudb --engine $TOFUDB_BIN --durability strict" \
+         "--backend sqlite" "--backend tofudb --engine $TOFUDB_BIN --durability strict"; do
+  R=$(mktemp -d); LD_PRELOAD=$TMPDIR/faultfs.so FAULTFS_ROOT=$R FAULTFS_FSYNC_US=770 \
+    FAULTFS_STATS=$R/faultfs.stats .venv/bin/python3 scripts/tofudb_load_test.py --root $R $b \
+    --seed-scale 0.2 --scales 1,3,5 --duration 90 --run-id rec
+done
+```
+
+The starvation reproduction runs the same Sidecar command with `--scales 5`
+under `taskset -c <8 CPUs>`, with N `sh -c 'while :; do :; done'` loops
+pinned to the same CPUs.
 
 ## TofuDB hot paths on the production DolphinFS client (2026-11-15)
 

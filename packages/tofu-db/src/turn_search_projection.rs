@@ -43,8 +43,15 @@ const TURN_TEXT_NAMESPACE: &str = "search_turn_text_v1";
 // One state row per indexed item of a scope: the source revision it was read
 // at and the rows it wrote. Pending and running Turns have none.
 const ITEM_NAMESPACE: &str = "search_items_v1";
+// The entries of an item record too large for one entity value (a long
+// compaction archive names one entry per archived message), in pages that
+// each fit the engine's inline value bound; the state row counts them.
+const ITEM_ENTRIES_NAMESPACE: &str = "search_item_entries_v1";
 const ITEM_TURN: u8 = 0;
 const ITEM_ARCHIVE: u8 = 1;
+// Item state flag: the entries live in ITEM_ENTRIES_NAMESPACE pages.
+const ITEM_FLAG_PAGED: u8 = 4;
+const MAX_ITEM_ROW_BYTES: usize = crate::generated_tofudb_ir::MAX_ENTITY_INLINE_VALUE_BYTES;
 const ITEM_SCAN_BATCH: usize = crate::generated_tofudb_ir::MAX_ENTITY_RANGE_ROWS;
 // Per-owner, beside the format marker: the newest source backfill generation
 // observed. Every backfill keeps its rebuild contract: a scope built before
@@ -433,6 +440,20 @@ fn item_key(
     key(transaction, ITEM_NAMESPACE, &raw)
 }
 
+fn item_entries_key(
+    transaction: &AuthorityTransaction,
+    conversation_id: &str,
+    scope: &str,
+    item: &ScopeItemKey,
+    page: u32,
+) -> io::Result<EntityKey> {
+    let mut raw = scope_prefix(conversation_id, scope);
+    raw.push(item.kind);
+    raw.extend_from_slice(&item_digest(&item.id));
+    raw.extend_from_slice(&page.to_be_bytes());
+    key(transaction, ITEM_ENTRIES_NAMESPACE, &raw)
+}
+
 fn push_string(output: &mut Vec<u8>, value: &str) -> io::Result<()> {
     let length =
         u16::try_from(value.len()).map_err(|_| invalid_input("search identity too long"))?;
@@ -646,21 +667,102 @@ impl ItemState {
     }
 }
 
-fn encode_item(state: &ItemState) -> io::Result<Vec<u8>> {
+/// The stored rows of one item record: its state row and, when the entries
+/// do not fit beside it in one entity value, their pages.
+#[derive(Debug, Eq, PartialEq)]
+struct ItemRows {
+    state: Vec<u8>,
+    pages: Vec<Vec<u8>>,
+}
+
+fn encode_item_entry(output: &mut Vec<u8>, entry: &ItemEntry) -> io::Result<()> {
+    output.extend_from_slice(&entry.ordinal.to_be_bytes());
+    push_string(output, &entry.turn_id)?;
+    output.extend_from_slice(&entry.documents.to_be_bytes());
+    Ok(())
+}
+
+/// A record whose entries fit its state row keeps them inline (the format
+/// every record had before paging). A larger one moves them into pages packed
+/// in order up to the entity value bound; one entry always fits a page
+/// (MAX_ID_BYTES). Entries only ever grow, so a record never returns inline,
+/// earlier pages keep their bytes and the rows' total size never shrinks.
+fn encode_item(state: &ItemState) -> io::Result<ItemRows> {
     let flags = u8::from(state.oversized) | u8::from(state.complete) << 1;
-    let mut output = vec![FORMAT_VERSION, state.item.kind, flags];
-    output.extend_from_slice(&state.revision.to_be_bytes());
-    output.extend_from_slice(&state.charged_bytes.to_be_bytes());
-    push_string(&mut output, &state.item.id)?;
+    let mut head = vec![FORMAT_VERSION, state.item.kind, flags];
+    head.extend_from_slice(&state.revision.to_be_bytes());
+    head.extend_from_slice(&state.charged_bytes.to_be_bytes());
+    push_string(&mut head, &state.item.id)?;
     let entries = u32::try_from(state.entries.len())
         .map_err(|_| invalid_input("search item has too many entries"))?;
-    output.extend_from_slice(&entries.to_be_bytes());
+    head.extend_from_slice(&entries.to_be_bytes());
+    let mut inline = head.clone();
     for entry in &state.entries {
-        output.extend_from_slice(&entry.ordinal.to_be_bytes());
-        push_string(&mut output, &entry.turn_id)?;
-        output.extend_from_slice(&entry.documents.to_be_bytes());
+        encode_item_entry(&mut inline, entry)?;
     }
-    Ok(output)
+    if inline.len() <= MAX_ITEM_ROW_BYTES {
+        return Ok(ItemRows {
+            state: inline,
+            pages: Vec::new(),
+        });
+    }
+    let mut pages = Vec::new();
+    let mut page = vec![FORMAT_VERSION];
+    let mut encoded = Vec::new();
+    for entry in &state.entries {
+        encoded.clear();
+        encode_item_entry(&mut encoded, entry)?;
+        if page.len() + encoded.len() > MAX_ITEM_ROW_BYTES {
+            pages.push(std::mem::replace(&mut page, vec![FORMAT_VERSION]));
+        }
+        page.extend_from_slice(&encoded);
+    }
+    pages.push(page);
+    head[2] |= ITEM_FLAG_PAGED;
+    let page_count =
+        u32::try_from(pages.len()).map_err(|_| invalid_input("search item has too many pages"))?;
+    head.extend_from_slice(&page_count.to_be_bytes());
+    Ok(ItemRows { state: head, pages })
+}
+
+/// Logical bytes of an item record's rows (keys and values), as charged.
+fn item_rows_bytes(
+    transaction: &AuthorityTransaction,
+    conversation_id: &str,
+    scope: &str,
+    item: &ScopeItemKey,
+    rows: &ItemRows,
+) -> io::Result<u64> {
+    let mut bytes = item_key(transaction, conversation_id, scope, item)?
+        .key_bytes()
+        .len()
+        + rows.state.len();
+    if !rows.pages.is_empty() {
+        let page_key = item_entries_key(transaction, conversation_id, scope, item, 0)?;
+        for page in &rows.pages {
+            bytes += page_key.key_bytes().len() + page.len();
+        }
+    }
+    Ok(bytes as u64)
+}
+
+fn decode_item_entry(input: &mut &[u8]) -> io::Result<ItemEntry> {
+    let ordinal = take_u64(input)?;
+    let turn_id = read_string(input)?;
+    let documents = take_u32(input)?;
+    Ok(ItemEntry {
+        ordinal,
+        turn_id,
+        documents,
+    })
+}
+
+/// A decoded state row. A paged record's `state.entries` is empty until its
+/// `pages` entry pages, holding `entries` entries, are read (`load_item`).
+struct StoredItem {
+    state: ItemState,
+    pages: u32,
+    entries: u32,
 }
 
 fn take_u32(input: &mut &[u8]) -> io::Result<u32> {
@@ -672,16 +774,17 @@ fn take_u32(input: &mut &[u8]) -> io::Result<u32> {
     Ok(value)
 }
 
-fn decode_item(mut input: &[u8]) -> io::Result<ItemState> {
+fn decode_item(mut input: &[u8]) -> io::Result<StoredItem> {
     if input.len() < 3 || input[0] != FORMAT_VERSION {
         return Err(invalid_data("search item state version is unsupported"));
     }
     let kind = input[1];
-    if input[2] > 3 {
+    if input[2] > 3 | ITEM_FLAG_PAGED {
         return Err(invalid_data("search item flags are malformed"));
     }
     let oversized = input[2] & 1 != 0;
     let complete = input[2] & 2 != 0;
+    let paged = input[2] & ITEM_FLAG_PAGED != 0;
     if !matches!(kind, ITEM_TURN | ITEM_ARCHIVE) {
         return Err(invalid_data("search item kind is malformed"));
     }
@@ -691,25 +794,44 @@ fn decode_item(mut input: &[u8]) -> io::Result<ItemState> {
     let id = read_string(&mut input)?;
     let count = take_u32(&mut input)?;
     let mut entries = Vec::new();
-    for _ in 0..count {
-        let ordinal = take_u64(&mut input)?;
-        let turn_id = read_string(&mut input)?;
-        let documents = take_u32(&mut input)?;
-        entries.push(ItemEntry {
-            ordinal,
-            turn_id,
-            documents,
-        });
-    }
+    let pages = if paged {
+        let pages = take_u32(&mut input)?;
+        if pages == 0 {
+            return Err(invalid_data("search item entry pages are malformed"));
+        }
+        pages
+    } else {
+        for _ in 0..count {
+            entries.push(decode_item_entry(&mut input)?);
+        }
+        0
+    };
     finish_decode(input)?;
-    Ok(ItemState {
-        item: ScopeItemKey { kind, id },
-        revision,
-        oversized,
-        complete,
-        charged_bytes,
-        entries,
+    Ok(StoredItem {
+        state: ItemState {
+            item: ScopeItemKey { kind, id },
+            revision,
+            oversized,
+            complete,
+            charged_bytes,
+            entries,
+        },
+        pages,
+        entries: count,
     })
+}
+
+fn decode_item_entries(mut input: &[u8], entries: &mut Vec<ItemEntry>) -> io::Result<()> {
+    if input.first().copied() != Some(FORMAT_VERSION) {
+        return Err(invalid_data(
+            "search item entry page version is unsupported",
+        ));
+    }
+    input = &input[1..];
+    while !input.is_empty() {
+        entries.push(decode_item_entry(&mut input)?);
+    }
+    Ok(())
 }
 
 fn encode_meta(meta: &TurnMeta) -> io::Result<Vec<u8>> {
@@ -1314,6 +1436,7 @@ impl OpenTurnSearchProjection {
             TURN_META_NAMESPACE,
             TURN_TEXT_NAMESPACE,
             ITEM_NAMESPACE,
+            ITEM_ENTRIES_NAMESPACE,
             USAGE_NAMESPACE,
             GRAM_NAMESPACE,
             GRAM_EXCLUSION_NAMESPACE,
@@ -1675,11 +1798,57 @@ impl OpenTurnSearchProjection {
         let Some(raw) = self.database.entity_get(transaction, &stored_key)? else {
             return Ok(None);
         };
-        let state = decode_item(&raw)?;
+        let StoredItem {
+            mut state,
+            pages,
+            entries,
+        } = decode_item(&raw)?;
         if &state.item != item {
             return Err(invalid_data("search item digest collision"));
         }
+        for page in 0..pages {
+            let page_key = item_entries_key(
+                transaction,
+                &header.conversation_id,
+                &header.scope,
+                item,
+                page,
+            )?;
+            let raw = self
+                .database
+                .entity_get(transaction, &page_key)?
+                .ok_or_else(|| invalid_data("search item entry page is missing"))?;
+            decode_item_entries(&raw, &mut state.entries)?;
+        }
+        if state.entries.len() != entries as usize {
+            return Err(invalid_data("search item entry count is malformed"));
+        }
         Ok(Some(state))
+    }
+
+    /// Store an item record's state row and entry pages. Pages only grow in
+    /// number (`encode_item`), so no earlier page is left behind.
+    fn store_item(
+        &self,
+        transaction: &mut AuthorityTransaction,
+        header: &Header,
+        rows: ItemRows,
+        item: &ScopeItemKey,
+    ) -> io::Result<()> {
+        let stored_key = item_key(transaction, &header.conversation_id, &header.scope, item)?;
+        self.database
+            .entity_put(transaction, stored_key, rows.state)?;
+        for (page, value) in rows.pages.into_iter().enumerate() {
+            let page_key = item_entries_key(
+                transaction,
+                &header.conversation_id,
+                &header.scope,
+                item,
+                page as u32,
+            )?;
+            self.database.entity_put(transaction, page_key, value)?;
+        }
+        Ok(())
     }
 
     /// The items a scope must retract and the source items it must read so
@@ -1719,7 +1888,7 @@ impl OpenTurnSearchProjection {
                     self.database
                         .entity_scan(&mut transaction, &start, &end, ITEM_SCAN_BATCH)?;
                 for (_, raw) in &rows {
-                    let state = decode_item(raw)?;
+                    let state = decode_item(raw)?.state;
                     let current = !rebuild
                         && state.complete
                         && match state.item.kind {
@@ -1858,12 +2027,16 @@ impl OpenTurnSearchProjection {
         emission: &mut GramEmission,
     ) -> io::Result<()> {
         validate_identity(&item.key.id, "invalid search item ID", MAX_ID_BYTES)?;
-        let stored_key = item_key(
-            transaction,
-            &header.conversation_id,
-            &header.scope,
-            item.key,
-        )?;
+        let (conversation_id, scope) = (header.conversation_id.clone(), header.scope.clone());
+        let record_bytes = |transaction: &AuthorityTransaction, state: &ItemState| {
+            item_rows_bytes(
+                transaction,
+                &conversation_id,
+                &scope,
+                item.key,
+                &encode_item(state)?,
+            )
+        };
         let mut state = match self.load_item(transaction, header, item.key)? {
             Some(state) if !state.complete && state.revision == item.revision => state,
             Some(_) => return Err(invalid_input("search scope item is already recorded")),
@@ -1877,13 +2050,13 @@ impl OpenTurnSearchProjection {
             },
         };
         let previous_charge = state.charged_bytes;
-        // The charge covers the item's rows and its own state row; the state
-        // row only grows, and its fixed-width charge field never changes size.
+        // The charge covers the item's rows and its own record rows; the
+        // record only grows, and its fixed-width charge field never changes
+        // size.
         let previous_rows = if previous_charge == 0 {
             0
         } else {
-            let previous_state_bytes =
-                (stored_key.key_bytes().len() + encode_item(&state)?.len()) as u64;
+            let previous_state_bytes = record_bytes(transaction, &state)?;
             previous_charge
                 .checked_sub(previous_state_bytes)
                 .ok_or_else(|| invalid_data("search item charge is malformed"))?
@@ -1931,8 +2104,7 @@ impl OpenTurnSearchProjection {
                     }
                 }
                 state.complete = *last;
-                let state_bytes =
-                    (stored_key.key_bytes().len() + encode_item(&state)?.len()) as u64;
+                let state_bytes = record_bytes(transaction, &state)?;
                 let state_growth = state_bytes
                     .checked_sub(previous_charge.saturating_sub(previous_rows))
                     .ok_or_else(|| invalid_data("search item state shrank"))?;
@@ -1965,7 +2137,7 @@ impl OpenTurnSearchProjection {
                 }
             }
         }
-        let state_bytes = (stored_key.key_bytes().len() + encode_item(&state)?.len()) as u64;
+        let state_bytes = record_bytes(transaction, &state)?;
         state.charged_bytes = previous_rows
             .checked_add(row_bytes)
             .and_then(|n| n.checked_add(state_bytes))
@@ -1974,8 +2146,7 @@ impl OpenTurnSearchProjection {
             .charged_bytes
             .checked_sub(previous_charge)
             .ok_or_else(|| invalid_data("search item charge shrank"))?;
-        self.database
-            .entity_put(transaction, stored_key, encode_item(&state)?)?;
+        self.store_item(transaction, header, encode_item(&state)?, item.key)?;
         header.item_bytes = header
             .item_bytes
             .checked_add(delta)
@@ -2224,6 +2395,16 @@ impl OpenTurnSearchProjection {
             check_search_stop(&self.stop)?;
             let stored_key = item_key(&transaction, conversation_id, &header.scope, &state.item)?;
             self.database.entity_delete(&mut transaction, stored_key)?;
+            for page in 0..encode_item(state)?.pages.len() {
+                let page_key = item_entries_key(
+                    &transaction,
+                    conversation_id,
+                    &header.scope,
+                    &state.item,
+                    page as u32,
+                )?;
+                self.database.entity_delete(&mut transaction, page_key)?;
+            }
             header.chunk_count = header
                 .chunk_count
                 .checked_sub(state.documents())
@@ -2506,7 +2687,12 @@ impl OpenTurnSearchProjection {
         usage = usage
             .checked_add_signed(gram_delta)
             .ok_or_else(|| invalid_data("search gram posting usage underflow"))?;
-        for namespace in [TURN_META_NAMESPACE, TURN_TEXT_NAMESPACE, ITEM_NAMESPACE] {
+        for namespace in [
+            TURN_META_NAMESPACE,
+            TURN_TEXT_NAMESPACE,
+            ITEM_NAMESPACE,
+            ITEM_ENTRIES_NAMESPACE,
+        ] {
             let (start, end) =
                 scope_range(&transaction, namespace, conversation_id, &header.scope)?;
             self.database
@@ -3900,6 +4086,85 @@ mod tests {
             read_usage(&projection.database, &mut transaction).unwrap()
         };
         assert_eq!(usage(&projection), usage(&fresh));
+    }
+
+    #[test]
+    fn an_item_record_past_one_entity_value_pages_its_entries_and_retracts_exactly() {
+        let directory = tempdir().unwrap();
+        let mut projection =
+            OpenTurnSearchProjection::initialize(directory.path(), BUDGET).unwrap();
+        let usage = |projection: &OpenTurnSearchProjection| {
+            let mut transaction = projection.database.begin(7, 11).unwrap();
+            read_usage(&projection.database, &mut transaction).unwrap()
+        };
+        projection
+            .publish_scope(7, 11, "conversation", 1, "")
+            .unwrap();
+        let empty = usage(&projection);
+        // One archive item with one ~100-byte chunk identity per message,
+        // written SOURCE_PAGE_ROWS documents per transaction: its record
+        // crosses the inline bound part-way and keeps growing as pages.
+        let key = ScopeItemKey::archive("archive");
+        let documents: Vec<_> = (0..200u64)
+            .map(|index| {
+                document(
+                    &format!("history:[\"archive\",{index}]{}", "x".repeat(80)),
+                    index,
+                    &format!("pagedneedle{index:03}"),
+                )
+            })
+            .collect();
+        let pages: Vec<_> = documents.chunks(SOURCE_PAGE_ROWS).collect();
+        for (index, page) in pages.iter().enumerate() {
+            projection
+                .index_scope_items(
+                    7,
+                    11,
+                    "conversation",
+                    "",
+                    &[ScopeItem {
+                        key: &key,
+                        revision: 0,
+                        content: ScopeItemContent::Documents {
+                            documents: page,
+                            last: index + 1 == pages.len(),
+                        },
+                    }],
+                )
+                .unwrap();
+        }
+        let mut transaction = projection.database.begin(7, 11).unwrap();
+        let header = projection
+            .current_scope(&mut transaction, "conversation")
+            .unwrap()
+            .unwrap()
+            .0;
+        let state = projection
+            .load_item(&mut transaction, &header, &key)
+            .unwrap()
+            .unwrap();
+        drop(transaction);
+        assert!(state.complete);
+        assert_eq!(state.entries.len(), 200);
+        assert!(encode_item(&state).unwrap().pages.len() > 1);
+        assert_eq!(
+            projection
+                .search(&request(11, "pagedneedle199"))
+                .unwrap()
+                .len(),
+            1
+        );
+        projection
+            .retract_scope_items(7, 11, "conversation", &[key], "", false)
+            .unwrap();
+        assert_eq!(usage(&projection), empty);
+        let mut transaction = projection.database.begin(7, 11).unwrap();
+        let (start, end) = EntityKey::prefix_range(7, 11, ITEM_ENTRIES_NAMESPACE, b"").unwrap();
+        assert!(projection
+            .database
+            .entity_scan(&mut transaction, &start, &end, 16)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

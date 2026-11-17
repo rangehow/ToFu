@@ -1569,6 +1569,22 @@ Decision (projection format 7, designed with the engine owner as R5-SP):
 - Counters in `maintenance`: `searchRetractedItems` and
   `searchRetractedLogicalBytes` (logical owner-budget bytes); a pure header
   re-key is not counted in `searchRebuiltConversations`.
+- An item record whose entries do not fit beside its state row in one entity
+  value (`MAX_ENTITY_INLINE_VALUE_BYTES`, 8 KiB) keeps them in entry pages
+  (`search_item_entries_v1`; state-row flag `4` plus the page count). A
+  compaction archive names one entry per archived message, so a
+  ~470-message archive's inline record was refused with `entity value
+  exceeds 8 KiB; use a blob reference`. Pages are packed in entry order, so a
+  growing record only appends; charges cover every page and retraction
+  deletes them by key. Records that fit stay inline and byte-identical, so no
+  format bump or projection rebuild is needed; an older engine refuses a
+  paged record as malformed.
+- A conversation the projection refuses with `InvalidInput` (a value or
+  identity past a bound) is permanent: the worker logs one
+  `search_permanent_failure` line naming it, acknowledges its dirty tokens and
+  continues the batch; a later change to the conversation schedules it again.
+  Previously the refusal failed the owner's whole round and `search_retry`
+  retried it forever, starving every conversation listed after it.
 
 Alternatives rejected: a per-conversation live entry for the running Turn
 (running Turns are not searchable under this contract, so streaming events

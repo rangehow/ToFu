@@ -586,7 +586,7 @@
     "progressHistoryPage": {
       "type": "object",
       "additionalProperties": false,
-      "description": "One page of every task the current binding's board ever showed, ordered by group (progressHistoryGroup order), then newest activity first. counts cover every task matching the query, per group. Pages hold at most 64 tasks, the coordination API's page bound (conversationPage). recorded is false while the board predates task history and the Coordinator has not changed it since: the page then holds only the current board.",
+      "description": "One page of every task the current binding's board ever showed, ordered by group (progressHistoryGroup order), then newest activity first. counts cover every task matching the query, per group. Pages hold at most 64 tasks, the coordination API's page bound (conversationPage). recorded is false while the board predates task history and the Coordinator has not changed it since: the page then holds only the current board. translation is the current board's display translation (progressState.translation): it covers the texts of tasks on the board, whose rows show that board's text.",
       "required": ["projectPath", "conversationId", "bindingRevision", "recorded", "counts", "tasks", "nextCursor", "coverage"],
       "properties": {
         "projectPath": {"type": "string", "minLength": 1, "maxLength": 4096},
@@ -607,7 +607,8 @@
         },
         "tasks": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/progressHistoryTask"}},
         "nextCursor": {"anyOf": [{"type": "string", "maxLength": 1024}, {"type": "null"}]},
-        "coverage": {"enum": ["page", "complete"]}
+        "coverage": {"enum": ["page", "complete"]},
+        "translation": {"$ref": "#/$defs/progressTranslation"}
       }
     },
     "progressState": {

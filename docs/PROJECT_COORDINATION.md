@@ -1249,7 +1249,12 @@ sessions and tells the human what matters.
   A republished board keeps the translations of texts it still shows; a dropped
   job (restart, refused admission, translator failure) leaves the board as
   written until the next publish. The card shows covered texts translated,
-  with the shared "Original" toggle back to the board as written. Alternatives
+  with the shared "Original" toggle back to the board as written. The task
+  history page carries the same translation, so a task still on the board
+  reads as on the card (its original text stays in the row's tooltip) and
+  history search also matches it; a task that left the board shows its text
+  as written, because the head keeps only the texts its board still shows.
+  Alternatives
   rejected: having the Coordinator write in the reading language (the board
   would leave its working language and turning translation off could not
   restore it); translating in the browser or on the GET read (rendering and

@@ -2,6 +2,8 @@
 
 import pytest
 
+from tests.support.paper_report import complete_report_body
+
 from lib.paper.report_engine._body import join_report_continuation
 
 
@@ -44,7 +46,8 @@ def test_length_partial_is_continued_and_published_whole(report_case):
     run, _, _ = report_case
     seen = []
     first = '# Report\n\n## ⚡ TL;DR\nThe method wor'
-    rest = 'ks well.\n\n## 📝 Technical Reference\nThe end.\n'
+    # The rest carries every required section, so no section repair is due.
+    rest = 'ks well.\n\n' + complete_report_body()
     dispatch, calls = _scripted([(first, 'length', []), (rest, 'stop', [])], seen)
 
     task, published = run(dispatch)

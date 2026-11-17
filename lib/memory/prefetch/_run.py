@@ -43,6 +43,7 @@ def _metadata(memory: dict) -> str:
     return ' '.join([
         str(memory.get('name') or ''),
         str(memory.get('description') or ''),
+        str(memory.get('trigger') or ''),
         ' '.join(str(tag) for tag in tags),
     ]).strip()
 

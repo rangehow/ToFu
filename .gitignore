@@ -233,6 +233,7 @@ __pycache__/
 !/scripts/prepare_project_folder.py
 !/scripts/generated_rust.py
 !/scripts/migrate_host.py
+!/scripts/backfill_memory_triggers.py
 !/scripts/verify_checkout_view.py
 !/scripts/benchmark_verification.py
 !/scripts/verify.py

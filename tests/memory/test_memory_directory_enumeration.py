@@ -312,7 +312,7 @@ def test_retrieval_view_bounds_1365_record_residency(
 
     assert len(retrieval) == 1_365
     assert set(retrieval[0]) == {
-        'id', 'name', 'description', 'enabled', 'tags', 'scope',
+        'id', 'name', 'description', 'trigger', 'enabled', 'tags', 'scope',
         'filepath', 'is_package', 'package_dir', 'eligible',
     }
     assert current_bytes < 1_000_000

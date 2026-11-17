@@ -17,6 +17,8 @@ from lib.error_envelope import BadRequest
 
 MEMORY_NAME_MAX_CHARS = 160
 MEMORY_DESCRIPTION_MAX_CHARS = 512
+# A trigger is a search line like the description, so it shares its limit.
+MEMORY_TRIGGER_MAX_CHARS = MEMORY_DESCRIPTION_MAX_CHARS
 MEMORY_BODY_MAX_CHARS = 32_768
 MEMORY_FRONTMATTER_READ_MAX_CHARS = 65_536
 MEMORY_TAG_MAX_ITEMS = 32
@@ -232,6 +234,12 @@ def normalize_memory_payload(
     )
 
 
+def normalize_memory_trigger(trigger: Any) -> str:
+    """A lesson's trigger: one bounded line naming the situation it applies in."""
+    return _bounded_text(trigger, field='trigger', max_chars=MEMORY_TRIGGER_MAX_CHARS,
+                         single_line=True).strip()
+
+
 def normalize_memory_updates(updates: Any) -> dict[str, Any]:
     """Validate fields a caller explicitly replaces; ignore legacy extras."""
     if not isinstance(updates, Mapping):
@@ -249,6 +257,8 @@ def normalize_memory_updates(updates: Any) -> dict[str, Any]:
                 allow_blank=allow_blank, single_line=single_line)
     if 'tags' in normalized:
         normalized['tags'] = normalize_memory_tags(normalized['tags'])
+    if 'trigger' in normalized:
+        normalized['trigger'] = normalize_memory_trigger(normalized['trigger'])
     for field in ('requires_bins', 'requires_env'):
         if field in normalized:
             normalized[field] = normalize_memory_tags(
@@ -387,6 +397,7 @@ __all__ = [
     'MEMORY_SUPERSEDED_BY_SHAPES',
     'MEMORY_TAG_MAX_CHARS',
     'MEMORY_TAG_MAX_ITEMS',
+    'MEMORY_TRIGGER_MAX_CHARS',
     'MEMORY_TRUST_CLASSES',
     'context_item_source_class',
     'context_item_trust_class',
@@ -400,6 +411,7 @@ __all__ = [
     'normalize_memory_payload',
     'normalize_memory_search',
     'normalize_memory_tags',
+    'normalize_memory_trigger',
     'normalize_memory_updates',
     'normalize_merge_memory_ids',
     'normalize_superseded_by',

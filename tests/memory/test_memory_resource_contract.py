@@ -17,6 +17,7 @@ import pytest
 from lib.memory.contracts import (
     MEMORY_BODY_MAX_CHARS,
     MEMORY_DESCRIPTION_MAX_CHARS,
+    MEMORY_TRIGGER_MAX_CHARS,
     MEMORY_GENERATED_ID_MAX_BYTES,
     MEMORY_ID_MAX_CHARS,
     MEMORY_MERGE_MAX_ITEMS,
@@ -251,6 +252,7 @@ def test_wire_schemas_share_limits_and_reject_costly_shapes():
     create = schemas['create_memory']['properties']
     assert create['name']['maxLength'] == MEMORY_NAME_MAX_CHARS
     assert create['description']['maxLength'] == MEMORY_DESCRIPTION_MAX_CHARS
+    assert create['trigger']['maxLength'] == MEMORY_TRIGGER_MAX_CHARS
     assert create['body']['maxLength'] == MEMORY_BODY_MAX_CHARS
     assert create['tags']['maxItems'] == MEMORY_TAG_MAX_ITEMS
     assert create['tags']['items']['maxLength'] == MEMORY_TAG_MAX_CHARS
@@ -272,16 +274,19 @@ def test_wire_schemas_share_limits_and_reject_costly_shapes():
 
     create_validator = Draft7Validator(schemas['create_memory'])
     assert create_validator.is_valid({
+        'name': 'lesson', 'description': 'dense trigger', 'trigger': 'situation',
+        'body': 'evidence'})
+    assert not create_validator.is_valid({
         'name': 'lesson', 'description': 'dense trigger', 'body': 'evidence'})
     assert not create_validator.is_valid({
-        'name': 'lesson', 'description': '', 'body': 'evidence'})
+        'name': 'lesson', 'description': '', 'trigger': 'situation', 'body': 'evidence'})
     assert not create_validator.is_valid({
-        'name': 'lesson', 'description': 'dense trigger', 'body': 'evidence',
-        'unknown': True})
+        'name': 'lesson', 'description': 'dense trigger', 'trigger': 'situation',
+        'body': 'evidence', 'unknown': True})
     merge_validator = Draft7Validator(schemas['merge_memories'])
     assert not merge_validator.is_valid({
         'memory_ids': ['same', 'same'], 'name': 'merged',
-        'description': 'dense trigger', 'body': 'evidence'})
+        'description': 'dense trigger', 'trigger': 'situation', 'body': 'evidence'})
 
 
 def test_memory_family_is_provider_stable_and_keeps_guidance():

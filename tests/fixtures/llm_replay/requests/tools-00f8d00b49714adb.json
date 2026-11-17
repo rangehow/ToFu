@@ -1662,10 +1662,17 @@
       "maxItems": 32,
       "type": "array",
       "uniqueItems": true
+     },
+     "trigger": {
+      "description": "The situation in which this lesson applies, as it looks before the fix is known: the kind of request or work, files/commands/tools involved, and the symptom or exact error text. Not the cause or fix.",
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string"
      }
     },
     "required": [
      "description",
+     "trigger",
      "name",
      "body"
     ],
@@ -1676,7 +1683,7 @@
  },
  {
   "function": {
-   "description": "Correct or extend an existing memory. A new name, description or body is saved as a new version that supersedes this one (the old stays as history; the result names the new id); tags change in place. When you verified a lesson is wrong or replaced, set status=disproved or superseded with status_reason and superseded_by instead of deleting it. verdict alone records what your run showed about a lesson; it settles when a reviewer accepts your result.",
+   "description": "Correct or extend an existing memory. A new name, description, trigger or body is saved as a new version that supersedes this one (the old stays as history; the result names the new id); tags change in place. When you verified a lesson is wrong or replaced, set status=disproved or superseded with status_reason and superseded_by instead of deleting it. verdict alone records what your run showed about a lesson; it settles when a reviewer accepts your result.",
    "name": "update_memory",
    "parameters": {
     "additionalProperties": false,
@@ -1765,6 +1772,12 @@
       "maxItems": 32,
       "type": "array",
       "uniqueItems": true
+     },
+     "trigger": {
+      "description": "New trigger: The situation in which this lesson applies, as it looks before the fix is known: the kind of request or work, files/commands/tools involved, and the symptom or exact error text. Not the cause or fix.",
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string"
      },
      "verdict": {
       "additionalProperties": false,
@@ -1875,11 +1888,18 @@
       "maxItems": 32,
       "type": "array",
       "uniqueItems": true
+     },
+     "trigger": {
+      "description": "The situation in which this lesson applies, as it looks before the fix is known: the kind of request or work, files/commands/tools involved, and the symptom or exact error text. Not the cause or fix.",
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string"
      }
     },
     "required": [
      "memory_ids",
      "description",
+     "trigger",
      "name",
      "body"
     ],

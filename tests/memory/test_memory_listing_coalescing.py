@@ -225,7 +225,7 @@ def test_listings_with_different_inputs_never_share_or_wait(
 
     assert [row['id'] for row in blocked_outcome['value']] == ['primary-note']
     assert set(blocked_outcome['value'][0]) == {
-        'id', 'name', 'description', 'enabled', 'tags', 'scope', 'filepath',
+        'id', 'name', 'description', 'trigger', 'enabled', 'tags', 'scope', 'filepath',
         'is_package', 'package_dir', 'eligible'}
     assert complete[0]['body'] == 'body for primary-note'
     assert [row['id'] for row in union] == ['primary-note', 'extra-note']

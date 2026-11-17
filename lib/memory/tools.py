@@ -17,6 +17,7 @@ from lib.memory.contracts import (
     MEMORY_STATUS_REASONS,
     MEMORY_TAG_MAX_CHARS,
     MEMORY_TAG_MAX_ITEMS,
+    MEMORY_TRIGGER_MAX_CHARS,
     MEMORY_VERDICTS,
 )
 
@@ -24,6 +25,14 @@ __all__ = ['ALL_MEMORY_TOOLS', 'MEMORY_TOOL_NAMES',
            'CREATE_MEMORY_TOOL', 'UPDATE_MEMORY_TOOL',
            'DELETE_MEMORY_TOOL', 'MERGE_MEMORY_TOOL',
            'SEARCH_MEMORIES_TOOL']
+
+# Lessons are written after the fix but needed before it; prefetch matches the
+# trigger against the request (lib/memory/triggers.py).
+_TRIGGER_DESCRIPTION = (
+    "The situation in which this lesson applies, as it looks before the fix is "
+    "known: the kind of request or work, files/commands/tools involved, and the "
+    "symptom or exact error text. Not the cause or fix."
+)
 
 
 CREATE_MEMORY_TOOL = {
@@ -51,6 +60,12 @@ CREATE_MEMORY_TOOL = {
                         "symptom, symbol/file, and verified fix/rule; drives "
                         "search and prefetch."
                     ),
+                },
+                "trigger": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": MEMORY_TRIGGER_MAX_CHARS,
+                    "description": _TRIGGER_DESCRIPTION,
                 },
                 "name": {
                     "type": "string",
@@ -97,7 +112,7 @@ CREATE_MEMORY_TOOL = {
                     ),
                 }
             },
-            "required": ["description", "name", "body"],
+            "required": ["description", "trigger", "name", "body"],
             "additionalProperties": False,
         }
     }
@@ -108,7 +123,7 @@ UPDATE_MEMORY_TOOL = {
     "function": {
         "name": "update_memory",
         "description": (
-            "Correct or extend an existing memory. A new name, description or body "
+            "Correct or extend an existing memory. A new name, description, trigger or body "
             "is saved as a new version that supersedes this one (the old stays as "
             "history; the result names the new id); tags change in place. When you "
             "verified a lesson is wrong or replaced, set status=disproved or superseded "
@@ -145,6 +160,12 @@ UPDATE_MEMORY_TOOL = {
                     "type": "string",
                     "maxLength": MEMORY_BODY_MAX_CHARS,
                     "description": "New complete Markdown body; replaces the old body."
+                },
+                "trigger": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": MEMORY_TRIGGER_MAX_CHARS,
+                    "description": "New trigger: " + _TRIGGER_DESCRIPTION,
                 },
                 "tags": {
                     "type": "array",
@@ -259,6 +280,12 @@ MERGE_MEMORY_TOOL = {
                     "maxLength": MEMORY_NAME_MAX_CHARS,
                     "description": "Merged memory title."
                 },
+                "trigger": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": MEMORY_TRIGGER_MAX_CHARS,
+                    "description": _TRIGGER_DESCRIPTION,
+                },
                 "body": {
                     "type": "string",
                     "minLength": 1,
@@ -281,7 +308,7 @@ MERGE_MEMORY_TOOL = {
                     "description": "Destination scope. Default: project"
                 }
             },
-            "required": ["memory_ids", "description", "name", "body"],
+            "required": ["memory_ids", "description", "trigger", "name", "body"],
             "additionalProperties": False,
         }
     }

@@ -93,20 +93,19 @@ _PINNED_VERSION = '0.12.29'
 # __file__ asserted inside the probe dir and all 37 facade __all__ symbols
 # resolving; the digests below are PyPI's own /pypi/tofu-search/0.10.3/json
 # values AND match the local sha256 of the uploaded files byte-for-byte.
-# 0.12.28 digests are the sha256 values https://pypi.org/simple/tofu-search/
+# 0.12.29 digests are the sha256 values https://pypi.org/pypi/tofu-search/0.12.29/json
 # serves, read back 2026-11-17 after `uv publish` of artifacts built from the
-# public export's packages/tofu-search with build_search_wheel's pinned
-# SOURCE_DATE_EPOCH. That pin makes the wheel byte-reproducible (earlier builds
-# recorded file mtimes, so equal sources gave different digests), and the
-# export's vendor/ wheel equals the published one byte for byte. Before
-# upload: twine check PASSED, all 90 package files present in the wheel, and a
-# fresh non-editable install from the index imported 0.12.28 from
-# site-packages.
+# public export's packages/tofu-search with install_artifacts.build_search_wheel
+# (pinned SOURCE_DATE_EPOCH) and build_search_sdist (normalized tar members and
+# gzip header). Two independent builds of that source gave these exact bytes for
+# both files, and the export's vendor/ wheel equals the published wheel byte for
+# byte. Before upload: twine check PASSED on both, and a fresh install of the
+# wheel imported 0.12.29 from site-packages.
 _EXPECTED_DIGESTS = {
-    'tofu_search-0.12.28-py3-none-any.whl':
-        'bfceadbde71374c8f2079bfe66891800ebbb461bee78ce0718c7e58053079795',
-    'tofu_search-0.12.28.tar.gz':
-        '7197b5b4dd966702c97eea5b20c641bc2cb5e709fd7f0961c54cd9348778c5fc',
+    'tofu_search-0.12.29-py3-none-any.whl':
+        '05b1ec7716c284a1075a5066bac1c550c6cc71806668204e1392e17ae6242b55',
+    'tofu_search-0.12.29.tar.gz':
+        '20f89cd0e26d95a6e9f656aa99b196dbdaafc3543ebdb562085f1a0256308590',
 }
 
 _PYPI_VERSION_JSON = 'https://pypi.org/pypi/{name}/{version}/json'

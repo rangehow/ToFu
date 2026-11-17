@@ -272,3 +272,34 @@ def test_search_wheel_build_pins_entry_timestamps_for_reproducible_bytes(tmp_pat
     # File mtimes no longer reach the archive, so an export rebuild of the
     # released source reproduces the published wheel's bytes.
     assert seen['env']['SOURCE_DATE_EPOCH'] == '315532800'
+
+
+def test_search_sdist_bytes_depend_only_on_member_content(tmp_path, monkeypatch):
+    def raw_sdist(out_dir, stamp):
+        artifact = Path(out_dir) / 'tofu_search-1.0.0.tar.gz'
+        with tarfile.open(artifact, 'w:gz', format=tarfile.PAX_FORMAT) as archive:
+            for name, data in (('tofu_search-1.0.0/setup.cfg', b'[egg_info]\n'),
+                               ('tofu_search-1.0.0/PKG-INFO', b'Name: tofu-search\n')):
+                info = tarfile.TarInfo(name)
+                info.size, info.mtime, info.uid, info.uname = len(data), stamp, 1234, 'builder'
+                archive.addfile(info, io.BytesIO(data))
+        return artifact
+
+    built = []
+    for index, stamp in enumerate((1794906132.9, 1794906146.3)):
+        def fake_run(command, stamp=stamp, **kwargs):
+            flag = '--out-dir' if '--out-dir' in command else '--outdir'
+            raw_sdist(command[command.index(flag) + 1], stamp)
+
+        monkeypatch.setattr(install_artifacts.subprocess, 'run', fake_run)
+        out = tmp_path / f'out{index}'
+        out.mkdir()
+        built.append(install_artifacts.build_search_sdist(tmp_path, out, sys.executable))
+        time.sleep(1.1)  # a gzip header would otherwise record a later build second
+    first, second = (path.read_bytes() for path in built)
+    assert built[0].name == 'tofu_search-1.0.0.tar.gz' and first == second
+    with tarfile.open(built[0]) as archive:
+        members = archive.getmembers()
+    assert [item.name for item in members] == sorted(item.name for item in members)
+    assert {(item.mtime, item.uid, item.uname, tuple(item.pax_headers)) for item in members} == {
+        (install_artifacts.ZIP_DOS_EPOCH, 0, '', ())}

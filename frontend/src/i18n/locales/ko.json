@@ -6700,6 +6700,7 @@
   "leadDeliverables.kind.deck": "슬라이드",
   "leadDeliverables.kind.document": "문서",
   "leadDeliverables.kind.merge": "병합됨",
+  "leadDeliverables.kind.pdf": "PDF",
   "leadDeliverables.reportKind.delivery": "전달됨",
   "leadDeliverables.reportKind.progress": "진행 상황",
   "leadDeliverables.reportKind.decision": "결정 필요",

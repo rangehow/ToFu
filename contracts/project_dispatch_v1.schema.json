@@ -191,6 +191,17 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 2147483647
+        },
+        "mcpServers": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 1024,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "description": "MCP servers (owner configuration names) whose tools a project Worker is granted: every server the issuing Coordinator was entitled to (connected with tools in its catalog, or enabled by the owner but not yet connected) when the policy was issued. A tool mcp__<server>__<tool> of a listed server is admitted whenever the Worker's own assembly finds it connected and enabled; servers the owner had disabled are never listed. Absent in grants issued before servers were recorded (docs/modules/tools_execution.md)."
         }
       },
       "allOf": [
@@ -337,6 +348,26 @@
               "maxToolCalls": {
                 "minimum": 1
               }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "enum": [
+                  "consult",
+                  "files",
+                  "coordinator"
+                ]
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "mcpServers"
+              ]
             }
           }
         }
@@ -2005,6 +2036,17 @@
             "minLength": 1,
             "maxLength": 256
           }
+        },
+        "workerMcpServers": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 1024,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "description": "MCP servers granted to Workers delegated during continuations (profile mcpServers). Absent in grants issued before servers were recorded."
         },
         "tools": {
           "type": "array",

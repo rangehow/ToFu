@@ -1,4 +1,4 @@
-"""Real app + isolated storage: the sidebar's reports-and-files section and the Coordinator's task board read in Chinese and English.
+"""Real app + isolated storage: a lead's reports-and-files panel and the Coordinator's task board read in Chinese and English.
 
 Owner request 2026-11-17: translate the Deliverables (汇报与文件) and Progress (任务进展) sections. Every label comes
 from the i18n catalogs (the hard-coded copy gate in scripts/check_i18n_usage.mjs covers the components), and a report
@@ -40,7 +40,7 @@ def _publish_board(project, leader, binding_revision):
 
 
 @pytest.mark.parametrize('language', ['zh', 'en'])
-def test_sidebar_reports_and_task_board_read_in_the_ui_language(page, monkeypatch, tmp_path, assert_no_js_errors, language):
+def test_reports_panel_and_task_board_read_in_the_ui_language(page, monkeypatch, tmp_path, assert_no_js_errors, language):
     from lib.translate.commit import commit_translation_to_turn
     from tests.conftest import _dismiss_onboarding_modals
     folder_id, leader, report_turn, project, _ = _seed(page, tmp_path, monkeypatch)
@@ -56,13 +56,20 @@ def test_sidebar_reports_and_task_board_read_in_the_ui_language(page, monkeypatc
                   ' localStorage.setItem("tofu_landing_workspace", "chat"); }', language)
     page.reload()
     _dismiss_onboarding_modals(page)
-    page.set_viewport_size({'width': 1440, 'height': 900})
+    page.set_viewport_size({'width': 1680, 'height': 900})
     page.locator(f'.folder-tab[data-folder-id="{folder_id}"]').click()
 
     row = page.locator('#projectCoordinatorEntry .coordination-leader')
     # An unread report previews in its display translation, as the conversation shows it.
     expect(row.locator('.coordination-leader-meta')).to_have_text(TRANSLATED_TITLE)
-    section = page.locator('#projectCoordinatorEntry + .lead-deliverables-slot .lead-deliverables')
+    _settle(page)
+    page.locator('#sidebar').screenshot(path=str(OUTPUT / f'{language}-sidebar.png'), animations='disabled')
+
+    # The reports and files sit in the right-hand panel of the lead's conversation (owner request 2026-11-17).
+    row.click()
+    page.wait_for_function('(id) => window.activeConvId === id', arg=leader)
+    expect(page.locator('#sidebar .lead-deliverables')).to_have_count(0)
+    section = page.locator('#chatInner .lead-deliverables')
     expect(section.locator('.lead-deliverables__label')).to_have_text(copy['section'])
     rows = section.locator('.lead-deliverable')
     expect(rows).to_have_count(4)
@@ -72,15 +79,14 @@ def test_sidebar_reports_and_task_board_read_in_the_ui_language(page, monkeypatc
     expect(first.locator('.lead-deliverable__title')).to_have_text(copy['title'])
     # The tooltip keeps the title as written beneath the translation.
     assert first.locator('.lead-deliverable__open').get_attribute('title').split('\n')[:2] == [TRANSLATED_TITLE, TITLE]
-    expect(first.locator('.lead-deliverable__meta')).to_have_text(re.compile(r'^Shop · (' + copy['age'] + r')$'))
-    expect(first.locator('.lead-deliverable__source')).to_have_text(copy['source'])
+    expect(section.locator('.lead-deliverables__scope')).to_have_text('Shop')
+    expect(first.locator('.lead-deliverable__age')).to_have_text(re.compile(r'^(' + copy['age'] + r')$'))
+    expect(first.locator('.lead-deliverable__source')).to_have_attribute('aria-label', copy['source'])
     page.wait_for_timeout(500)
     _settle(page)
-    page.locator('#sidebar').screenshot(path=str(OUTPUT / f'{language}-sidebar.png'), animations='disabled')
+    section.screenshot(path=str(OUTPUT / f'{language}-panel.png'), animations='disabled')
 
     # The task board pinned atop the Coordinator's conversation.
-    row.click()
-    page.wait_for_function('(id) => window.activeConvId === id', arg=leader)
     card = page.locator('.coordinator-progress')
     expect(card.locator('.coordinator-progress-title')).to_have_text(copy['board'])
     expect(card.locator('.coordinator-progress-tally')).to_have_text(copy['active'])

@@ -720,6 +720,38 @@ def test_real_supervisor_reloads_in_place_when_its_closure_definition_changes(tm
             str(project))
 
 
+@pytest.mark.serial
+def test_refresh_waits_out_a_slow_accepted_reexec_without_launching_a_rival(
+        tmp_path, monkeypatch):
+    """An accepted reload re-execs the same manager; its gap is not an absence.
+
+    Live incident od-81d08dc3 (2026-11-17): under load the re-exec took 3.8s,
+    the refresh launched ``supervisor.sh daemon`` into that gap (a second
+    watchdog that loops on "Address already in use" and took the PID file),
+    and the blocking launcher consumed the deadline, so every restart bridge
+    refused while the reloaded manager was in fact healthy.
+    """
+    project = _closure_project(tmp_path)
+    with _real_supervisor(project) as (process, base, environment, before):
+        script = project / 'supervisor.py'
+        # The next generation binds its port only after a gap longer than the
+        # refresh's launch fallback, as the loaded live re-exec did.
+        script.write_text('import time; time.sleep(5)\n'
+                          + script.read_text(encoding='utf-8'), encoding='utf-8')
+        launches = []
+        monkeypatch.setattr(supervisor_protocol, '_launch_supervisor',
+                            lambda *args: launches.append(args))
+
+        refreshed = supervisor_protocol.refresh_supervisor(
+            str(project), environment=environment, timeout=30.0)
+
+        assert launches == [], 'an accepted reload must never launch a rival manager'
+        assert refreshed['reloaded'] is True
+        assert refreshed['reloadAccepted'] is True
+        assert refreshed['managerPid'] == process.pid
+        assert process.poll() is None
+
+
 @pytest.mark.parametrize(('refusal', 'detail'), [
     ({'ok': False, 'httpStatus': 409, 'message': 'Supervisor reload is already in progress.'},
      'already in progress'),

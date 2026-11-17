@@ -6700,6 +6700,7 @@
   "leadDeliverables.kind.deck": "Презентация",
   "leadDeliverables.kind.document": "Документ",
   "leadDeliverables.kind.merge": "Слито",
+  "leadDeliverables.kind.pdf": "PDF",
   "leadDeliverables.reportKind.delivery": "Передано",
   "leadDeliverables.reportKind.progress": "Ход работ",
   "leadDeliverables.reportKind.decision": "Нужно решение",

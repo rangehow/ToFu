@@ -6700,6 +6700,7 @@
   "leadDeliverables.kind.deck": "スライド",
   "leadDeliverables.kind.document": "ドキュメント",
   "leadDeliverables.kind.merge": "マージ済み",
+  "leadDeliverables.kind.pdf": "PDF",
   "leadDeliverables.reportKind.delivery": "引き渡し済み",
   "leadDeliverables.reportKind.progress": "進捗",
   "leadDeliverables.reportKind.decision": "要決定",

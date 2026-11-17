@@ -6700,6 +6700,7 @@
   "leadDeliverables.kind.deck": "演示稿",
   "leadDeliverables.kind.document": "文档",
   "leadDeliverables.kind.merge": "已合并",
+  "leadDeliverables.kind.pdf": "PDF",
   "leadDeliverables.reportKind.delivery": "交付",
   "leadDeliverables.reportKind.progress": "进展",
   "leadDeliverables.reportKind.decision": "待决定",

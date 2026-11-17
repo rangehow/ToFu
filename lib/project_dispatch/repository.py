@@ -1110,7 +1110,8 @@ class ProjectDispatchRepository:
         ``issued``: the birth of a delegation the attempt issued while it ran
         (``source_for_task(issued=True)``).
         """
-        from .delegation import source_for_task, policy_for_task, validate_delegation_policy, issued_worker_policy
+        from .delegation import (source_for_task, policy_for_task, validate_delegation_policy,
+                                 issued_worker_policy, worker_profile)
         from .continuation import original_delegation, original_granter, ensure_open
         # One admission decision: the checks repeated inside the grant CAS
         # observe the external authority read before it, so that read never
@@ -1124,7 +1125,8 @@ class ProjectDispatchRepository:
             if (request.get('authorizationSource') != source or request.get('delegation') != expected
                     or request.get('model') != issued.model
                     or request.get('profile', {}).get('mode') != 'project'
-                    or request['profile']['tools'] != list(issued.tools)):
+                    or request['profile']['tools'] != list(issued.tools)
+                    or request['profile'].get('mcpServers', []) != worker_profile(issued).get('mcpServers', [])):
                 raise PermissionError('Worker request differs from its issued Coordinator policy')
             _validate_schema(request, 'request')
             from .scope import validate_profile

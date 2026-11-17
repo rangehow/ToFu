@@ -5,8 +5,9 @@ Sections 1–5 changed no code. Every live measurement in them was a read: memor
 through `debug/inspect_conversation.py`'s `_DiagnosticAPI`. Section 6 adds the replay benchmark that the gap list proposed
 (`evaluations/owner_memory/replay.py`) and its first measurement. Section 7 diagnoses its retrieval misses, replays from
 the defect point, adds a cross-request arm (`evaluations/owner_memory/midtask.py`) and measures one candidate mechanism. Section 8
-measures and ships lesson triggers (`evaluations/owner_memory/triggers.py`). Private owner content is reported only as counts and
-topics.
+measures and ships lesson triggers (`evaluations/owner_memory/triggers.py`). Section 9 scales the defect replay to 126 cases
+with power and diagnoses why lessons in context still fail (`evaluations/owner_memory/scale.py`). Private owner content is
+reported only as counts and topics.
 
 ## 给主人的一页摘要
 
@@ -65,13 +66,22 @@ topics.
 - **更相关（主要收益）。** 986c9ef4 的 held-out 93 个 Turn，盲评：相关注入从 91 条到 106 条（+15，95% 区间 [+6, +25]），无关的少 12 条 [−22, −3]，相关率 60.3% → 68.8%（+8.6 个百分点 [+3.0, +14.8]）。23 个案例和 20 个干扰任务开头注入的相关率 67.9% → 72.6%。预先登记的上线条件全部满足。
 - **结果。** 踩坑前一步重放：避开率 27.3% → 30.3%（+3.0 个百分点 [−15.2, +24.2]）；跨请求：0/21 → 1/21。都不显著。
 
+**第四次测量（2026-11-17，见第 9 节）：样本够大了，结论清楚——经验本身有用，但生产环境还没有把它用上，所以"越用越好"仍然没有证明。**
+
+- **样本。** 线上能找到的全部 401 个 Worker Turn，覆盖 tofu、parallel、knowledge 三个项目和全局库。得到 127 个真实缺陷案例（126 个有完整评分）：28 个是"这个 Turn 自己写的经验"，99 个是"别的对话早先写过、这次又踩了"的复发。每组 6 次重放，盲评。
+- **把经验放到模型眼前，有明确效果。** 避开率从 17.3% 升到 34.8%，+17.4 个百分点 [+10.9, +24.6]。
+- **但生产检索只在 25/126 个案例里把对的经验放进去。** 按生产实际运行，有没有这条经验：+1.8 个百分点 [−1.5, +5.3]。这个区间对 10 个百分点的效果有足够把握（功效约 1.0），可以说生产环境里没有 10 个百分点量级的"越用越好"。复发案例中，库里早有经验，生产只在 9/99 次把它放进去。
+- **经验在眼前却仍然踩坑，原因主要是"没理会"。** 25 次踩坑里，17 次经验明明适用、写清了怎么做，回答却既没提也没照做（只有 3 次提到经验）；5 次用错，3 次经验太笼统，0 次经验本身错误。
+- **试了一个结构性修复：在下一步动作前，把已选中的经验改写成一句"遇到 X 时，做 Y"的检查。** 预先登记的三条上线条件全部满足：避开率 34.8% → 56.0%（+21.3 个百分点 [+14.3, +28.3]），选中的经验完全不变，80 个无关任务的质量不降（99.7% 对 99.7%）。
+- **但没有上线。** 生产的上下文组装器不能做到"只在动作前出现一次"。能做到的方式是每轮工具调用后重发一份，实测效果归零（+0.3 个百分点 [−4.6, +5.5]），模型把每轮都出现的话当成背景。下一步是只在"即将执行的工具调用和经验的触发情境匹配时"出现一次检查，需要找到不靠阈值的匹配规则。
+
 ## 1. Verdict: not shown
 
 | Claim part | Evidence | Status |
 |---|---|---|
 | Memory helps at one point in time | MEMORY-EVAL baseline: application 31.7% with prefetch, 28.3% without; Coordinator full context 56.2% → 43.8% without prefetch (`docs/modules/context_engineering.md`, "Owner understanding: design record", Decision 8; `docs/OLD_REPO_RECOVERY_MEMORY.md`, "Experiment findings"; raw `.eval-runs/owner-memory/private/baseline-report.txt`, coordinator/full `appliedRate` 0.5625) | partially shown (small effect, one snapshot) |
 | An always-present owner profile helps at one point in time | 1b K1 +20.0 pp; 1c K1 +16.1 pp [+5.4, +28.6] but 1c NOT PASSED (K3) (`k3-1c/REPORT-k3.md`); FM-2x2 PASS (`fm2x2/private/analysis.json` `verdict: {profile|L1: PASS, profile|L0: PASS}`) | shown in the lab; **not in production**: Phase 1 is unmerged (`docs/OLD_REPO_RECOVERY_MEMORY.md` §A) and My Context has 0 active items |
-| The system improves as it is used (compounding) | Earlier experiments never varied corpus age. The before/after-lesson replay (§6, 2026-11-16) now does: on 23 real defects, avoidance is 4.3% before and 4.3% after the lesson, difference 0.0 pp, 95% CI [−8.3, +7.3]. From the defect point (§7.3, 11 cases): −3.0 pp [−21.2, +15.2]. In later, different requests that met the same defect (§7.4, 7 requests): 0 of 21 avoided with or without the earlier lesson. With lesson triggers (§8): defect point +3.0 pp [−15.2, +24.2], later requests 0/21 → 1/21 | **not shown: measured four ways, no detectable effect on outcomes; what is injected became more relevant (§8)** |
+| The system improves as it is used (compounding) | Earlier experiments never varied corpus age. The before/after-lesson replay (§6, 2026-11-16) now does: on 23 real defects, avoidance is 4.3% before and 4.3% after the lesson, difference 0.0 pp, 95% CI [−8.3, +7.3]. From the defect point (§7.3, 11 cases): −3.0 pp [−21.2, +15.2]. In later, different requests that met the same defect (§7.4, 7 requests): 0 of 21 avoided with or without the earlier lesson. With lesson triggers (§8): defect point +3.0 pp [−15.2, +24.2], later requests 0/21 → 1/21. At scale (§9, 126 cases, 6 trials): production +1.8 pp [−1.5, +5.3] (power ≈ 1.0 for 10 pp); with the lesson in front of the model +17.4 pp [+10.9, +24.6] | **not shown in production, now with power: a lesson the model sees helps clearly, but production shows the right lesson in 25 of 126 cases, and a model with the lesson in context mostly ignores it (17 of 25 hits). A pre-action check fixes that (+21.3 pp) but has no deliverable form yet (§9.4)** |
 | Live use makes memory better | §2: the corpus grows, but injection is fixed at 2 items per Turn, 3.4% of injected items are opened, 1 of 477 is cited, owner items are 0, and lifecycle states are 0 | **not shown**; inputs accumulate, use does not visibly improve |
 
 So "the more it's used, the better it gets" is **not demonstrated**. What is demonstrated: memory and the profile each help a little
@@ -725,3 +735,181 @@ python -m evaluations.owner_memory triggers --stage heldout --private $P --heldo
 
 `heldout-trigger.jsonl` is 986c9ef4's `replay.py` run with its `SNAP` pointed at `corpus-snapshot-triggers` and
 `TOFU_DATA_DIR` at that copy's `data`.
+
+## 9. Fourth measurement: 126 cases with power, and the "retrieved but not acted on" gap (2026-11-17)
+
+Code: this change (`evaluations/owner_memory/scale.py`, stages in `evaluations/owner_memory/README.md`), merged with
+`eval/opencode-glm53-tb21`. Private evidence: `.eval-runs/memory-replay/private/corpus-v2/`, `scale/` (`pool.json`,
+`links.json`, `rubrics.json`, `points.json`, `cases.json`, `interference.json`, `PREREGISTRATION-fix.txt`), `runs/scale-v1/`
+and `runs/scale-fix-unrelated/`. `lib/` is unchanged.
+
+**Plain answer: "better with use" is still not shown in production, and now we know why with statistical power.**
+
+- A lesson that is **in front of the model** at the defect point makes it avoid the defect **+17.4 pp** more often
+  [+10.9, +24.6]. When it is also restated as a one-line check right before the next action, avoidance rises from
+  17.3% (no lesson) to 56.0%.
+- But production retrieval puts the right lesson there in only **25 of 126** cases. So the store with the lesson,
+  under production selection, changes avoidance by **+1.8 pp [−1.5, +5.3]**. This interval rules out a 10-point
+  production effect (power ≈ 1.0).
+- The check that works cannot be delivered as measured. Sent the way the composer can deliver it (a superseding copy
+  after every tool round), it gives +0.3 pp [−4.6, +5.5]. **It is not shipped.**
+
+### 9.1 Case set (frozen before any replay)
+
+- **Corpus.** A new frozen copy of every store, with the shipped triggers (`corpus-v2`, 2,621 files, digest `b346bc42…`,
+  2026-11-17T04:09Z). Compared with `corpus-triggers`, 2,557 files are identical and 15 are new. 22 differ, but only in
+  the 910C trigger lines the earlier backfill could not write. No lesson created in the window was edited later, so
+  slicing by `created` is exact, as in §6.
+- **Pool.** Every Worker attempt the live store still holds with recorded requests: **401 Turns** in the tofu,
+  parallel and knowledge projects (11-15 → 11-17). cpt_data, hope-mcp and llm-mcp have lesson stores but no live Turns.
+  Turns before 11-15 return 404 (old host), so the pool cannot grow further.
+- **Two kinds of case.**
+  - **own:** the lesson this Turn wrote (provenance), as in §6–8.
+  - **recurrence:** a lesson written earlier in another conversation whose defect occurred again in this Turn.
+    - The candidate lessons for each Turn are the ones production selection reaches through their triggers (turn
+      start, and the failure-time candidate at every failed tool round), plus the `create_memory` repeat check for
+      the lessons the Turn wrote: 3,956 candidates in total.
+    - A fixed model (`claude-opus-5.5`, `LINK_SYSTEM`) read the Turn's numbered tool steps and decided which defects
+      occurred: **130 links**. 17 Turns' link calls were refused by the gateway (910C content).
+- **Rubric and defect point.** Each case got the frozen §6 rubric prompt and the frozen §7 point prompt. Of 169
+  candidates:
+  - 40 have no locatable defect step;
+  - 1 is not a defect;
+  - 1 rubric was refused.
+- **Frozen cases: 127** (28 own, 99 recurrence) over 83 Turns, 65 distinct lessons, in all three project stores plus
+  the global store (`cases.json`, digest in `runs/scale-v1/manifest.json`). 126 cases have judged rows in every arm.
+- **Recurrence link quality.** I read 10 seeded recurrence cases. 8 are clearly the same mechanism; 2 are loose (a
+  lint-gate lesson matched to a venv choice, an export-gate lesson to an unfinished test). Typical clear repeats:
+  - the read-before-edit gate refusing `edit_file`;
+  - `run_command` folding output lines;
+  - recursive `grep` on the FUSE mount;
+  - a heredoc commit message lost to the git rewriter.
+
+### 9.2 Arms and judging
+
+- **Replay point.** Every case replays from the Inspector-recorded request of the round that issued its defective step
+  (§7.3). The turn-start carrier is recomputed by production selection over a time slice:
+  - `without`: the store as the Turn found it (own: just before the lesson), minus every lesson linked to that Turn's
+    defects;
+  - `production`: the same store plus the case lesson;
+  - `shown`: as `production`, with the case lesson placed in the first carrier slot when selection did not pick it;
+  - `shown_fix`, `production_fix`, `shown_every`: the candidates of §9.4.
+- **Byte-identical arms share rows.** Where production does not select the lesson, `production` equals `without`.
+- **Trials and judge.** 6 trials per arm. Blind judging with the §7 mid-task judge: lesson names masked, no arm, seeded
+  order. 2,940 of 3,048 rows were judged; the rest were empty gateway refusals.
+- **Variance and power.** Intervals are a two-stage cluster bootstrap (10,000 resamples; clusters = source Turns).
+  "Power" is two-sided 5% power for a true 10-point effect, from the interval's implied standard error.
+
+### 9.3 Results
+
+| Comparison (avoided) | Cases | Rates | Difference [95% CI] | Up / down | Power for 10 pp |
+|---|---:|---|---|---|---:|
+| `without` → `production` (production as it runs) | 126 | 17.3% → 19.3% | **+1.8 pp [−1.5, +5.3]** | 11 / 5 | 1.00 |
+| `without` → `shown` (the lesson in front of the model) | 126 | 17.3% → 34.8% | **+17.4 pp [+10.9, +24.6]** | 50 / 14 | 0.81 |
+| `production` → `shown` (what retrieval misses) | 126 | 19.3% → 34.8% | +15.6 pp [+9.4, +22.6] | 39 / 10 | 0.84 |
+| own cases: `without` → `shown` | 27 | 30.1% → 62.2% | +32.1 pp [+14.1, +50.6] | 15 / 4 | 0.19 |
+| recurrence cases: `without` → `shown` | 99 | 14.0% → 27.5% | +13.5 pp [+7.3, +20.4] | 35 / 10 | 0.85 |
+| recurrence cases: `without` → `production` | 99 | 14.0% → 14.3% | +0.3 pp [−2.5, +3.0] | 3 / 1 | 1.00 |
+
+- **Hit rate.** `without` 19.6%, `production` 17.6%, `shown` 10.5%. `without` → `shown`: −8.9 pp [−13.9, −4.7].
+- **Retrieval is now the first bottleneck.**
+  - Production renders the case lesson in 25 of 126 cases (16 own, 9 recurrence).
+  - Where it does, `without` → `production` is +10.0 pp [−2.0, +23.9] (21 Turns).
+  - In the other 101 cases the two requests are identical by construction.
+- **Later requests meeting old defects** (the 99 recurrence cases) are the "better with use" question itself. The
+  store already held a lesson about the defect, and production showed it in 9 of 99 Turns: +0.3 pp.
+
+### 9.4 Why a lesson in front of the model still fails, and the fix tested
+
+- **Diagnosis (blind labels, `runs/scale-v1/gap.json`).** The labeller (`claude-opus-5.5`, `GAP_SYSTEM`, no arm) saw:
+  - the request and recent steps;
+  - the defect;
+  - the lesson that was in context;
+  - the response.
+
+  It classified every first-run row (2 trials) where the case lesson was rendered and the defect was not avoided:
+  153 rows over 86 cases.
+
+  | Outcome | Rows | ignored | misapplied | too vague | wrong | not yet (reasonable earlier step) | Mentions the lesson |
+  |---|---:|---:|---:|---:|---:|---:|---:|
+  | hit (walked into the defect) | 25 | **17** | 5 | 3 | 0 | — | 3 |
+  | not reached | 128 | 5 | 1 | 0 | 0 | 122 | 5 |
+
+  - **The dominant failure is "ignored".** In 17 of 25 hits, the lesson applied and said what to do, and the response
+    neither mentioned it nor followed it. It mentioned the lesson in only 3 of 25.
+  - No lesson was judged wrong.
+  - Hand check, 12 seeded hit rows (`gap-handlabels.json`): 9 of 12 agree. 2 of the 3 disagreements are
+    ignored-vs-misapplied/too-vague borderlines.
+  - The lesson sits in the Turn's opening message, a median of 37 tool steps before the defective action (10th–90th
+    percentile 8–123).
+- **Structural fix tested (no knobs).** `trailing_check` restates the lessons the turn-start carrier already rendered:
+  same selection, same order, nothing added. It writes them as one-line imperative checks, `When <trigger>:
+  <description>`, built from each lesson's own fields, in one carrier right before the next action. The rule was
+  pre-registered before any fix arm was built (`PREREGISTRATION-fix.txt`, digest `7d225bac…`). Amendment 1 raised the
+  trials from 2 to 6 and the unrelated tasks from 40 to 80, before any fix row was judged.
+
+  | Ship-rule condition | Measured | Holds? |
+  |---|---|---|
+  | 1. Avoidance up: `shown` → `shown_fix` CI lower bound > 0 | 34.8% → 56.0%, **+21.3 pp [+14.3, +28.3]**, 61 up / 13 down; hit −4.5 pp [−8.4, −1.0] | yes |
+  | 2. Relevance not down: identical selection in every arm pair | 152 case and 80 unrelated arm pairs inject identical lesson sets (dry run) | yes |
+  | 3. Unrelated-task quality not down: on-task (fix − production) CI lower bound > −0.10 | 80 unrelated Turns from their last round, 2 trials, blind mid-task on-task judge: 99.7% vs 99.7%, 0.0 [−0.01, +0.01] | yes |
+
+  Where production retrieves the lesson (25 cases), `production` → `production_fix` is +27.3 pp [+11.1, +42.0]. With
+  the check, production avoids the defect 69.3% of the time against 32.0% without the lesson.
+- **Why it is still not shipped.**
+  - Production cannot deliver "exactly one check, right before the action". The composer keeps sent history immutable
+    and reuses an unchanged block, so the only deliverable form re-sends a superseding copy after each tool round.
+    The check would otherwise sit wherever it was first appended.
+  - Amendment 2 pre-registered that deliverable form, `trailing_check_every`, with the same rule, before it was built.
+    Earlier copies were kept and compaction was not modelled: the most diluted case.
+
+  | Deliverable form | Measured | Holds? |
+  |---|---|---|
+  | 1. `shown` → `shown_every` | 34.8% → 33.3%, **+0.3 pp [−4.6, +5.5]**, 26 up / 30 down | **no** |
+  | 2. Identical selection | yes | yes |
+  | 3. Unrelated on-task | 100% vs 99.7%, +0.4 pp [0.0, +1.5] | yes |
+
+  - Repeating the same check after every round erases its effect entirely: `shown_fix` → `shown_every` −21.0 pp
+    [−28.1, −13.9]. The model treats a line that recurs every round as background, which is the same "ignored"
+    failure the diagnosis found.
+- **Decision: not shipped.** The measured form passes but cannot be built in the composer as measured. The buildable
+  form fails condition 1.
+- **What the result does establish.**
+  - Placing the lesson next to the action, once, is what works. Its value scales with whether retrieval reached the
+    lesson at all.
+  - The natural deliverable is a check emitted once, at the tool call its trigger matches: the brief's "explicit
+    pre-action check". It needs a match rule between the pending call and the trigger. Every rule tried so far (§7.2)
+    either needed a threshold or brought mostly noise. It is the next experiment, not part of this change.
+- **Alternatives.** Rewording the opening carrier as imperatives was not run separately: 17 of 25 hits ignored a
+  lesson that already stated its action, so the wording is not the binding problem. Rewriting lessons with a model
+  ("authoring fix") was not tried: no lesson was judged wrong, and only 3 of 25 were too vague.
+
+### 9.5 Limits and run notes
+
+- The judge is the same model family as the replayed agent. Agreement with my blind labels was 29/30 in §6 and 12/16
+  in §7. The gap labeller agreed 9/12.
+- 9 own cases have only 6–12 rows per arm after refusals. The own subset (27 cases) has power 0.19 for 10 points; the
+  pooled 126 cases carry the conclusions.
+- **Harness defects found.**
+  - The Inspector cuts long tool-call arguments to a non-JSON prefix, which the provider wire refuses. They now become
+    a JSON note (`midtask._restore_elided_arguments`).
+  - A forced third carrier entry could fall outside the renderer's byte budget. A forced lesson now takes the first
+    slot, and arms record `targetRendered`.
+  - A server restart during a judge pass made the credential reveal answer HTTP 503. The process exited; rerunning the
+    same command resumed it with no lost rows. This is unchanged (`transport.py` treats it like any provider error at
+    process start).
+- **Cost.** Case replays $3,001.75 (3,048 rows), judge $109.61. Unrelated arm $553.13 + $14.79. Links, rubrics,
+  points and gap labels (≈ 1,000 short calls) are not itemized.
+
+### 9.6 Reproduce
+
+```bash
+P=<canonical>/.eval-runs/memory-replay/private
+python -m evaluations.owner_memory scale --private $P --stage cases   # frozen; prints the counts
+python -m evaluations.owner_memory scale --private $P --key-hints 6672 --stop-on-429 --jobs 16 --run-name <name> \
+  --stage run --trials 6 --fix trailing_check,trailing_check_every
+python -m evaluations.owner_memory scale --private $P --key-hints 6672 --stop-on-429 --jobs 16 --run-name <name> --stage judge
+python -m evaluations.owner_memory scale --private $P --run-name <name> --stage report
+python -m evaluations.owner_memory scale --private $P --key-hints 6672 --stop-on-429 --jobs 8 --run-name <other> \
+  --stage interference --fix trailing_check,trailing_check_every
+```

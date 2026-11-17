@@ -26,10 +26,12 @@
  * Sections share one anatomy (heading: label, count, disclosure; then the
  * facts), separated by whitespace rather than rules. Ink steps: identity in
  * primary ink, facts in secondary, labels and glyphs in tertiary. The
- * background-agent dock speaks it in the rail and in the narrow-pane fold. */
+ * background-agent dock and a lead's reports and files (36-lead-deliverables.css)
+ * speak it in the rail and in the narrow-pane fold. */
 .turn-ctx,
 .tctx-fold,
-.agent-dock {
+.agent-dock,
+.lead-deliverables {
   --tctx-ink: var(--text-primary);
   --tctx-ink-soft: var(--text-secondary);
   --tctx-ink-faint: var(--text-tertiary);

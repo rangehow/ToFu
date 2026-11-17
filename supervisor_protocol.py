@@ -239,8 +239,9 @@ def refresh_supervisor(
     A one-time compatibility path retires a pre-protocol Supervisor (no
     ``protocolVersion``, ``/reload`` answers 404) only after validating its
     PID, cwd, command line, and project allow-list; its watchdog/systemd
-    owner normally brings the new image back.  If it does not, the canonical
-    detached launcher is invoked once.
+    owner normally brings the new image back.  If it does not, or no manager
+    answered at all, the canonical detached launcher is invoked once; it is
+    never invoked while an accepted reload is re-executing.
     """
     env = dict(os.environ if environment is None else environment)
     project = os.path.realpath(project_path)
@@ -301,7 +302,11 @@ def refresh_supervisor(
             retired_legacy = True
 
     deadline = time.monotonic() + max(1.0, float(timeout))
-    launch_attempted = False
+    # An accepted reload re-execs the answering manager under its own owner
+    # (watchdog/systemd); its unbound gap is not an absence. Launching into it
+    # adds a rival watchdog that loops on the port, takes the PID file, and
+    # blocks this loop past its deadline (live incident 2026-11-17).
+    launch_attempted = reload_accepted
     launch_after = time.monotonic() + (3.0 if initial_health else 0.0)
     last_error = ''
     while time.monotonic() < deadline:

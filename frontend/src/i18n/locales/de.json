@@ -6700,6 +6700,7 @@
   "leadDeliverables.kind.deck": "Präsentation",
   "leadDeliverables.kind.document": "Dokument",
   "leadDeliverables.kind.merge": "Zusammengeführt",
+  "leadDeliverables.kind.pdf": "PDF",
   "leadDeliverables.reportKind.delivery": "Übergeben",
   "leadDeliverables.reportKind.progress": "Fortschritt",
   "leadDeliverables.reportKind.decision": "Zu entscheiden",

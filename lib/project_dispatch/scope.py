@@ -130,9 +130,11 @@ def granted_tools(profile, *, assignment=None):
     whenever its policy was frozen. A profile holding ``spawn_agents`` also holds
     the artifact tools its swarm runs give their children
     (``lib.swarm.tools.ARTIFACT_TOOL_NAMES``): they are contextual, never catalog
-    entries, and touch only that run's in-process store.
+    entries, and touch only that run's in-process store. A project Worker's
+    ``mcpServers`` admit every tool of those servers (``GrantedTools``).
     """
     tools = frozenset(profile['tools'])
+    servers = frozenset(profile.get('mcpServers') or ()) if profile.get('mode') == 'project' else frozenset()
     if profile.get('mode') == 'coordinator':
         if assignment is None:
             raise ValueError('A Coordinator grant admits the catalog of the role it is bound to; '
@@ -146,10 +148,34 @@ def granted_tools(profile, *, assignment=None):
         # family adds no capability; deriving it here reaches policies frozen before.
         from lib.scheduler.tool_defs import ROLE_SCHEDULER_TOOL_NAMES
         tools |= ROLE_SCHEDULER_TOOL_NAMES
-    if 'spawn_agents' not in tools:
-        return tools
-    from lib.swarm.tools import ARTIFACT_TOOL_NAMES
-    return tools | ARTIFACT_TOOL_NAMES
+    if 'spawn_agents' in tools:
+        from lib.swarm.tools import ARTIFACT_TOOL_NAMES
+        tools |= ARTIFACT_TOOL_NAMES
+    return GrantedTools(tools, mcp_servers=servers) if servers else tools
+
+
+class GrantedTools(frozenset):
+    """A grant's exact tool names plus every tool of its granted MCP servers.
+
+    ``mcp__<server>__<tool>`` is a member when ``<server>`` is granted, whether
+    or not that server was connected when the grant was issued: the Worker's own
+    assembly still offers only tools its owner's bridge has connected and
+    enabled. Iteration and set algebra see the exact names only.
+    """
+
+    mcp_servers: frozenset[str]
+
+    def __new__(cls, names, *, mcp_servers):
+        granted = super().__new__(cls, names)
+        granted.mcp_servers = frozenset(mcp_servers)
+        return granted
+
+    def __contains__(self, name):
+        if super().__contains__(name):
+            return True
+        from lib.mcp.types import parse_namespaced_name
+        parsed = parse_namespaced_name(name) if isinstance(name, str) else None
+        return parsed is not None and parsed[0] in self.mcp_servers
 
 
 def _exact_fields(value, allowed):

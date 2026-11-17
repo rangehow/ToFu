@@ -1,4 +1,4 @@
-/** Opening a lead deliverable: the one open handler of the classic sidebar list and the studio office.
+/** Opening a lead deliverable: the one open handler of the classic conversation panel and the studio office.
  *
  * `open` shows the deliverable itself in the current mode: a published file, deck or document in the
  * artifact panel (its file preview and deck viewer), a delivery report as the readable report card
@@ -152,15 +152,5 @@ export function createDeliverableOpener(ports: DeliverableOpenPorts): Deliverabl
   };
 }
 
-/** The source control for places that render their own row (the sidebar list). */
-export function sourceButton(item: LeadDeliverable, opener: DeliverableOpener): HTMLButtonElement | null {
-  if (!item.source) return null;
-  const button = createButton({ label: t('leadDeliverables.source'), variant: 'ghost', size: 'sm', onClick: event => {
-    event.stopPropagation();
-    opener.openSource(item);
-  } });
-  button.classList.add('lead-deliverable__source');
-  return button;
-}
 
 export type { LeadDeliverableTurn };

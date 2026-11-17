@@ -8,6 +8,7 @@ import { createProjectConversationNavigation } from '../../features/project-conv
 import { createProjectCoordinationSurface } from '../../features/project-coordination-surface';
 import { createSameTaskReadJoin } from '../../features/project-coordination-read-join';
 import { createCoordinatorConversationGroups } from '../../features/coordinator-conversation-group';
+import { backgroundAgentContextHost } from '../../agent-sidebar-dock';
 import { createGlobalRouterEntry } from '../../features/global-router';
 import { createRouterWatchdogEntry } from '../../features/router-watchdog';
 import type { RouterState, RouterWatchdogState } from '../../api/router.generated';
@@ -267,6 +268,8 @@ describe('composer delivery into a live reply', () => {
     Object.assign(h.env, {
       window, showChoice, pushSubscribe: vi.fn(), pushUnsubscribe: vi.fn(),
       createProjectCoordinationSurface, createSameTaskReadJoin, createGlobalRouterEntry, createRouterWatchdogEntry, createCoordinatorConversationGroups,
+      // The prelude's host resolver for a lead conversation's reports and files (none mount here: no rail).
+      backgroundAgentContextHost,
       // The main coordinator header's owner-delegation disclosure is not under test here.
       createRouterOwnerDelegation: () => ({ settings: document.createElement('details'), destroy() {} }),
       openProjectCoordinationWorkspace: vi.fn(), getFolders: () => folders,

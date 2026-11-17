@@ -236,6 +236,9 @@ def test_provision_runs_every_stage_and_records_state(tcdir, fake_heavy,
                 if any('apt-get' in a for a in r)]
     assert len(apt_runs) == 2, fake_heavy['runs']
     assert all('-0' in r and '-R' not in r for r in apt_runs)
+    # Both toolchain trees keep their archived modes despite the umask.
+    tar_runs = [r for r in fake_heavy['runs'] if r[0] == 'tar']
+    assert len(tar_runs) == 2 and all('-p' in r for r in tar_runs)
     # apt-key got patched as part of provisioning (trap 1 wired in).
     assert tc._apt_key_patched()
     # Preloaders are gone from the provisioned tree (trap 4 wired in).

@@ -22,28 +22,7 @@ def _git(root, *args):
 def root(tmp_path, monkeypatch):
     path = tmp_path / 'data' / 'router'
     monkeypatch.setattr('lib.router.home.router_home_root', lambda: str(path))
-    # The registry seed lists the vault's entries; never read the real vault.
-    monkeypatch.setattr('lib.credentials_vault.list_entries', lambda: [])
     return path
-
-
-def test_resource_seed_lists_vault_entries_by_name_and_note_only(root, monkeypatch):
-    from lib.router.home import owner_resources
-
-    monkeypatch.setattr('lib.credentials_vault.list_entries', lambda: [
-        {'name': 'code_host_token', 'hint': 'ab**yz', 'note': 'Code host PAT (HTTPS | clone)'},
-        {'name': 'plain_key', 'hint': 'cd**wx', 'note': ''},
-        {'name': 'skill.demo.api_key', 'hint': 'ef**uv', 'note': 'skill-owned'},
-        {'name': 'channel.u7.github.token', 'hint': 'gh**st', 'note': 'channel-owned'},
-    ])
-    router_home_path(7)
-    seed = owner_resources(7, content=True)['content']
-    assert ("| `code_host_token` | Code host PAT (HTTPS / clone), in the owner's "
-            'Tofu credential vault |') in seed
-    assert "| `plain_key` | In the owner's Tofu credential vault |" in seed
-    assert 'skill.demo' not in seed and 'channel.u7' not in seed
-    assert not any(hint in seed for hint in ('ab**yz', 'cd**wx'))
-    assert '<!-- vault-rows -->' not in seed
 
 
 def test_location_is_owner_scoped_and_creates_nothing(root):

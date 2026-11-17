@@ -202,7 +202,7 @@ def fleet(tmp_path_factory):
     provider = fp.ScriptedProvider().start()
     # Desktop tools in the execution host reach the API host's bridge through
     # the relay record both roles find under their one project (production shape).
-    instance = ChaosInstance(root / 'home', faultfs=False, private_source=True)
+    instance = ChaosInstance(root / 'home', faultfs=False)
     edge = None
     harness = None
     try:

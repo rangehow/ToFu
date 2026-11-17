@@ -1131,10 +1131,13 @@ hides exactly the faults it exists to show). Findings and fixes:
 
 `tests/chaos/test_chaos_nodes.py` runs real node processes (the one node
 program, `python -m lib.desktop_agent`, on simulated host identities) against
-an isolated Home started in the production project topology
-(`ChaosInstance(private_source=True)`: the manager, API host and execution
-host share one project, a private export of the runtime source, so the bridge
-relay records they publish under `<project>/data` are found by every role).
+an isolated Home started in the production project topology, as every
+`ChaosInstance` is: the manager, API host and execution host share one
+project, a private export of the runtime source, so the bridge relay records
+they publish under `<project>/data` are found by every role and by no other
+instance (an execution host run from the checkout published
+`<checkout>/data/mcp-bridge-relay.json`, and concurrent instances relayed MCP
+calls to each other's servers).
 Nodes reach the Home only through a network edge (`tests/chaos/edge.py`): an
 HTTP proxy for an origin the node cannot resolve plus a CodeLab-style
 `/proxy/<port>` prefix, which can partition, heal and follow a moved Home.

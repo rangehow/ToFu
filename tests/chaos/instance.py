@@ -73,7 +73,7 @@ class ChaosInstance:
     """One private deployment; every path and port is its own."""
 
     def __init__(self, root: Path, *, backend: str = 'sqlite', python: str = sys.executable,
-                 faultfs: bool = True, private_source: bool = False):
+                 faultfs: bool = True):
         self.root = Path(root).resolve()
         self.faultfs: Path | None = None
         self._want_faultfs = faultfs
@@ -81,17 +81,17 @@ class ChaosInstance:
         self.backend = backend
         self.python = python
         self.tag = uuid.uuid4().hex
-        # private_source: the production topology, where the manager, the API
-        # host and the execution host share ONE project (bootstrap_pkg/
-        # launcher.py gives every role BASE_DIR), so records published under
-        # <project>/data -- the bridge relays among them -- are found by every
-        # role. The project is a private export of this checkout's runtime
-        # source, so its data/ belongs to the instance alone. Without it the
-        # execution host runs from the checkout while the records live under
-        # ``state``: right for the storage faults, but no relay is reachable.
-        self.private_source = private_source
-        self.source = self.root / 'source' if private_source else CHECKOUT
-        self.state_root = self.source if private_source else self.root / 'state'
+        # The production topology: the manager, the API host and the execution
+        # host share ONE project (bootstrap_pkg/launcher.py gives every role
+        # BASE_DIR), so records published under <project>/data -- the bridge
+        # relays among them -- are found by every role. The project is a
+        # private export of this checkout's runtime source, so its data/
+        # belongs to the instance alone. An execution host run from the
+        # checkout itself published <checkout>/data/mcp-bridge-relay.json, so
+        # two instances at once (xdist workers) relayed MCP calls to each
+        # other's servers.
+        self.source = self.root / 'source'
+        self.state_root = self.source
         self.port = 0
         self.api: subprocess.Popen | None = None
         self.api_generation = 0
@@ -183,7 +183,7 @@ class ChaosInstance:
         if self._want_faultfs:
             self.faultfs = self._build_faultfs()
             self.set_medium(fsync_us=0, enospc=False)
-        if self.private_source and not (self.source / 'server.py').exists():
+        if not (self.source / 'server.py').exists():
             self._export_source()
         self.environment = self._base_environment()
         self._seed_caches()

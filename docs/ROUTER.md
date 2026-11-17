@@ -997,7 +997,9 @@ point. Scope:
   did not ask for, and its 600-second token does not fit an asynchronous
   chat). Protection is the Settings signal, `list_running_tasks`, without the
   Router's own conversation: a protected step (`git_land`, `export`; below)
-  always refuses; other running conversations refuse unless the owner asked
+  is waited for under restart precedence instead of refusing (below), and
+  refuses only when its marker remains after that wait; other running
+  conversations refuse unless the owner asked
   to restart anyway (`interrupt_running_conversations`, the Settings force);
   an unreadable signal refuses. In the managed split the Router runs in the
   execution host, which owns no frontend: its preparation covers the native
@@ -1057,6 +1059,30 @@ point. Scope:
   automatic restart and deferred-restart quiescence see them too. A local
   marker counts while its process lives; another host's marker counts until
   its writer removes it, and the refusal names its path.
+- **A pending restart takes precedence over landings** (owner request
+  2026-11-17). Problem: landings ran back to back all day, so Settings and
+  Router restarts were refused for a running `git_land`, and a terminal
+  restart's hours-long engine certification could be invalidated by the next
+  landing. Decision: `restart_precedence` (same module) is held by
+  `serverctl.py restart`, Settings restart and the Router's `restart_server`
+  for their whole preparation; it waits (kernel `flock`, no interval or
+  timeout) for steps already running, and every new `protected_step` waits
+  for it, then resumes. An accepted restart retains precedence until its
+  process is replaced; a bridge refusal releases it. Locks live in
+  `<data root>/protected-steps-locks/`. Alternatives rejected: refusing new
+  landings (an error loop for every Worker), a polling retry or a wait cap
+  (knobs with no external source), pausing only the integration queue (it
+  misses terminal and agent landings). Specification:
+  `tests/server/test_restart_precedence.py`; real instance:
+  `benchmarks/startup_idle_dispatch.py restart`.
+- **A restart's failure stage is shown, not lost.** `serverctl.py restart`
+  records its outcome on its operator-pass approval record
+  (`lifecycle_approval.record_restart_outcome`) and as one
+  `[serverctl] restart failed stage=<stage> reason=<text>` line in
+  `logs/server-manager.log`, also when it stopped before the manager was
+  asked (engine certification, frontend build). `/update/check` projects the
+  newest failure since this server started as `last_restart_failure`, and
+  Settings renders its stage and full reason.
 
 **The boundary: act, never speak.** The grant lets the Router act as the
 owner; it never lets it speak as the owner. It cannot answer questions

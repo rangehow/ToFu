@@ -37,6 +37,13 @@ def test_instance_environment_carries_no_live_identity(monkeypatch, tmp_path):
         shutil.rmtree(instance.scratch, ignore_errors=True)
 
 
+def test_a_source_changing_restart_refuses_a_git_checkout():
+    """--land-source appends to application source; only an exported copy may be edited."""
+    assert (bench.ROOT / '.git').exists()
+    with pytest.raises(SystemExit, match='exported copy'):
+        bench.restart(object(), land_source=True)
+
+
 def test_summary_reports_median_and_samples():
     assert bench._summary([3.0, 1.0, 2.0]) == {
         'median': 2.0, 'min': 1.0, 'max': 3.0, 'samples': [3.0, 1.0, 2.0]}

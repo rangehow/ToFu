@@ -215,7 +215,9 @@ def serve(args, *, supervisor_factory=_new_supervisor) -> int:
             if prepare_plan(supervisor) != record['plan']:
                 raise RuntimeError('native storage configuration changed after preparation')
             if not stopped.is_set() and owner_alive():
-                runtime.start()
+                # A failed first start retries under the crash budget instead of
+                # failing the host until an explicit restart (2026-11-17 21:49).
+                runtime.start_supervised()
         except Exception as exc:
             errors.append(f'{type(exc).__name__}: {str(exc)[:300]}')
             logger.exception('resident native startup failed')

@@ -517,6 +517,48 @@ class StorageRuntime:
     def start(self) -> StorageClient:
         return self._start(clear_stop=True)
 
+    def start_supervised(self) -> None:
+        """First start of a resident owner, under the same crash budget as a crash.
+
+        A failed first start (an engine component not yet healthy at the
+        preflight, a lease not yet released) is one failed-start event: the
+        restart worker retries it with its backoff and breaker, exactly as it
+        would after a crash, instead of the owner failing until an explicit
+        restart. A runtime without automatic restart keeps ``start()``.
+        """
+        if not self._breaker_applies():
+            self.start()
+            return
+        try:
+            self.start()
+            return
+        except StorageStartRefused as exc:
+            self._record_refusal(exc)
+        except StorageStartDeferred:
+            pass
+        except Exception as exc:
+            logger.warning('Storage first start failed: %s: %s; the restart worker retries it '
+                           '(crash budget %d in %.0fs)', type(exc).__name__, str(exc)[:300],
+                           self._crash_limit, self._crash_window_seconds)
+            with self._lock:
+                events = self._record_restart_event_locked(time.monotonic())
+            if events > self._crash_limit:
+                self._enter_degraded(f'{events} storage crashes/failed starts within '
+                                     f'{self._crash_window_seconds:.0f}s (limit {self._crash_limit}); '
+                                     f'last start error: {type(exc).__name__}: {str(exc)[:200]}')
+                return
+        with self._lock:
+            if self._stopping.is_set() or (
+                    self._restart_thread is not None and self._restart_thread.is_alive()):
+                return
+            if self._unavailable_since is None:
+                self._unavailable_since = time.time()
+                self._fence_cause = self._last_error
+                self._fence_restart_base = self._restart_attempts
+            self._restart_thread = threading.Thread(
+                target=self._restart_loop, name='storage-restart', daemon=True)
+            self._restart_thread.start()
+
     def _start(self, *, clear_stop: bool, after_trip: bool = False) -> StorageClient:
         if clear_stop:
             self._stopping.clear()

@@ -369,7 +369,9 @@ def main(argv: list[str] | None = None) -> int:
     from lib.runtime.protected_steps import protected_step
     try:
         # A restart must not boot from a half-landed checkout (restart protection).
-        with nullcontext() if args.check else protected_step('git_land', detail=args.branch):
+        with nullcontext() if args.check else protected_step(
+                'git_land', detail=args.branch,
+                on_wait=lambda message: print(message, file=sys.stderr, flush=True)):
             result = land(args.branch, into=args.into, keep=args.keep, check=args.check)
     except Refused as refusal:
         print(f'Refused: {refusal.reason}. Nothing was changed.')

@@ -601,6 +601,9 @@ def test_impossible_automatic_certification_refuses_before_anything_is_stopped(
                 'gate-fails': '--deploy-uncertified-engine'}[obstacle]
     assert expected in line
     assert len(ran) == (obstacle == 'gate-fails')
+    # The owner reads restart outcomes in server-manager.log; this refusal never reached the manager.
+    manager_log = (project / 'logs/server-manager.log').read_text()
+    assert '[serverctl] restart failed stage=storage engine certification reason=' in manager_log
 
 
 # ── shared contract identity and deployment receipts ──────────────────────────

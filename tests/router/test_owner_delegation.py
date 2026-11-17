@@ -166,15 +166,22 @@ def test_running_conversations_refuse_unless_the_owner_asked_to_interrupt_them(d
     assert restarted['status'] == 'restarting' and restarted['interrupted'] == ['worker-a']
 
 
-@pytest.mark.parametrize('case', ['protected-step', 'activity-unavailable'])
-def test_a_protected_step_or_unreadable_activity_refuses_even_when_interrupting(d, case):
+def test_a_running_landing_is_waited_for_instead_of_refusing_the_restart(d):
+    """Continuous landings must not starve restarts: a restart takes precedence and waits
+    for the running landing (lib/runtime/protected_steps.py) instead of refusing."""
     d.grant()
-    d.running = (RuntimeError('worker_job.active.list unavailable') if case == 'activity-unavailable'
-                 else [{'taskId': 'protected-step:git_land-host-42-ab', 'convId': '', 'elapsed': 3.0,
-                        'protectedStep': 'git_land', 'marker': '/data/protected-steps/git_land.json'}])
+    d.running = [{'taskId': 'protected-step:git_land-host-42-ab', 'convId': '', 'elapsed': 3.0,
+                  'protectedStep': 'git_land', 'marker': '/data/protected-steps/git_land.json'}]
+    accepted = d.restart(interrupt_running_conversations=False)
+    assert accepted['status'] == 'accepted' and d.detached
+
+
+def test_unreadable_activity_refuses_even_when_interrupting(d):
+    d.grant()
+    d.running = RuntimeError('worker_job.active.list unavailable')
     with pytest.raises(DelegationRefused) as refused:
         d.restart(interrupt_running_conversations=True)
-    expected = 'restart_protection_unavailable' if case == 'activity-unavailable' else 'restart_protected_step'
+    expected = 'restart_protection_unavailable'
     assert refused.value.code == expected
     # The caller's own conversation never counts against itself, exactly as in Settings.
     assert d.events == [('protect', 'router', None)] and d.detached == []

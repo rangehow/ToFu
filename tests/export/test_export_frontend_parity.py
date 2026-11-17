@@ -17,6 +17,7 @@ so the shipped i18n dead-key gate stays green.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -187,7 +188,13 @@ def test_export_without_node_fails_closed(tmp_path, monkeypatch):
 
 
 def test_toolchain_materialization_drops_a_link_to_its_own_ancestor(tmp_path):
-    """A shared node_modules holding ``node_modules -> node_modules`` must not recurse."""
+    """A worktree link farm's ``node_modules`` entry into the shared self-link is dropped.
+
+    Copied, it became a second full toolchain at ``node_modules/node_modules``
+    that Node's upward lookup prefers from inside every package, so the
+    published frontend was built against duplicate package instances and
+    differed from CI's clean ``npm ci`` build.
+    """
     from export_pkg import _export_core
 
     shared = tmp_path / 'shared' / 'node_modules'
@@ -203,6 +210,17 @@ def test_toolchain_materialization_drops_a_link_to_its_own_ancestor(tmp_path):
 
     assert (tree / 'pkg' / 'index.js').read_text() == 'export default 1;\n'
     assert not (tree / 'pkg').is_symlink()
-    copied = tree / 'node_modules'
-    assert (copied / 'pkg' / 'index.js').is_file()
-    assert not (copied / 'node_modules').exists()
+    assert not os.path.lexists(tree / 'node_modules')
+
+
+def test_toolchain_materialization_drops_nested_node_modules_link_inside_the_tree(tmp_path):
+    from export_pkg import _export_core
+
+    tree = tmp_path / 'export' / 'node_modules'
+    (tree / 'pkg').mkdir(parents=True)
+    (tree / 'node_modules').symlink_to(tree)
+
+    _export_core._materialize_escaping_links(tree)
+
+    assert (tree / 'pkg').is_dir()
+    assert not os.path.lexists(tree / 'node_modules')

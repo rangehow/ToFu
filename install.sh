@@ -2247,144 +2247,6 @@ else
 
 fi
 
-# ── Optional: bundled internal MCP servers ──
-# The inventory is declared once, in bundles/yourprovider/mcp_launchers/yourprovider.json:
-# every launcher whose sources name vendor/<launcher> (export_pkg/_lists.py
-# bundles the same set). Opensource trees ship no bundles/, so the list is empty.
-# These private servers aren't on PyPI, so the MCP tab's "Install" button
-# can't fetch them — but they are NOT pip-installed into this env anymore.
-# Each launches ISOLATED via `uv run --no-project --with-editable <source>`
-# (lib/mcp/client/_vendor.vendored_launch_argv): the server's dependency tree
-# — its own `mcp` included — must never share Tofu's interpreter, or one
-# server's SDK requirement can break the Tofu client (measured 2026-07-31).
-# All this step does is locate the sources and pre-warm the isolated envs so
-# the first connect is a fast handshake instead of a cold resolve.
-# Sources, in priority order:
-#   1. vendor/<name>/   — personal/internal EXPORTS bundle the source here.
-#   2. ../<name>/        — a DEV checkout: sibling repos next to this one.
-# Skipped silently if neither source exists (opensource exports).
-step "Warming bundled internal MCP servers (isolated envs)"
-_INTERNAL_MCP_REPOS=()
-_INTERNAL_MCP_MANIFEST="${INSTALL_DIR}/bundles/yourprovider/mcp_launchers/yourprovider.json"
-if [[ -f "$_INTERNAL_MCP_MANIFEST" ]]; then
-    mapfile -t _INTERNAL_MCP_REPOS < <(python - "$_INTERNAL_MCP_MANIFEST" <<'PY'
-import json, sys
-launchers = json.load(open(sys.argv[1], encoding='utf-8'))['launchers']
-print('\n'.join(name for name, row in launchers.items() if f'vendor/{name}' in row['sources']))
-PY
-) || warn "Could not read the internal MCP inventory ${_INTERNAL_MCP_MANIFEST}"
-fi
-_BUNDLED_MCPS=()
-for _mcp in "${_INTERNAL_MCP_REPOS[@]}"; do
-    _vendor_path="${INSTALL_DIR}/vendor/${_mcp}"
-    _sibling_path="$(cd "${INSTALL_DIR}/.." 2>/dev/null && pwd)/${_mcp}"
-    if [[ -f "${_vendor_path}/pyproject.toml" ]]; then
-        _BUNDLED_MCPS+=("$_vendor_path")
-    elif [[ -f "${_sibling_path}/pyproject.toml" ]]; then
-        _BUNDLED_MCPS+=("$_sibling_path")
-    fi
-done
-if [[ ${#_BUNDLED_MCPS[@]} -eq 0 ]]; then
-    info "No bundled MCP repos (vendor/ or sibling checkout) — skipping"
-elif ! command -v uv >/dev/null 2>&1; then
-    warn "uv not available — cannot pre-warm bundled MCP servers"
-    warn "The MCP tab Install buttons will still work, but first connects will be slow."
-else
-    for _src in "${_BUNDLED_MCPS[@]}"; do
-        _name="$(basename "$_src")"
-        _pkg="${_name//-/_}"
-        info "Warming: ${_name} (${_src})"
-        if uv run --no-project --with-editable "$_src" python -c "import ${_pkg}"; then
-            ok "Bundled MCP ${_name} ready (isolated env warm)"
-        else
-            warn "Bundled MCP ${_name} warm failed — its Install button may be slow"
-            warn "Retry manually: uv run --no-project --with-editable ${_src} python -c 'import ${_pkg}'"
-        fi
-    done
-fi
-
-# ── YourProvider middle-platform runtime (internal exports only) ──
-# Owner decision 2026-11-01: an internal export must work OUT OF THE BOX —
-# the colleague must not have to install Node, the SSO CLI or the sandbox SDK
-# before the carried skills and MCP servers can run. Demand-driven: this step
-# runs only when a YourProvider capability is actually present (a vendored internal
-# MCP repo, or the owner-global skill store). Opensource installs never see it.
-# Every failure is a WARNING: optional capability state must never abort an
-# otherwise verified installation.
-_MEITUAN_CAPS_PRESENT=0
-for _probe in "${_INTERNAL_MCP_REPOS[@]}" github-batch-mcp; do
-    [[ -f "${INSTALL_DIR}/vendor/${_probe}/pyproject.toml" ]] && _MEITUAN_CAPS_PRESENT=1
-done
-[[ -d "${INSTALL_DIR}/data/skills/users" ]] && _MEITUAN_CAPS_PRESENT=1
-if [[ "$_MEITUAN_CAPS_PRESENT" -eq 0 ]]; then
-    info "No carried YourProvider capabilities — skipping the internal runtime step"
-else
-    step "Provisioning the YourProvider middle-platform runtime (Node, SSO CLI, sandbox SDK)"
-    _MEITUAN_NODE_OK=0
-    for _cand in "${TOFU_NODE:-}" "${ENV_PREFIX}/bin/node" "${INSTALL_DIR}/.tofu/node-toolchain/bin/node" "$(command -v node 2>/dev/null || true)"; do
-        [[ -n "$_cand" && -x "$_cand" ]] || continue
-        _major="$("$_cand" -p 'process.versions.node.split(".")[0]' 2>/dev/null || true)"
-        if [[ "${_major:-0}" -ge 22 ]] 2>/dev/null; then
-            _MEITUAN_NODE_OK=1
-            _MEITUAN_NODE="$_cand"
-            break
-        fi
-    done
-    if [[ "$_MEITUAN_NODE_OK" -eq 0 ]]; then
-        # DX needs Node >=22 (env-proxy support); the bundled musl toolchain is
-        # Node 20, so an export host that only has that one still needs a newer
-        # runtime. Reuse the conda env the installer already owns.
-        info "Installing nodejs 22 into ${ENV_NAME} (required by carried Node skills/MCP)"
-        if "$CONDA_BIN" install -y -n "$ENV_NAME" -c conda-forge --override-channels "nodejs=22" \
-                >/tmp/tofu-yourprovider-node.log 2>&1; then
-            _MEITUAN_NODE_OK=1
-            _MEITUAN_NODE="${ENV_PREFIX}/bin/node"
-            ok "Node $("$_MEITUAN_NODE" --version) available"
-        else
-            warn "Node >=22 could not be installed (see /tmp/tofu-yourprovider-node.log)."
-            warn "DX / npx-based MCP servers will not run until Node >=22 is on PATH."
-        fi
-    else
-        ok "Node >=22 already available: $("$_MEITUAN_NODE" --version)"
-    fi
-
-    # YourProvider npm CLIs into the env's own node_modules — the shared SSO adapter
-    # discovers @datafe/llm-cli via the `llm` launcher, and @mtfe/mtsso-auth-official
-    # next to it, so both land in the same prefix. No global/home mutation.
-    if [[ "$_MEITUAN_NODE_OK" -eq 1 && -x "${ENV_PREFIX}/bin/npm" ]]; then
-        _NPM_REGISTRY="${TOFU_NPM_REGISTRY:-http://r.npm.internal.example.com}"
-        info "Installing @datafe/llm-cli + @mtfe/mtsso-auth-official + @mtfe/mtskills (${_NPM_REGISTRY})"
-        if "${ENV_PREFIX}/bin/npm" install --prefix "$ENV_PREFIX" --no-audit --no-fund \
-                --registry="$_NPM_REGISTRY" \
-                @datafe/llm-cli @mtfe/mtsso-auth-official @mtfe/mtskills \
-                >/tmp/tofu-yourprovider-npm.log 2>&1; then
-            ok "YourProvider SSO CLI installed (${ENV_PREFIX}/bin/llm)"
-        else
-            warn "YourProvider npm CLIs could not be installed (see /tmp/tofu-yourprovider-npm.log)."
-            warn "Shared SSO ticket exchange needs @datafe/llm-cli and @mtfe/mtsso-auth-official."
-        fi
-    else
-        warn "Skipping YourProvider npm CLIs (no usable npm)."
-    fi
-
-    # Sandbox SDK for the carried sandbox-direct-access skill. It is published
-    # on YourProvider's own index, NOT on the conda/pypi mirrors used earlier.
-    if "$ENV_PYTHON" -c 'import pssdk' 2>/dev/null; then
-        ok "pssdk already available"
-    else
-        # --extra-index-url, NOT --index-url: the SDK only exists on YourProvider's
-        # own index, while its dependencies must still come from the mirror.
-        info "Installing mt-paas-sandbox-python-sdk from https://pypi.internal.example.com/simple/"
-        if _safe_pip_install --extra-index-url https://pypi.internal.example.com/simple/ \
-                mt-paas-sandbox-python-sdk==1.1.4 >/tmp/tofu-yourprovider-pssdk.log 2>&1; then
-            ok "pssdk installed for the sandbox skill"
-        else
-            warn "pssdk could not be installed (see /tmp/tofu-yourprovider-pssdk.log)."
-            warn "Direct sandbox runs need mt-paas-sandbox-python-sdk==1.1.4."
-        fi
-    fi
-fi
-
 # ── Optional: Docling (layout-aware PDF parsing) ──
 # Opt-in via --with-docling. Adds ~2 GB to the env (pulls torch + downloads
 # model weights on first use). Not installed by default because the base
@@ -2688,6 +2550,156 @@ else
 fi
 
 fi  # ── end legacy conda path ($_FAST_PATH_DONE != 1) ──
+
+# ── Optional: bundled internal MCP servers (BOTH paths) ──
+# This step and the YourProvider runtime step below must stay outside the
+# conda-only block: the default uv fast path skips that block wholesale.
+# The inventory is declared once, in bundles/yourprovider/mcp_launchers/yourprovider.json:
+# every launcher whose sources name vendor/<launcher> (export_pkg/_lists.py
+# bundles the same set). Opensource trees ship no bundles/, so the list is empty.
+# These private servers aren't on PyPI, so the MCP tab's "Install" button
+# can't fetch them — but they are NOT pip-installed into this env anymore.
+# Each launches ISOLATED via `uv run --no-project --with-editable <source>`
+# (lib/mcp/client/_vendor.vendored_launch_argv): the server's dependency tree
+# — its own `mcp` included — must never share Tofu's interpreter, or one
+# server's SDK requirement can break the Tofu client (measured 2026-07-31).
+# All this step does is locate the sources and pre-warm the isolated envs so
+# the first connect is a fast handshake instead of a cold resolve.
+# Sources, in priority order:
+#   1. vendor/<name>/   — personal/internal EXPORTS bundle the source here.
+#   2. ../<name>/        — a DEV checkout: sibling repos next to this one.
+# Skipped silently if neither source exists (opensource exports).
+step "Warming bundled internal MCP servers (isolated envs)"
+_INTERNAL_MCP_REPOS=()
+_INTERNAL_MCP_MANIFEST="${INSTALL_DIR}/bundles/yourprovider/mcp_launchers/yourprovider.json"
+if [[ -f "$_INTERNAL_MCP_MANIFEST" ]]; then
+    mapfile -t _INTERNAL_MCP_REPOS < <("$ENV_PYTHON" - "$_INTERNAL_MCP_MANIFEST" <<'PY'
+import json, sys
+launchers = json.load(open(sys.argv[1], encoding='utf-8'))['launchers']
+print('\n'.join(name for name, row in launchers.items() if f'vendor/{name}' in row['sources']))
+PY
+) || warn "Could not read the internal MCP inventory ${_INTERNAL_MCP_MANIFEST}"
+fi
+_BUNDLED_MCPS=()
+for _mcp in "${_INTERNAL_MCP_REPOS[@]}"; do
+    _vendor_path="${INSTALL_DIR}/vendor/${_mcp}"
+    _sibling_path="$(cd "${INSTALL_DIR}/.." 2>/dev/null && pwd)/${_mcp}"
+    if [[ -f "${_vendor_path}/pyproject.toml" ]]; then
+        _BUNDLED_MCPS+=("$_vendor_path")
+    elif [[ -f "${_sibling_path}/pyproject.toml" ]]; then
+        _BUNDLED_MCPS+=("$_sibling_path")
+    fi
+done
+if [[ ${#_BUNDLED_MCPS[@]} -eq 0 ]]; then
+    info "No bundled MCP repos (vendor/ or sibling checkout) — skipping"
+elif ! command -v uv >/dev/null 2>&1; then
+    warn "uv not available — cannot pre-warm bundled MCP servers"
+    warn "The MCP tab Install buttons will still work, but first connects will be slow."
+else
+    for _src in "${_BUNDLED_MCPS[@]}"; do
+        _name="$(basename "$_src")"
+        _pkg="${_name//-/_}"
+        info "Warming: ${_name} (${_src})"
+        if uv run --no-project --with-editable "$_src" python -c "import ${_pkg}"; then
+            ok "Bundled MCP ${_name} ready (isolated env warm)"
+        else
+            warn "Bundled MCP ${_name} warm failed — its Install button may be slow"
+            warn "Retry manually: uv run --no-project --with-editable ${_src} python -c 'import ${_pkg}'"
+        fi
+    done
+fi
+
+# ── YourProvider middle-platform runtime (internal exports only) ──
+# Owner decision 2026-11-01: an internal export must work OUT OF THE BOX —
+# the colleague must not have to install Node, the SSO CLI or the sandbox SDK
+# before the carried skills and MCP servers can run. Demand-driven: this step
+# runs only when a YourProvider capability is actually present (a vendored internal
+# MCP repo, or the owner-global skill store). Opensource installs never see it.
+# Every failure is a WARNING: optional capability state must never abort an
+# otherwise verified installation.
+_MEITUAN_CAPS_PRESENT=0
+for _probe in "${_INTERNAL_MCP_REPOS[@]}" github-batch-mcp; do
+    [[ -f "${INSTALL_DIR}/vendor/${_probe}/pyproject.toml" ]] && _MEITUAN_CAPS_PRESENT=1
+done
+[[ -d "${INSTALL_DIR}/data/skills/users" ]] && _MEITUAN_CAPS_PRESENT=1
+if [[ "$_MEITUAN_CAPS_PRESENT" -eq 0 ]]; then
+    info "No carried YourProvider capabilities — skipping the internal runtime step"
+else
+    step "Provisioning the YourProvider middle-platform runtime (Node, SSO CLI, sandbox SDK)"
+    _MEITUAN_NODE_OK=0
+    for _cand in "${TOFU_NODE:-}" "${ENV_PREFIX}/bin/node" "${INSTALL_DIR}/.tofu/node-toolchain/bin/node" "$(command -v node 2>/dev/null || true)"; do
+        [[ -n "$_cand" && -x "$_cand" ]] || continue
+        _major="$("$_cand" -p 'process.versions.node.split(".")[0]' 2>/dev/null || true)"
+        if [[ "${_major:-0}" -ge 22 ]] 2>/dev/null; then
+            _MEITUAN_NODE_OK=1
+            _MEITUAN_NODE="$_cand"
+            break
+        fi
+    done
+    if [[ "$_MEITUAN_NODE_OK" -eq 0 && "$_FAST_PATH_DONE" -eq 1 ]]; then
+        # A uv venv has no package manager that can provide Node.
+        warn "Node >=22 not found (set TOFU_NODE or put node >=22 on PATH)."
+        warn "DX / npx-based MCP servers will not run until Node >=22 is on PATH."
+    elif [[ "$_MEITUAN_NODE_OK" -eq 0 ]]; then
+        # DX needs Node >=22 (env-proxy support); the bundled musl toolchain is
+        # Node 20, so an export host that only has that one still needs a newer
+        # runtime. Reuse the conda env the installer already owns.
+        info "Installing nodejs 22 into ${ENV_NAME} (required by carried Node skills/MCP)"
+        if "$CONDA_BIN" install -y -p "$ENV_PREFIX" -c conda-forge --override-channels "nodejs=22" \
+                >/tmp/tofu-yourprovider-node.log 2>&1; then
+            _MEITUAN_NODE_OK=1
+            _MEITUAN_NODE="${ENV_PREFIX}/bin/node"
+            ok "Node $("$_MEITUAN_NODE" --version) available"
+        else
+            warn "Node >=22 could not be installed (see /tmp/tofu-yourprovider-node.log)."
+            warn "DX / npx-based MCP servers will not run until Node >=22 is on PATH."
+        fi
+    else
+        ok "Node >=22 already available: $("$_MEITUAN_NODE" --version)"
+    fi
+
+    # YourProvider npm CLIs into the env's own node_modules — the shared SSO adapter
+    # discovers @datafe/llm-cli via the `llm` launcher, and @mtfe/mtsso-auth-official
+    # next to it, so both land in the same prefix. No global/home mutation.
+    if [[ "$_MEITUAN_NODE_OK" -eq 1 && -x "${ENV_PREFIX}/bin/npm" ]]; then
+        _NPM_REGISTRY="${TOFU_NPM_REGISTRY:-http://r.npm.internal.example.com}"
+        info "Installing @datafe/llm-cli + @mtfe/mtsso-auth-official + @mtfe/mtskills (${_NPM_REGISTRY})"
+        if "${ENV_PREFIX}/bin/npm" install --prefix "$ENV_PREFIX" --no-audit --no-fund \
+                --registry="$_NPM_REGISTRY" \
+                @datafe/llm-cli @mtfe/mtsso-auth-official @mtfe/mtskills \
+                >/tmp/tofu-yourprovider-npm.log 2>&1; then
+            ok "YourProvider SSO CLI installed (${ENV_PREFIX}/bin/llm)"
+        else
+            warn "YourProvider npm CLIs could not be installed (see /tmp/tofu-yourprovider-npm.log)."
+            warn "Shared SSO ticket exchange needs @datafe/llm-cli and @mtfe/mtsso-auth-official."
+        fi
+    else
+        warn "Skipping YourProvider npm CLIs (no usable npm)."
+    fi
+
+    # Sandbox SDK for the carried sandbox-direct-access skill. It is published
+    # on YourProvider's own index, NOT on the conda/pypi mirrors used earlier.
+    if "$ENV_PYTHON" -c 'import pssdk' 2>/dev/null; then
+        ok "pssdk already available"
+    else
+        # --extra-index-url, NOT --index-url: the SDK only exists on YourProvider's
+        # own index, while its dependencies must still come from the mirror.
+        info "Installing mt-paas-sandbox-python-sdk from https://pypi.internal.example.com/simple/"
+        # _safe_pip_install is conda-path only; a uv venv ships no pip.
+        if [[ "$_FAST_PATH_DONE" -eq 1 ]]; then
+            _PSSDK_INSTALL=(_install_run 300 uv pip install --python "$ENV_PYTHON")
+        else
+            _PSSDK_INSTALL=(_safe_pip_install)
+        fi
+        if "${_PSSDK_INSTALL[@]}" --extra-index-url https://pypi.internal.example.com/simple/ \
+                mt-paas-sandbox-python-sdk==1.1.4 >/tmp/tofu-yourprovider-pssdk.log 2>&1; then
+            ok "pssdk installed for the sandbox skill"
+        else
+            warn "pssdk could not be installed (see /tmp/tofu-yourprovider-pssdk.log)."
+            warn "Direct sandbox runs need mt-paas-sandbox-python-sdk==1.1.4."
+        fi
+    fi
+fi
 
 # ═══════════════════════════════════════════════════════════════
 #  Step 8.4: Prebuilt frontend — release users never need Node/npm.

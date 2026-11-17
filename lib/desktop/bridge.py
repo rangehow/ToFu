@@ -5,6 +5,12 @@ The server queues commands here; the desktop agent long-polls
 return results. This module owns the queue state and the blocking
 ``send_desktop_command`` RPC so that lib-layer tool handlers can drive the
 agent without importing the routes package.
+
+The process that terminates polls owns this state. A resident execution host
+selects that owner through ``lib.desktop.bridge_relay``: the presence and
+command verbs below forward to it (``_relay()``), so tools, context and the
+liveness judge read the one registry Settings shows. Poll-side verbs
+(register, take, resolve, revoke) always run in the owner.
 """
 
 import asyncio
@@ -18,6 +24,20 @@ from lib.desktop_wire import contract, limit, protocol_version
 from lib.log import get_logger
 
 logger = get_logger(__name__)
+
+# How often a blocked caller re-checks its cancellation signal (local wait and
+# relayed wait alike).
+CANCEL_OBSERVATION_SECONDS = 0.25
+
+
+def _relay():
+    """The remote bridge owner selected for this process, or None (local owner)."""
+    from lib.desktop.bridge_relay import selected_relay
+    return selected_relay()
+
+
+def _relay_unavailable(verb, exc):
+    logger.warning('[Desktop] bridge owner unreachable for %s: %s', verb, exc)
 
 # ══════════════════════════════════════════════════════════
 #  Command Queue (mirrors lib/browser.py pattern)
@@ -95,6 +115,14 @@ def record_poll() -> None:
 
 def is_desktop_agent_connected() -> bool:
     """Check if the desktop agent has polled recently."""
+    relay = _relay()
+    if relay is not None:
+        from lib.desktop.bridge_relay import RelayUnavailable
+        try:
+            return bool(relay.call('connected', {}))
+        except RelayUnavailable as exc:
+            _relay_unavailable('connected', exc)
+            return False
     return time.time() - _last_poll[0] < _CONNECTED_WINDOW_S
 
 
@@ -122,6 +150,20 @@ def _command_active_locked(command, now):
     return (agent.get('user_id') == command.get('user_id')
             and now - agent.get('last_seen', 0) < _CONNECTED_WINDOW_S
             and command['id'] in (agent.get('active_command_ids') or set()))
+
+
+def command_active(cmd_id, now) -> bool:
+    """Whether a queued command is claimed by a device still connected (liveness judge)."""
+    relay = _relay()
+    if relay is not None:
+        from lib.desktop.bridge_relay import RelayUnavailable
+        try:
+            return bool(relay.call('command_active', {'cmd_id': str(cmd_id), 'now': float(now)}))
+        except RelayUnavailable as exc:
+            _relay_unavailable('command_active', exc)
+            return False
+    with command_queue_lock:
+        return _command_active_locked(command_queue.get(cmd_id), now)
 
 
 def _command_owned_by_poller(cmd, agent_id: str, user_id: str) -> bool:
@@ -203,6 +245,15 @@ def get_frames(cmd_id, since_seq=0):
     stream (design §4.3: never wait forever for a swept entry).
     ``get_command_stream`` keeps its stdout/stderr contract on top of this.
     """
+    relay = _relay()
+    if relay is not None:
+        from lib.desktop.bridge_relay import RelayUnavailable
+        try:
+            got = relay.call('frames', {'cmd_id': str(cmd_id), 'since_seq': int(since_seq)})
+        except RelayUnavailable as exc:
+            _relay_unavailable('frames', exc)
+            return None
+        return None if got is None else ([tuple(frame) for frame in got[0]], got[1])
     now = time.time()
     with command_queue_lock:
         _sweep_streams_locked(now)
@@ -337,7 +388,18 @@ def _public_agent(agent):
 
 
 def online_agents() -> list:
-    """Registry agents whose heartbeat is inside the liveness window."""
+    """Registry agents whose heartbeat is inside the liveness window.
+
+    An unreachable remote owner reads as no reachable device.
+    """
+    relay = _relay()
+    if relay is not None:
+        from lib.desktop.bridge_relay import RelayUnavailable
+        try:
+            return relay.call('online_agents', {})
+        except RelayUnavailable as exc:
+            _relay_unavailable('online_agents', exc)
+            return []
     now = time.time()
     with command_queue_lock:
         return [_public_agent(a) for a in _agents.values()
@@ -350,7 +412,12 @@ def list_agents(user_id=None) -> list:
     ``user_id`` (RWA P4a): when given, only agents registered by that
     bridge caller are returned — a tenant must never see another tenant's
     machines on a relay deployment. ``None`` = unfiltered (operator view).
+    Raises ``RelayUnavailable`` when the selected remote owner is unreachable,
+    so a caller can say so instead of reporting an empty fleet.
     """
+    relay = _relay()
+    if relay is not None:
+        return relay.call('list_agents', {'user_id': None if user_id is None else str(user_id)})
     now = time.time()
     with command_queue_lock:
         out = [dict(_public_agent(a), online=(now - a['last_seen']) < _CONNECTED_WINDOW_S)
@@ -366,6 +433,15 @@ def online_connection(agent_id, user_id) -> dict | None:
     Same shape as the connection :func:`register_agent` returns at the online
     transition; another owner's device is never visible.
     """
+    relay = _relay()
+    if relay is not None:
+        from lib.desktop.bridge_relay import RelayUnavailable
+        try:
+            return relay.call('online_connection', {'agent_id': str(agent_id),
+                                                    'user_id': str(user_id or '')})
+        except RelayUnavailable as exc:
+            _relay_unavailable('online_connection', exc)
+            return None
     now = time.time()
     with command_queue_lock:
         agent = _agents.get(agent_id)
@@ -446,7 +522,11 @@ def resolve_device_target(selector: str, user_id) -> tuple[dict | None, str | No
     offline, so the caller can offer a wait for it. Another owner's devices are
     filtered out before matching and never appear in an error.
     """
-    agents = list_agents(user_id=str(user_id or ''))
+    from lib.desktop.bridge_relay import RelayUnavailable
+    try:
+        agents = list_agents(user_id=str(user_id or ''))
+    except RelayUnavailable as exc:
+        return None, str(exc)
     online = [agent for agent in agents if agent['online']]
     matches = match_devices(agents, selector)
     if len(matches) > 1:
@@ -565,6 +645,10 @@ def send_desktop_command(cmd_type, params=None, timeout=None, target_agent_id=No
         raise ValueError('Desktop wait timeout must be nonnegative and finite or None')
     if cancellation is not None and cancellation.is_set():
         return None, 'Desktop command cancelled before dispatch'
+    relay = _relay()
+    if relay is not None:
+        return _send_via_relay(relay, cmd_type, params, timeout, target_agent_id,
+                               user_id, cmd_id, ttl, cancellation)
     err = (_addressing_enqueue_error(target_agent_id, user_id=user_id)
            or _tier_enqueue_error(cmd_type, params, target_agent_id, user_id=user_id))
     if err:
@@ -604,7 +688,8 @@ def send_desktop_command(cmd_type, params=None, timeout=None, target_agent_id=No
             # Poll only a supplied cancellation signal; otherwise block on settlement.
             interval = remaining
             if cancellation is not None:
-                interval = .25 if remaining is None else min(.25, remaining)
+                interval = (CANCEL_OBSERVATION_SECONDS if remaining is None
+                            else min(CANCEL_OBSERVATION_SECONDS, remaining))
             event.wait(timeout=interval)
 
     with command_queue_lock:
@@ -623,6 +708,30 @@ def send_desktop_command(cmd_type, params=None, timeout=None, target_agent_id=No
     return cmd.get('result'), cmd.get('error')
 
 
+def _send_via_relay(relay, cmd_type, params, timeout, target_agent_id, user_id, cmd_id,
+                    ttl, cancellation):
+    """Forward one blocking command to the remote owner, keeping the local device wait.
+
+    The owner enforces addressing, tiers and settlement; this process keeps
+    the task's device-wait publication so the liveness judge (which asks the
+    owner through :func:`command_active`) still sees whose silence it is.
+    """
+    from lib.desktop.bridge_relay import RelayUnavailable, is_cancelled
+    cmd_id = cmd_id or str(uuid.uuid4())
+    try:
+        with _device_wait_scope({'id': cmd_id, 'type': cmd_type}):
+            outcome = relay.call('send_command', {
+                'cmd_type': cmd_type, 'params': params or {}, 'timeout': timeout,
+                'target_agent_id': target_agent_id, 'user_id': str(user_id or ''),
+                'cmd_id': cmd_id, 'ttl': ttl,
+            }, wait_seconds=timeout, cancel_event=cancellation)
+    except RelayUnavailable as exc:
+        return None, str(exc)
+    if is_cancelled(outcome):
+        return None, 'Desktop command cancelled; remote completion is unconfirmed'
+    return outcome[0], outcome[1]
+
+
 def enqueue_desktop_command(cmd_type, params=None, target_agent_id=None,
                             user_id='', cmd_id=None, ttl=None, stream_limits=None,
                             fire_and_forget=False):
@@ -634,6 +743,18 @@ def enqueue_desktop_command(cmd_type, params=None, target_agent_id=None,
     ignoring the result instead of waiting. Returns ``(cmd_id, error)`` —
     error is the addressing refusal (same rules as send_desktop_command).
     """
+    relay = _relay()
+    if relay is not None:
+        from lib.desktop.bridge_relay import RelayUnavailable
+        try:
+            got = relay.call('enqueue_command', {
+                'cmd_type': cmd_type, 'params': params or {},
+                'target_agent_id': target_agent_id, 'user_id': str(user_id or ''),
+                'cmd_id': cmd_id, 'ttl': ttl, 'stream_limits': stream_limits,
+                'fire_and_forget': bool(fire_and_forget)})
+        except RelayUnavailable as exc:
+            return None, str(exc)
+        return got[0], got[1]
     err = (_addressing_enqueue_error(target_agent_id, user_id=user_id)
            or _tier_enqueue_error(cmd_type, params, target_agent_id, user_id=user_id))
     if err:
@@ -677,6 +798,19 @@ def consume_desktop_command(cmd_id, *, target_agent_id, user_id):
     artifact bytes. Out-of-order frames wait inside the declared byte/count
     window. Existing replay readers retain their non-consuming behavior.
     """
+    relay = _relay()
+    if relay is not None:
+        from lib.desktop.bridge_relay import RelayUnavailable
+        try:
+            got = relay.call('consume_command', {'cmd_id': str(cmd_id),
+                                                 'target_agent_id': target_agent_id,
+                                                 'user_id': str(user_id)})
+        except RelayUnavailable as exc:
+            _relay_unavailable('consume_command', exc)
+            return None
+        if got is not None:
+            got['frames'] = [tuple(frame) for frame in got['frames']]
+        return got
     with command_queue_lock:
         cmd = command_queue.get(cmd_id)
         if (not cmd or cmd.get('target_agent_id') != target_agent_id
@@ -701,6 +835,16 @@ def consume_desktop_command(cmd_id, *, target_agent_id, user_id):
 
 def release_desktop_command(cmd_id, *, target_agent_id, user_id):
     """Retire one owner's command and reconstructible stream on every exit."""
+    relay = _relay()
+    if relay is not None:
+        from lib.desktop.bridge_relay import RelayUnavailable
+        try:
+            return bool(relay.call('release_command', {'cmd_id': str(cmd_id),
+                                                       'target_agent_id': target_agent_id,
+                                                       'user_id': str(user_id)}))
+        except RelayUnavailable as exc:
+            _relay_unavailable('release_command', exc)
+            return False
     with command_queue_lock:
         cmd = command_queue.get(cmd_id)
         if (not cmd or cmd.get('target_agent_id') != target_agent_id
@@ -999,6 +1143,7 @@ def format_desktop_result(cmd_type, result):
 
 
 __all__ = [
+    'command_active',
     'command_queue',
     'command_queue_lock',
     'consume_desktop_command',

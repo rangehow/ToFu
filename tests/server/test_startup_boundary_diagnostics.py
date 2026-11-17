@@ -1,4 +1,7 @@
 """Startup refusals distinguish unreadable source from database ownership."""
+# A synthetic module under tmp_path, never a repository file.
+_AUDIT_SYNTHETIC_REPO_PATHS = ('lib/example.py',)
+
 from pathlib import Path
 
 import pytest

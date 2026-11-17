@@ -4,7 +4,7 @@ from __future__ import annotations
 
 _AUDIT_SYNTHETIC_REPO_PATHS = {
     'lib/business.py', 'lib/service.py', 'scripts/offline_migration.py',
-    'lib/untracked_driver.py',
+    'lib/untracked_driver.py', 'lib/marked.py', 'lib/plain.py',
 }
 
 import ast

@@ -801,6 +801,23 @@ class ProjectMailbox:
             ticket += 1
         return 'absorbed'
 
+    def observe(self):
+        """``(version, pending originals)`` for a reader that never absorbs: history first, then drawn arrivals.
+
+        A send only draws a ticket and writes its arrival; the head changes when
+        the recipient absorbs it. ``version`` therefore names the head revision
+        and the unabsorbed arrivals, so an equal version means the same pending
+        originals. Originals are yielded lazily.
+        """
+        head, revision = self.head()
+        tail = self._tail(head)
+
+        def originals():
+            for _position, m in self.pending(head, lambda _sender: True, set()):
+                yield m
+            yield from (m for m in tail if _pending(m))
+        return (revision, tuple(m['id'] for m in tail)), originals()
+
     def pending(self, head, eligible, exclude):
         """Submitted, unconsidered originals of eligible senders, oldest first.
 

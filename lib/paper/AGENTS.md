@@ -55,8 +55,10 @@ and terminal cancellation/error policies stay in their workers.
 
 `length_continuation.py` owns the output-token ceiling and the output-cap
 continuation policy (hook, prompt choice, seam join) shared by report, Q&A and
-Deepen; verify `test_paper_report_length_continuation.py` with
-`test_paper_qa_deepen_length_continuation.py`.
+Deepen, plus the premature-close `retry_bonus` hook that continues or resends
+a cut stream; verify `test_paper_report_length_continuation.py` with
+`test_paper_qa_deepen_length_continuation.py` and
+`test_paper_premature_close_recovery.py`.
 
 `report_engine/_body.py` owns report stream text, per-round draft withdrawal
 and terminal-response convergence. The worker keeps model/tool invocation,

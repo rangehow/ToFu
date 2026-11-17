@@ -227,6 +227,22 @@ the join/continue logic would drift. Verify
 `test_paper_report_length_continuation.py`,
 `test_paper_qa_deepen_length_continuation.py` and the body-projection suite.
 
+**Premature stream close (report, Q&A, Deepen) — Problem:** a provider
+stream that closed before its finish frame (live: kimi-k3, gemini-3.6-flash)
+returned a typed `premature_close` result, and the chassis' adoption check
+raised `UnverifiedProviderStreamError`, failing the whole task, while chat
+recovers the same cut. **Decision:** the three workers install
+`length_continuation.premature_close_recovery_hook` as the chassis
+`retry_bonus`. It detects with the shared `agent_loop.detect_premature_close`
+(the typed stream state: anything but `provider_finished`/`client_aborted`).
+A cut no-tool round that already carried answer text is continued exactly
+like an output-cap cut; an empty or tool-call round withdraws its streamed
+draft and resends the unchanged request, as chat does. The chassis'
+`DEFAULT_MAX_RETRY_BONUS` bounds both, and an exhausted budget still fails
+honestly. **Alternatives rejected:** a paper-local retry count or backoff
+(a second recovery owner and a tuning knob); always regenerating, which throws
+away a long partial report. Verify `test_paper_premature_close_recovery.py`.
+
 **Problem:** the retained report presenter mixed rendering with event mutation,
 sequence deduplication and push teardown; releasing its task subscription also
 removed sibling listeners. **Decision:** `report-events.ts` owns typed stream

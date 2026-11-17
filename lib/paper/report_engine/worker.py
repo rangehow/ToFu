@@ -32,6 +32,7 @@ from lib.paper.agent_usage import PaperAgentUsageMeter
 from lib.paper.length_continuation import (
     OUTPUT_TOKEN_CEILING,
     length_continuation_hook,
+    premature_close_recovery_hook,
 )
 from lib.paper.report_engine._body import ReportBodyProjection
 from lib.paper.report_engine._normalize import normalize_report_markdown_with_changes
@@ -355,6 +356,11 @@ def run_report_task(task, messages, images):
             execute_tool=_execute_tool,
             on_round_result=_accumulate_usage,
             on_tool_round=_begin_tool_round,
+            retry_bonus=premature_close_recovery_hook(
+                body.continuation, messages, abort_signal,
+                discard_draft=body.discard_tool_draft,
+                ui_lang=task.get('ui_lang') or task['lang'],
+                task_id=task['task_id'], log_prefix='[Paper:Report]'),
             decide_round=_report_length_continuation(task, body, messages, abort_signal),
             on_round_end=_result_budget.finish_round,
         )

@@ -299,6 +299,7 @@ include-package-data = false
 
 [tool.setuptools.package-data]
 "lib.repo_map" = ["LICENSE.grep-ast.txt"]
+"lib.storage_authority_sql.adapters" = ["sqlite_wal_coalesce.c"]
 "lib.tools.javascript" = ["bootstrap.js", "assets/*.wasm", "assets/*.json", "assets/*.LICENSE", "assets/NOTICE"]
 "tofu_agent" = ["setup_ui/*.html", "setup_ui/*.css", "setup_ui/*.js"]
 "lib.model_info" = ["data/*.json", "model_inference_defaults.json", "media_model_facts.json"]

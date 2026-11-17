@@ -23,6 +23,9 @@ from lib.storage.startup_control import StartupProgressCallback
 from lib.storage.storage_metric_policy import bounded_storage_metric_sample_capacity
 from lib.log import get_logger
 from lib.storage_authority_sql.adapters.base import Backend, Operation, receipt_cacheable
+from lib.storage_authority_sql.adapters.sqlite_wal_coalesce import (
+    WalCoalescing, connection_target, wal_coalescing,
+)
 from lib.storage_authority_sql.adapters.sqlite_read_pool import (
     DemandSQLiteReadPool, SQLiteReadSlot as _ReadSlot,
 )
@@ -1331,10 +1334,13 @@ class SQLiteBackend(Backend):
         self._backup_lock = threading.Lock()
         self._turn_search_projection: Any = None
         self._turn_search_projection_error = ''
+        self._wal_coalescing = WalCoalescing(None, 'backend not started')
 
     def _connect(self, *, query_only: bool) -> sqlite3.Connection:
+        database, uri = connection_target(self._authority_path, self._wal_coalescing.vfs)
         connection = sqlite3.connect(
-            self._authority_path,
+            database,
+            uri=uri,
             timeout=self.config.acquire_timeout_s,
             isolation_level=None,
             check_same_thread=False,
@@ -1405,7 +1411,8 @@ class SQLiteBackend(Backend):
         for suffix in ('', '-wal', '-shm'):
             path.with_name(path.name + suffix).unlink(missing_ok=True)
         try:
-            connection = sqlite3.connect(path, isolation_level=None)
+            database, uri = connection_target(path, self._wal_coalescing.vfs)
+            connection = sqlite3.connect(database, uri=uri, isolation_level=None)
             connection.execute('PRAGMA journal_mode=WAL')
             connection.execute('PRAGMA synchronous=FULL')
             connection.execute('CREATE TABLE durability_probe(value TEXT NOT NULL)')
@@ -1426,6 +1433,7 @@ class SQLiteBackend(Backend):
 
     def start(self) -> dict[str, Any]:
         _place_temporary_files()
+        self._wal_coalescing = wal_coalescing()
         report = run_filesystem_preflight(self.config.data_dir)
         from lib.storage_authority_sql import fastpath
         decision = fastpath.decide(self.config.data_dir)
@@ -1859,6 +1867,7 @@ class SQLiteBackend(Backend):
             'queries': {**self._metrics, 'pool_rotations': readers['rotations']},
             'writer': writer,
             'fastpath': fastpath_status,
+            'wal_coalescing': self._wal_coalescing.report(),
             'deferred_schema': {
                 'automatic_build': 'fresh-authority-only',
                 'missing_indexes': list(self._deferred_schema_missing),

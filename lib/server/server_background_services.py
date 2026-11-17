@@ -87,6 +87,7 @@ def start_background_services(
     healthy ~4s phase 7 into 147-190s (2026-09-22 boot profile).
     """
     from lib.process_roles import (
+        CAPABILITY_ATTEMPT_EXECUTION,
         CAPABILITY_NETWORK_CONFIGURATION,
         CAPABILITY_REQUEST_SERVICES,
         CAPABILITY_TASK_WORKERS,
@@ -118,6 +119,8 @@ def start_background_services(
         process_role, CAPABILITY_REQUEST_SERVICES)
     owns_task_workers = process_role_has(
         process_role, CAPABILITY_TASK_WORKERS)
+    owns_attempt_execution = process_role_has(
+        process_role, CAPABILITY_ATTEMPT_EXECUTION)
 
     try:
         _timed(
@@ -143,7 +146,7 @@ def start_background_services(
         from lib.conversation_sync.delivery_runtime import ensure_started
         _timed(log, 'conversation-delivery', lambda: ensure_started(app))
 
-    if owns_task_workers:
+    if owns_attempt_execution:
         try:
             from lib.durable_worker.runtime import ensure_workers_started
 
@@ -152,6 +155,7 @@ def start_background_services(
         except Exception as exc:
             log.warning('[Server] durable worker start failed: %s', exc)
 
+    if owns_task_workers:
         try:
             from lib.integration_control import ensure_worker_started
 

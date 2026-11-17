@@ -149,6 +149,7 @@ shares are of non-idle samples, self time unless marked inclusive.
    in the engine). At 1.03 cores that caps the host at about 9 model rounds per
    second, so 20 sessions see 2.0 s per round instead of 0.09 s. Every item
    below is per-round CPU that this ceiling multiplies.
+   Addressed by execution shards: see "Execution shards and `run_command`".
 2. **Synchronous storage round trips on the round path.**
    `StorageV2Client._request_once` (`lib/storage/v2_client.py:604`) 21.3 % self
    under load (11.2 % sequential); `wait_for_persistence`
@@ -172,6 +173,8 @@ shares are of non-idle samples, self time unless marked inclusive.
 6. **`run_command true` tool time.** 226 ms of `toolMs` for one `true` call,
    against 21 ms in pi, and every `true` Turn logs a `Tool-progress correction`
    (explicit no-op). `echo` rounds cost 83–90 ms.
+   The 200 ms idle poll tick is gone (281-286 -> 81-83 ms round trip); see
+   "Execution shards and `run_command`".
 7. **Engine memory under load.** Engine RSS grows from 31 MB to 1.1 GB mean
    (1.86 GB max) over 40 Turns × 21 rounds.
 8. **Execution host cold start.** 14.4 s to ready, against 0.17 s (codex) to
@@ -330,6 +333,82 @@ this in-process measurement.
 - **Dropping config from the prefetch identity.** Rejected: it would change
   which changes invalidate a prefetched read. Digesting frozen values keeps
   identity equality exactly as before.
+
+## Execution shards and `run_command` (2026-11-17)
+
+Hotspots 1 and 6. Owners: `serverctl_pkg/execution_shards.py` (decision record
+in its header) and `lib/project_mod/run_command.py`.
+
+### Changes
+
+- **Concurrency ceiling (hotspot 1).** The resident execution host starts
+  `execution_shard` processes on demand: one per job it had to claim beside
+  another. A shard runs the host's own frozen source generation (exported
+  once, served by a stdlib bootstrap), claims the same durable jobs with
+  process-bound claims, runs one job at a time, imports the modules the host
+  had imported before it admits work, and retires itself after
+  `TOFU_EXECUTOR_IDLE_SECONDS` idle. The host defers a claim to an idle shard
+  while it is busy and otherwise claims itself, so no job waits for capacity;
+  command controls (and `mcp_reconcile`) fan out from the host. No count,
+  CPU probe or new setting exists. The per-interpreter serialization points
+  of hotspots 2-3 (one storage client, one delivery coordinator, one GIL for
+  every session) are per process now; their per-round cost is unchanged.
+- **`run_command true` (hotspot 6).** 200 of its 226 ms were one idle
+  `safe_select_pipes([])`: once both pipes reached EOF the interactive runner
+  slept out the whole 0.2 s poll tick before observing the exit. It now waits
+  on the process exit itself (returns at exit); abort, interrupt and stdin
+  sensing keep the same tick. Direct `tool_run_command('true')` with a stdin
+  callback: 277 ms -> 7 ms.
+
+### ABAB (full mode, `--api-restarts 0`)
+
+Arm A: product at `76fa978731` (before); arm B: `d382d8f255` (this change,
+merged with the shared branch); both measured by the same harness (B's
+`run.py`, which also counts shard CPU/RSS and splits the concurrent phase by
+Turn). Runs alternated A, B, A, B, A, B on this host with load average 36-231
+(other tenants); artifacts in `output/harness_perf/shards-abab-20261117/`.
+Values are median / p95 per run; `true` has n=10 per run (30 per arm), every
+other row n≥60 per run.
+
+| metric | A r1 | A r2 | A r3 | B r1 | B r2 | B r3 |
+|---|---|---|---|---|---|---|
+| round overhead `run_command true`, ms | 285 / 313 | 283 / 337 | 286 / 314 | 171 / 665 | **83** / 176 | **81** / 104 |
+| round overhead `shell`, 1 session, ms | 95 / 304 | 89 / 339 | 117 / 771 | 100 / 697 | 97 / 192 | 86 / 131 |
+| round overhead `noop`, 1 session, ms | 75 / 84 | 76 / 84 | 75 / 90 | 100 / 663 | 81 / 123 | 78 / 128 |
+| round overhead, 20 sessions, all (n=800), ms | 3,211 / 8,637 | 2,063 / 2,841 | 6,451 / 8,849 | **221** / 4,643 | **125** / 1,397 | **171** / 2,911 |
+| ... first Turn of each session, ms | 2,100 / 2,651 | 2,052 / 2,657 | 6,402 / 8,735 | 1,348 / 5,003 | 1,123 / 1,437 | 1,080 / 3,713 |
+| ... second Turn of each session, ms | 6,967 / 9,239 | 2,065 / 2,937 | 6,515 / 8,917 | **108** / 733 | **99** / 253 | **127** / 893 |
+| TTFR second Turn, 20 sessions, ms | 2,746 | 2,285 | 3,753 | 471 | 284 | 299 |
+| CPU cores, 20 sessions: host + shards | 0.54 + 0 | 1.03 + 0 | 0.38 + 0 | 0.44 + 1.17 | 0.95 + 2.64 | 0.63 + 1.83 |
+| CPU ms per model request: host + shards + engine | 123 + 4 + 71 | 114 + 3 + 53 | 122 + 4 + 70 | 36 + 96 + 40 | 34 + 94 + 38 | 33 + 97 + 40 |
+| RSS max, 20 sessions: host / all shards, MB | 880 / - | 890 / - | 898 / - | 400 / 4,202 | 383 / 4,495 | 392 / 4,271 |
+
+Reading:
+
+- At 20 sessions per-round overhead falls from 2.1-6.5 s to 125-221 ms
+  (whole phase) and to 99-127 ms in the second Turn, 1.0-1.3x the one-session
+  `shell` figure of the same run: the "≤ 1.5x the one-session figure" target
+  is met once shards exist. Arm A's second Turn is as slow as its first: one
+  interpreter serves all 20 sessions.
+- Jobs never migrate. The first Turn of a 20-session burst starts before any
+  shard exists, so those Turns run on the host as before (about 2 s per
+  round); the shards started for them (ready about 5 s later) serve every
+  later Turn. Under heavy host load the burst's 20 shard boots compete for CPU
+  (r1-B first-Turn p95 5.0 s).
+- One session is unchanged within noise (`shell`, `noop`); `run_command true`
+  drops from 285 ms to 81-83 ms, the plain round overhead: the tool itself now
+  costs about 25 ms of `toolMs` (was 226-228).
+- CPU per request is unchanged in total (about 130-135 ms in Python, now spread
+  over processes; hotspots 2-5 remain per-round work). Each shard holds about
+  210-230 MB while serving; idle shards retire, so idle RSS is the host's.
+
+Alternatives considered: worker processes sized from the CPU count
+(forbidden: hardware never limits work); forking the multi-threaded host
+(inherits held locks); shards importing the checkout (a later merge would
+split one generation across processes); deferring the burst's first jobs to
+starting shards (adds about 5 s TTFR to every burst arrival, and the number of
+waiting jobs is unknown without a sizing heuristic); moving only event
+persistence to another process (at most the 21 % of host CPU it uses).
 
 ## Alternatives considered
 

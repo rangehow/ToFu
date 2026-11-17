@@ -690,7 +690,8 @@ uploads/images/*
 static/posters/
 
 # Vite production output is content-addressed and rebuilt from frontend/src.
-static/vite/
+# No trailing slash: a symlink to another checkout's build is ignored too.
+/static/vite
 # Interrupted Vite builds leave temporary siblings beside the final output.
 /static/.vite-build-*/
 /static/tmp/

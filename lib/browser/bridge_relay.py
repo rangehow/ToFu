@@ -339,8 +339,8 @@ def selected_relay() -> RelayClient | None:
 def configure_bridge_owner(*, process_role: str, environ) -> str:
     """Select this process's browser bridge owner from its process role.
 
-    ``api`` publishes the relay for the queue it owns; ``execution`` forwards
-    to it; ``all`` (and embedders) keep the local in-process owner.
+    ``api`` publishes the relay for the queue it owns; ``execution`` and its
+    shards forward to it; ``all`` (and embedders) keep the local in-process owner.
     """
     global _selected_client, _owned_server
     project = (environ.get('TOFU_PROJECT_PATH') or '').strip()
@@ -354,7 +354,7 @@ def configure_bridge_owner(*, process_role: str, environ) -> str:
                 server.start()
                 _owned_server = server
             return 'owner'
-        if process_role == 'execution':
+        if process_role in ('execution', 'execution_shard'):
             if not project:
                 raise RuntimeError('Resident execution needs its explicit project to reach '
                                    'the browser bridge owner')

@@ -50,7 +50,9 @@ _NOTICE_REFERENCE = re.compile(
     re.escape(_NOTICE_HEADER) + r'\nProject: (?P<projectPath>[^\n]*)\n'
     r'Project Router conversation: (?P<coordinatorId>[^\s]+)\n'
     r'Report: kind=(?P<kind>[a-z_]+), Turn (?P<turnId>[^\s]+)\n'
+    r'(?:Task: (?P<task>\{[^\n]*\})\n)?'
     r'(?:Files: (?P<files>\[[^\n]*\])\n)?')
+_TASK_KEY = re.compile(r'^[0-9a-f]{32}$')
 _FILE_KEYS = ('artifactId', 'filename', 'kind', 'sizeBytes', 'path')
 
 
@@ -95,15 +97,29 @@ def _notice_files(text: str | None) -> list[dict]:
     return files
 
 
+def _notice_task(text: str | None) -> dict | None:
+    """The ``deliverableTaskRef`` a notice's ``Task:`` line names; a malformed line names none."""
+    try:
+        value = json.loads(text) if text else None
+    except ValueError:
+        return None
+    if (isinstance(value, dict) and isinstance(value.get('key'), str) and _TASK_KEY.match(value['key'])
+            and isinstance(value.get('title'), str) and value['title'].strip()):
+        return {'key': value['key'], 'title': value['title']}
+    return None
+
+
 def notice_references(text: str) -> list[dict]:
     """The reports named by the report notices in ``text`` (lead_deliverables reads relayed reports).
 
-    Each reference carries the files its report's call attached (``files``, possibly empty).
+    Each reference carries the files its report's call attached (``files``, possibly empty) and the
+    board task it named (``task``, or None).
     """
     if _NOTICE_HEADER not in text:
         return []
-    return [{**{key: value for key, value in match.groupdict().items() if key != 'files'},
-             'files': _notice_files(match['files'])} for match in _NOTICE_REFERENCE.finditer(text)]
+    return [{**{key: value for key, value in match.groupdict().items() if key not in ('files', 'task')},
+             'files': _notice_files(match['files']), 'task': _notice_task(match['task'])}
+            for match in _NOTICE_REFERENCE.finditer(text)]
 
 
 def render_notice(report: dict) -> str:
@@ -112,6 +128,8 @@ def render_notice(report: dict) -> str:
         f'Project: {report["projectPath"]}',
         f'Project Router conversation: {report["coordinatorId"]}',
         f'Report: kind={report["kind"]}, Turn {report["turnId"]}',
+        *([f'Task: {json.dumps(report["task"], ensure_ascii=False, separators=(",", ":"))}']
+          if report.get('task') else []),
         *([f'Files: {json.dumps(report["files"], ensure_ascii=False, separators=(",", ":"))}']
           if report.get('files') else []),
         f'Title: {report["title"]}',

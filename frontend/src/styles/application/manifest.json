@@ -719,8 +719,8 @@
     },
     {
       "path": "36-lead-deliverables.css",
-      "responsibility": "Lead reports and files section in the lead conversation's right-hand context panel (rail card or narrow fold) and its report reader",
-      "featureEntry": "frontend/src/features/lead-deliverables/list.ts"
+      "responsibility": "Each task's reports and files expanded on the Coordinator task board, and the report reader",
+      "featureEntry": "frontend/src/features/coordinator-task-deliverables.ts"
     },
     {
       "path": "34-coordinator-task-history.css",

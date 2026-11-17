@@ -426,7 +426,6 @@
     if (typeof document === 'undefined'
         || typeof document.querySelectorAll !== 'function') return;
     runtimeScope.mountBackgroundAgents?.();
-    runtimeScope.mountLeadDeliverables?.();
     _measureRailTracks();
     _observeRailTrackLayout();
   }

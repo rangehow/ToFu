@@ -171,7 +171,6 @@ const openProjectCoordinationWorkspace = (ports) => import('../features/project-
 // The task board's 历史任务 drawer loads with its styles when it first opens.
 const openCoordinatorTaskHistory = (ports) => import('../features/coordinator-task-history')
   .then(module => module.openCoordinatorTaskHistory(ports));
-const loadLeadDeliverables = () => import('../features/lead-deliverables/classic');
 import {
   conversationFullIdById as queryConversationFullIdById,
   conversationTitleById as queryConversationTitleById,
@@ -22150,6 +22149,15 @@ let backgroundConversationActivity = new Map();
           progress: isRouterWatchdog(root) ? undefined : {
             read: function (path, signal) { return sharedRead('coordinatorProgress', [path], signal); },
           },
+          // The task board expands each task to its reports and files (Lead deliverables).
+          deliverables: isRouterWatchdog(root) ? undefined : {
+            read: function (id, path, query, signal) { return api.leadDeliverables(id, path, query, signal); },
+            subscribe: function (changed) {
+              pushSubscribe('project', '*', changed);
+              var stopReconnect = typeof pushOnReconnect === 'function' ? pushOnReconnect(function () { changed({}); }) : null;
+              return function () { pushUnsubscribe('project', '*', changed); stopReconnect?.(); };
+            },
+          },
           messages: function (path, id, beforeId) { return api.coordinationMessages(path, id, beforeId); },
           board: function (path, signal) { return sharedRead('board', [path], signal); },
           bind: function (path, id, revision) { return api.bindCoordinator(path, id, revision); },
@@ -22256,65 +22264,6 @@ let backgroundConversationActivity = new Map();
     },
   });
   }
-  /* Narrow bridge to the typed lead deliverables (features/lead-deliverables/list.ts),
-   * loaded when a lead's conversation is first open; delete with the retained presence
-   * adapter. Owner request 2026-11-17: a lead's reports and files sit in the right-hand
-   * panel of its own conversation (the context rail's card of the latest round, the
-   * same host as the background agents section; its in-flow fold on a narrow pane),
-   * never in the left sidebar. The rail track pass (info-rail.js) and every sidebar
-   * render call placeLeadDeliverables, so the section follows re-rendered rounds. The
-   * studio (#/world) opens the same deliverables from its own office. */
-  var leadDeliverablesModule = null, leadDeliverablesLoading = null, leadDeliverablesList = null;
-  var leadDeliverablesExpanded = new Map();
-  function activeLeadDeliverablesTarget() {
-    var id = activeRouterConversationId();
-    if (!id) return null;
-    if (globalRouter && id === globalRouter.conversationId()) return { leadId: id, path: globalRouter.home() || '' };
-    if (id === surface.coordinatorId()) return { leadId: id, path: projectPath() || '' };
-    if (id === sidebarSurface.coordinatorId()) return { leadId: id, path: sidebarPath() || '' };
-    return null;
-  }
-  function placeLeadDeliverables() {
-    var target = activeLeadDeliverablesTarget();
-    var host = target ? backgroundAgentContextHost(document.getElementById('chatInner'), target.leadId) : null;
-    if (!target || !host) {
-      if (leadDeliverablesList) { leadDeliverablesList.hide(); leadDeliverablesList.root.remove(); }
-      return;
-    }
-    if (!leadDeliverablesModule) { loadLeadDeliverablesModule(); return; }
-    var list = leadDeliverablesList || (leadDeliverablesList = leadDeliverablesModule.createLeadDeliverables(leadDeliverablesPorts));
-    // After the round's facts, ahead of the background agents section.
-    var dock = Array.from(host.children).find(function (node) { return node.classList.contains('agent-dock'); });
-    if (list.root.parentNode !== host || (dock && list.root.nextElementSibling !== dock)) host.insertBefore(list.root, dock || null);
-    list.place(host.dataset.conversationPart === 'turn-context-card' ? 'rail' : 'fold');
-    list.show(target);
-  }
-  runtimeScope.mountLeadDeliverables = placeLeadDeliverables;
-  function loadLeadDeliverablesModule() {
-    if (leadDeliverablesLoading || typeof loadLeadDeliverables !== 'function') return;
-    leadDeliverablesLoading = loadLeadDeliverables().then(function (module) {
-      leadDeliverablesModule = module;
-      leadDeliverablesPorts.opener = module.createDeliverableOpener(module.runtimeOpenPorts());
-      placeLeadDeliverables();
-    }).catch(function (error) {
-      // The conversation stays fully usable; the next placement retries the import.
-      leadDeliverablesLoading = null;
-      console.warn('[LeadDeliverables] load failed', error);
-    });
-  }
-  var leadDeliverablesPorts = {
-    read: function (target, cursor, signal) { return Api.project.leadDeliverables(target.leadId, target.path, cursor, signal); },
-    subscribe: function (handler) {
-      pushSubscribe('project', '*', handler);
-      return function () { pushUnsubscribe('project', '*', handler); };
-    },
-    onReconnect: function (listener) {
-      return typeof pushOnReconnect === 'function' ? pushOnReconnect(listener) : function () {};
-    },
-    opener: null,
-    readExpanded: function (id) { return leadDeliverablesExpanded.has(id) ? leadDeliverablesExpanded.get(id) : null; },
-    writeExpanded: function (id, expanded) { leadDeliverablesExpanded.set(id, expanded); },
-  };
   var surface = createSurface(false);
   var sidebarSurface = createSurface(true);
   // Narrow bridge to the typed Global Router and Watchdog owners
@@ -22409,8 +22358,6 @@ let backgroundConversationActivity = new Map();
     var projectBarHidden = isRouterManaged(projectPath());
     if (projectBar && projectBar.hidden !== projectBarHidden) projectBar.hidden = projectBarHidden;
     surface.refresh(); sidebarSurface.refresh(); globalRouter.refresh(); routerWatchdog.refresh();
-    // Which conversation is a lead may have changed without either lead's facts changing.
-    placeLeadDeliverables();
   };
   // Remove with the retained catalog bridge; grouping policy, rendering and
   // provenance live in the typed group and existing conversation owners.
@@ -22418,7 +22365,7 @@ let backgroundConversationActivity = new Map();
     listHost: list,
     pinned: function () {
       var pins = [];
-      // Each group follows its lead's entry.
+      // Each group follows its lead's sidebar entry.
       var project = sidebar.querySelector('[data-coordinator-id]')?.dataset.coordinatorId;
       if (project) pins.push({ id: project, path: sidebarPath(), host: sidebar });
       // Both router conversations stay reserved, so neither becomes a replaced
@@ -22485,8 +22432,6 @@ let backgroundConversationActivity = new Map();
       delete runtimeScope.recoverProjectCoordination;
       surface.destroy(); sidebarSurface.destroy(); globalRouter.destroy(); routerWatchdog.destroy();
       coordinatorConversationGroups.destroy();
-      leadDeliverablesList?.destroy();
-      delete runtimeScope.mountLeadDeliverables;
     }
   });
   runtimeScope.presenceRefresh();
@@ -22919,7 +22864,6 @@ let backgroundConversationActivity = new Map();
     if (typeof document === 'undefined'
         || typeof document.querySelectorAll !== 'function') return;
     runtimeScope.mountBackgroundAgents?.();
-    runtimeScope.mountLeadDeliverables?.();
     _measureRailTracks();
     _observeRailTrackLayout();
   }

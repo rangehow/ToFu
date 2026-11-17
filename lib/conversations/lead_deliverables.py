@@ -7,10 +7,11 @@ projects the deliverables from the owners that already hold them
 
 - reports of every kind: the lead's main-lane canonical ``coordinator_report.*``
   Turns (``coordinator_reports.py``), each with the files its ``report_to_user``
-  call attached (named by that call's receipt in the publishing reply); for the
-  Global Router also the reports relayed to it, named by the relay notices in
-  its Turns (``lib/router/relay.py``, which also carry the attached files) and
-  read from the Project Router's canonical report Turn;
+  call attached and the board task it named (both named by that call's receipt in
+  the publishing reply); for the Global Router also the reports relayed to it,
+  named by the relay notices in its Turns (``lib/router/relay.py``, which also
+  carry the attached files and task) and read from the Project Router's canonical
+  report Turn;
 - published files, decks (.pptx/.pptd files), rich responses and long-form
   reports: the conversation's artifact rows (``lib/artifacts``), linked to the
   Turn whose tool round carries their ``artifactId``. A file a report attached
@@ -19,8 +20,10 @@ projects the deliverables from the owners that already hold them
 Items are pointers: opening one reads the artifact or the report Turn from its
 own owner. Newest first; the cursor names the last item of the previous page
 by (createdAt, item digest), so a page boundary is stable while new items
-arrive. ``notify`` sends the project push hint the sidebar refreshes on; it is
-a hint, never a record.
+arrive. A page can be filtered to one task of the lead's own project, or to
+every other item, and always summarises the items per task: the task board
+expands each task to its reports and files from these reads. ``notify`` sends
+the project push hint the board refreshes on; it is a hint, never a record.
 
 Entry points: DeliverablesPage, notify. Dependencies: turn_lifecycle (Turns),
 lib.artifacts.core (artifact rows), lib.router.relay (notice format), the
@@ -45,6 +48,9 @@ PAGE_SIZE = _DEFS['deliverablePage']['properties']['items']['maxItems']
 _TITLE_MAX = _DEFS['deliverableItem']['properties']['title']['maxLength']
 _SUMMARY_MAX = _DEFS['deliverableItem']['properties']['summary']['maxLength']
 _CURSOR = re.compile(r'^(\d{1,16}):([0-9a-f]{16})$')
+_TASK_KEY = re.compile(r'^[0-9a-f]{32}$')
+# The deliverables of no task of the lead's own project (the `task` filter's other bucket).
+OTHER_TASKS = 'other'
 # Artifact producers whose publication is a deliverable; workspace writes,
 # inline images and scanner snippets are not.
 DELIVERABLE_SOURCES = frozenset({'response_file', 'rich_response', 'longform-report'})
@@ -96,7 +102,7 @@ def report_kind(turn):
     return value if value in REPORT_KINDS and turn.get('actor') == 'assistant' else ''
 
 
-def report_item(turn, *, project_path, files=()):
+def report_item(turn, *, project_path, files=(), task=None):
     """The item of one canonical report Turn (content is ``title\\n\\nmessage``)."""
     title, _, message = str((turn.get('projection') or {}).get('content') or '').partition('\n\n')
     item = {'id': 'report:' + turn['turnId'], 'kind': 'report', 'reportKind': report_kind(turn),
@@ -105,6 +111,8 @@ def report_item(turn, *, project_path, files=()):
             'source': _source(turn['conversationId'], turn), 'summary': _clip_body(message)}
     if files:
         item['files'] = list(files)
+    if task:
+        item['task'] = dict(task)
     # The copy the conversation shows by default: the Turn's auto-translation, same layout.
     translated_title, _, translated_message = str(
         (turn.get('projection') or {}).get('translatedContent') or '').partition('\n\n')
@@ -131,20 +139,29 @@ def _file_entries(receipt):
             ] if isinstance(files, list) else []
 
 
+def _task_ref(receipt):
+    task = receipt.get('task') if receipt else None
+    if (isinstance(task, dict) and isinstance(task.get('key'), str) and _TASK_KEY.match(task['key'])
+            and isinstance(task.get('title'), str) and task['title'].strip()):
+        return {'key': task['key'], 'title': task['title']}
+    return None
+
+
 def report_receipts(projection):
-    """``{report turnId: [reportFile]}`` of the ``report_to_user`` calls one reply made."""
+    """``{report turnId: {'files': [reportFile], 'task': deliverableTaskRef | None}}`` of the
+    ``report_to_user`` calls one reply made (segment result, else the round's stored receipt)."""
     found = {}
+
+    def take(receipt):
+        if receipt and isinstance(receipt.get('turnId'), str) and receipt['turnId'] not in found:
+            found[receipt['turnId']] = {'files': _file_entries(receipt), 'task': _task_ref(receipt)}
     for segment in (projection or {}).get('segments') or []:
         if isinstance(segment, dict) and segment.get('type') == 'tool_use' and segment.get('name') == _REPORT_TOOL:
             result = segment.get('result')
-            receipt = _receipt(result.get('content') if isinstance(result, dict) else result)
-            if receipt and isinstance(receipt.get('turnId'), str):
-                found[receipt['turnId']] = _file_entries(receipt)
+            take(_receipt(result.get('content') if isinstance(result, dict) else result))
     for round_ in (projection or {}).get('toolRounds') or []:
         if isinstance(round_, dict) and round_.get('toolName') == _REPORT_TOOL:
-            receipt = _receipt(round_.get('toolContent'))
-            if receipt and isinstance(receipt.get('turnId'), str) and not found.get(receipt['turnId']):
-                found[receipt['turnId']] = _file_entries(receipt)
+            take(_receipt(round_.get('toolContent')))
     return found
 
 
@@ -178,6 +195,17 @@ def _scan(value, artifact_ids, texts):
             _scan(child, artifact_ids, texts)
     elif isinstance(value, str):
         texts.append(value)
+
+
+def own_task_key(item, project_path):
+    """The task key of ``item`` when it names a task of the lead's own project, else None."""
+    task = item.get('task')
+    if not task:
+        return None
+    from lib.conversations.project_identity import normalize_project_path
+    own = normalize_project_path(project_path) if project_path else ''
+    theirs = normalize_project_path(item['projectPath']) if item.get('projectPath') else ''
+    return task['key'] if own == theirs else None
 
 
 class DeliverablesPage:
@@ -225,21 +253,22 @@ class DeliverablesPage:
                 if (turn and report_kind(turn) and turn.get('kind') == REPORT_TURN_PREFIX + reference['kind']
                         and turn.get('conversationId') == reference['coordinatorId']):
                     seen.add(reference['turnId'])
-                    yield report_item(turn, project_path=reference['projectPath'], files=reference['files'])
+                    yield report_item(turn, project_path=reference['projectPath'], files=reference['files'],
+                                      task=reference['task'])
 
     def project(self, project_path=''):
         """Every deliverable of the conversation, newest first."""
         owned, turns, artifacts, get_turn = self._ports()
         owned(self.conversation_id, self.owner)
-        items, turn_of_artifact, reports, files_of_report = [], {}, set(), {}
+        items, turn_of_artifact, reports, receipts = [], {}, set(), {}
         for turn in turns(self.conversation_id):
             if report_kind(turn):
                 reports.add(turn['turnId'])
                 items.append(report_item({**turn, 'conversationId': self.conversation_id},
                                          project_path=project_path))
                 continue
-            for report_id, files in report_receipts(turn.get('projection')).items():
-                files_of_report.setdefault(report_id, files)
+            for report_id, receipt in report_receipts(turn.get('projection')).items():
+                receipts.setdefault(report_id, receipt)
             artifact_ids, texts = [], []
             _scan(turn.get('projection'), artifact_ids, texts)
             for artifact_id in artifact_ids:
@@ -248,10 +277,13 @@ class DeliverablesPage:
         attached = set()
         for item in items:
             # A report Turn is published while its reply runs, so the receipt naming it is read later.
-            files = item.get('files') or files_of_report.get(item['source']['turnId'] if item['source'] else '')
+            receipt = receipts.get(item['source']['turnId'] if item['source'] else '') or {}
+            files = item.get('files') or receipt.get('files')
             if files:
                 item['files'] = files
                 attached.update(entry['artifactId'] for entry in files)
+            if 'task' not in item and receipt.get('task'):
+                item['task'] = receipt['task']
         for row in artifacts(self.conversation_id):
             if row.get('id') in attached:
                 continue
@@ -263,7 +295,15 @@ class DeliverablesPage:
         items.sort(key=lambda item: (-item['createdAt'], _digest(item['id'])))
         return items
 
-    def read(self, cursor=None, *, project_path=''):
+    def read(self, cursor=None, *, project_path='', task=None):
+        """One page newest first; ``task`` filters to one task key or ``OTHER_TASKS``.
+
+        ``tasks``/``otherCount`` summarise every item whatever the filter. An item
+        belongs to a task only when that task is of the lead's own project
+        (``project_path``); a report relayed from another project is in ``other``.
+        """
+        if task is not None and task != OTHER_TASKS and not (isinstance(task, str) and _TASK_KEY.match(task)):
+            raise ValueError('Invalid deliverables task filter')
         after = None
         if cursor is not None:
             match = _CURSOR.match(cursor) if isinstance(cursor, str) else None
@@ -271,9 +311,24 @@ class DeliverablesPage:
                 raise ValueError('Invalid deliverables cursor')
             after = (-int(match.group(1)), match.group(2))
         items = self.project(project_path)
+        summary, other = {}, 0
+        for item in items:
+            key = own_task_key(item, project_path)
+            if key is None:
+                other += 1
+                continue
+            entry = summary.get(key)
+            if entry is None:
+                # Newest first: the first item names the task's latest title and time.
+                summary[key] = {'key': key, 'title': item['task']['title'], 'count': 1, 'latestAt': item['createdAt']}
+            else:
+                entry['count'] += 1
+        if task is not None:
+            items = [item for item in items if (own_task_key(item, project_path) or OTHER_TASKS) == task]
         if after is not None:
             items = [item for item in items if (-item['createdAt'], _digest(item['id'])) > after]
         page = items[:PAGE_SIZE]
         last = page[-1] if page else None
         return {'conversationId': self.conversation_id, 'items': page,
-                'nextCursor': f'{last["createdAt"]}:{_digest(last["id"])}' if len(items) > PAGE_SIZE else None}
+                'nextCursor': f'{last["createdAt"]}:{_digest(last["id"])}' if len(items) > PAGE_SIZE else None,
+                'tasks': list(summary.values()), 'otherCount': other}

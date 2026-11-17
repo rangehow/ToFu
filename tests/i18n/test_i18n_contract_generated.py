@@ -66,7 +66,7 @@ def test_sidebar_deliverables_and_progress_components_hold_no_hard_coded_copy():
     result = _node('--input-type=module', '--eval', probe)
     assert result.returncode == 0, result.stderr
     report = json.loads(result.stdout)
-    assert {'frontend/src/features/lead-deliverables/list.ts',
+    assert {'frontend/src/features/lead-deliverables/rows.ts', 'frontend/src/features/coordinator-task-deliverables.ts',
             'frontend/src/features/coordinator-progress.ts'} <= set(report['files'])
     assert report['problems'] == []
     assert len(report['control']) == 4, report['control']

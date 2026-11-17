@@ -81,6 +81,28 @@
         "path": {"type": "string", "maxLength": 4096}
       }
     },
+    "deliverableTaskRef": {
+      "description": "The board task a report_to_user call named (its task argument): the task's history identity (progressHistoryKey) and its title when the report was sent.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "title"],
+      "properties": {
+        "key": {"$ref": "#/$defs/progressHistoryKey"},
+        "title": {"$ref": "#/$defs/progressTask/properties/title"}
+      }
+    },
+    "deliverableTaskSummary": {
+      "description": "One task of the lead's own project with deliverables: its key, its title on its newest item, how many items it has and when the newest arrived.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "title", "count", "latestAt"],
+      "properties": {
+        "key": {"$ref": "#/$defs/progressHistoryKey"},
+        "title": {"$ref": "#/$defs/progressTask/properties/title"},
+        "count": {"type": "integer", "minimum": 1},
+        "latestAt": {"type": "integer", "minimum": 0}
+      }
+    },
     "deliverableItem": {
       "description": "One deliverable of one lead conversation (docs/PROJECT_COORDINATION.md, Lead deliverables). Opening it shows the artifact (artifactId), the report (summary is its message) or the Worker result Turn (result). source is the message in the lead's conversation that produced it, when known. A report carries its reportKind and the files its report_to_user call attached; those files are not listed again as items of their own. translation is a report's display translation (its Turn's auto-translated title and message, the copy the conversation shows by default); reconstructible display data, absent when the Turn has none.",
       "type": "object",
@@ -99,6 +121,7 @@
         "result": {"$ref": "#/$defs/deliverableTurn"},
         "reportKind": {"enum": ["progress", "decision", "blocked", "delivery"]},
         "files": {"type": "array", "items": {"$ref": "#/$defs/reportFile"}},
+        "task": {"$ref": "#/$defs/deliverableTaskRef"},
         "translation": {
           "type": "object",
           "additionalProperties": false,
@@ -111,14 +134,16 @@
       }
     },
     "deliverablePage": {
-      "description": "One page of a lead conversation's deliverables, newest first. Pages hold at most 64 items, the coordination API's page bound (conversationPage); nextCursor reads the next older page.",
+      "description": "One page of a lead conversation's deliverables, newest first. Pages hold at most 64 items, the coordination API's page bound (conversationPage); nextCursor reads the next older page. task filters the items (a task key, or other); tasks and otherCount summarise the whole conversation whatever the filter: tasks are the lead's own project's tasks with deliverables (newest first), otherCount the items of no task of that project (unlinked reports, files published on their own, reports relayed from other projects).",
       "type": "object",
       "additionalProperties": false,
-      "required": ["conversationId", "items", "nextCursor"],
+      "required": ["conversationId", "items", "nextCursor", "tasks", "otherCount"],
       "properties": {
         "conversationId": {"type": "string", "minLength": 1, "maxLength": 256},
         "items": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/deliverableItem"}},
-        "nextCursor": {"anyOf": [{"type": "null"}, {"type": "string", "minLength": 1, "maxLength": 600}]}
+        "nextCursor": {"anyOf": [{"type": "null"}, {"type": "string", "minLength": 1, "maxLength": 600}]},
+        "tasks": {"type": "array", "items": {"$ref": "#/$defs/deliverableTaskSummary"}},
+        "otherCount": {"type": "integer", "minimum": 0}
       }
     },
 
@@ -652,7 +677,8 @@
         "conversationId": {"type": "string", "maxLength": 256},
         "bindingRevision": {"type": "integer", "minimum": 0},
         "board": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/progressBoard"}]},
-        "translation": {"$ref": "#/$defs/progressTranslation"}
+        "translation": {"$ref": "#/$defs/progressTranslation"},
+        "taskKeys": {"type": "array", "maxItems": 24, "items": {"$ref": "#/$defs/progressHistoryKey"}, "description": "History identity of each board task, in board order (progressHead.taskKeys; for a head written before task history, each title's first identity). The browser matches a task's deliverables by it."}
       }
     }
   },

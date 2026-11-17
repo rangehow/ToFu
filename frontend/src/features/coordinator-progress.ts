@@ -15,6 +15,14 @@
  * (coordinator-task-history.ts). Rendering reads nothing, acknowledges nothing
  * and starts no work.
  *
+ * Each task expands to its own reports and files (owner request 2026-11-17):
+ * with the deliverables helper attached (coordinator-task-deliverables.ts,
+ * loaded on demand), a task row is a disclosure showing how many items name
+ * that task, and opening it lists them. Tasks that left the board but have
+ * deliverables follow as earlier tasks, and everything of no task of this
+ * project reads under one "other reports and files" group, so the
+ * conversation's deliverables are all reachable from the board.
+ *
  * The card persists across renders: the owner's footer control (a Router's
  * Worker model) stays attached, and the fold, scroll and focus survive live
  * board updates.
@@ -24,9 +32,17 @@ import { t } from '../i18n';
 import type {
   CoordinatorProgressBoard, CoordinatorProgressTask, CoordinatorProgressTranslation,
 } from '../api/project-coordination.generated';
+import type { TaskDeliverables } from './coordinator-task-deliverables';
+import { folderIcon } from './project/folder-icons';
+
+/** The helper's key of the other group (coordinator-task-deliverables.ts OTHER_TASKS), kept here so the
+ * card does not load the helper module. */
+const OTHER_TASKS = 'other';
 
 export type CoordinatorProgressView =
-  | { kind: 'board'; board: CoordinatorProgressBoard; translation?: CoordinatorProgressTranslation }
+  | { kind: 'board'; board: CoordinatorProgressBoard; translation?: CoordinatorProgressTranslation;
+      /** History identity of each board task, in board order (progressState.taskKeys). */
+      taskKeys?: readonly string[] }
   | { kind: 'empty' }
   | { kind: 'unavailable' };
 
@@ -51,6 +67,10 @@ export interface CoordinatorProgressActions {
 export interface CoordinatorProgressCard {
   el: HTMLDetailsElement;
   render(view: CoordinatorProgressView, actions: CoordinatorProgressActions): void;
+  /** Make tasks expandable to their reports and files. */
+  attachDeliverables(deliverables: TaskDeliverables): void;
+  /** Repaint the last view, e.g. after the deliverables helper changed. */
+  repaint(): void;
 }
 
 type Status = CoordinatorProgressTask['status'];
@@ -125,7 +145,41 @@ export function coordinatorProgressGlyph(status: Status): HTMLSpanElement {
   return mark;
 }
 
-function taskRow(task: CoordinatorProgressTask, say: (text: string) => string): HTMLLIElement {
+/** Expandable row content: the task's line becomes a disclosure button with its item count. */
+function expandable(row: HTMLLIElement, line: Node[], key: string, label: string, deliverables: TaskDeliverables) {
+  const count = deliverables.count(key);
+  if (!count) {
+    row.append(...line);
+    return;
+  }
+  const open = deliverables.expanded(key);
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'coordinator-progress-task-toggle';
+  toggle.setAttribute('aria-expanded', String(open));
+  toggle.dataset.task = key;
+  const badge = document.createElement('span');
+  badge.className = 'coordinator-progress-task-count';
+  badge.textContent = String(count);
+  badge.title = t('coordinatorProgress.deliverables', { count });
+  toggle.setAttribute('aria-label', `${label} · ${badge.title}`);
+  // The archive toggle's chevron; CSS turns it right while folded.
+  const chevron = folderIcon('down');
+  chevron.classList.add('coordinator-progress-task-chevron');
+  chevron.setAttribute('width', '12'); chevron.setAttribute('height', '12'); chevron.setAttribute('stroke-width', '2.5');
+  toggle.append(...line, badge, chevron);
+  toggle.addEventListener('click', () => deliverables.toggle(key));
+  row.append(toggle);
+  row.dataset.expandable = 'true';
+  if (open) {
+    const region = deliverables.region(key);
+    region.setAttribute('aria-label', label);
+    row.append(region);
+  }
+}
+
+function taskRow(task: CoordinatorProgressTask, say: (text: string) => string,
+  key?: string, deliverables?: TaskDeliverables | null): HTMLLIElement {
   const row = document.createElement('li');
   row.className = 'coordinator-progress-task';
   row.dataset.status = task.status;
@@ -144,20 +198,62 @@ function taskRow(task: CoordinatorProgressTask, say: (text: string) => string): 
     else row.title = note.textContent;
     text.append(note);
   }
-  row.append(coordinatorProgressGlyph(task.status), text);
+  const line = [coordinatorProgressGlyph(task.status), text];
+  if (key && deliverables) expandable(row, line, key, say(task.title), deliverables);
+  else row.append(...line);
   return row;
 }
 
-function taskList(tasks: readonly CoordinatorProgressTask[], say: (text: string) => string): HTMLOListElement {
+type KeyedTask = { task: CoordinatorProgressTask; key?: string };
+
+function taskList(tasks: readonly KeyedTask[], say: (text: string) => string,
+  deliverables: TaskDeliverables | null): HTMLOListElement {
   const list = document.createElement('ol');
   list.className = 'coordinator-progress-tasks';
-  list.append(...tasks.map(task => taskRow(task, say)));
+  list.append(...tasks.map(({ task, key }) => taskRow(task, say, key, deliverables)));
   return list;
 }
 
+/** A group of deliverables outside the current board: one expandable row in a fold. */
+function deliverableGroup(className: string, label: string, rows: HTMLLIElement[], open: boolean,
+  remember: (open: boolean) => void): HTMLDetailsElement {
+  const fold = document.createElement('details');
+  fold.className = `coordinator-progress-group ${className}`;
+  fold.open = open;
+  fold.addEventListener('toggle', () => remember(fold.open));
+  const list = document.createElement('ol');
+  list.className = 'coordinator-progress-tasks';
+  list.append(...rows);
+  fold.append(createDisclosureSummary(document, label), list);
+  return fold;
+}
+
+/* A task off the board names no status here; its history row does. */
+function historyGlyph(): HTMLSpanElement {
+  const mark = document.createElement('span');
+  mark.className = 'coordinator-progress-glyph coordinator-progress-glyph--history';
+  mark.setAttribute('aria-hidden', 'true');
+  return mark;
+}
+
+function plainRow(title: string, key: string, deliverables: TaskDeliverables): HTMLLIElement {
+  const row = document.createElement('li');
+  row.className = 'coordinator-progress-task';
+  row.dataset.status = 'history';
+  const text = document.createElement('span');
+  text.className = 'coordinator-progress-text';
+  const name = document.createElement('span');
+  name.className = 'coordinator-progress-task-title';
+  name.textContent = title;
+  text.append(name);
+  expandable(row, [historyGlyph(), text], key, title, deliverables);
+  return row;
+}
+
 export function createCoordinatorProgress(ports: CoordinatorProgressPorts): CoordinatorProgressCard {
-  let finishedOpen = ports.finishedOpen, original = false;
+  let finishedOpen = ports.finishedOpen, original = false, earlierOpen = false;
   let last: [CoordinatorProgressView, CoordinatorProgressActions] | null = null;
+  let deliverables: TaskDeliverables | null = null;
 
   const card = document.createElement('details');
   card.className = 'coordinator-progress';
@@ -185,6 +281,26 @@ export function createCoordinatorProgress(ports: CoordinatorProgressPorts): Coor
   actions.append(commands);
   body.append(content, actions);
   card.append(head, body);
+
+  /** Earlier tasks with deliverables, then everything of no task of this project. */
+  function deliverableGroups(onBoard: ReadonlySet<string>): Node[] {
+    if (!deliverables) return [];
+    const helper = deliverables;
+    const nodes: Node[] = [];
+    const earlier = helper.tasks().filter(task => !onBoard.has(task.key));
+    if (earlier.length) {
+      nodes.push(deliverableGroup('coordinator-progress-earlier', t('coordinatorProgress.earlier', { count: earlier.length }),
+        earlier.map(task => plainRow(task.title, task.key, helper)), earlierOpen, open => { earlierOpen = open; }));
+    }
+    // One expandable row, not a fold around a row of the same name.
+    if (helper.count(OTHER_TASKS)) {
+      const list = document.createElement('ol');
+      list.className = 'coordinator-progress-tasks coordinator-progress-other';
+      list.append(plainRow(t('coordinatorProgress.other'), OTHER_TASKS, helper));
+      nodes.push(list);
+    }
+    return nodes;
+  }
 
   function render(view: CoordinatorProgressView, actionPorts: CoordinatorProgressActions) {
     last = [view, actionPorts];
@@ -229,29 +345,46 @@ export function createCoordinatorProgress(ports: CoordinatorProgressPorts): Coor
       updated.textContent = updatedLabel(board.updatedAt, ports.now?.() ?? Date.now());
       headNodes.push(updated);
 
-      const open = board.tasks.filter(task => OPEN.has(task.status));
-      const finished = board.tasks.filter(task => !OPEN.has(task.status));
+      const keys = view.taskKeys && view.taskKeys.length === board.tasks.length ? view.taskKeys : null;
+      const keyed: KeyedTask[] = board.tasks.map((task, index) => ({ task, key: keys?.[index] }));
+      const open = keyed.filter(({ task }) => OPEN.has(task.status));
+      const finished = keyed.filter(({ task }) => !OPEN.has(task.status));
       // In-progress work leads; otherwise the Coordinator's own order is kept.
-      open.sort((left, right) => Number(right.status === 'in_progress') - Number(left.status === 'in_progress'));
-      if (open.length) contentNodes.push(taskList(open, say));
+      open.sort((left, right) => Number(right.task.status === 'in_progress') - Number(left.task.status === 'in_progress'));
+      if (open.length) contentNodes.push(taskList(open, say, deliverables));
       if (finished.length) {
         const fold = document.createElement('details');
         fold.className = 'coordinator-progress-finished';
         fold.open = finishedOpen;
         fold.addEventListener('toggle', () => { finishedOpen = fold.open; ports.toggleFinished(fold.open); });
         const label = createDisclosureSummary(document, t('coordinatorProgress.finished', { count: finished.length }));
-        fold.append(label, taskList(finished, say));
+        fold.append(label, taskList(finished, say, deliverables));
         contentNodes.push(fold);
       }
+      contentNodes.push(...deliverableGroups(new Set(keys ?? [])));
     }
+    if (view.kind === 'empty') contentNodes.push(...deliverableGroups(new Set()));
     commandNodes.push(createButton({ label: t('coordinatorProgress.history'), size: 'sm', variant: 'ghost', onClick: actionPorts.history }));
     originalToggle.textContent = t('chat.bilingualOriginal');
     originalToggle.hidden = !translated;
     originalToggle.setAttribute('aria-pressed', String(translated && original));
+    // A task toggle is rebuilt by every paint; keep keyboard focus on the same task's toggle.
+    const focusedTask = document.activeElement instanceof HTMLElement && content.contains(document.activeElement)
+      ? document.activeElement.closest<HTMLElement>('.coordinator-progress-task-toggle')?.dataset.task : undefined;
     head.replaceChildren(...headNodes);
     content.replaceChildren(...contentNodes);
+    if (focusedTask) {
+      content.querySelector<HTMLElement>(`.coordinator-progress-task-toggle[data-task="${focusedTask}"]`)?.focus();
+    }
     commandSlot.replaceChildren(...commandNodes);
   }
 
-  return { el: card, render };
+  return {
+    el: card, render,
+    attachDeliverables(helper) {
+      deliverables = helper;
+      if (last) render(...last);
+    },
+    repaint() { if (last) render(...last); },
+  };
 }

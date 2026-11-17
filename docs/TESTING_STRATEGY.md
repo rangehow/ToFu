@@ -1495,6 +1495,27 @@ undo lazy-import publication and would hide the next polluter instead of
 naming it); resets in each victim (the polluters keep leaking to every other
 consumer).
 
+**Storage-factory aliases bound during a patch.** **Problem:** many
+fixtures `monkeypatch` `lib.storage.get_storage_client` with a test
+authority's factory. A product module first imported while that patch is
+active (`from lib.storage import get_storage_client` in a lazily imported
+owner such as `lib.acceptance.turns`) keeps the test's factory, and
+`monkeypatch` cannot undo an alias it never made. Every later test in that
+process read the stopped authority ("Storage sidecar is unavailable") until
+pytest-timeout; which test leaked depended on the xdist split, so the router
+silence root-loop specs failed only in large parallel runs. **Decision:** the
+conftest's `pytest_runtest_setup`/`pytest_runtest_teardown` wrappers record the
+imported modules and, after every fixture's teardown, rebind
+`get_storage_client` to the canonical factory in modules imported during the
+test whose alias is a function defined by a test module
+(`tests/support/storage_alias_isolation.py`, specified by
+`tests/meta/test_storage_alias_isolation.py`). The polluter here is the import
+order, not a test's own state, so there is no polluter to name.
+**Alternatives rejected:** eager imports of lazily imported owners (the next
+lazy owner leaks again); rewriting each fixture to patch only the runtime slot
+(the native parameter needs its factory, and the hazard returns with the next
+fixture); a longer persistence wait (the authority never returns).
+
 The `serial` marker is a narrow unit-test exception for a host-global resource,
 an intentional saturation test, or a timing contract that cannot safely
 overlap the parallel unit lane. Each new use carries an inline resource reason.

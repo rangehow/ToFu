@@ -2379,7 +2379,7 @@ in `output/studio-redesign/after/`).
 
 ### Lead deliverables (owner request 2026-11-16)
 
-Problem: in the classic view a lead's deliverables (delivery reports, published
+Problem: in the classic view a lead's deliverables (reports, published
 files and decks, merged Worker results) were scattered through very long
 conversations, so the owner scrolled back to find them; and in the studio,
 clicking a deliverable only opened the lead's conversation.
@@ -2394,19 +2394,24 @@ newest-first through `turn_lifecycle.lane_turns_newest_first` (one bounded
 `turn.sync.page` per Turn, so a long conversation never hits the
 whole-conversation response bound) and the conversation's artifact rows:
 
-- delivery reports: the lead's own canonical `coordinator_report.delivery`
-  Turns (`CoordinatorReports`); the item's title and summary are the Turn's
-  `title\n\nmessage` content. The Global Router's relayed deliveries are the
-  report relay notices in its Turns: `lib/router/relay.py` owns both the notice
-  format (`render_notice`) and its parser (`notice_references`); each named
-  report is read from the Project Router's canonical Turn, so a forged or
-  deleted reference lists nothing.
+- reports of every kind (owner request 2026-11-17; before, deliveries only):
+  the lead's own canonical `coordinator_report.*` Turns (`CoordinatorReports`);
+  the item's `reportKind` is the Turn's, its title and summary the Turn's
+  `title\n\nmessage` content, and its `files` the `reportFile`s the publishing
+  `report_to_user` call's receipt names (found in the reply that made the call,
+  segment result or round `toolContent`). The Global Router's relayed reports
+  are the report relay notices in its Turns: `lib/router/relay.py` owns both
+  the notice format (`render_notice`, whose `Files:` line carries the attached
+  files) and its parser (`notice_references`); each named report is read from
+  the Project Router's canonical Turn, so a forged or deleted reference lists
+  nothing.
 - published files, decks and documents: the artifact rows
   (`lib.artifacts.core.list_artifacts`) from `publish_response_file`, rich
   responses and long-form reports. A `.pptx`/`.pptd` file is a deck, another
   file a file, a rich response or long-form report a document; workspace
   writes, inline images and scanner snippets are not deliverables. The source
-  message is the oldest Turn whose tool round carries the `artifactId`.
+  message is the oldest Turn whose tool round carries the `artifactId`. A file a
+  report attached is listed under that report, never again as its own item.
 
 Items are newest first, 64 per page (the coordination page bound); the cursor
 is the previous page's last `(createdAt, item digest)`, so a page boundary is
@@ -2426,7 +2431,8 @@ deliverable itself: an artifact in the artifact panel (file preview, deck
 viewer), a report as the conversation's own `report_to_user` card in a dialog,
 a merge at its Worker's result Turn. The secondary action ("Go to message")
 opens the lead's message at that exact Turn. In the classic view, presence
-places a 成果 section after each shown lead's office slot (the Global Router's
+places a reports-and-files section (汇报与文件, open until the owner folds it;
+each report row names its kind and opens its attached files from chips) after each shown lead's office slot (the Global Router's
 card, a project's Coordinator row), above the archive of conversations it
 started; older pages load on demand, so lists of any length are complete. A
 `lead_deliverable` push for the shown lead and a push reconnect re-read the first
@@ -2721,19 +2727,46 @@ its translated title. The card is created folded; from then on the open state
 is the reader's, and no repaint of the live reply opens or folds it. Opened,
 the row keeps its geometry and hides the title, which the body starts with. A
 report published outside every reply is a message of its own and stays open.
-Reports in a reply are process descriptions (owner decision 2026-11-13,
-reversing the earlier rejection of this): before the reply's latest text,
-each folded card joins the narration well with the interim text
-(`interimNarrationIds`), keeping its own label, title and time inside it; the
-well's count includes them. A report after the latest text reads below it
-until a later round's text follows, so chronology is never reordered.
-Alternatives rejected: opening the newest report would fold
-the previous one under the reader as each report arrives, and a reload would
-read differently from the live page; keeping `decision` and `blocked` open
-treats reports as questions, which the report contract forbids (the human is
-asked with `ask_human`); clamping the body to a number of lines is a tuned
-cutoff. Verification: the renderer and placement suites and the browser
-journey named above.
+
+Reports are what the owner reads (owner request 2026-11-17, superseding the
+2026-11-13 decision that reports are process descriptions in the narration
+well). Problem: in the main coordinator's conversation (95 Turns, 2026-11-17)
+26 automatic continuation briefs held 104.5k characters, more than every reply
+together, the 25 reports were 22% of the text and sat folded inside the
+narration well between 1,000+ tool calls, and files the leads produced were
+named only by paths inside report prose, so the owner could not find the
+deliverables. Decision:
+
+- A report never joins the narration well (`interimNarrationIds`); a grouped
+  reply reads its reports after its prose, in their own order
+  (`groupedTurnLayout`), so no fold or later round text sits between the owner
+  and a report.
+- A `delivery`, `decision` or `blocked` card is created open, a `progress`
+  card folded; afterwards the open state stays the reader's.
+- `report_to_user` takes `files` (project paths). The tool publishes each one
+  through the `publish_response_file` publisher (verified roots, supported
+  types) before the report, all or none, and its receipt names them as
+  `reportFile`s (`project_coordination_v1.schema.json`). The report card reads
+  them from its publishing call's receipt and shows them as chips below its
+  head, outside the fold, each opening the file in the artifact panel
+  (`open-artifact`). The Turn projection is unchanged: the receipt is the
+  record, so no conversation-sync or engine field was added.
+- A project-brain `virtual_user` input (an automatic continuation, a delegated
+  brief) reads as one folded row, "Automatic instruction" and its first line
+  (`renderers/machine-brief-block.ts`); its body renders only when opened.
+- The sidebar section beneath each lead lists every report, with its kind and
+  attached files, and is open until the owner folds it ("Lead deliverables").
+
+Alternatives rejected: a separate "for me" transcript mode that hides process
+Turns (a second view model per Turn identity across windowing, navigation and
+actions, and the owner would have to switch modes to find a report); parsing
+paths out of report prose (unreliable, and files outside a published artifact
+cannot be opened); a new Turn projection field for the files (needs a
+conversation-sync contract and TofuDB engine change for data the receipt
+already records); opening the newest report only (folds the previous one under
+the reader as each report arrives). Verification: the renderer, placement and
+grouped-layout suites, `machine-brief-block.test.ts`, and the browser journey
+named above.
 
 The sidebar's fixed Coordinator entry shows an unread dot and the latest title.
 Clicking it opens the ordinary conversation, where the report is a normal

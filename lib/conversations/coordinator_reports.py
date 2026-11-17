@@ -132,16 +132,17 @@ class CoordinatorReports:
     def _content(request):
         return request['title'] + '\n\n' + request['message']
 
-    def publish(self, scope, request):
+    def publish(self, scope, request, *, files=()):
+        """Publish ``request``; ``files`` are the ``reportFile``s its call attached, for the relay."""
         validate_report(scope, 'reportScope')
         validate_report(request, 'reportRequest')
         if not request['title'].strip() or not request['message'].strip() or not request['idempotency_key'].strip():
             raise ValueError('Report title, message and idempotency key must not be blank')
         self._scope(scope)
         key, intent = self._retain_intent(scope, request)
-        return self._deliver(key, intent)
+        return self._deliver(key, intent, files=files)
 
-    def _deliver(self, key, intent):
+    def _deliver(self, key, intent, *, files=()):
         value = intent['value']; scope, request = value['scope'], value['request']
         validate_report(value, 'reportIntent')
         if type(intent['version']) is not int or intent['version'] < 1:
@@ -178,12 +179,12 @@ class CoordinatorReports:
         pointer.update(title=request['title'], kind=request['kind'])
         validate_report(pointer, 'reportPointer')
         self._change_head(scope, pointer=pointer)
-        if request['kind'] == 'delivery':
-            from lib.conversations.lead_deliverables import notify
-            notify(self.owner, scope['coordinatorId'], self.project)
+        # Every report is an item of the owner's lead deliverables list.
+        from lib.conversations.lead_deliverables import notify
+        notify(self.owner, scope['coordinatorId'], self.project)
         # Before the intent retires: a crash here replays the relay at boot, and
         # its per-Turn command id keeps the Global Router notice exactly once.
-        self._relay(scope, request, turn['turnId'])
+        self._relay(scope, request, turn['turnId'], files)
         # Intent is reconstructible transport state only after both canonical
         # message and attention pointer have committed. Lost ACK replays safely.
         self._delete_intent(key, intent['version'])
@@ -274,14 +275,17 @@ class CoordinatorReports:
         self._hint(scope['coordinatorId'])
         return self.read()
 
-    def _relay(self, scope, request, turn_id):
+    def _relay(self, scope, request, turn_id, files=()):
         relay = self.relay
         if relay is None:
             from lib.router.relay import relay_project_report as relay
+        report = {'projectPath': scope['projectPath'], 'coordinatorId': scope['coordinatorId'],
+                  'turnId': turn_id, 'kind': request['kind'], 'title': request['title'],
+                  'message': request['message']}
+        if files:
+            report['files'] = list(files)
         try:
-            relay(self.owner, {'projectPath': scope['projectPath'], 'coordinatorId': scope['coordinatorId'],
-                               'turnId': turn_id, 'kind': request['kind'], 'title': request['title'],
-                               'message': request['message']}, client=self.client)
+            relay(self.owner, report, client=self.client)
         except Exception:
             # The relay is a pointer to the canonical report; it never fails publication.
             from lib.log import get_logger

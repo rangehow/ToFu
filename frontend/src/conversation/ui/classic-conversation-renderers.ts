@@ -63,6 +63,7 @@ import {
   renderTurnFooter,
 } from './renderers/turn-chrome';
 import { renderCoordinatorReportBlock } from './renderers/coordinator-report-block';
+import { isMachineBrief, renderMachineBriefBlock } from './renderers/machine-brief-block';
 
 export type {
   ClassicConversationMarkdownOptions,
@@ -106,7 +107,9 @@ export function createClassicConversationRenderers(
         disposeToolBody(node);
       }
       if (block.kind !== 'thinking') disposeThinkingBody(node);
-      if (block.kind === 'text') {
+      if (block.kind === 'text' && isMachineBrief(context.turn)) {
+        renderMachineBriefBlock(node, block, ports, context.turn);
+      } else if (block.kind === 'text') {
         renderTextBlock(node, block, ports, context.turn);
       } else if (block.kind === 'thinking') {
         renderThinkingBlock(node, block, ports);

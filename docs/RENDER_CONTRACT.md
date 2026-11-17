@@ -445,11 +445,15 @@ Interim round prose shares ONE bounded, scrolling narration well
 (`interimNarrationIds` in `grouped-turn-layout.ts`; design ports
 `narrationWell`/`paintNarrationWell`; styles in `23-reading-prose.css`), so a
 long run of rounds no longer stretches the reply. Members are the contiguous
-run of non-deliverable, non-terminal text and Coordinator report cards
-starting at the first one, ending before the reply's latest text (owner
-decision 2026-11-13: reports are process descriptions): that text may still stream or become the answer, so
+run of non-deliverable, non-terminal text starting at the first one,
+ending before the reply's latest text: that text may still stream or become
+the answer, so
 a leaf is reparented at most once, when a later round's text follows it. The
-answer always reads on the open page below. Per-block caps were rejected: many
+answer always reads on the open page below. Coordinator report cards never join the well
+(owner request 2026-11-17, superseding 2026-11-13): a grouped reply reads them
+after its prose, and a project-brain `virtual_user` input reads as one folded
+"Automatic instruction" row (docs/PROJECT_COORDINATION.md, "Reports are what
+the owner reads"). Per-block caps were rejected: many
 short rounds still stretched the reply.
 
 The well is the activity card's last fold (owner report 2026-11-04: a

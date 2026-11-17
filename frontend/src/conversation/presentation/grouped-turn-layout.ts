@@ -49,8 +49,8 @@ const ZONE_BY_KIND: Readonly<Record<ConversationBlockKind, TurnLayoutZone>> = {
   'autopilot-run-notice': 'trail',
   'queue-status': 'trail',
   'live-status': 'trail',
-  // A report reads in the reply's prose at its call, never behind the panel's
-  // fold or call window; like interim text it joins the narration well.
+  // A report is the lead's message to the owner: it reads after the reply's
+  // prose, never behind the panel's fold, the call window or the narration well.
   'coordinator-report': 'content',
 };
 
@@ -124,19 +124,19 @@ export function entryRegions(entries: ReadonlyArray<GroupedTurnEntry>): Readonly
 
 /** Interim prose of a mounted reply: the contiguous run of round narration
  * that starts at its first interim entry, so the run can share one bounded
- * reading well. Interim entries are Coordinator reports (process descriptions
- * by owner decision 2026-11-13) and text that is neither the settled answer
+ * reading well. Interim entries are text that is neither the settled answer
  * nor the reply's latest text: the latest stays outside while it may still
  * stream (or become the answer) and joins only once a later round's text
- * follows it; a report after it waits outside with it. The run ends at the
- * first other entry, so chronology is never reordered. */
+ * follows it. The run ends at the first other entry, so chronology is never
+ * reordered. Coordinator reports are never interim (owner decision
+ * 2026-11-17, superseding 2026-11-13): they are what the owner reads. */
 export function interimNarrationIds(entries: ReadonlyArray<GroupedTurnEntry>): ReadonlySet<string> {
   let latestText = -1;
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     if (entries[index].kind === 'text') { latestText = index; break; }
   }
-  const interim = (entry: GroupedTurnEntry): boolean => entry.kind === 'coordinator-report'
-    || (entry.kind === 'text' && !entry.deliverable && !entry.terminal);
+  const interim = (entry: GroupedTurnEntry): boolean => entry.kind === 'text'
+    && !entry.deliverable && !entry.terminal;
   const ids = new Set<string>();
   let index = 0;
   while (index < latestText && !interim(entries[index])) index += 1;
@@ -222,6 +222,12 @@ export function groupedTurnLayout(turn: ConversationTurnViewModel): GroupedTurnL
       lead: [], thinking: [], process: [], content: [], trail: [],
     };
     for (const block of turn.blocks) zones[turnLayoutZone(block)].push(block);
+    // Reports close the prose in their own order, so no narration fold or
+    // later round text ever sits between the owner and a report.
+    const reports = zones.content.filter((block) => block.kind === 'coordinator-report');
+    if (reports.length) {
+      zones.content = [...zones.content.filter((block) => block.kind !== 'coordinator-report'), ...reports];
+    }
     const thinking = zones.thinking as ThinkingBlockViewModel[];
     const settled = replySettled(turn);
     layout = {

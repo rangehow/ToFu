@@ -296,6 +296,17 @@ export interface CoordinatorReportBlockViewModel extends ConversationBlockBase {
   title: string;
   createdAt: string | number;
   text: TextBlockViewModel;
+  /** The files the publishing `report_to_user` call attached, named by its
+   * receipt (`reportFile` in project_coordination_v1.schema.json). */
+  files: ReadonlyArray<CoordinatorReportFile>;
+}
+
+export interface CoordinatorReportFile {
+  artifactId: string;
+  filename: string;
+  kind: 'file' | 'deck' | 'document';
+  sizeBytes?: number;
+  path?: string;
 }
 
 export interface QueueStatusBlockViewModel extends ConversationBlockBase {

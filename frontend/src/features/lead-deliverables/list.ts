@@ -1,10 +1,13 @@
-/** Lead deliverables in the classic sidebar: a 成果 (Deliverables) section beneath a lead's entry.
+/** Lead deliverables in the classic sidebar: the reports and files section beneath a lead's entry.
  *
- * One section per shown lead (the Global Router's card, a project's Coordinator row). It reads the lead's
- * projection page by page, newest first (`leadDeliverables`), and appends older pages on demand, so a list of
- * any length is complete, never truncated. Each row shows the kind, title, project and age; clicking it
- * opens the deliverable itself through the shared opener, and its secondary control goes to the lead's
- * message at the exact Turn. A `lead_deliverable` project push for the shown lead, a push reconnect and
+ * One section per shown lead (the Global Router's card, a project's Coordinator row). It is what the lead
+ * sent the owner: every report (delivery, progress, decision, blocked) with the files its call attached,
+ * and files published on their own. It reads the lead's projection page by page, newest first
+ * (`leadDeliverables`), and appends older pages on demand, so a list of any length is complete, never
+ * truncated. It is open until the owner folds it. Each row shows the kind (a report's own kind; decision
+ * and blocked marked for attention), title, project and age; clicking it opens the deliverable itself
+ * through the shared opener, each attached file opens from its chip, and the row's secondary control goes
+ * to the lead's message at the exact Turn. A `lead_deliverable` project push for the shown lead, a push reconnect and
  * showing another lead re-read the first page; nothing polls. The server scopes every read to the owner.
  * Entry point: createLeadDeliverables. Dependencies: ports for the read, push and opener; i18n; ui.
  */
@@ -134,12 +137,14 @@ export function createLeadDeliverables(ports: LeadDeliverablesPorts): LeadDelive
     li.className = 'lead-deliverable';
     li.dataset.deliverableId = item.id;
     li.dataset.kind = item.kind;
+    if (item.reportKind) li.dataset.reportKind = item.reportKind;
     const open = document.createElement('button');
     open.type = 'button';
     open.className = 'lead-deliverable__open';
     const kind = document.createElement('span');
     kind.className = 'lead-deliverable__kind';
-    kind.textContent = t(`leadDeliverables.kind.${item.kind}`);
+    kind.textContent = item.kind === 'report' && item.reportKind
+      ? t(`leadDeliverables.reportKind.${item.reportKind}`) : t(`leadDeliverables.kind.${item.kind}`);
     const title = document.createElement('span');
     title.className = 'lead-deliverable__title';
     title.textContent = item.title;
@@ -153,9 +158,33 @@ export function createLeadDeliverables(ports: LeadDeliverablesPorts): LeadDelive
     open.append(kind, title, meta);
     open.addEventListener('click', () => { ports.opener.open(item); });
     li.append(open);
+    if (item.files?.length) li.append(files(item));
     const source = sourceButton(item, ports.opener);
     if (source) li.append(source);
     return li;
+  }
+
+  function files(item: LeadDeliverable): HTMLElement {
+    const group = document.createElement('div');
+    group.className = 'lead-deliverable__files';
+    group.setAttribute('role', 'list');
+    group.setAttribute('aria-label', t('leadDeliverables.files'));
+    for (const file of item.files || []) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'lead-deliverable__file';
+      chip.setAttribute('role', 'listitem');
+      chip.dataset.fileKind = file.kind;
+      chip.textContent = file.filename;
+      chip.title = file.path || file.filename;
+      chip.setAttribute('aria-label', t('leadDeliverables.openFile', { name: file.filename }));
+      chip.addEventListener('click', () => {
+        ports.opener.open({ id: 'artifact:' + file.artifactId, kind: file.kind, title: file.filename,
+          projectPath: item.projectPath, createdAt: item.createdAt, source: item.source, artifactId: file.artifactId });
+      });
+      group.append(chip);
+    }
+    return group;
   }
 
   function paint() {
@@ -190,7 +219,8 @@ export function createLeadDeliverables(ports: LeadDeliverablesPorts): LeadDelive
       items = [];
       cursor = null;
       state = 'idle';
-      expanded = ports.readExpanded?.(next.leadId) ?? false;
+      // Open until the owner folds it: this is where they find what the lead sent them.
+      expanded = ports.readExpanded?.(next.leadId) ?? true;
       root.hidden = false;
       root.dataset.leadId = next.leadId;
       list.replaceChildren();

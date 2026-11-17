@@ -30,14 +30,25 @@ def test_reports_artifacts_and_relayed_deliveries_project_from_their_owners(sema
     reports = CoordinatorReports(owner, project)
     delivered = reports.publish(scope, {'title': 'Shipped', 'message': 'All merged.', 'kind': 'delivery',
                                         'idempotency_key': 'delivery'})
-    reports.publish(scope, {'title': 'Pick one', 'message': 'A or B?', 'kind': 'decision', 'idempotency_key': 'ask'})
+    asked = reports.publish(scope, {'title': 'Pick one', 'message': 'A or B?', 'kind': 'decision',
+                                    'idempotency_key': 'ask'})
+    # The reply that called report_to_user keeps the receipt naming the files it attached.
+    attached = {'artifactId': 'cv-1', 'filename': 'cv.pdf', 'kind': 'file', 'sizeBytes': 9, 'path': 'out/cv.pdf'}
+    append_settled_turn(lead, user_id=owner, command_id='reply', actor='assistant', kind='message', projection={
+        'content': 'Reported.', 'toolRounds': [{'toolName': 'report_to_user', 'toolContent': __import__('json').dumps(
+            {'conversationId': lead, 'turnId': asked['turnId'], 'published': True, 'files': [attached]})}]})
     deck = {'id': 'deck-1', 'conv_id': lead, 'source': 'response_file', 'format': 'file', 'title': 'plan.pptx',
             'created_at': publishing['createdAt'], 'meta': {'responseFile': {'filename': 'plan.pptx'}}}
+    cv = {'id': 'cv-1', 'conv_id': lead, 'source': 'response_file', 'format': 'file', 'title': 'cv.pdf',
+          'created_at': publishing['createdAt'] + 1, 'meta': {'responseFile': {'filename': 'cv.pdf'}}}
 
-    items = DeliverablesPage(owner, lead, artifacts=lambda conversation: [deck]).read(project_path=project)['items']
-    assert [(item['kind'], item['title']) for item in items] == [('report', 'Shipped'), ('deck', 'plan.pptx')]
-    assert items[0]['source']['turnId'] == delivered['turnId'] and items[0]['summary'] == 'All merged.'
-    assert items[1]['source']['turnId'] == publishing['turnId'] and items[1]['projectPath'] == project
+    items = DeliverablesPage(owner, lead, artifacts=lambda conversation: [deck, cv]).read(
+        project_path=project)['items']
+    assert [(item['kind'], item.get('reportKind'), item['title']) for item in items] == [
+        ('report', 'decision', 'Pick one'), ('report', 'delivery', 'Shipped'), ('deck', None, 'plan.pptx')]
+    assert items[0]['files'] == [attached] and 'files' not in items[1]
+    assert items[1]['source']['turnId'] == delivered['turnId'] and items[1]['summary'] == 'All merged.'
+    assert items[2]['source']['turnId'] == publishing['turnId'] and items[2]['projectPath'] == project
 
     router = ProjectCoordinationRepository(owner).create(project + '-home', folder_id='test', expected_revision=0,
                                                          command_id='create-router')['conversationId']
@@ -46,8 +57,8 @@ def test_reports_artifacts_and_relayed_deliveries_project_from_their_owners(sema
         'content': render_notice({'projectPath': project, 'coordinatorId': lead, 'kind': 'delivery',
                                   'turnId': delivered['turnId'], 'title': 'Shipped', 'message': 'All merged.'})})
     [relayed] = DeliverablesPage(owner, router, artifacts=lambda conversation: []).read()['items']
-    assert relayed['id'] == items[0]['id'] and relayed['projectPath'] == project
-    assert relayed['source'] == items[0]['source']
+    assert relayed['id'] == items[1]['id'] and relayed['projectPath'] == project
+    assert relayed['source'] == items[1]['source']
 
     with pytest.raises(PermissionError):
         DeliverablesPage(owner + 1, lead, artifacts=lambda conversation: []).read()

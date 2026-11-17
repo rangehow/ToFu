@@ -129,17 +129,30 @@ describe('grouped turn layout', () => {
     expect(entryRegions(failed.blocks)).toEqual([{ kind: 'turn', start: 0, end: failed.blocks.length }]);
   });
 
-  it('gathers Coordinator reports into the narration well with interim text', () => {
+  it('never gathers Coordinator reports into the narration well', () => {
     const report = (blockId: string) => ({ kind: 'coordinator-report', blockId }) as GroupedTurnEntry;
     const text = (blockId: string, answer = false) => (
       { kind: 'text', blockId, deliverable: answer, terminal: answer }) as GroupedTurnEntry;
     const panel = { kind: 'tool-panel', blockId: TOOL_PANEL_BLOCK_ID } as GroupedTurnEntry;
-    // Reports before the latest text are process descriptions, mixed with interim prose.
-    expect([...interimNarrationIds([
-      panel, report('r1'), report('r2'), text('say-0'), report('r3'), text('say-1'), report('r4'),
-    ])]).toEqual(['r1', 'r2', 'say-0', 'r3']);
-    // The latest text and any report after it stay outside until a later text follows.
-    expect([...interimNarrationIds([report('r1'), text('answer', true), report('r2')])]).toEqual(['r1']);
+    expect([...interimNarrationIds([panel, text('say-0'), text('say-1'), text('answer', true), report('r1')])])
+      .toEqual(['say-0', 'say-1']);
+    expect([...interimNarrationIds([report('r1'), text('answer', true)])]).toEqual([]);
+  });
+
+  it('reads Coordinator reports after the reply prose, in their own order', () => {
+    const turn = {
+      turnId: 'reply', role: 'assistant', status: 'completed', commandPending: null,
+      metadata: {}, blocks: [
+        { kind: 'text', blockId: 'say-0', markdown: 'Working.', deliverable: false, terminal: false },
+        { kind: 'coordinator-report', blockId: 'r1' },
+        { kind: 'text', blockId: 'say-1', markdown: 'More.', deliverable: false, terminal: false },
+        { kind: 'coordinator-report', blockId: 'r2' },
+        { kind: 'text', blockId: 'answer', markdown: 'Done.', deliverable: true, terminal: true },
+      ],
+    } as unknown as ConversationTurnViewModel;
+    const entries = groupedTurnEntries(groupedTurnLayout(turn)!, false);
+    expect(ids(entries)).toEqual(['say-0', 'say-1', 'answer', 'r1', 'r2']);
+    expect([...interimNarrationIds(entries)]).toEqual(['say-0', 'say-1']);
   });
 
   it('memoizes entries per immutable Turn and panel state', () => {

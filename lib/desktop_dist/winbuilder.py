@@ -535,8 +535,9 @@ def _build_tofudb_exe(src: str, log_fh) -> None:
     cross-compiler: zig via cargo-zigbuild targets windows-gnu with no
     SDK (measured 2026-11-17: PE32+ x86-64, 22 MB). zig's clang turns
     mimalloc's __DATE__ into -Werror=date-time, hence the CFLAGS. The
-    target dir lives in the persistent cache so later builds reuse every
-    compiled dependency.
+    target dir lives on the toolchain's LOCAL disk so later builds reuse
+    every compiled dependency: on the FUSE cache lld-link's mmapped output
+    hung in uninterruptible sleep for 25+ minutes (measured 2026-11-17).
     """
     from . import builder as _linux_builder
     tools_bin = os.path.join(wintoolchain.cache_dir(), 'tools', 'bin')
@@ -545,7 +546,7 @@ def _build_tofudb_exe(src: str, log_fh) -> None:
             _conda_tools_add(package, log_fh)
     cargo_home = os.environ.get('CARGO_HOME') or os.path.expanduser(
         '~/.cargo')
-    target_dir = os.path.join(wintoolchain.cache_dir(), 'tofudb-target')
+    target_dir = os.path.join(wintoolchain.local_root(), 'tofudb-target')
     env = dict(os.environ,
                PATH=os.pathsep.join([tools_bin,
                                      os.path.join(cargo_home, 'bin'),

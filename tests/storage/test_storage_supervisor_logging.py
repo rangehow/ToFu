@@ -761,3 +761,72 @@ def test_lease_probe_defers_a_spawn_without_the_host_lifecycle_manager(
             project_root=tmp_path, backend='sqlite', startup_timeout=5.0)
         with pytest.raises(StorageStartDeferred, match='lease is held'):
             supervisor.start()
+
+def test_first_health_handshake_uses_startup_budget_instead_of_liveness_deadline(tmp_path, monkeypatch):
+    seen = []
+
+    class ColdClient(_ReadyClient):
+        def health(self, deadline=None):
+            seen.append(deadline)
+            return {'ready': deadline is not None and deadline >= 3, 'backend': 'sqlite',
+                    'probe_error': 'database_timeout'}
+
+    supervisor, children = _lease_holding_supervisor(tmp_path, monkeypatch, ColdClient)
+    try:
+        supervisor.start()
+        assert supervisor.ready
+        assert 3 <= seen[0] <= 5
+    finally:
+        supervisor.stop(timeout=2)
+        for child in children:
+            child.close_pipes()
+
+
+def test_failed_start_health_retains_sanitized_classification(tmp_path, monkeypatch):
+    class FailedClient(_ReadyClient):
+        def health(self, deadline=None):
+            return {'ready': False, 'backend': 'sqlite', 'probe_error': 'database_timeout',
+                    'diagnostic': 'must-not-log-secret'}
+
+    supervisor, children = _lease_holding_supervisor(tmp_path, monkeypatch, FailedClient)
+    try:
+        with pytest.raises(RuntimeError, match='probe_error=database_timeout') as error:
+            supervisor.start()
+        assert 'must-not-log-secret' not in str(error.value)
+        assert not supervisor.ready
+    finally:
+        supervisor.stop(timeout=2)
+        for child in children:
+            child.close_pipes()
+
+
+@pytest.mark.parametrize('now, remaining', [(103.0, 2.0), (105.0, None)])
+def test_startup_health_spends_only_remaining_budget(monkeypatch, now, remaining):
+    from types import SimpleNamespace
+    seen = []
+    client = SimpleNamespace(health=lambda **kwargs: seen.append(kwargs['deadline']) or
+                             {'ready': True, 'backend': 'tofudb'})
+    monkeypatch.setattr(supervisor_mod, 'time', SimpleNamespace(monotonic=lambda: now))
+    if remaining is None:
+        with pytest.raises(TimeoutError, match='startup budget expired'):
+            StorageSupervisor._verify_startup_health(client, 'tofudb', 105.0)
+        assert not seen
+    else:
+        StorageSupervisor._verify_startup_health(client, 'tofudb', 105.0)
+        assert seen == [remaining]
+
+
+@pytest.mark.parametrize('reported_backend, ready, probe', [
+    ('sqlite', True, None), ('tofudb', False, ['secret-token']),
+])
+def test_startup_health_refuses_wrong_backend_and_reports_only_known_components(
+        monkeypatch, reported_backend, ready, probe):
+    from types import SimpleNamespace
+    monkeypatch.setattr(supervisor_mod, 'time', SimpleNamespace(monotonic=lambda: 0))
+    client = SimpleNamespace(health=lambda **_: {
+        'ready': ready, 'backend': reported_backend, 'probe_error': probe,
+        'components': {'onlineBackup': {'healthy': False}, 'secret-token': {'healthy': False}},
+    })
+    with pytest.raises(RuntimeError, match='unhealthy=onlineBackup') as error:
+        StorageSupervisor._verify_startup_health(client, 'tofudb', 5)
+    assert 'secret-token' not in str(error.value)

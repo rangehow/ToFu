@@ -9,7 +9,9 @@ from pathlib import Path
 import pytest
 
 from tests._jsdom import require_node_modules
-from tests._runtime_sections import native_module_path, runtime_section_path
+from tests._runtime_sections import (
+    native_module_path, runtime_section_path,
+)
 
 
 pytestmark = pytest.mark.unit
@@ -22,6 +24,7 @@ CLIENT_LOG_SCHEDULER = native_module_path(
 INFO_RAIL = runtime_section_path('info-rail.js', scope_prelude=False)
 AVAILABILITY_PRELUDE = ROOT / 'frontend/src/runtime/sections/_prelude.js'
 AVAILABILITY_COORDINATOR = ROOT / 'frontend/src/availability-health-probe.ts'
+NETWORK_INDICATOR = ROOT / 'frontend/src/network-indicator.ts'
 FEATURE_FLAGS_LOADER = native_module_path(
     '.native/feature-flags-loader.js',
     ROOT / 'frontend/src/core/feature-flags-loader.ts',
@@ -197,13 +200,14 @@ def test_mcp_context_summary_piggybacks_without_a_schema_request():
 
 
 def test_network_badge_reuses_push_liveness_without_a_parallel_clock():
-    # The badge owner (behavior: frontend/src/network-indicator.test.ts) runs
-    # no timer of its own; the retained prelude feeds it the Push socket's
-    # readings and retires it with the composition.
-    source = (ROOT / 'frontend/src/network-indicator.ts').read_text(encoding='utf-8')
-    for clock in ('setInterval', 'setTimeout', 'Date.now', 'performance.now'):
-        assert clock not in source
+    # The badge is the typed network-indicator.ts state machine; the prelude
+    # wires its subscription ports and its retained-lifecycle release.
+    source = NETWORK_INDICATOR.read_text(encoding='utf-8')
     prelude = AVAILABILITY_PRELUDE.read_text(encoding='utf-8')
+    assert 'setInterval' not in source
+    assert 'setTimeout' not in source
+    assert 'fetch(' not in source
+    assert 'pushIsConnected' not in source
     assert 'subscribePush: (listener) => pushOnLatency(listener)' in prelude
     assert 'conversationConnectionHealth.subscribeAggregate(listener)' in prelude
     assert 'retainedCompositionLifecycle.add(() => networkIndicator.destroy())' in prelude

@@ -4467,50 +4467,75 @@
       "owner": "tests/evaluations/test_frontier_harness_native.py",
       "status": "documented"
     },
-    "OPENAI_API_BASE": {
-      "description": "Benchmark-only: the OpenAI-compatible base URL handed to a competitor tool run in its own venv (points at the local Tofu gateway).",
-      "owner": "evaluations/slides_bench/competitors/",
-      "status": "documented"
+    "FAULTFS_STATS": {
+      "status": "documented",
+      "owner": "benchmarks/agent_storage/faultfs.c",
+      "description": "Optional path of the shim's shared 4 KiB counter file (barrier counts and time, surviving SIGKILL). Benchmark/test-time only; the server never reads it and it tunes no product behavior."
+    },
+    "FAULTFS_COUNT_IO": {
+      "status": "documented",
+      "owner": "benchmarks/agent_storage/faultfs.c",
+      "description": "\"1\" (with FAULTFS_STATS) makes the shim also count in-scope read/write calls, bytes and time, as read by benchmarks/sqlite_write_pattern.py. Benchmark/test-time only; the server never reads it and it tunes no product behavior."
+    },
+    "FAULTFS_ROOT": {
+      "status": "documented",
+      "owner": "benchmarks/agent_storage/faultfs.c",
+      "description": "Absolute path prefix the LD_PRELOAD fault-injection shim acts on; descriptors outside it are untouched and unset disables injection. Benchmark/test-time only; the server never reads it and it tunes no product behavior."
+    },
+    "TOFU_BENCH_CHECKOUT": {
+      "status": "documented",
+      "owner": "benchmarks/startup_recovery_batch.py",
+      "description": "Tree whose lib the startup-recovery benchmark imports (an exported pre-change tree for the before arm); unset measures this checkout. Benchmark/test-time only; the server never reads it and it tunes no product behavior."
     },
     "SLIDES_BENCH_MODEL": {
-      "description": "Benchmark-only: model name competitor tools generate slides with.",
-      "owner": "evaluations/slides_bench/competitors/",
-      "status": "documented"
+      "status": "documented",
+      "owner": "evaluations/slides_bench/llm_bridge.py",
+      "description": "Model id the slides-benchmark arms request from the bridge endpoint (default gpt-5.5). Benchmark/test-time only; the server never reads it and it tunes no product behavior."
+    },
+    "OPENAI_API_BASE": {
+      "status": "documented",
+      "owner": "evaluations/slides_bench/competitors/run_pptagent.py",
+      "description": "Base URL the third-party competitor tools (PPTAgent, slide-deck-ai) read in their own isolated venvs; the slides benchmark points it at the running Tofu server's OpenAI-compatible endpoint. Benchmark/test-time only; the server never reads it and it tunes no product behavior."
     },
     "SLIDES_BENCH_DATA": {
-      "description": "Benchmark-only: data root for slides-benchmark inputs, competitor environments and renders, outside git (docs/SLIDES_BENCHMARK.md).",
-      "owner": "evaluations/slides_bench/",
-      "status": "documented"
+      "status": "documented",
+      "owner": "evaluations/slides_bench/corpus.py",
+      "description": "Private data root holding the slides benchmark corpus, tools and runs; unset uses data/ppt-bench under the shared checkout. Benchmark/test-time only; the server never reads it and it tunes no product behavior."
     },
     "SLIDES_BENCH_ENDPOINT": {
-      "description": "Benchmark-only: chat-completions endpoint the slides benchmark LLM bridge calls.",
+      "status": "documented",
       "owner": "evaluations/slides_bench/llm_bridge.py",
-      "status": "documented"
+      "description": "OpenAI-compatible chat endpoint of the running Tofu server through which every slides-benchmark arm, judge and auditor routes model calls. Benchmark/test-time only; the server never reads it and it tunes no product behavior."
     },
     "SLIDES_BENCH_SOFFICE": {
-      "description": "Benchmark-only: path of the LibreOffice binary used to render decks for scoring.",
+      "status": "documented",
       "owner": "evaluations/slides_bench/render.py",
-      "status": "documented"
+      "description": "LibreOffice binary that renders every arm's exported PPTX for the judge; unset uses the AppImage extracted under the benchmark data root. Benchmark/test-time only; the server never reads it and it tunes no product behavior."
     },
     "SLIDES_BENCH_TOFU_BASELINE": {
-      "description": "Benchmark-only: 1 runs the Tofu baseline arm of the slides benchmark.",
+      "status": "documented",
       "owner": "evaluations/slides_bench/run_tofu.py",
-      "status": "documented"
+      "description": "\"1\" runs the Tofu arm's recorded baseline variant (lifted outline token budget), recorded in run.json. Benchmark/test-time only; the server never reads it and it tunes no product behavior."
     },
     "SLIDES_BENCH_JUDGE_MODEL": {
-      "description": "Benchmark-only: model that judges rendered decks.",
+      "status": "documented",
       "owner": "evaluations/slides_bench/score.py",
-      "status": "documented"
+      "description": "Model id of the slides-benchmark judge (default gpt-5.5). Benchmark/test-time only; the server never reads it and it tunes no product behavior."
+    },
+    "PYTEST_DEBUG_TEMPROOT": {
+      "status": "documented",
+      "owner": "tests/conftest.py",
+      "description": "pytest's own temporary-root override, defined by pytest; tests/conftest.py reads it to derive the pytest-of-<user> basetemp ceiling. Test-time only."
     },
     "TOFU_TEST_CRASH_PROBE_SOURCES": {
-      "description": "Test-only, not a tuning knob: os.pathsep-separated drill sources for the engine-certify crash probe; the spec skips without them.",
+      "status": "documented",
       "owner": "tests/deploy/test_engine_certify_crash_probe.py",
-      "status": "documented"
+      "description": "os.pathsep-separated drill source data roots for the opt-in engine crash-probe test; unset skips it. Test-time only; sources are hard-link-snapshotted, never written."
     },
     "LEAD_DELIVERABLES_SHOT_LABEL": {
-      "description": "Test-only, not a tuning knob: label of the before/after screenshots the lead-deliverables browser spec writes (default \"after\").",
+      "status": "documented",
       "owner": "tests/frontend/test_lead_deliverables_browser.py",
-      "status": "documented"
+      "description": "Output subdirectory label (default \"after\") for the Lead deliverables visual test's screenshots under output/playwright. Test-time only."
     }
   },
   "legacy_count": 580,

@@ -106,6 +106,17 @@ def test_resource_registry_seeded_once_and_never_overwritten(root):
     assert read(home)['content'] == edited
 
 
+def test_resource_registry_seed_without_a_bundle_names_no_resources(root, monkeypatch):
+    from lib.router.home import owner_resources
+    monkeypatch.setattr('tofu_extensions.bundle_directories', lambda kind: [])
+    router_home_path(7)
+    seed = owner_resources(7, content=True)['content']
+    assert seed.startswith('# Owner resource registry')
+    assert 'Never store a secret here' in seed
+    assert 'No resources are recorded yet' in seed
+    assert 'hope_patrol' not in seed
+
+
 def test_home_inside_a_source_checkout_is_its_own_repository(tmp_path, monkeypatch):
     outer = tmp_path / 'checkout'
     outer.mkdir()

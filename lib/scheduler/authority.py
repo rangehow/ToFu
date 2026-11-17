@@ -329,8 +329,7 @@ def creator_state(owner: int, row: dict) -> dict:
             return {'state': 'ended', 'reason': 'binding_changed'}
         return {'state': 'active'}
     except Exception as error:
-        logger.debug('Creator state lookup failed for %s creator: %s',
-                     creator.get('role'), type(error).__name__)
+        logger.debug('creator state lookup failed for scheduler row %s', row.get('id'), exc_info=True)
         return {'state': 'unknown', 'reason': type(error).__name__}
 
 

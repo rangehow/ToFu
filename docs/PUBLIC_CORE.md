@@ -91,8 +91,10 @@ stdlib bootstrap shares it):
   twin), `site_packs/` (`lib/site_packs/_loader.py`), `search_gateways/`
   (`lib/search/search_gateway.py`), `gateway_profiles/`
   (`lib/provider/gateway_profiles.py`), `local_credentials/`
-  (`lib/provider/local_credentials.py`), `mcp_catalog/` (`lib/mcp/registry.py`)
-  and `mcp_launchers/` (`lib/mcp/vendored.py`). Later layers still win by key in
+  (`lib/provider/local_credentials.py`), `mcp_catalog/` (`lib/mcp/registry.py`),
+  `mcp_launchers/` (`lib/mcp/vendored.py`) and `router_home/` (the owner
+  resource registry seed `RESOURCES.md`, `lib/router/home.py`; the last
+  bundle's file wins). Later layers still win by key in
   each consumer (`docs/SITE_PACKS.md` §4); core rows win over bundle rows for
   the MCP catalog and launchers.
 

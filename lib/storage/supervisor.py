@@ -1463,6 +1463,11 @@ class StorageSupervisor:
                 self._abort_failed_start(process)
                 raise RuntimeError(
                     'storage sidecar owner channel is not close-on-exec')
+        # The ready envelope announces a bound socket; native background setup
+        # can still precede the listener's accept loop. The first authenticated
+        # handshake shares startup's hard budget rather than liveness's 2 s.
+        startup_deadline = time.monotonic() + max(
+            self._startup_timeout, self._launch_startup_timeout or 0.0)
         try:
             ready = self._read_startup_envelope(process)
             if isinstance(ready, dict) and ready.get('type') == STARTUP_ERROR_TYPE:
@@ -1516,10 +1521,7 @@ class StorageSupervisor:
                 client = StorageClient(
                     '127.0.0.1', ready['port'], self._token,
                     timeout=rpc_deadline_seconds())
-            health = client.health(deadline=2.0)
-            if (not health.get('ready')
-                    or health.get('backend') != ready['backend']):
-                raise RuntimeError('sidecar health preflight did not pass')
+            self._verify_startup_health(client, ready['backend'], startup_deadline)
         except Exception:
             self._abort_failed_start(process)
             raise
@@ -1607,6 +1609,31 @@ class StorageSupervisor:
             # EOF lets the daemon thread finish. Bound the join so startup
             # failure paths never hang on the control channel.
             reader.join(timeout=1.0)
+
+    @staticmethod
+    def _verify_startup_health(client, backend: str, deadline: float) -> None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('storage startup budget expired before its health handshake')
+        health = client.health(deadline=remaining)
+        if health.get('ready') and health.get('backend') == backend:
+            return
+        # Do not log arbitrary response text, scope, credentials or paths.
+        code = health.get('probe_error')
+        if not isinstance(code, str) or code not in {
+                        'database_timeout', 'database_unavailable', 'protocol_error',
+                        'schema_mismatch', 'authentication_failed', 'unknown_operation'}:
+            code = 'unclassified'
+        components = health.get('components')
+        unhealthy = []
+        if isinstance(components, dict):
+            for name in ('listener', 'maintenance', 'backgroundPacker',
+                         'onlineGarbageCollector', 'onlineBackup', 'authority'):
+                state = components.get(name)
+                if isinstance(state, dict) and state.get('healthy') is False:
+                    unhealthy.append(name)
+        raise RuntimeError('sidecar health preflight did not pass '
+                           f'(probe_error={code}; unhealthy={",".join(unhealthy) or "none"})')
 
     def _validate_startup_envelope(
         self,

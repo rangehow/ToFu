@@ -1262,7 +1262,9 @@ def _start_test_storage() -> None:
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_setup(item):
     from tests.support.native_engine_prerequisite import inherited_engine_refusal_skips
+    from tests.support.storage_alias_isolation import imported_module_names
 
+    item._modules_before_test = imported_module_names()
     # A browser on the live app needs the built graph, with or without the
     # shared ``page`` fixture; check before the server and browser start.
     if {'browser', 'live_server'} <= set(getattr(item, 'fixturenames', ())):
@@ -1284,10 +1286,15 @@ def pytest_runtest_call(item):
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_teardown(item, nextitem):
     """A test that leaves the environment naming production fails here (production_api_guard)."""
+    from tests.support.storage_alias_isolation import restore_storage_client_aliases
+
     try:
         result = yield
     finally:
         _discard_chat_tasks_left_by(item)
+        before = getattr(item, '_modules_before_test', None)
+        if before is not None:
+            restore_storage_client_aliases(before)
     production_guard.check_environment()
     return result
 

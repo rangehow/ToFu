@@ -19,10 +19,7 @@ def test_editor_styles_wait_for_lazy_entry_and_keep_control_geometry(browser, li
     page.on('pageerror', lambda error: errors.append(str(error)))
     manifest = json.loads((ROOT / 'static/vite/manifest.json').read_text())
     entry = manifest['frontend/src/features/slides.ts']
-    # Sheets the startup entry also owns (shared fonts) load before any editor.
-    startup_css = set(manifest['frontend/src/main.ts'].get('css', []))
-    editor_css = [css for css in entry.get('css', []) if css not in startup_css]
-    assert editor_css, 'Editor stylesheet belongs to the demand-loaded graph'
+    assert entry.get('css'), 'Editor stylesheet belongs to the demand-loaded graph'
     def slide_read(route):
         assert route.request.method == 'GET', 'This fixture must not change a slide'
         url = route.request.url.split('?')[0]
@@ -38,7 +35,7 @@ def test_editor_styles_wait_for_lazy_entry_and_keep_control_geometry(browser, li
         page.goto(live_server)
         _dismiss_onboarding_modals(page)
         page.evaluate('(theme)=>document.documentElement.dataset.theme=theme', theme)
-        assert not any(url.endswith('/' + css) for url in requests for css in editor_css)
+        assert not any(url.endswith('/' + css) for url in requests for css in entry['css'])
         assert '.sled-overlay' not in (ROOT / 'static/styles.css').read_text()
         # Use the registered delegated action rather than exposing private editor state.
         page.evaluate("""() => {
@@ -47,7 +44,7 @@ def test_editor_styles_wait_for_lazy_entry_and_keep_control_geometry(browser, li
           document.body.append(trigger);trigger.click();
         }""")
         expect(page.locator('.sled-overlay')).to_be_visible(timeout=20000)
-        assert any(url.endswith('/' + css) for url in requests for css in editor_css)
+        assert any(url.endswith('/' + css) for url in requests for css in entry['css'])
         assert page.locator('.sled-overlay').evaluate('(el)=>getComputedStyle(el).position') == 'fixed'
         assert page.locator('.sled-overlay').evaluate('(el)=>getComputedStyle(el).display') == 'flex'
         assert page.locator('.sled-shell').evaluate('(el)=>getComputedStyle(el).boxShadow') != 'none'
@@ -58,7 +55,7 @@ def test_editor_styles_wait_for_lazy_entry_and_keep_control_geometry(browser, li
         # The shared switch consumes the named one-pixel control inset in every theme.
         page.add_script_tag(path=native_module_path('.native/style-choice.js', ROOT / 'frontend/src/ui/choice.ts'))
         page.evaluate("document.body.append(createChoice({type:'switch',label:'Style geometry'}).el)")
-        assert page.get_by_role('switch', name='Style geometry').evaluate("(el)=>[getComputedStyle(el,'::after').top,getComputedStyle(el,'::after').left]") == ['1px','1px']
+        assert page.locator('input.ui-switch').evaluate("(el)=>[getComputedStyle(el,'::after').top,getComputedStyle(el,'::after').left]") == ['1px','1px']
         page.screenshot(path=str(tmp_path / f'lazy-editor-{theme}.png'))
         page.locator('.sled-close').click()
         expect(page.locator('.sled-overlay')).to_have_count(0)

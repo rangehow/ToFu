@@ -43,7 +43,7 @@ def main():
         repo/"frontend/src/icons.ts",
         repo/"frontend/src/html-safety.ts",
         repo/"static/styles.css",
-        repo/"frontend/src/features/inspector/shell.css",
+        repo/"frontend/src/styles/application/02-inspector-shell.css",
     ]
     with tempfile.TemporaryDirectory(prefix="tofu-poster-inspector-") as directory:
         temporary = Path(directory)

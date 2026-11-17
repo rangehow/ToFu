@@ -21,16 +21,6 @@ pytestmark = pytest.mark.unit
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, '..', '..'))
 SETTINGS_CSS = os.path.join(ROOT, 'static', 'settings.css')
-# Skills tab rules load with the Skills feature entry, beside its owner.
-SKILLS_CSS = os.path.join(ROOT, 'frontend', 'src', 'features', 'skills', 'skills.css')
-
-
-def _skills_css() -> str:
-    parts = []
-    for path in (SETTINGS_CSS, SKILLS_CSS):
-        with open(path, encoding='utf-8') as fh:
-            parts.append(fh.read())
-    return '\n'.join(parts)
 PANEL_HTML = os.path.join(ROOT, 'static', 'settings_panels', 'skills.html')
 SKILLS_TS = os.path.join(
     ROOT, 'frontend', 'src', 'features', 'skills', 'panel.ts')
@@ -163,7 +153,9 @@ def _skill_rules(css: str) -> list[tuple[str, str]]:
 
 
 def test_no_dark_leftovers_in_skills_css():
-    rules = _skill_rules(_skills_css())
+    with open(SETTINGS_CSS, encoding='utf-8') as fh:
+        css = fh.read()
+    rules = _skill_rules(css)
     assert len(rules) >= 25, (
         f'only {len(rules)} skill rules scanned — the ratchet would pass '
         'vacuously if the section went missing'
@@ -182,7 +174,8 @@ def test_no_dark_leftovers_in_skills_css():
 
 def test_skills_semantic_states_use_shared_theme_tokens():
     """State styling remains present and theme-aware across palette revisions."""
-    rules = list(_skill_rules(_skills_css()))
+    with open(SETTINGS_CSS, encoding='utf-8') as fh:
+        rules = list(_skill_rules(fh.read()))
     for state in ('.skills-scope-tab.active', '.mcp-app-card.is-installed',
                   '.skills-drop-zone.is-dragging', '.skill-installed-tag'):
         bodies = [body for selector, body in rules if state in selector]

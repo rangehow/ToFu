@@ -693,7 +693,6 @@ def test_write_partition_call_is_auto_approved_and_audited(
         'name': 'paper-autoapprove-probe',
         'description': 'auto-approval audit guard probe memory',
         'body': '## Why\nprobe body',
-        'trigger': 'probing the paper auto-approval audit',
         'scope': 'global',
     })
     content, display, *_ = execute_paper_tool(
@@ -725,7 +724,6 @@ def test_write_partition_call_is_auto_approved_and_audited(
                 'name': 'paper-gateway-autoapprove-probe',
                 'description': 'nested approval audit guard probe',
                 'body': '## Why\nnested probe body',
-                'trigger': 'probing the nested paper approval audit',
                 'scope': 'global',
             },
         }]}),

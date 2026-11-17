@@ -351,12 +351,8 @@ def _memory_from_file(filepath, scope='global', package_dir=None,
                 if fingerprint_hint is not None
                 else _memory_file_fingerprint(filepath)
             )
-            cached, meta, identity = _metadata_cache.lookup_readonly(
+            cached, meta = _metadata_cache.lookup_readonly(
                 identity, fingerprint_before)
-            # Share the cache's retained path string: every listing record
-            # would otherwise hold its own equal copy of a key the cache keeps.
-            if identity == filepath:
-                filepath = identity
             body = ''
             if not cached:
                 read_started_ns = _metadata_cache.clock_ns()

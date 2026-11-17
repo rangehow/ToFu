@@ -68,7 +68,7 @@ tofu-agent = "tofu_agent.cli:main"
 # deliberately separate so embedding Tofu never implies PostgreSQL or a
 # checked-out web application.
 full = [
-    "tofu-search>=0.12.29",
+    "tofu-search>=0.12.28",
     "trafilatura>=2.3.1",
     "Pillow>=13.0.0",
     "python-pptx>=0.6.21",
@@ -114,7 +114,7 @@ app = [
     # Internal exports carry installed skills whose bundled scripts run with the
     # application interpreter; codelab-ssh-connect imports paramiko (SSH/SFTP).
     "paramiko>=3.4",
-    "tofu-search>=0.12.29",
+    "tofu-search>=0.12.28",
     "trafilatura>=2.3.1",
     "Pillow>=13.0.0",
     "python-pptx>=0.6.21",
@@ -179,7 +179,7 @@ test = [
     "networkx>=3.0",
     # The repository suite exercises document/media/search parsing too, so it
     # needs the `full` surface (duplicated — extras cannot compose).
-    "tofu-search>=0.12.29",
+    "tofu-search>=0.12.28",
     "trafilatura>=2.3.1",
     "Pillow>=13.0.0",
     "python-pptx>=0.6.21",
@@ -218,7 +218,7 @@ dev = [
     "ruff",
     "pyright>=1.1.403",
     # Same `full` duplication as `test`.
-    "tofu-search>=0.12.29",
+    "tofu-search>=0.12.28",
     "trafilatura>=2.3.1",
     "Pillow>=13.0.0",
     "python-pptx>=0.6.21",
@@ -264,10 +264,6 @@ scale = [
 constraint-dependencies = [
     "certifi>=2026.10.19",
     "pyjwt>=2.14.0",
-    # onnxruntime (pymupdf_layout's runtime) ships no Intel-macOS wheel after
-    # 1.23; the lock forks there so every other platform keeps the current one.
-    "onnxruntime<1.24; sys_platform == 'darwin' and platform_machine == 'x86_64'",
-    "onnxruntime>=1.29; sys_platform != 'darwin' or platform_machine != 'x86_64'",
 ]
 
 [tool.uv.workspace]

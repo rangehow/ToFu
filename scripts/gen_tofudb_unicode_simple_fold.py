@@ -22,14 +22,6 @@ OUTPUT = ROOT / "packages" / "tofu-db" / "src" / "generated_unicode_simple_fold.
 PYTHON_OUTPUT = (
     ROOT / "lib" / "storage_authority_sql" / "generated_unicode_simple_fold.py"
 )
-# --check exit status when neither this interpreter's SQLite nor its
-# environment provides ICU: there is no reference table to compare with, so
-# drift was not checked.
-ICU_UNAVAILABLE_EXIT = 3
-
-
-class IcuUnavailable(RuntimeError):
-    pass
 
 
 def _icu_symbol(library: ctypes.CDLL, base: str):
@@ -70,7 +62,7 @@ def _load_icu() -> ctypes.CDLL:
         key=lambda path: len(path.name),
     )
     if not installed:
-        raise IcuUnavailable(
+        raise RuntimeError(
             "neither _sqlite3 nor the interpreter environment provides libicuuc")
     return ctypes.CDLL(str(installed[0]))
 
@@ -151,11 +143,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
-    try:
-        version, mappings = _mappings()
-    except IcuUnavailable as unavailable:
-        print(f"{unavailable}: no ICU to freeze or check against", file=sys.stderr)
-        return ICU_UNAVAILABLE_EXIT
+    version, mappings = _mappings()
     outputs = {
         OUTPUT: _render(version, mappings),
         PYTHON_OUTPUT: _render_python(version, mappings),

@@ -1091,9 +1091,12 @@ such value.
 (`git rev-parse --local-env-vars`), `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`,
 `GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` and `GIT_CEILING_DIRECTORIES` before the
 first project import, beside the lifecycle scrub. A test that needs one of them
-sets it with `monkeypatch` or an explicit child environment. The session fixture
-`_git_discovery_ceiling` then sets the suite's own `GIT_CEILING_DIRECTORIES`
-(pytest's basetemp parent and the system temp root), so a stray repository above
+sets it with `monkeypatch` or an explicit child environment. The same module
+load then sets the suite's own `GIT_CEILING_DIRECTORIES` (`_git_discovery_ceilings`:
+pytest's per-user temp root, which holds every session's and xdist worker's
+basetemp, and the system temp root). It was a session fixture until 2026-11-17;
+that set it inside the first test's setup, so the process-state probe charged
+that test with a leak (`tests/meta/test_process_state_isolation.py`). A stray repository above
 them, such as 2026-11-11's `/tmp/.git`, captures no test path; Tofu's own `.git`
 walkers honor it too ("Discovery ceiling" in
 `docs/modules/conversations_project_brain.md`).

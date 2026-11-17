@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.12.29
 
 - Hugging Face Papers keyword search keeps the endpoint's relevance order;
   only the topic-less daily list is ranked by upvotes. Re-sorting a keyword
@@ -381,7 +381,7 @@
 - Keep legacy sync handler registration with independently owned thread-affine
   browser workers. Preserve browser access, cookie isolation and rendering policy.
 
-## Unreleased
+## 0.12.29
 
 - Treat URL-derived source authority as explicitly unverified hints, match
   reference hosts at DNS label boundaries, and require query evidence before

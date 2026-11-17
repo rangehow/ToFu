@@ -84,7 +84,7 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 _REQUIREMENTS = _ROOT / 'requirements.txt'
 
 _PACKAGE = 'tofu-search'
-_PINNED_VERSION = '0.12.28'
+_PINNED_VERSION = '0.12.29'
 
 # Measured 2026-08-21 from the artifacts built off tofu-search e2cbcfc (tag
 # v0.10.3) via clean `git archive HEAD` + `python -m build --no-isolation`,

@@ -396,6 +396,22 @@ def test_the_pipeline_installs_requirements_BEFORE_building():
         'requirements must be installed before icons/pyinstaller run')
 
 
+def test_both_pipelines_build_the_gitignored_vite_graph_before_pyinstaller():
+    """tofu.spec refuses to build without static/vite, which git archive
+    never contains (gitignored, generated)."""
+    import inspect
+    from lib.desktop_dist import builder as lb
+    for src in (inspect.getsource(wb._pipeline),
+                inspect.getsource(lb._pipeline)):
+        i_archive = src.index('archive HEAD')
+        i_front = src.index('build_frontend(src, log_fh)')
+        i_pyinst = src.index('PyInstaller')
+        assert i_archive < i_front < i_pyinst
+    body = inspect.getsource(lb.build_frontend)
+    assert 'npm run build:frontend' in body
+    assert 'verify_frontend_dist.py' in body
+
+
 # ═══════════════════════════════════════════════════════════════════
 #  NEUTER — the two traps must bite
 # ═══════════════════════════════════════════════════════════════════

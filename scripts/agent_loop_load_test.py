@@ -75,8 +75,6 @@ USER_ID = 1
 MARKER = 'agent-loop-load'
 MODEL_ID = 'agent-loop-load-model'
 CREATOR_ID = 'tofu-agent-loop-load'
-# Models in the live owner's model-routing aggregate on 2026-11-17.
-OWNER_CATALOG_MODELS = 91
 
 # Model pacing measured 2026-11-12 from the apiRounds of production's 60 most
 # recently updated conversations (13,294 rounds, read-only turn.list through
@@ -662,18 +660,6 @@ class Driver:
                              'connection_id': 'agent-load-anthropic', 'wire_model_id': MODEL_ID, 'enabled': True,
                              'identity_confidence': 'high', 'probe_status': 'passed', 'priority': 0}],
         }
-        # Every Turn reads and validates its owner's whole aggregate, so its cost
-        # follows the owner's catalog, not the one model the load selects.
-        for index in range(OWNER_CATALOG_MODELS - 1):
-            ref = {'creator_id': CREATOR_ID, 'model_id': f'{MODEL_ID}-catalog-{index:03d}'}
-            document['models'].append({**document['models'][0], **ref,
-                                       'display_name': f'Catalog model {index:03d}'})
-            document['offerings'].append({**document['offerings'][0], 'offering_id': f'agent-load-offering-{index:03d}',
-                                          'model': dict(ref)})
-            document['deployments'].append({**document['deployments'][0],
-                                            'deployment_id': f'agent-load-deployment-{index:03d}',
-                                            'offering_id': f'agent-load-offering-{index:03d}',
-                                            'wire_model_id': ref['model_id']})
         repository.compare_and_swap(boundary, document, expected_revision=current.revision)
 
     def _start_execution_host(self):

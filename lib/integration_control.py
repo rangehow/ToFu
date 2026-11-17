@@ -1176,16 +1176,11 @@ def has_active_workspace_for_work(
     work_id: str,
     *,
     user_id: int,
-    checkout_root: str = '',
 ) -> bool:
-    """Return whether this owner/work ID has an editable isolated workspace.
-
-    ``checkout_root`` is the top level of ``project_path``'s checkout when the
-    caller already identified it in this admission; otherwise Git resolves it.
-    """
+    """Return whether this owner/work ID has an editable isolated workspace."""
     if not project_path or not work_id:
         return False
-    root = Path(checkout_root) if checkout_root else _repo_root(project_path)
+    root = _repo_root(project_path)
     row = _state.find_workspace(
         str(root), str(work_id).strip(), user_id=_require_user_id(user_id))
     return bool(row and row.get('state') in {'running', 'checkpointed'})

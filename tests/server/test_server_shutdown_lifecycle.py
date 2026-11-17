@@ -719,7 +719,6 @@ def test_a_late_owner_is_recorded_with_its_storage_ownership(monkeypatch):
     from types import SimpleNamespace
     from lib.server import server_background_services as services
     import lib.browser.bridge_relay as bridge_relay
-    import lib.desktop.bridge_relay as desktop_bridge_relay
     stops = {}
 
     def owner_stop(name, stopped):
@@ -740,8 +739,6 @@ def test_a_late_owner_is_recorded_with_its_storage_ownership(monkeypatch):
         module = importlib.import_module(module_name)
         monkeypatch.setattr(module, stop_name, owner_stop(stop_name, stop_name != 'stop_bot_sessions'))
     monkeypatch.setattr(bridge_relay, 'stop_bridge_owner', owner_stop('relay', False))
-    monkeypatch.setattr(desktop_bridge_relay, 'stop_bridge_owner',
-                        owner_stop('desktop relay', False))
     monkeypatch.setitem(sys.modules, 'lib.app.plugin_registry',
                         SimpleNamespace(run_shutdown_hooks=lambda app: 0))
     app = SimpleNamespace(extensions={'tofu_registered_background_services': True,
@@ -749,7 +746,6 @@ def test_a_late_owner_is_recorded_with_its_storage_ownership(monkeypatch):
     services.stop_registered_background_services(app, timeout=2.0)
     assert app.extensions[services.LATE_OWNERS_KEY] == (
         services.LateBackgroundOwner('browser bridge relay', writes_storage=False),
-        services.LateBackgroundOwner('desktop bridge relay', writes_storage=False),
         services.LateBackgroundOwner('bot channel sessions', writes_storage=True))
     assert app.extensions['tofu_registered_background_services'] is True  # the latch stays
     assert set(stops.values()) == {2.0}

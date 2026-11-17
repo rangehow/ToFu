@@ -319,18 +319,15 @@ def note_isolated_workspace_signal(task: dict, project_path: str) -> str:
     task_id = str(task.get('id') or '').strip()
     if not task_id:
         return ''
-    from lib.tasks_pkg.workspace_delivery import admitted_checkout_root, canonical_work_path
+    from lib.tasks_pkg.workspace_delivery import canonical_work_path
     if (task.get('_workspaceDelivery') or {}).get('repositories'):
         return ensure_work_item(
             task, canonical_work_path(task, project_path), trigger=WORK_TRIGGER_ISOLATED)
-    checkout_root = admitted_checkout_root(task, project_path)
-    if checkout_root == '':
-        return ''  # Admission found no checkout, so no isolated workspace of it exists.
     from lib.integration_control import has_active_workspace_for_work
 
     work_id = deterministic_work_id(task_id)
     if not has_active_workspace_for_work(
-            project_path, work_id, user_id=_owner(task), checkout_root=checkout_root or ''):
+            project_path, work_id, user_id=_owner(task)):
         return ''
     return ensure_work_item(
         task, project_path, trigger=WORK_TRIGGER_ISOLATED)

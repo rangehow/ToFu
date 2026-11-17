@@ -18,9 +18,6 @@ CAPABILITY_REQUEST_SERVICES = 'request_services'
 CAPABILITY_NETWORK_CONFIGURATION = 'network_configuration'
 CAPABILITY_TASK_RECOVERY = 'task_recovery'
 CAPABILITY_TASK_WORKERS = 'task_workers'
-# Claims and runs durable conversation/automation jobs. Task workers own it
-# together with the process singletons; an execution shard owns only it.
-CAPABILITY_ATTEMPT_EXECUTION = 'attempt_execution'
 CAPABILITY_SCHEDULED_JOBS = 'scheduled_jobs'
 CAPABILITY_EVENT_MAINTENANCE = 'event_maintenance'
 
@@ -30,7 +27,6 @@ _ALL_CAPABILITIES = frozenset({
     CAPABILITY_NETWORK_CONFIGURATION,
     CAPABILITY_TASK_RECOVERY,
     CAPABILITY_TASK_WORKERS,
-    CAPABILITY_ATTEMPT_EXECUTION,
     CAPABILITY_SCHEDULED_JOBS,
     CAPABILITY_EVENT_MAINTENANCE,
 })
@@ -48,14 +44,6 @@ _ROLE_CAPABILITIES = {
         CAPABILITY_NETWORK_CONFIGURATION,
         CAPABILITY_TASK_RECOVERY,
         CAPABILITY_TASK_WORKERS,
-        CAPABILITY_ATTEMPT_EXECUTION,
-    }),
-    # Launched on demand by the resident execution host from its own pinned
-    # generation (serverctl_pkg/execution_shards.py): it claims durable jobs
-    # beside its primary and owns no recovery, scheduler or inbound singleton.
-    'execution_shard': frozenset({
-        CAPABILITY_NETWORK_CONFIGURATION,
-        CAPABILITY_ATTEMPT_EXECUTION,
     }),
     'scheduler': frozenset({
         CAPABILITY_SCHEDULED_JOBS,
@@ -67,7 +55,7 @@ _ROLE_CAPABILITIES = {
 _ROLE_CAPABILITIES['execution'] = (
     _ROLE_CAPABILITIES['worker'] | _ROLE_CAPABILITIES['scheduler'])
 VALID_PROCESS_ROLES = frozenset(_ROLE_CAPABILITIES)
-PERSONAL_PROCESS_ROLES = frozenset({'all', 'api', 'execution', 'execution_shard'})
+PERSONAL_PROCESS_ROLES = frozenset({'all', 'api', 'execution'})
 
 
 def normalize_process_role(role: str) -> str:
@@ -103,7 +91,6 @@ def process_role_has_any(role: str, capabilities: Iterable[str]) -> bool:
 
 
 __all__ = [
-    'CAPABILITY_ATTEMPT_EXECUTION',
     'CAPABILITY_EVENT_MAINTENANCE',
     'CAPABILITY_FRONTEND',
     'CAPABILITY_NETWORK_CONFIGURATION',

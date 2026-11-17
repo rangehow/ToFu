@@ -266,20 +266,10 @@ def run_workload(directory, *, split):
                 turns = [wait_turn(client, path, {'completed', 'failed', 'interrupted'}) for path in paths]
                 lost = admit(client, project, 99, goal=False)
                 assert provider.crash_entered.wait(45)
-                lost_attempt = client.get(lost).json()['turn']['currentAttemptId']
-                # The execution plane is the host and the shards it started
-                # for the concurrent items; the call may run in either.
-                from serverctl_pkg.execution_shards import live_shard_pids
-                for pid in (execution_pid, *live_shard_pids(execution_pid)):
-                    os.kill(pid, signal.SIGKILL)
+                os.kill(execution_pid, signal.SIGKILL)
 
                 def released():
-                    # Recover like the manager (ExecutionService.recover): only a
-                    # departed host is stopped, then only after its lease is free.
-                    # A SIGKILLed host can stay visible while the kernel tears it
-                    # down; stopping it then is a graceful stop it cannot confirm.
-                    if execution.host_matches(execution.record()):
-                        return False
+                    # Recover like the manager: only after the killed host's lease is free.
                     try:
                         execution.stop()
                         return True
@@ -291,18 +281,11 @@ def run_workload(directory, *, split):
                                     seconds=NATIVE_SERVICE_PREPARATION_SECONDS)
                 assert record['state'] == 'ready', record
                 assert record['pid'] != execution_pid
-                # A model call the kill cut off has no unknown side effect: the
-                # Attempt settles like the graceful quiesce and the restart
-                # resume pass continues the Turn in place, exactly once, in a
-                # new Attempt (docs/contracts/TURN_SETTLEMENT.md, durable
-                # worker recovery; docs/RUN_CONTINUITY.md).
-                eventually(lambda: provider.counts[99], lambda count: count == 2,
-                           seconds=NATIVE_SERVICE_PREPARATION_SECONDS)
+                interrupted = wait_turn(client, lost, {'interrupted', 'failed'})
+                assert interrupted['status'] == 'interrupted', interrupted
+                assert interrupted['settlement']['error']['code'] == 'worker_effect_outcome_unknown'
+                assert provider.counts[99] == 1
                 provider.crash_release.set()
-                resumed = wait_turn(client, lost, {'completed', 'failed', 'interrupted'})
-                assert resumed['status'] == 'completed', resumed
-                assert resumed['currentAttemptId'] != lost_attempt
-                assert provider.counts[99] == 2
                 storage.stop()
                 storage.ensure(storage_plan, environment)
 
@@ -329,7 +312,7 @@ def run_workload(directory, *, split):
         assert not provider.errors, provider.errors
         assert all(turn['status'] == 'completed' for turn in turns), turns
         assert provider.counts == {**{item: 3 for item in range(WORK_ITEMS)},
-                                   **({99: 2, 100: 1} if split else {})}
+                                   **({99: 1, 100: 1} if split else {})}
         assert [path.read_text() for path in sorted(project.glob('item-*.txt'))] == ['once\n'] * WORK_ITEMS
         fees = [row for turn in turns for row in goal_fees(storage, turn)]
         assert sum(row['usage']['total_tokens'] for row in fees) == WORK_ITEMS * 3 * 5

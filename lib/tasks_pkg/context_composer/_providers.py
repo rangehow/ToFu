@@ -680,12 +680,8 @@ def _desktop_devices_context(request: ComposeRequest) -> str:
     if not any(_capability_available(request, name) for name in sorted(DESKTOP_TOOL_NAMES)):
         return ''
     from lib.desktop.bridge import device_summary, list_agents
-    from lib.desktop.bridge_relay import RelayUnavailable
-    try:
-        agents = list_agents(user_id=str(request.user_id))
-    except RelayUnavailable:
-        return ''
-    devices = sorted((agent for agent in agents if agent['online']),
+    devices = sorted((agent for agent in list_agents(user_id=str(request.user_id))
+                      if agent['online']),
                      key=lambda agent: ((agent.get('name') or '').casefold(), agent['agent_id']))
     if not devices:
         return ''

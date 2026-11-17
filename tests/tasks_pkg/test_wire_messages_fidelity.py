@@ -218,7 +218,7 @@ def test_carrier_transforms_fire():
 
 
 def test_provider_symmetry_no_gateway_divergence():
-    """provider_id='' (auto-detect) and explicit non-sankuai agree on the
+    """provider_id='' (auto-detect) and explicit non-example-corp agree on the
     carrier transforms — proving only _sanitize_messages is provider-gated."""
     from lib.tasks_pkg.wire_messages import apply_wire_sanitize
     from lib.tasks_pkg.conv_message_builder._transform import _transform_messages

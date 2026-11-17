@@ -289,9 +289,7 @@ def test_async_http_burst_enters_server_without_active_connection_count_queue():
         def do_GET(self):
             with lock:
                 entered.append(self.path)
-            # Held until every request has entered: a connection-count queue
-            # would keep later requests out for as long as these stay held.
-            assert release.wait(60)
+            assert release.wait(5)
             self.send_response(200)
             self.send_header('Content-Length', '2')
             self.end_headers()
@@ -310,7 +308,7 @@ def test_async_http_burst_enters_server_without_active_connection_count_queue():
         tasks = [asyncio.create_task(client.get(
             f'http://127.0.0.1:{server.server_port}/{index}')) for index in range(48)]
         try:
-            deadline = asyncio.get_running_loop().time() + 30
+            deadline = asyncio.get_running_loop().time() + 3
             while len(entered) < 48:
                 assert asyncio.get_running_loop().time() < deadline
                 await asyncio.sleep(.005)

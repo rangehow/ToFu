@@ -409,10 +409,7 @@ def test_background_completion_continues_same_assignment_and_moves_result_to_new
     from lib.conversation_sync.runtime import conversation_turn_commands
     monkeypatch.setattr(conversation_turn_commands, 'resume_turn', create)
     if attempt_lookup == 'default':
-        attempt_get = r.c.repo.attempt_get
-        monkeypatch.setattr('lib.turn_lifecycle.get_attempt', attempt_get)
-        monkeypatch.setattr('lib.turn_lifecycle.get_attempts', lambda ids, *, user_id: [
-            attempt_get(attempt_id, user_id=user_id) for attempt_id in ids])
+        monkeypatch.setattr('lib.turn_lifecycle.get_attempt', r.c.repo.attempt_get)
         monkeypatch.setattr(r.c.repo, 'attempt_get', None)
     worker_turn_reads, read_turn = [], r.c.repo.turn_get
     def recorded_turn_get(conversation, turn, **kwargs):

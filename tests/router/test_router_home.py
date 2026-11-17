@@ -47,8 +47,10 @@ def test_creation_is_an_idempotent_committed_repository(root):
     assert _git(home, 'rev-parse', 'HEAD') == head
 
 
-def test_resource_registry_seeded_once_and_never_overwritten(root):
+def test_resource_registry_seeded_from_its_documented_source_and_never_overwritten(root):
     from lib.router.home import owner_resources, router_home_location
+    import json
+    from pathlib import Path
 
     def read(home):
         return owner_resources(7, content=True)
@@ -66,10 +68,15 @@ def test_resource_registry_seeded_once_and_never_overwritten(root):
     assert seed.startswith('# Owner resource registry')
     assert 'Never store a secret here' in seed
     assert 'how to obtain' in seed
-    # The registry is names and how to obtain them, never a credential value.
-    # (Its agreement with the private Hope patrol's queue list is
-    # tests/router/test_router_home_hope_seed.py, which stays private with
-    # scripts/hope_patrol/.)
+    # The in-tree YourProvider bundle supplies this seed (router_home/RESOURCES.md).
+    # Every queue the patrol's documented seed names is in the registry; the
+    # registry is names and how to obtain them, never a credential value.
+    patrol = json.loads(Path('scripts/hope_patrol/queues.json').read_text())
+    for queue in patrol['queues']:
+        assert f'`{queue}`' in seed
+    for source in ('scripts/hope_patrol/queues.json', 'references/queues.md',
+                   'references/rsi-queues-2026q4.md'):
+        assert source in seed
     for forbidden in ('ghp_', 'github_pat_', 'pypi-', 'BEGIN', 'Bearer '):
         assert forbidden not in seed
     # The seed matches the committed baseline byte for byte, so a home left at

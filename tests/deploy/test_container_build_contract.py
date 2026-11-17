@@ -38,7 +38,7 @@ def test_frontend_ci_installs_python_tools_before_contract_checks():
 
 def _dependency_stage() -> str:
     return _read('Dockerfile').split(
-        'FROM ${BASE_IMAGE} AS python-dependencies', 1)[1].split('FROM ', 1)[0]
+        'FROM ${PYTHON_IMAGE} AS python-dependencies', 1)[1].split('FROM ', 1)[0]
 
 
 def test_docker_copies_workspace_members_before_frozen_sync():
@@ -49,35 +49,21 @@ def test_docker_copies_workspace_members_before_frozen_sync():
 
 
 def test_docker_dependency_stage_installs_the_toolchain_the_kernel_builds_with():
-    """`tofu-repo-kernel` compiles its Rust helpers, so the stage needs cargo.
+    """`tofu-repo-kernel` compiles its Rust helper, so the stage needs cargo.
 
     The kernel wheel is built in this stage, and its ``setup.py`` shells out to
-    ``cargo build``. Its gix discovery crate declares a ``rust-version``, so the
-    stage installs the exact toolchain pinned by the native release builds
-    through a checksum-verified ``rustup-init`` instead of a distribution rustc.
+    ``cargo build``. Debian ships ``cargo`` and ``rustc`` as separate packages,
+    so installing only ``rustc`` let the image fail late with
+    ``error: [Errno 2] No such file or directory: 'cargo'``. Keep both names
+    pinned here so removing either one fails this contract instead of the
+    release build.
     """
-    import re
-    import tomllib
-
     deps = _dependency_stage()
-    packages = deps[deps.index('apk add'):deps.index('case ')]
-    installed = set(packages.replace('\\', ' ').replace('&&', ' ').split())
-    assert {'build-base', 'curl', 'ca-certificates-bundle', 'python-3.12'} <= installed
-    assert 'rustc' not in installed and 'rust' not in installed
-
-    hashes = re.findall(r'rustup_sha256=([0-9a-f]{64})', deps)
-    assert len(hashes) == 2, 'amd64 and arm64 rustup-init must each be checksum-pinned'
-    assert deps.index('sha256sum -c') < deps.index('/tmp/rustup-init -y')
-
-    toolchain = re.search(r'--default-toolchain (\d+\.\d+\.\d+)', deps)
-    assert toolchain, 'the stage must install an exact Rust toolchain'
-    desktop = _read('.github/workflows/build-desktop.yml')
-    assert f"RUSTUP_TOOLCHAIN: '{toolchain.group(1)}'" in desktop
-    discovery = tomllib.loads(_read('packages/tofu-repo-kernel/rust/discovery/Cargo.toml'))
-    required = tuple(int(part) for part in discovery['package']['rust-version'].split('.'))
-    assert tuple(int(part) for part in toolchain.group(1).split('.')) >= required
+    packages = deps[deps.index('apt-get install'):deps.index('rm -rf /var/lib/apt/lists/*')]
+    installed = set(packages.replace('\\', ' ').split())
+    assert {'gcc', 'g++', 'rustc', 'cargo'} <= installed
     # The kernel is built in this stage, so the toolchain must precede it.
-    assert deps.index('cargo --version') < deps.index('uv build --wheel --out-dir /native-wheelhouse')
+    assert deps.index('cargo') < deps.index('uv build --wheel --out-dir /native-wheelhouse')
 
 
 def test_docker_uv_pin_tracks_the_committed_lock():
@@ -100,33 +86,8 @@ def test_docker_uv_pin_tracks_the_committed_lock():
 
 def test_docker_playwright_install_fails_loudly():
     dockerfile = _read('Dockerfile')
-    worker = dockerfile.split('FROM runtime-base AS worker', 1)[1].split('\nFROM ', 1)[0]
-    install = worker[worker.index('RUN '):worker.index('USER ')]
-    assert 'python -m playwright install chromium --only-shell' in install
-    assert '|| true' not in install and '2>/dev/null' not in install
-    # `--with-deps` drives apt-get, which the Wolfi base does not have.
-    assert '--with-deps' not in install
-
-
-def test_worker_installs_every_library_the_chromium_headless_shell_links():
-    """The sonames are the ELF NEEDED set of Playwright's headless shell.
-
-    Measured with ``readelf -d`` on chromium_headless_shell-1234 (Playwright
-    1.62.0); the C runtime sonames come from glibc/libgcc already present.
-    """
-    dockerfile = _read('Dockerfile')
-    worker = dockerfile.split('FROM runtime-base AS worker', 1)[1].split('\nFROM ', 1)[0]
-    linked = {
-        'libasound.so.2', 'libatk-1.0.so.0', 'libatk-bridge-2.0.so.0', 'libatspi.so.0',
-        'libdbus-1.so.3', 'libexpat.so.1', 'libgbm.so.1', 'libgio-2.0.so.0',
-        'libglib-2.0.so.0', 'libnspr4.so', 'libnss3.so', 'libudev.so.1', 'libX11.so.6',
-        'libxcb.so.1', 'libXcomposite.so.1', 'libXdamage.so.1', 'libXext.so.6',
-        'libXfixes.so.3', 'libxkbcommon.so.0', 'libXrandr.so.2',
-    }
-    requested = {word[3:] for word in worker.split() if word.startswith('so:')}
-    assert linked <= requested
-    assert 'fontconfig-config' in worker.split()
-    assert worker.index('apk add') < worker.index('playwright install chromium')
+    assert 'python -m playwright install chromium --with-deps' in dockerfile
+    assert 'playwright install chromium --with-deps 2>/dev/null || true' not in dockerfile
 
 
 def test_docker_has_pinned_rootless_api_worker_and_agent_targets():
@@ -135,17 +96,16 @@ def test_docker_has_pinned_rootless_api_worker_and_agent_targets():
         line for line in dockerfile.splitlines()
         if not line.lstrip().startswith('#'))
     assert (
-        'ARG BASE_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:'
-        '833c48f1faf32c90e6f9501a2410a9aa28ceb2c594102edd4470053c30efa089'
+        'python:3.12-slim@sha256:'
+        '2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a'
     ) in dockerfile
     assert 'FROM runtime-base AS api' in dockerfile
     assert 'FROM runtime-base AS worker' in dockerfile
-    assert 'FROM ${BASE_IMAGE} AS agent' in dockerfile
-    assert 'apt-get' not in instructions, 'the Wolfi base has no apt'
+    assert 'FROM ${PYTHON_IMAGE} AS agent' in dockerfile
     assert dockerfile.count('USER tofu:tofu') == 3
     assert 'postgresql' not in instructions.lower()
 
-    runtime = instructions.split('FROM ${BASE_IMAGE} AS runtime-base', 1)[1]
+    runtime = instructions.split('FROM ${PYTHON_IMAGE} AS runtime-base', 1)[1]
     api = runtime.split('FROM runtime-base AS api', 1)[1].split(
         'FROM runtime-base AS worker', 1)[0]
     assert 'gcc' not in runtime.split()  # libgcc-s1 is a runtime dependency
@@ -155,7 +115,7 @@ def test_docker_has_pinned_rootless_api_worker_and_agent_targets():
 
 def test_public_agent_image_contains_only_the_installed_runtime():
     dockerfile = _read('Dockerfile')
-    agent = dockerfile.split('FROM ${BASE_IMAGE} AS agent', 1)[1]
+    agent = dockerfile.split('FROM ${PYTHON_IMAGE} AS agent', 1)[1]
     assert 'COPY --from=agent-builder' in agent
     assert 'COPY . .' not in agent
     assert 'playwright' not in agent.lower()

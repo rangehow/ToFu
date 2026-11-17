@@ -86,38 +86,17 @@ def fresh_record(c, walks):
 def test_unchanged_stored_rows_skip_repeated_schema_walk(context, schema_walks, segmented):
     value = fresh_record(context, schema_walks)
     definition = 'assignment' if segmented else 'record'
-    context.repo._check_record(deepcopy(value), segmented=segmented)
-    first = [walk for walk in schema_walks if walk != 'admission']
-    assert first
-    context.repo._check_record(deepcopy(value), segmented=segmented)
-    assert [walk for walk in schema_walks if walk != 'admission'] == first
+    for _ in range(2):
+        context.repo._check_record(deepcopy(value), segmented=segmented)
+    assert schema_walks.count(definition) == 1
     value['assignments'][0]['modelAttempts'].append(model_attempt('another-root'))
     context.repo._check_record(deepcopy(value), segmented=segmented)
     # A changed row walks only its changed member, never its unchanged request again.
     changed = 'assignment/properties/modelAttempts' if segmented else 'record/properties/assignments'
-    assert [walk for walk in schema_walks if walk != 'admission'] == first + [changed]
+    assert schema_walks.count(definition) == 1 and schema_walks.count(changed) == 1
+    assert not any(walk.startswith(definition + '/') and walk != changed for walk in schema_walks)
     # The derived admission projection is not stored evidence and is walked on every read.
     assert schema_walks.count('admission') == 3
-
-
-def test_a_value_many_rows_repeat_is_walked_once(context, schema_walks):
-    """Grants of one Coordinator request repeat its profile; a boot walks it once."""
-    value = fresh_record(context, schema_walks)
-    rows = [value['assignments'][0]] + [{**deepcopy(value['assignments'][0]), 'id': str(uuid.uuid4())}
-                                        for _ in range(3)]
-    profile = {'mode': 'consult', 'tools': [], 'readPaths': [], 'writePaths': [], 'maxToolCalls': 0}
-    assert repository._validator('profile').is_valid(profile)
-    schema_walks.clear()
-    for row in rows:
-        row['request']['profile'] = deepcopy(profile)
-        repository._validate_stored_row(row, 'assignment', row['id'], decoded=True)
-    assert schema_walks.count('profile') <= 1
-    assert sum(walk.startswith('request/properties/brief') for walk in schema_walks) <= 1
-    tampered = {**deepcopy(rows[0]), 'id': str(uuid.uuid4())}
-    tampered['request']['profile']['mode'] = 7
-    assert not repository._validator('assignment').is_valid(tampered)
-    with pytest.raises(ProjectDispatchError):
-        repository._validate_stored_row(tampered, 'assignment', tampered['id'], decoded=True)
 
 
 @pytest.mark.parametrize('segmented', [False, True])
@@ -126,13 +105,10 @@ def test_changed_invalid_stored_row_is_walked_and_refused_every_time(context, sc
     definition = 'assignment' if segmented else 'record'
     context.repo._check_record(deepcopy(value), segmented=segmented)
     value['assignments'][0]['request']['brief'] = 7
-    changed = 'request/properties/brief' if segmented else 'record/properties/assignments'
-    before = schema_walks.count(changed)
     for _ in range(2):
         with pytest.raises(ProjectDispatchError, match='Invalid dispatch ' + definition):
             context.repo._check_record(deepcopy(value), segmented=segmented)
-    # A refusal is never remembered: the changed member is walked by every read.
-    assert schema_walks.count(changed) == before + 2
+    assert sum(walk.split('/')[0] == definition for walk in schema_walks) == 3
 
 
 @pytest.mark.parametrize('segmented', [False, True])
@@ -152,7 +128,8 @@ def test_stored_verdicts_are_not_shared_across_definitions(context, schema_walks
     value['requestBudgets'] = [deepcopy(value['assignments'][0])]
     with pytest.raises(ProjectDispatchError, match='Invalid dispatch coordinatorRequestBudget'):
         context.repo._check_record(deepcopy(value), segmented=True)
-    assert not repository._validator('coordinatorRequestBudget').is_valid(value['requestBudgets'][0])
+    assert schema_walks.count('assignment') == 1
+    assert schema_walks.count('coordinatorRequestBudget') == 1
 
 
 @pytest.mark.parametrize('change', ['undeclared-member', 'missing-required-member', 'invalid-member'])
@@ -169,4 +146,4 @@ def test_a_proven_row_whose_members_change_is_refused_like_a_whole_walk(context,
     assert not repository._validator('assignment').is_valid(row)
     with pytest.raises(ProjectDispatchError):
         context.repo._check_record(deepcopy(value), segmented=True)
-    assert schema_walks.count('assignment') == 1  # the refused oracle check above
+    assert schema_walks.count('assignment') == 2  # one proof, one refused oracle check above

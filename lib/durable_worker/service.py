@@ -8,12 +8,6 @@ caps concurrent jobs. Claims are event-driven: a read-only
 committed in-process producer command or a settled claim. Row principals,
 leases, cancellation and recovery remain with the existing worker/repository
 authorities. No per-rule thread, new queue, idle poll or polling receipt.
-
-An optional claim gate places claims across the processes of one execution
-generation (serverctl_pkg/execution_shards.py). Every coordinator pass reports
-how many claimed jobs run and probes are in flight; the gate answers whether
-this process may probe now and when to ask again. It only defers a probe to a
-peer that will take the job; it never refuses or caps work.
 """
 from dataclasses import dataclass, field
 import threading
@@ -95,10 +89,8 @@ def _next_probe(observation, now, policy):
 
 
 class DurableWorkerService:
-    def __init__(self, *, principal, client_factory, registrations, max_workers, now_ms, policy, wake_source=None,
-                 claim_gate=None):
+    def __init__(self, *, principal, client_factory, registrations, max_workers, now_ms, policy, wake_source=None):
         self._wake_source = wake_source
-        self._claim_gate = claim_gate
         self._policy = policy = dict(policy)
         if (not isinstance(principal, PrincipalContext) or principal.kind != 'system'
                 or principal.owner_user_id is not None or principal.tenant_id is not None
@@ -179,10 +171,6 @@ class DurableWorkerService:
             return not thread.is_alive()
         return True
 
-    def wake(self):
-        """Re-run the coordinator pass, e.g. after the claim gate's answer changed."""
-        self._wake.set()
-
     def _hint(self, _operation):
         with self._lock:
             if self._hinted_at is None:
@@ -248,12 +236,7 @@ class DurableWorkerService:
                             due, pending = _next_probe(pending, now, policy), None
                         if settled:
                             due = now
-                        admitted, gate_wait = True, None
-                        if self._claim_gate is not None:
-                            admitted, gate_wait = self._claim_gate.admit(
-                                running=sum(1 for value in futures.values() if value.claimed),
-                                inflight=len(futures))
-                        if (admitted and pending is None and now >= backoff_until
+                        if (pending is None and now >= backoff_until
                                 and (self._claim_hint.is_set() or (due is not None and now >= due))):
                             with self._lock:
                                 self._claim_hint.clear()
@@ -266,12 +249,10 @@ class DurableWorkerService:
                             self._active = len(futures)
                             self._high_water = max(self._high_water, self._active)
                         wait = None
-                        if pending is None and admitted:
+                        if pending is None:
                             target = now if self._claim_hint.is_set() else due
                             if target is not None:
                                 wait = max(0.0, max(target, backoff_until) - time.monotonic())
-                        if gate_wait is not None:
-                            wait = gate_wait if wait is None else min(wait, gate_wait)
                         self._wake.wait(wait)
                 finally:
                     self._stop.set()

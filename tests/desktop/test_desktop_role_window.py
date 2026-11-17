@@ -14,11 +14,12 @@ gate (should_show_at_startup):
   listed as a joined server.
 * **Startup gate** — absent config key shows the window; an explicit
   "don't show" persists and is honored.
-* **Tray wiring** — the launcher's tray, run against a recording pystray,
-  shows the window at startup behind its gate, wires diagnostics, and has
-  the "Control panel…" re-entry.
+* **Wiring ratchets** — the launcher imports role_window, shows it at
+  startup, wires join/leave/diagnostics, and the tray has the
+  "Control panel…" re-entry.
 """
 
+import ast
 import os
 import sys
 import unittest
@@ -237,91 +238,45 @@ class RendererDesignRatchetTest(unittest.TestCase):
                           '%s lost its desc key' % tier)
 
 
-class _FakeMenuItem:
-    def __init__(self, text, action, **options):
-        self.text, self.action, self.options = text, action, options
+class WiringRatchetTest(unittest.TestCase):
+    """Source-level pins so the panel can never silently vanish again."""
 
+    def _imports_role_window(self, rel):
+        tree = ast.parse(_src(rel), filename=rel)
+        full = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                full.add(node.module)
+                full.update('%s.%s' % (node.module, a.name)
+                            for a in node.names)
+            elif isinstance(node, ast.Import):
+                full.update(a.name for a in node.names)
+        return any('role_window' in m for m in full)
 
-class _FakeMenu:
-    SEPARATOR = object()
+    def test_launcher_imports_role_window(self):
+        for rel in ('desktop/launcher.py',):
+            self.assertTrue(self._imports_role_window(rel),
+                            '%s does not import desktop.role_window — the '
+                            'startup role declaration is gone' % rel)
 
-    def __init__(self, *items):
-        self.items = items
+    def test_launcher_shows_window_at_startup(self):
+        for rel in ('desktop/launcher.py',):
+            src = _src(rel)
+            self.assertIn('should_show_at_startup', src,
+                          '%s lost the startup gate — the role window is '
+                          'never offered' % rel)
+            self.assertIn('show_role_window(', src,
+                          '%s never calls show_role_window' % rel)
 
-
-class _FakeIcon:
-    def __init__(self, name, image, title, menu):
-        self.menu = menu
-
-    def run(self):
-        pass
-
-    def update_menu(self):
-        pass
-
-
-class _ExitedServer:
-    def poll(self):
-        return 0
-
-
-class TrayWiringTest(unittest.TestCase):
-    """Run the launcher's tray with a recording pystray and tk host, so the
-    panel can never silently vanish: shown at startup behind its gate,
-    re-entered from the tray, and its diagnostics action answers."""
-
-    def _run_tray(self, *, show_at_startup):
-        from desktop import _tk_host, launcher, role_window
-        shown = []
-        icons = []
-
-        def make_icon(*args):
-            icons.append(_FakeIcon(*args))
-            return icons[-1]
-
-        pystray = mock.Mock(MenuItem=_FakeMenuItem, Menu=_FakeMenu, Icon=make_icon)
-        with mock.patch.dict(sys.modules, {'pystray': pystray}), \
-                mock.patch.object(launcher, '_restore_cc_state', return_value=False), \
-                mock.patch.object(launcher, '_load_icon', return_value=None), \
-                mock.patch.object(launcher, '_check_for_update', return_value=None), \
-                mock.patch.object(_tk_host, 'start', return_value=False), \
-                mock.patch.object(_tk_host, 'post_or_call', side_effect=lambda fn: fn()), \
-                mock.patch.object(role_window, 'should_show_at_startup',
-                                  return_value=show_at_startup), \
-                mock.patch.object(role_window, 'show_role_window',
-                                  side_effect=lambda state_fn, actions, log: shown.append(actions)):
-            launcher._run_tray(15000, _ExitedServer())
-        return shown, icons[0].menu
-
-    def test_startup_gate_decides_whether_the_window_is_offered(self):
-        shown, _ = self._run_tray(show_at_startup=True)
-        self.assertEqual(len(shown), 1, 'the role window is never offered at startup')
-        shown, _ = self._run_tray(show_at_startup=False)
-        self.assertEqual(shown, [], 'a persisted "don\'t show" is ignored')
-
-    def test_tray_control_panel_reopens_the_window(self):
-        import desktop._tk_theme as theme
-        _, menu = self._run_tray(show_at_startup=False)
-        label = theme.t('desktop.tray.controlPanel', theme.detect_lang())
-        entry = [item for item in menu.items
-                 if isinstance(item, _FakeMenuItem) and item.text == label]
-        self.assertEqual(len(entry), 1, 'the tray lost the Control-panel re-entry')
-        shown = []
-        from desktop import _tk_host, role_window
-        with mock.patch.object(_tk_host, 'post_or_call', side_effect=lambda fn: fn()), \
-                mock.patch.object(role_window, 'show_role_window',
-                                  side_effect=lambda state_fn, actions, log: shown.append(actions)):
-            entry[0].action(None, entry[0])
-        self.assertEqual(len(shown), 1)
-
-    def test_window_wires_the_copy_diag_action(self):
+    def test_window_wires_the_copy_diag_button(self):
         """Debugging a dead link on a machine with no shell access needs the
         evidence pack (routes / candidates / verdicts / log tail) one click
         away. NEUTER: drop the action or the button and this goes red.
         """
-        (actions,), _ = self._run_tray(show_at_startup=True)
-        self.assertIn('copy_diag', actions, 'the window lost its diagnostics action')
-        report = self._diag_report_for_one_joined_server(actions['copy_diag'])
+        launcher = _src('desktop/launcher.py')
+        self.assertIn("'copy_diag'", launcher,
+                      'the window lost its diagnostics action')
+        report = self._diag_report_for_one_joined_server()
         self.assertIn('server Lab: url=https://lab.example', report)
         self.assertIn('secret=set (13 chars)', report)
         self.assertNotIn('tok_SECRET123', report)
@@ -336,7 +291,7 @@ class TrayWiringTest(unittest.TestCase):
             self.assertIn('en', pair, '%s missing en' % key)
             self.assertIn('zh', pair, '%s missing zh' % key)
 
-    def _diag_report_for_one_joined_server(self, copy_diag):
+    def _diag_report_for_one_joined_server(self):
         import tempfile
         from desktop import launcher
 
@@ -351,12 +306,17 @@ class TrayWiringTest(unittest.TestCase):
             with open(log_path, 'w', encoding='utf-8') as handle:
                 handle.write('link-ready\n')
             with mock.patch.object(launcher, '_LOG_PATH', log_path), \
-                    mock.patch.object(launcher, '_node_links', return_value=_Links()), \
                     mock.patch('lib.desktop_agent.config.attachments',
                                return_value=[record]), \
                     mock.patch('lib.desktop_agent.config.config_path',
                                return_value=os.path.join(scratch, 'node.json')):
-                return copy_diag()
+                return launcher._diag_report({'links': _Links()})
+
+    def test_tray_gains_control_panel_reentry(self):
+        for rel in ('desktop/launcher.py',):
+            self.assertIn('desktop.tray.controlPanel', _src(rel),
+                          '%s tray lost the Control-panel re-entry — the '
+                          'panel is tray-hidden again' % rel)
 
 
 if __name__ == '__main__':

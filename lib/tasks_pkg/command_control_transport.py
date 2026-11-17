@@ -111,12 +111,8 @@ def _valid_result(method, result):
             if result[key] else 'pid' not in result)
 
 
-def call(endpoint, method, task_id, *, user_id, params=None, deadline_unix_ms=None):
-    """One delivery attempt; a missing acknowledgement is never replayed.
-
-    ``deadline_unix_ms`` carries a forwarded request's own deadline, so a
-    hop (the primary asking its execution shards) never extends it.
-    """
+def call(endpoint, method, task_id, *, user_id, params=None):
+    """One delivery attempt; a missing acknowledgement is never replayed."""
     if (not isinstance(endpoint, dict) or endpoint.get('format') != FORMAT
             or endpoint.get('host') != '127.0.0.1'
             or type(endpoint.get('port')) is not int or not 0 < endpoint['port'] < 65536
@@ -124,14 +120,11 @@ def call(endpoint, method, task_id, *, user_id, params=None, deadline_unix_ms=No
             or not isinstance(endpoint.get('token'), str)):
         raise CommandControlUnavailable('Execution control endpoint is unavailable')
     identity = uuid.uuid4().hex
-    seconds = ACKNOWLEDGEMENT_SECONDS
-    if deadline_unix_ms is not None:
-        seconds = min(seconds, max(0.0, deadline_unix_ms / 1000 - time.time()))
-    deadline = time.monotonic() + seconds
+    deadline = time.monotonic() + ACKNOWLEDGEMENT_SECONDS
     request = {'format': FORMAT, 'serviceId': endpoint['serviceId'], 'token': endpoint['token'],
         'requestId': identity, 'ownerId': user_id, 'method': method, 'taskId': task_id,
         'params': {} if params is None else params,
-        'deadlineUnixMs': int((time.time() + seconds) * 1000)}
+        'deadlineUnixMs': int((time.time() + ACKNOWLEDGEMENT_SECONDS) * 1000)}
     try:
         with create_connection((endpoint['host'], endpoint['port']), _remaining(deadline)) as connection:
             connection.settimeout(_remaining(deadline))

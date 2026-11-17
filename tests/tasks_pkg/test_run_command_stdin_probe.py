@@ -265,24 +265,6 @@ def test_blocked_sensor_never_refuses_later_sensors_and_fences_late_result():
         assert pool.active == 0
 
 
-@pytest.mark.parametrize('command', ['true', 'echo out; echo err >&2',
-                                     'exec >/dev/null 2>&1; sleep 0.3'])
-def test_interactive_command_returns_at_exit_not_at_the_next_poll_tick(tmp_path, monkeypatch, command):
-    """After both pipes reach EOF only the exit remains: wait on it, never an idle select."""
-    import lib.compat
-    from lib.project_mod.run_command import tool_run_command
-    real_select = lib.compat.safe_select_pipes
-    def select_with_members(read_fds, timeout=0.2):
-        assert read_fds, 'an empty select sleeps out the whole tick'
-        return real_select(read_fds, timeout=timeout)
-    monkeypatch.setattr(lib.compat, 'safe_select_pipes', select_with_members)
-    task = {'aborted': False}
-    out = tool_run_command(str(tmp_path), command, timeout=5, task=task,
-                           stdin_callback=lambda hint: None)
-    assert '[exit code: 0]' in out
-    assert '_subprocess_pid' not in task
-
-
 def test_noninteractive_stdin_reader_still_receives_eof(tmp_path):
     from lib.project_mod.run_command import tool_run_command
     calls = []

@@ -112,7 +112,9 @@ def _live_device_claim(command, now):
     if not isinstance(command, dict):
         return False
     from lib.desktop import bridge
-    return bridge.command_active(command['id'], now)
+    with bridge.command_queue_lock:
+        queued = bridge.command_queue.get(command['id'])
+        return bool(queued is not None and bridge._command_active_locked(queued, now))
 
 
 def explained_wait(task, now=None):

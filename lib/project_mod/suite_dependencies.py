@@ -9,8 +9,7 @@ requirements into the environment that owns the interpreter's packages: a task
 worktree's bridged `.venv` (workspace_runtime) resolves to its source environment,
 so one install serves every worktree of that checkout.
 
-Dependencies: standard library, lib.tools.process_environment (the child
-environment); `packaging` inside the checked interpreter.
+Dependencies: standard library; `packaging` inside the checked interpreter.
 """
 from __future__ import annotations
 

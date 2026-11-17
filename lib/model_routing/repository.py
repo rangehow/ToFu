@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, field
-import json
 import secrets
 import threading
 import time
@@ -13,7 +12,6 @@ from typing import Any, Protocol
 
 from lib.identity import require_user_id
 from lib.secret_envelope import open_secret, seal_secret
-from lib.utils import sha256_holding_gil
 
 from .change_notifications import notify_model_routing_changed
 from .credential_envelope import credential_secret_display_hint
@@ -97,36 +95,6 @@ class RepositoryPort(Protocol):
 
 
 
-def _canonical_digest(document: Any) -> bytes | None:
-    try:
-        canonical = json.dumps(document, ensure_ascii=False, sort_keys=True,
-                               separators=(",", ":"), allow_nan=False)
-    except (TypeError, ValueError, RecursionError):
-        return None
-    return sha256_holding_gil(canonical.encode("utf-8")).digest()
-
-
-# Per owner boundary, the canonical digest of the last stored document that
-# normalize_document returned unchanged (a pure function of the document under
-# this process's pinned schema and defaults). It holds no document, revision or
-# secret: every read still fetches and decodes its own owner revision, and only
-# content byte-identical to a proven fixed point skips the walk. The value read
-# is freshly decoded storage JSON, so it is already that walk's canonical output.
-_CANONICAL_STORED_DIGESTS: dict[OwnerBoundary, bytes] = {}
-
-
-def _normalized_stored_document(boundary: OwnerBoundary, stored: Any) -> dict[str, Any]:
-    digest = _canonical_digest(stored)
-    if digest is not None and _CANONICAL_STORED_DIGESTS.get(boundary) == digest:
-        return stored
-    document = normalize_document(stored)
-    # ``==`` alone admits 1 == 1.0 and the digest alone a tuple for a list;
-    # together they prove the decoded value is the canonical output itself.
-    if digest is not None and document == stored and _canonical_digest(document) == digest:
-        _CANONICAL_STORED_DIGESTS[boundary] = digest
-    return document
-
-
 def _validated_secret(plaintext: str) -> str:
     if not isinstance(plaintext, str):
         raise ModelRoutingError(
@@ -171,7 +139,7 @@ class ModelRoutingRepository:
             ) from exc
         if row is None:
             return StoredAuthority(boundary, 0, empty_document(), 0.0)
-        document = _normalized_stored_document(boundary, row["document"])
+        document = normalize_document(row["document"])
         revision = int(row["revision"])
         if document["revision"] != revision:
             raise ModelRoutingError(

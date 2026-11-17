@@ -48,8 +48,6 @@ from lib.log import get_logger
 logger = get_logger(__name__)
 
 _PACKAGE_INIT = '__init__.py'
-SNAPSHOT_FORMAT = 'tofu.execution-source-snapshot/v1'
-_BOOTSTRAPPED = None
 # Top-level packages of an application root that no application process
 # imports: the repository's test suite (tests/server/test_execution_plan.py
 # specifies that application source never imports it). They are not part of
@@ -84,15 +82,6 @@ class _Pin:
         self.mtime_ns = status.st_mtime_ns
         self.size = status.st_size
         self._compressed = zlib.compress(source)
-
-    @classmethod
-    def restored(cls, mtime: float, mtime_ns: int, size: int, compressed: bytes) -> '_Pin':
-        pin = cls.__new__(cls)
-        pin.mtime, pin.mtime_ns, pin.size, pin._compressed = mtime, mtime_ns, size, compressed
-        return pin
-
-    def exported(self) -> tuple:
-        return (self.mtime, self.mtime_ns, self.size, self._compressed)
 
     @property
     def compressed_size(self) -> int:
@@ -209,7 +198,6 @@ class PinnedImportSource:
         self._sweeps: list[threading.Thread] = []
         self._lock = threading.Lock()
         self._frozen = False
-        self.loaded_modules: tuple[str, ...] = ()
         self._frozen_sources: frozenset[str] = frozenset()
 
     def install(self) -> None:
@@ -262,51 +250,6 @@ class PinnedImportSource:
         self._frozen_sources = frozenset(sources)
         return source_identity((path, pin.source()) for path, pin in sorted(self._pins.items()))
 
-    def snapshot(self) -> dict:
-        """The frozen generation as plain data another interpreter can serve.
-
-        An execution shard (serverctl_pkg/execution_shards.py) runs exactly
-        the generation its primary retained, whatever the checkout holds now.
-        """
-        if not self._frozen:
-            raise RuntimeError('Only a frozen execution generation can be exported')
-        with self._lock:
-            pins = {path: pin.exported() for path, pin in self._pins.items()}
-            packages = sorted(self._packages)
-        # The application modules this process has imported so far: a shard
-        # imports the same set before it admits work, so its first job pays
-        # no import the primary's jobs no longer pay.
-        loaded = sorted(name for name, module in list(sys.modules.items())
-                        if getattr(getattr(module, '__spec__', None), 'origin', None) in pins)
-        return {'format': SNAPSHOT_FORMAT, 'roots': sorted(self._roots),
-                'packages': packages, 'pins': pins, 'loaded': loaded}
-
-    @classmethod
-    def from_snapshot(cls, snapshot: dict) -> 'PinnedImportSource':
-        """A frozen source serving exactly an exported generation; no sweep reads the checkout."""
-        if not isinstance(snapshot, dict) or snapshot.get('format') != SNAPSHOT_FORMAT:
-            raise RuntimeError('Not an execution source snapshot')
-        source = cls(snapshot['roots'])
-        source._pins = {path: _Pin.restored(*fields) for path, fields in snapshot['pins'].items()}
-        source._packages = set(snapshot['packages'])
-        source.loaded_modules = tuple(snapshot.get('loaded', ()))
-        source._frozen_sources = frozenset(source._pins)
-        source._frozen = True
-        return source
-
-    def install_frozen(self) -> None:
-        """Insert a frozen source ahead of PathFinder without pinning sweeps."""
-        if not self._frozen:
-            raise RuntimeError('install_frozen requires a frozen source')
-        position = next((index for index, finder in enumerate(sys.meta_path)
-                         if finder is importlib.machinery.PathFinder), len(sys.meta_path))
-        sys.meta_path.insert(position, self)
-
-    def identity(self) -> dict:
-        """Digest of the retained bytes, as ``freeze`` returns it."""
-        with self._lock:
-            pins = sorted(self._pins.items())
-        return source_identity((path, pin.source()) for path, pin in pins)
     def unchanged_since_freeze(self) -> bool:
         """Whether the checkout still holds exactly the frozen generation.
 
@@ -445,15 +388,3 @@ class PinnedImportSource:
             'compressed) in %.1fs; %d unreadable or rewritten while read load from '
             'the checkout', pinned, ', '.join(scope), source_bytes / 2**20,
             compressed_bytes / 2**20, time.monotonic() - started, unpinned)
-
-
-def adopt_bootstrapped(source: PinnedImportSource) -> None:
-    """Record the frozen source a shard's bootstrap installed before any application import."""
-    global _BOOTSTRAPPED
-    if _BOOTSTRAPPED is not None:
-        raise RuntimeError('A bootstrapped execution source is already installed')
-    _BOOTSTRAPPED = source
-
-
-def bootstrapped() -> PinnedImportSource | None:
-    return _BOOTSTRAPPED

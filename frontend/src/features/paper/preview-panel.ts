@@ -2,13 +2,13 @@
  * this instance owns controls, focus, responsive layout and secondary drawers.
  */
 import { ReaderNavigation, readerButton, readerIcon as icon, readerIcons as icons, showReaderSearch, showReaderOutline } from './reader-controls';
-import './preview-sources.css';
-import './preview-problems.css';
-import './preview-layout.css';
-import './preview-editor.css';
-import './preview-selection.css';
-import './preview-error-assist.css';
-import './preview-proposal.css';
+import '../../styles/application/24-paper-preview-sources.css';
+import '../../styles/application/24-paper-preview-problems.css';
+import '../../styles/application/24-paper-preview-layout.css';
+import '../../styles/application/24-paper-preview-editor.css';
+import '../../styles/application/24-paper-preview-selection.css';
+import '../../styles/application/24-paper-preview-error-assist.css';
+import '../../styles/application/24-paper-preview-proposal.css';
 
 import { createLifecycleScope } from '../../lifecycle';
 import { t, type Translator } from '../../i18n';

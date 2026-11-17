@@ -2954,16 +2954,8 @@ def _run_command_interactive(command, full_command, timeout, base, stdin_callbac
             # Read available stdout/stderr (non-blocking)
             got_output = False
             from lib.compat import safe_select_pipes
-            if retcode is None and not open_pipes:
-                # Both pipes reached end-of-file: only the exit remains to
-                # observe. Waiting on it returns at exit instead of sleeping
-                # out the whole tick that bounds abort/interrupt checks.
-                try:
-                    retcode = proc.wait(timeout=0.2)
-                except subprocess.TimeoutExpired:
-                    pass
             try:
-                readable = safe_select_pipes(open_pipes, timeout=0.2) if open_pipes else []
+                readable = safe_select_pipes(open_pipes, timeout=0.2)
             except (ValueError, OSError) as _e_audit:
                 # fd already closed
                 logger.debug('[tools] _run_command_interactive caught %s: %s', type(_e_audit).__name__, _e_audit)

@@ -486,14 +486,7 @@ def _run_post_ready_deferred():
     rehydration and output housekeeping.
     Required task/turn and work-item settlement stays in _init_database.
     Wired as ``ProductionStartupSteps.post_ready`` by the composition root.
-    An execution shard only claims jobs beside its primary, which runs these.
     """
-    from lib.process_roles import (
-        CAPABILITY_ATTEMPT_EXECUTION, CAPABILITY_TASK_WORKERS, process_role_has)
-    role = _DEPLOYMENT_CONFIGURATION.process_role
-    if (process_role_has(role, CAPABILITY_ATTEMPT_EXECUTION)
-            and not process_role_has(role, CAPABILITY_TASK_WORKERS)):
-        return
     try:
         from lib.storage.warmup import start_keep_warm
         # The existing lifecycle-owned keeper runs the initial pass off the

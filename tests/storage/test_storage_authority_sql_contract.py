@@ -22,8 +22,6 @@ from lib.storage_authority_sql.preflight import ProjectLease
 
 
 pytestmark = pytest.mark.unit
-# The PostgreSQL lane uses the suite-owned cluster when no external DSN file is set.
-pytest_plugins = ('tests.support.postgres_cluster',)
 _BACKENDS = ['sqlite']
 if os.environ.get('TOFU_STORAGE_TEST_POSTGRES') == '1':
     _BACKENDS.append('postgres')
@@ -78,7 +76,7 @@ def test_record_list_headers_preserve_versions_cursors_without_value_hydration(s
 @pytest.fixture(params=_BACKENDS)
 def storage(request, tmp_path: Path, monkeypatch):
     from contextlib import ExitStack
-    from tests.support.postgres_isolation import isolated_postgres_dsn, postgres_dsn_source
+    from tests.support.postgres_isolation import isolated_postgres_dsn
 
     monkeypatch.setenv('TOFU_STORAGE_SQLITE_READ_POOL', '2')
     monkeypatch.setenv('TOFU_STORAGE_RPC_CAPACITY', '8')
@@ -86,7 +84,7 @@ def storage(request, tmp_path: Path, monkeypatch):
     monkeypatch.setenv('TOFU_STORAGE_PG_WRITE_POOL', '1')
     with ExitStack() as resources:
         if request.param == 'postgres':
-            source = postgres_dsn_source(request, tmp_path)
+            source = Path(os.environ['TOFU_STORAGE_TEST_POSTGRES_DSN_FILE'])
             isolated = resources.enter_context(isolated_postgres_dsn(source, tmp_path))
             monkeypatch.setenv('TOFU_STORAGE_TEST_POSTGRES_DSN_FILE', str(isolated))
         supervisor = StorageSupervisor(
@@ -373,79 +371,6 @@ def test_parent_watch_requests_stop_when_owner_image_channel_closes():
     finally:
         watcher.set()
         ownership_stream.close()
-
-
-def test_owner_channel_alone_identifies_the_owner_where_ppid_is_a_launcher(monkeypatch):
-    """A Windows venv launcher is the Sidecar's PPID; only EOF proves death."""
-    import lib.storage_authority_sql.__main__ as sidecar_main
-
-    monkeypatch.setattr(sidecar_main, '_PARENT_PID_IDENTIFIES_OWNER', False)
-    monkeypatch.setattr(sidecar_main.os, 'getppid', lambda: 456)
-    requested = threading.Event()
-    read_descriptor, write_descriptor = os.pipe()
-    ownership_stream = os.fdopen(read_descriptor, 'rb', buffering=0)
-    watcher = sidecar_main._start_parent_watch(
-        123, requested.set, ownership_stream=ownership_stream, interval=0.01)
-    try:
-        assert not sidecar_main._owner_gone(123, read_descriptor)
-        assert not requested.wait(0.2)
-        os.close(write_descriptor)
-        write_descriptor = None
-        assert requested.wait(1.0)
-        assert sidecar_main._owner_gone(123, read_descriptor)
-    finally:
-        watcher.set()
-        if write_descriptor is not None:
-            os.close(write_descriptor)
-        ownership_stream.close()
-
-
-def test_supervisor_startup_refusal_names_child_exit_code_and_stderr(tmp_path, monkeypatch):
-    """A refused child startup must say why in the raised diagnostic itself."""
-    monkeypatch.delenv('TOFU_STORAGE_TEST_POSTGRES_DSN_FILE', raising=False)
-    forwarded = []
-    supervisor = StorageSupervisor(
-        project_root=tmp_path, backend='postgres', startup_timeout=60,
-        child_stderr_forward=forwarded.append)
-    try:
-        with pytest.raises(RuntimeError) as raised:
-            supervisor.start()
-    finally:
-        supervisor.stop()
-    message = str(raised.value)
-    assert message.startswith(
-        'storage sidecar startup refused (database_unavailable): '
-        'storage startup failed (RuntimeError) [exit_code=2; stderr: ')
-    assert 'requires TOFU_STORAGE_TEST_POSTGRES_DSN_FILE' in message
-    assert forwarded
-
-
-@pytest.mark.skipif(os.name == 'nt', reason='the byte-injecting launcher is a POSIX shell script')
-def test_undecodable_child_stderr_keeps_the_drainer_and_failure_tail(tmp_path, monkeypatch):
-    """A child byte the parent cannot decode must not end stderr draining."""
-    import sys
-
-    launcher = tmp_path / 'python-launcher'
-    launcher.write_text(
-        '#!/bin/sh\n'
-        "printf '\\377\\201 undecodable child output\\n' >&2\n"
-        f'exec "{sys.executable}" "$@"\n')
-    launcher.chmod(0o700)
-    monkeypatch.setattr(sys, 'executable', str(launcher))
-    monkeypatch.delenv('TOFU_STORAGE_TEST_POSTGRES_DSN_FILE', raising=False)
-    forwarded = []
-    supervisor = StorageSupervisor(
-        project_root=tmp_path, backend='postgres', startup_timeout=60,
-        child_stderr_forward=forwarded.append)
-    try:
-        with pytest.raises(RuntimeError) as raised:
-            supervisor.start()
-    finally:
-        supervisor.stop()
-    message = str(raised.value)
-    assert '[exit_code=2; stderr: ' in message
-    assert 'requires TOFU_STORAGE_TEST_POSTGRES_DSN_FILE' in message
-    assert forwarded[0] == '\ufffd\ufffd undecodable child output\n'
 
 
 def test_parent_watch_fails_closed_without_a_valid_owner_channel():
@@ -6372,16 +6297,9 @@ def test_runtime_fences_then_restarts_and_rehandshakes_same_backend(
     os.environ.get('TOFU_STORAGE_TEST_POSTGRES') != '1',
     reason='real PostgreSQL contract is opt-in',
 )
-def test_postgres_kill_reconnects_external_authority(request, tmp_path, monkeypatch):
-    from contextlib import ExitStack
-    from tests.support.postgres_isolation import isolated_postgres_dsn, postgres_dsn_source
-
+def test_postgres_kill_reconnects_external_authority(tmp_path, monkeypatch):
     monkeypatch.setenv('TOFU_STORAGE_PG_READ_POOL', '1')
     monkeypatch.setenv('TOFU_STORAGE_PG_WRITE_POOL', '1')
-    resources = ExitStack()
-    isolated = resources.enter_context(isolated_postgres_dsn(
-        postgres_dsn_source(request, tmp_path), tmp_path))
-    monkeypatch.setenv('TOFU_STORAGE_TEST_POSTGRES_DSN_FILE', str(isolated))
     fenced = threading.Event()
     supervisor = StorageSupervisor(
         project_root=tmp_path, backend='postgres', startup_timeout=60)
@@ -6406,7 +6324,6 @@ def test_postgres_kill_reconnects_external_authority(request, tmp_path, monkeypa
         )['value'] is True
     finally:
         runtime.stop()
-        resources.close()
     assert not (tmp_path / 'data' / 'pgdata').exists()
 
 

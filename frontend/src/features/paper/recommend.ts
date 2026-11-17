@@ -1,6 +1,5 @@
 import { featureRegistry } from '../../feature-registry';
 import { escapeHtml as escape } from '../../html-safety';
-import './recommend.css';
 import type { I18nKey } from '../../i18n';
 
 import { scheduleAnimationFrame } from '../../conversation/ui/animation-frame-scheduler';

@@ -11,15 +11,13 @@ from pathlib import Path
 import platform
 import re
 import statistics
+import subprocess
 import sys
 import threading
 
 from tests._runtime_sections import ROOT, native_module_path
 
-# Frozen copies of both owners at 5c55a9d1b. That commit is not in the
-# published history, so `git show` cannot recover it in a clone.
 REFERENCE_COMMIT = '5c55a9d1b'
-REFERENCE_ROOT = Path(__file__).resolve().parent / f'reference_{REFERENCE_COMMIT}'
 OWNER = 'frontend/src/conversation/ui/renderers/'
 
 
@@ -27,7 +25,7 @@ def bundles(folder):
     folder = Path(folder)
     reference = {}
     for name in ('stable-dom.ts', 'text-blocks.ts'):
-        original = (REFERENCE_ROOT / name).read_text(encoding='utf-8')
+        original = subprocess.check_output(['/usr/bin/git', 'show', REFERENCE_COMMIT + ':' + OWNER + name], cwd=ROOT, text=True)
         def imports(match):
             target = folder / 'stable-dom.ts' if name == 'text-blocks.ts' and match[2] == './stable-dom' else (ROOT / OWNER / match[2]).resolve()
             return 'from ' + json.dumps(str(target))

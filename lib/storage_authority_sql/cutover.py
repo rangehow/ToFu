@@ -20,7 +20,6 @@ import time
 import uuid
 
 from lib.log import get_logger
-from lib.storage_authority_sql.durability import fsync_file
 
 
 AUTHORITY_FILE = '.tofu_sqlite_authority.json'
@@ -64,7 +63,8 @@ def _sha256_file(path: Path) -> str:
 
 
 def _fsync_file_and_dir(path: Path) -> None:
-    fsync_file(path)
+    with path.open('rb') as handle:
+        os.fsync(handle.fileno())
     try:
         fd = os.open(path.parent, os.O_RDONLY)
         try:

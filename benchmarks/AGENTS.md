@@ -487,13 +487,6 @@ processes with `TOFU_BENCH_CHECKOUT` (and `PYTHONPATH`) naming each tree; the
 summary prints the `lib` it measured. Dispatch recovery and coordinator
 reports are excluded. Verify `tests/meta/test_startup_recovery_batch_measure.py`.
 
-`startup_dispatch_recovery.py` runs boot's `recover_persisted_dispatch` against
-`<instance>/data/tofudb-authority`, a private authority restored from a backup
-of the store under study (`tofu-db restore --backup-dir <backups>/tofudb/closed`),
-never the live store, reporting wall time and storage exchanges by operation per
-pass. A pass changes the copy as a boot would, so warm it with one pass, then
-alternate arms (`TOFU_BENCH_CHECKOUT`) one fresh process each on the same copy.
-
 - Keep datasets, manifests, pricing inputs, random seeds, model/provider
   identity, and acceptance criteria explicit enough to reproduce a result.
 - Default runs must be bounded and dry-run/offline when practical. Live model

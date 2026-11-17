@@ -64,16 +64,6 @@ retain the launch lease through physical cleanup. Verify
 `ExecutionService.recover` and `readiness_error` own executor reconciliation
 and readiness; the manager injects its existing failure budget and retains the
 single recovery record. Verify `test_execution_composition.py` for those ports.
-`execution_shards.py` lets the execution host manage on-demand
-`execution_shard` hosts (the same `execution_host.py`, `--report-fd`) through
-`ResidentService`: each runs the primary's frozen pins, exported once and served
-by the stdlib `execution_shard_boot.py` spawned from `PinnedHelperSource`, so a
-later merge never splits one generation across processes. Claim placement is a
-`DurableWorkerService` claim gate (one job per shard; the primary claims while
-idle or when no shard is idle and starts a shard per overflow claim); controls
-fan out from the primary; idle shards retire themselves after
-`TOFU_EXECUTOR_IDLE_SECONDS`. Never size shards from hardware or add a count.
-Verify `tests/server/test_execution_shards.py` and the harness concurrent phase.
 `execution_plan.py` prepares a source/environment/configuration digest before
 host admission; it uses the existing pinned-source discovery boundary and
 `runtime_replica`'s install fingerprint, and never copies an app.

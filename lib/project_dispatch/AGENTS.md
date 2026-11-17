@@ -29,12 +29,7 @@ full only when a grant is admitted; an admitted grant's live gate
 `_check_record` skips a stored row's schema walk only for the exact canonical
 digests last validated under that definition and row identity, and walks only the
 changed top-level members of a row whose definition is a plain closed object
-(`_members`); a member whose schema only references a definition is skipped when
-that exact content was already proven valid under it in this process (grants of
-one request repeat its delegation policy and profile). It caches no row or
-authority, and caller-supplied input is always walked. Recovery reads the
-execution attempts of every lane it decides in one exchange (`read_attempts`),
-and whole-project walks read each index page's documents in one exchange. `scope.validate_profile`
+(`_members`); it caches no row or authority, and caller-supplied input is always walked. `scope.validate_profile`
 likewise skips its walk only for a profile content digest it already proved valid
 (a pure function of the value), returns a fresh copy, and never remembers a failure.
 `clock` and budget deadlines are Unix seconds; grant `createdAt` uses that clock.

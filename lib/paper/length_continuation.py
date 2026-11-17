@@ -15,6 +15,8 @@ or when a continuation adds no visible text (the text as generated is then
 published). A fixed count would be a tuning knob (AGENTS.md principle 5).
 """
 
+import re
+
 from lib.agent_loop.agent_loop import LoopDirective
 from lib.log import get_logger
 from lib.paper.prompts import length_continuation_prompt
@@ -32,12 +34,21 @@ def join_length_continuation(prefix: str, continuation: str) -> str:
     The seam is joined exactly (a cut can fall mid-word or mid-table-row).
     Models asked to continue sometimes restart the line they were cut in, or
     repeat the last complete line; when the continuation begins with exactly
-    that trailing line, the repeated copy is dropped.
+    that trailing line, the repeated copy is dropped. A model may also repeat
+    only the trailing words of the cut line (``"**Berges et"`` continued as
+    ``"et al., ..."``): a whole-word tail of the line that the continuation
+    restarts, as a complete word, is dropped too. The tail must end at a word
+    boundary in the continuation, so ``"of 1"`` + ``"1,000"`` stays intact.
     """
     line_start = prefix.rfind('\n', 0, len(prefix.rstrip('\n'))) + 1
     last_line = prefix[line_start:]
     if last_line.strip() and continuation.startswith(last_line):
         return continuation[len(last_line):]
+    for match in re.finditer(r'\s+', last_line):
+        tail = last_line[match.end():]
+        if (tail and continuation.startswith(tail)
+                and continuation[len(tail):len(tail) + 1].isspace()):
+            return continuation[len(tail):]
     return continuation
 
 

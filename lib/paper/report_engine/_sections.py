@@ -221,6 +221,10 @@ def insert_repaired_sections(report: str, repair_text: str, missing, lang: str):
     for offset in sorted(insertions, reverse=True):
         block = '\n\n'.join(insertions[offset])
         head, tail = report[:offset].rstrip('\n'), report[offset:].lstrip('\n')
+        # A report that separates sections with a thematic break keeps one
+        # between the inserted section and the next.
+        if tail and re.search(r'(?:^|\n)\s*---\s*$', head):
+            block += '\n\n---'
         report = (f'{head}\n\n' if head else '') + f'{block}\n' + (f'\n{tail}' if tail else '')
     return report, repaired
 

@@ -1334,6 +1334,8 @@ def make_research_tool_executor(messages, *, user_question, abort_signal,
             if contract_error is not None:
                 done_ev['contractError'] = contract_error
                 done_ev['toolContent'] = result[:4000]
+            if search_diag:
+                done_ev['searchDiag'] = search_diag
             if engine_breakdown:
                 done_ev['engineBreakdown'] = engine_breakdown
             if verticals:

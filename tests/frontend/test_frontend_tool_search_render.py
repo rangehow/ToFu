@@ -439,6 +439,35 @@ check('vertical_source_budget_stops_before_reading_the_tail',
   && !boundedVerticalSourcesHtml.includes('source-256')
   && boundedVerticalSourcesHtml.includes('Additional vertical results omitted'));
 
+const verticalOnlyHtml = presentation.renderSearchHtml({
+  roundNum: 14,
+  toolName: 'web_search',
+  searchDiag: { reason: 'no_usable_evidence' },
+  verticals: [{
+    domain: 'academic',
+    items: [
+      { title: 'Exact Title Match', url: 'https://papers.test/exact', upvotes: 2 },
+      { title: 'Popular Unrelated', url: 'https://papers.test/popular', upvotes: 900 },
+    ],
+  }],
+}, [], header);
+check('vertical_answers_are_not_reported_as_no_results_when_web_is_empty',
+  !verticalOnlyHtml.includes('no usable evidence')
+  && !verticalOnlyHtml.includes('no results')
+  && verticalOnlyHtml.includes('2 results')
+  && verticalOnlyHtml.includes('>Exact Title Match</a>'));
+check('vertical_items_keep_source_ranking_order',
+  verticalOnlyHtml.indexOf('Exact Title Match')
+    < verticalOnlyHtml.indexOf('Popular Unrelated'));
+const emptyEverywhereHtml = presentation.renderSearchHtml({
+  roundNum: 15,
+  toolName: 'web_search',
+  searchDiag: { reason: 'no_usable_evidence' },
+  verticals: [{ domain: 'academic', items: [] }],
+}, [], header);
+check('empty_web_and_empty_vertical_still_report_the_diagnostic',
+  emptyEverywhereHtml.includes('no usable evidence'));
+
 const engineRound = Object.freeze({
   roundNum: 13,
   toolName: 'web_search',
@@ -578,7 +607,7 @@ def test_tool_search_presentation_owner_contract() -> None:
     passes = [
         line for line in process.stdout.splitlines() if line.startswith('PASS ')
     ]
-    assert len(passes) == 48, process.stdout
+    assert len(passes) == 51, process.stdout
 
 
 def test_retained_dispatch_wires_search_owner_and_filters_gateway() -> None:

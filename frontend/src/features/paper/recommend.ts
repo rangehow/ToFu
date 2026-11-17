@@ -3,6 +3,7 @@ import { escapeHtml as escape } from '../../html-safety';
 import type { I18nKey } from '../../i18n';
 
 import { scheduleAnimationFrame } from '../../conversation/ui/animation-frame-scheduler';
+import { reconcileRichCardHtml } from '../../conversation/ui/rich-card-reconciliation';
 import {
   paperAttachPush,
   paperDetachPush,
@@ -68,7 +69,7 @@ interface RecommendApi {
   recommendAbort(taskId: string): Promise<unknown>;
 }
 
-type RecElement = HTMLElement & { _recSig?: string; _recToolKey?: string };
+type RecElement = HTMLElement & { _recSig?: string; _recToolHtml?: string };
 
 type RecommendWindow = Window & {
   Api?: { paper?: RecommendApi };
@@ -471,14 +472,15 @@ export function paintRecommendNow(): void {
   }
 
   if (toolsElement) {
-    const searching = stream.toolRounds.filter((round) => round.status === 'searching').length;
-    const key = `${stream.toolRounds.length}:${searching}`;
-    if (toolsElement._recToolKey !== key) {
-      const render = globals().renderToolRoundsHTML;
-      toolsElement.innerHTML = stream.toolRounds.length && render
-        ? render(stream.toolRounds, stream.status === 'running') : '';
-      toolsElement.hidden = stream.toolRounds.length === 0;
-      toolsElement._recToolKey = key;
+    const render = globals().renderToolRoundsHTML;
+    const html = stream.toolRounds.length && render
+      ? render(stream.toolRounds, stream.status === 'running') : '';
+    if (toolsElement._recToolHtml !== html) {
+      // Patch in place: replacing innerHTML restarted every row's entry
+      // animation and collapsed rows the reader had expanded on each event.
+      reconcileRichCardHtml(toolsElement, html);
+      toolsElement.hidden = !html;
+      toolsElement._recToolHtml = html;
     }
   }
 

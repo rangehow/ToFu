@@ -276,8 +276,11 @@ class WiringRatchetTest(unittest.TestCase):
         launcher = _src('desktop/launcher.py')
         self.assertIn("'copy_diag'", launcher,
                       'the window lost its diagnostics action')
-        self.assertIn('_diag_report', launcher,
-                      'the diagnostics report builder is gone')
+        report = self._diag_report_for_one_joined_server()
+        self.assertIn('server Lab: url=https://lab.example', report)
+        self.assertIn('secret=set (13 chars)', report)
+        self.assertNotIn('tok_SECRET123', report)
+        self.assertIn('link-ready', report)
         window = _src('desktop/role_window.py')
         self.assertIn('desktop.role.copyDiag', window,
                       'the agent role window lost the copy-diag button')
@@ -287,6 +290,27 @@ class WiringRatchetTest(unittest.TestCase):
             self.assertIsNotNone(pair, '%s missing from STRINGS' % key)
             self.assertIn('en', pair, '%s missing en' % key)
             self.assertIn('zh', pair, '%s missing zh' % key)
+
+    def _diag_report_for_one_joined_server(self):
+        import tempfile
+        from desktop import launcher
+
+        class _Links:
+            def statuses(self):
+                return [{'id': 'lab', 'last_status': {'state': 'ok'}}]
+
+        record = {'id': 'lab', 'label': 'Lab', 'url': 'https://lab.example',
+                  'candidates': [], 'state': 'active', 'secret': 'tok_SECRET123'}
+        with tempfile.TemporaryDirectory() as scratch:
+            log_path = os.path.join(scratch, 'desktop.log')
+            with open(log_path, 'w', encoding='utf-8') as handle:
+                handle.write('link-ready\n')
+            with mock.patch.object(launcher, '_LOG_PATH', log_path), \
+                    mock.patch('lib.desktop_agent.config.attachments',
+                               return_value=[record]), \
+                    mock.patch('lib.desktop_agent.config.config_path',
+                               return_value=os.path.join(scratch, 'node.json')):
+                return launcher._diag_report({'links': _Links()})
 
     def test_tray_gains_control_panel_reentry(self):
         for rel in ('desktop/launcher.py',):

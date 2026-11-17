@@ -232,6 +232,31 @@ describe('network indicator wired to the real availability monitor', () => {
     env.monitor.destroy();
   });
 
+  it('owns no liveness clock or connection of its own', () => {
+    const timers = [
+      vi.spyOn(globalThis, 'setTimeout'),
+      vi.spyOn(globalThis, 'setInterval'),
+    ];
+    const WebSocketSpy = vi.fn();
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('WebSocket', WebSocketSpy);
+    vi.stubGlobal('fetch', fetchSpy);
+    try {
+      const env = environment();
+      env.push({ connected: true, ms: 60, state: 'good', downReason: null });
+      env.push({ connected: false, ms: null, state: 'offline', downReason: 'dropped' });
+      window.dispatchEvent(new Event('offline'));
+      window.dispatchEvent(new Event('online'));
+      env.indicator.destroy();
+      env.monitor.destroy();
+      for (const timer of timers) expect(timer).not.toHaveBeenCalled();
+      expect(WebSocketSpy).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('releases every subscription on destroy', () => {
     const env = environment();
     env.push({ connected: true, ms: 60 });

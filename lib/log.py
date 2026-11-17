@@ -422,13 +422,13 @@ def _audit_rotation_limits():
     return stream_max_bytes('audit'), stream_backup_count('audit')
 
 
-def _rotate_audit_log_if_needed(incoming_bytes: int) -> None:
+def _rotate_audit_log_if_needed(incoming_bytes: int, path: str | None = None) -> None:
     """Size-rotate ``audit.log`` before one append; caller serializes writes."""
     max_bytes, backups = _audit_rotation_limits()
     try:
         from lib.logging_pkg.log_retention import copytruncate_if_oversize
         copytruncate_if_oversize(
-            AUDIT_LOG_FILE,
+            path or AUDIT_LOG_FILE,
             max_bytes=max_bytes,
             trigger_bytes=max(1, max_bytes - max(0, int(incoming_bytes))),
             backup_count=backups)
@@ -444,36 +444,104 @@ def _audit_sync_writes() -> bool:
     return bool(os.environ.get('PYTEST_CURRENT_TEST')) or ('pytest' in sys.modules)
 
 
-def _audit_write_line(line: str) -> None:
-    """Append one JSON line to the audit file (the actual disk I/O). Reads
-    the module-level paths at call time so tests can monkeypatch them."""
+def _audit_append(path: str, payload: bytes, *, rotate: bool) -> None:
+    """Append bytes to one audit file; ``rotate=False`` continues a partial line."""
     from lib.logging_pkg.log_retention import (
         append_bytes_locked, ensure_private_log_directory,
     )
+    ensure_private_log_directory(os.path.dirname(path) or LOG_DIR)
+    if rotate:
+        _rotate_audit_log_if_needed(len(payload), path)
+    append_bytes_locked(path, payload)
+
+
+def _audit_write_line(line: str) -> None:
+    """Append one JSON line to the audit file (the actual disk I/O). Reads
+    the module-level paths at call time so tests can monkeypatch them."""
+    from lib.logging_pkg.log_retention import ensure_private_log_directory
     ensure_private_log_directory(LOG_DIR)
-    payload = line.encode('utf-8', errors='replace')
-    _rotate_audit_log_if_needed(len(payload))
-    append_bytes_locked(AUDIT_LOG_FILE, payload)
+    _audit_append(AUDIT_LOG_FILE, line.encode('utf-8', errors='replace'), rotate=True)
+
+
+# Records the writer could not append yet, per target path and in order: a
+# transient filesystem fault (dolphinfs EDQUOT/EREMOTEIO) must delay audit
+# evidence, never drop it. The first entry is the unwritten tail of a partial
+# append when the path is in ``_audit_partial_tails``. Owned by the writer
+# thread; bounded by the queue capacity, like the queue itself.
+_audit_retained: dict = {}
+_audit_partial_tails: set = set()
+_audit_failing_paths: set = set()
+
+
+def _retain_audit_record(path: str, payload: bytes) -> None:
+    global _audit_dropped
+    retained = _audit_retained.setdefault(path, [])
+    retained.append(payload)
+    while len(retained) > _audit_queue_capacity():
+        # Keep the newest, as a saturated queue does; never drop a partial
+        # line's tail, which would leave a fragment in the file.
+        retained.pop(1 if path in _audit_partial_tails else 0)
+        _audit_dropped += 1
+
+
+def _flush_retained_audit_records(path: str) -> None:
+    """Append ``path``'s retained records in order until one fails."""
+    retained = _audit_retained.get(path) or []
+    written = 0
+    while retained:
+        payload = retained[0]
+        try:
+            _audit_append(path, payload, rotate=path not in _audit_partial_tails)
+        except OSError as exc:
+            done = int(getattr(exc, 'tofu_bytes_written', 0) or 0)
+            if done:
+                retained[0] = payload[done:]
+                _audit_partial_tails.add(path)
+            if path not in _audit_failing_paths:
+                _audit_failing_paths.add(path)
+                # One report per fault episode; the record is never echoed.
+                logging.getLogger('audit').error(
+                    'Failed to write audit log record (%d bytes); %d record(s) '
+                    'retained for retry', len(payload), len(retained), exc_info=exc,
+                    extra={'tofu_event_name': 'logging.audit_write_failed',
+                           'tofu_event_fields': {'record_bytes': len(payload),
+                                                 'retained_records': len(retained)}})
+            return
+        retained.pop(0)
+        _audit_partial_tails.discard(path)
+        written += 1
+    _audit_retained.pop(path, None)
+    if path in _audit_failing_paths:
+        _audit_failing_paths.discard(path)
+        logging.getLogger('audit').warning(
+            'Audit log write recovered; %d retained record(s) written', written,
+            extra={'tofu_event_name': 'logging.audit_write_recovered',
+                   'tofu_event_fields': {'records': written}})
 
 
 def _audit_writer_loop(q: '_queue_mod.Queue') -> None:
+    from lib.logging_pkg.log_policy import maintenance_interval_seconds
     while True:
-        line = q.get()
+        try:
+            # With records retained, retry at the log-maintenance cadence even
+            # when no new record arrives; otherwise wait for demand only.
+            line = q.get(timeout=maintenance_interval_seconds()
+                         if _audit_retained else None)
+        except _queue_mod.Empty:
+            for path in tuple(_audit_retained):
+                _flush_retained_audit_records(path)
+            continue
         try:
             if line is None:  # shutdown sentinel
+                for path in tuple(_audit_retained):
+                    _flush_retained_audit_records(path)
                 return
-            _audit_write_line(line)
+            path = AUDIT_LOG_FILE
+            _retain_audit_record(path, line.encode('utf-8', errors='replace'))
+            _flush_retained_audit_records(path)
         except Exception:
-            logging.getLogger('audit').error(
-                'Failed to write audit log record (%d bytes)',
-                len(line.encode('utf-8', errors='replace')), exc_info=True,
-                extra={
-                    'tofu_event_name': 'logging.audit_write_failed',
-                    'tofu_event_fields': {
-                        'record_bytes': len(line.encode(
-                            'utf-8', errors='replace')),
-                    },
-                })
+            logging.getLogger('audit').exception(
+                'Audit log writer failed; retained records stay queued')
         finally:
             q.task_done()
 

@@ -1615,6 +1615,26 @@ setting adds a tuning knob for a delay the lease contract already defines;
 holding the claim until the process exits strands the job behind a
 long-lived service.
 
+**An unknown verdict is the domain's settlement, not a handler failure.**
+Problem: on 2026-11-17 00:00–00:14 a build without the deferral above ran the
+same loop (2,409 `domain settlement unknown`, 2,269 `handler failed`, 2,413
+`worker outcome requires recovery`, 28 entered Attempts). It ended at the
+00:14 restart, which loaded the deferral. Every claim also logged `handler
+failed`, because the runner passed the handler's own
+`WorkerDomainSettlementUnknown` to the failure port. That port repeated the same
+refused exit recovery. A port that settles unknown effects as `failed` would
+also turn an unproved outcome into a terminal one. Decision:
+`SynchronousWorkerRunner` passes `WorkerDomainSettlementUnknown` from the
+handler straight to `settlement_unconfirmed`, as it does for `WorkerLeaseLost`.
+The failure port receives only real failures. A repeating unknown settlement
+therefore costs one claim, one log line and one release per
+`workerLeaseMilliseconds`, the correctness horizon of the lease contract, and
+fresh claims are not delayed. Alternatives rejected: a per-job retry counter
+that parks the job (a new knob, and parking an unproved effect strands its
+recovery when evidence later appears); log rate limits only (the duplicated
+failure-port recovery stays). Spec:
+`tests/storage/test_worker_service_remote.py::test_a_repeating_unknown_settlement_converges_instead_of_storming`.
+
 Problem: a detached descendant's held-claim read after its root Turn settled
 turned transient storage pressure into a model-permission refusal. Decision:
 this proof uses the existing effect-free persistence wait, retaining the same

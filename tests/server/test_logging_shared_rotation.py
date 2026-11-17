@@ -96,6 +96,7 @@ _WRITER = '''
 import logging, os, sys, time
 from lib.server.server_logging import _SizeAndTimeRotatingFileHandler
 path, writer, count, ready, go = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4], sys.argv[5]
+pause = float(sys.argv[6]) if len(sys.argv) > 6 else 0.0
 handler = _SizeAndTimeRotatingFileHandler(
     path, when='midnight', backupCount=10_000, encoding='utf-8',
     max_bytes=4096, total_budget_bytes=0)
@@ -111,6 +112,8 @@ while not os.path.exists(go):
 for seq in range(count):
     text = f'W{writer}-{seq:04d} ' + 'x' * (20 + (seq * 37) % 280)
     handler.emit(logging.LogRecord('lib.shared_rotation_test', logging.INFO, 'writer', 1, text, (), None))
+    if pause:
+        time.sleep(pause)
 handler.close()
 sys.exit(3 if failures else 0)
 '''
@@ -145,6 +148,120 @@ def test_concurrent_processes_keep_every_record_exactly_once(tmp_path):
         assert b'\x00' not in data, path.name
         keys += [line.split(' ', 1)[0] for line in data.decode('utf-8').splitlines()]
     assert sorted(keys) == sorted(f'W{w}-{s:04d}' for w in range(2) for s in range(400))
+
+
+_FUSE_UNLINKED_FSTAT = '''
+import errno, os
+_real_fstat = os.fstat
+def _fuse_fstat(descriptor):
+    # The BeeGFS FUSE mount answers fstat on a descriptor whose file was
+    # unlinked with ENOENT, where a local filesystem reports st_nlink == 0.
+    result = _real_fstat(descriptor)
+    if result.st_nlink == 0:
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT))
+    return result
+os.fstat = _fuse_fstat
+'''
+
+_PRUNER = '''
+import fcntl, os, shutil, sys, time
+logs, archive, stop = sys.argv[1], sys.argv[2], sys.argv[3]
+while True:
+    finished = os.path.exists(stop)
+    for name in sorted(os.listdir(logs)):
+        if name == 'app.log':
+            continue
+        path = os.path.join(logs, name)
+        try:
+            source = open(path, 'rb')
+        except FileNotFoundError:
+            continue
+        with source:
+            # Like retention under budget pressure: the chunk is removed while
+            # a peer may still hold a descriptor on it.
+            fcntl.flock(source.fileno(), fcntl.LOCK_EX)
+            with open(os.path.join(archive, name), 'ab') as target:
+                shutil.copyfileobj(source, target)
+            os.unlink(path)
+    if finished:
+        break
+    time.sleep(0.002)
+'''
+
+
+def test_a_peer_removing_the_file_behind_a_descriptor_loses_no_record(tmp_path):
+    """Retention in one process unlinks a chunk another writer still holds open."""
+    base = tmp_path / 'app.log'
+    first, second = (_SizeAndTimeRotatingFileHandler(
+        str(base), when='midnight', backupCount=30, encoding='utf-8',
+        max_bytes=200, total_budget_bytes=0) for _ in range(2))
+    failures = []
+    for handler in (first, second):
+        handler.setFormatter(logging.Formatter('%(message)s'))
+        handler.handleError = failures.append
+    real_fstat = os.fstat
+
+    def fuse_fstat(descriptor):
+        result = real_fstat(descriptor)
+        if result.st_nlink == 0:
+            raise FileNotFoundError(2, 'No such file or directory')
+        return result
+
+    try:
+        second.emit(_record('second-first'))
+        first.emit(_record('a' * 190))
+        first.emit(_record('b' * 20))  # first rolls the file second still holds
+        for path in _rotated(tmp_path, base):
+            path.unlink()
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(os, 'fstat', fuse_fstat)
+            second.emit(_record('after-peer-removed-file'))
+    finally:
+        first.close()
+        second.close()
+    assert failures == []
+    assert _lines(base) == ['b' * 20, 'after-peer-removed-file']
+
+
+def test_concurrent_processes_keep_every_record_while_chunks_are_removed(tmp_path):
+    """Writers on a FUSE-like mount while a peer removes rotated chunks."""
+    logs = tmp_path / 'logs'
+    logs.mkdir()
+    archive = tmp_path / 'archive'
+    archive.mkdir()
+    go = tmp_path / 'go'
+    stop = tmp_path / 'stop'
+    ready = [tmp_path / f'ready-{writer}' for writer in range(3)]
+    root = Path(__file__).resolve().parents[2]
+    workers = [subprocess.Popen(
+        [sys.executable, '-c', _FUSE_UNLINKED_FSTAT + _WRITER, str(logs / 'app.log'),
+         str(writer), '300', str(ready[writer]), str(go),
+         # Writer 0 stays idle between records, so peers roll its file away
+         # and the pruner removes it before its next record.
+         '0.005' if writer == 0 else '0'],
+        cwd=root) for writer in range(3)]
+    pruner = subprocess.Popen(
+        [sys.executable, '-c', _PRUNER, str(logs), str(archive), str(stop)], cwd=root)
+    try:
+        deadline = time.monotonic() + 120
+        while not all(path.exists() for path in ready) and time.monotonic() < deadline:
+            if any(worker.poll() is not None for worker in workers):
+                break
+            time.sleep(0.01)
+        go.touch()
+        codes = [worker.wait(timeout=180) for worker in workers]
+        stop.touch()
+        assert pruner.wait(timeout=60) == 0
+    finally:
+        for process in (*workers, pruner):
+            if process.poll() is None:
+                process.kill()
+    assert codes == [0, 0, 0], 'a writer reported a handler error (dropped record)'
+    keys = []
+    for path in (*logs.iterdir(), *archive.iterdir()):
+        keys += [line.split(' ', 1)[0]
+                 for line in path.read_bytes().decode('utf-8').splitlines()]
+    assert sorted(keys) == sorted(f'W{w}-{s:04d}' for w in range(3) for s in range(300))
 
 
 def test_a_record_logged_by_the_rollover_itself_is_appended(tmp_path):

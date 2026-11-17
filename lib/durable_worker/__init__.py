@@ -927,7 +927,10 @@ class SynchronousWorkerRunner:
                     outcome = self._settle_cancellation(
                         registration, context, claim.payload
                     )
-                except WorkerLeaseLost:
+                except (WorkerLeaseLost, WorkerDomainSettlementUnknown):
+                    # An unknown verdict is the domain's settlement, not a
+                    # failure: its failure port would rerun the same refused
+                    # recovery, or settle unknown effects as failed.
                     raise
                 except Exception as exc:
                     logger.exception(

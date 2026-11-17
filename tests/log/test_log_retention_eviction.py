@@ -236,3 +236,59 @@ def test_same_date_chunks_outlive_older_rotations_after_second_size_rotation(
         ('error.log.6', 'global_budget'), ('audit.log.4', 'global_budget')]
     assert sorted(path.name for path in logs.glob('app.log.*')) == [
         'app.log.2026-10-26', 'app.log.2026-10-27', 'app.log.2026-10-27.00001']
+
+
+def _fault_dump(logs: Path, pid: int) -> Path:
+    return logs / f'tofu_faulthandler_{pid}.log'
+
+
+def test_global_budget_evicts_ordinary_logs_before_todays_crash_evidence(
+        tmp_path, monkeypatch):
+    """Regression for 2026-11-17 21:49:36: the dump of worker 75010, stopped
+    seconds earlier after a stall, was the first global-budget eviction because
+    every other file of the day was a protected rotation."""
+    logs, data = _dirs(tmp_path)
+    now = _local(2026, 11, 17, 21, 49)
+    live, previous, older = 130220, 75010, 130441
+    monkeypatch.setattr(log_retention, 'pid_is_alive', lambda pid: pid == live)
+    _write(logs / 'app.log', 300, now)
+    _write(logs / 'app.log.2026-11-17', 300, _local(2026, 11, 17, 18, 25))
+    _write(_fault_dump(logs, live), 100, now)
+    _write(_fault_dump(logs, previous), 200, _local(2026, 11, 17, 21, 32))
+    _write(_fault_dump(logs, older), 100, _local(2026, 11, 16, 22, 57))
+    _write(logs / 'frontend.log.2026-11-16', 200, _local(2026, 11, 16, 23, 59))
+    monkeypatch.setattr(log_retention, 'total_log_budget_bytes', lambda: 700)
+
+    result = maintain_logs(logs, data_dir=data, now=now)
+
+    assert _removed(result) == [
+        ('frontend.log.2026-11-16', 'global_budget'),
+        (_fault_dump(logs, older).name, 'global_budget'),
+    ]
+    assert _fault_dump(logs, previous).exists()
+    assert _fault_dump(logs, live).exists()
+    assert result['over_budget_bytes'] == 200
+
+
+def test_previous_generation_crash_evidence_outlives_midnight_and_budgets(
+        tmp_path, monkeypatch):
+    logs, data = _dirs(tmp_path)
+    now = _local(2026, 11, 18, 0, 30)
+    live, previous, older = 300, 200, 100
+    monkeypatch.setattr(log_retention, 'pid_is_alive', lambda pid: pid == live)
+    _write(logs / 'app.log', 100, now)
+    # Live sinks alone exceed the fault family budget.
+    _write(_fault_dump(logs, live), 400, now)
+    _write(_fault_dump(logs, previous), 200, _local(2026, 11, 17, 23, 58))
+    _write(_fault_dump(logs, older), 200, _local(2026, 11, 17, 9))
+    monkeypatch.setattr(log_retention, 'stream_family_budget_bytes',
+                        lambda name: 300)
+    monkeypatch.setattr(log_retention, 'total_log_budget_bytes', lambda: 500)
+
+    result = maintain_logs(logs, data_dir=data, now=now)
+
+    assert _removed(result) == [
+        (_fault_dump(logs, older).name, 'fault_family_budget')]
+    assert _fault_dump(logs, previous).exists()
+    assert result['faulthandler_process']['over_budget_bytes'] == 300
+    assert result['over_budget_bytes'] == 200

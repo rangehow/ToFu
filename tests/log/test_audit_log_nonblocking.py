@@ -28,6 +28,9 @@ def _force_queue_path(monkeypatch, tmp_path):
     monkeypatch.setattr(log_mod, '_audit_sync_writes', lambda: False)
     monkeypatch.setattr(log_mod, 'AUDIT_LOG_FILE', str(tmp_path / 'audit.log'))
     monkeypatch.setattr(log_mod, 'LOG_DIR', str(tmp_path))
+    monkeypatch.setattr(log_mod, '_audit_retained', {})
+    monkeypatch.setattr(log_mod, '_audit_partial_tails', set())
+    monkeypatch.setattr(log_mod, '_audit_failing_paths', set())
 
 
 def _drain():
@@ -65,13 +68,13 @@ def test_audit_log_returns_before_write_completes(tmp_path, monkeypatch):
     queue. Stall the write behind a gate; audit_log must return immediately."""
     _force_queue_path(monkeypatch, tmp_path)
     gate = threading.Event()
-    real_write = log_mod._audit_write_line
+    real_append = log_mod._audit_append
 
-    def slow_write(line):
+    def slow_append(path, payload, *, rotate):
         assert gate.wait(5), 'test gate never released'
-        real_write(line)
+        real_append(path, payload, rotate=rotate)
 
-    monkeypatch.setattr(log_mod, '_audit_write_line', slow_write)
+    monkeypatch.setattr(log_mod, '_audit_append', slow_append)
     start = time.monotonic()
     log_mod.audit_log('slow_event')
     assert time.monotonic() - start < 1.0
@@ -126,3 +129,68 @@ def test_audit_queue_capacity_is_clamped(monkeypatch):
     assert log_mod._audit_queue_capacity() == 100_000
     monkeypatch.setenv('TOFU_AUDIT_LOG_QUEUE_MAX', 'invalid')
     assert log_mod._audit_queue_capacity() == 4096
+
+
+def test_transient_storage_fault_retains_and_later_writes_every_record(
+        tmp_path, monkeypatch, caplog):
+    """Regression for 2026-11-17 11:15-11:16: dolphinfs answered EDQUOT and
+    the writer dropped 21 audit records, one per failed append. Records are
+    retained in order and written once the filesystem recovers; a partial
+    append resumes at its first unwritten byte, so no line is split or
+    duplicated, and one fault episode logs once, not once per record."""
+    import errno
+    import os
+    _force_queue_path(monkeypatch, tmp_path)
+    real_write = os.write
+    fault = {'on': True, 'partial': True}
+
+    def flaky_write(descriptor, data):
+        if fault['on'] and os.fstat(descriptor).st_ino == os.stat(
+                tmp_path / 'audit.log').st_ino:
+            if fault['partial']:
+                fault['partial'] = False
+                return real_write(descriptor, bytes(data[:7]))
+            raise OSError(errno.EDQUOT, os.strerror(errno.EDQUOT))
+        return real_write(descriptor, data)
+
+    monkeypatch.setattr(os, 'write', flaky_write)
+    with caplog.at_level('WARNING', logger='audit'):
+        for index in range(5):
+            log_mod.audit_log('during_fault', index=index)
+        _drain()
+        fault['on'] = False
+        log_mod.audit_log('after_recovery', index=5)
+        _drain()
+    entries = [json.loads(line) for line in
+               (tmp_path / 'audit.log').read_text(encoding='utf-8').splitlines()]
+    assert [entry['index'] for entry in entries] == [0, 1, 2, 3, 4, 5]
+    failures = [r for r in caplog.records
+                if 'Failed to write audit log record' in r.getMessage()]
+    assert len(failures) == 1
+    assert 'during_fault' not in caplog.text
+    assert any('recovered' in r.getMessage() for r in caplog.records)
+
+
+def test_retained_records_are_bounded_by_the_queue_capacity(
+        tmp_path, monkeypatch):
+    _force_queue_path(monkeypatch, tmp_path)
+    monkeypatch.setattr(log_mod, '_audit_queue_capacity', lambda: 3)
+    monkeypatch.setattr(log_mod, '_audit_dropped', 0)
+    broken = {'on': True}
+    real_append = log_mod._audit_append
+
+    def append(path, payload, *, rotate):
+        if broken['on']:
+            raise OSError(122, 'Disk quota exceeded')
+        return real_append(path, payload, rotate=rotate)
+
+    monkeypatch.setattr(log_mod, '_audit_append', append)
+    for index in range(6):
+        log_mod.audit_log('bounded', index=index)
+    _drain()
+    broken['on'] = False
+    log_mod.audit_log('bounded', index=6)
+    _drain()
+    kept = [json.loads(line)['index'] for line in
+            (tmp_path / 'audit.log').read_text(encoding='utf-8').splitlines()]
+    assert kept == [4, 5, 6]

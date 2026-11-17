@@ -279,7 +279,7 @@ def test_cold_boot_prepares_before_storage_and_stops_on_failure(monkeypatch):
     monkeypatch.setattr(assembly, '_server_log', __import__('logging').getLogger('test'))
     monkeypatch.setattr(serverctl, 'prepare_native_engine_artifact',
                         lambda *a, **k: calls.append('prepare') or '')
-    monkeypatch.setattr(storage, 'start_storage', lambda: calls.append('storage'))
+    monkeypatch.setattr('lib.storage.service.storage_runtime', lambda: SimpleNamespace(start=lambda: calls.append('storage')))
     monkeypatch.setattr(storage, 'storage_status', lambda: {'ready': True})
     assembly._start_storage_authority_sql()
     assert calls == ['prepare', 'storage']

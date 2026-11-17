@@ -211,7 +211,7 @@ def test_start_storage_retries_while_previous_owner_releases_lease(monkeypatch):
                 'storage sidecar closed its readiness channel before '
                 'startup (exit 1)')
 
-    monkeypatch.setattr(storage_pkg, 'start_storage', contended_start)
+    monkeypatch.setattr('lib.storage.service.storage_runtime', lambda: SimpleNamespace(start=contended_start))
     monkeypatch.setattr(
         storage_pkg, 'storage_status',
         lambda: {'ready': True, 'backend': 'tofudb', 'pid': 4242})
@@ -233,7 +233,7 @@ def test_start_storage_raises_after_exhausting_retries(monkeypatch):
     def always_contended():
         raise RuntimeError('another tofu-db process owns the data directory')
 
-    monkeypatch.setattr(storage_pkg, 'start_storage', always_contended)
+    monkeypatch.setattr('lib.storage.service.storage_runtime', lambda: SimpleNamespace(start=always_contended))
 
     with pytest.raises(RuntimeError):
         assembly._start_storage_authority_sql()
@@ -252,7 +252,7 @@ def test_start_storage_does_not_retry_typed_integrity_failure(monkeypatch):
     def fail():
         calls.append('start')
         raise failure
-    monkeypatch.setattr(storage_pkg, 'start_storage', fail)
+    monkeypatch.setattr('lib.storage.service.storage_runtime', lambda: SimpleNamespace(start=fail))
     with pytest.raises(StorageError) as result:
         assembly._start_storage_authority_sql()
     assert result.value is failure
@@ -270,7 +270,7 @@ def test_external_storage_boot_never_rebuilds_its_owner_engine(monkeypatch):
                         lambda *a, **k: pytest.fail('attaching application must not replace the owner engine'))
     monkeypatch.setattr(assembly, '_boot', lambda *a, **k: None)
     calls = []
-    monkeypatch.setattr(storage_pkg, 'start_storage', lambda: calls.append('handshake'))
+    monkeypatch.setattr('lib.storage.service.storage_runtime', lambda: SimpleNamespace(start=lambda: calls.append('handshake')))
     monkeypatch.setattr(storage_pkg, 'storage_status', lambda: {'ready': True, 'backend': 'tofudb'})
     assembly._start_storage_authority_sql()
     assert calls == ['handshake']
@@ -278,7 +278,7 @@ def test_external_storage_boot_never_rebuilds_its_owner_engine(monkeypatch):
     failure = StorageError('database_integrity', 'engine identity mismatch', retryable=False)
     def refuse():
         raise failure
-    monkeypatch.setattr(storage_pkg, 'start_storage', refuse)
+    monkeypatch.setattr('lib.storage.service.storage_runtime', lambda: SimpleNamespace(start=refuse))
     with pytest.raises(StorageError) as raised:
         assembly._start_storage_authority_sql()
     assert raised.value is failure

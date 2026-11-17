@@ -20,6 +20,7 @@ no sleeps that race a product timer. Run it with ``make test-chaos``.
 """
 from __future__ import annotations
 
+import contextlib
 import os
 from pathlib import Path
 import signal
@@ -123,10 +124,10 @@ class Chaos:
         return assistant
 
 
-@pytest.fixture(scope='module')
-def chaos(tmp_path_factory):
+@contextlib.contextmanager
+def _running_chaos(root: Path):
     provider = fp.ScriptedProvider().start()
-    instance = ChaosInstance(tmp_path_factory.mktemp('chaos'))
+    instance = ChaosInstance(root)
     try:
         instance.start()
         harness = Chaos(instance, provider)
@@ -142,6 +143,22 @@ def chaos(tmp_path_factory):
     # C5 for the whole instance: every owner joined what it started.
     assert not leaked, f'processes outlived the instance: {leaked}'
     assert not locks, f'locks held after the instance stopped: {locks}'
+
+
+@pytest.fixture(scope='module')
+def chaos(tmp_path_factory):
+    with _running_chaos(tmp_path_factory.mktemp('chaos')) as harness:
+        yield harness
+
+
+@pytest.fixture
+def chaos_restart(tmp_path_factory):
+    """A private instance for explicit restarts: each restart counts toward the
+    restart-storm guard (lib/conversations/restart_resume.py), which stands
+    automatic resume down; on the shared instance it would change what the
+    later kill-and-recover specs observe."""
+    with _running_chaos(tmp_path_factory.mktemp('chaos-restart')) as harness:
+        yield harness
 
 
 # ── provider faults ────────────────────────────────────────────────────────
@@ -276,6 +293,55 @@ def test_execution_host_killed_during_a_tool_and_recovered(chaos):
     chaos.instance.recover_execution_host()
     chaos.assert_contract(conversation, user_text, outcomes={'completed', 'interrupted', 'failed'},
                           final_text='Continued after recovery.', effects={nonce: 1})
+
+
+def test_execution_host_restarted_during_a_tool_drains_and_continues_once(chaos_restart):
+    """An explicit restart while a tool runs: the old host drains within the
+    manager's stop budget without a kill, and the next generation continues
+    the Turn without replaying the side effect."""
+    chaos = chaos_restart
+    conversation, nonce, user_text, _ = _scripted(chaos, lambda n: [
+        fp.tool('run_command', {'command': chaos.effect_command(n, chaos.hang_command(n))}),
+        fp.text('Continued after the restart.')])
+    chaos.wait_tool_process(nonce)
+    chaos.wait_effect(nonce)
+    drained = chaos.instance.restart_execution_host()
+    print(f'execution host drained in {drained:.1f}s')
+    chaos.assert_contract(conversation, user_text, outcomes={'completed'},
+                          final_text='Continued after the restart.', effects={nonce: 1})
+
+
+def test_execution_host_restart_hands_a_background_command_to_the_next_generation(chaos_restart):
+    """A background command still running at an explicit restart does not hold
+    the old host past its stop budget; it survives the drain by design
+    (docs/modules/task_engine.md, durable background records), the next
+    generation reattaches it, delivers its one result, and never starts it again."""
+    chaos = chaos_restart
+    release = chaos.workspace / f'release-{uuid.uuid4().hex}'
+    conversation, nonce, user_text, _ = _scripted(chaos, lambda n: [
+        fp.tool('run_command', {'command': chaos.effect_command(
+            n, f'while [ ! -e {release.name} ]; do sleep 0.1; done # {TOOL_MARKER}{n}'),
+            'background': True}),
+        fp.text('Started it in the background.'),
+        fp.text('Saw the background result.')])
+    chaos.wait_effect(nonce)
+    chaos.settle(conversation)
+    assert chaos.tool_processes(nonce), 'the background command ended before the restart'
+    drained = chaos.instance.restart_execution_host()
+    print(f'execution host drained in {drained:.1f}s')
+    assert chaos.tool_processes(nonce), 'the restart lost the running background command'
+    release.touch()
+    deadline = time.monotonic() + SETTLE_DEADLINE_S
+    while True:
+        turns = chaos.client.wait_settled(conversation, timeout=SETTLE_DEADLINE_S)
+        answers = [t['projection'].get('content') or '' for t in turns if t.get('actor') == 'assistant']
+        if any('Saw the background result.' in answer for answer in answers):
+            break
+        assert time.monotonic() < deadline, answers
+        time.sleep(0.2)
+    assert sum(answer.count('Saw the background result.') for answer in answers) == 1, answers
+    assert chaos.effect_count(nonce) == 1
+    assert not chaos.tool_processes(nonce), chaos.tool_processes(nonce)
 
 
 def test_execution_host_killed_mid_stream_and_recovered(chaos):

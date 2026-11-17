@@ -737,6 +737,38 @@ the post-trip recovery, the backoff, the crash-storm worker and the hook
 failure. Also `tests/server/test_native_storage_host_state.py` and the
 verdict cases in `tests/server/test_server_manager.py`.
 
+## A shutdown closes the storage runtime
+
+Problem: a host still in boot phase 3 (attaching to a storage owner that
+never published its connection file) received the restart's SIGTERM. The
+shutdown stopped the runtime and ended the in-flight attach, but the boot's
+start loop asked the service for the process runtime on every attempt;
+`stop_storage()` had dropped it, so the next attempt attached through a new
+runtime with a full startup budget. The host finished its shutdown stack in
+0.1 s and then lived on in that thread until the manager killed it at its
+stop budget.
+
+Decision: `stop_storage()` closes the runtime it discards.
+`StorageRuntime.close()` and `StorageSupervisor.close()` stop and then refuse
+every later start with a non-retryable `StorageError`. The supervisor checks
+under the lock that re-arms its stop flags, so a start already on its way in
+cannot undo the close, and an attach cut short by the close reports that
+refusal. The boot loop (`_start_storage_authority_sql`) starts one pinned
+runtime on every attempt, so the refusal ends it. `stop()` still lets a
+later `start()` re-arm, which crash restarts and tests that stop and restart
+storage in one process rely on. Alternatives rejected: a process-wide
+"storage closed" latch (breaks in-process stop/start), checking the shutdown
+event in the boot loop alone (a start can still pass the check and attach
+after the stop), and a shorter attach budget or extra timeout (a tuning knob
+that leaves the race).
+
+Specification: `tests/server/test_execution_drain_during_storage_boot.py` (a
+real execution host stopped during its storage boot drains within the
+manager's budget without a kill) and `tests/storage/test_storage_runtime_close.py`.
+The drain of a host that is serving work is covered by
+`tests/chaos/test_chaos_faults.py` (graceful restart mid-tool, and a
+background command handed to the next generation).
+
 ## Verification and measurement
 
 `tests/server/test_native_storage_service.py` exercises real native clients and

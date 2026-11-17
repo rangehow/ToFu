@@ -18,6 +18,8 @@ from lib import integration_control as ic
 pytestmark = pytest.mark.unit
 
 REPO = Path(__file__).resolve().parents[2]
+# A git tree path of the temporary checkout below, not a repository file.
+_AUDIT_SYNTHETIC_REPO_PATHS = ('static/new.css',)
 
 
 def git(root, *args):

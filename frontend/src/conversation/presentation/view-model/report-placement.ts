@@ -26,6 +26,7 @@ import type { TurnState } from '../../domain/turn-store';
 import type {
   ConversationBlockViewModel,
   CoordinatorReportBlockViewModel,
+  CoordinatorReportFile,
   TextBlockViewModel,
 } from './types';
 
@@ -45,19 +46,40 @@ function isCoordinatorReport(turn: TurnRecordOf | undefined): turn is TurnRecord
   return turn?.actor === 'assistant' && Boolean(coordinatorReportKind(turn.kind));
 }
 
-/** The report Turn ID in one `report_to_user` receipt (JSON text or object), else ''. */
-function receiptTurnId(receipt: unknown): string {
+function receiptRecord(receipt: unknown): Record<string, unknown> | null {
   let value = receipt;
   if (typeof value === 'string') {
     try {
       value = JSON.parse(value);
     } catch {
-      return '';
+      return null;
     }
   }
-  const turnId = value !== null && typeof value === 'object'
-    ? (value as Record<string, unknown>).turnId : undefined;
+  return value !== null && typeof value === 'object' ? value as Record<string, unknown> : null;
+}
+
+/** The report Turn ID in one `report_to_user` receipt (JSON text or object), else ''. */
+function receiptTurnId(receipt: unknown): string {
+  const turnId = receiptRecord(receipt)?.turnId;
   return typeof turnId === 'string' ? turnId : '';
+}
+
+const REPORT_FILE_KINDS = new Set(['file', 'deck', 'document']);
+
+/** The files one `report_to_user` receipt names; malformed entries name nothing. */
+function receiptFiles(receipt: unknown): CoordinatorReportFile[] {
+  const files = receiptRecord(receipt)?.files;
+  if (!Array.isArray(files)) return [];
+  return files.flatMap((entry): CoordinatorReportFile[] => {
+    const file = entry as Record<string, unknown> | null;
+    if (!file || typeof file.artifactId !== 'string' || !file.artifactId
+        || typeof file.filename !== 'string' || !REPORT_FILE_KINDS.has(file.kind as string)) return [];
+    return [{
+      artifactId: file.artifactId, filename: file.filename, kind: file.kind as CoordinatorReportFile['kind'],
+      ...(typeof file.sizeBytes === 'number' ? { sizeBytes: file.sizeBytes } : {}),
+      ...(typeof file.path === 'string' ? { path: file.path } : {}),
+    }];
+  });
 }
 
 const field = (value: unknown, name: string): unknown => (value !== null && typeof value === 'object'
@@ -146,6 +168,7 @@ export function coordinatorReportBlock(
     title: (text.displayMarkdown || text.markdown).split('\n').map((line) => line.trim()).find(Boolean) ?? '',
     createdAt: report.projection.timestamp ?? report.createdAt,
     text,
+    files: [],
   };
 }
 
@@ -160,8 +183,14 @@ export function insertCoordinatorReports(
     const index = blocks.findIndex((block) => block.kind === 'tool'
       && block.name === REPORT_TO_USER_TOOL
       && publishedReportTurnId(block.result, block.round) === report.reportTurnId);
-    if (index < 0) pending.push(report);
-    else blocks.splice(index + 1, 0, report);
+    if (index < 0) {
+      pending.push(report);
+      continue;
+    }
+    const call = blocks[index] as Extract<ConversationBlockViewModel, { kind: 'tool' }>;
+    const files = receiptFiles(field(call.result, 'content'));
+    const attached = files.length ? files : receiptFiles(field(call.round, 'toolContent'));
+    blocks.splice(index + 1, 0, attached.length ? { ...report, files: attached } : report);
   }
   blocks.push(...pending);
 }

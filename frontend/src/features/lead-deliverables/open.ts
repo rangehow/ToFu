@@ -90,11 +90,27 @@ function reportCard(item: LeadDeliverable, ports: DeliverableOpenPorts): HTMLEle
   host.className = 'lead-deliverable-report';
   host.innerHTML = cards.renderCardHtml({
     toolName: 'report_to_user', status: 'done', roundNum: 0,
-    toolArgs: { title: item.title, message: item.summary || '', kind: 'delivery' },
+    toolArgs: { title: item.title, message: item.summary || '', kind: item.reportKind || 'delivery' },
     toolContent: JSON.stringify({ conversationId: item.source?.conversationId || '', turnId: item.source?.turnId || '', published: true }),
   }, { iconHtml: '' });
   host.querySelector('details')?.setAttribute('open', '');
   return host;
+}
+
+/** The files a report attached, each opening the file itself. */
+function reportFiles(item: LeadDeliverable, open: (artifactId: string) => void): HTMLElement | null {
+  if (!item.files?.length) return null;
+  const group = document.createElement('div');
+  group.className = 'lead-deliverable-report__files';
+  group.setAttribute('role', 'list');
+  group.setAttribute('aria-label', t('leadDeliverables.files'));
+  for (const file of item.files) {
+    const chip = createButton({ label: file.filename, variant: 'secondary', size: 'sm', onClick: () => open(file.artifactId) });
+    chip.setAttribute('role', 'listitem');
+    chip.title = file.path || file.filename;
+    group.append(chip);
+  }
+  return group;
 }
 
 export function createDeliverableOpener(ports: DeliverableOpenPorts): DeliverableOpener {
@@ -106,6 +122,11 @@ export function createDeliverableOpener(ports: DeliverableOpenPorts): Deliverabl
 
   function showReport(item: LeadDeliverable) {
     const body = reportCard(item, ports);
+    const files = reportFiles(item, artifactId => {
+      dialog.close(null);
+      ports.openArtifact(artifactId);
+    });
+    if (files) body.append(files);
     const dialog = createDialog({
       title: item.title, body,
       actions: [

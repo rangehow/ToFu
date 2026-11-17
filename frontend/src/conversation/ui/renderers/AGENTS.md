@@ -25,7 +25,8 @@ This directory owns content projection into the Surface-provided node:
 | `usage-recovery-notice.ts` | Read-only usage recovery check, explicit new-budget confirmation and delivery uncertainty; generated API ports only |
 | `workflow-blocks.ts` | Branch, queue and concluded goal-run surfaces |
 | `turn-chrome.ts` | Avatar, header, action datasets and footer; accepted task time delegates to `../task-time-presentations.ts` |
-| `coordinator-report-block.ts` | Coordinator report card in its publishing reply's text area: one folded row (report label, title, time) the reader opens to the body, never the answer toolbar |
+| `coordinator-report-block.ts` | Coordinator report card after its publishing reply's prose: head row (report label, title, time), open by default unless progress, attached-file chips outside the fold, never the answer toolbar |
+| `machine-brief-block.ts` | A project-brain `virtual_user` input as one folded row; the brief renders only when opened |
 | `stable-dom.ts`, `icons.ts`, `localized-copy.ts` | Shared reconciliation and presentation primitives |
 
 ## Dependencies and verification

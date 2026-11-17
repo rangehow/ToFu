@@ -5,13 +5,16 @@ scattered through a long conversation. This module stores nothing: each read
 projects the deliverables from the owners that already hold them
 (docs/PROJECT_COORDINATION.md, "Lead deliverables"):
 
-- delivery reports: the lead's main-lane canonical ``coordinator_report.delivery`` Turns
-  (``coordinator_reports.py``); for the Global Router also the delivery reports
-  relayed to it, named by the relay notices in its Turns (``lib/router/relay.py``)
-  and read from the Project Router's canonical report Turn;
+- reports of every kind: the lead's main-lane canonical ``coordinator_report.*``
+  Turns (``coordinator_reports.py``), each with the files its ``report_to_user``
+  call attached (named by that call's receipt in the publishing reply); for the
+  Global Router also the reports relayed to it, named by the relay notices in
+  its Turns (``lib/router/relay.py``, which also carry the attached files) and
+  read from the Project Router's canonical report Turn;
 - published files, decks (.pptx/.pptd files), rich responses and long-form
   reports: the conversation's artifact rows (``lib/artifacts``), linked to the
-  Turn whose tool round carries their ``artifactId``.
+  Turn whose tool round carries their ``artifactId``. A file a report attached
+  is listed under that report, never again on its own.
 
 Items are pointers: opening one reads the artifact or the report Turn from its
 own owner. Newest first; the cursor names the last item of the previous page
@@ -46,7 +49,9 @@ _CURSOR = re.compile(r'^(\d{1,16}):([0-9a-f]{16})$')
 # inline images and scanner snippets are not.
 DELIVERABLE_SOURCES = frozenset({'response_file', 'rich_response', 'longform-report'})
 _DECK_SUFFIXES = ('.pptx', '.pptd')
-REPORT_TURN_KIND = 'coordinator_report.delivery'
+REPORT_TURN_PREFIX = 'coordinator_report.'
+REPORT_KINDS = frozenset(_DEFS['deliverableItem']['properties']['reportKind']['enum'])
+_REPORT_TOOL = 'report_to_user'
 
 
 def _digest(item_id):
@@ -84,13 +89,58 @@ def _source(conversation_id, turn):
     return source
 
 
-def report_item(turn, *, project_path):
-    """The item of one canonical delivery report Turn (content is ``title\\n\\nmessage``)."""
+def report_kind(turn):
+    """The report kind of a canonical report Turn, else ''."""
+    kind = str(turn.get('kind') or '')
+    value = kind[len(REPORT_TURN_PREFIX):] if kind.startswith(REPORT_TURN_PREFIX) else ''
+    return value if value in REPORT_KINDS and turn.get('actor') == 'assistant' else ''
+
+
+def report_item(turn, *, project_path, files=()):
+    """The item of one canonical report Turn (content is ``title\\n\\nmessage``)."""
     title, _, message = str((turn.get('projection') or {}).get('content') or '').partition('\n\n')
-    return {'id': 'report:' + turn['turnId'], 'kind': 'report',
+    item = {'id': 'report:' + turn['turnId'], 'kind': 'report', 'reportKind': report_kind(turn),
             'title': _clip(title or turn['turnId'], _TITLE_MAX), 'projectPath': project_path or '',
             'createdAt': int(turn.get('createdAt') or 0),
             'source': _source(turn['conversationId'], turn), 'summary': _clip_body(message)}
+    if files:
+        item['files'] = list(files)
+    return item
+
+
+def _receipt(value):
+    """A ``report_to_user`` receipt (JSON text or object), else None."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return None
+    return value if isinstance(value, dict) else None
+
+
+def _file_entries(receipt):
+    files = receipt.get('files') if receipt else None
+    return [{key: entry[key] for key in ('artifactId', 'filename', 'kind', 'sizeBytes', 'path') if key in entry}
+            for entry in files if isinstance(entry, dict) and isinstance(entry.get('artifactId'), str)
+            and isinstance(entry.get('filename'), str) and entry.get('kind') in ('file', 'deck', 'document')
+            ] if isinstance(files, list) else []
+
+
+def report_receipts(projection):
+    """``{report turnId: [reportFile]}`` of the ``report_to_user`` calls one reply made."""
+    found = {}
+    for segment in (projection or {}).get('segments') or []:
+        if isinstance(segment, dict) and segment.get('type') == 'tool_use' and segment.get('name') == _REPORT_TOOL:
+            result = segment.get('result')
+            receipt = _receipt(result.get('content') if isinstance(result, dict) else result)
+            if receipt and isinstance(receipt.get('turnId'), str):
+                found[receipt['turnId']] = _file_entries(receipt)
+    for round_ in (projection or {}).get('toolRounds') or []:
+        if isinstance(round_, dict) and round_.get('toolName') == _REPORT_TOOL:
+            receipt = _receipt(round_.get('toolContent'))
+            if receipt and isinstance(receipt.get('turnId'), str) and not found.get(receipt['turnId']):
+                found[receipt['turnId']] = _file_entries(receipt)
+    return found
 
 
 def artifact_item(artifact, *, project_path='', source=None):
@@ -161,34 +211,45 @@ class DeliverablesPage:
         from lib.router.relay import notice_references
         for text in texts:
             for reference in notice_references(text):
-                if reference['kind'] != 'delivery' or reference['turnId'] in seen:
+                if reference['turnId'] in seen:
                     continue
-                seen.add(reference['turnId'])
                 try:
                     turn = get_turn(reference['coordinatorId'], reference['turnId'])
                 except (LookupError, PermissionError):
                     turn = None  # A deleted or foreign report is no deliverable.
-                if (turn and turn.get('kind') == REPORT_TURN_KIND
+                if (turn and report_kind(turn) and turn.get('kind') == REPORT_TURN_PREFIX + reference['kind']
                         and turn.get('conversationId') == reference['coordinatorId']):
-                    yield report_item(turn, project_path=reference['projectPath'])
+                    seen.add(reference['turnId'])
+                    yield report_item(turn, project_path=reference['projectPath'], files=reference['files'])
 
     def project(self, project_path=''):
         """Every deliverable of the conversation, newest first."""
         owned, turns, artifacts, get_turn = self._ports()
         owned(self.conversation_id, self.owner)
-        items, turn_of_artifact, reports = [], {}, set()
+        items, turn_of_artifact, reports, files_of_report = [], {}, set(), {}
         for turn in turns(self.conversation_id):
-            if turn.get('kind') == REPORT_TURN_KIND and turn.get('actor') == 'assistant':
+            if report_kind(turn):
                 reports.add(turn['turnId'])
                 items.append(report_item({**turn, 'conversationId': self.conversation_id},
                                          project_path=project_path))
                 continue
+            for report_id, files in report_receipts(turn.get('projection')).items():
+                files_of_report.setdefault(report_id, files)
             artifact_ids, texts = [], []
             _scan(turn.get('projection'), artifact_ids, texts)
             for artifact_id in artifact_ids:
                 turn_of_artifact[artifact_id] = turn  # Read newest first: the oldest mention publishes it.
             items.extend(self._relayed(texts, get_turn, reports))
+        attached = set()
+        for item in items:
+            # A report Turn is published while its reply runs, so the receipt naming it is read later.
+            files = item.get('files') or files_of_report.get(item['source']['turnId'] if item['source'] else '')
+            if files:
+                item['files'] = files
+                attached.update(entry['artifactId'] for entry in files)
         for row in artifacts(self.conversation_id):
+            if row.get('id') in attached:
+                continue
             turn = turn_of_artifact.get(row.get('id'))
             item = artifact_item(row, project_path=project_path,
                                  source=_source(self.conversation_id, turn) if turn else None)

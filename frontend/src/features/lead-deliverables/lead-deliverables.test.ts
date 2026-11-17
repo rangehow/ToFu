@@ -146,3 +146,46 @@ it('the item model matches the server projection identities', () => {
   expect(appendDeliverables([item(1)], [item(1), item(2)]).map(entry => entry.id)).toEqual(['report:t1', 'report:t2']);
   expect(deliverableProject('/a/b/tofu/')).toBe('tofu');
 });
+
+/* Owner request 2026-11-17: the section lists what the lead sent the owner,
+ * every report with the files it attached, open until the owner folds it. */
+it('names each report by its kind and opens its attached files from chips', async () => {
+  const files = [{ artifactId: 'pdf', filename: 'resume.pdf', kind: 'file' as const, path: 'out/resume.pdf' },
+    { artifactId: 'deck', filename: 'talk.pptx', kind: 'deck' as const }];
+  const { view, opened } = list(new Map([['', { conversationId: 'lead', nextCursor: null, items: [
+    item(1, { reportKind: 'delivery', files }), item(2, { reportKind: 'decision' })] }]]));
+  view.show({ leadId: 'lead', path: '/work/tofu' });
+  await flush();
+  const [delivered, decision] = [...document.querySelectorAll<HTMLElement>('.lead-deliverable')];
+  expect(delivered.querySelector('.lead-deliverable__kind')!.textContent).toBe('leadDeliverables.reportKind.delivery');
+  expect(decision.dataset.reportKind).toBe('decision');
+  expect(decision.querySelector('.lead-deliverable__files')).toBeNull();
+  const chips = [...delivered.querySelectorAll<HTMLButtonElement>('.lead-deliverable__file')];
+  expect(chips.map(chip => [chip.textContent, chip.title])).toEqual([['resume.pdf', 'out/resume.pdf'], ['talk.pptx', 'talk.pptx']]);
+  chips[1].click();
+  expect(opened).toEqual(['artifact:deck']);
+});
+
+it('is open by default and remembers a fold', async () => {
+  const view = createLeadDeliverables({
+    read: async () => ({ conversationId: 'lead', items: [], nextCursor: null }),
+    subscribe: () => () => {}, onReconnect: () => () => {},
+    opener: { open: () => true, openSource: () => true }, readExpanded: () => null,
+  });
+  document.body.append(view.root);
+  view.show({ leadId: 'lead', path: '' });
+  await flush();
+  expect(view.root.querySelector('.lead-deliverables__toggle')!.getAttribute('aria-expanded')).toBe('true');
+});
+
+it('the report dialog shows the report kind and opens attached files', () => {
+  const { calls, open } = ports();
+  createDeliverableOpener(open).open(item(4, { reportKind: 'progress',
+    files: [{ artifactId: 'md', filename: 'notes.md', kind: 'document' }] }));
+  const dialog = document.querySelector<HTMLDialogElement>('dialog.lead-deliverable-dialog')!;
+  const chip = dialog.querySelector<HTMLButtonElement>('.lead-deliverable-report__files button')!;
+  expect(chip.textContent).toBe('notes.md');
+  chip.click();
+  expect(calls.artifact).toEqual(['md']);
+  expect(dialog.hasAttribute('open')).toBe(false);
+});

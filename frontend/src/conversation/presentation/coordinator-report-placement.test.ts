@@ -116,6 +116,23 @@ describe('coordinator report placement', () => {
     expect(second).toMatchObject({ reportKind: 'delivery', title: 'report-2 title', createdAt: 60 });
   });
 
+  it('gives a report the files its call attached, named by the call receipt', () => {
+    const files = [{ artifactId: 'art-1', filename: 'resume.pdf', kind: 'file', sizeBytes: 9, path: 'out/resume.pdf' },
+      { artifactId: '', filename: 'forged', kind: 'file' }, { artifactId: 'x', filename: 'odd', kind: 'exe' }];
+    const attaching = { ...publish('p1'), result: { status: 'done', content: JSON.stringify({
+      conversationId: 'c', published: true, turnId: 'report-1', files }) } };
+    const value = state([
+      request,
+      reply('running', [attaching, publish('p2', 'report-2')]),
+      report('report-1', 3, 50, 'reply', 'delivery'),
+      report('report-2', 4, 60, 'report-1'),
+    ], [attempt('reply')]);
+    const reports = lane(value).turns[1]!.blocks.flatMap((block) => (
+      block.kind === 'coordinator-report' ? [block.files] : []));
+    expect(reports).toEqual([
+      [{ artifactId: 'art-1', filename: 'resume.pdf', kind: 'file', sizeBytes: 9, path: 'out/resume.pdf' }], []]);
+  });
+
   it('reads the receipt from the live round before the segment checkpoint carries it', () => {
     // The task projection stores the call's receipt on its round at once; the
     // segment's own result stays `searching` until the next checkpoint.

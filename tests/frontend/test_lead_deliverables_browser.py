@@ -5,9 +5,12 @@ conversation; in the studio, clicking a deliverable only opened the lead's class
 real Coordinator publishes a deck and a file through the response-file publisher and a delivery
 report through CoordinatorReports; the classic sidebar lists them newest first, projected from those
 owners (no store of its own), a click opens the deliverable itself and "Go to message" opens the exact Turn; the studio's
-desk opens the same report card. Screenshots land in output/playwright/lead-deliverables/<label>/
+desk opens the same report card. Owner request 2026-11-17: the section lists every report with its kind
+and the files its report_to_user call attached (chips, also on the report card in the conversation),
+and an automatic continuation brief reads as one folded row. Screenshots land in output/playwright/lead-deliverables/<label>/
 (LEAD_DELIVERABLES_SHOT_LABEL, default "after").
 """
+import json
 import os
 import re
 from pathlib import Path
@@ -53,6 +56,24 @@ def _seed(page, tmp_path, monkeypatch):
         publishing.append(append_settled_turn(leader, user_id=1, command_id='publish-' + uuid.uuid4().hex[:8], actor='assistant',
                             kind='message', projection={'content': f'Published {name}', 'toolRounds': [
                                 {'results': [{'meta': {'artifactId': published['id'], 'responseFile': published}}]}]})['turn']['turnId'])
+    # An automatic continuation brief, then a progress report whose call attached a file: the
+    # reply that made the call keeps the receipt naming it (lib/conversations/coordinator_tools.py).
+    append_settled_turn(leader, user_id=1, command_id='brief-' + uuid.uuid4().hex[:8], actor='virtual_user',
+                        kind='input', projection={'content': 'Continue the request. ' + 'Board state. ' * 400,
+                                                  'origin': {'blockId': 'origin', 'initiator': 'brain'}})
+    (tmp_path / 'Shop' / 'resume.md').write_text('# Resume\n\nFinal version.\n')
+    attached = publish_file(str(tmp_path / 'Shop' / 'resume.md'), conv_id=leader, user_id=1, roots=[project])
+    scope = {'owner': 1, 'projectPath': project, 'coordinatorId': leader, 'bindingRevision': binding['revision']}
+    progress = CoordinatorReports(1, project).publish(scope, {
+        'title': 'Resume ready', 'message': 'Final version attached.', 'kind': 'progress',
+        'idempotency_key': 'progress-' + uuid.uuid4().hex[:8]})
+    file_ref = {'artifactId': attached['id'], 'filename': 'resume.md', 'kind': 'document',
+                'sizeBytes': attached['sizeBytes'], 'path': 'resume.md'}
+    call = {'type': 'tool_use', 'blockId': 'tool:call-report', 'id': 'call-report', 'name': 'report_to_user',
+            'input': '{}', 'result': {'status': 'done', 'content': json.dumps(
+                {'conversationId': leader, 'turnId': progress['turnId'], 'published': True, 'files': [file_ref]})}}
+    append_settled_turn(leader, user_id=1, command_id='reply-' + uuid.uuid4().hex[:8], actor='assistant',
+                        kind='message', projection={'content': 'Reported.', 'segments': [call]})
     receipt = CoordinatorReports(1, project).publish(
         {'owner': 1, 'projectPath': project, 'coordinatorId': leader, 'bindingRevision': binding['revision']},
         {'title': TITLE, 'message': '**Outcome**: login no longer drops on Safari.\n- Merged to main\n- Regression suite green',
@@ -77,13 +98,17 @@ def test_classic_sidebar_lists_and_opens_a_leads_deliverables(page, monkeypatch,
     section = page.locator('#projectCoordinatorEntry + .lead-deliverables-slot .lead-deliverables')
     expect(section).to_be_visible()
     toggle = section.locator('.lead-deliverables__toggle')
-    expect(toggle).to_contain_text('Deliverables')
-    if toggle.get_attribute('aria-expanded') != 'true':
-        toggle.click()
+    expect(toggle).to_contain_text('Reports & files')
+    # Open until the owner folds it.
+    expect(toggle).to_have_attribute('aria-expanded', 'true')
     rows = section.locator('.lead-deliverable')
-    expect(rows).to_have_count(3)
-    # Newest first: the report, then the file, then the deck published first.
-    assert rows.evaluate_all('rows => rows.map(row => row.dataset.kind)') == ['report', 'file', 'deck']
+    expect(rows).to_have_count(4)
+    # Newest first: the delivery, the progress report, then the file and the deck published first.
+    # The attached resume is listed under its report, never again on its own.
+    assert rows.evaluate_all('rows => rows.map(row => row.dataset.reportKind || row.dataset.kind)') == [
+        'delivery', 'progress', 'file', 'deck']
+    expect(rows.nth(0).locator('.lead-deliverable__kind')).to_have_text('Delivered')
+    expect(rows.nth(1).locator('.lead-deliverable__file')).to_have_text('resume.md')
     expect(rows.first.locator('.lead-deliverable__title')).to_have_text(TITLE)
     # Title, project and time ("now" / "1 minute ago" for items just published).
     expect(rows.first.locator('.lead-deliverable__meta')).to_have_text(re.compile(r'^Shop · \S.*'))
@@ -104,13 +129,32 @@ def test_classic_sidebar_lists_and_opens_a_leads_deliverables(page, monkeypatch,
     _settle(page)
     page.screenshot(path=str(OUTPUT / 'classic-report-source-turn.png'), animations='disabled')
 
+    # In the conversation the brief is one folded row and the progress report shows its file chip.
+    brief = page.locator('#chatInner .conversation-machine-brief').first
+    expect(brief).to_be_visible()
+    expect(brief.locator('details.conversation-machine-brief__fold')).to_have_js_property('open', False)
+    assert brief.bounding_box()['height'] < 80
+    report_chip = page.locator('#chatInner .conversation-coordinator-report__file', has_text='resume.md')
+    expect(report_chip).to_be_visible()
+    report_chip.scroll_into_view_if_needed()
+    _settle(page)
+    page.screenshot(path=str(OUTPUT / 'classic-report-file-chip.png'), animations='disabled')
+    report_chip.click()
+    expect(page.locator('#artifactPanel, .artifact-panel').first).to_be_visible()
+    _settle(page)
+    page.screenshot(path=str(OUTPUT / 'classic-report-file-panel.png'), animations='disabled')
+
+    # The sidebar chip opens the same file.
+    rows.nth(1).locator('.lead-deliverable__file').click()
+    expect(page.locator('#artifactPanel, .artifact-panel').first).to_be_visible()
+
     # A published deck opens in the artifact panel.
-    rows.nth(2).locator('.lead-deliverable__open').click()
+    rows.nth(3).locator('.lead-deliverable__open').click()
     expect(page.locator('#artifactPanel, .artifact-panel').first).to_be_visible()
     _settle(page)
     page.screenshot(path=str(OUTPUT / 'classic-deck-panel.png'), animations='disabled')
     # And its link back to the message that published it.
-    rows.nth(2).locator('.lead-deliverable__source').click()
+    rows.nth(3).locator('.lead-deliverable__source').click()
     expect(page.locator(f'#chatInner [data-turn-id="{deck_turn}"]').first).to_be_visible()
     _settle(page)
     page.screenshot(path=str(OUTPUT / 'classic-deck-source-turn.png'), animations='disabled')

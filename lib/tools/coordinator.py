@@ -124,9 +124,18 @@ COORDINATOR_TOOLS.append(_tool('report_to_user',
     'Never ask for permission the system already grants (reviewing, merging or publishing verified '
     'work, retries, re-delegation, cost) and never present internal pending work (reviews, dependencies, delivery) as the human\'s task. '
     'Title is a short plain-text summary; message contains the outcome, evidence and next action. '
+    'Attach every file the human should open (resume, deck, document, report, table) with files: '
+    'the human finds deliverables through these attachments, never by searching paths in your message. '
     'This grants no work or authority. Retry unchanged content with the same idempotency_key. '
     'Sending a report is not proof the human has read or agreed to it.',
-    _report['properties'], _report['required']))
+    {**_report['properties'], 'files': {
+        'type': 'array', 'uniqueItems': True,
+        'items': {'type': 'string', 'minLength': 1,
+                  'maxLength': _REPORT_CONTRACT['$defs']['reportFile']['properties']['path']['maxLength']},
+        'description': 'Paths of existing files in this project to attach (PDF, Office, Markdown, HTML, SVG, '
+                       'text or ZIP). Each is published as a file the human opens from the report and the '
+                       'sidebar. The whole report is refused if any file cannot be published.'}},
+    _report['required']))
 
 # The human follows progress only through this board, so its schema is the
 # contract the browser renders. Inline the task item: tool schemas carry no $defs.

@@ -129,7 +129,7 @@ def test_a_billing_stop_signal_names_the_refused_key_not_the_last_good_round(wor
         source='llm-stream', retryable=False,
         detail='API HTTP 402: {"status":402,"message":"credit exhausted"}',
         extensions={'billingStop': {
-            'providerId': 'example-corp', 'credentialId': 'cred-synthetic',
+            'providerId': 'sankuai', 'credentialId': 'cred-synthetic',
             'deploymentId': 'dep-synthetic', 'model': 'kimi-k3.1-pro',
             'keyTail': 'x1y2', 'statusCode': 402, 'scope': 'key',
             'observedAtMs': 1794232054000}},

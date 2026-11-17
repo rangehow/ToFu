@@ -262,7 +262,11 @@ def _ensure_rootfs() -> None:
     if not os.path.isfile(tarball):
         _download(_UBUNTU_BASE_URL, tarball, _UBUNTU_BASE_SHA256)
     os.makedirs(rootfs, exist_ok=True)
-    _run(['tar', '-xzf', tarball, '-C', rootfs])
+    # -p: under a 077 umask (this host's) tar strips the rootfs to 0700
+    # and proot -0 then refuses to exec guest binaries (`id: Permission
+    # denied`, apt: "gpgv ... neither seems installed"), measured
+    # 2026-11-17.
+    _run(['tar', '-p', '-xzf', tarball, '-C', rootfs])
 
 
 def _apt_key_patched() -> bool:
@@ -328,7 +332,7 @@ def _ensure_wine_tree() -> None:
     if not os.path.isfile(tarball):
         _download(_WINE_URL, tarball, _WINE_SHA256)
     os.makedirs(dest, exist_ok=True)
-    _run(['tar', '-xJf', tarball, '-C', dest, '--strip-components=1'])
+    _run(['tar', '-p', '-xJf', tarball, '-C', dest, '--strip-components=1'])
     _strip_preloaders(dest)
 
 

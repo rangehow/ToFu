@@ -817,9 +817,15 @@ Decision: restarts deploy only certified engines.
   checks 623-4,011 s each), then the ordinary preparation deploys the new
   record. Fixture: this checkout's own store when no engine holds its `LOCK`
   (a stopped server), else the newest record's fixture whose `CONTROL` still
-  matches; the work root is `packages/tofu-db/target/engine-certify-work`.
-  Uncommitted engine inputs or contracts, no settled fixture, a work root on
-  another filesystem, or a failing gate refuse with one actionable line before
+  matches. Problem: a recorded fixture can be on a different filesystem from
+  the checkout, while snapshots require hard links. Decision: use
+  `packages/tofu-db/target/engine-certify-work` on the same device, otherwise
+  create a private work root beside the fixture (outside the authority).
+  The gate retains failed work for diagnosis; empty private wrappers are
+  removed. Alternatives rejected: copying a large fixture or bypassing the
+  certification gate to permit restart.
+  Uncommitted engine inputs or contracts, no settled fixture, inability to
+  create a work root on its filesystem, or a failing gate refuse with one actionable line before
   the manager is asked to stop anything. The operator override skips it; the
   in-app restart and the manager's own spawns do not run it.
 - **Automatic spawns** (crash, planned and lease recovery) prepare only the

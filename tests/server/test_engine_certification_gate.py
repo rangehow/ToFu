@@ -456,7 +456,9 @@ def _serverctl(project: Path, monkeypatch, *, running: bool):
 
 
 @pytest.mark.parametrize('door', ['start', 'restart'])
-def test_a_normal_start_certifies_and_deploys_heads_engine_after_an_ir_change(project, monkeypatch, door):
+@pytest.mark.parametrize('cross_filesystem', [False, True])
+def test_a_normal_start_certifies_and_deploys_heads_engine_after_an_ir_change(
+        project, monkeypatch, door, cross_filesystem):
     dest, authority = _ir_only_change_after_deployment(project, monkeypatch)
     if door == 'restart':
         # The running server holds its store; the last record's intact fixture is used instead.
@@ -475,7 +477,36 @@ def test_a_normal_start_certifies_and_deploys_heads_engine_after_an_ir_change(pr
     with pytest.raises(engines.UncertifiedEngineRefusedError):
         engines.prepare(project)  # what the start hit before: no record for HEAD's new contract
     ran = []
-    monkeypatch.setattr(engines, '_run_engine_gate', _gate(project, ran))
+    managed_work = project / engines.MANAGED_ENGINE_ROOT / 'engine-certify-work'
+    if cross_filesystem:
+        # Model the production checkout mount separately from the recorded fixture.
+        from types import SimpleNamespace
+        real_stat = Path.stat
+
+        def stat(path, *args, **kwargs):
+            result = real_stat(path, *args, **kwargs)
+            return SimpleNamespace(st_dev=result.st_dev + 1) if path == managed_work else result
+
+        monkeypatch.setattr(Path, 'stat', stat)
+    work_roots = []
+    gate = _gate(project, ran)
+
+    def run_gate(root, commit, selected_fixture, work_root):
+        work_roots.append(work_root)
+        assert selected_fixture == fixture
+        assert work_root.stat().st_dev == fixture.stat().st_dev
+        if cross_filesystem:
+            assert work_root.parent == fixture.parent
+            assert not work_root.is_relative_to(fixture)
+        else:
+            assert work_root == managed_work
+        # Exercise the gate's actual filesystem requirement, not just its device check.
+        link = work_root / 'control-link'
+        link.hardlink_to(fixture / 'CONTROL')
+        link.unlink()
+        return gate(root, commit, fixture, work_root)
+
+    monkeypatch.setattr(engines, '_run_engine_gate', run_gate)
     serverctl, posted = _serverctl(project, monkeypatch, running=door == 'restart')
 
     if door == 'start':
@@ -486,6 +517,8 @@ def test_a_normal_start_certifies_and_deploys_heads_engine_after_an_ir_change(pr
     head = engines.source_fingerprint(project)
     contract = engines.storage_contract_sha256(project)
     assert ran == [(subprocess_head(project), fixture)]
+    if cross_filesystem:
+        assert not work_roots[0].exists()
     assert posted == [door]  # the manager is asked only after the engine is certified
     record, _problem = certification.passing_record(project, head, contract)
     assert record is not None
@@ -494,6 +527,40 @@ def test_a_normal_start_certifies_and_deploys_heads_engine_after_an_ir_change(pr
         assert json.loads((dest.parent / 'build.json').read_text())['storage_contract_sha256'] == contract
     assert engines.prepare(project) is (door == 'restart')
     engines.verify_admissible(dest, project)
+
+
+@pytest.mark.parametrize('failure', ['gate', 'work-root'])
+def test_cross_filesystem_certification_preserves_failure_and_fixture(tmp_path, monkeypatch, failure):
+    from types import SimpleNamespace
+    root = tmp_path / 'checkout'
+    fixture = tmp_path / 'snapshot' / 'fixture'
+    fixture.mkdir(parents=True)
+    control = fixture / 'CONTROL'
+    control.write_text('unchanged fixture')
+    managed = root / engines.MANAGED_ENGINE_ROOT / 'engine-certify-work'
+    real_stat = Path.stat
+
+    def stat(path, *args, **kwargs):
+        result = real_stat(path, *args, **kwargs)
+        return SimpleNamespace(st_dev=result.st_dev + 1) if path == managed else result
+
+    monkeypatch.setattr(Path, 'stat', stat)
+    if failure == 'work-root':
+        def denied(**kwargs):
+            raise PermissionError('fixture parent is read-only')
+        monkeypatch.setattr(engines.tempfile, 'mkdtemp', denied)
+        with pytest.raises(engines.EnginePreparationError, match='nothing was stopped.*read-only'):
+            with engines._certification_work_root(root, fixture):
+                pytest.fail('no gate may run without a work root')
+    else:
+        with pytest.raises(RuntimeError, match='gate failed'):
+            with engines._certification_work_root(root, fixture) as work:
+                evidence = work / 'failed-run'
+                evidence.mkdir()
+                (evidence / 'report').write_text('failure evidence')
+                raise RuntimeError('gate failed')
+        assert (evidence / 'report').read_text() == 'failure evidence'
+    assert control.read_text() == 'unchanged fixture'
 
 
 def subprocess_head(root: Path) -> str:

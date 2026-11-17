@@ -98,6 +98,7 @@ def _memory_document_text(mem: dict[str, Any], include_body: bool = False) -> st
     parts = [
         mem.get('name', ''),
         mem.get('description', ''),
+        mem.get('trigger', ''),
     ]
     tags = mem.get('tags', [])
     if isinstance(tags, list):

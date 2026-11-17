@@ -55,6 +55,7 @@ _MEMORY_RETRIEVAL_RECORD_KEYS = (
     'id',
     'name',
     'description',
+    'trigger',
     'enabled',
     'tags',
     'scope',
@@ -426,6 +427,7 @@ def _memory_from_file(filepath, scope='global', package_dir=None,
                     memory_id.replace('_', ' ').replace('-', ' ').title()),
         'description': str(_copy_metadata_value(
             meta.get('description')) or ''),
+        'trigger': str(_copy_metadata_value(meta.get('trigger')) or ''),
         'enabled': _copy_metadata_value(meta.get('enabled', True)),
         'tags': _coerce_str_list(meta.get('tags')),
         'requires_bins': legacy_bins or pkg_meta['requires_bins'],
@@ -478,6 +480,8 @@ def _write_memory_file(filepath, mem):
         'created': mem.get('created', now),
         'updated': now,
     }
+    if mem.get('trigger'):
+        meta['trigger'] = mem['trigger']
     if mem.get('requires_bins'):
         meta['requires_bins'] = mem['requires_bins']
     if mem.get('requires_env'):

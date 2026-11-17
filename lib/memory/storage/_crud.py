@@ -22,6 +22,7 @@ from lib.memory.contracts import (
     MEMORY_SOURCE_CLASSES,
     normalize_memory_payload,
     normalize_memory_tags,
+    normalize_memory_trigger,
     normalize_memory_updates,
     normalize_merge_memory_ids,
     truncate_utf8,
@@ -652,11 +653,12 @@ def _write_provenance(provenance):
 
 
 def create_memory(name, description='', body='', tags=None, scope='global', project_path=None,
-                  *, provenance=None):
+                  *, provenance=None, trigger=''):
     """Create one bounded memory atomically; return its storage record.
 
     ``provenance`` comes from the write path (the model tool handler or the
-    owner's API route), never from model arguments.
+    owner's API route), never from model arguments. ``trigger`` is the
+    situation the lesson applies in (``lib/memory/triggers.py``).
     """
     name, description, body, tags, scope = normalize_memory_payload(
         name=name,
@@ -665,7 +667,8 @@ def create_memory(name, description='', body='', tags=None, scope='global', proj
         tags=tags,
         scope=scope,
     )
-    refuse_secret_shapes({'name': name, 'description': description,
+    trigger = normalize_memory_trigger(trigger)
+    refuse_secret_shapes({'name': name, 'description': description, 'trigger': trigger,
                           'body': body, 'tags': tags})
     provenance = _write_provenance(provenance)
     if description and len(description.strip()) < MIN_DESCRIPTION_LENGTH:
@@ -683,16 +686,16 @@ def create_memory(name, description='', body='', tags=None, scope='global', proj
                 break
 
     return _publish_new_memory(
-        _new_memory_record(name, description, body, tags, scope, provenance),
+        _new_memory_record(name, description, body, tags, scope, provenance, trigger=trigger),
         resolve_target_dir(scope, project_path))
 
 
 def _new_memory_record(name, description, body, tags, scope, provenance,
-                       recurrences=None):
+                       recurrences=None, *, trigger=''):
     now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
     return {
         'id': _make_memory_id(name), 'name': name, 'description': description,
-        'enabled': True, 'tags': tags,
+        'trigger': trigger, 'enabled': True, 'tags': tags,
         'requires_bins': [], 'requires_env': [],
         'created': now, 'updated': now, 'body': body, 'scope': scope,
         'status': 'active', 'status_reason': '', 'superseded_by': {},
@@ -719,7 +722,7 @@ def _publish_new_memory(mem, dirpath):
     return mem
 
 
-_CONTENT_KEYS = ('name', 'description', 'body', 'tags')
+_CONTENT_KEYS = ('name', 'description', 'trigger', 'body', 'tags')
 _UPDATABLE_KEYS = _CONTENT_KEYS + (
     'enabled', 'requires_bins', 'requires_env', 'sensitive',
     'status', 'status_reason', 'superseded_by')
@@ -785,15 +788,15 @@ def supersede_memory(memory_id, updates, project_path=None, extra_paths=None,
     lesson's mistake again; recurrences carry forward along the chain, so the
     current version's ``recurrences`` is the lesson's repeat count.
 
-    ``updates`` holds content fields only (name, description, body, tags);
-    omitted fields keep the predecessor's value. Returns
+    ``updates`` holds content fields only (name, description, trigger, body,
+    tags); omitted fields keep the predecessor's value. Returns
     ``(successor, predecessor)`` or ``None`` when no lesson has this ID.
     """
     memory_id = validate_memory_id(memory_id)
     updates = normalize_memory_updates(updates)
     extra = sorted(set(updates) - set(_CONTENT_KEYS))
     if extra:
-        raise BadRequest('A new version changes name, description, body or tags only; '
+        raise BadRequest('A new version changes name, description, trigger, body or tags only; '
                          f'not {", ".join(extra)}', field=extra[0])
     refuse_secret_shapes(updates)
     edit = _write_provenance(provenance)
@@ -816,8 +819,8 @@ def supersede_memory(memory_id, updates, project_path=None, extra_paths=None,
                 + '. Correct or repeat the current version instead.', field='memory_id')
         content = {key: updates.get(key, old.get(key)) for key in _CONTENT_KEYS}
         if not recurrence and all(content[key] == old.get(key) for key in _CONTENT_KEYS):
-            raise BadRequest('Nothing to correct: the name, description, body and tags are '
-                             'unchanged', field='body')
+            raise BadRequest('Nothing to correct: the name, description, trigger, body and '
+                             'tags are unchanged', field='body')
         name, description, body, tags, scope = normalize_memory_payload(
             name=content['name'], description=content['description'] or '',
             body=content['body'] or '', tags=content['tags'] or [], scope=old['scope'])
@@ -828,7 +831,8 @@ def supersede_memory(memory_id, updates, project_path=None, extra_paths=None,
             raise _revision_conflict(memory_id)
         successor = _publish_new_memory(
             _new_memory_record(name, description, body, tags, scope,
-                               {**edit, 'supersedes': memory_id}, recurrences),
+                               {**edit, 'supersedes': memory_id}, recurrences,
+                               trigger=normalize_memory_trigger(content['trigger'] or '')),
             os.path.dirname(old['filepath']))
         old.update(status='superseded', status_reason='stale',
                    superseded_by={'item_id': successor['id']},
@@ -953,7 +957,7 @@ def clear_memories(project_path=None, extra_paths=None, *, dry_run=False):
 
 
 def merge_memories(memory_ids, name, description, body, tags=None, scope='project', project_path=None,
-                   extra_paths=None, *, provenance=None):
+                   extra_paths=None, *, provenance=None, trigger=''):
     """Merge multiple memories into one new consolidated memory, deleting the originals.
 
     Source memories are located across the primary + extra roots; the new
@@ -1007,6 +1011,7 @@ def merge_memories(memory_ids, name, description, body, tags=None, scope='projec
             scope=scope,
             project_path=project_path,
             provenance=provenance,
+            trigger=trigger,
         )
 
         deleted_ids = []

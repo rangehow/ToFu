@@ -99,7 +99,7 @@ def _memory_create(fn_args, project_path, extra_paths=None, *, task=None):
             return content, '🔎 check repeats', f"🔎 Memory: {fn_args.get('name', '?')}"
     provenance = _agent_provenance(task)
     if repeat_of and repeat_of != MEMORY_RECORD_AS_NEW:
-        updates = {key: fn_args[key] for key in ('name', 'description', 'body', 'tags')
+        updates = {key: fn_args[key] for key in ('name', 'description', 'trigger', 'body', 'tags')
                    if fn_args.get(key) is not None}
         result = supersede_memory(repeat_of, updates, project_path, extra_paths,
                                   provenance={**provenance, 'recorded_as': 'repeat'},
@@ -116,6 +116,7 @@ def _memory_create(fn_args, project_path, extra_paths=None, *, task=None):
     mem = create_memory(
         name=fn_args.get('name', 'Untitled Memory'),
         description=fn_args.get('description', ''),
+        trigger=fn_args.get('trigger', ''),
         body=fn_args.get('body', ''),
         tags=fn_args.get('tags', []),
         scope=(fn_args.get('scope')
@@ -131,7 +132,7 @@ def _memory_create(fn_args, project_path, extra_paths=None, *, task=None):
     return content, '💡 saved', f"💡 Memory: {fn_args.get('name', '?')}"
 
 
-_CLAIM_FIELDS = ('name', 'description', 'body')
+_CLAIM_FIELDS = ('name', 'description', 'trigger', 'body')
 _LIFECYCLE_FIELDS = ('status', 'status_reason', 'superseded_by')
 
 
@@ -166,7 +167,7 @@ def _memory_update(fn_args, project_path, extra_paths=None, *, task=None):
     updates = {k: v for k, v in fn_args.items() if k in _MODEL_UPDATE_FIELDS and v is not None}
     if any(key in updates for key in _CLAIM_FIELDS):
         if any(key in updates for key in _LIFECYCLE_FIELDS):
-            raise ValueError('A correction (name, description or body) is saved as a new '
+            raise ValueError('A correction (name, description, trigger or body) is saved as a new '
                              'version; change status in a separate update_memory call')
         result = supersede_memory(sid, updates, project_path, extra_paths,
                                   provenance=_agent_provenance(task))
@@ -213,6 +214,7 @@ def _memory_merge(fn_args, project_path, extra_paths=None, *, task=None):
         memory_ids=fn_args.get('memory_ids', []),
         name=fn_args.get('name', 'Merged Memory'),
         description=fn_args.get('description', ''),
+        trigger=fn_args.get('trigger', ''),
         body=fn_args.get('body', ''),
         # ``None`` means derive the union from source memories; an explicit
         # empty list intentionally clears tags on the replacement.

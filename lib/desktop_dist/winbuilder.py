@@ -727,7 +727,10 @@ def _render_nsi(version: str, payload_dir: str, out_file: str,
     t = _NSI_TARGETS[target]
     with open(_NSI_TEMPLATE, encoding='utf-8') as f:
         text = f.read()
-    asset_dir = os.path.join(_REPO_ROOT, 'static', 'icons')
+    # tofu.ico is generated and gitignored (scripts/gen_desktop_icons.py
+    # runs inside the payload build), so it is taken from the payload built
+    # from the same commit, never from whatever the checkout happens to hold.
+    asset_dir = os.path.join(payload_dir, '_internal', 'static', 'icons')
     text = (text.replace('@APP_VERSION@', version)
                 .replace('@PAYLOAD_DIR@', payload_dir)
                 .replace('@OUT_FILE@', out_file)

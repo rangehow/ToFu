@@ -42,6 +42,19 @@ def _makensis() -> str | None:
     return None
 
 
+def _stub_payload(tmp_path, tgt) -> Path:
+    """The payload's shape: exe, _internal/, and the generated app icon
+    the wrapper takes from it."""
+    from PIL import Image
+    payload = tmp_path / 'payload'
+    icons = payload / '_internal' / 'static' / 'icons'
+    icons.mkdir(parents=True)
+    (payload / tgt['exe']).write_bytes(b'MZ stub')
+    (payload / '_internal' / 'x.txt').write_text('x')
+    Image.new('RGBA', (32, 32), (200, 160, 90, 255)).save(icons / 'tofu.ico')
+    return payload
+
+
 @pytest.fixture(scope='module')
 def makensis():
     exe = _makensis()
@@ -55,10 +68,7 @@ def test_rendered_template_compiles(makensis, tmp_path):
     tgt = wb._TARGETS[target]
     # Stub payload: the File /r glob and the exe-existence checks only
     # need the shape, not the 87-309 MB real thing.
-    payload = tmp_path / 'payload'
-    (payload / '_internal').mkdir(parents=True)
-    (payload / tgt['exe']).write_bytes(b'MZ stub')
-    (payload / '_internal' / 'x.txt').write_text('x')
+    payload = _stub_payload(tmp_path, tgt)
     art_dir = tmp_path / 'art'
     installer_art.render(str(art_dir),
                          wb._NSI_TARGETS[target]['app_name'], '0.16.0')
@@ -82,10 +92,7 @@ def test_diag_variant_compiles(makensis, tmp_path):
     define, a syntax error inside the ifdef branches would only surface
     when someone builds the diagnostic installer mid-incident."""
     tgt = wb._TARGETS['full']
-    payload = tmp_path / 'payload'
-    (payload / '_internal').mkdir(parents=True)
-    (payload / tgt['exe']).write_bytes(b'MZ stub')
-    (payload / '_internal' / 'x.txt').write_text('x')
+    payload = _stub_payload(tmp_path, tgt)
     art_dir = tmp_path / 'art'
     installer_art.render(str(art_dir),
                          wb._NSI_TARGETS['full']['app_name'], '0.16.0')

@@ -24,6 +24,22 @@ from lib.tools.gateway import search_executable_catalog
 pytestmark = pytest.mark.unit
 
 
+class _NoLiveMcpBridge:
+    """An owner bridge with no connected server: catalog MCP schemas stay as declared."""
+
+    def tool_catalog_generation(self):
+        return 0
+
+    def get_tool_info(self, name):
+        return None
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_mcp_bridge(monkeypatch):
+    import lib.mcp
+    monkeypatch.setattr(lib.mcp, 'get_bridge', lambda owner: _NoLiveMcpBridge())
+
+
 def _tool(name, *, description=''):
     return {
         'type': 'function',
@@ -326,7 +342,7 @@ def test_handler_uses_final_wire_projection_not_broader_assembly_schema(
     monkeypatch.setattr(handler, '_finalize', lambda *args, **kwargs: None)
     catalog = _xuecheng_catalog()
     task = {
-        'id': 'task-visible-tools', 'model': 'test',
+        'id': 'task-visible-tools', 'model': 'test', '_userId': 1,
         '_executable_tool_catalog': catalog,
         # Assembly proposed both tools, but the provider budget retained only
         # read_doc. The final wire projection is the visibility authority.
@@ -356,7 +372,7 @@ def test_fail_open_directory_still_omits_visible_tools(monkeypatch):
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError('boom')))
     catalog = _xuecheng_catalog()
     task = {
-        'id': 'task-visible-fail-open', 'model': 'test',
+        'id': 'task-visible-fail-open', 'model': 'test', '_userId': 1,
         '_executable_tool_catalog': catalog,
         '_tool_schema': [catalog[0]],
     }

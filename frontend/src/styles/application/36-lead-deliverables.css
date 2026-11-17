@@ -14,12 +14,9 @@
 }
 .lead-deliverables__toggle:hover { background: var(--bg-hover); color: var(--text-primary); }
 .lead-deliverables__toggle:focus-visible { outline: var(--control-edge-inset) solid var(--accent); outline-offset: var(--control-edge-inset); }
-.lead-deliverables__toggle::before {
-  content: ''; flex-shrink: 0; width: 0; height: 0;
-  border-block: 4px solid transparent; border-inline-start: 5px solid var(--text-tertiary);
-  transition: transform var(--motion-fast) var(--ease-standard);
-}
-.lead-deliverables__toggle[aria-expanded="true"]::before { transform: rotate(90deg); }
+/* The archive toggle's chevron, turned to point right while collapsed. */
+.lead-deliverables__chevron { flex-shrink: 0; color: var(--text-tertiary); transform: rotate(-90deg); transition: transform var(--motion-fast) var(--ease-standard); }
+.lead-deliverables__toggle[aria-expanded="true"] .lead-deliverables__chevron { transform: none; }
 .lead-deliverables__label { flex: 1; min-width: 0; text-align: start; }
 .lead-deliverables__count { color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
 .lead-deliverables__body { display: flex; flex-direction: column; max-height: 40vh; overflow-y: auto; overscroll-behavior: contain; }

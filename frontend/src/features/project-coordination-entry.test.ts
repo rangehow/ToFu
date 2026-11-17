@@ -12,10 +12,8 @@ import { LANDING_STORAGE_KEY, rememberLanding } from '../application-shell/landi
 vi.mock('../i18n', () => ({ t: (key: string) => key }));
 const passiveReads = { coordinatorReports: async () => undefined, coordinatorBudget: async () => null, coordinatorProgress: async () => null,
   workerConversations: async () => ({ conversations: [], nextCursor: null, coverage: 'complete' }) };
-// presence.js also bridges the Global Router, its owner delegation, its portfolio and the Watchdog entries; these coordination specs stub them.
-// presence.js always constructs the portfolio and passes its `settings` element into the router's controls, so it rides with the owner-delegation stub every harness already prepends.
-const routerSettingsStub = 'const createRouterOwnerDelegation = () => ({ settings: document.createElement(\'details\'), destroy() {} });\n'
-  + 'const createRouterPortfolio = () => ({ settings: document.createElement(\'details\'), destroy() {} });\n';
+// presence.js also bridges the Global Router, its owner delegation and the Watchdog entries; these coordination specs stub them.
+const routerSettingsStub = 'const createRouterOwnerDelegation = () => ({ settings: document.createElement(\'details\'), destroy() {} });\n';
 const ownerDelegationStub = routerSettingsStub;
 const routerStub = ownerDelegationStub + 'const createGlobalRouterEntry = () => ({ refresh() {}, destroy() {}, home() { return \'\'; }, conversationId() { return \'\'; } });\n'
   + 'const createRouterWatchdogEntry = () => ({ refresh() {}, destroy() {}, location() { return \'\'; }, conversationId() { return \'\'; } });\n';
@@ -186,16 +184,18 @@ it('bridges the main coordinator card and health checks to their typed owners an
   const watchdog = { projectPath: '/data/router/1/.tofu-watchdog', conversationId: 'coordinator-watchdog', revision: 1,
     availability: 'available', capabilities: router.capabilities,
     review: { enabled: false, schedule: '7,37 * * * *', taskId: null } };
-  const routerWatchdog = vi.fn(async () => ({ ...watchdog, conversationId: '', revision: 0, availability: 'unbound' }));
+  // Ensuring the main coordinator turns its health checks on, so the read after it finds the Watchdog.
+  const routerWatchdog = vi.fn()
+    .mockResolvedValueOnce({ ...watchdog, conversationId: '', revision: 0, availability: 'unbound' })
+    .mockResolvedValue(watchdog);
   const ensureRouterWatchdog = vi.fn(async () => watchdog);
-  const configureRouterWatchdogReview = vi.fn(async () => watchdog);
   new Function('runtimeScope', 'pushSubscribe', 'pushUnsubscribe', 'createProjectCoordinationSurface', 'createSameTaskReadJoin',
     'openProjectCoordinationWorkspace', 'getActiveConv', 'Api', 'getFolders', 'getActiveFolderId', 'loadConversation',
     '_projectConversationNavigation', 'createGlobalRouterEntry', 'createRouterWatchdogEntry', 'createCoordinatorConversationGroups', 'const conversations = [];\n' + ownerDelegationStub + 'const mergeConversationCatalogRows = () => 0; const renderConversationList = () => {};\n' + source)(
     runtime, vi.fn(), vi.fn(), createProjectCoordinationSurface, createSameTaskReadJoin, vi.fn(), () => active,
     { project: { ...passiveReads, coordination: async () => ({ conversationId: '', availability: 'unbound', revision: 0 }),
       board: async () => null, coordinationAssignments: async () => ({ assignments: [] }),
-      globalRouter, ensureGlobalRouter, routerWatchdog, ensureRouterWatchdog, configureRouterWatchdogReview } },
+      globalRouter, ensureGlobalRouter, routerWatchdog, ensureRouterWatchdog } },
     () => folders, () => folder, open, createProjectConversationNavigation(), createGlobalRouterEntry, createRouterWatchdogEntry,
     createCoordinatorConversationGroups,
   );
@@ -216,9 +216,11 @@ it('bridges the main coordinator card and health checks to their typed owners an
     expect(strip.previousElementSibling!.querySelector('.router-watchdog-header')).not.toBeNull();
     const routerHeader = strip.previousElementSibling!.previousElementSibling!.querySelector('.global-router-header')!;
     expect(strip.parentElement!.querySelector(':scope > .lead-office-slot, :scope > .lead-office, :scope > .lead-deliverables-slot')).toBeNull();
-    // Health checks live in the main coordinator's settings, not in a sidebar entry of their own.
+    // Health checks are a fold in the main coordinator's header with nothing to switch, not a sidebar entry.
     const healthChecks = routerHeader.querySelector<HTMLDetailsElement>('details.router-watchdog')!;
     expect(healthChecks).not.toBeNull();
+    expect(healthChecks.querySelectorAll('input')).toHaveLength(0);
+    expect(routerHeader.querySelector('.router-portfolio')).toBeNull();
     expect(globalRouter).toHaveBeenCalledTimes(1);
     expect(routerWatchdog).toHaveBeenCalledTimes(1);
     // Unbound reads name no Coordinator chat for the composer to steer.
@@ -229,14 +231,14 @@ it('bridges the main coordinator card and health checks to their typed owners an
     await vi.waitFor(() => expect(open).toHaveBeenCalledWith('coordinator-router'));
     expect(ensureGlobalRouter).toHaveBeenCalledTimes(1);
     expect(runtime.isCoordinatorConversation('coordinator-router')).toBe(true);
-    healthChecks.querySelector<HTMLButtonElement>('.router-watchdog-off button')!.click();
-    await vi.waitFor(() => expect(ensureRouterWatchdog).toHaveBeenCalledTimes(1));
+    // Ensuring the main coordinator re-reads its health checks: on, with nothing for the owner to do.
     await vi.waitFor(() => expect(runtime.isCoordinatorConversation('coordinator-watchdog')).toBe(true));
+    expect(routerWatchdog).toHaveBeenCalledTimes(2);
+    expect(ensureRouterWatchdog).not.toHaveBeenCalled();
     expect(open).not.toHaveBeenCalledWith('coordinator-watchdog');
-    healthChecks.querySelector<HTMLButtonElement>('.router-watchdog-on button:last-of-type')!.click();
+    healthChecks.querySelector<HTMLButtonElement>('button')!.click();
     expect(open).toHaveBeenCalledWith('coordinator-watchdog');
     expect(runtime.isCoordinatorConversation('')).toBe(false);
-    expect(configureRouterWatchdogReview).not.toHaveBeenCalled();
     // Both chats are reached from the card and its settings, never as list rows.
     expect(runtime.routerConversationIds()).toEqual(['coordinator-router', 'coordinator-watchdog']);
     // The studio's compute-stall dialog ensures the Watchdog through the same owner.

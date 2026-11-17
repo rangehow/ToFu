@@ -406,6 +406,44 @@ def test_periodic_review_is_one_owner_controlled_scheduler_task(world):
         assert review_state(owner + 1)['taskId'] is None
 
 
+def test_health_checks_are_on_by_default_and_keep_the_owners_later_choice(world):
+    """Owner decision 2026-11-17: nothing has to be turned on. The boot install and
+    every ensure install the review on once; from then on it is the owner's."""
+    from lib.identity import PrincipalContext
+    from lib.router.watchdog.binding import router_watchdog
+    from lib.router.watchdog.review import (DEFAULT_REVIEW_SCHEDULE, configure_review, ensure_health_checks,
+                                            review_state, review_task_id, watchdog_principal)
+    from lib.scheduler.manager import ScheduledTaskManager, get_scheduler
+
+    def booted(owner):
+        manager = ScheduledTaskManager()
+        manager._process_principal = PrincipalContext.system(
+            subject_id='scheduler-test', owner_user_id=owner, scopes={'scheduler:run'})
+        return manager
+    owner = world.owner
+    # The fixture's Watchdog was provisioned without a review, as before this decision.
+    assert review_state(owner)['taskId'] is None
+    assert booted(owner)._ensure_default_router_health_checks() == world.watchdog
+    on = {'enabled': True, 'schedule': DEFAULT_REVIEW_SCHEDULE, 'taskId': review_task_id(owner)}
+    assert review_state(owner) == on
+    assert ensure_health_checks(owner) == world.watchdog and review_state(owner) == on
+    principal = watchdog_principal(owner)
+    configure_review(owner, {'enabled': False}, principal=principal)
+    assert ensure_health_checks(owner) == world.watchdog
+    assert review_state(owner) == {**on, 'enabled': False}
+    configure_review(owner, {'enabled': True, 'schedule': '*/15 * * * *'}, principal=principal)
+    assert booted(owner)._ensure_default_router_health_checks() == world.watchdog
+    assert review_state(owner) == {**on, 'schedule': '*/15 * * * *'}
+    rows = [task for task in get_scheduler().list_tasks(user_id=owner, include_disabled=True)
+            if task['task_type'] == 'router_watchdog_review']
+    assert [task['id'] for task in rows] == [on['taskId']]
+    if not world.native:
+        # Without a main coordinator the boot install provisions nothing.
+        assert booted(owner + 1)._ensure_default_router_health_checks() is None
+        assert router_watchdog(owner + 1, create=False)['availability'] == 'unbound'
+        assert review_state(owner + 1)['taskId'] is None
+
+
 class _FrozenClock(datetime):
     @classmethod
     def now(cls, tz=None):

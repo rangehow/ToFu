@@ -6,8 +6,8 @@ import { buildProjectContinuityEndpoints } from './project-continuity';
 import type { CoordinatorProgressHistoryGroup, CoordinatorProgressHistoryPage, LeadDeliverablePage } from '../project-coordination.generated';
 
 import type { CoordinatorConversationPage, CoordinatorReportState, CoordinatorReportReadRequest, CoordinationBinding, CoordinatorProgressState, ProjectMessagePage } from '../project-coordination.generated';
-import type { RouterInstruction, RouterInstructionPage, RouterOwnerDelegationState, RouterPortfolioState, RouterProjectsPage,
-  RouterState, RouterWatchdogReviewRequest, RouterWatchdogState } from '../router.generated';
+import type { RouterInstruction, RouterInstructionPage, RouterOwnerDelegationState, RouterProjectsPage,
+  RouterState, RouterWatchdogState } from '../router.generated';
 
 import type { ProjectDispatchRequest, ProjectDispatchRetry, ProjectDispatchRevoke,
   ProjectDispatchReviewRequest, ProjectDispatchPublishRequest, ProjectDispatchView,
@@ -156,7 +156,8 @@ export function createProjectEndpoints(ports: EndpointPorts) {
     cancelRouterInstruction: (instructionId: string) =>
       post<RouterInstruction>('/api/v4/router/instructions/cancel', { instructionId },
         { headers: { 'Idempotency-Key': ports.newIdempotencyKey() }, onError: 'throw' }),
-    // The Router Watchdog is the bound Coordinator of the owner's watchdog path (docs/ROUTER.md R7).
+    // The Router Watchdog is the bound Coordinator of the owner's watchdog path (docs/ROUTER.md R7);
+    // its ensure turns health checks on, so the browser has nothing to configure.
     routerWatchdog: (signal?: AbortSignal) =>
       get<RouterWatchdogState>('/api/v4/router/watchdog', { signal, timeout: COORDINATION_READ_TIMEOUT_MS, onError: 'throw' }),
     ensureRouterWatchdog: async () => {
@@ -166,16 +167,6 @@ export function createProjectEndpoints(ports: EndpointPorts) {
       if (response?.ok) return await response.json() as RouterWatchdogState;
       return ports._failRetriedWrite(response, '/api/v4/router/watchdog', commandId);
     },
-    configureRouterWatchdogReview: (body: RouterWatchdogReviewRequest) =>
-      post<RouterWatchdogState>('/api/v4/router/watchdog/review', body,
-        { headers: { 'Idempotency-Key': ports.newIdempotencyKey() }, onError: 'throw' }),
-    // Portfolio ownership (docs/ROUTER.md R10): the review switch and value ledger.
-    routerPortfolio: (signal?: AbortSignal) =>
-      get<RouterPortfolioState>('/api/v4/router/portfolio',
-        { signal, timeout: COORDINATION_READ_TIMEOUT_MS, onError: 'throw' }),
-    setRouterPortfolioReview: (enabled: boolean) =>
-      post<RouterPortfolioState>('/api/v4/router/portfolio/review', { enabled },
-        { headers: { 'Idempotency-Key': ports.newIdempotencyKey() }, onError: 'throw' }),
     // Every bound project's lead with its live activity (get_router_projects); follow nextCursor.
     routerProjects: (cursor?: string, signal?: AbortSignal) =>
       get<RouterProjectsPage>('/api/v4/router/projects',

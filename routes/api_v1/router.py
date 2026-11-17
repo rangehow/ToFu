@@ -4,7 +4,8 @@ Wire shapes are owned by contracts/router_v1.schema.json. Owner identity comes
 from the shared authentication boundary; every handler calls one router owner
 (lib.router.binding, lib.router.instructions, ProjectCoordinationRepository,
 lib.router.watchdog, the owner delegation in lib.lifecycle_approval) and maps
-its typed result. POST requires an Idempotency-Key; the operations
+its typed result; ensuring the main coordinator also ensures its health checks,
+which are on by default (R7). POST requires an Idempotency-Key; the operations
 themselves are idempotent (deterministic provisioning, set-to-value, pause,
 resume, cancel, grant, revoke). Granting the owner delegation is the one
 human-UI-only write (auth.human_ui_provenance, docs/ROUTER.md R9).
@@ -14,6 +15,7 @@ from __future__ import annotations
 from quart import Blueprint
 
 from lib.api_response import api_bad_request, api_error, api_ok, api_typed_error
+from lib.log import get_logger
 from lib.openapi import api_meta
 from lib.router.contract import parse, query_parameters, request_body, validate
 from lib.router.home import RouterGitUnavailable, RouterHomeUnavailable
@@ -22,6 +24,7 @@ from lib.storage import StorageError
 from .auth import request_principal, request_user_id, require_scope
 
 api_v1_router_bp = Blueprint('api_v1_router', __name__)
+logger = get_logger(__name__)
 
 
 def _owner() -> int:
@@ -85,17 +88,30 @@ def router_read():
 
 @api_v1_router_bp.route('/api/v1/router', methods=['POST'])
 @require_scope('conversations')
-@api_meta(summary="Ensure the owner's Global Router home and conversation exist", tags=['router'],
-          scope='conversations', request_body=request_body('ensureRequest'))
+@api_meta(summary="Ensure the owner's Global Router home and conversation exist, with health checks on",
+          tags=['router'], scope='conversations', request_body=request_body('ensureRequest'))
 def router_ensure():
     try:
         _idempotency_key()
         parse('ensureRequest')
         from lib.router.binding import global_router
         owner = _owner()
-        return api_ok(_router_state(owner, global_router(owner, create=True)))
+        router = global_router(owner, create=True)
+        _ensure_health_checks(owner)
+        return api_ok(_router_state(owner, router))
     except _TYPED_FAILURES as error:
         return _typed_error(error)
+
+
+def _ensure_health_checks(owner: int) -> None:
+    """Health checks come with the main coordinator (docs/ROUTER.md R7). They never
+    keep the owner out of it: a failure is logged and the next ensure retries."""
+    from lib.router.watchdog.review import ensure_health_checks
+    try:
+        ensure_health_checks(owner, tenant_id=request_principal().tenant_id)
+    except _TYPED_FAILURES:
+        logger.warning('[Router] health checks not ensured for owner %s; the next ensure retries',
+                       owner, exc_info=True)
 
 
 @api_v1_router_bp.route('/api/v1/router/worker-model', methods=['GET'])
@@ -258,15 +274,17 @@ def router_office_read():
 
 @api_v1_router_bp.route('/api/v1/router/watchdog', methods=['POST'])
 @require_scope('conversations')
-@api_meta(summary="Ensure the owner's Router Watchdog conversation exists", tags=['router'],
+@api_meta(summary=("Ensure the owner's health checks: the Router Watchdog conversation and, unless the "
+                   "owner chose otherwise, its periodic review"), tags=['router'],
           scope='conversations', request_body=request_body('ensureRequest'))
 def router_watchdog_ensure():
     try:
         _idempotency_key()
         parse('ensureRequest')
-        from lib.router.watchdog.binding import router_watchdog
+        from lib.router.watchdog.review import ensure_health_checks
         owner = _owner()
-        return api_ok(_watchdog_state(owner, router_watchdog(owner, create=True)))
+        return api_ok(_watchdog_state(owner, ensure_health_checks(
+            owner, tenant_id=request_principal().tenant_id)))
     except _TYPED_FAILURES as error:
         return _typed_error(error)
 

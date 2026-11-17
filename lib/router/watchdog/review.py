@@ -1,19 +1,23 @@
 """Watchdog reviews over the existing scheduler (docs/ROUTER.md R7).
 
-Responsibility: the owner-controlled periodic review and the one-shot
-re-checks the Watchdog arms for intermittent faults. Both are ordinary
-owner-visible scheduler tasks of type ``router_watchdog_review`` whose
+Responsibility: health checks on by default, the periodic review and the
+one-shot re-checks the Watchdog arms for intermittent faults. Both reviews are
+ordinary owner-visible scheduler tasks of type ``router_watchdog_review`` whose
 execution delegates here: the periodic review is the owner's keyed task
 (``scheduler.task.ensure`` with system key ``router-watchdog-review``: retries
-converge, the owner enables it and chooses the cron, the contract documents the
-default), a re-check is a ``once:`` task with a deterministic id per Watchdog
-idempotency key. Execution builds the deterministic health snapshot and wakes
-the Watchdog with the ``proactive`` initiator and a command id per task and
-minute; a periodic review whose snapshot holds nothing to judge ends without a
-model turn, while a re-check always wakes (the Watchdog asked for it).
+converge), a re-check is a ``once:`` task with a deterministic id per Watchdog
+idempotency key. ``ensure_health_checks`` provisions the Watchdog and installs
+the periodic review on at the contract cadence for an owner who never chose
+(owner decision 2026-11-17); once installed, the row is the owner's choice
+(off, another cadence) and only ``configure_review`` changes it. Execution
+builds the deterministic health snapshot and wakes the Watchdog with the
+``proactive`` initiator and a command id per task and minute; a periodic review
+whose snapshot holds nothing to judge ends without a model turn, while a
+re-check always wakes (the Watchdog asked for it).
 
-Entry points: review_state, configure_review, schedule_recheck,
-run_scheduled_review (the scheduler's task-type handler), REVIEW_TASK_TYPE.
+Entry points: ensure_health_checks, review_state, configure_review,
+schedule_recheck, run_scheduled_review (the scheduler's task-type handler),
+REVIEW_TASK_TYPE.
 Dependencies: scheduler.manager/cron, router.contract, router.watchdog
 (binding, signals, snapshot).
 """
@@ -69,20 +73,46 @@ def _validate_cron(schedule: str) -> str:
     return schedule
 
 
-def configure_review(owner: int, request: dict, *, principal: PrincipalContext) -> dict:
-    """Owner choice: enable or disable the periodic review and set its cadence."""
+def _install_review(owner: int, *, enabled: bool, schedule: str, principal: PrincipalContext,
+                    reconcile_enabled: bool) -> dict:
     from .heartbeat import REVIEW_MAX_RUNTIME_S, record_configured
-    request = validate(dict(request), 'watchdogReviewRequest')
-    current = review_state(owner)
-    schedule = _validate_cron(request.get('schedule') or current['schedule'])
     _scheduler().ensure_owner_task(
         principal=principal, system_key=REVIEW_SYSTEM_KEY, name=_REVIEW_NAME, schedule=schedule,
         command=_REVIEW_COMMAND, task_type=REVIEW_TASK_TYPE,
         description='Wakes the Router Watchdog to judge Worker progress and open faults.',
-        max_runtime=REVIEW_MAX_RUNTIME_S, enabled=request['enabled'], reconcile_enabled=True)
+        max_runtime=REVIEW_MAX_RUNTIME_S, enabled=enabled, reconcile_enabled=reconcile_enabled)
     state = review_state(owner)
     record_configured(owner, state['schedule'], state['enabled'])
     return state
+
+
+def configure_review(owner: int, request: dict, *, principal: PrincipalContext) -> dict:
+    """Owner choice: enable or disable the periodic review and set its cadence."""
+    request = validate(dict(request), 'watchdogReviewRequest')
+    current = review_state(owner)
+    schedule = _validate_cron(request.get('schedule') or current['schedule'])
+    return _install_review(owner, enabled=request['enabled'], schedule=schedule, principal=principal,
+                           reconcile_enabled=True)
+
+
+def ensure_health_checks(owner: int, *, tenant_id: str | None = None) -> dict:
+    """Health checks are on by default (owner decision 2026-11-17).
+
+    Provisions the Watchdog and, for an owner whose periodic review was never
+    installed, installs it on at the contract cadence under the Watchdog's own
+    least-privilege scheduling identity: the owner granted that scope, so
+    neither the owner nor the caller configures anything. An installed review is
+    the owner's choice (off, another cadence) and is never rewritten here.
+    Returns the Watchdog binding.
+    """
+    from .binding import router_watchdog
+    watchdog = router_watchdog(owner, create=False)
+    if watchdog['availability'] != 'available':
+        watchdog = router_watchdog(owner, create=True)
+    if watchdog['availability'] == 'available' and review_state(owner)['taskId'] is None:
+        _install_review(owner, enabled=True, schedule=DEFAULT_REVIEW_SCHEDULE,
+                        principal=watchdog_principal(owner, tenant_id), reconcile_enabled=False)
+    return watchdog
 
 
 def watchdog_principal(owner: int, tenant_id: str | None = None) -> PrincipalContext:
@@ -146,7 +176,7 @@ def run_scheduled_review(task: dict) -> tuple[bool, str]:
     owner = require_user_id(task.get('user_id'), context='watchdog review')
     watchdog = router_watchdog(owner, create=False)
     if watchdog['availability'] != 'available':
-        return False, 'The Watchdog conversation is unavailable; open it again from the sidebar.'
+        return False, 'The Watchdog conversation is unavailable; open the main coordinator to restore it.'
     from .compute_patrol import ingest_compute_patrols
     # Off-host patrols cannot reach Tofu; their published flags become signals before the snapshot reads them.
     ingest_compute_patrols(owner)
@@ -179,5 +209,5 @@ def run_scheduled_review(task: dict) -> tuple[bool, str]:
 
 
 __all__ = ['DEFAULT_REVIEW_SCHEDULE', 'REVIEW_SYSTEM_KEY', 'REVIEW_TASK_TYPE', 'configure_review',
-           'review_state', 'review_task_id', 'run_scheduled_review', 'schedule_recheck',
-           'watchdog_principal']
+           'ensure_health_checks', 'review_state', 'review_task_id', 'run_scheduled_review',
+           'schedule_recheck', 'watchdog_principal']

@@ -31,6 +31,15 @@ document. The host publishes it atomically with mode 0600 only after a native
 health handshake. Attachment validates protocol, backend, owner/tenant, project/data root,
 engine content identity and PID/start identity before authenticated health.
 The active projection/fastpath descriptors accompany that same generation.
+The spawned child's first authenticated health handshake shares the remaining
+startup hard budget with its readiness envelope (including the selected native
+fastpath startup budget). The envelope can precede native background setup and
+the listener's accept loop, so the ordinary two-second liveness deadline must
+not terminate a cold but still-starting authority. Exhausted startup budgets
+and unhealthy/mismatched backends still fail closed; failures retain only
+allowlisted probe classifications and unhealthy component names, never response
+text or credentials. A larger separate health timeout or blind retry loop was
+rejected because it would extend startup's existing deadline.
 An application cannot rebuild an external owner's executable during attachment;
 direct launches still prepare before starting their own database.
 

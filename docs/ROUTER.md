@@ -237,6 +237,21 @@ queue rows at activation time (changes generic queue semantics for one
 caller); a mailbox-only evidence input (either it never reaches the model, or
 it still starts an unauthorized request).
 
+**A repeated forward delivers nothing.** Problem: a Global Router continuation
+forwarded the owner's message of its request again with a new note (same
+source, so the same command id). The busy Project Router's steer receipt
+refused the changed request, the refusal was taken for a closed steer window,
+and the message was queued as a second request that waited hours behind the
+live reply (2026-11-17, three Project Routers). Decision: the target replays
+its earlier acceptance (CONVERSATION_SYNC_V3.md: a steer command is delivered
+once; a started or queued pair replays by command id), `dispatch_scheduled_turn`
+reports it as `replayed`, and `route_to_project` answers `already_forwarded:
+true` with a next step that sends new evidence through `send_project_message`:
+the repeat delivered nothing, its note included. Alternatives rejected: hashing
+the note into the command id (each re-forward with new evidence becomes another
+owner request, the duplicate work this identity prevents); refusing the repeat
+as an error (the forward did happen, and an error invites a retry).
+
 **Steered owner messages.** Problem: a message the owner steers into the
 router's running reply has no Turn of its own, and
 the steer lane kept only a 1,200-character display preview, so it could not be

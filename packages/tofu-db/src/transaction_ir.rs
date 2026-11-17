@@ -9778,7 +9778,7 @@ mod tests {
             execute_transaction_ir(&mut database, &conflicting_replay)
                 .unwrap_err()
                 .kind(),
-            io::ErrorKind::WouldBlock
+            io::ErrorKind::AlreadyExists
         );
         assert_eq!(
             execute_transaction_ir(

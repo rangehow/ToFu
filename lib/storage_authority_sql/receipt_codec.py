@@ -26,7 +26,7 @@ import zlib
 
 import orjson
 
-from lib.storage.errors import StorageError
+from lib.storage.errors import COMMAND_ID_REUSED_MESSAGE, StorageError
 
 
 from .generated_storage_receipts import (
@@ -116,9 +116,7 @@ def decode_command_receipt_lookup(
             "database_integrity", "Stored command receipt match is invalid"
         )
     if not bool(request_matches):
-        raise StorageError(
-            "database_conflict", "command_id was reused for a different request"
-        )
+        raise StorageError("database_conflict", COMMAND_ID_REUSED_MESSAGE)
     return True, decode_receipt_response(row.get("response_json"))
 
 

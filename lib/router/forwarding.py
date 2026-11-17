@@ -17,7 +17,9 @@ same input**: ``content`` is the owner's text followed by the labelled evidence,
 ``authored_text`` and the forward verification compare. A second input would
 become its own synthetic Coordinator request whenever the steer window had
 closed and re-attempt the work with no authority. A deterministic command id per
-(router conversation, source, project) makes every retry deliver at most once.
+(router conversation, source, project) makes every retry deliver at most once:
+a repeated forward, with any note, delivers nothing and answers
+``already_forwarded`` (the target conversation replays its earlier acceptance).
 The portfolio review (R10) applies a standing instruction through the same
 resolution and delivery (``apply_standing_instruction``) but queues behind a
 busy Project Router instead of steering into its live request, so every
@@ -305,7 +307,10 @@ def deliver_forward(owner: int, project: str, text: str, forwarded: dict, *, com
 
     ``inject_mode='steer'`` hands a busy Project Router the request at its next
     step (the owner's own message); ``'queue'`` waits for its live request to
-    end, so the forward opens a request of its own (``input_turn_id``).
+    end, so the forward opens a request of its own (``input_turn_id``). A
+    forward whose command id the Project Router already accepted reports that
+    acceptance with ``already_forwarded`` and points new evidence to
+    send_project_message: the repeat delivered nothing, its note included.
     """
     target, created = _ensure_project_router(owner, project, config)
     if command_id is None:
@@ -328,7 +333,8 @@ def deliver_forward(owner: int, project: str, text: str, forwarded: dict, *, com
               'binding_revision': target['revision'], 'project_router_created': created,
               'disposition': outcome.disposition, 'forwarded_from': forwarded,
               'context_disposition': None, 'command_id': command_id,
-              'input_turn_id': outcome.input_turn_id or None}
+              'input_turn_id': outcome.input_turn_id or None,
+              'already_forwarded': outcome.replayed}
     if instruction_id is not None:
         application = RouterInstructions(owner).record_application({
             'version': 1, 'owner': owner, 'instructionId': instruction_id,
@@ -338,9 +344,16 @@ def deliver_forward(owner: int, project: str, text: str, forwarded: dict, *, com
             'note': note, 'commandId': command_id,
             'disposition': outcome.disposition, 'createdAt': int(time.time() * 1000)})
         result['instruction_application_id'] = application['applicationId']
-    result['next_step'] = ('The Project Router now owns this work and its Workers; its reports reach you '
-                           'as nonhuman notices. Do not delegate or forward the same work again; follow it '
-                           'with get_router_projects or get_conversation on the Project Router.')
+    if outcome.replayed:
+        result['next_step'] = ('This forward already reached the Project Router earlier, so this call '
+                               'delivered nothing, its note included. Do not forward the same message '
+                               'again: pass new evidence with send_project_message, which the Project '
+                               'Router reads as a nonhuman message.')
+    else:
+        result['next_step'] = ('The Project Router now owns this work and its Workers; its reports reach '
+                               'you as nonhuman notices. Do not delegate or forward the same work again; '
+                               'follow it with get_router_projects or get_conversation on the Project '
+                               'Router.')
     return result
 
 

@@ -145,3 +145,45 @@ def test_a_steer_passes_queued_input_waiting_behind_the_live_reply(lane):
     result = _command(owner, conversation, 'steer-after-queue', 'steer')
     assert result.get('steered') is True and not result.get('steerFallback'), result
     assert _steers_on(owner, conversation, reply) == ['steer-after-queue']
+
+
+def test_a_steer_command_reused_for_another_text_is_refused_as_reused(lane):
+    """Both authorities name the reused command, which is not a closed window."""
+    from lib.turn_lifecycle import LifecycleConflict, commit_user_steer, get_turn
+    owner, conversation, reply = lane
+    attempt = get_turn(conversation, reply, user_id=owner)['currentAttemptId']
+    first = commit_user_steer(conversation, attempt, command_id='forward', text='first note',
+                              user_id=owner)
+    replay = commit_user_steer(conversation, attempt, command_id='forward', text='first note',
+                               user_id=owner)
+    assert replay['blockId'] == first['blockId'] == 'injection:user-steer:forward'
+    with pytest.raises(LifecycleConflict) as reused:
+        commit_user_steer(conversation, attempt, command_id='forward', text='second note',
+                          user_id=owner)
+    assert reused.value.code == 'command_reused'
+    with pytest.raises(LifecycleConflict) as closed:
+        commit_user_steer(conversation, 'attempt-that-never-ran', command_id='late', text='late',
+                          user_id=owner)
+    assert closed.value.code == 'steer_window_closed'
+    assert _steers_on(owner, conversation, reply) == ['forward']
+
+
+def test_a_steer_command_resent_with_another_text_replays_instead_of_queueing(lane):
+    from lib import agent_inbox
+    from lib.turn_lifecycle import list_turns
+    owner, conversation, reply = lane
+
+    def steer(text):
+        return _service().create_turn(conversation, owner, {
+            'commandId': 'resent-steer', 'inputTurn': {'content': text}, 'config': {},
+            'injectMode': 'steer'}, request_started_at=time.time()).value
+
+    turns = len(list_turns(conversation, user_id=owner)['turns'])
+    assert steer('first note').get('steered') is True
+    resent = steer('second note')
+    assert resent['steered'] is True and resent['idempotentReplay'] is True, resent
+    assert not resent.get('queued') and not resent.get('steerFallback')
+    assert len(list_turns(conversation, user_id=owner)['turns']) == turns
+    assert _steers_on(owner, conversation, reply) == ['resent-steer']
+    [item] = agent_inbox.drain(conversation, modes=['user-steer'])
+    assert item['value'] == 'first note'

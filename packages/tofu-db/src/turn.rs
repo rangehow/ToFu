@@ -13273,8 +13273,9 @@ pub(crate) fn attempt_create(
     // a resume anchor that does not match the current settlement is an
     // ordinary optimistic-concurrency conflict like the surrounding
     // live-attempt, parent and submitted-turn fences. `ConflictFence` is
-    // reserved for the deterministic ownership fences in worker_job.rs that
-    // carry a compile-time literal reason to the client; routing this check
+    // reserved for deterministic fences that carry a compile-time literal
+    // reason to the client (the ownership fences in worker_job.rs and the
+    // command-receipt identity fence in authority.rs); routing this check
     // through it would change the variant callers match on and silently drop
     // the reason SQL already returns ("The requested resume anchor is not
     // current."). Do not "improve" the message by re-classifying it.

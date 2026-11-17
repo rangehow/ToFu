@@ -257,3 +257,38 @@ def test_executor_and_client_writes_keep_the_committed_authors(steered):
     after = {item['commandId']: item for item in steered.read()['projection']['_userSteerInjects']}
     assert after['steer-owner']['author'] == {'actor': 'human', 'text': TEXT}
     assert 'author' not in after['steer-event']
+
+
+def test_a_repeated_forward_delivers_nothing_and_points_new_evidence_to_project_messages(
+        steered, semantic_authority, monkeypatch):
+    """2026-11-17: a Global Router continuation forwarded the owner's message
+    again with a new note, and each busy Project Router queued it as a second
+    request that waited hours behind its live reply."""
+    from lib import agent_inbox
+    from lib.router.forwarding import route_to_project
+    from lib.turn_lifecycle import get_turn, list_turns
+    from tests.support.chat_tasks import chat_task_registry
+    client = semantic_authority[0]
+    monkeypatch.setattr('lib.scheduler.conversation_dispatch.get_storage_client', client)
+    monkeypatch.setattr('lib.integration_state_repository.get_storage_client', client)
+    target = steered.target['conversationId']
+    live = _running_reply(target, steered.owner, 'project-request', 'project-task')
+    try:
+        def route(note):
+            return route_to_project(steered.task, steered.scope, {
+                'project_path': steered.project, 'source_steer_id': 'steer-owner', 'note': note})
+
+        first = route('Evidence A')
+        assert (first['disposition'], first['already_forwarded']) == ('steered', False)
+        again = route('Evidence B')
+        assert (again['disposition'], again['already_forwarded']) == ('steered', True)
+        assert again['command_id'] == first['command_id']
+        assert 'delivered nothing' in again['next_step']
+        assert 'send_project_message' in again['next_step']
+        records = [record for record in get_turn(target, live['turn']['turnId'], user_id=steered.owner)[
+            'projection']['_userSteerInjects'] if record['commandId'] == first['command_id']]
+        assert len(records) == 1 and 'Evidence A' in records[0]['previews'][0]['text']
+        assert len(list_turns(target, user_id=steered.owner)['turns']) == 2, 'a second request was queued'
+    finally:
+        chat_task_registry.pop('project-task', None)
+        agent_inbox.reset_for_test(target)

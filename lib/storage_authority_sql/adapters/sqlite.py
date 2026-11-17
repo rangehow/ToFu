@@ -9,6 +9,7 @@ from collections.abc import Callable as Callable, Mapping, Sequence as Sequence
 from dataclasses import dataclass, field
 import faulthandler
 import os
+import sys
 from pathlib import Path
 import sqlite3
 import threading
@@ -170,9 +171,9 @@ def _place_temporary_files() -> str:
     payload = b'tofu-sqlite-temporary-file-probe'
     # SQLite's Windows VFS never unlinks an open file (Windows refuses that);
     # it opens temporary files delete-on-close, which O_TEMPORARY reproduces.
-    windows = os.name == 'nt'
+    windows = sys.platform == 'win32'
     flags = os.O_RDWR | os.O_CREAT | os.O_EXCL
-    if windows:
+    if sys.platform == 'win32':
         flags |= os.O_TEMPORARY | os.O_BINARY
     try:
         descriptor = os.open(path, flags, 0o600)

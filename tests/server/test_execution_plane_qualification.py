@@ -270,7 +270,12 @@ def run_workload(directory, *, split):
                 os.kill(execution_pid, signal.SIGKILL)
 
                 def released():
-                    # Recover like the manager: only after the killed host's lease is free.
+                    # Recover like the manager (ExecutionService.recover): only a
+                    # departed host is stopped, then only after its lease is free.
+                    # A SIGKILLed host can stay visible while the kernel tears it
+                    # down; stopping it then is a graceful stop it cannot confirm.
+                    if execution.host_matches(execution.record()):
+                        return False
                     try:
                         execution.stop()
                         return True

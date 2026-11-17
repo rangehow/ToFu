@@ -102,7 +102,13 @@ def _wait_until(predicate, timeout=2.0, poll=0.02):
 def _reset_global_state(task_id: str):
     """Clear any leaking session / inbox / tombstones between tests."""
     with _sessions_lock:
-        _active_sessions.pop(task_id, None)
+        session = _active_sessions.pop(task_id, None)
+    # A spawned session outlives the test that launched it; its driver still
+    # builds late agents (past the test's factory patch) and persists their
+    # results through whatever storage a later test installed.
+    if session is not None and session._driver_thread is not None:
+        session.abort()
+        session.wait_terminated()
     agent_inbox.reset_for_test(task_id)
 
 

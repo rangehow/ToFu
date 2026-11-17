@@ -2070,8 +2070,10 @@ after the run
 fallback warning now names the SQLite cause instead of only the generic
 `SQLite operation failed`. After the fix, the rerun below had 0 fallbacks,
 0 I/O errors and 0 tracebacks in the Sidecar legs. TofuDB was unaffected in
-both runs. A Sidecar started with `TMPDIR` (or `SQLITE_TMPDIR`) on
-DolphinFS would still degrade this way.
+both runs. The Sidecar itself now places SQLite's temporary files in the
+host temporary root whatever `TMPDIR`/`SQLITE_TMPDIR` it inherits, and
+refuses a root that cannot serve unlinked files
+([STORAGE.md](STORAGE.md), `test_sqlite_temporary_files.py`).
 
 **Medium.** `benchmarks/storage_medium_probe.py`, run twice on the scratch
 directory with production's preload, against local XFS (p50/p99 ms):
@@ -2200,6 +2202,82 @@ for b in "--backend sqlite" "--backend tofudb --engine $TOFUDB_BIN --durability 
     FAULTFS_STATS=$TMPDIR/$(basename $R).stats .venv/bin/python3 scripts/tofudb_load_test.py --root $R $b \
     --seed-scale 0.2 --scales 1,3,5 --duration 90 --run-id dfs
   cp -r $R/results $TMPDIR/$(basename $R)-results && rm -rf -- "$R"
+done
+```
+
+### SQLite write calls on DolphinFS (2026-11-17)
+
+**Problem:** the Sidecar's cost on DolphinFS is per write call (above:
+119,497 `pwrite` in a 60 s 1x phase, 40% of the writer's time). Can a SQLite
+setting or the commit path change that structurally?
+
+**Method.** `benchmarks/sqlite_write_pattern.py` seeds an 80,000-event
+database (400 Turns, a unique `(turn, seq)` index and an indexed Turn row)
+on local disk, copies it to the medium, and replays 1,500 event-append jobs.
+Each job is three event rows plus a Turn update inside a savepoint. The
+writer uses the Sidecar's connection settings: WAL, `synchronous=FULL`,
+64 MiB cache and `wal_autocheckpoint=4096`. `faultfs` (`FAULTFS_COUNT_IO=1`)
+counts the in-scope calls and the time inside them. Each variant changes one
+thing. The scratch directory was
+`FMG/your-username/tofu-sqlite-writes-scratch-20261117/` on the production
+volume, through production's preload client, outside every checkout; it was
+removed afterwards. There were two alternating rounds at host load 7-18; the
+counts were identical in both rounds and wall times within 5%.
+
+| variant (DolphinFS, r1 · r2) | write calls / commit | time in writes | wall | commit p50/p99 ms | barriers (time) |
+|---|---|---|---|---|---|
+| base | 14.2 | 4.11 · 4.09 s | 5.70 · 5.72 s | 3.25/5.51 · 3.22/5.28 | 1,508 (1.0 s) |
+| `page_size=65536` | 8.3 | 3.77 · 3.87 s | 5.82 · 5.95 s | 3.64/6.14 · 3.69/6.60 | 1,505 (1.4 s) |
+| `mmap_size` over the whole file | 14.2 | 4.27 · 4.34 s | 5.94 · 6.11 s | 3.37/5.74 · 3.45/5.88 | 1,508 (1.0 s) |
+| no checkpoint | 13.0 | 3.95 · 3.85 s | 5.44 · 5.40 s | 3.36/5.63 · 3.39/5.43 | 1,502 (1.0 s) |
+| 8 jobs per COMMIT | 59.8 (7.5 per job) | 2.14 · 2.18 s | 2.78 · 2.82 s | 11.2/34.4 · 11.3/37.6 | 193 (0.2 s) |
+
+The same runs on local XFS take 0.17 s (base), with 0.02 s in writes.
+
+- **Two calls per WAL frame.** Without checkpoints, 9,732 frames are
+  19,489 calls and 38.2 MiB, which is 2 x 9,732 + 25 calls of
+  (4,096 + 24) bytes. SQLite writes each frame header and page separately.
+  A checkpoint adds one call per page, which is 8% of the calls here.
+- **`page_size=65536`** (SQLite's maximum; DolphinFS reports a 512 KiB
+  `st_blksize`, beyond it). It needs fewer pages per commit, but a 64 KiB
+  call costs more than a 4 KiB one, so p50 is 12% worse at 8.7x the bytes.
+  Rejected.
+- **mmap** only replaces reads. SQLite still writes through `pwrite`.
+  Rejected.
+- **Grouping** halves the calls and the wall time per job, because jobs
+  share dirty pages. The writer already does this whenever a backlog exists
+  (`_take_batch` drains it without a window). Grouping more would need a
+  wait or a cap, which are tuned knobs. Rejected.
+
+**Coalescing a commit's frames** (`--variant frames`: one commit's frames
+written as SQLite does, or as one call, into a preallocated region like a
+reused WAL, each followed by `fdatasync`; 300 alternating commits per run):
+
+| frames per commit | 2 calls per frame, p50/p99 ms (r1 · r2) | one call, p50/p99 ms (r1 · r2) |
+|---|---|---|
+| 7 | 3.61/4.91 · 3.90/5.71 | 0.98/1.38 · 0.96/1.63 |
+| 30 | 12.51/18.87 · 12.62/18.24 | 1.27/1.75 · 1.21/1.63 |
+
+The split 7-frame case reproduces the SQLite base commit (3.2-3.3 ms p50).
+One call per commit would cut it 3.7x, and the 30-frame settlement-sized
+commit 10x. That is the only structural lever found. SQLite has no setting
+for it. It needs a VFS shim, loaded into Python's `sqlite3` as a native
+extension, that buffers contiguous WAL appends and flushes them before every
+sync, read, truncate, size query, lock change and close. This adds a native
+artifact on the durability path, so it is proposed and not adopted here
+([STORAGE.md](STORAGE.md), "SQLite's write calls on DolphinFS").
+
+Reproduce (`S` is a fresh directory on the volume; run from a shell carrying
+production's `LD_PRELOAD`/`LIBBGFS_*`):
+
+```sh
+cc -O2 -shared -fPIC -o $TMPDIR/faultfs.so benchmarks/agent_storage/faultfs.c -ldl
+for v in base page64k mmap group8 nockpt; do
+  LD_PRELOAD="$TMPDIR/faultfs.so $LD_PRELOAD" FAULTFS_ROOT=$S FAULTFS_COUNT_IO=1 \
+    .venv/bin/python3 benchmarks/sqlite_write_pattern.py --root $S --variant $v
+done
+for f in 7 30; do
+  .venv/bin/python3 benchmarks/sqlite_write_pattern.py --root $S --variant frames --frames $f --jobs 300
 done
 ```
 

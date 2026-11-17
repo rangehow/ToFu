@@ -1092,13 +1092,58 @@ reimplement the fence, restart and validation rules.
   startup latency threshold (formerly `TOFU_STORAGE_PREFLIGHT_MAX_MS`, now
   ignored) is rejected: any threshold refuses all storage on a busier host,
   and a default-off switch gets turned back on.
-- SQLite's temporary files (statement journals, sorters) follow
-  `SQLITE_TMPDIR`/`TMPDIR`, then `/var/tmp`. They must be host-local. SQLite
-  unlinks each one as soon as it opens it, and DolphinFS fails I/O on an
-  unlinked open file with `ENOENT`, so a `TMPDIR` on DolphinFS turns
-  savepointed batch jobs into `SQLITE_IOERR_WRITE` rollbacks and per-job
-  fallbacks. Production sets no `TMPDIR`. The preflight above does not check
-  this ([measurement](STORAGE_PERFORMANCE_CHARTER.md#the-same-comparison-on-the-real-dolphinfs-volume-2026-11-17)).
+- **The Sidecar places SQLite's temporary files in the host temporary root.**
+  Before its first connection, `SQLiteBackend.start()` sets
+  `PRAGMA temp_store_directory` to `local_placement.temporary_root()`
+  (`/tmp`), whatever `TMPDIR`/`SQLITE_TMPDIR` the process inherited. It then
+  opens, unlinks, writes and reads back a probe file there, and refuses
+  startup with `database_unavailable` if that fails.
+  Problem: SQLite unlinks each temporary file (statement journal, sorter,
+  temp database) as soon as it opens it. DolphinFS fails I/O on an unlinked
+  open file with `ENOENT`. With `TMPDIR` on DolphinFS, savepointed batch jobs
+  became `SQLITE_IOERR_WRITE` rollbacks and per-job fallbacks (1,070 of
+  1,076 batches at 5x). Production was safe only because it sets no
+  `TMPDIR`.
+  Decision: the process-wide `sqlite3_temp_directory`, which takes precedence
+  over both environment variables for every temporary file opened later.
+  Alternatives rejected:
+  - Setting `SQLITE_TMPDIR` in the process: SQLite reads it once, at
+    `import sqlite3`, so a later assignment is ignored (verified).
+  - Setting it in the supervisor's child environment: it covers only managed
+    launches, not harnesses or a manual `python -m lib.storage_authority_sql`.
+  - `temp_store=MEMORY`: it moves sorter and temp-index growth, for example
+    building deferred indexes over the whole authority, into process memory.
+  Spec: `tests/storage_authority_sql/test_sqlite_temporary_files.py`, which
+  reproduces DolphinFS with `faultfs`'s `FAULTFS_UNLINKED_ENOENT`
+  ([measurement](STORAGE_PERFORMANCE_CHARTER.md#the-same-comparison-on-the-real-dolphinfs-volume-2026-11-17)).
+- **SQLite's write calls on DolphinFS: no setting changes them; only write
+  coalescing would.** SQLite writes every WAL frame as two calls, a 24-byte
+  header and then the page, and checkpoints one call per page. On DolphinFS
+  each call is a userspace round trip of about 0.19 ms, so a 7-frame commit
+  spends 2.7 of its 3.3 ms in `pwrite`.
+  Problem: the Sidecar made 119k write calls where TofuDB made 2.5k.
+  Decision: keep `page_size=4096`, no mmap, `wal_autocheckpoint=4096`, and
+  backlog-draining group commit, all unchanged.
+  Alternatives measured on the real volume and rejected
+  ([SQLite write calls on DolphinFS](STORAGE_PERFORMANCE_CHARTER.md#sqlite-write-calls-on-dolphinfs-2026-11-17)):
+  - `page_size=65536`, SQLite's documented maximum: the volume's 512 KiB
+    block size is beyond it. It gives 41% fewer calls, but each costs more,
+    so commit p50 is 12% worse at 8.7x the bytes, and it needs a
+    VACUUM-based migration.
+  - `mmap_size`: SQLite still writes through `pwrite`, so the write calls
+    are unchanged.
+  - Deferring checkpoints: the checkpoint is only 8% of the calls.
+  - A batching window or a larger batch cap: tuned knobs (principle 5). The
+    writer already commits its whole backlog at once, and grouping eight jobs
+    halves the calls per job.
+  The structural fix is to coalesce a commit's contiguous frames into one
+  write call. That is one `pwrite` instead of 14 for a 7-frame commit:
+  0.97 ms instead of 3.6-3.9 ms with the same `fdatasync`, and 1.2 ms
+  instead of 12.5 ms at 30 frames. SQLite has no option for it. It needs a
+  VFS shim that buffers contiguous WAL appends and flushes them before every
+  sync, read, truncate, size query, lock change and close. Python's
+  `sqlite3` can load one only as a native extension, which makes it a new
+  native artifact on the durability path. It is proposed, not adopted.
 - Before reclamation reaches the writer, the adapter checks the observed
   authority topology. Network, generic userspace, and unknown filesystems
   return `offline_required` without executing any SQLite statement: even one

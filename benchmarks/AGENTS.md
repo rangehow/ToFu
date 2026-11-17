@@ -387,6 +387,18 @@ engine's `--fastpath-admission required` probe and live `system.metrics`
 (`docs/STORAGE_OPERATIONS.md`, "Native authority placement"). Verify
 `tests/meta/test_storage_medium_probe_measure.py`.
 
+`sqlite_write_pattern.py` replays event-append jobs with the SQL Sidecar's
+writer settings against a database seeded locally and copied to the measured
+root. One variant changes one setting (page size, mmap, group commit,
+checkpoint), and `faultfs` (`FAULTFS_COUNT_IO=1`) counts the in-scope write
+and read calls and the time inside them. `--variant frames` needs no SQLite
+and no shim: it compares a commit's WAL frames written as SQLite writes them
+(header and page separately) with one coalesced call. Run it on the medium
+through production's preload. Counts are the result; clocks are observations
+of the medium. Measurements are in `docs/STORAGE_PERFORMANCE_CHARTER.md`,
+"SQLite write calls on DolphinFS". Verify
+`tests/meta/test_sqlite_write_pattern_measure.py`.
+
 ## Editing rules
 
 `native_workspace_compare.py` compares the standalone native workspace with Git on identical synthetic trees; `existing_lane_workflow.py` measures the production lane owner independently. Fresh alternating workers, exact content digests, raw samples and separate child-CPU scopes are required. Verify `tests/meta/test_native_workspace_benchmark.py`; these component results do not establish production-lane or application speedups.

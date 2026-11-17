@@ -751,6 +751,7 @@ designs/ui-gallery/ui-kit.bundle.js
 !/benchmarks/settled_cost_fold.py
 !/benchmarks/turn_event_persist_encode.py
 !/benchmarks/storage_medium_probe.py
+!/benchmarks/sqlite_write_pattern.py
 !/benchmarks/workspace_claims_lease.py
 !/benchmarks/held_conflict_passes.py
 

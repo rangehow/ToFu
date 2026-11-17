@@ -2,8 +2,9 @@
  *
  * Applies the same injected medium behaviour to every backend under test:
  * a fixed or dynamically changed latency on each durability barrier
- * (fsync, fdatasync, syncfs, sync_file_range with WAIT_AFTER, msync MS_SYNC)
- * and, while armed, ENOSPC from write-family calls. Only descriptors whose
+ * (fsync, fdatasync, syncfs, sync_file_range with WAIT_AFTER, msync MS_SYNC),
+ * while armed, ENOSPC from write-family calls and, optionally, DolphinFS's
+ * ENOENT for I/O on an open file that was already unlinked. Only descriptors whose
  * resolved path starts with FAULTFS_ROOT are affected, so harness logs and
  * the interpreter itself are untouched.
  *
@@ -16,6 +17,13 @@
  *                     SIGKILL because it is a MAP_SHARED mapping); with
  *                     FAULTFS_FSYNC_US=0 it measures a real medium's
  *                     barriers (count and time spent in the real call)
+ *   FAULTFS_COUNT_IO  "1" (with FAULTFS_STATS): also count in-scope read and
+ *                     write calls, their bytes and the time inside them; on
+ *                     a userspace medium each call is a round trip
+ *   FAULTFS_UNLINKED_ENOENT  "1": read, write and sync calls on an in-scope
+ *                     descriptor whose file is unlinked fail with ENOENT,
+ *                     as DolphinFS does (fstat still works); POSIX requires
+ *                     them to succeed, and SQLite's temporary files rely on it
  *
  * Build: cc -O2 -shared -fPIC -o faultfs.so faultfs.c -ldl
  */
@@ -38,6 +46,11 @@ struct faultfs_stats {
     unsigned long long enospc_returns;    /* write-family calls refused */
     unsigned long long out_of_scope;      /* barriers on other paths */
     unsigned long long medium_ns;         /* time inside the real in-scope barrier calls */
+    unsigned long long writes;            /* in-scope write-family calls, when counting */
+    unsigned long long write_ns;          /* time inside them */
+    unsigned long long write_bytes;       /* bytes they wrote */
+    unsigned long long reads;             /* in-scope read-family calls, when counting */
+    unsigned long long read_ns;           /* time inside them */
 };
 
 static const char *g_root;
@@ -45,6 +58,8 @@ static size_t g_root_len;
 static const char *g_control;
 static volatile long g_fsync_us;
 static volatile int g_enospc;
+static int g_unlinked_enoent;
+static int g_count_io;
 static volatile long long g_last_check_ns;
 static struct faultfs_stats *g_stats;
 
@@ -68,6 +83,10 @@ __attribute__((constructor)) static void faultfs_init(void) {
     const char *us = getenv("FAULTFS_FSYNC_US");
     g_fsync_us = us ? atol(us) : 0;
     g_control = copy_env("FAULTFS_CONTROL");
+    const char *unlinked = getenv("FAULTFS_UNLINKED_ENOENT");
+    g_unlinked_enoent = unlinked && strcmp(unlinked, "1") == 0;
+    const char *count_io = getenv("FAULTFS_COUNT_IO");
+    g_count_io = count_io && strcmp(count_io, "1") == 0;
     const char *stats = getenv("FAULTFS_STATS");
     if (stats && *stats) {
         int (*real_open)(const char *, int, ...) = dlsym(RTLD_NEXT, "open");
@@ -106,14 +125,31 @@ static void refresh_control(void) {
     g_enospc = enospc;
 }
 
-static int in_scope(int fd) {
+static int in_scope_target(int fd, char *target, size_t size) {
     if (!g_root_len || fd < 0) return 0;
-    char link[64], target[4096];
+    char link[64];
     snprintf(link, sizeof(link), "/proc/self/fd/%d", fd);
-    ssize_t n = readlink(link, target, sizeof(target) - 1);
+    ssize_t n = readlink(link, target, size - 1);
     if (n <= 0) return 0;
     target[n] = 0;
     return strncmp(target, g_root, g_root_len) == 0;
+}
+
+static int in_scope(int fd) {
+    char target[4096];
+    return in_scope_target(fd, target, sizeof(target));
+}
+
+/* The kernel names an unlinked file's descriptor "<path> (deleted)". */
+static int refuse_unlinked(int fd) {
+    if (!g_unlinked_enoent) return 0;
+    char target[4096];
+    if (!in_scope_target(fd, target, sizeof(target))) return 0;
+    static const char suffix[] = " (deleted)";
+    size_t n = strlen(target), k = sizeof(suffix) - 1;
+    if (n < k || strcmp(target + n - k, suffix) != 0) return 0;
+    errno = ENOENT;
+    return 1;
 }
 
 static void barrier_delay(int fd, long long medium_ns) {
@@ -134,6 +170,7 @@ static void barrier_delay(int fd, long long medium_ns) {
 }
 
 static int refuse_write(int fd) {
+    if (refuse_unlinked(fd)) return 1;
     refresh_control();
     if (!g_enospc || !in_scope(fd)) return 0;
     if (g_stats) __atomic_fetch_add(&g_stats->enospc_returns, 1, __ATOMIC_RELAXED);
@@ -141,11 +178,30 @@ static int refuse_write(int fd) {
     return 1;
 }
 
+/* Times one real call and charges it to an in-scope descriptor's counters. */
+#define COUNTED(fd, kind, call) ({ \
+    long long counted_started = g_count_io && g_stats ? now_ns() : 0; \
+    __typeof__(call) counted_rc = (call); \
+    long long counted_ns = counted_started ? now_ns() - counted_started : 0; \
+    if (counted_started && in_scope(fd)) { \
+        __atomic_fetch_add(&g_stats->kind##s, 1, __ATOMIC_RELAXED); \
+        __atomic_fetch_add(&g_stats->kind##_ns, (unsigned long long)counted_ns, __ATOMIC_RELAXED); \
+        if (counted_rc > 0) count_bytes_##kind((unsigned long long)counted_rc); \
+    } \
+    counted_rc; })
+
+static void count_bytes_write(unsigned long long n) {
+    __atomic_fetch_add(&g_stats->write_bytes, n, __ATOMIC_RELAXED);
+}
+
+static void count_bytes_read(unsigned long long n) { (void)n; }
+
 #define REAL(name) static __typeof__(&name) real_##name; \
     if (!real_##name) real_##name = (__typeof__(&name))dlsym(RTLD_NEXT, #name)
 
 int fsync(int fd) {
     REAL(fsync);
+    if (refuse_unlinked(fd)) return -1;
     long long started = now_ns();
     int rc = real_fsync(fd);
     if (rc == 0) barrier_delay(fd, now_ns() - started);
@@ -154,6 +210,7 @@ int fsync(int fd) {
 
 int fdatasync(int fd) {
     REAL(fdatasync);
+    if (refuse_unlinked(fd)) return -1;
     long long started = now_ns();
     int rc = real_fdatasync(fd);
     if (rc == 0) barrier_delay(fd, now_ns() - started);
@@ -179,37 +236,37 @@ int sync_file_range(int fd, off64_t offset, off64_t nbytes, unsigned int flags) 
 ssize_t write(int fd, const void *buf, size_t count) {
     REAL(write);
     if (refuse_write(fd)) return -1;
-    return real_write(fd, buf, count);
+    return COUNTED(fd, write, real_write(fd, buf, count));
 }
 
 ssize_t pwrite(int fd, const void *buf, size_t count, off_t offset) {
     REAL(pwrite);
     if (refuse_write(fd)) return -1;
-    return real_pwrite(fd, buf, count, offset);
+    return COUNTED(fd, write, real_pwrite(fd, buf, count, offset));
 }
 
 ssize_t pwrite64(int fd, const void *buf, size_t count, off64_t offset) {
     REAL(pwrite64);
     if (refuse_write(fd)) return -1;
-    return real_pwrite64(fd, buf, count, offset);
+    return COUNTED(fd, write, real_pwrite64(fd, buf, count, offset));
 }
 
 ssize_t writev(int fd, const struct iovec *iov, int iovcnt) {
     REAL(writev);
     if (refuse_write(fd)) return -1;
-    return real_writev(fd, iov, iovcnt);
+    return COUNTED(fd, write, real_writev(fd, iov, iovcnt));
 }
 
 ssize_t pwritev(int fd, const struct iovec *iov, int iovcnt, off_t offset) {
     REAL(pwritev);
     if (refuse_write(fd)) return -1;
-    return real_pwritev(fd, iov, iovcnt, offset);
+    return COUNTED(fd, write, real_pwritev(fd, iov, iovcnt, offset));
 }
 
 ssize_t pwritev64(int fd, const struct iovec *iov, int iovcnt, off64_t offset) {
     REAL(pwritev64);
     if (refuse_write(fd)) return -1;
-    return real_pwritev64(fd, iov, iovcnt, offset);
+    return COUNTED(fd, write, real_pwritev64(fd, iov, iovcnt, offset));
 }
 
 int fallocate(int fd, int mode, off_t offset, off_t len) {
@@ -234,6 +291,24 @@ int posix_fallocate64(int fd, off64_t offset, off64_t len) {
     REAL(posix_fallocate64);
     if (refuse_write(fd)) return ENOSPC;
     return real_posix_fallocate64(fd, offset, len);
+}
+
+ssize_t read(int fd, void *buf, size_t count) {
+    REAL(read);
+    if (refuse_unlinked(fd)) return -1;
+    return COUNTED(fd, read, real_read(fd, buf, count));
+}
+
+ssize_t pread(int fd, void *buf, size_t count, off_t offset) {
+    REAL(pread);
+    if (refuse_unlinked(fd)) return -1;
+    return COUNTED(fd, read, real_pread(fd, buf, count, offset));
+}
+
+ssize_t pread64(int fd, void *buf, size_t count, off64_t offset) {
+    REAL(pread64);
+    if (refuse_unlinked(fd)) return -1;
+    return COUNTED(fd, read, real_pread64(fd, buf, count, offset));
 }
 
 int msync(void *addr, size_t length, int flags) {

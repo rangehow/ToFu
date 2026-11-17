@@ -47,6 +47,7 @@ from lib.storage_authority_sql.turn_projection_cache import TurnProjectionCache
 from lib.storage_authority_sql.durability import (
     fsync_directory, fsync_file, sha256_file, write_json_durable,
 )
+from serverctl_pkg.local_placement import temporary_root
 
 
 _SQLITE_BUSY = {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
@@ -129,6 +130,58 @@ def _verify_backup_target(
 # ``_transaction`` path, so worst-case semantics equal the pre-batch design.
 _MAX_BATCH_JOBS = 64
 _SEGMENT_BUDGET_S = 0.25
+
+
+def _place_temporary_files() -> str:
+    """Keep this process's SQLite temporary files in the host's temporary root.
+
+    SQLite unlinks each temporary file (statement journal, sorter, temp
+    database) as soon as it opens it and keeps reading and writing it.
+    DolphinFS fails that I/O with ENOENT, so a temporary directory there turns
+    savepointed batch jobs into ``SQLITE_IOERR_WRITE`` rollbacks. SQLite reads
+    ``SQLITE_TMPDIR``/``TMPDIR`` once, when ``import sqlite3`` initializes the
+    library, so an inherited value cannot be corrected through the
+    environment afterwards. ``sqlite3_temp_directory`` (set by
+    ``PRAGMA temp_store_directory``) takes precedence over both for every
+    temporary file opened later in the process.
+
+    The directory must then serve I/O on an unlinked open file; a location
+    that cannot refuses startup instead of degrading every batch.
+    """
+    directory = temporary_root()
+    connection = sqlite3.connect(':memory:')
+    try:
+        quoted = directory.replace("'", "''")
+        connection.execute(f"PRAGMA temp_store_directory = '{quoted}'")
+        placed = connection.execute('PRAGMA temp_store_directory').fetchone()
+    finally:
+        connection.close()
+    if placed is None or placed[0] != directory:
+        raise StorageError(
+            'database_unavailable',
+            f'SQLite did not accept {directory} as its temporary directory')
+    path = os.path.join(directory, f'.tofu-sqlite-unlinked-probe-{uuid.uuid4().hex}')
+    payload = b'tofu-sqlite-temporary-file-probe'
+    try:
+        descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+    except OSError as exc:
+        raise StorageError(
+            'database_unavailable',
+            f'SQLite temporary directory {directory} is not writable: {exc}') from exc
+    try:
+        os.unlink(path)
+        os.pwrite(descriptor, payload, 0)
+        if os.pread(descriptor, len(payload), 0) != payload:
+            raise OSError('read back different bytes')
+    except OSError as exc:
+        raise StorageError(
+            'database_unavailable',
+            f'SQLite temporary directory {directory} cannot serve I/O on an '
+            f'unlinked open file ({exc}); SQLite temporary files need a '
+            'host-local directory') from exc
+    finally:
+        os.close(descriptor)
+    return directory
 
 
 def _deferred_index_name(statement: str) -> str:
@@ -1372,6 +1425,7 @@ class SQLiteBackend(Backend):
                 path.with_name(path.name + suffix).unlink(missing_ok=True)
 
     def start(self) -> dict[str, Any]:
+        _place_temporary_files()
         report = run_filesystem_preflight(self.config.data_dir)
         from lib.storage_authority_sql import fastpath
         decision = fastpath.decide(self.config.data_dir)

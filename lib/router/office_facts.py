@@ -182,14 +182,17 @@ class StoragePorts:
         from lib.conversations.coordinator_reports import CoordinatorReports
         return CoordinatorReports(owner, lead['projectPath']).latest(lead)
 
-    def report_messages(self, owner: int, lead: dict, known_version: int | None):
-        """``(version, pending kind=report messages)``; messages are None when unchanged."""
+    def report_messages(self, owner: int, lead: dict, known_version: tuple | None):
+        """``(version, pending kind=report messages)``; messages are None when unchanged.
+
+        Reports not yet absorbed by the lead count: the Router office never writes the mailbox.
+        """
         from lib.conversations.project_messages import ProjectMailbox
         mailbox = ProjectMailbox(owner, lead['projectPath'], lead['conversationId'])
-        head, version = mailbox.head()
+        head, tail, version = mailbox.observe()
         if version == known_version:
             return version, None
-        return version, [message for _position, message in mailbox.pending(head, lambda _sender: True, set())
+        return version, [message for _position, message in mailbox.pending(head, lambda _sender: True, set(), tail)
                          if message['kind'] == 'report']
 
     def result(self, owner: int, placement: dict) -> dict | None:

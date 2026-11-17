@@ -856,9 +856,14 @@ def test_storage_leads_page_every_binding_of_the_owner_only(records):
     assert 'foreign' not in {lead['conversationId'] for lead in leads}
 
 
-def test_storage_report_messages_read_the_real_mailbox_and_only_reports(records, monkeypatch):
+def test_storage_report_messages_read_the_real_mailbox_and_only_reports(monkeypatch):
     from types import SimpleNamespace
     from lib.conversations import project_messages as pm
+    # The mailbox draws tickets with unconditional puts; this fake models both
+    # authorities' put-without-expected_version and command-ID replay.
+    from tests.project_mod.test_project_message_history import LockedRecordClient
+    records = LockedRecordClient()
+    monkeypatch.setattr('lib.storage.get_storage_client', lambda **_kw: records)
     projects = {(OWNER, 'sender'): '/project', (OWNER, 'lead'): '/project'}
 
     def get(self, conversation, *, user_id, include_messages):
@@ -873,6 +878,15 @@ def test_storage_report_messages_read_the_real_mailbox_and_only_reports(records,
     version, messages = ports.report_messages(OWNER, lead, None)
     assert [(message['kind'], message['sender']) for message in messages] == [('report', 'sender')]
     assert ports.report_messages(OWNER, lead, version) == (version, None)
+    # Sends never write the head: a report the lead has not absorbed yet is still news.
+    pm.execute('send_project_message', {'conversation_id': 'lead', 'content': 'more', 'idempotency_key': 'r2',
+                                        'kind': 'report'}, sender)
+    later, messages = ports.report_messages(OWNER, lead, version)
+    assert later != version and [message['content'] for message in messages] == ['done', 'more']
+    pm.ProjectMailbox(OWNER, '/project', 'lead').absorb()
+    absorbed, messages = ports.report_messages(OWNER, lead, later)
+    assert [message['content'] for message in messages] == ['done', 'more']
+    assert ports.report_messages(OWNER, lead, absorbed) == (absorbed, None)
 
 
 def test_storage_results_follow_the_assignment_association_attempt_and_review(monkeypatch):

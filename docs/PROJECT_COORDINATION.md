@@ -2435,7 +2435,9 @@ state machine of its own.
       no conversation, so the API host's own `project` hint (a Push Hub
       publication listener) refreshes that lead.
     - a pending `kind=report` project message in a lead's mailbox, cleared once
-      the lead's round confirms it.
+      the lead's round confirms it. A send never writes the mailbox head, so the
+      read includes arrivals the lead has not absorbed (`ProjectMailbox.observe`),
+      and its version changes with each newly readable arrival as well as the head.
     - a Worker's completed, unreviewed assignment result, found on a busy-to-idle
       edge through the attempt's assignment association, and at the baseline on
       each lead's newest history page (`coverage.reports: newest_page`). It is

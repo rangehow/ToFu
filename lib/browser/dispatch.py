@@ -70,6 +70,19 @@ def _pick_connected_client(owner_user_id, owned):
         return chosen
 
 
+def select_owner_client(owner_user_id, owned, *, preferred: str = '') -> str:
+    """The owner's device for a server-side request that no task pins.
+
+    ``owned`` is the owner's connected-client rows. ``preferred`` wins while
+    it is connected; otherwise the device unpinned browser tools use (sticky
+    per owner). '' when the owner has no connected device.
+    """
+    if preferred and any(str(row.get('client_id') or '') == preferred
+                         for row in owned):
+        return preferred
+    return _pick_connected_client(str(owner_user_id or '').strip(), owned) if owned else ''
+
+
 def _clear_sticky_clients() -> int:
     """Test/maintenance hook: drop all remembered device routes."""
     with _STICKY_LOCK:

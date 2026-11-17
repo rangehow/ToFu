@@ -194,6 +194,22 @@ def _automatic_read_replay_identity(info):
     return identity if all(isinstance(value, str) and value for value in identity) else None
 
 
+def _with_credential_notice(result, notice: str):
+    """Append Tofu's credential guidance to an MCP error result only; every
+    other result stays byte-exact for document and receipt consumers."""
+    if not notice or not isinstance(result, MCPToolResult) or not result.is_error:
+        return result
+    suffix = '\n\n' + notice
+    return MCPToolResult(
+        str(result) + suffix, image_contents=result.image_contents,
+        structured_json=result.structured_json,
+        document_text=(None if result.document_text is None
+                       else result.document_text + suffix),
+        document_error=result.document_error, is_error=True,
+        content_blocks=result.content_blocks,
+        retention_error=result.retention_error)
+
+
 def _tool_result_is_error(result) -> bool:
     """Read the MCP tool-error flag across the installed SDK generations.
 
@@ -357,6 +373,12 @@ class MCPBridge:
         # keepalive sweep re-probes at most once per MCP_CRED_PROBE_INTERVAL.
         self._cred_probe_ts: dict[str, float] = {}
         self._cred_probe_inflight: set[str] = set()
+        # Learning which stored values copy the owner's browser cookies
+        # (lib/mcp/browser_credentials.py): one pass per server at a time,
+        # and the fingerprints a browser already answered for, so a reconnect
+        # does not ask the browser about the same value again.
+        self._credential_learning_inflight: set[str] = set()
+        self._credential_learning_seen: dict[str, frozenset[str]] = {}
 
         # Per-server resolved liveness-probe method name (see
         # ``_probe_liveness``): 'send_discover' | 'discover' | 'send_ping' |
@@ -817,6 +839,7 @@ class MCPBridge:
             # not imply a valid session cookie/token. Non-blocking; no-op unless
             # the server's catalog entry declares a health_probe.
             self._probe_cred_health_async(name)
+            self._learn_browser_credentials_async(name)
             return tools
 
     # ── Circuit breaker ──────────────────────────────────
@@ -1005,59 +1028,140 @@ class MCPBridge:
 
     def _newer_credential(self, name: str) -> dict | None:
         """The stored row to reconnect ``name`` with, when its credential is
-        known expired and that row (after copying in a browser-held
-        credential) carries a different ``env`` than the live connection."""
+        known expired and that row (after copying in the owner's current
+        browser session) carries a different ``env`` than the live connection."""
+        return self._credential_renewal(name)[0]
+
+    def _credential_renewal(self, name: str) -> tuple[dict | None, Any]:
+        """``(row, outcome)``: the ``_newer_credential`` row or None, and the
+        ``browser_credentials.RefreshOutcome`` that explains a None."""
         with self._lock:
             if (self._cred_health.get(name) or {}).get('status') != 'expired':
-                return None
+                return None, None
             handle = self._servers.get(name)
             live = handle.config if handle is not None else self._configs.get(name)
-        stored = self._stored_server_config(name, refresh_browser=True)
+        stored, outcome = self._stored_server_config(name, refresh_browser=True)
         if (stored is None or not stored.get('enabled', True)
                 or (stored.get('env') or {}) == ((live or {}).get('env') or {})):
-            return None
-        return stored
+            return None, outcome
+        return stored, outcome
 
     def _stored_server_config(self, name: str, *,
-                              refresh_browser: bool) -> dict | None:
-        """The owner's stored row for ``name``.
+                              refresh_browser: bool) -> tuple[dict | None, Any]:
+        """``(row, outcome)``: the owner's stored row for ``name``.
 
-        None for an unowned bridge, an absent row or an unreadable store.
-        ``refresh_browser`` first saves into the row any credential the
-        catalog backs with a browser cookie the owner's browser holds now
-        (``lib/mcp/browser_credentials.py``). Values are never logged.
+        The row is None for an unowned bridge, an absent row or an unreadable
+        store. ``refresh_browser`` first copies the owner's current browser
+        session into each browser-held credential of the row and returns that
+        ``browser_credentials.RefreshOutcome`` (else None).
         """
         if self._owner_user_id is None:
-            return None
+            return None, None
         from lib.json_store import JsonStoreReadError
-        from lib.mcp.browser_credentials import read_browser_env
-        from lib.mcp.config import merge_server_env
-        changed: list[str] = []
+        from lib.mcp.browser_credentials import refresh_from_browser
+        outcome = None
         try:
-            row = load_mcp_config(user_id=self._owner_user_id).get(name)
-            if not isinstance(row, dict):
-                return None
             if refresh_browser:
-                env = row.get('env') if isinstance(row.get('env'), dict) else {}
-                fresh = read_browser_env(
-                    name, row, owner_user_id=self._owner_user_id)
-                changed = sorted(k for k, v in fresh.items() if env.get(k) != v)
-                if changed:
-                    row = merge_server_env(
-                        name, {k: fresh[k] for k in changed},
-                        user_id=self._owner_user_id)
+                outcome = refresh_from_browser(
+                    name, owner_user_id=self._owner_user_id)
+                row = outcome.row
+            else:
+                row = load_mcp_config(user_id=self._owner_user_id).get(name)
         except (JsonStoreReadError, OSError) as e:
             logger.warning('[MCP] Stored config for %s unavailable (%s); '
                            'using the last-known config', name, e)
+            return None, None
+        return (dict(row) if isinstance(row, dict) else None), outcome
+
+    def _auth_failure_detail(self, server_name: str, result) -> str | None:
+        """A short snippet when ``result`` reports a rejected credential.
+
+        Free text counts only on an MCP error result, so a document that
+        merely mentions authentication never does; the structured
+        ``login_required`` convention counts on any result.
+        """
+        from lib.mcp.health_probe import (STRUCTURED_EXPIRED_MARKERS,
+                                          classify_probe_result)
+        text = str(result or '')
+        if not (getattr(result, 'is_error', False) or any(
+                marker in text.lower() for marker in STRUCTURED_EXPIRED_MARKERS)):
             return None
-        if row is None:
+        status, detail = classify_probe_result(
+            text, self._cred_probe_spec(server_name) or {})
+        return detail if status == 'expired' else None
+
+    def _credential_followup(self, server_name: str, tool_name: str, result):
+        """Renew a browser-held credential after ``result`` was rejected.
+
+        None unless ``result`` is an auth failure of a server whose stored
+        credential copies the owner's browser session. Otherwise records the
+        expired verdict and returns ``(handle, notice)``: the connection
+        reconnected with the browser's newer session (or None when there is
+        none) and the guidance for a caller that cannot repeat the call.
+        """
+        detail = self._auth_failure_detail(server_name, result)
+        if detail is None or self._owner_user_id is None:
             return None
-        if changed:
-            audit_log('mcp_credential_refreshed', server=name,
-                      env_keys=changed, source='browser_cookie')
-            logger.info('[MCP] Saved %s for %s from the owner\'s browser',
-                        ', '.join(changed), name)
-        return dict(row)
+        from lib.mcp.browser_credentials import credential_bindings, failure_notice
+        row = self._stored_server_config(server_name, refresh_browser=False)[0]
+        if row is None or not credential_bindings(server_name, row):
+            return None
+        logger.warning('[MCP] %s.%s rejected its browser-held credential (%s)',
+                       server_name, tool_name, detail)
+        with self._lock:
+            self._cred_health[server_name] = {
+                'status': 'expired', 'checked_at': time.time(), 'detail': detail}
+        audit_log('mcp_credential_expired', server=server_name, tool=tool_name)
+        newer, outcome = self._credential_renewal(server_name)
+        if newer is None:
+            return None, failure_notice(
+                server_name, row, renewed=False,
+                reason=getattr(outcome, 'reason', 'unbound'))
+        try:
+            handle = self._reconnect_server(server_name, newer)
+        except Exception as e:
+            logger.warning('[MCP] Credential renewal for %s failed: %s',
+                           server_name, _unwrap_exception_group(e))
+            return None, ''
+        return handle, failure_notice(server_name, newer, renewed=True,
+                                      reason='renewed')
+
+    def _learn_browser_credentials_async(self, name: str) -> bool:
+        """Learn in the background which stored values of ``name`` copy the
+        owner's browser cookies (``browser_credentials.learn_bindings``)."""
+        if self._owner_user_id is None:
+            return False
+        with self._lock:
+            if name in self._credential_learning_inflight:
+                return False
+            self._credential_learning_inflight.add(name)
+            seen = self._credential_learning_seen.get(name, frozenset())
+
+        def _worker():
+            from lib.mcp.browser_credentials import learn_bindings
+            try:
+                answered = learn_bindings(
+                    name, owner_user_id=self._owner_user_id, skip=seen)
+                if answered:
+                    with self._lock:
+                        self._credential_learning_seen[name] = (
+                            self._credential_learning_seen.get(name, frozenset())
+                            | answered)
+            except Exception as e:
+                logger.debug('[MCP] browser credential learning for %s failed: %s',
+                             name, e)
+            finally:
+                with self._lock:
+                    self._credential_learning_inflight.discard(name)
+
+        try:
+            threading.Thread(target=_worker, name=f'mcp-credlearn-{name}',
+                             daemon=True).start()
+        except BaseException:
+            with self._lock:
+                self._credential_learning_inflight.discard(name)
+            raise
+        return True
 
     def _cred_probe_due(self, name: str) -> bool:
         """True if ``name`` has a health_probe and its re-probe interval elapsed.
@@ -1136,9 +1240,11 @@ class MCPBridge:
 
         The config is the owner's current stored row (``stored`` when the
         caller already resolved it), so a credential saved by Settings or by
-        another process applies here, and a credential known to be expired is
-        first renewed from the owner's browser. An unowned bridge or a server
-        absent from the store keeps its last-known config.
+        another process applies here. A credential known to be expired, or a
+        server whose last connect failed (it may have refused a stale
+        credential at startup), is first renewed from the owner's browser. An
+        unowned bridge or a server absent from the store keeps its last-known
+        config.
 
         Raises if the config is unknown or the reconnect itself fails — the
         caller decides how to surface that.
@@ -1151,11 +1257,20 @@ class MCPBridge:
             srv_cfg = dict(old.config) if old is not None else self._configs.get(name)
             srv_cfg = dict(srv_cfg) if srv_cfg is not None else None
             expired = (self._cred_health.get(name) or {}).get('status') == 'expired'
+            failing = name in self._breaker
             rlock = self._reconnect_locks.lock_for(name)
         if srv_cfg is None:
             raise ValueError(f'cannot reconnect unknown MCP server: {name}')
-        srv_cfg = (stored or self._stored_server_config(
-            name, refresh_browser=expired) or srv_cfg)
+        if stored is None:
+            stored = self._stored_server_config(
+                name, refresh_browser=expired or failing)[0]
+        if stored is not None:
+            if (stored.get('env') or {}) != (srv_cfg.get('env') or {}):
+                # A verdict about the replaced credential says nothing about
+                # the new one; the reconnect's own probe sets the next one.
+                with self._lock:
+                    self._cred_health.pop(name, None)
+            srv_cfg = stored
 
         with rlock:
             # Re-check under the per-server lock: a racing caller may have
@@ -2199,13 +2314,25 @@ class MCPBridge:
         replay_identity = (
             _automatic_read_replay_identity(info) if retry_on_disconnect is None else None)
         may_replay = retry_on_disconnect is True or replay_identity is not None
-        t0 = time.time()
-        try:
-            result = self._run_async(
-                self._async_call_tool(handle, tool_name, arguments, timeout, meta=meta),
+
+        def _attempt(on_handle):
+            return self._run_async(
+                self._async_call_tool(on_handle, tool_name, arguments, timeout, meta=meta),
                 timeout=(timeout + 10) if timeout else None,
                 **({'cancel': cancel} if cancel is not None else {}),
             )
+
+        def _replay_declaration_current():
+            with self._lock:
+                current = self._tool_index.get(namespaced_name)
+                disabled = tool_name in self._disabled_tools_for(server_name)
+                changed = (retry_on_disconnect is None
+                           and _automatic_read_replay_identity(current) != replay_identity)
+            return not (disabled or changed)
+
+        t0 = time.time()
+        try:
+            result = _attempt(handle)
         except CancelledError:
             raise
         except Exception as e:
@@ -2234,23 +2361,13 @@ class MCPBridge:
                     raise e from re
                 if cancel is not None and cancel.is_set():
                     raise CancelledError('MCP call cancelled during reconnect')
-                with self._lock:
-                    current = self._tool_index.get(namespaced_name)
-                    disabled = tool_name in self._disabled_tools_for(server_name)
-                    declaration_changed = (
-                        retry_on_disconnect is None
-                        and _automatic_read_replay_identity(current) != replay_identity)
-                if disabled or declaration_changed:
+                if not _replay_declaration_current():
                     logger.warning(
                         '[MCP:Call] %s.%s reconnected without replay: '
                         'the enabled read declaration changed', server_name, tool_name)
                     raise
                 try:
-                    result = self._run_async(
-                        self._async_call_tool(new_handle, tool_name, arguments, timeout, meta=meta),
-                        timeout=(timeout + 10) if timeout else None,
-                        **({'cancel': cancel} if cancel is not None else {}),
-                    )
+                    result = _attempt(new_handle)
                     elapsed = time.time() - t0
                     self._reset_timeout_streak(server_name)
                     logger.info(
@@ -2275,7 +2392,23 @@ class MCPBridge:
         self._reset_timeout_streak(server_name)
         logger.info('[MCP:Call] %s.%s returned %d chars in %.1fs',
                     server_name, tool_name, len(result), elapsed)
-        return result
+        followup = self._credential_followup(server_name, tool_name, result)
+        if followup is None:
+            return result
+        renewed, notice = followup
+        if renewed is None or not may_replay or not _replay_declaration_current():
+            return _with_credential_notice(result, notice)
+        if cancel is not None and cancel.is_set():
+            raise CancelledError('MCP call cancelled during credential renewal')
+        logger.info('[MCP:Call] %s.%s repeating once with the renewed credential',
+                    server_name, tool_name)
+        try:
+            return _attempt(renewed)
+        except CancelledError:
+            raise
+        except Exception as e:
+            self._record_call_failure(server_name, tool_name, e, timeout, t0)
+            raise
 
     def _record_call_failure(self, server_name, tool_name, error, timeout, started_at):
         """Settle health for either attempt; a peer answer ends a timeout streak."""

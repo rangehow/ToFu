@@ -28,11 +28,11 @@
 >
 > **Kit readiness, checked 2026-10-31** — so a future submitter starts from
 > facts rather than re-deriving them:
-> - `manifest.store.json` = 12 permissions, version 5.8.5, matching the
+> - `manifest.store.json` = 12 permissions, version 5.9.0, matching the
 >   shipped manifest; `downloads`, `webRequest`, and `webNavigation` present,
 >   `activeTab` absent.
 > - `bash scripts/package_extension.sh --store` produces a valid
->   `tofu-browser-bridge-5.8.5-store.zip` (bundled worker modules, `<all_urls>`).
+>   `tofu-browser-bridge-5.9.0-store.zip` (bundled worker modules, `<all_urls>`).
 > - `frame_authority` checks the selected frame URL and pins its Chrome document
 >   ID. It reuses `webNavigation` and `scripting`; no permission is added.
 > - `tests/release/test_chrome_store_manifest_parity.py` — 25/25, and it DERIVES the

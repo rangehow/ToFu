@@ -439,3 +439,24 @@ def test_NEUTER_leaking_host_env_breaks_pip(monkeypatch):
     assert leaked.get('PIP_REQUIRE_VIRTUALENV') == '1', (
         'NEUTER setup: the poison must be present to prove the scrub')
     assert 'PIP_REQUIRE_VIRTUALENV' not in wb._wine_env()
+
+
+@pytest.mark.parametrize('order', [('msitools', 'nsis'), ('nsis', 'msitools')])
+def test_tools_prefix_is_created_once_whichever_tool_comes_first(
+        tmp_path, monkeypatch, order):
+    """A cold cache needs msitools before nsis; the first tool must create
+    the prefix and the second install into it (mamba refuses `install`
+    into a non-env and `create` would wipe the first tool)."""
+    monkeypatch.setattr(wb.wintoolchain, 'cache_dir', lambda: str(tmp_path))
+    monkeypatch.setattr(wb.shutil, 'which', lambda name: '/fake/' + name)
+    verbs = []
+
+    def fake_sh(cmd, log_fh, **kw):
+        verbs.append(cmd.split()[1])
+        os.makedirs(os.path.join(tmp_path, 'tools', 'conda-meta'),
+                    exist_ok=True)
+
+    monkeypatch.setattr(wb, '_sh', fake_sh)
+    for package in order:
+        wb._conda_tools_add(package, None)
+    assert verbs == ['create', 'install']

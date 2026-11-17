@@ -499,24 +499,35 @@ def _pip_index_env() -> dict:
 
 # ── Small helpers (mirroring builder.py conventions) ─────────────────
 
+def _conda_tools_add(package: str, log_fh) -> None:
+    """Add one conda-forge package to the shared native tools prefix.
+
+    mamba refuses `install` into a prefix that is not yet an env
+    ("Environment must first be created", measured) and `create` would
+    wipe one that is, so the verb follows the prefix: msitools is needed
+    before nsis on a cold cache, so neither may assume the other ran.
+    """
+    conda = shutil.which('mamba') or shutil.which('conda')
+    if not conda:
+        raise RuntimeError(f'{package} not provisioned and no conda/mamba '
+                           'to install it with')
+    prefix = os.path.join(wintoolchain.cache_dir(), 'tools')
+    verb = ('install' if os.path.isdir(os.path.join(prefix, 'conda-meta'))
+            else 'create')
+    _sh(f'{conda} {verb} -y -p {prefix} -c conda-forge {package}', log_fh,
+        timeout=1800)
+
+
 def _ensure_msiextract(log_fh) -> str:
     """Locate msiextract (conda-forge msitools), provisioning if absent.
 
     Same shape as _ensure_makensis: native binary, no wine, no display.
-    The tools prefix already exists (nsis made it an env), so the verb
-    is `install` — `create` is only for a not-yet-env prefix.
     """
     exe = os.path.join(wintoolchain.cache_dir(), 'tools', 'bin',
                        'msiextract')
     if os.path.isfile(exe):
         return exe
-    conda = shutil.which('mamba') or shutil.which('conda')
-    if not conda:
-        raise RuntimeError('msiextract not provisioned and no conda/mamba '
-                           'to install msitools with')
-    prefix = os.path.join(wintoolchain.cache_dir(), 'tools')
-    _sh(f'{conda} install -y -p {prefix} -c conda-forge msitools', log_fh,
-        timeout=1800)
+    _conda_tools_add('msitools', log_fh)
     if not os.path.isfile(exe):
         raise RuntimeError(f'msiextract missing after provision: {exe}')
     return exe
@@ -672,15 +683,7 @@ def _ensure_makensis(log_fh) -> str:
     exe = os.path.join(wintoolchain.cache_dir(), 'tools', 'bin', 'makensis')
     if os.path.isfile(exe):
         return exe
-    conda = shutil.which('mamba') or shutil.which('conda')
-    if not conda:
-        raise RuntimeError('makensis not provisioned and no conda/mamba '
-                           'to install nsis with')
-    prefix = os.path.join(wintoolchain.cache_dir(), 'tools')
-    # `create`, not `install`: mamba refuses install into a prefix that is
-    # not yet a conda env ("Environment must first be created", measured).
-    _sh(f'{conda} create -y -p {prefix} -c conda-forge nsis', log_fh,
-        timeout=1800)
+    _conda_tools_add('nsis', log_fh)
     if not os.path.isfile(exe):
         raise RuntimeError(f'makensis missing after provision: {exe}')
     return exe

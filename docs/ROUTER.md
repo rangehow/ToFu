@@ -1926,7 +1926,9 @@ projects. Nothing else changes.
   registry lane never published reported `available=false` while leads were
   pointed at it. `router_home_path` now writes `RESOURCES.md` once — at
   creation and on the first open of a pre-existing home that lacks it — from
-  `_RESOURCES` in `lib/router/home.py`: the queues of
+  the last release bundle's `router_home/RESOURCES.md`
+  (docs/PUBLIC_CORE.md D2), else the core's empty registry `_RESOURCES` in
+  `lib/router/home.py`. The YourProvider bundle's seed holds the queues of
   `scripts/hope_patrol/queues.json` (the compute patrol's documented seed,
   itself sourced from the owner's 2026-11-13 Hope account audit), the queue
   and resource-code observations of the Hope skill's `references/queues.md`

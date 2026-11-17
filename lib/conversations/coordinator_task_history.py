@@ -451,10 +451,15 @@ class CoordinatorTaskHistory:
                                'firstSeenAt': board['updatedAt'], 'lastSeenAt': board['updatedAt'],
                                'changedAt': board['updatedAt']}, board=board, task=task, now=now)
                        for key, task in on_board.items() if key not in shown)
+        translation = head.get('translation') if head else None
+        if translation:
+            page['translation'] = deepcopy(translation)
+        shown_as = {item['source']: item['text'] for item in translation['texts']} if translation else {}
         if needle:
-            entries = [entry for entry in entries if any(
-                needle in text.casefold()
-                for text in (entry['title'], entry.get('progress', ''), *entry.get('formerTitles', ())))]
+            def texts(entry):
+                written = (entry['title'], entry.get('progress', ''), *entry.get('formerTitles', ()))
+                return (*written, *(shown_as[text] for text in written if text in shown_as))
+            entries = [entry for entry in entries if any(needle in text.casefold() for text in texts(entry))]
         for entry in entries:
             page['counts'][_group(entry)] += 1
         if group is not None:

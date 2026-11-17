@@ -347,9 +347,13 @@ their owner with personal tokens, so a colleague registers them with their own.
 live registration shipped the owner's personal and third-party servers to
 colleagues together with the personal tokens they authenticate with.
 Decision: a registration travels iff its command is the bare launcher of an
-internal MCP repo the export bundles under `vendor/`; one tuple
-(`_BUNDLED_INTERNAL_MCP_REPOS` in `export_pkg/_lists.py`) drives both the
-bundler and the carry filter. Such a server launches from the bundled source
+internal MCP repo the export bundles under `vendor/`. The inventory is
+declared once, in `bundles/yourprovider/mcp_launchers/yourprovider.json`: every launcher
+whose sources name `vendor/<launcher>` is bundled from the sibling
+`../<launcher>` checkout. The runtime launcher resolution, the export bundler
+and carry filter (`_BUNDLED_INTERNAL_MCP_REPOS` in `export_pkg/_lists.py` is
+derived from it) and `install.sh`'s warm step all read that file, so adding a
+row adds the server everywhere; there is no directory scan. Such a server launches from the bundled source
 on any host and signs in through the destination's own SSO session. Matching
 is exact: a host-pinned path to a bundled launcher does not resolve to
 `vendor/` on another host and stays behind. Alternatives considered: a

@@ -39,6 +39,10 @@ carry out that task:
   that tab;
 - capture a screenshot of a tab;
 - read or set cookies for the site being automated;
+- check which of its cookies equals a site session the user saved in their
+  Tofu tool settings, by comparing one-time keyed digests inside the extension
+  (only the matching cookie's name, domain and path are sent), and read that
+  cookie again when the saved copy has expired;
 - search the user's browsing history when a task asks it to;
 - read the user's bookmarks when a task asks it to;
 - stream the bytes of a user-requested authenticated file to that user's own

@@ -117,7 +117,12 @@ def search(identifier, params):
                 seen.add(pid)
                 papers.append(p)
 
-        papers.sort(key=lambda p: p.get('upvotes', 0), reverse=True)
+        # The keyword endpoint already ranks by relevance; only the curated
+        # daily list is ordered by popularity. Re-sorting a keyword search by
+        # upvotes dropped the exact title match (rank 2 of 120) below 15
+        # popular but unrelated papers.
+        if not topic:
+            papers.sort(key=lambda p: p.get('upvotes', 0), reverse=True)
         top = papers[:15]
         if not top:
             return None

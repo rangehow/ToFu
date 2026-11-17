@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import hashlib
 import os
 import shutil
 import threading
@@ -79,7 +80,10 @@ def pool(root: Path) -> Path | None:
     return None if local is None else local / ic._repository_key(root)
 
 
-SCRATCH_PREFIX = '.tmp-'
+def scratch_root() -> Path:
+    """The directory holding every pooled task checkout's command scratch."""
+    from serverctl_pkg.local_placement import temporary_root
+    return Path(temporary_root()) / f'tofu-{getattr(os, "getuid", lambda: 0)()}-tmp'
 
 
 def _scratch_path(checkout: Path) -> Path | None:
@@ -93,7 +97,8 @@ def _scratch_path(checkout: Path) -> Path | None:
     local = ic._placed_local_root()
     if local is None or os.path.realpath(owner.parent.parent) != os.path.realpath(local):
         return None
-    return owner / f'{SCRATCH_PREFIX}{checkout.name}'
+    identity = os.path.join(os.path.realpath(owner), checkout.name)
+    return scratch_root() / hashlib.sha256(identity.encode('utf-8')).hexdigest()[:12]
 
 
 def checkout_scratch(checkout: Path) -> str | None:
@@ -101,14 +106,23 @@ def checkout_scratch(checkout: Path) -> str | None:
 
     Workers' scratch (``mktemp``, ``tempfile``, build and test temporaries)
     otherwise landed in the shared ``/tmp`` or beside the checkouts with no
-    owner. It lives beside its checkout, outside the tree Git captures, and
-    goes when the checkout retires (:func:`retire_scratch`), i.e. when its
-    assignment is delivered or discarded. None for any other directory.
+    owner. It lives outside the tree Git captures, in the private
+    :func:`scratch_root` under a digest of the checkout's path, and goes when
+    the checkout retires (:func:`retire_scratch`), i.e. when its assignment is
+    delivered or discarded. None for any other directory.
+
+    The path stays short because programs bind AF_UNIX sockets under
+    ``$TMPDIR`` and ``sun_path`` holds 108 bytes: Chromium aborts with
+    "Socket path too long" at ``$TMPDIR/org.chromium.Chromium.XXXXXX/
+    SingletonSocket`` once ``$TMPDIR`` exceeds about 60 characters, which a
+    directory beside the checkout always did.
     """
     scratch = _scratch_path(checkout)
     if scratch is None:
         return None
+    from serverctl_pkg.local_placement import ensure_private_directory
     try:
+        ensure_private_directory(scratch.parent)
         scratch.mkdir(mode=0o700, exist_ok=True)
     except OSError:
         return None

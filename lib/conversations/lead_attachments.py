@@ -14,7 +14,8 @@ what it can already read.
 - a path inside the sending task's verified roots (the read_files roots),
   read without following symlinks (``lib.artifacts.file_snapshot``);
 - ``att_media_<id>``: one of the owner's own attachments (owner-scoped lookup);
-- ``/api/images/<file>``: an uploaded image this conversation's messages show.
+- ``/api/images/<file>``: an uploaded image this conversation's messages show,
+  including one the owner steered into the running Turn.
 Anything else is refused before any record is written. No size or count limit
 applies beyond the attachment platform's own. An attachment is context only:
 an agent-authored message grants no human authority, attachments included.
@@ -115,17 +116,41 @@ def _read_workspace_file(task: dict, reference: str) -> tuple[bytes, str]:
     return snapshot.content or b'', os.path.basename(snapshot.path)
 
 
+def _owner_steered_images(task: dict) -> list:
+    """Images of the owner's own messages steered into the Turn this task executes.
+
+    A steer never enters ``task['messages']``; its images live on its record:
+    this executor's delivered ones and those committed to the live Turn. The
+    committed author decides it was the owner's input in this conversation;
+    nonhuman steers and Router forwards carry none.
+    """
+    from lib.tasks_pkg.committed_steers import live_turn_steer_records
+    from lib.turn_initiation import require_human_turn, steer_author_turn
+    images: list = []
+    for record in [*(task.get('_userSteerInjects') or ()), *live_turn_steer_records(task)]:
+        author = record.get('author') if isinstance(record, dict) else None
+        if not isinstance(author, dict):
+            continue
+        try:
+            require_human_turn(steer_author_turn(author))
+        except ValueError:
+            continue
+        for preview in record.get('previews') or ():
+            if isinstance(preview, dict):
+                images.extend(preview.get('images') or ())
+    return images
+
+
 def _conversation_images(task: dict) -> set[str]:
     from lib.attachments import canonical_image_ref
     shown: set[str] = set()
-    for message in task.get('messages') or ():
-        if not isinstance(message, dict):
-            continue
-        for image in message.get('images') or ():
-            values = image.values() if isinstance(image, dict) else (image,)
-            for value in values:
-                if isinstance(value, str) and canonical_image_ref(value):
-                    shown.add(canonical_image_ref(value))
+    images = [image for message in task.get('messages') or () if isinstance(message, dict)
+              for image in message.get('images') or ()]
+    for image in images + _owner_steered_images(task):
+        values = image.values() if isinstance(image, dict) else (image,)
+        for value in values:
+            if isinstance(value, str) and canonical_image_ref(value):
+                shown.add(canonical_image_ref(value))
     return shown
 
 

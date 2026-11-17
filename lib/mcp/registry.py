@@ -58,11 +58,10 @@ class EnvSpec(TypedDict, total=False):
                         # non-obvious (e.g. Amap: create app → add key → pick
                         # "Web service"). Omit when the link is self-evident.
     browser_cookie: dict  # optional {name, url, url_env?}: the browser cookie
-                          # this value copies. When the server's credential
-                          # probe proves the stored copy expired, the bridge
-                          # reads that one cookie (for the server's url_env
-                          # value, else url) from the owner's connected Tofu
-                          # extension and saves it (lib/mcp/browser_credentials.py).
+                          # this value copies (at the server's url_env value,
+                          # else url). Declare it when the stored copy may
+                          # already be stale; other servers' cookie copies are
+                          # learned. Renewal: lib/mcp/browser_credentials.py.
 
 
 class CatalogEntry(TypedDict, total=False):

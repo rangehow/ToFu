@@ -14,7 +14,7 @@ import re
 import time
 
 import lib as _lib
-from lib.agent_loop.agent_loop import AbortSignal
+from lib.agent_loop.agent_loop import AbortSignal, LoopDirective
 from lib.llm_dispatch.api import dispatch_stream
 from lib.llm.llm_errors import AbortedError
 from lib.log import get_logger
@@ -29,7 +29,9 @@ from lib.paper.images.titles import (
 from lib.paper.artifact_repository import PaperArtifactRepository, PaperReport
 from lib.paper.agent_loop_policy import run_guarded_paper_agent_loop
 from lib.paper.agent_usage import PaperAgentUsageMeter
+from lib.paper.prompts import report_continuation_prompt
 from lib.paper.report_engine._body import ReportBodyProjection
+from lib.paper.report_engine._normalize import normalize_report_markdown_with_changes
 from lib.paper.report_engine._publication import publish_report
 from lib.paper.review._lang import (
     is_rebuttal_lang,
@@ -65,6 +67,67 @@ from lib.paper.report_engine._hooks import (
 )
 
 logger = get_logger(__name__)
+
+
+def _clean_report_body(task, body, *, normalize_markdown):
+    # Strip LLM preamble before the first heading. Models often emit
+    # "Now I have enough information..." / "Let me compile..." / multi-
+    # paragraph "I'll research..." before the actual Markdown report
+    # starts at the first `## ` or `# `. Strip aggressively — any text
+    # before the first heading is non-report chatter regardless of length.
+    _heading_start = re.search(r'^#{1,6}\s', body.text, re.MULTILINE)
+    if _heading_start and _heading_start.start() > 0:
+        preamble = body.text[:_heading_start.start()].strip()
+        if preamble:
+            logger.info('[Paper:Report] Stripping %d-char preamble: %.120s',
+                        len(preamble), preamble.replace('\n', ' '))
+            body.text = body.text[_heading_start.start():]
+
+    # Ordinary reports: deterministically repair formatting-rule violations
+    # (outer ```markdown wrapper, closing chatter, LaTeX in backticks).
+    # Review-family bodies have their own finalizers in run_report_task.
+    if not normalize_markdown:
+        return
+    body.text, md_changes = normalize_report_markdown_with_changes(body.text)
+    if md_changes:
+        task['full_text'] = body.text
+        logger.info('[Paper:Report] Task %s — normalized report Markdown: %s',
+                    task['task_id'], ', '.join(f'{c.kind}={c.count}' for c in md_changes))
+
+
+def _report_length_continuation(task, body, messages, abort_signal):
+    """Return the ``decide_round`` hook that resumes output-cap truncation.
+
+    Review/rebuttal documents keep their single-round behaviour (no hook).
+    """
+    if is_review_family(task['lang']):
+        return None
+    prompt_lang = task.get('ui_lang') or task['lang']
+
+    def _continue_truncated_report(rnd, msg, finish, usage):
+        # A no-tool round cut by the model's output cap is not a finished
+        # report: ask for the rest and let the body join the pieces. There is
+        # no round cap; a continuation that adds no text ends the loop and the
+        # report is published as far as the model got.
+        if (finish != 'length' or abort_signal.aborted
+                or not isinstance(msg, dict) or msg.get('tool_calls')):
+            return None
+        if not body.continue_truncated_response():
+            logger.warning(
+                '[Paper:Report] Task %s round %d — output cap reached with no '
+                'new text; publishing the report as generated (%d chars)',
+                task['task_id'], rnd + 1, len(body.text))
+            return None
+        logger.info(
+            '[Paper:Report] Task %s round %d — output cap reached; requesting '
+            'continuation', task['task_id'], rnd + 1)
+        messages.append({key: value for key, value in msg.items()
+                         if key != 'tool_calls'})
+        messages.append({'role': 'user',
+                         'content': report_continuation_prompt(prompt_lang)})
+        return LoopDirective.continue_round()
+
+    return _continue_truncated_report
 
 
 def run_report_task(task, messages, images):
@@ -170,11 +233,10 @@ def run_report_task(task, messages, images):
 
         logger.info('[Paper:Report] Task %s round %d — model=%s msgs=%d',
                     task['task_id'], rnd + 1, model_name, len(messages))
-        # max_tokens: pass a very large ceiling so the report can run to
-        #   completion without artificial truncation.  dispatch_stream →
-        #   build_body → _clamp_max_tokens() automatically reduces this to each
-        #   model's native API limit (GPT=32k, Claude=128k, Qwen per-model
-        #   16–64k, etc.), so we get "as much as the model allows" without a cap.
+        # max_tokens: a very large ceiling; _clamp_max_tokens() reduces it to
+        #   each model's native output limit ("as much as the model allows").
+        #   A round that still stops at that limit is continued by
+        #   _report_length_continuation instead of being published truncated.
         from lib.llm.stream_result import ensure_provider_stream_result
         return ensure_provider_stream_result(dispatch_stream(
             messages,
@@ -234,6 +296,7 @@ def run_report_task(task, messages, images):
             execute_tool=_execute_tool,
             on_round_result=_accumulate_usage,
             on_tool_round=_begin_tool_round,
+            decide_round=_report_length_continuation(task, body, messages, abort_signal),
             on_round_end=_result_budget.finish_round,
         )
         aborted = _outcome.aborted
@@ -262,19 +325,7 @@ def run_report_task(task, messages, images):
                     task['task_id'], len(body.text), elapsed)
 
         body.adopt_terminal_response()
-
-        # Strip LLM preamble before the first heading. Models often emit
-        # "Now I have enough information..." / "Let me compile..." / multi-
-        # paragraph "I'll research..." before the actual Markdown report
-        # starts at the first `## ` or `# `. Strip aggressively — any text
-        # before the first heading is non-report chatter regardless of length.
-        _heading_start = re.search(r'^#{1,6}\s', body.text, re.MULTILINE)
-        if _heading_start and _heading_start.start() > 0:
-            preamble = body.text[:_heading_start.start()].strip()
-            if preamble:
-                logger.info('[Paper:Report] Stripping %d-char preamble: %.120s',
-                            len(preamble), preamble.replace('\n', ' '))
-                body.text = body.text[_heading_start.start():]
+        _clean_report_body(task, body, normalize_markdown=not _is_review_family)
 
         # Resolve the best title from three sources, in priority order:
         #   1. A non-placeholder stored title (user-renamed or already-resolved

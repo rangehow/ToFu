@@ -36,10 +36,7 @@ export interface CoordinatorConversationGroupPorts {
   activeConversationId(): string;
   isRunning?(conversation: CoordinatorConversationRow): boolean;
   status?(conversation: CoordinatorConversationRow): 'running' | 'done' | 'failed' | 'cancelled' | null;
-  /** The lead office shows this Coordinator's live work: the group is then its archive, without a running tally. */
-  officeShows?(coordinatorId: string): boolean;
-  /** Sub-agents or commands of this conversation still run in the background. The office
-   * shows Workers' Turns, not their background work, so this tally always shows. */
+  /** Sub-agents or commands of this conversation still run in the background. */
   hasBackground?(conversation: CoordinatorConversationRow): boolean;
   readExpanded(coordinatorId: string): boolean | null;
   writeExpanded(coordinatorId: string, expanded: boolean): void;
@@ -103,7 +100,7 @@ export function createCoordinatorConversationGroup(ports: CoordinatorConversatio
     setStableHidden(root, !coordinatorId || rows.length === 0);
     if (root.hidden) { setStableHidden(body, true); return; }
     setStableText(count, String(rows.length));
-    const running = ports.officeShows?.(coordinatorId) ? 0 : rows.filter(row => ports.isRunning?.(row)).length;
+    const running = rows.filter(row => ports.isRunning?.(row)).length;
     const background = rows.filter(row => ports.hasBackground?.(row)).length;
     setStableText(live, [running ? t('projectCoordination.running', { n: running }) : '',
       background ? t('sidebar.backgroundRunningTag', { count: background }) : ''].filter(Boolean).join(' · '));
@@ -242,7 +239,6 @@ export function createCoordinatorConversationGroups(ports: {
   activeConversationId(): string;
   isRunning?(conversation: CoordinatorConversationRow): boolean;
   status?(conversation: CoordinatorConversationRow): 'running' | 'done' | 'failed' | 'cancelled' | null;
-  officeShows?(coordinatorId: string): boolean;
   hasBackground?(conversation: CoordinatorConversationRow): boolean;
   refresh?(): void;
   refreshActive?(): void;
@@ -335,7 +331,7 @@ export function createCoordinatorConversationGroups(ports: {
               adoptCoordinator: coordinator => ports.adoptCoordinator?.(coordinator, path),
               open: ports.open, renderRow: ports.renderRow,
               activeConversationId: ports.activeConversationId,
-              isRunning: ports.isRunning, status: ports.status, officeShows: ports.officeShows,
+              isRunning: ports.isRunning, status: ports.status,
               hasBackground: ports.hasBackground,
               readExpanded: key => localStorage.getItem(`tofu.coordinator.conversations.expanded.${key}`) === 'true' ? true : null,
               writeExpanded: (key, value) => localStorage.setItem(`tofu.coordinator.conversations.expanded.${key}`, String(value)),

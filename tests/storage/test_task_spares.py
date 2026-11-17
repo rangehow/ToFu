@@ -9,6 +9,10 @@ from __future__ import annotations
 
 import fcntl
 import json
+import os
+import shutil
+import socket
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -24,6 +28,8 @@ from tests.storage.test_local_task_checkouts import (
     OWNER, create, git, layout as layout, locked, worktrees)
 
 pytestmark = pytest.mark.unit
+
+_HOST_SCRATCH_ROOT = task_spares.scratch_root
 
 
 @pytest.fixture
@@ -169,7 +175,7 @@ def test_a_delivered_checkout_becomes_a_pristine_spare_the_next_task_takes(
     (checkout / '.tofu' / 'file-history' / 'snapshots.jsonl').write_text('{"id": "undo"}\n')
     from lib.project_mod.run_command import _get_cmd_env
     scratch = Path(_get_cmd_env(str(checkout), project_root=str(checkout))['TMPDIR'])
-    assert scratch.parent == checkout.parent and scratch.is_dir()
+    assert str(scratch) == task_spares.checkout_scratch(checkout) and scratch.is_dir()
     (scratch / 'build.o').write_text('a worker temporary\n')
 
     delivery.settle_task_workspace(str(root), 'worker', user_id=OWNER, outcome='completed')
@@ -194,15 +200,33 @@ def test_a_delivered_checkout_becomes_a_pristine_spare_the_next_task_takes(
     assert not (following / '.tofu').exists()
 
 
-def test_command_scratch_exists_only_beside_pooled_task_checkouts(layout, tmp_path):
+def test_command_scratch_exists_only_for_pooled_task_checkouts(layout, tmp_path):
     checkout = create(layout)
     scratch = Path(task_spares.checkout_scratch(checkout))
 
-    assert scratch == checkout.parent / f'.tmp-{checkout.name}' and scratch.is_dir()
+    assert scratch.is_dir() and str(scratch) == task_spares.checkout_scratch(checkout)
+    assert not scratch.is_relative_to(checkout), 'Git never captures scratch'
     assert task_spares.checkout_scratch(tmp_path / 'elsewhere') is None
     assert task_spares.checkout_scratch(layout['root']) is None
     task_spares.retire_scratch(checkout)
     assert scratch.is_dir(), 'a live checkout keeps its scratch'
+    shutil.rmtree(checkout)
+    task_spares.retire_scratch(checkout)
+    assert not scratch.exists()
+
+
+def test_command_scratch_leaves_room_for_chromium_singleton_socket(layout, monkeypatch):
+    """Chromium binds $TMPDIR/org.chromium.Chromium.XXXXXX/SingletonSocket and
+    aborts with 'Socket path too long' beyond AF_UNIX's sun_path (2026-11-17)."""
+    monkeypatch.setattr(task_spares, 'scratch_root', _HOST_SCRATCH_ROOT)
+    checkout = create(layout, 'project-worker-d7e415ad-ce03-525c-be4b-562b127ea-58ae999662')
+    scratch = task_spares.checkout_scratch(checkout)
+    try:
+        directory = tempfile.mkdtemp(prefix='org.chromium.Chromium.', dir=scratch)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(os.path.join(directory, 'SingletonSocket'))
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 def test_spares_give_back_space_oldest_first_when_the_volume_nears_its_reserve(

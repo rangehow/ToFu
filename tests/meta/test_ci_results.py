@@ -98,7 +98,7 @@ def test_dotfile_artifacts_opt_into_hidden_file_upload():
               if any(part.startswith('.') and part not in {'.', '..'}
                      for line in str(upload['path']).splitlines()
                      for part in Path(line.strip()).parts)]
-    assert {upload['name'] for upload in hidden} >= {'coverage-unit', 'coverage-api'}
+    assert {upload['name'] for upload in hidden} >= {'coverage-unit-${{ matrix.shard }}', 'coverage-api'}
     for upload in hidden:
         assert upload.get('include-hidden-files') is True, upload['name']
 
@@ -124,3 +124,52 @@ def test_incremental_and_qualification_jobs_have_explicit_scope_and_receipts():
                step['with'].get('if-no-files-found') == 'error' for step in artifacts)
     for name in ('test-unit', 'test-api', 'test-slow', 'coverage', 'visual-nightly', 'perf-nightly'):
         assert "'full'" in jobs[name]['if']
+
+
+def test_unit_tier_shards_cover_every_file_once_and_gate_all_shard_coverage():
+    jobs = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text())['jobs']
+    unit = jobs['test-unit']
+    shards = unit['strategy']['matrix']['shard']
+    assert unit['strategy']['fail-fast'] is False
+    assert shards == list(range(1, len(shards) + 1))
+    assert unit['env']['TOFU_TEST_SHARD'] == f'${{{{ matrix.shard }}}}/{len(shards)}'
+    gate = next(step['run'] for step in jobs['coverage']['steps'] if 'check_coverage.py' in step.get('run', ''))
+    assert 'coverage-unit-*/.coverage' in gate
+
+
+def test_shard_selection_partitions_whole_files(monkeypatch):
+    from tests.conftest import _shard_selection
+
+    class Item:
+        def __init__(self, nodeid):
+            self.nodeid = nodeid
+
+    class Hook:
+        def __init__(self):
+            self.deselected = []
+
+        def pytest_deselected(self, items):
+            self.deselected.extend(items)
+
+    class Config:
+        def __init__(self):
+            self.hook = Hook()
+
+    every = [Item(f'tests/area{n % 7}/test_{n}.py::test_{case}') for n in range(60) for case in 'ab']
+    owner = {}
+    for index in (1, 2, 3):
+        monkeypatch.setenv('TOFU_TEST_SHARD', f'{index}/3')
+        items, config = list(every), Config()
+        _shard_selection(config, items)
+        assert len(items) + len(config.hook.deselected) == len(every)
+        for item in items:
+            path = item.nodeid.split('::', 1)[0]
+            assert owner.setdefault(path, index) == index
+    assert len(owner) == 60
+    monkeypatch.delenv('TOFU_TEST_SHARD')
+    items = list(every)
+    _shard_selection(Config(), items)
+    assert items == every
+    monkeypatch.setenv('TOFU_TEST_SHARD', '4/3')
+    with pytest.raises(pytest.UsageError):
+        _shard_selection(Config(), list(every))

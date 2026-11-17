@@ -156,6 +156,16 @@ jobs:
     # verified graph when frontend succeeded, so graph contracts execute.
     needs: [verification-scope, frontend]
     if: ${{ always() && !cancelled() && needs.verification-scope.outputs.profile == 'full' }}
+    # One runner for the whole tier was shut down by GitHub at ~44% on every
+    # run from 52cb8c11 on; each shard completes on its own runner
+    # (tests/conftest.py, TOFU_TEST_SHARD).
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    name: test-unit (${{ matrix.shard }}/4)
+    env:
+      TOFU_TEST_SHARD: ${{ matrix.shard }}/4
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -207,7 +217,7 @@ jobs:
       - name: Publish unit coverage data
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-unit
+          name: coverage-unit-${{ matrix.shard }}
           path: .coverage
           # upload-artifact@v4 skips dotfiles unless asked to include them.
           include-hidden-files: true
@@ -282,7 +292,7 @@ jobs:
         run: >-
           uv run --frozen --extra test python
           scripts/check_coverage.py
-          coverage-unit/.coverage coverage-api/.coverage
+          coverage-unit-*/.coverage coverage-api/.coverage
 
   # ── Slow tier (endpoint-loop integration; ~90s each) — bounded parallel ──
   # Kept in a separate job because the loops are multi-minute, but a release

@@ -1442,7 +1442,30 @@ def pytest_xdist_auto_num_workers(config):
 # from CI.
 _TIER_MARKERS = frozenset({'unit', 'api', 'visual', 'slow', 'live_llm'})
 
+def _shard_selection(config, items):
+    """``TOFU_TEST_SHARD=k/n`` keeps only shard k (1-based) of n: CI splits a tier
+    across runners so each completes on its own machine. A file stays whole
+    (module fixtures) and a stable hash of its path places it, so every file
+    lands in exactly one shard and every xdist node selects the same items."""
+    import zlib
+    spec = os.environ.get('TOFU_TEST_SHARD', '').strip()
+    if not spec:
+        return
+    index, _, count = spec.partition('/')
+    if not (index.isdigit() and count.isdigit() and 1 <= int(index) <= int(count)):
+        raise pytest.UsageError(f'TOFU_TEST_SHARD must be k/n with 1 <= k <= n, got {spec!r}')
+    index, count = int(index), int(count)
+    kept, dropped = [], []
+    for item in items:
+        path = item.nodeid.split('::', 1)[0]
+        (kept if zlib.crc32(path.encode()) % count == index - 1 else dropped).append(item)
+    if dropped:
+        config.hook.pytest_deselected(items=dropped)
+        items[:] = kept
+
+
 def pytest_collection_modifyitems(config, items):
+    _shard_selection(config, items)
     auto_marked_files = set()
     for item in items:
         own = {m.name for m in item.iter_markers()}

@@ -140,8 +140,8 @@
             "description": "A 大象 (SSO) MIS account, lowercase."},
     "EventDisposition": {"type": "string", "enum": ["command", "candidate", "context"]},
     "OutboxState": {"type": "string", "enum": ["draft", "queued", "sending", "unknown", "sent", "failed", "discarded"]},
-    "OutboxOriginKind": {"type": "string", "enum": ["router_receipt", "router_content", "router_progress", "router_reply", "router_status", "tool", "draft_notice", "robot_notice"],
-                         "description": "draft_notice: the command-chat notice of a new draft, sent untranslated so the owner reads the exact draft text. robot_notice: the command-chat notice that the notification robot stopped posting (with its refusal) or posts again."},
+    "OutboxOriginKind": {"type": "string", "enum": ["router_receipt", "router_content", "router_progress", "router_reply", "router_status", "tool", "draft_notice", "robot_notice", "attachment_notice"],
+                         "description": "draft_notice: the command-chat notice of a new draft, sent untranslated so the owner reads the exact draft text. robot_notice: the command-chat notice that the notification robot stopped posting (with its refusal) or posts again. attachment_notice: the notice, untranslated, naming each file of a failed item that was not delivered and why (C10); in the item's own thread when that is the command chat, else in the command chat."},
     "OutboxAuthority": {"type": "string", "enum": ["owner", "merged", "third_party", "nonhuman"],
                         "description": "Whose authority the request that recorded the item had (C11). owner: a genuine owner request. merged: an owner request into which other people's messages were steered. third_party: a review of other people's messages. nonhuman: another nonhuman request (a report relay, a timer) or Tofu itself."},
     "OutboxDecision": {

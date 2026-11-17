@@ -51,6 +51,7 @@ from lib.mcp.client._coerce import (  # noqa: E402,F401
 from lib.mcp.client._state import (  # noqa: E402,F401
     _pkg,
     get_bridge,
+    local_bridge,
     _vendored_mod,
     _VENDORED_LAUNCHERS,
     _repo_root,
@@ -116,6 +117,7 @@ __all__ = [
     'MCPBridge',
     '_MCPServerHandle',
     'get_bridge',
+    'local_bridge',
     'is_vendored_launcher',
     'prewarm_vendored_launcher',
     'prewarm_all_vendored',

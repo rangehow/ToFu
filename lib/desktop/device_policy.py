@@ -25,6 +25,7 @@ from functools import lru_cache
 import json
 from pathlib import Path
 import threading
+from typing import Any
 import uuid
 
 from lib.agent_core.storage_errors import StorageError
@@ -52,7 +53,7 @@ def _validator(name: str):
                                  '$ref': '#/$defs/' + name})
 
 
-def validate(value, name: str):
+def validate(value: Any, name: str) -> Any:
     error = next(_validator(name).iter_errors(value), None)
     if error is not None:
         location = '.'.join(str(part) for part in error.absolute_path) or name
@@ -230,12 +231,12 @@ def permissions_listing(owner, agents) -> dict:
 
 # ── owner commands ────────────────────────────────────────────────────────
 
-def set_ceiling(owner, node_id: str, tiers: dict, *, client=None) -> tuple[dict, int]:
-    """Replace one node's ceiling. ``tiers`` follows CeilingRequest.tiers."""
-    validate({'tiers': tiers}, 'CeilingRequest')
+def set_ceiling(owner, node_id: str, tiers: object, *, client=None) -> tuple[dict, int]:
+    """Replace one node's ceiling; ``tiers`` (request input) must be CeilingRequest.tiers."""
+    validated = validate({'tiers': tiers}, 'CeilingRequest')['tiers']
     if not isinstance(node_id, str) or not 1 <= len(node_id) <= 256:
         raise ValueError('node_id is required')
-    ceiling = {tier: bool(tiers.get(tier)) for tier in CEILING_TIERS}
+    ceiling = {tier: bool(validated.get(tier)) for tier in CEILING_TIERS}
 
     def change(record):
         record['ceilings'][node_id] = ceiling

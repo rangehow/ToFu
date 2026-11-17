@@ -436,7 +436,7 @@ def _bridge_credentials(owner_user_id: int, tenant_id: str | None) -> list[dict]
     ]
 
 
-def _node_row(record, agent, credential, transport, predecessor=None, policy=None) -> dict:
+def _node_row(record, agent, credential, transport, predecessor=None, *, policy: dict) -> dict:
     from lib.desktop.device_policy import permissions_view
     from lib.desktop_wire.node_protocol import granted_tiers
     agent = agent or {}
@@ -514,7 +514,7 @@ def _node_listing(owner_user_id: int, tenant_id: str | None, agents) -> list[dic
             bound.add(record['replacement']['credentialId'])
         nodes.append(_node_row(record, agent, credentials.get(record['credentialId']),
                                transport_facts(owner_user_id, record['nodeId']), predecessor,
-                               policy))
+                               policy=policy))
     for agent in live.values():
         credential = credentials.get(agent.get('key_id') or '')
         if credential:

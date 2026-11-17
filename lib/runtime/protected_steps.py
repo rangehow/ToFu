@@ -156,8 +156,9 @@ def restart_precedence(detail: str, *, on_wait=None):
     Waits for restarts ahead of it, then for the protected steps already
     running. ``on_wait(message)`` reports a wait once, before it blocks.
     """
-    if _retained_here() is not None:
-        yield _retained
+    retained = _retained_here()
+    if retained is not None:
+        yield retained
         return
     fds = [_open_lock(_PRECEDENCE_LOCK)]
     holder = RestartPrecedence(fds, os.path.join(_locks_root(), _PENDING_RESTART))

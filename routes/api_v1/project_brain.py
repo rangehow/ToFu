@@ -19,7 +19,7 @@ logger = get_logger(__name__)
 api_v1_project_brain_bp = Blueprint('api_v1_project_brain', __name__)
 
 
-def _path(explicit: str = '') -> str:
+def _path(explicit: str | None = '') -> str:
     path = str(explicit or decode_proxy_path_arg('path') or '').strip()
     if not path:
         raise ValueError('path is required')

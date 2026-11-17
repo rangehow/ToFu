@@ -26,6 +26,7 @@
 
 // Temporary lexical presenters; remove with the retained artifact-panel migration.
 import { renderPublishedFile, renderScriptWarning } from '../rich-response/artifact-delivery';
+import { mountArtifactReview } from '../rich-response/artifact-review';
 
 (function () {
   "use strict";
@@ -299,9 +300,6 @@ import { renderPublishedFile, renderScriptWarning } from '../rich-response/artif
       if (_activeId !== id || _openEpoch !== openEpoch) return;
       _renderHeader(panel, meta);
       if (reviewHost) {
-        // The review editor loads with the first opened artifact, not at startup.
-        const { mountArtifactReview } = await import('../rich-response/artifact-review');
-        if (_activeId !== id || _openEpoch !== openEpoch) return;
         reviewHost.hidden = false;
         _disposeReview = mountArtifactReview(reviewHost, {
           load: signal => Api.artifacts.review(id, signal),

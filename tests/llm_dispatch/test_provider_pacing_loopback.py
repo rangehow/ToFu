@@ -81,15 +81,6 @@ class _MinuteLimitedProvider:
             return [(at, tag) for at, tag, verdict, _key in self.events
                     if verdict == 'ok' and tag in tags]
 
-    def first_contact(self, tags):
-        """``tags`` in the order each first reached the provider (accepted or refused)."""
-        with self.lock:
-            seen = []
-            for _at, tag, _verdict, _key in self.events:
-                if tag in tags and tag not in seen:
-                    seen.append(tag)
-            return seen
-
     def per_key(self, tags):
         """``{key: {'ok': n, '429': n}}`` for the given requests."""
         counts = {}
@@ -329,13 +320,7 @@ def test_every_dispatch_transport_paces_after_the_first_refusal(
     assert not report['failed'], report
     assert report['429s'] <= 2, report
     assert sorted(report['accept_order']) == sorted(tags), report
-    # Until the first refusal returns nothing is learned, so nothing is held:
-    # the burst reaches the provider in wire order, not submission order (a
-    # fresh event loop per async call delays some first bytes past the 20 ms
-    # gaps on a loaded host). Pacing keeps the order requests reached it in:
-    # a refused request is accepted before any request of a later window.
-    report['first_contact'] = provider.first_contact(tags)
-    assert _in_window_order(report['first_contact'], report['accept_order'], LIMIT), report
+    assert _in_window_order(tags, report['accept_order'], LIMIT), report
     assert report['elapsed_s'] <= WINDOW_S + LATENCY_S + SLACK_S, report
 
 

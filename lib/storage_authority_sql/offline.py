@@ -16,8 +16,6 @@ import socket
 from typing import Any
 from urllib.parse import quote
 
-from runtime_guards import pid_is_alive
-
 
 @dataclass(frozen=True, slots=True)
 class SQLiteAuthorityLocation:
@@ -52,7 +50,11 @@ def _lease_is_live(data_dir: Path, lease: dict[str, Any]) -> bool:
         pid = int(lease.get('pid') or 0)
     except (TypeError, ValueError):
         return False
-    if not pid_is_alive(pid):
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
         return False
 
     lock_path = data_dir / '.storage-sidecar.lock'

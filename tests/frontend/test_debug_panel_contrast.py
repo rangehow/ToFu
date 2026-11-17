@@ -32,8 +32,8 @@ def _read(path: str) -> str:
     with open(path, encoding='utf-8') as f:
         css = f.read()
     if path == _STYLES:
-        owners = Path(ROOT) / 'frontend/src/features/inspector'
-        css += '\n' + '\n'.join((owners / f'{part}.css').read_text()
+        owners = Path(ROOT) / 'frontend/src/styles/application'
+        css += '\n' + '\n'.join((owners / f'02-inspector-{part}.css').read_text()
                                   for part in ('shell', 'structure', 'drawer', 'inline', 'responsive'))
     return css
 

@@ -129,12 +129,13 @@ submission path enforces them, and the m17 entry is global.
 
 ## Keys and credentials
 
-No key value belongs in this file. Names and where to get one (vault rows:
-the credential vault's entry names and owner notes when this was seeded):
+No key value belongs in this file. Names and where to get one:
 
 | Key | How to obtain |
 | --- | --- |
-<!-- vault-rows -->
+| `dev_example_corp_token` | dev.internal.example.com Personal Access Token, in the owner's Tofu credential vault |
+| `github_token` | GitHub PAT, in the owner's Tofu credential vault |
+| `pypi_token` | PyPI token, in the owner's Tofu credential vault |
 | Hope / MLP access | Browser SSO session of the owner, through the configured Hope MCP |
 | Eval API keys | The evaluation project's own launchers under `evaluations/`; ask its lead |
 
@@ -152,28 +153,6 @@ registry, delegate a Router-home Worker: it edits this file with the new
 source and read date, and its reviewed publication lands here. Until then
 `list_project_leads` reports `available=true` for this seed's facts only.
 '''
-
-
-def _resources_seed() -> str:
-    """RESOURCES.md with the credential vault's entries listed by name and note.
-
-    The vault is the documented source of which keys exist; its redacted view
-    carries no value, and the hint is left out as well. Skill- and
-    channel-owned entries are not lendable, as in the model-facing index.
-    """
-    from lib import credentials_vault
-
-    rows = []
-    for entry in credentials_vault.list_entries():
-        name = entry['name']
-        if (name.lower().startswith(credentials_vault.SKILL_ENTRY_PREFIX)
-                or credentials_vault.is_channel_entry(name)):
-            continue
-        note = ' '.join(entry['note'].split()).replace('|', '/')
-        rows.append(f"| `{name}` | {note + ', in' if note else 'In'} the owner's Tofu credential vault |")
-    if not rows:
-        rows.append("| (none) | The owner's Tofu credential vault held no entries when this was seeded |")
-    return _RESOURCES.replace('<!-- vault-rows -->', '\n'.join(rows))
 
 
 class RouterHomeUnavailable(RuntimeError):
@@ -230,12 +209,9 @@ def owner_resources(user_id: int, *, content: bool) -> dict:
     return view
 
 
-def _write_once(path: str, content) -> None:
-    """``content`` is the text, or a callable producing it once the file is missing."""
+def _write_once(path: str, content: str) -> None:
     if os.path.lexists(path):
         return
-    if callable(content):
-        content = content()
     directory = os.path.dirname(path)
     handle, temporary = tempfile.mkstemp(prefix='.tofu_router_', dir=directory)
     try:
@@ -277,7 +253,7 @@ def router_home_path(user_id: int) -> str:
         # R13: a home created before the registry seed must not point leads at a
         # missing RESOURCES.md. Write-once; the owner or a reviewed Worker may
         # edit or delete it afterwards and nothing here restores or overwrites it.
-        _write_once(os.path.join(home, 'RESOURCES.md'), _resources_seed)
+        _write_once(os.path.join(home, 'RESOURCES.md'), _RESOURCES)
         return home
     # The same cross-process per-root lock as managed repository preparation:
     # concurrent `git init` runs race on template and config lock files.
@@ -285,7 +261,7 @@ def router_home_path(user_id: int) -> str:
     with _repo_lock(home):
         _write_once(os.path.join(home, 'README.md'), _README)
         _write_once(os.path.join(home, '.gitignore'), _GITIGNORE)
-        _write_once(os.path.join(home, 'RESOURCES.md'), _resources_seed)
+        _write_once(os.path.join(home, 'RESOURCES.md'), _RESOURCES)
         if not os.path.lexists(os.path.join(home, '.git')):
             initialized = _git(home, 'init', '-q')
             if initialized.returncode:

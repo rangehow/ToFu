@@ -412,7 +412,7 @@ def _ensure_canary_browser(build_environment: dict[str, str]) -> str:
     """
     python = (build_environment.get('TOFU_PYTHON')
               or build_environment.get('PYTHON') or sys.executable)
-    from serverctl_pkg.native_engine import EngineCommandFailedError, _run
+    from serverctl_pkg.native_engine import _run
     try:
         _run(
             [python, str(Path(PROJECT) / 'chromium_env.py'), '--ensure-headless-shell'],
@@ -420,16 +420,8 @@ def _ensure_canary_browser(build_environment: dict[str, str]) -> str:
             timeout=_FRONTEND_REPAIR_TIMEOUT_SECONDS,
             progress='Preparing frontend canary Chromium',
             failure_subject='Headless Chromium preparation')
-    except EngineCommandFailedError as exc:
-        # The report ends with the browser authority's actionable last line;
-        # the installer output before it was already relayed as progress.
-        return ('the frontend bundle canary needs a headless Chromium: '
-                + str(exc).strip().splitlines()[-1])
     except (OSError, RuntimeError) as exc:
-        # Timeout and cancellation name themselves on the first line, then
-        # append the child's output that progress already relayed.
-        return ('the frontend bundle canary needs a headless Chromium: '
-                + str(exc).strip().split('\n', 1)[0])
+        return f'the frontend bundle canary needs a headless Chromium: {exc}'
     return ''
 
 

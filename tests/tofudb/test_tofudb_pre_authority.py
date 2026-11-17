@@ -23,21 +23,6 @@ TOFUDB_IR = ROOT / "contracts" / "tofudb_ir_v1.json"
 pytestmark = pytest.mark.unit
 
 
-def test_simple_case_fold_table_matches_the_linked_sqlite_icu():
-    # The table freezes the ICU that the legacy authority's SQLite links; an
-    # interpreter whose SQLite links no ICU has no reference to compare with.
-    simple_fold = subprocess.run(
-        [sys.executable, "scripts/gen_tofudb_unicode_simple_fold.py", "--check"],
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if simple_fold.returncode == 3:
-        pytest.skip(simple_fold.stderr.strip())
-    assert simple_fold.returncode == 0, simple_fold.stdout + simple_fold.stderr
-
-
 def test_storage_operation_catalog_matches_executable_registry():
     completed = subprocess.run(
         [sys.executable, "scripts/gen_storage_operation_catalog.py", "--check"],
@@ -55,6 +40,14 @@ def test_storage_operation_catalog_matches_executable_registry():
         check=False,
     )
     assert casefold.returncode == 0, casefold.stdout + casefold.stderr
+    simple_fold = subprocess.run(
+        [sys.executable, "scripts/gen_tofudb_unicode_simple_fold.py", "--check"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert simple_fold.returncode == 0, simple_fold.stdout + simple_fold.stderr
 
     document = json.loads(CATALOG.read_text(encoding="utf-8"))
     names = [operation["name"] for operation in document["operations"]]

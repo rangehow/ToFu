@@ -143,12 +143,6 @@ def test_verifier_log_dir_is_root_only_and_agent_plantings_are_removed():
     if os.geteuid() != 0:
         if os.environ.get(USERNS_ENV) or shutil.which("unshare") is None:
             pytest.skip("needs root or a working single-uid user namespace")
-        # Hosts may forbid unprivileged user namespaces (Ubuntu 24.04 AppArmor).
-        probe = subprocess.run(["unshare", "-U", "-r", "true"], stdout=subprocess.PIPE,
-                               stderr=subprocess.STDOUT, text=True, timeout=30)
-        if probe.returncode != 0:
-            pytest.skip("needs root or a working single-uid user namespace: "
-                        f"unshare -U -r failed: {probe.stdout.strip()}")
         # Mapping only my own uid to 0 makes the 0:0 chown work; it cannot drop to 65534.
         completed = subprocess.run(
             ["unshare", "-U", "-r", sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",

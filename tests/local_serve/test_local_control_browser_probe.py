@@ -63,6 +63,7 @@ from tests._runtime_sections import runtime_section_path
 
 LC_JS = Path(runtime_section_path('local-control.js'))
 STYLES = ROOT / "static" / "styles.css"
+STYLE_ROOT = ROOT / "frontend" / "src" / "styles" / "application"
 LOCAL_CONTROL_FEATURE_ENTRY = 'frontend/src/features/local-control.ts'
 
 # ══════════════════════════════════════════════════════════
@@ -514,12 +515,13 @@ def _local_control_css() -> str:
     then the deferred sheets its feature entry imports (the dialog body moved
     out of the critical sheet in e7f266f04; Vite admits it before the modal
     shows, so its rules follow the critical sheet in document order)."""
-    entry = ROOT / LOCAL_CONTROL_FEATURE_ENTRY
+    manifest = json.loads((STYLE_ROOT / 'manifest.json').read_text(encoding='utf-8'))
     sheets = [STYLES.read_text(encoding='utf-8')]
-    for name in re.findall(r"^import '(\./[^']+\.css)';", entry.read_text(encoding='utf-8'), re.M):
-        sheets.append((entry.parent / name).read_text(encoding='utf-8'))
+    for row in manifest['deferredSections']:
+        if row.get('featureEntry') == LOCAL_CONTROL_FEATURE_ENTRY:
+            sheets.append((STYLE_ROOT / row['path']).read_text(encoding='utf-8'))
     assert len(sheets) > 1, (
-        f'no feature sheet is imported by {LOCAL_CONTROL_FEATURE_ENTRY}')
+        f'no deferred sheet is imported by {LOCAL_CONTROL_FEATURE_ENTRY}')
     return '\n'.join(sheets)
 
 

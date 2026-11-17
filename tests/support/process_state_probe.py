@@ -22,10 +22,8 @@ from pathlib import Path
 
 import pytest
 
-# The pytest runner sets PYTEST_CURRENT_TEST for the duration of each test
-# phase. tests/conftest.py::_git_discovery_ceiling, a session fixture, sets
-# GIT_CEILING_DIRECTORIES during the first test's setup for the whole session.
-_RUNNER_OWNED_ENVIRONMENT = frozenset({'PYTEST_CURRENT_TEST', 'GIT_CEILING_DIRECTORIES'})
+# The pytest runner sets this for the duration of each test phase.
+_RUNNER_OWNED_ENVIRONMENT = frozenset({'PYTEST_CURRENT_TEST'})
 _records: list[dict] = []
 
 

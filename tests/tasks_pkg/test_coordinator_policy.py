@@ -200,3 +200,32 @@ def test_provider_execution_lanes_follow_role_not_settings_or_replay(coordinator
             assert body['_programmatic_tool_calling'] == 'on'
             assert projection.multi_agent_backend == 'native_openai'
             assert outbound['multi_agent']['enabled'] is True
+
+
+def test_an_unbound_turn_reads_its_role_once_and_keeps_it(coordinator, monkeypatch):
+    """The role is fixed per Turn in both directions (docs/HARNESS_PERFORMANCE.md).
+
+    An ordinary Turn's negative answer is remembered for its exact (owner,
+    conversation, project): later rounds read no binding; a binding made
+    meanwhile takes effect from the next Turn, as an unbinding already does.
+    Another project path is a different question and is read.
+    """
+    from lib.conversations import project_coordination
+    _task, state = coordinator
+    reads = []
+
+    def repository(owner):
+        return SimpleNamespace(read=lambda path: reads.append(path) or deepcopy(state))
+    monkeypatch.setattr(project_coordination, 'ProjectCoordinationRepository', repository)
+    ordinary = {'id': 'worker-task', 'convId': 'worker', '_userId': 7,
+                'config': {'projectPath': '/project'}}
+    for _ in range(3):
+        assert coordinator_scope(ordinary) is None
+    assert reads == ['/project']
+    state['conversationId'] = 'worker'  # bound while this Turn runs
+    assert coordinator_scope(ordinary) is None and reads == ['/project']
+    coordinator_scope(ordinary, '/other')
+    assert reads == ['/project', '/other']
+    next_turn = {**ordinary, 'id': 'next-task'}
+    next_turn.pop('_coordinatorUnboundScopes', None)
+    assert coordinator_scope(next_turn)

@@ -170,6 +170,18 @@ class ResidentService:
         """Extra host arguments and child-only descriptors; launch closes those descriptors."""
         return [], ()
 
+    def spawn(self, argv: list[str], *, cwd: Path, env: dict[str, str], log: Path,
+              pass_fds: tuple[int, ...]) -> int:
+        """Start the host process in its own session; returns its pid.
+
+        ``pass_fds`` is (lease, manager reader, *launch extras), in that order.
+        """
+        with log.open('ab') as output:
+            self._process = subprocess.Popen(
+                argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=output,
+                stderr=subprocess.STDOUT, start_new_session=True, close_fds=True, pass_fds=pass_fds)
+        return self._process.pid
+
     def record(self) -> dict:
         record = read_record(self.state_path, record_format=self.record_format)
         if (record.get('projectPath') != str(self.project)
@@ -249,25 +261,22 @@ class ResidentService:
             log.parent.mkdir(parents=True, exist_ok=True)
             extra_args, extra_fds = self.launch_extras()
             try:
-                with log.open('ab') as output:
-                    process = subprocess.Popen([
-                        self.launch_python(plan), *self.launch_command(plan), '--service-id', service_id,
-                        '--manager-pid', str(os.getpid()), '--manager-start', str(manager_ticks),
-                        '--manager-fd', str(manager_read),
-                        '--lease-fd', str(descriptor), '--state-file', str(self.state_path),
-                        *extra_args,
-                    ], cwd=self.working_directory(plan), env=env, stdin=subprocess.DEVNULL,
-                        stdout=output, stderr=subprocess.STDOUT, start_new_session=True,
-                        close_fds=True, pass_fds=(descriptor, manager_read, *extra_fds))
+                pid = self.spawn([
+                    self.launch_python(plan), *self.launch_command(plan), '--service-id', service_id,
+                    '--manager-pid', str(os.getpid()), '--manager-start', str(manager_ticks),
+                    '--manager-fd', str(manager_read),
+                    '--lease-fd', str(descriptor), '--state-file', str(self.state_path),
+                    *extra_args,
+                ], cwd=self.working_directory(plan), env=env, log=log,
+                    pass_fds=(descriptor, manager_read, *extra_fds))
             finally:
                 for extra in extra_fds:
                     os.close(extra)
-            self._process = process
             record = {
                 'format': self.record_format, 'host': socket.gethostname(),
                 'projectPath': str(self.project), **self.identity_fields(),
-                'serviceId': service_id, 'pid': process.pid,
-                'processStartTime': proc_start_ticks(process.pid),
+                'serviceId': service_id, 'pid': pid,
+                'processStartTime': proc_start_ticks(pid),
                 'managerPid': os.getpid(), 'managerStartTime': manager_ticks,
                 'managerControl': {'fd': manager_write, 'device': control_info.st_dev,
                                    'inode': control_info.st_ino},
@@ -277,8 +286,9 @@ class ResidentService:
                 write_record(self.state_path, record)
                 published = True
             except BaseException:
-                process.terminate()
-                process.wait(timeout=10)
+                os.kill(pid, signal.SIGTERM)
+                if self._process is not None:
+                    self._process.wait(timeout=10)
                 raise
             return self.result_path()
         finally:

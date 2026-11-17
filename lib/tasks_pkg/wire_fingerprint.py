@@ -77,6 +77,7 @@ from typing import Any
 
 import orjson
 
+from lib.conversation_sync.settled_rows import is_settled, memo_get, memo_put
 from lib.log import get_logger
 from lib.tasks_pkg.wire_fingerprint_diff import (
     diff_canonical as diff_canonical,
@@ -883,6 +884,18 @@ def _sealed_byte_entries(msg: dict, key: str, payload: bytes,
             {'key': key, 'fields': field_hashes})
 
 
+_SEALED_EVIDENCE_KEY = ('wire-fingerprint', 'sealed-message-evidence')
+
+
+def _evidence_entries(msg: dict, payload: bytes, view: memoryview, span) -> tuple:
+    canonical_entry = _canonical_message_entry(msg)
+    entries = _sealed_byte_entries(msg, canonical_entry['key'], payload, view, span)
+    message_entry, field_entry = (
+        entries if entries is not None
+        else _wire_message_and_field_byte_entries(msg, key=canonical_entry['key']))
+    return canonical_entry, message_entry, field_entry
+
+
 def capture_wire_message_evidence(messages: list, *,
                                   sealed=None) -> WireMessageEvidence:
     """Capture all message-sized wire fingerprints in one shared traversal.
@@ -904,6 +917,17 @@ def capture_wire_message_evidence(messages: list, *,
     view = memoryview(payload)
     for index, msg in enumerate(messages or ()):
         if not isinstance(msg, dict):
+            continue
+        if index < len(spans) and is_settled(msg):
+            # All three entries are pure functions of the immutable row and
+            # its sealed bytes (the seal memoizes a settled row's encoding).
+            held = memo_get(msg, _SEALED_EVIDENCE_KEY)
+            if held is None:
+                held = memo_put(msg, _SEALED_EVIDENCE_KEY, _evidence_entries(
+                    msg, payload, view, spans[index]))
+            canonical.append(held[0])
+            message_bytes.append(held[1])
+            field_bytes.append(held[2])
             continue
         canonical_entry = _canonical_message_entry(msg)
         canonical.append(canonical_entry)
@@ -1085,19 +1109,35 @@ def static_prefix_hash(messages: list) -> str:
     Used to distinguish "whole prefix evicted" from "only the body past the
     static floor was not reused".
     """
-    parts: list[str] = []
+    floor: list[tuple[str, dict]] = []
     for msg in messages or ():
         if not isinstance(msg, dict):
             continue
         role = msg.get('role', '')
         if role in ('system', 'developer'):
-            parts.append('sys\x03' + _text_of(msg.get('content')))
+            floor.append(('sys', msg))
         elif role == 'user':
-            parts.append('user\x03' + _text_of(msg.get('content')))
+            floor.append(('user', msg))
             break  # stop at the first user turn — that's the static floor
         else:
             break
-    return _md5('\x01'.join(parts))
+    from lib.conversation_sync.settled_rows import is_settled, memo_get, memo_put
+    # Settled rows are immutable: the floor's hash is kept on its last row,
+    # with the exact row objects it covers (held, so no identity is reused).
+    rows = tuple(msg for _, msg in floor)
+    holder = rows[-1] if rows and all(is_settled(row) for row in rows) else None
+    if holder is not None:
+        held = memo_get(holder, _STATIC_PREFIX_KEY)
+        if held is not None and len(held[0]) == len(rows) and all(
+                a is b for a, b in zip(held[0], rows)):
+            return held[1]
+    digest = _md5('\x01'.join(f'{kind}\x03{_text_of(msg.get("content"))}' for kind, msg in floor))
+    if holder is not None:
+        memo_put(holder, _STATIC_PREFIX_KEY, (rows, digest))
+    return digest
+
+
+_STATIC_PREFIX_KEY = ('wire-fingerprint', 'static-prefix')
 
 
 def _canon_beta(anthropic_beta: Any) -> str:

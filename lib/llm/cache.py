@@ -307,11 +307,12 @@ def add_cache_breakpoints(body, log_prefix='', *, api_protocol='anthropic'):
             if isinstance(content, list) and any(
                     isinstance(block, dict) and 'cache_control' in block
                     for block in content):
-                messages[i] = {**msg, 'content': [
-                    {k: v for k, v in block.items() if k != 'cache_control'}
-                    if isinstance(block, dict) and 'cache_control' in block
-                    else block
-                    for block in content]}
+                messages[i] = _rewritten(msg, ('strip-markers',), lambda msg=msg, content=content: {
+                    **msg, 'content': [
+                        {k: v for k, v in block.items() if k != 'cache_control'}
+                        if isinstance(block, dict) and 'cache_control' in block
+                        else block
+                        for block in content]})
         if tools:
             for t_idx, tool in enumerate(tools):
                 # Non-dict entries are dropped at the prepare_request wire
@@ -371,7 +372,7 @@ def add_cache_breakpoints(body, log_prefix='', *, api_protocol='anthropic'):
             if role in ('tool', 'user'):
                 content = msg.get('content')
                 if isinstance(content, str) and content:
-                    messages[i] = {**msg, 'content': [{'type': 'text', 'text': content}]}
+                    messages[i] = _rewritten(msg, ('wrap',), _wrapped, msg)
             elif role == 'assistant':
                 # An assistant turn is frequently the conversation TAIL (the model's
                 # prose before its tool_calls, or a prefill-resume round), so the
@@ -412,11 +413,12 @@ def add_cache_breakpoints(body, log_prefix='', *, api_protocol='anthropic'):
                         content is None
                         or (isinstance(content, str) and not content.strip())
                         or (isinstance(content, list) and not content))):
-                    msg = {k: v for k, v in msg.items() if k != 'content'}
+                    msg = _rewritten(msg, ('omit-content',), lambda msg=msg: {
+                        k: v for k, v in msg.items() if k != 'content'})
                     messages[i] = msg
                     content = None
                 if isinstance(content, str) and content:
-                    messages[i] = {**msg, 'content': [{'type': 'text', 'text': content}]}
+                    messages[i] = _rewritten(msg, ('wrap',), _wrapped, msg)
 
     bp = 0
 
@@ -459,10 +461,8 @@ def add_cache_breakpoints(body, log_prefix='', *, api_protocol='anthropic'):
             continue
         content = msg.get('content', '')
         if isinstance(content, str) and content.strip():
-            messages[i] = {**msg, 'content': [
-                {'type': 'text', 'text': content,
-                 'cache_control': dict(_cc_stable)}
-            ]}
+            messages[i] = _rewritten(msg, ('mark-text', _marker_key(_cc_stable)),
+                                     _marked_text, msg, _cc_stable)
             bp += 1
         elif isinstance(content, list) and content:
             _text_idxs = [j for j, blk in enumerate(content)
@@ -470,19 +470,16 @@ def add_cache_breakpoints(body, log_prefix='', *, api_protocol='anthropic'):
             _slots = _system_bp_budget - bp
             _chosen = _text_idxs[-_slots:] if _slots > 0 else []
             if _chosen:
-                content = list(content)
-                for blk_idx in _chosen:
-                    content[blk_idx] = {**content[blk_idx],
-                                        'cache_control': dict(_cc_stable)}
-                    bp += 1
-                messages[i] = {**msg, 'content': content}
+                messages[i] = _rewritten(
+                    msg, ('mark-blocks', tuple(_chosen), _marker_key(_cc_stable)),
+                    _marked_blocks, msg, _chosen, _cc_stable)
+                bp += len(_chosen)
 
     # Cache last tool definition (stable, extended TTL)
     if tools and bp < _MAX_CACHE_BP:
         fn = tools[-1].get('function')
         if fn:
-            tools[-1] = {**tools[-1],
-                         'function': {**fn, 'cache_control': dict(_cc_stable)}}
+            tools[-1] = _cache_marked_tool(tools[-1], fn, _cc_stable)
             bp += 1
 
     # Cache a stepping-stone breakpoint that TRAILS the tail by ~_MID_TRAIL
@@ -511,17 +508,14 @@ def add_cache_breakpoints(body, log_prefix='', *, api_protocol='anthropic'):
                 continue  # volatile — its bytes flip to bare assistant next round
             content = msg.get('content', '')
             if isinstance(content, str) and content:
-                messages[i] = {**msg, 'content': [
-                    {'type': 'text', 'text': content,
-                     'cache_control': dict(_cc_stable)}
-                ]}
+                messages[i] = _rewritten(msg, ('mark-text', _marker_key(_cc_stable)),
+                                         _marked_text, msg, _cc_stable)
                 bp += 1
                 _placed_mid = True
                 break
             elif isinstance(content, list) and content and isinstance(content[-1], dict):
-                messages[i] = {**msg, 'content': [
-                    *content[:-1],
-                    {**content[-1], 'cache_control': dict(_cc_stable)}]}
+                messages[i] = _rewritten(msg, ('mark-last', _marker_key(_cc_stable)),
+                                         _marked_last, msg, _cc_stable)
                 bp += 1
                 _placed_mid = True
                 break
@@ -557,18 +551,16 @@ def add_cache_breakpoints(body, log_prefix='', *, api_protocol='anthropic'):
                 continue
             content = msg.get('content', '')
             if isinstance(content, str) and content:
-                messages[idx] = {**msg, 'content': [
-                    {'type': 'text', 'text': content,
-                     'cache_control': dict(_cc_tail)}
-                ]}
+                messages[idx] = _rewritten(msg, ('mark-text', _marker_key(_cc_tail)),
+                                           _marked_text, msg, _cc_tail)
                 bp += 1
                 _bp4_placed = True
                 break
             elif isinstance(content, list) and content:
                 last = content[-1]
                 if isinstance(last, dict):
-                    messages[idx] = {**msg, 'content': [
-                        *content[:-1], {**last, 'cache_control': dict(_cc_tail)}]}
+                    messages[idx] = _rewritten(msg, ('mark-last', _marker_key(_cc_tail)),
+                                               _marked_last, msg, _cc_tail)
                     bp += 1
                     _bp4_placed = True
                     break
@@ -584,3 +576,67 @@ def add_cache_breakpoints(body, log_prefix='', *, api_protocol='anthropic'):
     if bp > 0 and log_prefix:
         _ttl_info = ' (mixed TTL: BP1-3=1h, BP4=5m)' if use_extended_ttl else ''
         logger.debug('%s Cache: %d breakpoint(s)%s', log_prefix, bp, _ttl_info)
+
+
+def _rewritten(msg, key, build, *args):
+    """``build(*args)``: one message's marker rewrite, kept per settled row.
+
+    A rewrite is a pure function of the message and ``key`` (which names the
+    rewrite and every marker value it writes). A settled message keeps its
+    settled rewrite in its memo slot, so the rewritten row keeps one identity
+    across requests and the per-row memos after this pass (translation,
+    sealed encode, content digest) answer it. A live message gets a fresh
+    copy; neither is ever written in place.
+    """
+    from lib.conversation_sync.settled_rows import is_settled, memo_get, memo_put, settle
+    if not is_settled(msg):
+        return build(*args)
+    key = ('cache-breakpoints',) + key
+    held = memo_get(msg, key)
+    if held is None:
+        held = memo_put(msg, key, settle(build(*args)))
+    return held
+
+
+def _marker_key(marker):
+    return tuple(sorted(marker.items()))
+
+
+def _wrapped(msg):
+    return {**msg, 'content': [{'type': 'text', 'text': msg['content']}]}
+
+
+def _marked_text(msg, marker):
+    return {**msg, 'content': [
+        {'type': 'text', 'text': msg['content'], 'cache_control': dict(marker)}]}
+
+
+def _marked_last(msg, marker):
+    content = msg['content']
+    return {**msg, 'content': [
+        *content[:-1], {**content[-1], 'cache_control': dict(marker)}]}
+
+
+def _marked_blocks(msg, chosen, marker):
+    content = list(msg['content'])
+    for index in chosen:
+        content[index] = {**content[index], 'cache_control': dict(marker)}
+    return {**msg, 'content': content}
+
+
+def _cache_marked_tool(tool, function, marker):
+    """``tool`` with ``marker`` on its function, settled and kept per settled row.
+
+    The wire surface's rows keep their identity across rounds; the marked
+    copy does too, so every per-row memo downstream (provider translation,
+    sealed encode, byte fingerprints) answers it without recomputing.
+    """
+    from lib.conversation_sync.settled_rows import is_settled, memo_get, memo_put, settle
+    marked = {**tool, 'function': {**function, 'cache_control': dict(marker)}}
+    if not is_settled(tool):
+        return marked
+    key = ('cache-marked-tool', tuple(sorted(marker.items())))
+    held = memo_get(tool, key)
+    if held is None:
+        held = memo_put(tool, key, settle(marked))
+    return held

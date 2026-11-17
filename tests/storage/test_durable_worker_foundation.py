@@ -745,3 +745,41 @@ def test_claim_rejects_malformed_wake_observation(value):
 def test_legacy_claim_defaults_wake_observation_to_zero():
     document = _job_document()
     assert WorkerJobClaim.from_document(document,expected_worker_id=document['claimOwner']).wake_sequence == 0
+
+
+@pytest.mark.parametrize('released', [True, False])
+def test_placement_hands_an_unentered_claim_back_or_lets_it_enter(released):
+    """A claim gate that places claims across processes (execution shards).
+
+    Asked once under the claim's lease and before any handler: a released
+    claim returns to the queue at once with no handler effect; otherwise the
+    claim runs here exactly as without placement.
+    """
+    class Store(_FakeStore):
+        deferred = []
+
+        def defer(self, claim, *, now_ms, outcome, observed_cancel_sequence):
+            self.deferred.append((outcome.available_at_ms, now_ms, observed_cancel_sequence))
+            return {'ok': True}
+    store = Store(_job_document())
+    handled, placed = [], []
+
+    def handler(context, payload):
+        handled.append(payload)
+        return WorkerJobOutcome(status='succeeded', replay_cursor=context.replay_cursor)
+
+    def placement(context):
+        placed.append(context.claim.task_id)
+        assert not handled, 'placement precedes every handler effect'
+        return released
+    runner = SynchronousWorkerRunner(worker_id='replica-a/worker-1', store=store,
+        registrations=[_registration(handler)], now_ms=lambda: 5_000, placement=placement)
+    result = runner.run_once()
+    assert placed == ['runner-job']
+    if released:
+        assert result.state == 'suspended'
+        assert handled == [] and store.complete_calls == []
+        assert store.deferred == [(5_000, 5_000, 0)]
+    else:
+        assert result.state == 'succeeded'
+        assert len(handled) == 1 and store.deferred == []

@@ -79,43 +79,29 @@ def create_application(shutdown_requested, plan):
 def _create_shard_application(shutdown_requested, plan, project, environment, retained):
     """A shard runs its primary's generation: the retained bytes and its launch policy."""
     from serverctl_pkg.execution_plan import prepare_launch_policy
-    from serverctl_pkg.execution_shards import SHARD_ROLE
+    from serverctl_pkg.execution_shards import SHARD_ROLE, image_environment, import_primary_modules
     from runtime_guards import load_deployment_configuration
+    environment = image_environment() or environment
     if load_deployment_configuration().process_role != SHARD_ROLE:
         raise RuntimeError('An execution shard requires the execution_shard process role')
     # The role is the only launch difference from the primary's generation.
     generation = {**environment, 'TOFU_PROCESS_ROLE': 'execution'}
     require_plan_match(plan, {**prepare_launch_policy(project, generation), **retained.identity()},
                        stage='shard preparation')
+    # A shard forked from the preloaded image already holds both imports.
     import server
     app = server.app
     server.register_server_runtime_lifecycle(app, shutdown_requested=shutdown_requested)
     app.extensions['tofu_execution_import_source'] = retained
-    _import_primary_modules(retained.loaded_modules)
+    import_primary_modules(retained.loaded_modules)
     return app
-
-
-def _import_primary_modules(names):
-    """Import what the primary's jobs had imported, before this shard admits one."""
-    import importlib
-    failed = 0
-    for name in names:
-        if name in ('__main__', 'serverctl_pkg.execution_host'):
-            continue  # This module runs as __main__ here; never load a second copy.
-        try:
-            importlib.import_module(name)
-        except Exception:
-            failed += 1  # As in the primary, a lazy import fails on use, not here.
-    if failed:
-        logging.getLogger(__name__).info('execution shard: %d of %d primary modules did not import',
-                                         failed, len(names))
 
 
 def _claim_gate(args, app, record, request_stop, loop):
     """The shard's gate, or the primary's shard pool; None for a test composition."""
     from lib.durable_worker.runtime import CLAIM_GATE_EXTENSION
+    from lib.server.server_loop_runtime import _executor_idle_seconds
     if getattr(args, 'report_fd', None) is not None:
-        from lib.server.server_loop_runtime import _executor_idle_seconds
         from serverctl_pkg.execution_shards import ShardGate
 
         def retire():
@@ -136,7 +122,8 @@ def _claim_gate(args, app, record, request_stop, loop):
         gate = ShardPool(source=source, plan=record['plan'],
                          checkout=Path(record['projectPath']), python=sys.executable,
                          launch_environment=getattr(args, 'launch_environment', None) or dict(os.environ),
-                         directory=Path(args.state_file).parent / 'execution-shards')
+                         directory=Path(args.state_file).parent / 'execution-shards',
+                         idle_seconds=_executor_idle_seconds(os.environ, logging.getLogger('server')))
     app.extensions[CLAIM_GATE_EXTENSION] = gate
     return gate
 

@@ -278,27 +278,45 @@ def _rename_tool_name(name: str, reverse: dict) -> str:
 
 
 def _cloak_message_tools(messages: list, reverse: dict) -> None:
-    """Rename tool references inside message content blocks (in place)."""
-    for msg in messages or []:
+    """Rename tool references inside message content blocks.
+
+    ``messages`` is the translated body's own list; a message whose blocks
+    change is replaced copy-on-write, so a shared (settled) translated row
+    of the canonical history is never written.
+    """
+    for index, msg in enumerate(messages or []):
         content = msg.get('content')
         if not isinstance(content, list):
             continue
-        for part in content:
-            if not isinstance(part, dict):
-                continue
-            ptype = part.get('type')
-            if ptype == 'tool_use':
-                part['name'] = _rename_tool_name(part.get('name', ''), reverse)
-            elif ptype == 'tool_reference':
-                part['tool_name'] = _rename_tool_name(
-                    part.get('tool_name', ''), reverse)
-            elif ptype == 'tool_result':
-                nested = part.get('content')
-                if isinstance(nested, list):
-                    for np in nested:
-                        if isinstance(np, dict) and np.get('type') == 'tool_reference':
-                            np['tool_name'] = _rename_tool_name(
-                                np.get('tool_name', ''), reverse)
+        renamed = [_cloaked_part(part, reverse) for part in content]
+        if any(new is not old for new, old in zip(renamed, content)):
+            messages[index] = {**msg, 'content': renamed}
+
+
+def _renamed_field(part: dict, key: str, reverse: dict) -> dict:
+    name = _rename_tool_name(part.get(key, ''), reverse)
+    if key in part and part[key] == name and type(part[key]) is type(name):
+        return part
+    return {**part, key: name}
+
+
+def _cloaked_part(part, reverse: dict):
+    if not isinstance(part, dict):
+        return part
+    ptype = part.get('type')
+    if ptype == 'tool_use':
+        return _renamed_field(part, 'name', reverse)
+    if ptype == 'tool_reference':
+        return _renamed_field(part, 'tool_name', reverse)
+    if ptype == 'tool_result':
+        nested = part.get('content')
+        if isinstance(nested, list):
+            renamed = [_renamed_field(np, 'tool_name', reverse)
+                       if isinstance(np, dict) and np.get('type') == 'tool_reference'
+                       else np for np in nested]
+            if any(new is not old for new, old in zip(renamed, nested)):
+                return {**part, 'content': renamed}
+    return part
 
 
 def _prepend_system_reminder(messages: list, user_system: str) -> None:
@@ -400,12 +418,12 @@ def apply_claude_cloak(body: dict) -> tuple[dict, dict]:
         _prepend_system_reminder(body.get('messages') or [], user_system)
 
     # ── 3. Tool names (definitions, tool_choice, and in-message references).
-    for tool in body.get('tools') or []:
-        if not isinstance(tool, dict):
-            continue
-        if tool.get('type'):  # Anthropic built-in (web_search etc.) — keep
-            continue
-        tool['name'] = _rename_tool_name(tool.get('name', ''), reverse)
+    if isinstance(body.get('tools'), list):
+        # Copy-on-write: translated tool rows may be settled (shared, immutable).
+        body['tools'] = [
+            tool if not isinstance(tool, dict) or tool.get('type')  # Anthropic built-in — keep
+            else {**tool, 'name': _rename_tool_name(tool.get('name', ''), reverse)}
+            for tool in body['tools']]
     tc = body.get('tool_choice')
     if isinstance(tc, dict) and tc.get('type') == 'tool':
         body['tool_choice'] = {

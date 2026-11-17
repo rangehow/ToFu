@@ -899,17 +899,20 @@ def _count_request_with_view(
     unslotted: list[tuple[SettledDict, list[str]]] = []
     slot_key = (_SETTLED_TEXT_TOKENS_KEY, encoding)
     for message in messages or ():
-        message_texts = list(iter_message_texts((message,)))
         if type(message) is SettledDict:
             slotted = memo_get(message, slot_key)
             if slotted is not None:
                 settled_tokens += sum(slotted)
                 if selected_text_token_counts is not None:
+                    message_texts = iter_message_texts((message,))
                     for text, count in zip(message_texts, slotted):
                         if id(text) in selected_text_token_counts:
                             selected_text_token_counts[id(text)] = count
                 continue
+            message_texts = list(iter_message_texts((message,)))
             unslotted.append((message, message_texts))
+        else:
+            message_texts = list(iter_message_texts((message,)))
         texts.extend(message_texts)
     if not texts:
         return settled_tokens

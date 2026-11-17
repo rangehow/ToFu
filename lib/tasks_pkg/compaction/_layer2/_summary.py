@@ -16,6 +16,8 @@ from lib.log import audit_log, get_logger
 
 from lib.llm.stream_result import UnverifiedProviderStreamError
 from lib.tasks_pkg.compaction._ownership import compaction_owner_key
+from lib.tasks_pkg.compaction._summary_accounting import summary_model_admission
+from lib.tasks_pkg.persistence_wait import settle_deferred_ready_events
 from lib.tasks_pkg.compaction._layer2._summary_input import (
     SummaryInputPorts, build_summary_input, compose_summary_input,
     next_summary_pass, resolve_prior_receipt,
@@ -432,8 +434,8 @@ def _generate_query_aware_summary(messages: list, current_query: str,
     the receipt can track goal replacement across a long conversation.
     Requests over the summarizer window roll (``_generate_rolling_summary``).
     """
+    settle_deferred_ready_events(task)  # ready receipts precede every paid request
     authority_evidence = _summary_authority_evidence(task)
-    from lib.tasks_pkg.compaction._summary_accounting import summary_model_admission
     model_admission = summary_model_admission(task)
     from lib.llm_dispatch import dispatch_chat, dispatch_stream
     from lib.llm.llm_errors import AbortedError, LocalRequestPreparationError

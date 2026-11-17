@@ -727,19 +727,47 @@ def test_worker_delegated_by_a_coordinator_that_started_before_mcp_connected_rea
     assert _mcp_calls(chaos).count('record worker') == 1, _mcp_results(chaos, worker_nonce)
 
 
-# ── MCP across execution shards (lib/mcp/bridge_relay.py) ──────────────────
-
 def _shard_pids(chaos) -> list[int]:
-    pids = []
-    for row in chaos.instance.leaked_processes():
-        try:
-            environ = Path(f'/proc/{row["pid"]}/environ').read_bytes().split(b'\0')
-        except OSError:
-            continue
-        if b'TOFU_PROCESS_ROLE=execution_shard' in environ:
-            pids.append(row['pid'])
-    return pids
+    from serverctl_pkg.execution_shards import live_shard_pids
+    return live_shard_pids(int(chaos.instance.execution_record()['pid']))
 
+
+def _shard_running(chaos, tool_pid: int) -> int:
+    """The execution shard whose process tree runs ``tool_pid``."""
+    shards = set(_shard_pids(chaos))
+    pid = tool_pid
+    while pid > 1:
+        if pid in shards:
+            return pid
+        pid = int(Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[1])
+    raise AssertionError(f'tool {tool_pid} runs in no execution shard {sorted(shards)}')
+
+
+def test_execution_shard_killed_mid_tool(chaos):
+    """A Turn placed on a shard (the primary is busy) loses that shard mid-tool.
+
+    The primary and its Turn are untouched; the lost Turn settles resumably
+    with a visible error (or completes after recovery), its side effect ran
+    once, and no tool process of it survives (docs/DEFENSIVE_PATTERNS.md).
+    """
+    busy, _busy_nonce, busy_text, _response, release = _held_turn(chaos, 'Primary answer.')
+    try:
+        conversation, nonce, user_text, _ = _scripted(chaos, lambda n: [
+            fp.tool('run_command', {'command': chaos.effect_command(n, chaos.hang_command(n))}),
+            fp.text('Continued after the shard loss.')])
+        tool_pid = chaos.wait_tool_process(nonce)
+        chaos.wait_effect(nonce)
+        shard = _shard_running(chaos, tool_pid)
+        os.kill(shard, signal.SIGKILL)
+    finally:
+        release.set()
+    chaos.assert_contract(busy, busy_text, outcomes={'completed'}, final_text='Primary answer.')
+    chaos.assert_contract(conversation, user_text, outcomes={'completed', 'interrupted', 'failed'},
+                          final_text='Continued after the shard loss.', effects={nonce: 1})
+    assert shard not in _shard_pids(chaos)
+
+
+# ── MCP across execution shards (lib/mcp/bridge_relay.py) ──────────────────
 
 def _launches(chaos, name: str) -> int:
     log = chaos.instance.root / 'mcp-pair' / name / 'launches.log'

@@ -850,6 +850,8 @@ _HEAVY_TERMINAL_FIELDS = (
     '_anthropicToolInputs',
     # The latest Request Inspector snapshot's settled messages (reuse source).
     '_snapshotMessages',
+    # The latest provider request's settled messages and their memos.
+    '_wireMessageRows',
 )
 
 _CONVERSATION_TERMINAL_PROJECTION_FIELDS = (

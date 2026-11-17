@@ -39,6 +39,8 @@ class _ClaimObservation:
     # The first commit hint this probe consumes; None for a timed probe.
     hinted_at: tuple[int, float] | None = None
     startup: TaskStartupIntervals = field(default_factory=TaskStartupIntervals)
+    # The gate's placement of this probe's claim, once it owned one.
+    placement: object | None = None
 
 
 class _ObservedJobStore(StorageWorkerJobStore):
@@ -99,6 +101,9 @@ class DurableWorkerService:
                  claim_gate=None):
         self._wake_source = wake_source
         self._claim_gate = claim_gate
+        # A gate that places claims decides, per owned claim, whether this
+        # process enters it or hands it to a peer that will.
+        self._placement = claim_gate if callable(getattr(claim_gate, 'place', None)) else None
         self._policy = policy = dict(policy)
         if (not isinstance(principal, PrincipalContext) or principal.kind != 'system'
                 or principal.owner_user_id is not None or principal.tenant_id is not None
@@ -138,7 +143,14 @@ class DurableWorkerService:
             lease_ms=policy['workerLeaseMilliseconds'],
             heartbeat_interval_ms=policy['heartbeatIntervalMilliseconds'],
             control_signals=self._wake_source.signals if self._wake_source else None,
-            startup=observation.startup)
+            startup=observation.startup,
+            placement=None if self._placement is None else
+                lambda context: self._place(observation, context))
+
+    def _place(self, observation, context):
+        """Whether the gate hands this owned, unentered claim to a peer."""
+        observation.placement = self._placement.place(context, stopping=self._stop)
+        return observation.placement.released
 
     def snapshot(self):
         with self._lock:
@@ -170,6 +182,9 @@ class DurableWorkerService:
             thread = self._thread
             self._stop.set()
             self._wake.set()
+        if self._placement is not None:
+            # Parked claims return to the queue; the executor join below awaits them.
+            self._placement.interrupt()
         if self._wake_source is not None:
             self._wake_source.interrupt()
         if thread is not None:
@@ -191,7 +206,11 @@ class DurableWorkerService:
         self._wake.set()
 
     def _execute(self, observation):
-        return self._runner(observation).run_once(shutdown_event=self._stop)
+        try:
+            return self._runner(observation).run_once(shutdown_event=self._stop)
+        finally:
+            if observation.placement is not None:
+                self._placement.leave(observation.placement)
 
     def _finished(self, futures, now):
         """Reap done futures; return (backoff deadline, whether a claim settled)."""

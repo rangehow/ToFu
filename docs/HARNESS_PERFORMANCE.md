@@ -395,7 +395,9 @@ Reading:
 - Jobs never migrate. The first Turn of a 20-session burst starts before any
   shard exists, so those Turns run on the host as before (about 2 s per
   round); the shards started for them (ready about 5 s later) serve every
-  later Turn. Under heavy host load the burst's 20 shard boots compete for CPU
+  later Turn. (Since superseded: claims beyond the primary's own job are now
+  placed on shards before entry; see "Burst placement, forked shards and
+  settled tool translation".) Under heavy host load the burst's 20 shard boots compete for CPU
   (r1-B first-Turn p95 5.0 s).
 - One session is unchanged within noise (`shell`, `noop`); `run_command true`
   drops from 285 ms to 81-83 ms, the plain round overhead: the tool itself now
@@ -411,6 +413,343 @@ split one generation across processes); deferring the burst's first jobs to
 starting shards (adds about 5 s TTFR to every burst arrival, and the number of
 waiting jobs is unknown without a sizing heuristic); moving only event
 persistence to another process (at most the 21 % of host CPU it uses).
+
+## Burst placement, forked shards and settled tool translation (2026-11-17)
+
+Follow-up to "Execution shards and `run_command`". Owners:
+`serverctl_pkg/execution_shards.py` (decision record in its header),
+`serverctl_pkg/execution_shard_boot.py`, `lib/durable_worker/service.py`,
+`lib/llm/anthropic_outbound/_to_anthropic.py`, `lib/llm/cache.py`.
+
+### Root cause of the slow first Turn
+
+py-spy of the 20-session phase on the merged tree (`eda37e9714e8`): every
+first-Turn job ran on the primary, because jobs never migrate and the shards
+started for them took 9-15 s to boot under host load (a fresh interpreter,
+`import server`, re-importing the primary's modules, full startup phases).
+The primary's interpreter was again the one serialization point (event
+delivery `submit` lock wait 33 % of loop wall time, `_await_target` 13 %).
+Second Turns were fast only because the shards existed by then.
+
+### Changes
+
+1. **Placement at the claim boundary.** A claim the busy primary owns is
+   decided before any handler effect (`DurableWorkerService` claim gate
+   `place`, under the claim's lease monitor). If the primary's own job ended
+   meanwhile it enters the claim; otherwise the claim is parked, one shard is
+   started for it, and the first shard to report idle is reserved for it while
+   the unentered claim is handed back to the queue (deferral, available now)
+   for that shard to claim. A refused or stopping pool enters parked claims
+   itself. No count, window or prewarm number exists.
+2. **Shards fork from a preloaded image.** One single-threaded fork server
+   (`execution_shard_boot.py --fork-server`) loads the primary's frozen
+   generation, imports the application and the primary's modules, refuses to
+   fork once any thread exists, and forks each shard with its lease, manager
+   and report descriptors (SCM_RIGHTS). The primary's first job starts it; it
+   retires after `TOFU_EXECUTOR_IDLE_SECONDS` without work. Shard boot fell
+   from 9-15 s to 2-6 s on this host (fork server itself 1.2-4 s).
+   Process identities captured at import (`boot_identity.BOOT_ID/PID`,
+   `turn_lifecycle`'s attempt dispatch owner) are re-derived after fork, so no
+   shard can replay another process's attempt claim.
+3. **Settled tool rows survive Anthropic translation.** The cache-marked last
+   tool and each translated Anthropic tool row are settled once per settled
+   source row, so the sealed encode, byte fingerprint and schema-token memos
+   answer later rounds instead of re-serializing the tool surface every
+   request (`prepare_request`: `wire_byte_region` 4.5 -> 1.9 ms per request).
+   The Claude OAuth cloak renames tools copy-on-write.
+
+### ABAB (full mode, `--api-restarts 0`)
+
+Arm A: `90544031fc` (shared branch with the first shard change merged); arm B:
+`bc55214919` (changes 1-3). Fresh private root per run, TofuDB engine built
+from this source; runs alternated A, B on this host. r2-B coincided with a
+foreign load spike to 250 (it lost sessions to turn timeouts) and is replaced
+by r4. `true` n=10 per run (40 per arm across r1-r4), one-session rows n=60,
+20-session rows n=400 per Turn. Median / p95, ms. Artifacts:
+`output/harness_perf/burst-abab-20261117/`.
+
+| metric | A r1 | A r2 | A r3 | A r4 | B r1 | B r3 | B r4 |
+|---|---|---|---|---|---|---|---|
+| 20 sessions, first Turn rounds | 1,241 / 1,624 | 1,318 / 1,663 | 1,731 / 2,086 | 1,586 / 2,110 | **116** / 270 | **113** / 168 | **122** / 252 |
+| 20 sessions, second Turn rounds | 135 / 282 | 121 / 203 | 102 / 967 | 104 / 165 | 115 / 167 | 108 / 149 | 115 / 181 |
+| 20 sessions, all rounds (n=800) | 175 / 1,554 | 147 / 1,609 | 146 / 2,025 | 136 / 1,928 | **115** / 223 | **110** / 157 | **117** / 241 |
+| 20 sessions, first Turn TTFR | 2,750 | 2,001 | 1,698 | 1,615 | 9,168 | 1,981 | 2,619 |
+| 1 session, `noop` steady rounds | 79 / 133 | 79 / 139 | 72 / 122 | 71 / 142 | 73 / 83 | 70 / 81 | 74 / 129 |
+| 1 session, `shell` steady rounds | 127 / 191 | 108 / 224 | 89 / 137 | 93 / 144 | 103 / 156 | 89 / 130 | 89 / 202 |
+| `run_command true` round trip | 100 / 237 | 98 / 419 | 83 / 160 | 80 / 141 | 112 / 1,184 | 80 / 143 | 82 / 151 |
+
+Reading:
+
+- The first Turn of a 20-session burst no longer runs at 1.2-1.7 s per round:
+  113-122 ms, the second-Turn figure, 1.1-1.3x the one-session `shell`
+  figure of the same run. p95 over the whole phase fell from 1.5-2.0 s to
+  0.16-0.24 s.
+- The cost moved to the burst's first request: parked claims wait for their
+  shard (2-6 s here), so first-Turn TTFR is 2.0-2.6 s against 1.6-2.7 s
+  (r1-B, 9.2 s, was the first fork server of a cold, loaded run). Every
+  later round of those Turns gains 1.1-1.6 s, so a 20-round Turn finishes
+  about 25 s sooner.
+- One session is unchanged within noise; `true` stays at 80-82 ms (r1-B's
+  p95 is one 1.2 s outlier). In-process, change 3 removes about 2.6 ms of
+  request assembly per round (`prepare_request` 21 -> 20 ms per request
+  with the larger `seal_request`/`project_tool_wire` share unchanged); the
+  deployment suite cannot resolve it beside storage and event delivery.
+- Arm B's export predates the harness fix that finds forked shards
+  (`live_shard_pids` by ancestry), so its shard CPU/RSS columns read zero;
+  per-request CPU of the execution host fell from 43-48 to 4-9 ms because
+  the work runs in shards.
+
+### Remaining per-round cost (1 session, `true`, 40 Turns, py-spy 400 Hz)
+
+77-89 ms per round of loop wall time: provider request preparation and send
+32 ms (`prepare_request` 20 ms: `seal_request` 4.6 incl. a deep copy and
+sorted digest of the context lineage, Anthropic translation 3.1,
+`project_tool_wire` 2.2, `wire_byte_region` 1.9, token recount 2.2), tool
+dispatch 16-19 ms (the `true` child itself about 7 ms), event-durability
+barriers 8 ms (`checkpoint_invocation` flushes after tools and at round
+close), the coordinator-binding read `coordinator_scope` 4 ms per request for
+a conversation without a binding (one storage query each round, uncached
+because only a positive answer is pinned), working-facts/requirements reads
+3 ms. These are the next structural targets toward codex's 38 ms; none was
+changed here beyond change 3.
+
+### Alternatives considered
+
+- **Run the burst's extra claims on the primary** (before): 1.2-1.7 s per
+  round for the whole first Turn.
+- **Migrate a running job to a ready shard at a round boundary.** Its entered
+  effects, open provider streams and process-local carriers belong to one
+  process; moving them needs a second recovery path. Placement before entry
+  hands over only unentered claims.
+- **A prewarmed pool of idle shards.** A count knob (forbidden).
+- **Fork the multi-threaded primary.** Inherits held locks; the fork server
+  is a separate single-threaded image of the same generation.
+- **Cache negative coordinator bindings.** A binding can appear mid-Turn;
+  needs a revision-checked invalidation first.
+
+## Per-round cost follow-up (2026-11-18)
+
+Owners: `lib/tasks_pkg/persistence_wait.py` (deferred ready boundary),
+`lib/tasks_pkg/event_delivery.py` (`through` barriers), `lib/tasks_pkg/coordinator_policy.py`,
+`lib/tasks_pkg/wire_fingerprint.py`, `serverctl_pkg/execution_shards.py`.
+
+### Changes
+
+1. **Ready receipts persist while the next round prepares.** The root's
+   `ready` round end recorded and awaited every accepted event (about 4 ms a
+   round). It now records the lane position; the pre-request boundary awaits
+   exactly the events accepted up to it (`flush_task_events(through=...)`)
+   before the paid request, after the next round's context preparation,
+   admission and body build ran beside their persistence. The durability
+   contract is unchanged: ready receipts still precede every paid request of
+   the task (`stream_llm_response`, compaction summaries call
+   `settle_deferred_ready_events` first) and every awaited checkpoint covers
+   them. A domain sink (Swarm write-ahead) keeps the boundary awaited.
+   Measured `close_round` 4.3 -> 0.3 ms per Turn.
+2. **A Turn reads its coordinator role once.** `coordinator_scope` pinned a
+   positive answer but re-read storage for every ordinary Turn on every request
+   (4 ms). The negative answer is now kept for the Turn, keyed by the exact
+   (owner, conversation, project). Decision: the role is a property of the
+   Turn, in both directions, as the tool surface assembled from the same
+   lookup already is. A binding made while a Turn runs applies from the next
+   Turn. Alternative not taken: a process-wide cache invalidated by binding
+   writes needs a cross-process binding watch (the API host writes, execution
+   processes read); the Turn scope needs no invalidation because it ends.
+3. **The static-prefix hash is kept per settled floor** (3.8 ms per Turn): the
+   hash of the system rows plus first user row is memoized on that settled
+   row together with the exact rows it covers.
+
+### ABAB (full mode, 4 pairs, pooled samples)
+
+Arm A `507ebe6785` (shared branch merged, before these changes), arm B
+`75390e9742`. Same engine build, fresh roots, alternated A, B (host load
+90-115). Median / p95, ms. Artifacts: `output/harness_perf/rounds-abab-20261118/`.
+
+| metric | n per arm | A | B |
+|---|---|---|---|
+| `run_command true` Turn (two model requests) | 40 | 91.5 / 167.0 | **75.7** / 153.7 |
+| `noop` steady round | 228 | 74.1 / 88.1 | **70.8** / 80.5 |
+| `shell` steady round | 228 | 92.5 / 144.2 | 90.7 / 139.4 |
+| 20 sessions, first Turn rounds | 1,600 | 114.1 / 197.2 | 110.4 / 202.7 |
+| 20 sessions, second Turn rounds | 1,600 | 114.4 / 159.3 | 110.3 / 169.6 |
+
+`true` improved 17 % and `noop` 4 %. Check 2 of the assignment (codex 38 ms
+per round, pi 21 ms per `true`) is **not met**.
+
+### Where the remaining time goes (`true`, 40 Turns, py-spy 400 Hz, arm B)
+
+About 89 ms of loop wall time per Turn (two requests):
+
+| part | ms per Turn |
+|---|---|
+| provider request preparation (`prepare_request`: Anthropic translation 3.7 with lineage deep copy, sealing 3.1, wire byte region 1.9, request id digest 1.1, raw archive 1.1, token recount 0.9) | 23.5 |
+| provider exchange with the stub, SSE parse, request diagnostics | 14 |
+| round context (programmatic inputs, working facts, steer/notice reads, micro compaction) | 10 |
+| request body build incl. Request Inspector snapshot event | 6.8 |
+| tool execution: command 4.8 (of it `which` over PATH for the Hope shim 2.1, the spawn+select 1.8), tool-effect intent persisted before the effect 2.6, `tools_in_flight` barrier 4.0, post-tool snapshot 5.2 | 17 |
+| terminal `done` event persisted before settlement | 10.7 |
+| admission token count | 4.2 |
+
+A bare `subprocess.run(['true'])` costs 2.9 ms here, so the command is not
+the floor. What separates Tofu from pi/codex is per-request durable
+evidence they do not keep: a sealed request with context lineage, a Request
+Inspector snapshot, raw archive capture, and Turn events persisted to a
+separate storage process with intent-before-effect and terminal-before-
+settlement barriers (about 17 ms of awaited persistence per Turn). Those
+barriers are durability contracts and stay. The preparation work (about
+40 ms per Turn) is the remaining structural target: the lineage deep copy
+and digest, translation and request-id digests re-walk the whole history
+each request instead of extending the previous request's settled prefix.
+"Incremental request building" below removes that re-walk.
+
+### Fork safety of the shard image
+
+`tests/server/test_execution_shards.py::test_fork_audit_of_the_real_shard_image`
+inventories the preloaded image (`tests/server/fork_audit_probe.py`): one
+thread, 159 module locks of which none is held at the fork point, no socket
+or storage connection (each shard opens its own; the fork server is spawned
+fresh, never forked from the primary), and import-time identities limited to
+those re-derived after fork (`boot_identity.BOOT_ID/PID`,
+`turn_lifecycle._ATTEMPT_DISPATCH_OWNER_ID`). The audit found a third:
+`conversation_sync.service` copied `BOOT_ID` at import, which the post-fork
+reset never reached; it now reads the live value. Inherited descriptors are
+the instance's append-mode log files, which every process opens the same way.
+The fork server also refuses to fork whenever more than one thread exists.
+
+`tests/chaos/test_chaos_faults.py::test_execution_shard_killed_mid_tool` kills
+the shard running a tool while the primary is busy with another Turn. It
+found that the dead shard's foreground command group outlived it (boot
+recovery retires a dead owner's groups only when an execution host restarts);
+the primary now runs the same owner-death sweep when it observes a shard exit.
+
+## Incremental request building (2026-11-18)
+
+Owners: `lib/llm/request.py` (`detach_input`, `_content_digest`),
+`lib/tasks_pkg/orchestrator/_round_request_prep.py`, `lib/llm/cache.py`,
+`lib/llm/anthropic_outbound/_to_anthropic.py`, `lib/llm_sanitize/lineage.py`,
+`lib/tasks_pkg/round_evidence.py`, `lib/tasks_pkg/wire_fingerprint.py`.
+Contract: `docs/CONTEXT_INJECTIONS.md`, "Incremental request sealing".
+
+### Problem
+
+Every provider request rebuilt its evidence from the whole history: Anthropic
+translation, the lineage deep copy and span verification, the request-id and
+content digests, the recount, the sealed per-item encodes, transport
+fingerprints, the raw-archive capture and the context-telemetry token counts.
+The settled-row memos built for that (per-row encodings, the semantic chain)
+never fired, because nothing gave request messages a stable identity: the
+body builder copies every message every round.
+
+### Changes
+
+1. **Unchanged history is the same immutable rows from round to round.**
+   `build_round_request` settles the canonical messages against the task's
+   previous round (`settle_items`: a message interchangeable with the row at
+   its position is that row). Cache-marker rewrites are memoized per settled
+   row with the marker values in the key, so ingress detachment reuses the
+   post-marker rows by identity (`_wire_message_rows`, task-owned, released
+   with the task's heavy state).
+2. **Every stage memoizes on the row, keyed by everything else it reads.**
+   Anthropic messages (replay policy and respelled tool-call IDs in the key;
+   consecutive tool results become one memoized batch), conversion
+   validation, rejected tool-call IDs, the recount projection and its token
+   slot, sealed transport evidence, lineage range hashes (per settled carrier)
+   and the Request Inspector snapshot row (a row with nothing to strip is its
+   own snapshot row). `requestContentHash` resumes a SHA-256 chain per
+   settled wire item. Lineage traces are copied as JSON instead of
+   `deepcopy`; the raw-archive capture shares exact settled JSON; the OAuth
+   cloak renames copy-on-write.
+3. **Exactness.** Invalidation is by construction: any change to a message
+   (compaction, injection, in-place edit of a loop message, moved cache
+   marker, changed system prompt) yields a row that is not interchangeable
+   with the previous one, and everything derived from it is recomputed.
+   `tests/llm/test_incremental_request_build.py` drives 56 rounds per wire
+   (Anthropic, Chat with and without cache markers, Responses) through those
+   changes and asserts that the sealed payload, both identities, local tokens,
+   sealed lineage, usage evidence, transport fingerprints, headers, the raw
+   archive request bytes and the Inspector snapshot equal a fresh full
+   rebuild at every round; a deliberately loosened reuse check fails it.
+
+### Request build cost against history length
+
+`benchmarks/request_build_scaling.py`, calling-thread CPU ms, median of 10
+rounds per checkpoint; `build` is `build_round_request`, `prepare` the slot
+adaptation plus Anthropic `prepare_request`; `cold` is the same history's
+first request on a fresh task (the first request of a Turn). Arm A is
+`247fc45044` (the checkpoint this work starts from), arm B this change.
+
+| messages | A build | A prepare | A total | B build | B prepare | B total | A cold | B cold |
+|---|---|---|---|---|---|---|---|---|
+| 113 | 2.9 | 5.5 | 8.5 | 1.7 | 2.4 | 4.0 | 10.5 | 14.2 |
+| 228 | 5.4 | 9.4 | 14.8 | 3.0 | 3.4 | 6.5 | 18.8 | 24.0 |
+| 458 | 10.6 | 17.4 | 28.0 | 5.8 | 6.0 | 11.8 | 35.7 | 46.6 |
+| 918 | 21.2 | 34.4 | 55.7 | 11.4 | 11.0 | 22.7 | 70.5 | 92.8 |
+
+A warm round now grows by about 20 µs per message instead of 58 (`prepare`
+by 10 instead of 37). It is near-flat rather than flat: one
+interchangeable comparison per message (about 1.5 µs) stays, and so does
+`build_body`'s own pipeline (about 8 µs per message: field projection,
+protocol repair, same-role merge, canonical ordering, lineage seeding over
+the loop's mutable message dicts). The cold request pays the memo
+construction (settled twins of the translated, rewritten and recount rows,
+per-row digest links): about 30 % more than before. Over a Turn the warm
+rounds repay it from the second request on (228 messages: A 18.8 + 14.8 per
+further request, B 24.0 + 6.5); only a single-request Turn is slower, by
+about 2 ms at 100 messages.
+
+### ABAB (full mode, `--api-restarts 0`, 6 pairs)
+
+Arm A `247fc45044`, arm B `7fa61c098c`, same engine build, fresh roots,
+alternating. Pairs 2–5 ran at host load 80–100; pairs 1 and 6 at 180–190.
+Median / p95, ms. Artifacts: `output/harness_perf/request-build-abab-20261118/`.
+
+| metric | n per arm | A (pairs 2–5) | B (pairs 2–5) | A (all 6) | B (all 6) |
+|---|---|---|---|---|---|
+| `run_command true` round | 40 / 60 | 74.1 / 175.8 | **68.3** / 116.0 | 80.2 / 679.2 | **69.4** / 323.9 |
+| `true` TTFR (cold request) | 40 / 60 | 93.6 / 317.1 | 93.9 / 179.5 | 100.0 / 586.5 | 96.4 / 481.7 |
+| `noop` steady round | 228 / 342 | 68.5 / 111.1 | **64.0** / 106.6 | 70.9 / 558.0 | **64.2** / 106.6 |
+| `shell` steady round | 228 / 342 | 104.9 / 157.3 | 114.4 / 135.0 | 114.9 / 527.4 | 114.2 / 132.5 |
+| `chat` TTFR | 40 / 60 | 83.5 / 91.2 | 82.7 / 87.1 | 85.3 / 225.0 | 83.1 / 103.6 |
+| 20 sessions, all rounds | 3200 / 4800 | 103.0 / 176.9 | 101.7 / 164.6 | 111.4 / 627.2 | 100.7 / 161.3 |
+
+`shell` rounds are bimodal in both arms (about 75 and 115 ms; a fixed delay
+in the command path, not request building): each mode is faster in B, and
+the median follows the share of rounds in the fast mode, which varies from
+run to run (A 14–32 of 57, B 19–21).
+
+Request build time per round, from the Turn trace (`[TurnTraceSummary]`,
+median of run medians, pairs 2–5, `noop`, 21 rounds per Turn): model-call
+time per round 23.1 → 21.6 ms (it includes provider ingress and the stub
+exchange) and round preparation per round 19.1 → 16.0 ms.
+
+### What remains (floor)
+
+The harness histories are short (75–160 messages), so the per-round build
+saving there is about 4–5 ms and the rounds stay near 64–69 ms against
+codex 38 / pi 21. What remains per `noop` round is not history-length work:
+round context preparation (inbox, working facts, programmatic inputs,
+hygiene), the provider exchange and stream parse, tool dispatch, and the
+awaited persistence that the durability contracts keep (intent before
+effect, terminal before settlement, ready receipts before the next paid
+request). The first request of each Turn builds from scratch because the
+row holder dies with the task; carrying it across Turns needs a retention
+owner for conversation-sized state between Turns, which the terminal
+heavy-state release deliberately refuses.
+
+### Alternatives considered
+
+- **A delta request over the previous sealed request.** Sealed evidence
+  would depend on request history, need its own invalidation protocol, and
+  the provider still needs the full body; identity reuse gives the same
+  saving with every request still a pure function of its body.
+- **Content-hash keyed caches.** Computing the key costs the encode being
+  saved.
+- **Identity memos on the loop's message dicts.** They are mutable and
+  edited in place, so identity proves nothing without a comparison.
+- **Dropping the recount-projection memo** to make the first request
+  cheaper: measured 2 ms less cold and 1.2 ms more per warm round at 458
+  messages; kept, because Turns with a tool round outnumber single-request
+  Turns.
 
 ## Alternatives considered
 

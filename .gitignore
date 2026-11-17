@@ -134,6 +134,7 @@ __pycache__/
 !/benchmarks/startup_dispatch_recovery.py
 !/benchmarks/settled_turn_retention.py
 !/benchmarks/agent_round_overhead.py
+!/benchmarks/request_build_scaling.py
 !/benchmarks/mcp_live_schema_projection.py
 !/benchmarks/verification_bundle_reuse.py
 !/benchmarks/sse_text_accumulation.py

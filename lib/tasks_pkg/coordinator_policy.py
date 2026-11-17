@@ -111,9 +111,19 @@ def coordinator_scope(task: dict, project_path: str | None = None) -> dict | Non
     from lib.tasks_pkg.manager import task_user_id
     owner = task_user_id(task)
     path = normalize_project_path(path)
+    # The role is fixed for a Turn in both directions: a positive answer is
+    # pinned above, and a negative one is remembered for the exact (owner,
+    # conversation, project) it read. A binding made while the Turn runs takes
+    # effect from the next Turn, as an unbinding already does.
+    identity = (owner, task['convId'], path)
+    unbound = task.get('_coordinatorUnboundScopes')
+    if isinstance(unbound, tuple) and identity in unbound:
+        return None
     binding = ProjectCoordinationRepository(owner).read(path)
     if (binding.get('availability') != 'available'
             or binding.get('conversationId') != task['convId']):
+        task['_coordinatorUnboundScopes'] = (
+            unbound if isinstance(unbound, tuple) else ()) + (identity,)
         return None
     result = {'project_path': path, 'binding_revision': binding['revision'],
               'conversation_id': task['convId'], 'user_id': owner}

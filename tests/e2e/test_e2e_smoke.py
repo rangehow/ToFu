@@ -247,6 +247,28 @@ def _wait_app_ready(page, timeout=15000):
         timeout=timeout)
 
 
+def _start_new_chat(page):
+    """Click New chat where a user reaches it.
+
+    A drawer viewport (phone width) keeps the sidebar off-canvas: entering one
+    collapses it after the debounced resize, and New chat leaves the opened
+    drawer up. Open it first and dismiss it through its backdrop afterwards,
+    instead of racing the collapse to click a control about to leave the screen.
+    """
+    settled = """() => !window.isDrawerViewport()
+        || document.getElementById('sidebar').classList.contains('collapsed')"""
+    page.wait_for_function(settled)
+    drawer = page.evaluate('window.isDrawerViewport()')
+    if drawer:
+        page.locator('.toggle-sidebar-btn').click()
+    page.locator('.new-chat-btn').click()
+    if drawer:
+        # The open drawer covers the backdrop's centre; tap its uncovered edge.
+        page.locator('#sidebarBackdrop').click(
+            position={'x': page.viewport_size['width'] - 8, 'y': 8})
+        page.wait_for_function(settled)
+
+
 def _open_settled_tool_panel(page):
     """A settled reply keeps its calls in a closed panel; open it like a reader."""
     toggle = page.locator(
@@ -317,6 +339,47 @@ def test_bundle_loaded_in_browser(page, assert_no_js_errors):
         'version': 3, 'api': 'function', 'newChat': 'function',
         'settings': True, 'oldScripts': False,
     }
+
+
+_LAZY_IMPORT_FAILURE = """(beforeUnload) => {
+  const reported = [];
+  const original = {error: console.error, warn: console.warn};
+  console.error = (...args) => reported.push(['error', String(args[0])]);
+  console.warn = (...args) => reported.push(['warn', String(args[0])]);
+  try {
+    if (beforeUnload) {
+      const leaving = document.createEvent('BeforeUnloadEvent');
+      leaving.initEvent('beforeunload', false, true);
+      if (beforeUnload === 'cancelled') {
+        window.addEventListener('beforeunload', event => event.preventDefault(), {once: true});
+      } else if (beforeUnload === 'prompted') {
+        window.addEventListener('beforeunload', event => { event.returnValue = 'stay'; },
+                                {once: true});
+      }
+      window.dispatchEvent(leaving);
+    }
+    const failure = new Event('vite:preloadError', {cancelable: true});
+    failure.payload = new TypeError('Importing a module script failed.');
+    window.dispatchEvent(failure);
+    window.dispatchEvent(new Event('pageshow'));
+  } finally {
+    Object.assign(console, original);
+  }
+  return reported;
+}"""
+
+
+def test_lazy_import_cancelled_by_navigation_is_not_an_app_failure(page):
+    """WebKit rejects a pending lazy import when a reload proceeds (after
+    beforeunload); that is the leaving document's cancellation, while the same
+    rejection in a document that stays, including after a cancelled
+    beforeunload, remains an error."""
+    _wait_app_ready(page)
+    assert page.evaluate(_LAZY_IMPORT_FAILURE, 'proceeding') == [
+        ['warn', '[boot] lazy asset load cancelled by navigation:']]
+    for staying in (None, 'cancelled', 'prompted'):
+        assert page.evaluate(_LAZY_IMPORT_FAILURE, staying) == [
+            ['error', '[boot] lazy asset failed after app-ready:']], staying
 
 
 def test_send_message_streams_and_renders(page, assert_no_js_errors):
@@ -423,7 +486,7 @@ def test_program_observation_and_measurements_render_and_restore(
     _wait_app_ready(page)
     page.set_viewport_size({'width': width, 'height': 900})
     _wait_app_ready(page)
-    page.locator('.new-chat-btn').click()
+    _start_new_chat(page)
     _select_stub_model(page)
     search_before = _SENTINEL['search_calls']
     page.locator('#userInput').fill('__e2e_program__ inspect candidates')

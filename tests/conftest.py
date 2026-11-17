@@ -2102,6 +2102,26 @@ _BENIGN_CONSOLE_ERRORS = (
 )
 
 
+#: Each engine's exact ``Request.failure`` text for a request the browser itself
+#: cancelled (navigation, reload, page close) — the same
+#: event in three dialects. Any other failure text, including every DNS,
+#: connection, TLS or HTTP-level failure, stays a hard finding.
+#: Firefox names a cancelled channel ``NS_BINDING_ABORTED`` or, for a
+#: streaming read torn down mid-body, ``NS_ERROR_ABORT`` (both observed on CI
+#: for navigation-cancelled SSE and fetches); WebKit uses
+#: ``Load request cancelled``.
+_CANCELLED_REQUEST_FAILURES = {
+    'chromium': frozenset({'net::ERR_ABORTED'}),
+    'firefox': frozenset({'NS_BINDING_ABORTED', 'NS_ERROR_ABORT'}),
+    'webkit': frozenset({'Load request cancelled'}),
+}
+
+
+def _is_cancelled_request_failure(browser_name, failure):
+    """Whether ``failure`` is ``browser_name``'s own cancellation of a request."""
+    return failure in _CANCELLED_REQUEST_FAILURES[browser_name]
+
+
 def _attach_js_error_capture(pg):
     """Record uncaught JS exceptions + unexpected console errors on ``pg``.
 
@@ -2122,8 +2142,9 @@ def _attach_js_error_capture(pg):
 
       * ``pageerror``   → ALWAYS hard. An uncaught exception is never fine.
       * ``console.error`` → hard UNLESS it matches :data:`_BENIGN_CONSOLE_ERRORS`.
-      * ``requestfailed`` → hard unless ``ERR_ABORTED``, which is the browser
-        cancelling an in-flight preload/navigation, not a missing asset.
+      * ``requestfailed`` → hard unless it is the engine's own cancellation of
+        an in-flight request (:data:`_CANCELLED_REQUEST_FAILURES`; Chromium's
+        ``net::ERR_ABORTED``), not a missing asset.
         (Verified: the ERR_ABORTED seen at boot is a pet sprite preload, and
         that file EXISTS on disk — treating it as a 404 would be a false
         accusation of the kind the charter warns about.)
@@ -2134,6 +2155,7 @@ def _attach_js_error_capture(pg):
     """
     hard = []
     pg._tofu_js_errors = hard
+    browser_name = pg.context.browser.browser_type.name
 
     def _on_pageerror(exc):
         hard.append(f'uncaught exception: {str(exc)[:300]}')
@@ -2148,7 +2170,7 @@ def _attach_js_error_capture(pg):
 
     def _on_requestfailed(req):
         failure = req.failure or ''
-        if 'ERR_ABORTED' in failure:
+        if _is_cancelled_request_failure(browser_name, failure):
             return
         hard.append(f'request failed: {req.url[:200]} ({failure})')
 

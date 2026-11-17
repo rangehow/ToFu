@@ -56,6 +56,19 @@
   var retryKey = 'tofu:vite-preload-reload';
   var proxyRetries = Object.create(null);
   var freshRetries = Object.create(null);
+  /* WebKit stops every in-flight load of the old document when a navigation
+   * or reload proceeds, after beforeunload and before pagehide, so a pending
+   * lazy import rejects in a document that is being replaced. A beforeunload
+   * that nothing cancelled is that navigation; pageshow means this document
+   * is current again. */
+  var leaving = null;
+  window.addEventListener('beforeunload', function (event) { leaving = event; });
+  window.addEventListener('pageshow', function () { leaving = null; });
+  function navigatingAway() {
+    if (!leaving || leaving.defaultPrevented) return false;
+    /* A non-empty BeforeUnloadEvent.returnValue also asks to stay. */
+    return !(typeof leaving.returnValue === 'string' && leaving.returnValue);
+  }
 
   function eventAsset(event) {
     var target = event && event.target;
@@ -196,7 +209,11 @@
      * uses a separate reload guard; the boot key is cleared on app-ready and
      * cannot safely own these failures (2026-08-20 refresh-loop incident). */
     if (ready || (window.TofuModules && window.TofuModules.version === 3)) {
-      if (window.console && console.error) {
+      if (navigatingAway()) {
+        if (window.console && console.warn) {
+          console.warn('[boot] lazy asset load cancelled by navigation:', error);
+        }
+      } else if (window.console && console.error) {
         console.error('[boot] lazy asset failed after app-ready:', error);
       }
       return;

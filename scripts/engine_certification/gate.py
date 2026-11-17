@@ -205,7 +205,9 @@ class Certification:
         self.checkout = self.work / 'checkout'
         self.previous_paths, self.note, self.argv = previous, note, argv
         self.checks: list[Check] = []
-        self.environment = {key: value for key, value in os.environ.items() if key not in SECRET_ENGINE_KEYS}
+        # The detached checkout has no .env; resolve declared toolchain roots before spawning children.
+        environment = {key: value for key, value in os.environ.items() if key not in SECRET_ENGINE_KEYS}
+        self.environment = native_engine.resolve_cargo_source(environment, root=repo).environment
 
     # ── process plumbing ──────────────────────────────────────────────────
     def _run(self, check_id: str, argv: list, *, log_name: str | None = None, cwd: Path | None = None,
@@ -264,10 +266,7 @@ class Certification:
                             output=str(output)).verdict == 'pass'
 
     def cargo(self) -> bool:
-        cargo = shutil.which('cargo', path=self.environment.get('PATH', os.defpath))
-        if not cargo:
-            installed = Path(self.environment.get('CARGO_HOME') or Path.home() / '.cargo') / 'bin/cargo'
-            cargo = str(installed) if installed.is_file() else None
+        cargo = native_engine.resolve_cargo_source(self.environment).cargo
         manifest = ['--manifest-path', 'packages/tofu-db/Cargo.toml', '--lib', '--locked']
         environment = {**self.environment, 'CARGO_TARGET_DIR': str(self.cache / 'cargo-test-target')}
         results = []

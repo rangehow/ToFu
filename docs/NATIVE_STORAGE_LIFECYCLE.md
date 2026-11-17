@@ -744,6 +744,13 @@ earlier deployment's evidence.
 
 Decision: restarts deploy only certified engines.
 
+The gate resolves Cargo and Rustup roots through the shared native-engine
+resolver against the invoking checkout's `.env` before spawning any check.
+Its detached checkout has no `.env`; build and Cargo checks inherit the resolved
+toolchain environment. Copying the whole project configuration into the test
+checkout was rejected because unrelated runtime configuration and credentials
+must not become certification inputs.
+
 - **Record.** `scripts/engine_certify.py` (owner `scripts/engine_certification/gate.py`)
   is the only writer. For one commit, in a private detached checkout, it runs
   every check in `serverctl_pkg.engine_certification.REQUIRED_CHECKS` and, only

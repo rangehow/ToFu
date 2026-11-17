@@ -242,3 +242,23 @@ def test_a_work_root_off_the_fixtures_filesystem_is_refused_before_any_copy(tmp_
         assert 'different filesystems' in capsys.readouterr().err
     finally:
         shutil.rmtree(work_root, ignore_errors=True)
+
+
+def test_certification_inherits_declared_toolchain_without_project_secrets(tmp_path, monkeypatch):
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    cargo_home, rustup_home = tmp_path / 'cargo', tmp_path / 'rustup'
+    (cargo_home / 'bin').mkdir(parents=True)
+    rustup_home.mkdir()
+    cargo = cargo_home / 'bin/cargo'
+    cargo.write_text('#!/bin/sh\nexit 0\n')
+    cargo.chmod(0o755)
+    (repo / '.env').write_text(
+        f'CARGO_HOME={cargo_home}\nRUSTUP_HOME={rustup_home}\nAPI_KEY=project-secret\n')
+    monkeypatch.setattr(os, 'environ', {'PATH': '/usr/bin:/bin', 'HOME': str(tmp_path)})
+    run = gate.Certification(repo, 'c' * 40, tmp_path / 'fixture', tmp_path / 'work', [], '', [])
+    assert run.environment['CARGO_HOME'] == str(cargo_home)
+    assert run.environment['RUSTUP_HOME'] == str(rustup_home)
+    assert shutil.which('cargo', path=run.environment['PATH']) == str(cargo)
+    assert 'API_KEY' not in run.environment
+    assert not (run.checkout / '.env').exists()

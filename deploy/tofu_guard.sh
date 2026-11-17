@@ -266,12 +266,16 @@ record_death_evidence_async() {
 }
 
 _heartbeat_file() {
-  # Mirror lib.server_boot.lock: explicit heartbeat dir or the dedicated
-  # local runtime path. The heartbeat never lives on the project FUSE mount.
+  # Mirror runtime_path_policy.instance_heartbeat_path: explicit heartbeat dir,
+  # else one directory per data root (sha256 of its real path) under the local
+  # runtime path. The heartbeat never lives on the project FUSE mount.
   if [ -n "${TOFU_HEARTBEAT_DIR:-}" ]; then
     printf '%s/server.heartbeat' "${TOFU_HEARTBEAT_DIR}"
   else
-    printf '%s' '/tmp/tofu/heartbeat/server.heartbeat'
+    local data identity
+    data="$(realpath -m "${PROJ}/data")"
+    identity="$(printf '%s' "${data}" | sha256sum | cut -d' ' -f1)"
+    printf '/tmp/tofu/heartbeat/%s/server.heartbeat' "${identity}"
   fi
 }
 

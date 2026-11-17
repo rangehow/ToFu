@@ -463,6 +463,27 @@ requests is not a clean measurement. `--smoke` is the CI size (under 2 min).
 Verify `tests/meta/test_harness_perf_measure.py`; baseline, hotspots and
 targets live in `docs/HARNESS_PERFORMANCE.md`.
 
+`startup_idle_dispatch.py` measures the manager-composed instance
+(`serverctl.py start`: lifecycle manager, API host, execution host) of the
+checkout it lives in: `cold-start` (median of N stop/start cycles, each host
+from spawn and from the CLI to ready), `idle` (CPU%, RSS and context switches
+per second of both hosts over a window, busiest threads named through py-spy),
+`dispatch` (submit to the loopback provider's first request byte, plus the
+first Turn after ready) and `hold`. It builds a scrubbed environment (private
+manager/API ports, `TOFU_HEARTBEAT_DIR`, `TMPDIR`, in-tree `data/`) and
+refuses a checkout that already runs a server or manager, so it never reaches
+a live Tofu. Run each compared tree from its own exported checkout. Results
+live in `docs/HARNESS_PERFORMANCE.md`, "Startup, idle and dispatch".
+
+`startup_recovery_batch.py` times boot's active work-item recovery
+(`recover_active_work_items`) on a disposable TofuDB (or `--backend sqlite`)
+authority with restart-paused work items over Git checkouts, all under the
+given scratch root; put the root on the volume under study. Paused items stay
+active, so every run repeats the same pass. Compare arms in fresh alternating
+processes with `TOFU_BENCH_CHECKOUT` (and `PYTHONPATH`) naming each tree; the
+summary prints the `lib` it measured. Dispatch recovery and coordinator
+reports are excluded. Verify `tests/meta/test_startup_recovery_batch_measure.py`.
+
 - Keep datasets, manifests, pricing inputs, random seeds, model/provider
   identity, and acceptance criteria explicit enough to reproduce a result.
 - Default runs must be bounded and dry-run/offline when practical. Live model

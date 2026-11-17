@@ -7,7 +7,8 @@ successful handoff; the command worker, swarm session, TaskRuntime and human
 gate owner decide the actual result. ``None`` means this process holds no such
 task, session or gate, so a split API asks the execution incarnation instead.
 ``storage_rpc_metrics`` reports this process's storage RPC histogram for the
-API's admin ``/metrics``; it carries no owner data.
+API's admin ``/metrics``; it carries no owner data. ``mcp_reconcile`` queues
+an owner's MCP management action on this process's bridge.
 """
 import time
 
@@ -137,6 +138,14 @@ def storage_rpc_metrics(*, user_id: int, deadline_unix_ms: int | None = None):
     return {'histograms': storage_rpc_snapshot()}
 
 
+def reconcile_mcp_server(*, user_id: int, server: str, action: str,
+                         deadline_unix_ms: int | None = None):
+    """Apply an MCP management action to this process's bridge, asynchronously."""
+    _admit(deadline_unix_ms)
+    from lib.mcp.startup import request_mcp_reconcile
+    return {'scheduled': request_mcp_reconcile(user_id, server, action)}
+
+
 def merge_background_activity(*views):
     """Union per-process views; one swarm run or command appears once."""
     merged = {'swarms': [], 'backgroundCommands': []}
@@ -172,4 +181,6 @@ def apply_command_control(method, task_id, *, user_id, deadline_unix_ms=None, **
         return background_activity(user_id=user_id, deadline_unix_ms=deadline_unix_ms)
     if method == 'storage_rpc_metrics' and not params and task_id == '':
         return storage_rpc_metrics(user_id=user_id, deadline_unix_ms=deadline_unix_ms)
+    if method == 'mcp_reconcile' and set(params) == {'server', 'action'} and task_id == '':
+        return reconcile_mcp_server(user_id=user_id, deadline_unix_ms=deadline_unix_ms, **params)
     raise ValueError('Unsupported execution command control')

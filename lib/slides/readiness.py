@@ -24,10 +24,11 @@ class SlidesRuntimeUnavailable(RuntimeError):
 
     def __init__(self, detail: str):
         self.detail = str(detail or 'unknown slide-render runtime failure')
+        install = ' '.join(headless_shell_install_command())
         self.hint = (
-            'Make .tofu_env.json point to the environment installed for this '
-            'project, verify that environment can import Playwright and launch '
-            'Chromium, then restart Tofu.')
+            f'Install the browser this interpreter launches: {install}. If '
+            'that environment is not the one installed for this project, '
+            'make .tofu_env.json point to it and restart Tofu.')
         super().__init__(
             f'PPT rendering is unavailable in Python environment '
             f'{sys.prefix}: {self.detail}')
@@ -57,6 +58,11 @@ class SlidesRuntimeUnavailable(RuntimeError):
             source='lib.slides.readiness',
             retryable=False,
         )
+
+
+def headless_shell_install_command() -> list[str]:
+    import chromium_env
+    return chromium_env.headless_shell_install_command(sys.executable)
 
 
 _ready_lock = threading.Lock()
@@ -103,9 +109,19 @@ def ensure_slides_runtime_ready() -> dict:
             raise SlidesRuntimeUnavailable(
                 f'cannot import playwright.sync_api ({exc})') from exc
 
+        import chromium_env
+        chromium_env.ensure_chromium_env(os.environ)
+        # Playwright launches only the browser build its own release pins; an
+        # env upgrade (playwright 1.61 → 1.65) leaves the old build on disk and
+        # the new one absent. Preparing it is the platform's job, for THIS
+        # interpreter, before the first launch.
         try:
-            import chromium_env
-            chromium_env.ensure_chromium_env(os.environ)
+            chromium_env.ensure_headless_shell()
+        except chromium_env.ChromiumUnavailable as exc:
+            raise SlidesRuntimeUnavailable(
+                f'Chromium is not installed for this interpreter ({exc})'
+            ) from exc
+        try:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(headless=True)
                 try:

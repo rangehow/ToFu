@@ -2077,7 +2077,8 @@ mod tests {
         // optimistic-concurrency conflict, exactly like the SQL authority's
         // "The requested resume anchor is not current." It is NOT a
         // ConflictFence literal: those are reserved for the deterministic
-        // worker-claim ownership fences. Pin the wire shape here because
+        // worker-claim ownership fences and the command-receipt identity
+        // fence. Pin the wire shape here because
         // turn.attempt.create's admission path is what a Coordinator hits
         // when it echoes a stale or mistyped resume anchor.
         let directory = tempfile::tempdir().unwrap();
@@ -2146,6 +2147,46 @@ mod tests {
             "advertised anchor refused: {:?}",
             accepted.error_message
         );
+    }
+
+    #[test]
+    fn a_reused_command_id_names_its_receipt_conflict_on_the_wire() {
+        // A command ID whose receipt names another request carries the same
+        // literal reason the SQL authority returns. A conversation command
+        // reused with other content was already accepted; a client that saw
+        // only the bare code took it for a closed steer window and queued the
+        // input a second time (2026-11-17 Global Router re-forwards).
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        let session = authenticator().authenticate(&hello()).unwrap();
+        let create = |title: &str| {
+            let mut create = request(
+                "conversation.create",
+                11,
+                json!({"conv_id": "reuse-wire", "user_id": 11, "title": title, "settings": {}}),
+            );
+            create.command_id = Some("reuse-wire-command".into());
+            create
+        };
+        let created = session.dispatch(&mut database, &create("First"), 500);
+        assert_eq!(
+            created.status, 0,
+            "create refused: {:?}",
+            created.error_message
+        );
+        let replay = session.dispatch(&mut database, &create("First"), 600);
+        assert_eq!(
+            replay.status, 0,
+            "identical replay refused: {:?}",
+            replay.error_message
+        );
+        let reused = session.dispatch(&mut database, &create("Second"), 700);
+        assert_eq!(reused.error_code.as_deref(), Some("database_conflict"));
+        assert_eq!(
+            reused.error_message.as_deref(),
+            Some(crate::semantic_executor::COMMAND_ID_REUSED)
+        );
+        assert!(!reused.retryable);
     }
 
     #[test]

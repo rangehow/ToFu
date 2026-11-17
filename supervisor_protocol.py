@@ -46,6 +46,7 @@ SUPERVISOR_SOURCE_FILES = (
     'serverctl_pkg/resident_service.py',
     'serverctl_pkg/restart_budget.py',
     'runtime_guards.py',
+    'runtime_path_policy.py',
     'tofu_workers/__init__.py',
     'tofu_workers/executor.py',
     'tofu_workers/resources.py',

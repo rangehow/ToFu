@@ -41,7 +41,7 @@ def spawnable(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, 'prepare_server_python_cache', lambda *_args, **_kwargs: (
         cache.ServerPythonCacheActivation(selected=False, managed=False, reason='test',
                                           mode='off')))
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _path: {
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _path, _server_env=None: {
         'running': False, 'projectPath': str(project.resolve())})
     monkeypatch.setattr(sm, 'port_accepts', lambda *_args, **_kwargs: False)
     monkeypatch.setattr(sm, 'listener_pids', lambda _port: [])

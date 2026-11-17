@@ -407,7 +407,7 @@ def test_manager_applies_prefix_and_owns_namespace_lease(
     )
     monkeypatch.setattr(cache, 'prepare_server_python_cache',
                         lambda *_args, **_kwargs: activation)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _path: {
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _path, _server_env=None: {
         'running': False, 'projectPath': str(project.resolve())})
     monkeypatch.setattr(sm, 'port_accepts', lambda *_args, **_kwargs: False)
     monkeypatch.setattr(sm, 'listener_pids', lambda _port: [])
@@ -450,7 +450,7 @@ def test_cache_helper_failure_never_blocks_worker_spawn(tmp_path, monkeypatch):
         raise RuntimeError('optional cache unavailable')
 
     monkeypatch.setattr(cache, 'prepare_server_python_cache', fail_cache_setup)
-    monkeypatch.setattr(sm, 'read_lock_status', lambda _path: {
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _path, _server_env=None: {
         'running': False, 'projectPath': str(project.resolve())})
     monkeypatch.setattr(sm, 'port_accepts', lambda *_args, **_kwargs: False)
     monkeypatch.setattr(sm, 'proc_start_ticks', lambda _pid: 99)

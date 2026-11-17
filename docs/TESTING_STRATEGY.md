@@ -193,6 +193,7 @@ removing required plugins would bypass the shared test contract.
 |---|---|---|
 | Unit | Pure policy, reducer, parser, repository and lifecycle behavior | `make test-unit` |
 | API | Authenticated HTTP plus application/storage integration | `make test-api` |
+| Fault injection | Real Turns through an isolated two-process instance under one injected fault each; part of the API tier ([contracts](DEFENSIVE_PATTERNS.md#fault-contracts-of-the-chaos-suite)) | `make test-chaos` |
 | Frontend owner | TypeScript owner, generated artifact and serving contracts | `make test-frontend` |
 | Browser journey | A small set of user-critical flows through the real app | `make test-e2e` |
 | Visual | Layout and interaction behavior requiring a browser | `make test-visual` |

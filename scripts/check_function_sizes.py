@@ -47,7 +47,7 @@ FUNCTION_LINE_BUDGETS = _unique_budgets(
     ('lib/tasks_pkg/turn_trace.py', '_fold_task_trace', 221),
     ('lib/tasks_pkg/cache_tracking/_detect.py', 'detect_cache_break', 378),
     ('lib/tasks_pkg/orchestrator/_finalize.py', '_finalize_and_emit_done', 392),
-    ('lib/tasks_pkg/stream_handler/_analyse.py', 'analyse_stream_result', 237),
+    ('lib/tasks_pkg/stream_handler/_analyse.py', 'analyse_stream_result', 236),
     ('lib/translate/engine/_engine.py', '_translate_one_chunk', 425),
     ('evaluations/long_agent_release/tofu_projection.py', 'project_tofu_trial', 630),
     ('lib/cost_experiments/cost_experiments.py', 'aggregate_cost_experiment_rows', 634),

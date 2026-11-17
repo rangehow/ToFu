@@ -491,7 +491,11 @@ native) and the `query_many` cases of `tests/storage/test_storage_v2_client.py`.
 
 - same command ID + same operation and canonical payload returns the committed
   response;
-- same command ID + different operation or payload is `database_conflict`;
+- same command ID + different operation or payload is `database_conflict`
+  with the message `command_id was reused for a different request` on both
+  authorities (`lib.storage.errors.is_command_id_reuse`; native
+  `semantic_executor::COMMAND_ID_REUSED`), so a caller can tell a command it
+  already had accepted from every other conflict;
 - a rollback writes neither receipt nor business mutation;
 - a read-only refusal or empty lease claim is not receipt-cached;
 - maintenance commands use the low-priority writer lane and bounded batches.

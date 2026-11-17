@@ -44,7 +44,8 @@ def test_automatic_replay_requires_an_explicit_read_declaration(
     else:
         with pytest.raises(ConnectionResetError):
             bridge.call_tool(name, {})
-        assert len(calls) == 1 and reconnects == []
+        # Never replayed; the reconnect only refreshes the dead process's catalog.
+        assert len(calls) == 1 and reconnects == ['hope']
 
 
 @pytest.mark.parametrize('policy', [True, False])
@@ -57,7 +58,7 @@ def test_explicit_host_replay_policy_remains_authoritative(policy, monkeypatch):
     else:
         with pytest.raises(ConnectionResetError):
             bridge.call_tool(name, {}, retry_on_disconnect=False)
-        assert len(calls) == 1 and reconnects == []
+        assert len(calls) == 1 and reconnects == ['hope']
 
 
 @pytest.mark.parametrize('change', ['permission', 'schema', 'target', 'removed', 'disabled'])
@@ -92,7 +93,7 @@ def test_missing_declaration_fingerprint_does_not_grant_automatic_replay(monkeyp
     bridge._tool_index[name].pop('schema_hash')
     with pytest.raises(ConnectionResetError):
         bridge.call_tool(name, {})
-    assert len(calls) == 1 and reconnects == []
+    assert len(calls) == 1 and reconnects == ['hope']
 
 
 def test_owner_cancellation_during_reconnect_prevents_replay(monkeypatch):
@@ -145,3 +146,34 @@ def test_retried_read_settles_health_once_without_a_third_execution(
     assert len(calls) == 2 and reconnects == ['hope']
     assert bridge._timeout_streak.get('hope', 0) == (
         2 if final_failure == 'timeout' else 0)
+
+
+def test_a_dead_transport_refreshes_the_catalog_without_replaying_the_call(monkeypatch):
+    """Found by the chaos suite (docs/ROBUSTNESS_AUDIT_20261117.md R6): a server
+    that crashed mid-call kept its dead process's schema until the keepalive
+    sweep, so the restarted server's changed arguments were refused."""
+    bridge, name, calls, _ = disconnected_bridge(monkeypatch, read_only=False)
+    refreshed = []
+
+    def reconnect(server):
+        bridge._tool_index[name]['input_schema'] = {'type': 'object', 'properties': {'message': {}}}
+        refreshed.append(server)
+        return bridge._servers[server]
+
+    monkeypatch.setattr(bridge, '_reconnect_server', reconnect)
+    with pytest.raises(ConnectionResetError, match='reply lost'):
+        bridge.call_tool(name, {})
+    assert len(calls) == 1 and refreshed == ['hope']
+    assert 'message' in bridge._tool_index[name]['input_schema']['properties']
+
+
+def test_a_failed_refresh_keeps_the_original_failure(monkeypatch):
+    bridge, name, calls, _ = disconnected_bridge(monkeypatch, read_only=False)
+
+    def reconnect(server):
+        raise RuntimeError('server still down')
+
+    monkeypatch.setattr(bridge, '_reconnect_server', reconnect)
+    with pytest.raises(ConnectionResetError, match='reply lost'):
+        bridge.call_tool(name, {})
+    assert len(calls) == 1

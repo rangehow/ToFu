@@ -662,6 +662,29 @@ budget that nothing here defines; naming the busy Turn in the `turn_in_progress`
 refusal would remove the walk but changes both authorities' error contract.
 Covered by `test_steer_live_attempt_target.py` on both authorities.
 
+A steer command is delivered once per conversation. A resend of a command this
+conversation already holds (an identical retry, or the same command id with
+other text or for a later attempt) answers `steered: true, idempotentReplay:
+true` and delivers nothing. Its evidence is the command's injection record: in
+the busy live Turn, or, when the authority refuses the reused command id
+(`command_id was reused for a different request`, docs/STORAGE.md), in an
+earlier Turn of the lane, read newest first. A receipt whose record is gone (a
+regenerate discarded its Turn, or a conversation id was reused) leaves the
+message new to this conversation: it takes the queue fallback with reason
+`steer_record_gone`. Problem: the receipt refusal read as a closed steer
+window, so the resend took the queue fallback and was delivered twice; on
+2026-11-17 Global Router re-forwards with a new note waited hours as second
+requests behind the Project Routers' live replies. Decision: replay from the
+record, as a started or queued pair already replays by command id.
+Alternatives rejected: a new storage error code (every consumer of today's
+`database_conflict` receipt refusal, timer polls among them, would have to learn
+it); trusting the receipt alone (it outlives its record, and the message would
+be lost); reading the lane's history on every closed window (engines
+predating the literal give no other signal; that reads a long conversation for
+each late steer, so they rely on the live Turn's record). Covered by
+`test_conversation_command_inject_mode.py` and, on both authorities,
+`test_steer_live_attempt_target.py`.
+
 
 The v3 queue-cancel command also accepts pending background completion rows
 without a Turn pair. It removes only delivery intent, returns `inputTurn: null`

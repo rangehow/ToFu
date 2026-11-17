@@ -57,7 +57,8 @@ class _Kernel:
     """The one kernel of this process: its thread, stop event and port."""
 
     def __init__(self) -> None:
-        self.stop_requested = threading.Event()
+        from lib.server.server_shutdown import ShutdownRequest
+        self.stop_requested = ShutdownRequest()
         self.listening: Future = Future()
         self.thread: threading.Thread | None = None
 
@@ -229,9 +230,9 @@ def main(argv: list[str] | None = None) -> int:
 
     import server  # noqa: F401 -- assembles the app before the loop starts
     from lib.server.server_shutdown import (
-        graceful_shutdown_signals, request_graceful_shutdown)
+        ShutdownRequest, graceful_shutdown_signals, request_graceful_shutdown)
 
-    stop_requested = threading.Event()
+    stop_requested = ShutdownRequest()
     for signum in graceful_shutdown_signals():
         signal.signal(signum, lambda _signum, _frame: request_graceful_shutdown(
             stop_requested))

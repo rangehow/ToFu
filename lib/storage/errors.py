@@ -6,8 +6,10 @@ reap; StorageRuntime keeps both out of its crash breaker.
 """
 
 from lib.agent_core.storage_errors import (
+    COMMAND_ID_REUSED_MESSAGE,
     ERROR_CODES,
     TRANSIENT_STORAGE_CODES,
+    is_command_id_reuse,
     is_resource_bound_refusal,
     is_transient_storage_error,
     StorageError,
@@ -56,7 +58,8 @@ class StorageStartRefused(StorageError):
 
 
 __all__ = [
-    'ERROR_CODES', 'StorageError', 'ProjectionRebaseRequired', 'describe_storage_failure',
-    'StorageStartDeferred', 'StorageStartRefused', 'TRANSIENT_STORAGE_CODES', 'is_resource_bound_refusal',
-    'is_transient_storage_error', 'http_status_for_storage_error',
+    'COMMAND_ID_REUSED_MESSAGE', 'ERROR_CODES', 'StorageError', 'ProjectionRebaseRequired',
+    'describe_storage_failure', 'StorageStartDeferred', 'StorageStartRefused', 'TRANSIENT_STORAGE_CODES',
+    'is_command_id_reuse', 'is_resource_bound_refusal', 'is_transient_storage_error',
+    'http_status_for_storage_error',
 ]

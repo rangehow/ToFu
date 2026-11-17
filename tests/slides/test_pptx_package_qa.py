@@ -59,7 +59,8 @@ def test_export_element_failure_preserves_existing_file(tmp_path, monkeypatch):
     assert list(tmp_path.glob('.tofu-pptx-*')) == []
 
 
-@pytest.mark.parametrize('corruption', ['missing_target', 'bad_xml', 'chart_axis', 'slide_count'])
+@pytest.mark.parametrize('corruption', ['missing_target', 'bad_xml', 'chart_axis', 'slide_count',
+                                        'bare_autofit'])
 def test_package_rejects_structural_corruption(tmp_path, corruption):
     path = tmp_path / 'deck.pptx'
     export_pptx(deck(tmp_path), str(path), embed_fonts=False)
@@ -75,6 +76,11 @@ def test_package_rejects_structural_corruption(tmp_path, corruption):
             ns = '{http://schemas.openxmlformats.org/drawingml/2006/chart}'
             chart.find('.//' + ns + 'barChart/' + ns + 'axId').set('val', '999999')
             parts['ppt/charts/chart1.xml'] = ET.tostring(chart)
+        elif corruption == 'bare_autofit':
+            # PowerPoint/WPS open it at 100%, LibreOffice refits it on open.
+            parts['ppt/slides/slide1.xml'] = parts['ppt/slides/slide1.xml'].replace(
+                b'<a:noAutofit/>', b'<a:normAutofit/>', 1)
+            assert b'<a:normAutofit/>' in parts['ppt/slides/slide1.xml']
 
     rewrite(path, corrupt)
     result = inspect_pptx_package(str(path), expected_pages=2 if corruption == 'slide_count' else 1)
@@ -103,3 +109,27 @@ def test_failed_package_verification_cannot_replace_previous_output(tmp_path, mo
     with pytest.raises(ExportError, match='package invalid'):
         export_pptx(deck(tmp_path), str(output), embed_fonts=False)
     assert output.read_bytes() == b'previous deck'
+
+
+def test_table_rows_of_plain_text_cells_export_their_text(tmp_path):
+    """A model-authored table may write cells as plain strings; the export
+    crashed with "'str' object has no attribute 'get'" (cov3 pre-repair deck)."""
+    plain = deck(tmp_path)
+    plain.pages[0].elements[2]['rows'] = [['方案', 'A'], ['违约率', 2.8]]
+    plain.pages[0].elements[2]['columnWidths'] = [0.5, 0.5]
+    output = tmp_path / 'plain.pptx'
+    export_pptx(plain, str(output), embed_fonts=False)
+    from pptx import Presentation
+    table = next(shape.table for shape in Presentation(str(output)).slides[0].shapes
+                 if shape.has_table)
+    assert [[cell.text for cell in row.cells] for row in table.rows] == [
+        ['方案', 'A'], ['违约率', '2.8']]
+
+
+def test_plain_text_table_cells_reach_the_embedded_font_subset(tmp_path):
+    from lib.slides.export_pptx import _collect_font_usage
+    plain = deck(tmp_path)
+    plain.pages[0].elements[2]['rows'] = [['违约率'], [2.8]]
+    used = ''.join(''.join(sorted(styles.get('regular', set())))
+                   for styles in _collect_font_usage(plain).values())
+    assert set('违约率2.8') <= set(used)

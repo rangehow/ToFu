@@ -23,8 +23,11 @@ import html as _html
 import re
 
 from lib.log import get_logger
-from lib.slides.pptd import (Deck, Page, cell_content, chart_font_family, resolve_color,
-                             resolve_media, table_style, text_style)
+from lib.slides.pptd import (Deck, Page, cell_content, chart_font_family,
+                             chart_series_palette, shared_value_max,
+                             element_backdrop_color, readable_text_colors,
+                             resolve_color, resolve_media, table_rows,
+                             table_style, text_style)
 from lib.slides.richtext import RICH_MARKUP_RE
 
 logger = get_logger(__name__)
@@ -530,7 +533,7 @@ def _cell_style(cell: dict, row: int, col: int, rows: int, cols: int,
 
 def _table_div(el: dict, deck: Deck, theme: dict) -> str:
     x, y, w, h = [float(v) for v in el['bounds']]
-    rows = el.get('rows') or []
+    rows = table_rows(el)
     n_rows = len(rows)
     n_cols = max((len(r) for r in rows), default=0)
     tstyle = table_style(el.get('style'), theme)
@@ -625,28 +628,16 @@ def _table_div(el: dict, deck: Deck, theme: dict) -> str:
 
 # ── Chart (parametric SVG preview; native/editable in PPTX) ───────────
 
-#: Series colours, in order, for series without their own colour (preview
-#: and native export alike).
-CHART_PALETTE_TOKENS = (('$primary', '#16283C'), ('$accent', '#C0652B'),
-                        ('$muted', '#6B7280'), ('$ink', '#1B2430'))
-
-
-def _chart_palette(theme: dict) -> list:
-    from lib.slides.pptd import resolve_color as _rc
-    return [_rc(token, theme, fallback)
-            for token, fallback in CHART_PALETTE_TOKENS]
-
-
-def _chart_div(el: dict, deck: Deck, theme: dict) -> str:
+def _chart_div(el: dict, deck: Deck, theme: dict, *, backdrop: str,
+               shared_peak: float | None = None) -> str:
     x, y, w, h = [float(v) for v in el['bounds']]
     ctype = str(el.get('chartType') or 'column')
     data = el.get('data') or {}
     cats = [str(c) for c in (data.get('categories') or [])]
     series = [s for s in (data.get('series') or []) if isinstance(s, dict)]
     opts = el.get('options') or {}
-    pal = _chart_palette(theme)
-    ink = _css_color('$ink', theme, '#1B2430')
-    muted = _css_color('$muted', theme, '#6B7280')
+    pal = chart_series_palette(theme, backdrop)
+    ink, muted = readable_text_colors(theme, backdrop)
     hair = _css_color('$hairline', theme, '#D8D5CE')
     if not cats or not series:
         return ''
@@ -728,7 +719,7 @@ def _chart_div(el: dict, deck: Deck, theme: dict) -> str:
             ly += fs_cat * 1.9
     else:
         all_vals = [float(v) for s in series for v in (s.get('values') or [])]
-        vmax = max(all_vals) if all_vals else 1.0
+        vmax = shared_peak or (max(all_vals) if all_vals else 1.0)
         vmax = vmax * 1.12 if vmax > 0 else 1.0
         plot_top = top_pad
         plot_bot = h - fs_cat * 2.2
@@ -958,7 +949,10 @@ def render_page_html(deck: Deck, page: Page, *, page_index: int = 0,
             elif etype == 'table':
                 parts.append(_table_div(el, deck, theme))
             elif etype == 'chart':
-                parts.append(_chart_div(el, deck, theme))
+                parts.append(_chart_div(
+                    el, deck, theme,
+                    backdrop=element_backdrop_color(page, el, theme),
+                    shared_peak=shared_value_max(page, el)))
         except Exception as e:
             logger.warning('[Slides] page %d element %s render failed: %s',
                            page_index + 1, el.get('elementId'), e)

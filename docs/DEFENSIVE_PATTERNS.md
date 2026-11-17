@@ -1075,3 +1075,54 @@ and real stdio cancel/checkpoint/model-control boundaries. Persistent worker
 reuse must use this barrier before advertising readiness; no reuse is currently
 selected by this change. Evidence and the 8-byte per-reader size change live in
 [resource control](RESOURCE_CONTROL.md#native-reader-join-fence).
+
+## Fault contracts of the chaos suite
+
+Problem: each layer had its own fault specs, but nothing proved that a real
+session survives a fault across the seams: provider stream, tool process, MCP
+child, execution host, API host, storage host, medium and client. Unit specs
+also missed defects that exist only between the two processes (the MCP bridge
+split below). Decision: `tests/chaos/` drives real Turns through an isolated
+two-process instance (`tests/chaos/instance.py`: resident storage host,
+resident execution host and a separate API host, each with its own data root,
+port, `TMPDIR` and environment allowlist) against a scripted Anthropic provider
+(`tests/chaos/fake_provider.py`). It injects one fault per test and asserts the
+contract below. Every instance process runs under the benchmark's medium
+injector (`benchmarks/agent_storage/faultfs.c`) over the data root, with
+DolphinFS's ENOENT for I/O on open-but-unlinked files always on. `make
+test-chaos` is the bounded CI smoke: one instance per xdist worker, every wait
+bounded by the suite's settlement bound or the resident owners' own deadlines.
+
+Every fault must leave:
+
+- **C1** the committed user input and every committed assistant answer intact,
+  each exactly once;
+- **C2** each tool side effect executed at most once (never replayed by
+  retry, recovery or reconnect);
+- **C3** the Turn settled (`completed`, `failed` or `interrupted`), and a Turn
+  that did not complete carrying `settlement.resumeOptions`;
+- **C4** a failure that carries a non-empty user-visible `settlement.error`
+  message, unless the owner stopped it (`cause: user_abort`);
+- **C5** no tool process of the Turn alive after settlement, and after the
+  instance stops no process tagged with the instance and no held lock file.
+
+| Fault | Expected behavior beyond C1-C5 |
+|---|---|
+| Provider stream drop mid-response, 429, 503, 500, malformed SSE (once) | The shared transport retries; the Turn completes with the healthy reply and the dropped partial text is not committed. |
+| Persistent provider 5xx | The primary call waits on the shared backoff schedule ([LLM I/O](modules/llm_io.md), "Unreachable endpoints"): a visible `retrying` phase, well under one request per second, and Stop settles it `interrupted` with resume options. Failing fast was rejected there. |
+| Model emits invalid tool-argument JSON | The malformed call never executes; the round is regenerated or answered with an error result. |
+| Tool subprocess killed / hung | A killed child reports its exit status to the model; Stop retires a hung group and settles `interrupted`. |
+| MCP server crash mid-call | The call fails visibly and is not replayed; the restarted server's current schema serves the next call. |
+| Execution host SIGKILL mid-tool / mid-stream, then recovery | Recovery retires the orphaned tool group and never re-runs the side effect. |
+| API host restart mid-stream | The execution host keeps the Turn running; a client reconnecting with `Last-Event-ID` gets no repeated event. |
+| Client disconnect during streaming | The Turn is not cancelled ([API contract](contracts/API_CONTRACT.md) §2.11). |
+| Storage host frozen (SIGSTOP) or killed and restarted | The Turn settles; new Turns are served afterwards. |
+| ENOSPC or slow barriers on the data root | The Turn settles; new Turns are served once space returns. |
+
+Alternatives rejected: in-process fakes of the hosts (the MCP split and the
+uv orphan exist only between real processes); a manager-driven instance (it
+couples the suite to restart preparation and engine certification, which have
+their own gates); retrying or skipping a failing scenario (a flaky chaos test
+hides exactly the faults it exists to show). Findings and fixes:
+[robustness audit 2026-11-17](ROBUSTNESS_AUDIT_20261117.md). Specs:
+`tests/chaos/test_chaos_faults.py`.

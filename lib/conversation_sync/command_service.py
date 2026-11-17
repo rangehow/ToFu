@@ -62,6 +62,7 @@ from lib.turn_lifecycle import (
     get_attempt,
     get_conversation_revision,
     get_turn,
+    lane_turns_newest_first,
     list_dispatchable_attempts,
     projection_with_committed_steer_authors,
     record_turn_perception,
@@ -208,6 +209,39 @@ def _steer_text_with_reply_quotes(text: str, quotes: Any) -> str:
     if not blocks:
         return text
     return "\n\n".join(blocks) + "\n\n" + text
+
+
+def _turn_holds_steer(turn: Any, block_id: str) -> bool:
+    """Whether a lane-busy conflict's live Turn already holds this committed steer."""
+    projection = turn.get("projection") if isinstance(turn, Mapping) else None
+    records = projection.get("_userSteerInjects") if isinstance(projection, Mapping) else None
+    return isinstance(records, list) and any(
+        isinstance(record, Mapping) and record.get("blockId") == block_id
+        for record in records
+    )
+
+
+def _earlier_turn_holds_steer(
+    conversation_id: str, lane_id: str, block_id: str, *, live_turn: Any, user_id: Any,
+) -> bool:
+    """Whether a Turn of this lane before the live one holds this committed steer.
+
+    Read newest first, one Turn per page, stopping at the record. An
+    unreadable lane proves no delivery.
+    """
+    from lib.storage.errors import StorageError
+
+    ordinal = live_turn.get("ordinal") if isinstance(live_turn, Mapping) else None
+    try:
+        for turn, _attempt in lane_turns_newest_first(
+                conversation_id, lane_id, user_id=user_id,
+                before_ordinal=ordinal if type(ordinal) is int else None):
+            if _turn_holds_steer(turn, block_id):
+                return True
+    except StorageError:
+        logger.warning("Conversation %s lane %s unreadable while looking for steer %s",
+                       conversation_id, lane_id, block_id, exc_info=True)
+    return False
 
 
 BuildUserMessage = Callable[
@@ -520,6 +554,10 @@ class ConversationTurnCommandService:
         config = data.get("config") or {}
         if not isinstance(config, Mapping):
             raise BadRequest("config object required", field="config")
+        if config.get("model") is not None and not isinstance(config["model"], str):
+            # Refused before any Turn exists; the executor would fail on it later.
+            raise BadRequest("config.model must be a model ID string; pass a structured "
+                             "reference as config.modelRef", field="config.model")
         from lib.tasks_pkg.plan_mode import (
             normalize_interaction_mode_conversation_settings,
             normalize_interaction_mode_runtime_config,
@@ -1807,14 +1845,23 @@ class ConversationTurnCommandService:
             steer_images = steer_preview_images({"_user_msg": user_message or {}})
             # The steer has no Turn of its own: record its author so a genuine
             # human message stays forwardable as its own words (ROUTER.md R2).
-            from lib.turn_initiation import steer_author
+            from lib.turn_initiation import STEER_BLOCK_PREFIX, steer_author
             author = steer_author(
                 user_message or {"content": steer_text},
                 actor=str(data.get("inputActor") or "human"),
             )
             command_id = str(data.get("commandId") or "")
+            block_id = STEER_BLOCK_PREFIX + command_id
             attempt_id = str((conflict.turn or {}).get("currentAttemptId") or "")
             committed: dict[str, Any] | None = None
+            # A steer command is delivered once per conversation: a resend
+            # whose committed record exists replays that acceptance and is
+            # never queued as a second input. The authority refuses a resend
+            # with other text or into another attempt as ``command_reused``;
+            # engines predating that literal answer the bare conflict a closed
+            # window also answers, so there the live Turn's record decides.
+            already_committed = _turn_holds_steer(conflict.turn, block_id)
+            reused = False
             from lib.tasks_pkg.committed_steers import executes_attempt_here
             if not steer_text.strip():
                 # Both authorities keep a steer by its text; a message without
@@ -1846,8 +1893,11 @@ class ConversationTurnCommandService:
                         )
                     else:
                         steer_fallback_reason = "commit_not_persisted"
-                except LifecycleConflict:
-                    steer_fallback_reason = "steer_window_closed"
+                except LifecycleConflict as exc:
+                    if exc.code == "command_reused":
+                        reused = True
+                    else:
+                        steer_fallback_reason = "steer_window_closed"
                 except LifecycleNotFound:
                     steer_fallback_reason = "attempt_gone"
             else:
@@ -1868,7 +1918,7 @@ class ConversationTurnCommandService:
                         mode="user-steer",
                         extra={
                             "injectionId": command_id,
-                            "blockId": f"injection:user-steer:{command_id}",
+                            "blockId": block_id,
                             "steerAuthor": author,
                             "_user_msg": user_message
                             or {"role": "user", "content": steer_text},
@@ -1886,8 +1936,11 @@ class ConversationTurnCommandService:
                         steer_fallback_reason = "inbox_tombstoned"
                     else:
                         steer_fallback_reason = "commit_not_persisted"
-                except LifecycleConflict:
-                    steer_fallback_reason = "steer_window_closed"
+                except LifecycleConflict as exc:
+                    if exc.code == "command_reused":
+                        reused = True
+                    else:
+                        steer_fallback_reason = "steer_window_closed"
                 except LifecycleNotFound:
                     steer_fallback_reason = "attempt_gone"
             if committed is not None:
@@ -1908,12 +1961,39 @@ class ConversationTurnCommandService:
                     )
                 return {
                     "steered": True,
+                    # An identical resend replays the committed receipt.
+                    **({"idempotentReplay": True} if already_committed else {}),
                     "injectionId": committed.get("injectionId") or command_id,
                     "blockId": committed.get("blockId"),
                     "conversationId": conversation_id,
                     "conversationRevision": committed["conversationRevision"],
                     **({"latestTurn": committed["turn"]}
                        if committed.get("turn") is not None else {}),
+                }
+            if reused and not already_committed:
+                # The receipt outlives its record when a regenerate discarded
+                # the Turn holding it or a conversation id was reused; with
+                # no record left, the message is new to this conversation.
+                already_committed = _earlier_turn_holds_steer(
+                    conversation_id, str(data.get("laneId") or "main"), block_id,
+                    live_turn=conflict.turn, user_id=user_id)
+                if not already_committed:
+                    steer_fallback_reason = "steer_record_gone"
+            if already_committed and steer_fallback_reason != "attempt_gone":
+                logger.info(
+                    "Conversation %s steer %s was already delivered; replaying that "
+                    "acceptance instead of queueing it again",
+                    conversation_id, command_id,
+                )
+                return {
+                    "steered": True,
+                    "idempotentReplay": True,
+                    "injectionId": command_id,
+                    "blockId": block_id,
+                    "conversationId": conversation_id,
+                    "conversationRevision": get_conversation_revision(
+                        conversation_id, user_id=user_id
+                    ),
                 }
             logger.info(
                 "Conversation %s steer unavailable (%s); using durable queue",

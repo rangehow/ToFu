@@ -224,6 +224,7 @@ export function sameBlock(
     return previous.reportKind === current.reportKind
       && previous.title === current.title
       && previous.createdAt === current.createdAt
+      && samePresentationValue(previous.files, current.files)
       && sameBlock(previous.text, current.text);
   }
   return samePresentationValue(previous.source, current.source);

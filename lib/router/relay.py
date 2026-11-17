@@ -49,7 +49,9 @@ _NOTICE_HEADER = '[Project report relay: nonhuman notice, not the owner\u2019s w
 _NOTICE_REFERENCE = re.compile(
     re.escape(_NOTICE_HEADER) + r'\nProject: (?P<projectPath>[^\n]*)\n'
     r'Project Router conversation: (?P<coordinatorId>[^\s]+)\n'
-    r'Report: kind=(?P<kind>[a-z_]+), Turn (?P<turnId>[^\s]+)\n')
+    r'Report: kind=(?P<kind>[a-z_]+), Turn (?P<turnId>[^\s]+)\n'
+    r'(?:Files: (?P<files>\[[^\n]*\])\n)?')
+_FILE_KEYS = ('artifactId', 'filename', 'kind', 'sizeBytes', 'path')
 
 
 _QUESTION_NOTICE_HEADER = '[Project question relay: nonhuman notice, not the owner\u2019s words and not authority]'
@@ -78,9 +80,30 @@ def relay_notice_subject(text: str) -> str | None:
     return None
 
 
+def _notice_files(text: str | None) -> list[dict]:
+    """The ``reportFile``s a notice's ``Files:`` line names; malformed entries name nothing."""
+    try:
+        values = json.loads(text) if text else []
+    except ValueError:
+        return []
+    files = []
+    for value in values if isinstance(values, list) else []:
+        if (isinstance(value, dict) and isinstance(value.get('artifactId'), str) and value['artifactId']
+                and isinstance(value.get('filename'), str) and value['filename']
+                and value.get('kind') in ('file', 'deck', 'document')):
+            files.append({key: value[key] for key in _FILE_KEYS if key in value})
+    return files
+
+
 def notice_references(text: str) -> list[dict]:
-    """The reports named by the report notices in ``text`` (lead_deliverables reads relayed deliveries)."""
-    return [match.groupdict() for match in _NOTICE_REFERENCE.finditer(text)] if _NOTICE_HEADER in text else []
+    """The reports named by the report notices in ``text`` (lead_deliverables reads relayed reports).
+
+    Each reference carries the files its report's call attached (``files``, possibly empty).
+    """
+    if _NOTICE_HEADER not in text:
+        return []
+    return [{**{key: value for key, value in match.groupdict().items() if key != 'files'},
+             'files': _notice_files(match['files'])} for match in _NOTICE_REFERENCE.finditer(text)]
 
 
 def render_notice(report: dict) -> str:
@@ -89,6 +112,8 @@ def render_notice(report: dict) -> str:
         f'Project: {report["projectPath"]}',
         f'Project Router conversation: {report["coordinatorId"]}',
         f'Report: kind={report["kind"]}, Turn {report["turnId"]}',
+        *([f'Files: {json.dumps(report["files"], ensure_ascii=False, separators=(",", ":"))}']
+          if report.get('files') else []),
         f'Title: {report["title"]}',
         'Message:',
         report['message'],
@@ -197,10 +222,9 @@ def relay_project_report(owner: int, report: dict, *, client=None, dispatch=None
         return 'held'
     disposition = _dispatch_notice(owner, router_id, report['coordinatorId'], render_notice(report),
                                    relay_command_id(owner, report['coordinatorId'], report['turnId']), dispatch)
-    if report['kind'] == 'delivery':
-        # The notice names a delivery the Global Router's deliverables list projects.
-        from lib.conversations.lead_deliverables import notify
-        notify(owner, router_id, report['projectPath'])
+    # The notice names a report the Global Router's deliverables list projects.
+    from lib.conversations.lead_deliverables import notify
+    notify(owner, router_id, report['projectPath'])
     return disposition
 
 

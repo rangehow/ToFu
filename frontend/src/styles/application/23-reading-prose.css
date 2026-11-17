@@ -70,10 +70,11 @@
   padding: var(--space-2) var(--space-3);
 }
 
-/* In a reply the report is one folded row in the process folds' grammar
+/* In a reply the report's head is a row in the process folds' grammar
  * (23-reading-tool-panel.css): label, title, time, trailing chevron. The
  * title gives way to an ellipsis first; opened, it only hides, because the
- * body starts with it, so the row keeps its geometry. */
+ * body starts with it, so the row keeps its geometry. A delivery stands out
+ * with its accent label; its attached files stay in view as chips. */
 .conversation-surface .conversation-coordinator-report__head {
   display: flex;
   align-items: center;
@@ -141,6 +142,110 @@
 .conversation-surface .conversation-coordinator-report__fold > [data-coordinator-report-body] {
   margin: 0 var(--space-3);
   padding: var(--space-1) 0 var(--space-2);
+}
+
+.conversation-surface .conversation-coordinator-report[data-report-kind="delivery"] .conversation-coordinator-report__label {
+  color: var(--accent);
+}
+
+.conversation-surface .conversation-coordinator-report__files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: 0 var(--space-3) var(--space-2);
+}
+
+.conversation-surface .conversation-coordinator-report__file {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  min-height: var(--control-h-sm);
+  padding: 0 var(--space-2);
+  border: var(--control-edge-inset) solid var(--turn-rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--conversation-process-font-size);
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-standard);
+}
+
+.conversation-surface .conversation-coordinator-report__file:hover {
+  background: var(--turn-process-hover);
+}
+
+.conversation-surface .conversation-coordinator-report__file:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.conversation-surface .conversation-coordinator-report__file > svg {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
+}
+
+.conversation-surface .conversation-coordinator-report__file-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Machine brief -------------------------------------------------------
+ * A project-brain instruction to the agent (automatic continuation, delegated
+ * brief) in an input Turn: one folded row, so it never buries what the owner
+ * reads. Opened, the brief reads as ordinary prose. */
+.conversation-surface .conversation-machine-brief__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h-sm);
+  color: var(--text-secondary);
+  font-size: var(--conversation-process-font-size);
+  line-height: var(--leading-title);
+  list-style: none;
+  cursor: pointer;
+}
+
+.conversation-surface .conversation-machine-brief__head::-webkit-details-marker {
+  display: none;
+}
+
+.conversation-surface .conversation-machine-brief__head:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.conversation-surface .conversation-machine-brief__label {
+  flex: 0 0 auto;
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+.conversation-surface .conversation-machine-brief__preview {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-surface .conversation-machine-brief__chevron.conversation-disclosure-chevron {
+  color: var(--text-tertiary);
+  transform: rotate(-90deg);
+}
+
+.conversation-surface .conversation-machine-brief__fold[open] > .conversation-machine-brief__head > .conversation-machine-brief__chevron.conversation-disclosure-chevron {
+  transform: none;
+}
+
+.conversation-surface .conversation-machine-brief__body {
+  padding-block-start: var(--space-2);
 }
 
 /* The rubric is a reading toolbar. Text starts on the exact prose baseline;

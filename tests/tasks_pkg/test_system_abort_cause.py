@@ -227,7 +227,7 @@ def test_project_brain_recovery_keeps_restart_paused_work_active(monkeypatch):
 
     monkeypatch.setattr(startup, 'get_storage_client', lambda **kw: Client())
     monkeypatch.setattr(delivery, 'record_task_workspace_intents',
-                        lambda task, root: intents.append(task['id']))
+                        lambda task, root, **_: intents.append(task['id']))
 
     assert startup.recover_active_work_items() == 1
     assert [work for work, _status in finishes] == ['work-stopped-by-user']

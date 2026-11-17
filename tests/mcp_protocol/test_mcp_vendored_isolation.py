@@ -183,7 +183,7 @@ def test_prewarm_uses_uv_warm_not_pip():
         'prewarm does not resolve the isolated launch argv — it cannot be '
         'warming the uv env'
     )
-    assert 'subprocess.run' in src, (
+    assert '_run_warm' in src, (
         'prewarm never runs the warm subprocess — the cold resolve would land '
         'inside the first connect readiness budget instead'
     )

@@ -243,7 +243,7 @@ def test_prewarm_failure_is_retryable_not_wedged(tmp_path, monkeypatch):
             stderr = 'network unreachable'
         return R()
 
-    monkeypatch.setattr(mc.subprocess, 'run', _fail_run)
+    monkeypatch.setattr(mc, '_run_warm', lambda args, env, stop=None: _fail_run(args))
     ready, detail = mc.prewarm_vendored_launcher('fake-mcp')
     assert ready is False
     assert 'network unreachable' in mc._install_last_error['fake-mcp']

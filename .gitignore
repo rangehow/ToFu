@@ -132,6 +132,8 @@ __pycache__/
 !/benchmarks/markdown_worker/
 /benchmarks/markdown_worker/*
 !/benchmarks/markdown_worker/reference_5c55a9d1b/
+!/benchmarks/startup_idle_dispatch.py
+!/benchmarks/startup_recovery_batch.py
 !/benchmarks/settled_turn_retention.py
 !/benchmarks/agent_round_overhead.py
 !/benchmarks/mcp_live_schema_projection.py

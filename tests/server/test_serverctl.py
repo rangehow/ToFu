@@ -382,7 +382,7 @@ def test_managed_start_surfaces_healthy_port_drift_instead_of_false_outage(
     monkeypatch.setattr(serverctl, '_wait_ready', lambda *_a, **_k: status)
     monkeypatch.setattr(
         serverctl, 'read_lock_status',
-        lambda _project: {'running': True, 'pid': 42,
+        lambda _project, _server_env=None: {'running': True, 'pid': 42,
                           'cmdline': 'python server.py --port 15000'})
     monkeypatch.setattr(
         serverctl, '_worker_port_drift',
@@ -910,7 +910,7 @@ def test_restart_aborts_before_manager_post_when_frontend_repair_fails(
         monkeypatch, capsys):
     monkeypatch.setattr(serverctl, '_remote_status', lambda: {'running': False})
     monkeypatch.setattr(
-        serverctl, 'read_lock_status', lambda _project: {'running': False})
+        serverctl, 'read_lock_status', lambda _project, _server_env=None: {'running': False})
     monkeypatch.setattr(
         serverctl, 'prepare_source_frontend_artifact',
         lambda _operation: 'frontend build failed')
@@ -926,7 +926,7 @@ def test_restart_aborts_before_manager_post_when_frontend_repair_fails(
 
 def test_restart_checks_raw_lock_when_manager_is_offline(monkeypatch):
     monkeypatch.setattr(serverctl, '_remote_status', lambda: None)
-    monkeypatch.setattr(serverctl, 'read_lock_status', lambda _p: {'running': True})
+    monkeypatch.setattr(serverctl, 'read_lock_status', lambda _p, _server_env=None: {'running': True})
     approved = []
     monkeypatch.setattr(serverctl, '_approve_restart_if_needed',
                         lambda _args: approved.append(True) or False)
@@ -941,7 +941,7 @@ def test_restart_checks_raw_lock_when_manager_is_offline(monkeypatch):
 def test_stop_checks_raw_lock_and_requires_shutdown_approval(monkeypatch):
     monkeypatch.setattr(serverctl, '_remote_status', lambda: None)
     monkeypatch.setattr(
-        serverctl, 'read_lock_status', lambda _p: {'running': True})
+        serverctl, 'read_lock_status', lambda _p, _server_env=None: {'running': True})
     approved = []
     monkeypatch.setattr(
         serverctl, '_approve_stop_if_needed',
@@ -960,7 +960,7 @@ def test_stop_is_idempotent_without_approval_when_no_worker_is_live(monkeypatch)
     monkeypatch.setattr(
         serverctl, '_remote_status', lambda: {'running': False})
     monkeypatch.setattr(
-        serverctl, 'read_lock_status', lambda _p: {'running': False})
+        serverctl, 'read_lock_status', lambda _p, _server_env=None: {'running': False})
     monkeypatch.setattr(
         serverctl, '_approve_stop_if_needed',
         lambda _args: pytest.fail('stopped service must not ask for approval'))
@@ -1460,7 +1460,7 @@ def test_doctor_json_warning_is_healthy_but_not_ready(monkeypatch, capsys):
     monkeypatch.setattr(
         serverctl, '_forwarded_server_env',
         lambda: {'TOFU_MAX_INFLIGHT_TASKS': '7'})
-    monkeypatch.setattr(serverctl, 'read_lock_status', lambda _project: {})
+    monkeypatch.setattr(serverctl, 'read_lock_status', lambda _project, _server_env=None: {})
     monkeypatch.setattr(serverctl, 'listener_pids', lambda _port: [])
     monkeypatch.setattr(
         serverctl, '_proc_lines',
@@ -1600,7 +1600,7 @@ def test_status_json_exposes_verified_worker_port_drift(monkeypatch, capsys):
         'url': 'http://localhost:15000', 'listenerPids': [42],
     }
     monkeypatch.setattr(serverctl, '_remote_status', lambda probe=False: status)
-    monkeypatch.setattr(serverctl, 'read_lock_status', lambda _project: lock)
+    monkeypatch.setattr(serverctl, 'read_lock_status', lambda _project, _server_env=None: lock)
     monkeypatch.setattr(
         serverctl, '_worker_port_drift',
         lambda manager_status, lock_status: drift

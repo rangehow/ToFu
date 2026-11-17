@@ -24,6 +24,7 @@
 .lead-deliverables__list { margin: 0; padding: 0; list-style: none; }
 .lead-deliverable { position: relative; display: flex; align-items: flex-start; border-radius: var(--radius-sm); }
 .lead-deliverable:hover { background: var(--bg-hover); }
+.lead-deliverable:has(> .lead-deliverable__files) { flex-wrap: wrap; }
 .lead-deliverable__open {
   display: grid; flex: 1; min-width: 0; grid-template-columns: auto 1fr; column-gap: var(--space-2);
   padding: var(--space-1) var(--space-3); color: var(--text-primary); text-align: start;
@@ -37,7 +38,19 @@
 }
 .lead-deliverable[data-kind="report"] .lead-deliverable__kind,
 .lead-deliverable[data-kind="merge"] .lead-deliverable__kind { color: var(--accent); border-color: currentColor; }
+.lead-deliverable[data-report-kind="progress"] .lead-deliverable__kind { color: var(--text-secondary); border-color: var(--border); }
+.lead-deliverable[data-report-kind="decision"] .lead-deliverable__kind,
+.lead-deliverable[data-report-kind="blocked"] .lead-deliverable__kind { color: var(--warning-text); border-color: var(--warning-border); background: var(--warning-bg); }
 .lead-deliverable__title { min-width: 0; overflow: hidden; font-size: var(--font-size-sm); text-overflow: ellipsis; white-space: nowrap; }
+/* A report's attached files: chips under its row, each opening the file itself. */
+.lead-deliverable__files { display: flex; flex-basis: 100%; flex-wrap: wrap; gap: var(--space-1); padding: 0 var(--space-3) var(--space-1); }
+.lead-deliverable__file {
+  max-width: 100%; overflow: hidden; padding: 0 var(--space-2); color: var(--text-primary);
+  border: var(--control-edge-inset) solid var(--border); border-radius: var(--radius-sm); background: var(--bg-primary);
+  font-size: var(--font-size-xs); line-height: 1.6; text-overflow: ellipsis; white-space: nowrap; cursor: pointer;
+}
+.lead-deliverable__file:hover { border-color: var(--accent); color: var(--accent); }
+.lead-deliverable__file:focus-visible { outline: var(--control-edge-inset) solid var(--accent); outline-offset: var(--control-edge-inset); }
 .lead-deliverable__meta { min-width: 0; overflow: hidden; color: var(--text-tertiary); font-size: var(--font-size-xs); text-overflow: ellipsis; white-space: nowrap; }
 /* Overlaid on hover/focus so the title keeps the row's whole width the rest of the time. */
 .lead-deliverable__source {
@@ -51,3 +64,4 @@
 .lead-deliverables__more, .lead-deliverables__retry { align-self: flex-start; margin: var(--space-0) var(--space-2) var(--space-1); }
 .lead-deliverable-dialog .ui-dialog__body { max-height: 70vh; overflow-y: auto; }
 .lead-deliverable-report .ptool-coord-card { margin: 0; }
+.lead-deliverable-report__files { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-block-start: var(--space-3); }

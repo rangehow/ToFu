@@ -347,3 +347,241 @@ this in-process measurement.
 - **Polling the attempt for settle.** Replaced by the durable `settledAt`
   mapped onto the monotonic clock; polling over-states settle by up to one
   poll interval.
+
+## Startup, idle and dispatch
+
+Owner: process start-up, idle cost and the submit-to-provider handoff of the
+API host (`server.py`), the execution host (`serverctl_pkg/execution_host.py`)
+and the manager's preparation for them (`serverctl.py start`).
+
+### Method
+
+- **Manager-composed instance.** `benchmarks/startup_idle_dispatch.py` runs
+  the real `serverctl.py start` composition of the checkout it lives in
+  (manager, API host, execution host, SQL Sidecar) with a scrubbed
+  environment, private manager/API ports, a private `TOFU_HEARTBEAT_DIR` and
+  `TMPDIR`, and in-tree `data/`. `cold-start` stops and restarts the instance
+  (median of 5, after one warm-up start), `idle` samples both hosts over 600 s
+  after a 60 s settle (CPU from `/proc/<pid>/stat`, RSS, voluntary plus
+  involuntary context switches of every thread as wakeups, threads named via
+  py-spy), `dispatch` measures `POST /turns` to the first request byte at a
+  loopback provider (20 Turns, plus the first Turn after ready).
+- **Suite.** `benchmarks/harness_perf/run.py --smoke` (TofuDB engine, fresh
+  private root per run, so the storage-boundary cache starts cold) for the
+  execution-host cold start and idle RSS, 3 alternating pairs.
+- **Arms.** Before is `08e08feec55f` exported to a private directory, after is
+  this change; each arm runs from its own tree, alternating, on local disk of
+  the shared host (`codelab-prod-…-9h7mn`, load 15–25). The SQL Sidecar is the
+  manager-composed backend because a worktree has no TofuDB certification
+  fixture; nothing measured here depends on the engine.
+- **Import profile.** `python -X importtime -c "import server"` and cProfile of
+  the same import; stage clocks of `execution_host.create_application`
+  reproduced step by step in one process.
+
+### Results (2026-11-17)
+
+| metric | before | after |
+|---|---|---|
+| `serverctl start` to both hosts ready, median of 5 | 12.0 s (10.6–14.1) | **7.4 s** (6.5–8.8) |
+| host spawn to ready, median of 5 (API ready waits for execution) | 7.8 s | **3.55 s** |
+| suite execution host cold start (prepare + launch + ready), 3 runs | 11.5 / 15.0 / 13.7 s | **8.1 / 7.9 / 7.3 s** |
+| execution host after the manager's plan: plan check, import, pin, construct, recheck | 6.5 s | **2.9 s** |
+| storage boundary scan, cold / warm (this checkout) | 4.4 / 0.12 s | 2.45 / 0.12 s |
+| storage boundary scan on the live DolphinFS checkout, warm | 0.42 s | 0.23–0.35 s |
+| API host idle wakeups (600 s) | 42.0 /s | **21.8 /s** |
+| API host idle CPU / RSS | 0.40 % / 137 MiB | 0.29 % / 138 MiB |
+| execution host idle wakeups | 12.5 /s | 12.1 /s |
+| execution host idle CPU / RSS (manager-composed) | 0.18 % / 165 MiB | 0.17 % / **141 MiB** |
+| execution host idle RSS (suite, TofuDB) | 213 MB | **191 MB** |
+| submit to first provider byte, steady (20 Turns) | 73 ms | 73 ms |
+| `POST /turns` admission | 8 ms | 8 ms |
+
+Execution host stages (one process, local disk; before → after): plan check
+1.1–1.7 s → 0.3 s; `import server` 1.0–1.2 s (unchanged); freeze 2.4–3.1 s →
+1.4 s; second application assembly 0.14 s → 0; post-construction recheck
+0.9–1.2 s → 0.2 s; the manager's plan child 1.3 s → 0.85 s (warm boundary
+cache). On DolphinFS each of the removed source passes costs 5–6 s (one read
+of 8,098 files, 89 MiB, warm page cache); live logs show the execution host
+spending 33 s between "starting up" and phase 1.
+
+Where the remaining time goes. API host: `import server` about 1.2 s
+cumulative, of which route assembly and werkzeug rule compilation are 0.45 s,
+`lib/__init__` 85 ms (plugin flag entry points), `lib.pricing._provider` 75 ms
+(bundle entry points), the Chromium fontconfig probe 0.27 s. Execution host:
+the same import, pinning the frozen generation 1.4 s, the cold boundary scan
+2.45 s once per data root. Idle: the storage liveness probe (6.4 wakeups/s in
+each host: a 1 s probe on a new thread, the declared liveness contract in
+`docs/STORAGE.md`), the manager's TCP readiness probe of the API port and the
+1 s loop heartbeat. Dispatch (`[TaskStartupTiming]`): API admission to
+execution-host claim wake 1 ms; the claim 4 ms; per-Turn preparation reaches
+context-ready at +44 ms (`registration_route` 9, `startup_tools` 8, context
+compose 10 ms); round assembly to the first byte about 25 ms. The first Turn
+after ready takes 0.46–0.78 s: 44 % first-use imports and 0.11 s loading the
+token encoder.
+
+### Decisions
+
+1. **The test suite is not execution source.** Problem: the resident
+   execution generation listed, read and zlib-pinned the whole `tests/` tree
+   (4,988 of 8,098 files, 51 of 89 MiB) in every plan pass and in freeze, and a
+   test-only edit replaced the execution host. Decision:
+   `pinned_import_source.NON_APPLICATION_PACKAGES` names it once;
+   `application_sources()` applies it to plan preparation, pin sweeps, freeze
+   and frozen lookup; `tests/server/test_execution_plan.py` asserts that no
+   generation member imports it. Alternatives: reuse `pyproject.toml`'s wheel
+   package list (it also excludes `routes` and storage authorities the server
+   runs); a per-package allow list (a second inventory to keep in step).
+2. **Recheck a constructed host by pin stat.** Problem: after construction
+   the host re-read and re-hashed every source to learn whether the checkout
+   moved. Decision: the retained pins already equal the plan, so
+   `unchanged_since_freeze()` compares one listing and one stat per pin and
+   byte-compares only files whose size or mtime moved; only a changed checkout
+   pays the exact `prepare_plan`. Alternative: drop the recheck (loses the
+   source-refresh authorization `serverctl_pkg/AGENTS.md` grants to a
+   construction-time change).
+3. **One application per execution host.** `import server` already assembles
+   the application `server.py` serves; the host adopts it instead of a second
+   `create_app()`.
+4. **The storage boundary caches every file.** Problem: each of the three to
+   four boundary checks per boot ran `rg` over all of `lib/` and `routes/`
+   before consulting a cache that held only marker-bearing files; the scanner
+   walked each AST three times. Decision: every listed file is cached by stat
+   signature (markerless files with no violations), only changed files are
+   searched (`rg`, or the same regex in Python) and parsed, in one traversal;
+   identical verdicts on all 9,165 tracked Python files. Alternative: key the
+   verdict on the plan's source digest (the boundary also covers non-package
+   directories outside the plan, so it would not be exact).
+5. **Shutdown is awaited, not polled.** Problem: `wait_for_shutdown_trigger`
+   slept 50 ms in a loop for the life of the API host: 20 wakeups/s idle and
+   up to 50 ms before a drain began. Decision: `ShutdownRequest` (a
+   `threading.Event`) resolves the futures of awaiting loops from `set()` on
+   any thread. Alternative: `run_in_executor(event.wait)` parks a pool thread
+   that `asyncio.run` then joins forever if shutdown never comes.
+
+### Considered and not taken
+
+- **Preload the token encoder and first-Turn modules after ready.** Saves
+  most of the first Turn's 0.46–0.78 s, but the encoder alone retains
+  +53 MiB (0.5 s to load), moving the execution host's idle RSS from 141 to
+  about 194 MiB against the ≤ 300 MB all-process idle target.
+- **One process-wide entry-point index.** Each `entry_points(group=…)` rescans
+  every distribution: 69 ms per group here (270 distributions), 29 ms with the
+  live interpreter (116). Six owners each scan their group, and their tests
+  replace `importlib.metadata.entry_points` with fakes of several signatures;
+  about 0.15 s per process does not justify a shared seam across them.
+- **Defer the Chromium environment probe.** `ensure_chromium_env` mutates
+  `os.environ` so every later child (including agents' shell commands)
+  inherits library and font paths; per-launch-site setup would cost more
+  machinery than its 0.27 s.
+- **A headless execution composition without routes** (≈0.45 s import and
+  rule compilation, and their RSS). The Router's `owner_settings` in the
+  execution host reaches the Settings backend that assembly registers
+  (`docs/ROUTER.md` R11); it needs a composition split, not a skip.
+- **Reuse one storage liveness probe thread.** Saves a thread start per
+  second per host; the per-probe thread is the watchdog's isolation from a
+  stuck probe, and the cadence is a liveness contract, not a tuning value.
+
+### Second pass (2026-11-17): safety, boot recovery, first Turn
+
+Method additions. **Boot recovery:** `benchmarks/startup_recovery_batch.py`
+runs `recover_active_work_items` against a disposable **TofuDB on DolphinFS**
+(`.eval-runs/`), 32 restart-paused work items over 4 Git checkouts on the
+same volume (the live shape of 2026-11-17 00:15), 5 passes per process, arms
+alternating in fresh processes (`TOFU_BENCH_CHECKOUT`). **First Turn:** the
+manager-composed instance of `startup_idle_dispatch.py` per arm (exported
+pre-change tree vs. this tree, alternating, 3 rounds), first Turn submit to
+first provider byte after ready, then 5 more Turns, execution-host RSS 30 s
+after ready and after the Turns. The shared host was loaded (both hosts ready
+in 10–28 s), so only medians and ranges are meaningful. py-spy (250 Hz) of
+the execution host located first-Turn and steady-Turn costs.
+
+| metric | before | after |
+|---|---|---|
+| active work-item recovery, 32 paused items / 4 projects, TofuDB on DolphinFS, median of 5 (2 alternating pairs) | 0.462 / 0.443 s | **0.102 / 0.106 s** |
+| Git identity children per recovery pass (same shape; before from cProfile, after by the per-path memo, 2 per checkout) | 64 | **8** |
+| storage exchanges for the page's task results | 32 | **1** |
+| first Turn after ready, submit to first provider byte (3 alternating runs) | 1.20 / 2.13 / 1.50 s | **0.87 / 1.20 / 0.50 s** |
+| execution host RSS 30 s after ready, before any Turn | 145 / 131 / 127 MiB | 145 / 142 / 145 MiB |
+| execution host RSS after six Turns | 205 / 196 / 192 MiB | 198 / 192 / 196 MiB |
+| steady submit to first provider byte (median of later Turns) | 78 ms | 79 ms |
+
+Live recovery mapped onto the bench: the 10 s work-item part of the 22.4 s
+phase is the per-item Git identity (two children plus an ancestor walk on
+DolphinFS) and per-item reads; the remaining 13 s is dispatch recovery
+(`recover_persisted_dispatch`, below). The live gain is observed only after
+the next execution-host restart.
+
+6. **A start never acts on another live instance.** Problem: a Tofu shell
+   exports the serving instance's `TOFU_PROJECT_PATH`; `serverctl.py` took
+   its project from it, so `serverctl.py start` in a worktree deployed the
+   storage engine into the live checkout and launched a second manager. The
+   manager read its worker's lock at `<project>/data` while a worker on
+   `TOFU_DATA_DIR` writes it under that data root (its own worker reported as
+   a foreign port owner), and every instance stamped one host-global
+   heartbeat that the live manager reads for wedge evidence. Decision:
+   `serverctl.py` controls the checkout it belongs to; instance actions
+   (start, stop, restart, ensure, install-recovery, prepare-frontend) refuse
+   with exit 2 under another checkout's `TOFU_PROJECT_PATH`, and `ensure`
+   refuses a manager port answered by a manager of other projects instead of
+   launching a watchdog that can never bind. `server_manager.read_lock_status`
+   resolves the worker's data root from the composition the worker receives
+   (ambient, project `.env`, `serverEnv`). The heartbeat defaults to
+   `/tmp/tofu/heartbeat/<sha256 of the data directory>/server.heartbeat`
+   (`runtime_path_policy.instance_heartbeat_path`), read the same way by the
+   instance lock, the manager and `deploy/tofu_guard.sh`. Alternatives:
+   scrubbing a deny list of inherited names in serverctl (the scratch-server
+   rule already rejected deny lists: the exported identity grows over time);
+   keeping the shared heartbeat and requiring `TOFU_HEARTBEAT_DIR` (an
+   unenforced ritual that every new launcher forgets). Specification:
+   `tests/server/test_start_never_acts_on_another_instance.py`.
+7. **A recovery page reads its tasks in one exchange and each checkout
+   once.** Problem: boot recovery read each active work item's task result
+   and resolved each item's checkout identity one item at a time.
+   Decision: the page's unique active items are collected first, their
+   `task_results.replay_get` reads go through one `query_many`, and the
+   pass memoizes `_checkout` per path (`record_task_workspace_intents(...,
+   checkouts=)`; failures are not remembered). Alternatives: batching
+   `find_workspace` too (0.1 s of 0.76 s here, and it needs a new batch read
+   in integration state); not re-recording intents of items that stay paused
+   (the acknowledgement lives only on the in-memory task, so persisting it
+   is a contract change of workspace delivery).
+8. **The execution host imports its turn executor with the application.**
+   Problem: py-spy of the first Turn after ready showed 0.2 s of first-use
+   imports (`lib.tasks_pkg.orchestrator.api` from `spawn._prepare_task_worker`,
+   `lib.llm.stream` through the `lib.llm` facade) inside the claimed attempt.
+   Decision: `execution_host.create_application` imports both after pinning;
+   the API host still never does. The cost is about 13 MiB before the first
+   Turn only: RSS after any Turn is unchanged (the same modules), and the
+   host's ready time moved within the noise of this host. Alternatives:
+   importing in a background thread after ready (same memory, and a Turn
+   arriving meanwhile waits on the import locks anyway); preloading the token
+   encoder (rejected above: +53 MiB).
+
+Considered and not taken in this pass:
+
+- **Cache the normalized model-routing document.** Steady Turns spend about
+  14 ms of the 79 ms in `ModelRoutingRepository.get`, which runs
+  `normalize_document` (7 ms for a 91-model aggregate) on every read, twice
+  per Turn. An exact cache keyed by the raw document digest would cut each
+  read to under 1 ms, but `lib/model_routing/AGENTS.md` requires every request
+  to read and validate its own owner revision and forbids a global authority
+  cache; this needs that owner's decision, so it is reported, not changed.
+- **A byte bound instead of the encoder for small requests.** Byte-level BPE
+  never yields more tokens than bytes, but admission counts feed serving-unit
+  conversion, telemetry and the memoized-count parity contract of
+  `lib/token_counter`; the encoder load is about 80 ms of the first Turn.
+
+### Remaining
+
+- Dispatch recovery is now the larger part of live "Storage recovery": 13 s
+  on 2026-11-17 over three project scopes, with two 6 s gaps around one
+  Coordinator resumed in place. It was not reproduced on an isolated instance
+  (it needs the live dispatch record's shape); the next step is a py-spy of
+  `recover_persisted_dispatch` on a copy of a large dispatch record.
+- Steady submit to first byte (79 ms) is per-Turn preparation owned by the
+  round path: model-routing reads (above), tool assembly in `create_task`
+  (about 17 ms) and settled-row copies (about 14 ms); the API to
+  execution-host handoff itself is about 10 ms (persist 2, start 2, claim 4,
+  dispatch entry 2).
+- Execution host to ready is 2.9 s of host work plus the manager's plan child
+  against the ≤ 2 s target: `import server` and pinning remain.

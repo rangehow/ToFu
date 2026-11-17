@@ -452,6 +452,10 @@ Remote content is untrusted tool output. Resource links, text, images, audio, `s
 
 **MCP credentials that copy a browser session renew from it (2026-11-17).** Problem: many MCP servers authenticate with a copy of the user's browser session: one cookie's value (Overleaf `OVERLEAF_SESSION` is `overleaf_session2`) or a whole Cookie header (`a1=…; web_session=…`). The copy expires, or the site rotates the session, while the browser stays signed in; every call then fails, the credential probe can only show an expired badge, and agents ask the user to paste a fresh value from DevTools. A per-server declaration covers only curated entries, and a pasted value did not even reach the execution host, whose reconnects reused the config cached at first connect. Decision: `lib/mcp/browser_credentials.py` owns *bindings*, the non-secret record of which browser cookies an env value copies: kind `cookie` (`name`, `url`) or `cookie_header` (`names` in the user's order, `required` session names, `url`). A curated catalog `env_specs` row may declare `browser_cookie: {name, url, url_env}`, which works even when the stored copy is already stale; Overleaf declares `overleaf_session2` at `OVERLEAF_BASE_URL` (default `https://www.overleaf.com`, as `overleaf_mcp.config` uses). Every other server learns its bindings after each connect (`learn_bindings`, one pass per server; values a browser already answered for are not asked about again in that process). Only values that could be session identifiers are candidates: cookie-octets, not a URL or path, at least 64 bits by a character-class estimate (OWASP's session-ID minimum), never a catalog field marked non-secret; a header contributes its session-like pairs. The extension's `match_cookies` command (capability `cookie_match`) compares HMAC-SHA-256 digests under a one-time key against its own cookie store and returns only matching cookies' name, domain, path and flags, so neither stored values nor cookie values cross the bridge. A value binds to exactly one matching cookie; a cookie scripts may read binds only beside an HttpOnly session cookie of the same site (a CSRF companion such as `bili_jct`), so a lone username or locale cookie never does; a header binds when a session-like pair matched and every matched cookie is sent to one URL. A learned binding is stored in the row's `browser_credentials` with the answering device and the value's SHA-256 fingerprint, and lapses when the value changes by any other path. `refresh_from_browser` reads bound cookies from the binding's device while it is connected, else from the device unpinned browser tools use (`lib.browser.dispatch.select_owner_client`), skips the owner's read-denied domains and unusable values, rebuilds a header in the user's order (renewal needs every `required` cookie), and saves changed values plus device and fingerprint in one locked transaction (`config.update_server`; a value edited meanwhile keeps the edit), audited as `mcp_credential_refreshed` by key name. The bridge renews only on evidence that the copy is rejected: an expired probe (`_renew_expired_credential`), a call result that is an MCP error with an auth phrase from `health_probe.DEFAULT_CRED_FAIL_PATTERNS` (or the structured `login_required` marker on any result) on a server with a binding, a call to a server already known to be expired, or a reconnect after a failed connect (servers that refuse a stale credential at startup). A renewed rejected call is repeated once under the same replay rule as a dead transport (an enabled, unchanged read-only declaration or a trusted host's opt-in); any other call returns its error with guidance to repeat it, and when the browser holds no newer session the guidance tells the model to have the user sign in to the site in the browser connected to Tofu, or connect the extension, never to ask for cookie values. Every reconnect (`_reconnect_server`) uses the owner's current stored row, so a Settings edit or the other process's renewal applies at the next wake, and a changed credential drops the old verdict; an unowned bridge or a row absent from the store keeps its last-known config. Renewal never reads the browser for a credential that works; learning asks about each value once per process. Alternatives rejected: letting the model read values (`browser_get_cookies` redacts them so they stay out of transcripts and logs); matching on the server with `get_cookies` (single values have no name to scope the read, so it would export cookie values of unrelated sites); declaring every server by hand (custom servers have no catalog entry); reading the browser on every connect (a browser round trip on each wake, and a working credential would follow whichever account the browser has open); trusting any exact match (a username or locale cookie would rewrite configuration); opening a login tab from a probe (probes run without user demand); storing the cookie as an auth source (`lib/auth_sources.py` feeds web fetch, not MCP env). An extension without `cookie_match` keeps declared renewal; learning starts after it updates, and the server must restart first because the protocol rejects unknown capabilities (the extension parks and retries on 426). Verify with `tests/mcp_protocol/test_mcp_browser_credentials.py`, `tests/browser/test_browser_cookie_match.py` and `tests/mcp_protocol/test_mcp_cred_health.py`.
 
+**MCP management reaches the execution host (2026-11-17).** Problem: an MCP bridge is process-local. In the two-process runtime the management routes (`routes/api_v1/mcp.py`: connect, disconnect, remove, per-tool enable/disable, catalog install and uninstall) acted on the API host's bridge, while every Turn calls tools through the execution host's, which only auto-connects the configuration it saw at boot. A server added at runtime was invisible to Turns (`execute_tools` answered `tool_not_enabled` with no candidates) until the execution host restarted, a disconnected server kept serving Turns, and a tool the owner disabled kept running in them. Decision: after applying an action to its own bridge, each route sends the owner method `mcp_reconcile` (`contracts/command_control_v1.json`, params `server` and `action` = `connect` | `disconnect` | `tools`) over the existing execution command control. The execution host queues it on its owned MCP startup worker (`lib/mcp/startup.py::request_mcp_reconcile`, joined by `stop_mcp_auto_connect`), which connects with the owner's current stored row (a disabled or removed row disconnects), disconnects, or applies the row's `disabled_tools` without reconnecting. The acknowledgement confirms only the queueing because a connect can outlast the two-second control acknowledgement (a cold vendored launch takes 42 s and more); the response's `execution` field reports `scheduled`, `refused` (shutting down), `unavailable` (no confirmed incarnation; logged) or `not_split`. Alternatives rejected: reading the MCP configuration on every tool assembly in the execution host (a storage read on every model round); moving all MCP management into the execution host (the UI's live listing and health would then depend on control availability); a polling reconciler (a detection interval knob). Specs: `tests/mcp_protocol/test_mcp_startup_lifecycle.py`, `tests/tasks_pkg/test_command_control_runtime.py`, `tests/tasks_pkg/test_command_control_transport.py`, and the real two-process cases in `tests/chaos/test_chaos_faults.py`.
+
+**A dead MCP transport refreshes its catalog without replaying the call (2026-11-17).** Problem: a server that crashed mid-call left the bridge holding the dead process's tool catalog until the keepalive sweep reconnected it. A server upgraded across that restart therefore had every call validated against its old schema, and the model was told its arguments were wrong. Decision: when a call fails on a dead transport and is not replayable, `call_tool` still reconnects (`_reconnect_server`, which re-lists the tools) before re-raising the original failure; the operation is never repeated, and a failed reconnect leaves the original error and the keepalive's recovery in place. Alternatives rejected: waiting for the keepalive sweep (the stale window); validating against no schema while a server is down (admits malformed calls); replaying after the reconnect (a lost write reply may have committed). Specs: `tests/mcp_protocol/test_mcp_disconnect_recovery.py` and the crash/upgrade case in `tests/chaos/test_chaos_faults.py`.
+
 **Children launch browsers from the installed Playwright registry (2026-11-15).** Problem: the tool cache defaults `apply_tool_paths` gives command and MCP children include `XDG_CACHE_HOME=<tool cache root>` (default `data/mcp-cache`). Playwright on Linux derives its browser registry from `XDG_CACHE_HOME`, and `chromium_env.browsers_root` mirrors that on purpose, so every child, including `npm run build:frontend`'s bundle canary and the browser test tier, searched `data/mcp-cache/ms-playwright`, which holds no browser, while the browsers sit in the registry the server itself resolves (`~/.cache/ms-playwright`). Workers had to export `PLAYWRIGHT_BROWSERS_PATH` by hand. Decision: `chromium_env.playwright_registry(mapping)` is the one authority for which registry Playwright uses under an environment. `apply_tool_paths` resolves it from the child's mapping before applying the cache defaults and, only when the redirect would move it, sets `PLAYWRIGHT_BROWSERS_PATH` to that registry. An explicit `PLAYWRIGHT_BROWSERS_PATH` (including `0`) is never replaced, and a mapping whose cache root already is the per-user cache (the landing test environment) is unchanged. No path is configured: it is the launching process's own Playwright default. Alternatives rejected: removing `XDG_CACHE_HOME` from command children (it is the generic cache redirect for read-only homes, and other XDG-following tools would move back to `~/.cache`); scoping it to MCP processes only (MCP servers that drive Playwright would keep the same defect); a discovery fallback inside `browsers_root` that searches other caches (it would report browsers the Playwright that launches does not use); a hardcoded `~/.cache/ms-playwright` (wrong on macOS, Windows and installer layouts). Verify with `tests/tools/test_process_environment.py::test_command_and_mcp_children_launch_browsers_from_the_installed_registry` and `tests/browser/test_chromium_env.py`.
 ## Invariants
 - One registry for names and schemas; one gateway for execution verdicts.
@@ -711,12 +715,104 @@ seeded subset whose value sets cannot overflow, so the property holds
 exactly; it fails when a branch stops joining, a derived value loses its
 collapse, or an `&&`/`||` operand is taken as certain.
 
-Known limits: positional parameters (`$1`, `"$@"`) inside function bodies are
-not bound at calls; `trap` strings, sourced files and `export -f` are not
-followed; `set`, `read`, `unset`, `source` and `eval` still reset bindings to
-the starting environment; `cd` to a wholly unproven directory keeps the old
-cwd; a configured `SHELL_PREFIX` may change the environment before the
-command.
+Known limits: see "Catastrophic-delete guard shell semantics" below.
+
+## Catastrophic-delete guard shell semantics
+
+Problem (2026-11-17): with control flow followed, the guard still read words,
+builtins and program words more simply than a shell. Checked against dash
+and bash, it never saw deletes of `/` reached through a `trap` action
+(`trap 'rm -rf /' EXIT`), a function's positional parameters (`f() { rm -rf
+"$1"; }; f /`), a child shell's environment (`export D=/; sh -c 'rm -rf
+"$D"'`), a program word with an expansion (`X=rm; $X -rf /`, `run() { "$@";
+}; run rm -rf /`, `sudo $RM -rf /`, `/bin/r? -rf /`), an alias (`alias
+x='rm -rf /'`, then `x` on the next line), a quoted shell name (`"bash" -c
+'rm -rf /'`), `echo`/`printf` output piped into a shell, or a bash brace word
+(`rm -rf /{tmp/x,}`). The other way, `set -e`, `read`, `printf -v`, `let` and
+`typeset` reset every binding to the starting environment, refusing scoped
+deletes after them, and an unknown number of positional parameters spliced
+into more text crashed the guard with a `TypeError`.
+
+Decision (2026-11-17): the guard expands words and runs builtins the way the
+shell does (`_expand_word`, `_BUILTIN_EFFECTS`), and treats a parameter list
+of unknown length like any unknown unquoted value.
+
+- A word's expansions: the `${…}` operators, field splitting and pathname
+  expansion of unquoted values, `$'…'`, `$((…))` and the substitutions whose
+  output `_PRODUCERS` model (`echo`, `printf`, `pwd`, `dirname`, `basename`,
+  `cd DIR && pwd`, `git rev-parse --show-toplevel`). bash makes a word of each
+  brace-expression variant, each judged as an operand of its own; dash keeps
+  the braces.
+- A builtin changes only what it changes: `unset` empties a name; `set --`,
+  `shift` and a function call set the positional parameters; `read`,
+  `printf -v`, `getopts` and `mapfile` assign the names they take; `eval` and a
+  `trap` action run their text in this shell, a trap with every state reached
+  after it was set; `cd` follows its destinations (`$CDPATH`, `-`, `$HOME`)
+  and loses the working directory at one it cannot know; `source` may change
+  every binding.
+- A child shell (`sh -c`, a shell reading a heredoc or a pipe) starts with the
+  exported names, the assignments and `env` options in front of it, the
+  functions of `export -f`, its own `$0` and positional parameters, and no
+  aliases. A shell's program word and options are read dequoted, its `-c`
+  string as written.
+- A program word with expansions (`_expanding_program_word`: the command word
+  or the program a wrapper runs) is expanded like an operand, and each field
+  list it may make is judged as the command it makes, with the item's
+  heredocs and redirects. A pattern is judged as each delete command it
+  matches. Where the program may be one the guard cannot name, the command
+  also refuses when its text could run a delete, the policy for a wrapper
+  option it does not understand.
+- `alias` records the texts an alias may hold. A command word that may be an
+  alias (dash and `bash --posix` expand aliases in scripts) is judged as the
+  alias text, a value ending in a blank expanding the next word too, and as
+  the word itself. An alias is never expanded inside its own text.
+- What `echo` or `printf` prints into a pipeline stage that may be a shell
+  reading its stdin (a program word with an expansion may name one) is that
+  shell's script, run with the environment of the shell's own stage.
+
+The dangerous-command guard judges an alias value where it is defined, as it
+does a trap action.
+
+Alternatives rejected: refusing every command whose program word has an
+expansion (blocks `$PYTHON`, `"$EDITOR"` and every `"$@"` wrapper); judging
+the operands of a program the guard cannot name as a delete's (the
+containment rule would refuse every outside-workspace path given to
+`$(command -v python3)`); expanding only aliases defined on an earlier line,
+as dash does (needs the shell's line-read order through compound commands
+and function bodies, while judging the alias text and the word itself is a
+superset that costs ordinary aliases nothing); taking the product of a brace
+word's variants for an operand (a multi-valued `$O` in `rm -rf "$O"/{a,b,c}`
+overflowed into a refusal, though each variant is a word of its own);
+rebuilding the command as text from its expanded words (loses the heredocs
+and redirects the substituted item keeps).
+
+Verification: `tests/project_mod/test_delete_guard_shell_semantics.py` holds
+the cases above, refused and allowed. Against the guard before this change,
+every refusal case of its program-word, alias, shell-input and brace classes
+passes unrefused. `tests/project_mod/test_delete_guard_shell_oracle.py` adds
+a second differential property: seeded scripts reach `rm` through program
+words, `"$@"` wrappers, `command`, `env`, aliases (a chained one included),
+`echo`/`printf` piped into `sh`, `sh -c` and brace words, and run in dash,
+`bash --posix` and bash with a PATH holding only an `rm` that prints its
+operands. Every operand it receives must be among the guard's candidates for
+the same script, and each delete's operand carries a mark of its own so only
+its own events can account for it. Of its 720 runs per pass, 405 hand `rm` a
+marked operand. It fails when program words are not expanded (33 of 80
+seeds), piped output is not judged (13), brace words are not expanded (3) or
+aliases are not recorded (2), and against the guard before this change (48
+of 80). A one-line command still takes under 0.1 ms; a 100-line script of 500
+commands, every fifth a program word, took 24 ms against 16 ms without
+program-word expansion, on a loaded host.
+
+Known limits: a program word whose value the guard cannot know (`X=$(command
+-v rm); $X -rf /`) is not judged as `rm` unless the command's text names a
+delete; the output of other programs is unknown, so `cat script | sh` is not
+judged; a sourced file is not read; the guard does not know when the shell
+reads a line, so an alias also counts on the line that defines it and in
+plain bash, which expands none; a brace word with more variants than
+`_DELETE_BINDING_CAP` is refused as unproven; the dangerous-command guard
+binds no variables, so `X=reboot; $X` and wrapper functions pass it; a
+configured `SHELL_PREFIX` may change the environment before the command.
 
 ## Dangerous-command guard structure
 

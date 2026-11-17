@@ -133,6 +133,22 @@ TRANSIENT_STORAGE_CODES = frozenset({
 
 _SQL_FRAME_TOO_LARGE_MESSAGE = 'Storage frame exceeds the size limit'
 
+#: Both authorities refuse a command ID whose stored receipt names another
+#: request with this literal under ``database_conflict`` (SQL receipt_codec,
+#: native authority.rs ``COMMAND_ID_REUSED``).
+COMMAND_ID_REUSED_MESSAGE = 'command_id was reused for a different request'
+
+
+def is_command_id_reuse(exc: BaseException | None) -> bool:
+    """The authority already accepted this command ID for a different request.
+
+    Nothing was written: the earlier request stays the command's only effect.
+    Native engines predating the literal answer the bare ``database_conflict``
+    as the message, indistinguishable from every other conflict.
+    """
+    return (isinstance(exc, StorageError) and exc.code == 'database_conflict'
+            and exc.message == COMMAND_ID_REUSED_MESSAGE)
+
 
 def is_resource_bound_refusal(exc: BaseException | None) -> bool:
     """The authority refused one read against a deterministic per-request bound.
@@ -234,7 +250,7 @@ def http_status_for_storage_error(error: StorageError) -> int:
 
 
 __all__ = [
-    'ERROR_CODES', 'StorageError', 'ProjectionRebaseRequired', 'describe_storage_failure',
-    'TRANSIENT_STORAGE_CODES', 'is_resource_bound_refusal',
-    'is_transient_storage_error', 'http_status_for_storage_error',
+    'COMMAND_ID_REUSED_MESSAGE', 'ERROR_CODES', 'StorageError', 'ProjectionRebaseRequired',
+    'describe_storage_failure', 'TRANSIENT_STORAGE_CODES', 'is_command_id_reuse',
+    'is_resource_bound_refusal', 'is_transient_storage_error', 'http_status_for_storage_error',
 ]

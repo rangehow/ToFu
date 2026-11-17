@@ -91,6 +91,8 @@ def _valid_result(method, result):
             and all(type(result[name]) is bool
                     for name in ('terminated', 'awaitingContinue') if name in result)
             and isinstance(agents, list) and all(isinstance(row, dict) for row in agents))
+    if method == 'mcp_reconcile':
+        return isinstance(result, dict) and set(result) == {'scheduled'} and type(result['scheduled']) is bool
     if method in OWNER_METHODS:
         return (isinstance(result, dict) and set(result) == {'swarms', 'backgroundCommands'}
                 and all(isinstance(rows, list) and all(isinstance(row, dict) for row in rows)
@@ -162,6 +164,10 @@ def _valid_request(request):
         return (set(params) == {'response'} and isinstance(params['response'], str)
                 and bool(params['response'].strip())
                 and len(params['response']) <= MAX_HUMAN_GATE_RESPONSE_LENGTH)
+    if method == 'mcp_reconcile':
+        return (set(params) == {'server', 'action'} and isinstance(params['server'], str)
+                and bool(params['server'].strip())
+                and params['action'] in ('connect', 'disconnect', 'tools'))
     return params == {}
 
 

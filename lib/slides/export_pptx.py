@@ -37,7 +37,11 @@ import tempfile
 import zipfile
 
 from lib.log import get_logger
-from lib.slides.pptd import (Deck, Page, chart_font_family, resolve_media, table_style,
+from lib.slides.pptd import (Deck, Page, chart_font_family,
+                             chart_series_palette, element_backdrop_color,
+                             shared_value_max,
+                             readable_text_colors,
+                             resolve_media, table_rows, table_style,
                              text_style)
 from lib.slides.richtext import parse_rich_text
 
@@ -192,6 +196,10 @@ def _add_shadow(shape, shadow: dict, theme: dict) -> None:
 _ALIGN_MAP = {'left': 1, 'center': 2, 'right': 3, 'justify': 4}
 
 
+#: ST_TextFontScalePercent for 100% (OOXML thousandths of a percent).
+_OOXML_FULL_SCALE = 100000
+
+
 def _fill_text_frame(tf, content: dict, theme: dict, deck: Deck) -> None:
     from pptx.util import Pt
     st = text_style(content, theme)
@@ -200,15 +208,21 @@ def _fill_text_frame(tf, content: dict, theme: dict, deck: Deck) -> None:
     # A python-pptx textbox defaults to ``spAutoFit`` (grow the SHAPE to fit
     # text).  That silently breaks PPTD's fixed geometry in PowerPoint/WPS:
     # text can leave the authored bounds and cover the next element even when
-    # the browser preview is clean.  Fixed boxes + native shrink-to-fit are the
-    # safe default; authors may explicitly request the two uncommon modes.
+    # the browser preview is clean.  Boxes are fixed.  Layout QA measures the
+    # authored size to fit (with PowerPoint's reserve), so that size is the
+    # fitted size: written as ``noAutofit``, or for an explicit ``shrink`` as
+    # ``normAutofit`` carrying that measured 100% scale.  A bare
+    # ``<a:normAutofit/>`` opens at 100% in PowerPoint/WPS but LibreOffice
+    # refits it on open, so the two disagree and LibreOffice hides overflow.
     from pptx.enum.text import MSO_AUTO_SIZE
-    fit = str(content.get('fit') or 'shrink').strip().lower()
+    fit = str(content.get('fit') or 'none').strip().lower()
     tf.auto_size = {
         'none': MSO_AUTO_SIZE.NONE,
         'resize': MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT,
         'shrink': MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE,
-    }.get(fit, MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE)
+    }.get(fit, MSO_AUTO_SIZE.NONE)
+    if tf.auto_size == MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE:
+        tf._bodyPr.normAutofit.set('fontScale', str(_OOXML_FULL_SCALE))
     align = content.get('align') or ['left', 'top']
     halign, valign = (list(align) + ['left', 'top'])[:2]
     anchor = {'top': 1, 'middle': 3, 'bottom': 4}.get(valign, 1)
@@ -228,11 +242,16 @@ def _fill_text_frame(tf, content: dict, theme: dict, deck: Deck) -> None:
                            3: PP_ALIGN.RIGHT, 4: PP_ALIGN.JUSTIFY}[
                                _ALIGN_MAP[pa]]
         lh_px = para.line_height_px or st.get('lineHeightPx')
-        lh = para.line_height or st.get('lineHeight')
-        if lh_px:
-            p.line_spacing = Pt(float(lh_px))
-        elif lh and float(lh) != 1.0:
-            p.line_spacing = float(lh)
+        lh = para.line_height or st.get('lineHeight') or 1.0
+        if not lh_px:
+            # The preview's unitless line-height multiplies each run's font
+            # size; PowerPoint's percentage multiplies the font's own line
+            # (~1.45 em for Noto Sans CJK), so the pitch is written exactly.
+            size = max((float(run.font_size or st.get('fontSize') or 18)
+                        for run in para.runs),
+                       default=float(st.get('fontSize') or 18))
+            lh_px = float(lh) * size
+        p.line_spacing = Pt(float(lh_px))
         mt = para.margin_top or st.get('marginTop') or 0
         # Do not inherit theme/master paragraph spacing.  Explicit zeroes make
         # the exported layout stable across PowerPoint, WPS and LibreOffice.
@@ -773,7 +792,7 @@ def _add_icon(slide, el: dict, deck: Deck) -> None:
 def _add_table(slide, el: dict, deck: Deck) -> None:
     from pptx.util import Emu
     x, y, w, h = [float(v) for v in el['bounds']]
-    rows = el.get('rows') or []
+    rows = table_rows(el)
     n_rows = len(rows)
     n_cols = max((len(r) for r in rows), default=0)
     if not n_rows or not n_cols:
@@ -831,7 +850,8 @@ def _add_table(slide, el: dict, deck: Deck) -> None:
             tf.word_wrap = True
             content = {'text': cc.get('text') or '',
                        'align': cc.get('align') or st.get('align')
-                                or ['center', 'middle']}
+                                or ['center', 'middle'],
+                       'fit': cc.get('fit')}
             merged_style = dict(st)
             _fill_text_frame(tf, {**content, **{k: v for k, v in
                              merged_style.items() if k in (
@@ -916,7 +936,8 @@ _CHART_XL = {
 }
 
 
-def _add_chart(slide, el: dict, deck: Deck) -> None:
+def _add_chart(slide, el: dict, deck: Deck, *, backdrop: str,
+               shared_peak: float | None = None) -> None:
     from pptx.chart.data import CategoryChartData
     from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
     from pptx.util import Emu, Pt
@@ -942,9 +963,13 @@ def _add_chart(slide, el: dict, deck: Deck) -> None:
     _set_font_typefaces(chart.font, chart_font_family(deck.theme))
     chart.font.bold = False
     chart.font.italic = False
+    # Office's default chart text is near-black; the preview's colours are
+    # derived from what the chart sits on, so the export uses the same pair.
+    text_rgb, muted_rgb = (_rgb(color)[0] for color in
+                           readable_text_colors(deck.theme, backdrop))
+    chart.font.color.rgb = text_rgb
     # Series colors: per-series override, else the theme cycle.
-    from lib.slides.render_html import _chart_palette
-    pal = _chart_palette(deck.theme)
+    pal = chart_series_palette(deck.theme, backdrop)
     for i, ser in enumerate(chart.series):
         color = series[i].get('color') if i < len(series) else None
         hexv = _resolve(color, deck.theme) if color else pal[i % len(pal)]
@@ -966,11 +991,17 @@ def _add_chart(slide, el: dict, deck: Deck) -> None:
         chart.legend.position = XL_LEGEND_POSITION.BOTTOM
         chart.legend.include_in_layout = False
         chart.legend.font.size = Pt(max(9.0, h * 0.036))
+        chart.legend.font.color.rgb = muted_rgb
     # De-default discipline: no heavy gridlines; hairline category axis only.
     try:
         if ctype not in ('pie', 'doughnut'):
             value_axis = chart.value_axis
             value_axis.has_major_gridlines = False
+            if shared_peak:
+                # Peer charts of one measure share one scale; the preview's
+                # plot keeps the same 12% headroom above the peak.
+                value_axis.minimum_scale = 0
+                value_axis.maximum_scale = shared_peak * 1.12
             value_axis.format.line.color.rgb = _rgb(
                 _resolve('$hairline', deck.theme))[0]
             cat_axis = chart.category_axis
@@ -978,6 +1009,7 @@ def _add_chart(slide, el: dict, deck: Deck) -> None:
                 _resolve('$hairline', deck.theme))[0]
             for axis in (value_axis, cat_axis):
                 axis.tick_labels.font.size = Pt(max(9.0, h * 0.04))
+                axis.tick_labels.font.color.rgb = muted_rgb
             if any(float(v) < 0 for s in series
                    for v in (s.get('values') or [])):
                 from pptx.enum.chart import XL_TICK_LABEL_POSITION
@@ -991,6 +1023,7 @@ def _add_chart(slide, el: dict, deck: Deck) -> None:
             plot = chart.plots[0]
             plot.has_data_labels = True
             plot.data_labels.font.size = Pt(max(9.0, h * 0.036))
+            plot.data_labels.font.color.rgb = text_rgb
         except Exception as e:
             logger.debug('[Slides→PPTX] data labels: %s', e)
 
@@ -1104,7 +1137,10 @@ def _write_pptx(deck: Deck, out_path: str, *, transition: str = 'fade',
                 elif etype == 'table':
                     _add_table(slide, el, deck)
                 elif etype == 'chart':
-                    _add_chart(slide, el, deck)
+                    _add_chart(slide, el, deck,
+                               backdrop=element_backdrop_color(
+                                   page, el, deck.theme),
+                               shared_peak=shared_value_max(page, el))
                 else:
                     raise ExportError(f'unsupported element type: {etype!r}')
                 if len(slide.shapes) <= before_shapes:
@@ -1251,7 +1287,7 @@ def _collect_font_usage(deck: Deck) -> dict:
                 continue
             if el.get('elementType') != 'table':
                 continue
-            rows = el.get('rows') or []
+            rows = table_rows(el)
             n_rows = len(rows)
             n_cols = max((len(r) for r in rows), default=0)
             tstyle = table_style(el.get('style'), deck.theme)

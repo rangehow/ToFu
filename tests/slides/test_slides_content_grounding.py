@@ -75,6 +75,40 @@ def test_outline_attaches_cited_units_and_gate_requires_citations():
     assert any('content pages [3]' in e for e in errors)
 
 
+def _cut_off_outline():
+    """An outline reply that hit the output limit after two complete pages
+    (slides_6a8ef6c574674ddb: 4096 completion tokens, reasoning included)."""
+    pages = [{'pageType': 'cover', 'key_message': '先把账算对'},
+             {'pageType': 'content', 'key_message': '排班 47 → 9 分钟',
+              'content_notes': '月报 [M1]'},
+             {'pageType': 'content', 'key_message': '违约率 2.8%'}]
+    full = json.dumps({'title': 'T', 'pages': pages}, ensure_ascii=False)
+    return full[:full.rindex('{"pageType": "content", "key_message": "违约') + 30]
+
+
+@pytest.mark.parametrize('usage', [{'finish_reason': 'length',
+                                    'completion_tokens': 4096}, {}])
+def test_a_cut_off_outline_reply_is_reported_as_cut_off(usage):
+    """A reply truncated at the output limit is not malformed JSON: the
+    greedy object match ended at the last complete page and json reported
+    "Expecting ',' delimiter", hiding the real cause from logs and retries."""
+    research = {'cards': [], 'material_cards': material_cards(MATERIAL)}
+    with pytest.raises(ValueError) as caught:
+        recipe._outline_candidate(_cut_off_outline(), topic='T',
+                                  research=research, maximum=12, usage=usage)
+    message = str(caught.value)
+    assert 'delimiter' not in message
+    assert 'cut off' in message
+    if usage:
+        assert '4096' in message
+
+
+def test_outline_prompt_output_budget_fits_the_largest_material_deck():
+    """A 16-page material-grounded Chinese outline measured 5.5-6k completion
+    tokens (reasoning included) on gpt-5.6-sol; 4096 cut every reply off."""
+    assert recipe._OUTLINE_MAX_TOKENS >= 12000
+
+
 def test_author_prompt_carries_verbatim_evidence():
     brief = {'pageType': 'content', 'key_message': 'k',
              'sources': material_cards(MATERIAL)[:1]}
@@ -162,3 +196,55 @@ def test_a_tag_outside_the_rich_text_vocabulary_is_an_author_finding():
     assert not any('标签' in f for f in author._validate_page_text(
         _deck(), 'pages/01.page',
         page('<p>把配置写进 <strong>提示词</strong> 的 &lt;ctx&gt; 块<br/>次行</p>')))
+
+
+def _one_text_page(text):
+    return yaml.safe_dump({'elements': [
+        {'elementId': 'k', 'elementType': 'text', 'bounds': [0, 0, 600, 80],
+         'content': {'fontSize': 18, 'text': text}}]}, allow_unicode=True)
+
+
+def test_an_english_deck_page_written_in_chinese_is_refused():
+    """e2e (2026-11-17): the English brief's content pages came back in
+    Chinese; the English prompt carries Chinese format examples and theme
+    labels and never named the page language."""
+    deck = _deck('Maya Okafor interview walkthrough')
+    brief = {'key_message': 'LoadCast is 13.2x faster than vendor A',
+             'content_notes': 'Office: 港湾电网 (Harborline Grid) [M3]'}
+    chinese = _one_text_page('<p>LoadCast 快 13.2 倍</p>')
+    refused = author._validate_page_text(deck, 'pages/01.page', chinese, brief,
+                                         lang='en')
+    assert any('English' in finding for finding in refused)
+    # A CJK name the evidence itself quotes is a fact, not a language slip.
+    assert not any('English' in finding for finding in author._validate_page_text(
+        deck, 'pages/01.page', _one_text_page('<p>Harborline Grid (港湾电网)</p>'),
+        brief, lang='en'))
+    # The deck language is what was requested, never guessed from a title.
+    assert not any('English' in finding for finding in author._validate_page_text(
+        deck, 'pages/01.page', chinese, brief, lang='zh'))
+
+
+def test_the_author_refuses_an_english_page_in_chinese(tmp_path, monkeypatch):
+    deck = _deck('Grid ML')
+    english = _one_text_page('<p>LoadCast is 13.2x faster</p>')
+    replies = [(_one_text_page('<p>LoadCast 快 13.2 倍</p>'), {'finish_reason': 'stop'}),
+               (english, {'finish_reason': 'stop'})]
+    calls = []
+
+    def llm(messages, **_kwargs):
+        calls.append(messages)
+        return replies.pop(0)
+
+    monkeypatch.setattr(author, '_llm', llm)
+    result = author.author_page(deck, {'pageType': 'content', 'key_message':
+                                       'LoadCast is 13.2x faster'}, 0, 1,
+                                lang='en', max_rounds=2)
+    assert result['mode'] == 'authored' and result['yaml'] == english.strip()
+    assert 'English' in calls[1][-1]['content']
+
+
+def test_english_author_prompt_names_the_page_language():
+    prompt = author._build_prompt(_deck('Grid ML'), {'pageType': 'content',
+                                                    'key_message': 'k'},
+                                  1, 4, '', '', '', [], 'en')
+    assert 'Write every visible word on the page in English' in prompt

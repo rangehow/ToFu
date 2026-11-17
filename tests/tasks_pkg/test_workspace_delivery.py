@@ -714,6 +714,10 @@ def test_literal_cross_checkout_shell_write_is_refused(workspace, command):
         command.format(**workspace), workspace['selected'])
     assert 'workspace-isolation' in refusal
     assert 'not started' in refusal
+    # The refusal names what it refused, so the caller can tell a mistaken
+    # target from a write that only needs a different working directory.
+    refused = workspace['sibling'] if '{sibling}' in command else workspace['root']
+    assert os.path.realpath(refused) in refusal
 
 
 @pytest.mark.parametrize('command', ['git status', 'git add base.txt', 'printf changed > base.txt'])

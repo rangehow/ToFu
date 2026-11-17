@@ -113,7 +113,7 @@ def test_prewarm_runs_uv_warm_and_reports_failure(tmp_path, monkeypatch):
         seen['args'] = args
         return _R()
 
-    monkeypatch.setattr(mc.subprocess, 'run', _fake_run)
+    monkeypatch.setattr(mc, '_run_warm', lambda args, env, stop=None: _fake_run(args))
     ready, detail = prewarm_vendored_launcher('warm-mcp')
     assert ready is True
     assert calls['n'] == 1
@@ -131,7 +131,7 @@ def test_prewarm_runs_uv_warm_and_reports_failure(tmp_path, monkeypatch):
         stdout = ''
         stderr = 'ResolutionImpossible: boom'
 
-    monkeypatch.setattr(mc.subprocess, 'run', lambda *a, **k: _F())
+    monkeypatch.setattr(mc, '_run_warm', lambda *a, **k: _F())
     ready, detail = prewarm_vendored_launcher('warm-mcp')
     assert ready is False
     assert 'boom' in detail
@@ -221,7 +221,7 @@ def test_prewarm_marker_lifecycle_drives_cold_budget(tmp_path, monkeypatch):
         stdout = 'ok'
         stderr = ''
 
-    monkeypatch.setattr(mc.subprocess, 'run', lambda *a, **k: _R())
+    monkeypatch.setattr(mc, '_run_warm', lambda *a, **k: _R())
     ready, _ = prewarm_vendored_launcher('mark-mcp')
     assert ready is True
     assert mc.vendored_needs_cold_budget('mark-mcp') is False, (
@@ -233,7 +233,7 @@ def test_prewarm_marker_lifecycle_drives_cold_budget(tmp_path, monkeypatch):
         stdout = ''
         stderr = 'ResolutionImpossible: boom'
 
-    monkeypatch.setattr(mc.subprocess, 'run', lambda *a, **k: _F())
+    monkeypatch.setattr(mc, '_run_warm', lambda *a, **k: _F())
     ready, _ = prewarm_vendored_launcher('mark-mcp')
     assert ready is False
     assert mc.vendored_needs_cold_budget('mark-mcp') is True, (

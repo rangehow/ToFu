@@ -149,6 +149,16 @@ def parse_page_text(text: str, *, path: str) -> Page:
     return _page_from_data(data, path=path)
 
 
+def table_rows(element: dict) -> list:
+    """A table's rows with every cell an object: a cell written as a bare
+    value (``['方案', 2.8]``) is that cell's text. Both renderers read cells
+    through this, so code-built decks need no parse step."""
+    return [[cell if isinstance(cell, dict)
+             else {'text': '' if cell is None else str(cell)}
+             for cell in row] if isinstance(row, list) else []
+            for row in element.get('rows') or []]
+
+
 def _page_from_data(data, *, path: str) -> Page:
     if not isinstance(data, dict):
         raise PPTDError(f'page must be a mapping: {path}')
@@ -254,6 +264,146 @@ def text_style(content: dict, theme: dict) -> dict:
     if out.get('backgroundColor'):
         out['backgroundColor'] = resolve_color(out['backgroundColor'], theme)
     return out
+
+
+#: WCAG 2.x minimum contrast for normal-size text (SC 1.4.3).
+WCAG_TEXT_CONTRAST = 4.5
+#: WCAG 2.x success criterion 1.4.11 (non-text contrast) for graphical objects.
+WCAG_NON_TEXT_CONTRAST = 3.0
+
+
+def _relative_luminance(color: str) -> float:
+    value = color.strip().lstrip('#')[:6]
+    channels = [int(value[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+    linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+              for c in channels]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def contrast_ratio(first: str, second: str) -> float:
+    """WCAG contrast ratio of two ``#RRGGBB[AA]`` colours (alpha ignored)."""
+    high, low = sorted((_relative_luminance(first),
+                        _relative_luminance(second)), reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
+
+def _fill_color(fill, theme: dict) -> str:
+    """The colour a solid or gradient fill shows on average, else ``''``."""
+    if not isinstance(fill, dict):
+        return ''
+    if fill.get('type') == 'solid':
+        color = resolve_color(fill.get('color'), theme)
+        return color if _HEX_RE.match(color or '') else ''
+    if fill.get('type') == 'gradient':
+        stops = [resolve_color(stop.get('color'), theme)
+                 for stop in fill.get('stops') or [] if isinstance(stop, dict)]
+        stops = [stop for stop in stops if _HEX_RE.match(stop or '')]
+        if stops:
+            mean = [round(sum(int(stop.lstrip('#')[i:i + 2], 16)
+                              for stop in stops) / len(stops))
+                    for i in (0, 2, 4)]
+            return '#' + ''.join(f'{channel:02X}' for channel in mean)
+    return ''
+
+
+def element_backdrop_color(page, element: dict, theme: dict) -> str:
+    """Colour behind ``element``: the topmost earlier filled shape under its
+    centre, else the page background, else the theme's ``$bg``."""
+    x, y, w, h = [float(v) for v in element.get('bounds') or (0, 0, 0, 0)]
+    cx, cy = x + w / 2, y + h / 2
+    elements = list(getattr(page, 'elements', None) or [])
+    earlier = elements[:elements.index(element)] if element in elements \
+        else elements
+    for other in reversed(earlier):
+        if not isinstance(other, dict) or other.get('elementType') != 'shape':
+            continue
+        ox, oy, ow, oh = [float(v) for v in other.get('bounds') or (0, 0, 0, 0)]
+        color = _fill_color(other.get('fill'), theme)
+        if color and ox <= cx <= ox + ow and oy <= cy <= oy + oh:
+            return color
+    return (_fill_color(getattr(page, 'background', None), theme)
+            or resolve_color('$bg', theme) or '#FFFFFF')
+
+
+def readable_text_colors(theme: dict, backdrop: str) -> tuple[str, str]:
+    """(text, secondary text) colours for labels drawn on ``backdrop``.
+
+    The theme's ``$ink``/``$muted`` when they meet WCAG contrast there;
+    otherwise the theme's own opposite pole (``$bg`` for a dark page in a
+    light theme), and only then black or white.
+    """
+    candidates = [resolve_color(token, theme) for token in ('$ink', '$bg')]
+    candidates = [c for c in candidates if _HEX_RE.match(c or '')]
+    text = next((c for c in candidates
+                 if contrast_ratio(c, backdrop) >= WCAG_TEXT_CONTRAST), '')
+    if not text:
+        text = max(('#000000', '#FFFFFF'),
+                   key=lambda c: contrast_ratio(c, backdrop))
+    muted = resolve_color('$muted', theme)
+    if not (_HEX_RE.match(muted or '') and contrast_ratio(
+            muted, backdrop) >= WCAG_TEXT_CONTRAST):
+        muted = text
+    return text[:7], muted[:7]
+
+
+#: Series colours, in order, for series without their own colour (preview
+#: and native export alike), with the fallback used when a theme lacks one.
+CHART_PALETTE_TOKENS = (('$primary', '#16283C'), ('$accent', '#C0652B'),
+                        ('$muted', '#6B7280'), ('$ink', '#1B2430'))
+
+
+def chart_series_palette(theme: dict, backdrop: str) -> list:
+    """Default series colours for a chart drawn on ``backdrop``.
+
+    The theme cycle, with the colours that reach WCAG non-text contrast on
+    the backdrop first (order kept within each group): a dark theme's
+    ``$primary`` is often a slate barely distinguishable from its ``$bg``,
+    so its first series would vanish.
+    """
+    colors = [resolve_color(token, theme, fallback)
+              for token, fallback in CHART_PALETTE_TOKENS]
+    if not _HEX_RE.match(backdrop or ''):
+        return colors
+    return sorted(colors, key=lambda color: not (
+        _HEX_RE.match(color or '')
+        and contrast_ratio(color, backdrop) >= WCAG_NON_TEXT_CONTRAST))
+
+
+def shared_value_max(page, element: dict) -> float | None:
+    """The value-axis maximum ``element`` shares with its peer charts.
+
+    Charts on one page that plot the same series (same names) measure the
+    same quantity side by side; each scaled to its own maximum, a smaller
+    value can draw longer than a larger one next to it. Peers therefore
+    share the largest value among them. ``None`` for a chart without peers,
+    a pie/doughnut, or a group with negative values (each keeps its own
+    automatic axis).
+    """
+    def key(chart):
+        if str(chart.get('chartType') or 'column') in ('pie', 'doughnut'):
+            return None
+        names = frozenset(str(series.get('name') or '') for series in
+                          (chart.get('data') or {}).get('series') or []
+                          if isinstance(series, dict))
+        return names if names and '' not in names else None
+
+    own = key(element)
+    if own is None:
+        return None
+    peers = [chart for chart in page.elements
+             if isinstance(chart, dict) and chart.get('elementType') == 'chart'
+             and key(chart) == own]
+    if len(peers) < 2:
+        return None
+    try:
+        values = [float(value) for chart in peers
+                  for series in (chart.get('data') or {}).get('series') or []
+                  for value in series.get('values') or []]
+    except (TypeError, ValueError):
+        return None
+    if not values or min(values) < 0 or max(values) <= 0:
+        return None
+    return max(values)
 
 
 def chart_font_family(theme: dict) -> str:

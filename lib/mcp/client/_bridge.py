@@ -2394,6 +2394,16 @@ class MCPBridge:
                     raise
             logger.error('[MCP:Call] %s.%s failed after %.1fs: %s',
                          server_name, tool_name, elapsed, e, exc_info=True)
+            if _is_transport_dead_error(e) and not (cancel is not None and cancel.is_set()):
+                # Never replayed, but the dead process's catalog must not
+                # outlive it: until the keepalive sweep, every later call
+                # was validated against the old schema and told its
+                # arguments were wrong. Reconnecting re-lists the tools.
+                try:
+                    self._reconnect_server(server_name)
+                except Exception as re:
+                    logger.warning('[MCP:Call] reconnect of %s after its transport died '
+                                   'failed: %s', server_name, re)
             raise
 
         elapsed = time.time() - t0

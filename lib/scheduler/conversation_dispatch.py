@@ -32,7 +32,9 @@ class ScheduledTurnDispatch:
     is already durable inside the live turn's inbox or the conversation queue,
     so the caller's obligation is settled even though no executor task of its
     own exists yet. ``busy`` means nothing was accepted and the caller owns a
-    retry.
+    retry. ``replayed``: the conversation had already accepted this command id,
+    so this dispatch delivered nothing and reports that earlier acceptance,
+    whatever this message carried.
     """
 
     disposition: Literal[
@@ -44,6 +46,7 @@ class ScheduledTurnDispatch:
     # The submitted input Turn of a ``started`` or ``queued`` pair: the request
     # this input opens (a steer joins another request and has none).
     input_turn_id: str = ""
+    replayed: bool = False
 
     @property
     def accepted(self) -> bool:
@@ -244,36 +247,42 @@ def dispatch_scheduled_turn(
     except AttemptStartFailure:
         logger.error("%s Durable turn exists but executor start failed", log_prefix)
         return ScheduledTurnDispatch("start_failed")
+    replayed = bool(outcome.get("idempotentReplay"))
+    replay_note = " (replay: nothing new delivered)" if replayed else ""
     if outcome.get("steered"):
         logger.info(
-            "%s Delivered into the live turn (steer) conv=%s block=%s",
+            "%s Delivered into the live turn (steer) conv=%s block=%s%s",
             log_prefix,
             conversation_id,
             str(outcome.get("blockId") or ""),
+            replay_note,
         )
-        return ScheduledTurnDispatch("steered")
+        return ScheduledTurnDispatch("steered", replayed=replayed)
     queue_id = str(outcome.get("queueId") or "")
     input_turn_id = str((outcome.get("submittedTurn") or {}).get("turnId") or "")
     if outcome.get("queued") and queue_id:
         logger.info(
-            "%s Queued behind the live turn conv=%s queue=%s position=%s",
+            "%s Queued behind the live turn conv=%s queue=%s position=%s%s",
             log_prefix,
             conversation_id,
             queue_id[:8],
             outcome.get("position"),
+            replay_note,
         )
-        return ScheduledTurnDispatch("queued", queue_id=queue_id, input_turn_id=input_turn_id)
+        return ScheduledTurnDispatch("queued", queue_id=queue_id, input_turn_id=input_turn_id,
+                                     replayed=replayed)
     task_id = str((outcome.get("attempt") or {}).get("taskId") or "")
     if not task_id:
         logger.warning("%s Turn command returned no executor task", log_prefix)
         return ScheduledTurnDispatch("start_failed")
     logger.info(
-        "%s Started turn-native task %s in conv=%s",
+        "%s Started turn-native task %s in conv=%s%s",
         log_prefix,
         task_log_tag(task_id),
         conversation_id,
+        replay_note,
     )
-    return ScheduledTurnDispatch("started", task_id, input_turn_id=input_turn_id)
+    return ScheduledTurnDispatch("started", task_id, input_turn_id=input_turn_id, replayed=replayed)
 
 
 __all__ = ["ScheduledTurnDispatch", "dispatch_scheduled_turn", "scheduled_turn_model"]

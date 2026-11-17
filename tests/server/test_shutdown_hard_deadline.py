@@ -72,9 +72,9 @@ def test_shutdown_deadline_forces_only_while_shutdown_is_requested():
 
 
 def test_shutdown_trigger_closes_push_before_transport_drain():
-    from lib.server.server_shutdown import wait_for_shutdown_trigger
+    from lib.server.server_shutdown import ShutdownRequest, wait_for_shutdown_trigger
 
-    requested = threading.Event()
+    requested = ShutdownRequest()
     closed = []
 
     async def scenario():
@@ -87,6 +87,33 @@ def test_shutdown_trigger_closes_push_before_transport_drain():
 
     asyncio.run(scenario())
     assert closed == [True]
+
+
+def test_shutdown_trigger_waits_without_timers_and_wakes_on_a_foreign_thread_set():
+    """An idle serving loop schedules no polling timer for shutdown (idle wakeups)."""
+    from lib.server.server_shutdown import ShutdownRequest, wait_for_shutdown_trigger
+
+    requested = ShutdownRequest()
+
+    async def scenario():
+        loop = asyncio.get_running_loop()
+        trigger = asyncio.create_task(wait_for_shutdown_trigger(
+            requested, close_push_clients=lambda: 0))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert not trigger.done()
+        assert not [handle for handle in loop._scheduled if not handle.cancelled()]
+        setter = threading.Thread(target=requested.set)
+        started = loop.time()
+        setter.start()
+        await asyncio.wait_for(trigger, timeout=5)
+        setter.join()
+        return loop.time() - started
+
+    assert asyncio.run(scenario()) < 1
+    # A loop awaiting an already-set request returns without registering.
+    asyncio.run(wait_for_shutdown_trigger(requested, close_push_clients=lambda: 0))
+    assert requested._waiters == []
 
 
 def test_shutdown_arms_deadline_before_clean_marker_io():

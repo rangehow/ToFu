@@ -42,6 +42,7 @@ from runtime_guards import (
     pid_is_alive,
     proc_stat_fields,
 )
+from runtime_path_policy import instance_heartbeat_path, resolve_runtime_base
 from tofu_dotenv import read_dotenv_values
 from serverctl_pkg.restart_budget import (
     ARTIFACT_PREPARATION_SECONDS, FRONTEND_PREFLIGHT_SECONDS, STORAGE_ENGINE_PREFLIGHT_SECONDS,
@@ -735,9 +736,32 @@ def read_storage_lease_status(data_dir: str | Path) -> dict[str, Any]:
     }
 
 
-def read_lock_status(project_path: str) -> dict[str, Any]:
+_DATA_ROOT_ENV_KEYS = ('TOFU_DATA_DIR', 'TOFU_DATA_LAYOUT', 'XDG_DATA_HOME', 'LOCALAPPDATA')
+
+
+def worker_data_directory(project_path: str, server_env: dict[str, str] | None = None) -> Path:
+    """The ``data/`` directory a managed worker of *project_path* resolves.
+
+    The worker writes its instance lock under ``data_root()``, which follows
+    the data-location names of its launch environment: ambient, then the
+    project's current ``.env``, then validated ``serverEnv`` (the precedence of
+    ``managed_worker_environment``). Reading ``<project>/data`` instead
+    misreports a worker on ``TOFU_DATA_DIR`` as a foreign port owner.
+    """
     project = os.path.realpath(project_path)
-    lock_path = Path(project) / 'data' / '.server.lock'
+    project_values = _read_project_dotenv(project)
+    environment: dict[str, str] = {}
+    for key in _DATA_ROOT_ENV_KEYS:
+        for source in (os.environ, project_values, server_env or {}):
+            if source.get(key):
+                environment[key] = str(source[key])
+    return Path(resolve_runtime_base(
+        environment, repository_root=project, allow_probe=False, report=False)) / 'data'
+
+
+def read_lock_status(project_path: str, server_env: dict[str, str] | None = None) -> dict[str, Any]:
+    project = os.path.realpath(project_path)
+    lock_path = worker_data_directory(project, server_env) / '.server.lock'
     result: dict[str, Any] = {
         'projectPath': project,
         'running': False,
@@ -2308,7 +2332,7 @@ class LifecycleManager:
 
     def _adopt_existing(self) -> None:
         with self._lock:
-            status = read_lock_status(self.project)
+            status = self._lock_status()
             if status.get('running'):
                 identity_error = self._identity_error(status)
                 if identity_error:
@@ -2466,9 +2490,21 @@ class LifecycleManager:
         probe = self._http_probe(expected_pid, timeout=timeout)
         return bool(probe.get('liveness') and probe.get('ready'))
 
+    def _server_env(self) -> dict[str, str]:
+        return dict(self._state.get('serverEnv') or {})
+
+    def _lock_status(self) -> dict[str, Any]:
+        return read_lock_status(self.project, self._server_env())
+
+    def _worker_heartbeat_environment(self) -> dict[str, str]:
+        directory = (_read_project_dotenv(self.project).get('TOFU_HEARTBEAT_DIR')
+                     or os.environ.get('TOFU_HEARTBEAT_DIR') or '')
+        return {'TOFU_HEARTBEAT_DIR': directory}
+
     def _heartbeat_state(self, pid: int) -> dict[str, Any] | None:
-        root = (os.environ.get('TOFU_HEARTBEAT_DIR') or '').strip()
-        path = Path(root or '/tmp/tofu/heartbeat') / 'server.heartbeat'
+        path = Path(instance_heartbeat_path(
+            worker_data_directory(self.project, self._server_env()),
+            self._worker_heartbeat_environment()))
         value = _read_json(path)
         try:
             if int(value.get('pid')) != int(pid):
@@ -2603,7 +2639,7 @@ class LifecycleManager:
 
     def status(self, *, probe_health: bool = False) -> dict[str, Any]:
         with self._lock:
-            low = read_lock_status(self.project)
+            low = self._lock_status()
             conflict, foreign = self._port_conflict(low)
             worker = dict(self._state.get('worker') or {})
             recent_failure_count = len(self._recent_failure_times())
@@ -3234,7 +3270,7 @@ class LifecycleManager:
                 self._validated_server_environment(server_env))
             if environment_error:
                 return {'ok': False, 'message': environment_error}
-            status = read_lock_status(self.project)
+            status = self._lock_status()
             if status.get('running'):
                 identity_error = self._identity_error(status)
                 if not identity_error:
@@ -3281,7 +3317,7 @@ class LifecycleManager:
                 effective_env.update(self._state.get('serverEnv') or {})
                 self._state['port'] = _server_port(
                     self._state.get('serverArgs') or [], effective_env)
-            status = read_lock_status(self.project)
+            status = self._lock_status()
             conflict, foreign = self._port_conflict(status)
             if conflict:
                 self._state['desired'] = 'running'
@@ -3394,7 +3430,7 @@ class LifecycleManager:
 
     def stop(self, *, source: str = 'cli', keep_desired_running: bool = False) -> dict[str, Any]:
         with self._lock:
-            status = read_lock_status(self.project)
+            status = self._lock_status()
             foreign_owner = (
                 '' if status.get('running') else self._foreign_owner(status))
             if foreign_owner:
@@ -3496,7 +3532,7 @@ class LifecycleManager:
             if server_env is not None and not isinstance(server_env, dict):
                 return self._refuse_restart('validation', 'serverEnv must be a JSON object')
             if server_args is None and server_env is None:
-                live = read_lock_status(self.project)
+                live = self._lock_status()
                 if live.get('running') and not self._identity_error(live):
                     self._reconcile_live_worker_port(live)
             if server_env is None:
@@ -3657,7 +3693,7 @@ class LifecycleManager:
         with self._lock:
             self._maintain_process_logs()
             reap_children_of_previous_image()
-            status = read_lock_status(self.project)
+            status = self._lock_status()
             if not status.get('running') and self._state.get('desired') == 'stopped':
                 status = self._remembered_worker_status() or status
             desired = self._state.get('desired')
@@ -3954,7 +3990,7 @@ class LifecycleManager:
                 self._save()
                 return
             self._state['nextRetryAt'] = 0.0
-            if read_lock_status(self.project).get('running'):
+            if self._lock_status().get('running'):
                 # The generation that failed is still alive (a slow boot whose
                 # liveness the manager has not yet observed): spawning now
                 # would race it for the instance lock. The caller's own

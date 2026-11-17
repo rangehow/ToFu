@@ -925,21 +925,30 @@ def save_worker_workspaces(task: dict, *, capture=None) -> list[dict]:
     return saved
 
 
-def record_task_workspace_intents(task: dict, project_path: str = '') -> dict | None:
-    """Persist boot handoff before work.finish, without capturing old checkouts."""
+def record_task_workspace_intents(task: dict, project_path: str = '', *,
+                                  checkouts: dict | None = None) -> dict | None:
+    """Persist boot handoff before work.finish, without capturing old checkouts.
+
+    ``checkouts`` is one recovery pass's memo of resolved checkout identities
+    (path -> ``_checkout`` result): boot visits many work items of the same
+    project, and each identity costs an ancestor walk and two Git children on
+    the project volume. A failed resolution is not remembered.
+    """
     def record_intent(*args, **kwargs):
         from lib.integration_control import record_task_workspace_intent
         return record_task_workspace_intent(*args, **kwargs)
 
     return _settle_task_workspaces(
         task, project_path, settle_workspace=record_intent,
-        acknowledgement_key='_workspaceDeliveryIntentAcknowledgedOutcome')
+        acknowledgement_key='_workspaceDeliveryIntentAcknowledgedOutcome',
+        checkouts=checkouts)
 
 
 def _settle_task_workspaces(task: dict, project_path: str = '', project_paths=None,
                             *, evidence: dict | None = None,
                             settle_workspace: Callable[..., dict | None],
-                            acknowledgement_key: str) -> dict | None:
+                            acknowledgement_key: str,
+                            checkouts: dict | None = None) -> dict | None:
     """Share registration, outcome, receipt and failure handling across receivers."""
     if (task.get('_transientRuntime') or not task.get('id')
             or task.get('_workspaceDeliveryOwnershipRejected')):
@@ -967,7 +976,12 @@ def _settle_task_workspaces(task: dict, project_path: str = '', project_paths=No
     settled = set()
     for path in roots:
         try:
-            info = _checkout(path)
+            if checkouts is None:
+                info = _checkout(path)
+            elif path in checkouts:
+                info = checkouts[path]
+            else:
+                info = checkouts[path] = _checkout(path)
             if not info or info[1] in settled:
                 continue
 
@@ -1147,11 +1161,13 @@ def command_workspace_refusal(task: dict, command: str, cwd: str) -> str:
     from lib.project_mod.git_command_scope import git_command_scopes, shell_cwd_change
     def forbidden(path):
         return bool(workspace_target_refusal(task, path))
-    def refusal():
-        return ('Error [workspace-isolation]: command writes a canonical or peer '
-                'checkout or READ-ONLY reference instead of a writable task-owned worktree. '
-                'Run it from the start directory (the bound worktree) with relative targets; '
-                'command was not started.')
+    def refusal(path):
+        return (f'Error [workspace-isolation]: command writes {_local_path(path)}, a '
+                'canonical or peer checkout or READ-ONLY reference, not a writable '
+                'task-owned worktree. Run it from the start directory (the bound '
+                'worktree) with relative targets, and name a file in another '
+                'writable root by its absolute path instead of cd-ing into a '
+                'checkout; command was not started.')
     def judge(source, start):
         for scope in git_command_scopes(source, start, environment=os.environ, strict=False):
             if scope.classification == 'readonly':
@@ -1160,8 +1176,10 @@ def command_workspace_refusal(task: dict, command: str, cwd: str) -> str:
                 raise WorkspaceBindingError(
                     'the shell chooses where Git works only when the command runs; '
                     'name the directory literally')
-            if any(forbidden(path) for path in (*scope.paths, *scope.execution_cwds)):
-                return refusal()
+            refused = next((path for path in (*scope.paths, *scope.execution_cwds)
+                            if forbidden(path)), None)
+            if refused is not None:
+                return refusal(refused)
         active = _local_path(start)
         for segment in _split_pipeline(source):
             words = [word.text for word in _shell_words(segment)]
@@ -1185,13 +1203,14 @@ def command_workspace_refusal(task: dict, command: str, cwd: str) -> str:
                     return nested
             if (os.path.basename(words[0]) != 'git'
                     and _command_checkout_mutation(segment, active) and forbidden(active)):
-                return refusal()
+                return refusal(active)
             # Snapshot completeness is not admission evidence: opaque builds can
             # still redirect into a known foreign checkout. Preserve source-aware
             # literal targets (including quoted dollar signs) and expansion parents.
             for target in command_segment_literal_targets(segment):
-                if forbidden(os.path.join(active, os.path.expanduser(target))):
-                    return refusal()
+                path = os.path.join(active, os.path.expanduser(target))
+                if forbidden(path):
+                    return refusal(path)
         return ''
     try:
         return judge(command or '', cwd)

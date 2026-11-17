@@ -158,12 +158,13 @@ def test_ambiguous_transport_loss_does_not_replay_an_application_operation(conne
             calls.append(args)
             raise ClosedResourceError()
     handle.session = LostReplySession()
-    def no_retry(*args):
-        pytest.fail('A lost build/write response must not replay the operation')
-    monkeypatch.setattr(bridge, '_reconnect_server', no_retry)
+    reconnects = []
+    # Reconnecting refreshes the dead process's catalog; it never replays.
+    monkeypatch.setattr(bridge, '_reconnect_server', lambda server: reconnects.append(server) or handle)
     with pytest.raises(ClosedResourceError):
         bridge.call_tool_document(name, {}, timeout=30)
-    assert len(calls) == 1
+    assert len(calls) == 1, 'A lost build/write response must not replay the operation'
+    assert len(reconnects) == 1
 
 
 def test_outer_deadline_cancels_the_underlying_coroutine(connection):

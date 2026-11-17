@@ -86,6 +86,7 @@ describe('coordinator report presentation', () => {
         translatedMarkdown: '18:00 状态\n\n重启改到 22:00', displayMarkdown: '18:00 状态\n\n重启改到 22:00',
         displayMode: 'translated', translationModel: 'kimi',
       }),
+      files: [],
     };
     renderCoordinatorReportBlock(node, block, ports);
     expect(node.classList.contains('conversation-coordinator-report')).toBe(true);
@@ -123,5 +124,40 @@ describe('coordinator report presentation', () => {
     fold.open = false;
     renderCoordinatorReportBlock(node, block, ports);
     expect(fold.open).toBe(false);
+  });
+
+  /* Owner request 2026-11-17: the owner finds deliverables through reports,
+   * so a delivery opens by itself and its files stay in view as chips. */
+  it('opens a delivery by default and keeps its attached files in view', () => {
+    const node = document.createElement('section');
+    document.body.append(node);
+    const block: CoordinatorReportBlockViewModel = {
+      kind: 'coordinator-report', blockId: 'coordinator-report:report-2', identitySource: 'contract',
+      source: {}, reportTurnId: 'report-2', reportKind: 'delivery', title: 'Resume ready',
+      createdAt: Date.UTC(2026, 10, 17, 9, 0), text: text({ markdown: 'Resume ready\n\nBoth versions.' }),
+      files: [
+        { artifactId: 'art-pdf', filename: 'resume.pdf', kind: 'file', path: 'data/out/resume.pdf' },
+        { artifactId: 'art-deck', filename: 'talk.pptx', kind: 'deck' },
+      ],
+    };
+    renderCoordinatorReportBlock(node, block, ports);
+    const fold = node.querySelector<HTMLDetailsElement>('details.conversation-coordinator-report__fold')!;
+    expect(fold.open).toBe(true);
+    const chips = [...node.querySelectorAll<HTMLButtonElement>('.conversation-coordinator-report__file')];
+    // Chips sit outside the fold, so folding the report never hides its files.
+    expect(chips.every((chip) => !fold.contains(chip))).toBe(true);
+    expect(chips.map((chip) => [chip.textContent, chip.dataset.conversationAction, chip.dataset.operation,
+      chip.dataset.fileKind])).toEqual([
+      ['resume.pdf', 'open-artifact', 'art-pdf', 'file'], ['talk.pptx', 'open-artifact', 'art-deck', 'deck']]);
+    expect(chips[0].title).toBe('data/out/resume.pdf');
+    expect(chips[0].getAttribute('aria-label')).toBe('Open {name}');
+
+    // The reader folds it; a repaint with the same files keeps chips and choice.
+    fold.open = false;
+    renderCoordinatorReportBlock(node, { ...block }, ports);
+    expect(fold.open).toBe(false);
+    expect(node.querySelector('.conversation-coordinator-report__file')).toBe(chips[0]);
+    renderCoordinatorReportBlock(node, { ...block, files: [] }, ports);
+    expect(node.querySelector('.conversation-coordinator-report__files')).toBeNull();
   });
 });

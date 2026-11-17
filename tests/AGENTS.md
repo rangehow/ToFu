@@ -58,7 +58,7 @@ after the worktree is stable.
   project path, heartbeat directory and `TMPDIR` under `<root>`. A Tofu shell
   exports production's identity (`TOFU_PROJECT_PATH`, `PORT`,
   `TOFU_PROCESS_ROLE=execution`, the storage connection), and the default
-  `TMPDIR` and heartbeat directory are production's
+  `TMPDIR` is production's (the default heartbeat is per data root)
   (`docs/TESTING_STRATEGY.md`, "Scratch servers share nothing with the live
   one"). Without `TOFU_RUN_SERVER`, `python3 server.py` hands startup to the
   shared manager on 127.0.0.1:15001 (`bootstrap_pkg/server_entry.py`). Never

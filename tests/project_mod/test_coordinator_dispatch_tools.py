@@ -227,6 +227,42 @@ def test_report_tool_reaches_canonical_publication_through_real_pipeline(runtime
     assert not r.created and not r.calls  # Reporting starts no worker/model.
 
 
+def test_report_files_are_published_with_the_report_and_named_by_its_receipt(runtime, reports, monkeypatch):
+    from lib.artifacts import events
+    from lib.conversations import coordinator_reports
+    from lib.tools import rich_response
+    r = runtime
+    monkeypatch.setattr(coordinator_reports, 'CoordinatorReports', reports.factory)
+    published, emitted = [], []
+
+    def publish(task, path, title, project_path):
+        assert task is r.task and project_path == '/project'
+        if path.endswith('.exe'):
+            raise ValueError('Unsupported or empty response file')
+        published.append(path)
+        name = path.rsplit('/', 1)[-1]
+        return {'artifactId': 'art-' + name, 'filename': name, 'sizeBytes': 3,
+                'format': 'file' if name.endswith(('.pdf', '.pptx')) else 'markdown', 'artifact': {'id': name}}
+    monkeypatch.setattr(rich_response, 'publish_file_for_task', publish)
+    monkeypatch.setattr(events, 'emit_artifact_event', lambda task, artifact: emitted.append(artifact['id']))
+
+    refused = r.call('report_to_user', **{**reports.request, 'idempotency_key': 'bad',
+                                          'files': ['out/cv.pdf', 'out/tool.exe']})
+    assert 'tool.exe' in json.dumps(refused) and not reports.turns and not emitted
+
+    published.clear()
+    result = r.call('report_to_user', **{**reports.request, 'kind': 'delivery',
+                                         'files': ['out/cv.pdf', 'out/talk.pptx', 'out/notes.md', 'out/cv.pdf']})
+    assert published == ['out/cv.pdf', 'out/talk.pptx', 'out/notes.md']
+    assert [(entry['filename'], entry['kind'], entry['path']) for entry in result['files']] == [
+        ('cv.pdf', 'file', 'out/cv.pdf'), ('talk.pptx', 'deck', 'out/talk.pptx'),
+        ('notes.md', 'document', 'out/notes.md')]
+    assert result['published'] and emitted == ['cv.pdf', 'talk.pptx', 'notes.md']
+    [turn] = reports.turns.values()
+    assert turn['kind'] == 'coordinator_report.delivery'
+    assert 'files' not in turn['projection']  # The receipt names the files; the Turn stays the report text.
+
+
 def test_dispatch_error_does_not_claim_execution_never_started(runtime, monkeypatch):
     from lib.storage.errors import StorageError
     r = runtime

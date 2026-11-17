@@ -55,7 +55,7 @@
   },
   "$defs": {
     "deliverableKind": {
-      "description": "report: a report_to_user(kind=delivery) message; file/deck/document: a published response file (a deck is a .pptx or .pptd file), rich response or long-form report; merge: a Worker result its lead accepted and merged, as the studio's trophy shelf shows it (the server projects reports and artifacts only).",
+      "description": "report: a report_to_user message of any kind (reportKind names it); file/deck/document: a published response file (a deck is a .pptx or .pptd file), rich response or long-form report; merge: a Worker result its lead accepted and merged, as the studio's trophy shelf shows it (the server projects reports and artifacts only).",
       "enum": ["report", "file", "deck", "document", "merge"]
     },
     "deliverableTurn": {
@@ -68,8 +68,21 @@
         "ordinal": {"type": "integer", "minimum": 0}
       }
     },
+    "reportFile": {
+      "description": "One file a report_to_user call attached (its files argument), published as an owned response-file artifact of the lead's conversation. kind: deck for a .pptx/.pptd file, document for a text document (Markdown, HTML, SVG, text), file otherwise.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifactId", "filename", "kind"],
+      "properties": {
+        "artifactId": {"type": "string", "minLength": 1, "maxLength": 128},
+        "filename": {"type": "string", "minLength": 1, "maxLength": 240},
+        "kind": {"enum": ["file", "deck", "document"]},
+        "sizeBytes": {"type": "integer", "minimum": 0},
+        "path": {"type": "string", "maxLength": 4096}
+      }
+    },
     "deliverableItem": {
-      "description": "One deliverable of one lead conversation (docs/PROJECT_COORDINATION.md, Lead deliverables). Opening it shows the artifact (artifactId), the report (summary is its message) or the Worker result Turn (result). source is the message in the lead's conversation that produced it, when known.",
+      "description": "One deliverable of one lead conversation (docs/PROJECT_COORDINATION.md, Lead deliverables). Opening it shows the artifact (artifactId), the report (summary is its message) or the Worker result Turn (result). source is the message in the lead's conversation that produced it, when known. A report carries its reportKind and the files its report_to_user call attached; those files are not listed again as items of their own.",
       "type": "object",
       "additionalProperties": false,
       "required": ["id", "kind", "title", "projectPath", "createdAt", "source"],
@@ -83,7 +96,9 @@
         "artifactId": {"type": "string", "minLength": 1, "maxLength": 128},
         "format": {"type": "string", "maxLength": 64},
         "summary": {"type": "string", "maxLength": 4000},
-        "result": {"$ref": "#/$defs/deliverableTurn"}
+        "result": {"$ref": "#/$defs/deliverableTurn"},
+        "reportKind": {"enum": ["progress", "decision", "blocked", "delivery"]},
+        "files": {"type": "array", "items": {"$ref": "#/$defs/reportFile"}}
       }
     },
     "deliverablePage": {

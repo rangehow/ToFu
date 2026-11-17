@@ -2676,9 +2676,8 @@ impl AuthorityDatabase {
         let digest_matches = receipt.request_digest == request_digest
             || alternate_digest.is_some_and(|alternate| receipt.request_digest == alternate);
         if receipt.operation != operation || !digest_matches {
-            return Err(io::Error::new(
-                io::ErrorKind::WouldBlock,
-                "command ID was reused for a different request",
+            return Err(crate::semantic_executor::conflict_fence(
+                crate::semantic_executor::COMMAND_ID_REUSED,
             ));
         }
         let encoded_response = self.receipt_response_bytes(transaction, receipt.response)?;
@@ -4128,12 +4127,13 @@ mod tests {
             Some(response.to_vec())
         );
         let mut conflict = database.begin(7, 11).unwrap();
+        let reused = database
+            .receipt_lookup(&mut conflict, "command-1", "artifact.create", [4; 32])
+            .unwrap_err();
+        assert_eq!(reused.kind(), io::ErrorKind::AlreadyExists);
         assert_eq!(
-            database
-                .receipt_lookup(&mut conflict, "command-1", "artifact.create", [4; 32])
-                .unwrap_err()
-                .kind(),
-            io::ErrorKind::WouldBlock
+            reused.to_string(),
+            crate::semantic_executor::COMMAND_ID_REUSED
         );
     }
 

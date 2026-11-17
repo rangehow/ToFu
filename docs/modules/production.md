@@ -322,7 +322,8 @@ between samples; contact-sheet replacement is atomic.
 Slide visual repairs seed from the current YAML. Candidates are parsed by
 the same PPTD page parser, measured only on the affected page, rendered into
 private scratch and reviewed again. A strict improvement in blocker/major
-counts is required. Changed decks receive a fresh coherence review; an outage
+counts, judged on both renders side by side, is required (see the visual-QA
+convergence record below). Changed decks receive a fresh coherence review; an outage
 or increased whole-deck severity rolls the candidate batch back. Known
 major/blocker findings block the visual stage. Optional review outages remain
 explicit quality degradation. One versioned, digest-fenced recovery journal
@@ -346,6 +347,88 @@ timeline length differs from render duration; accepting a repair on successful
 render alone was rejected because it proves neither improved layout nor
 appearance; a browser-only or CRC-only export check misses native OOXML
 relationship/chart defects. Office rendering remains separate validation.
+
+### Native text fit and chart text colour
+
+**Problem:** text boxes defaulted to a bare `<a:normAutofit/>`: PowerPoint and
+WPS open it at 100% and refit only after an edit, while LibreOffice refits on
+open, so every LibreOffice render hid overflow PowerPoint shows. Table cells
+dropped their `fit`. Native charts never coloured their text, so Office's
+default near-black labels vanished on dark decks while the HTML preview
+(theme `$ink`) looked correct.
+**Decision:** layout QA measures every text box at its authored size with
+PowerPoint's reserve, so that size is the fitted size: the exporter writes
+`noAutofit` by default, an explicit `fit: shrink` writes `normAutofit` with
+its measured `fontScale` (100%), and table cells honour `fit`. Package QA
+rejects a bare `normAutofit`. `evaluations/slides_bench/native_fit.py` renders
+a forced-`noAutofit` copy with LibreOffice (PowerPoint's open-time view) and
+reports text spans that leave their frame. Chart text colours come from
+`pptd.readable_text_colors`, shared by preview and export: `$ink`/`$muted`
+when they meet WCAG 4.5:1 against the colour behind the chart (topmost filled
+shape under it, else the page background), otherwise the theme's opposite pole.
+Line height exports as exact points (`spcPts` = multiplier x the paragraph's
+largest run size): the preview's unitless CSS `line-height` multiplies the
+font size, while PowerPoint's `spcPct` multiplies the font's own line (about
+1.45 em for Noto Sans CJK), which put native lines up to ~0.65 em lower than
+the measured preview.
+**Alternatives considered:** computing a PowerPoint shrink scale per box
+repeats a fit layout QA already guarantees and would still disagree with
+LibreOffice, which ignores a stored `fontScale` (probe: 24 pt text drawn at
+13 pt with `fontScale="100000"`); always using `$ink` for chart text fails on
+a dark page inside a light theme.
+
+### Visual-QA convergence: heading breaks, claim scope, paired repair verdicts, series colour
+
+**Problem:** end-to-end decks from a 9 KB Chinese interview brief passed every
+stage but visual QA, which refused each with 2-3 majors that one repair round
+never cleared (2026-11-17). (1) CJK title breaks: the browser's word
+dictionary splits unknown words (外|采, 复|算) into single characters and sees
+`5 处` as two words, so the widow/split detector missed them, and it never
+measured balance. No LLM rewrite can fix a break it cannot see.
+(2) Overstated titles: the outline compresses the evidence into a key message
+that becomes the title, dropping a baseline (+2.7% against which solver), a
+scope (春节 for 春节前两周), turning before/after into cause, or changing an
+attribution. The repair prompt then told the author to keep the judgment
+sentence, so a claim finding could not be fixed. (3) Repairs were adopted
+only when the candidate's independent review counted fewer majors than the
+original's. Two samples report different problems of one page: a candidate
+fixing the split title drew two scope findings the original also had, and
+(0,1) -> (0,2) was rejected. (4) The first default chart series was
+`$primary`, a slate at 1.35:1 on a dark theme's `$bg`.
+**Decision:** (1) Layout QA plans each wrapped `$title` that contains CJK:
+breaks after clause punctuation or before an opening bracket (not the
+enumeration comma `、`), else between two dictionary words of two or more
+characters. It picks the feasible set with the smallest widest line for the
+same line count. `line_break_repairs` writes the plan as `<br/>`, so preview
+and PPTX break in the same place whatever their font metrics. (2) Outline and
+author prompts carry the scope rules (baseline, time window/sample,
+before/after vs cause, attribution). The evidence outranks the planned key
+message. The repair prompt rewrites disputed wording from the page evidence,
+in the page language. (3) `visual_qa.qa_compare` judges every major/blocker
+either review reported on the original and candidate renders together, in one
+request. A candidate is adopted when it has fewer of them than the original,
+and each later round must beat the previous adopted state. That strictly
+decreasing chain of (blockers, majors) terminates without a round cap. An
+incomplete verdict falls back to the review-vs-review comparison.
+(4) `pptd.chart_series_palette` orders the theme cycle so colours reaching
+WCAG 1.4.11 non-text contrast (3:1) on the chart's backdrop come first. The
+preview and native export share it. LibreOffice render: 1.35:1 -> 9.07:1.
+Two more defects surfaced on the same runs. Charts on one page that plot
+the same series names share one value peak (`pptd.shared_value_max`): the
+preview scales to it and the native value axis is fixed to the same range,
+because two MAPE charts that each auto-scaled drew 19% longer than 31%.
+An English deck's pages came back in Chinese: the English author prompt
+carries Chinese format examples and never named the language. It now does,
+and `author._validate_page_text(lang='en')` refuses Chinese the page
+evidence does not quote. The language is the requested one, never guessed
+from the title.
+**Alternatives considered:** extending the word dictionary only moves the
+miss to the next unknown word. Narrowing the box toward `text-wrap: balance`
+still breaks inside words and does not survive PowerPoint's different
+metrics. A fixed number of repair retries is a knob and still compares
+samples. A tolerant score (accepting equal counts) adopts lateral changes and
+can cycle. Dropping `$primary` from charts loses the theme's structural
+colour on light decks, where it is the most legible.
 
 ### Author guidance and numeric fidelity
 

@@ -106,3 +106,34 @@ def test_area_doughnut_and_radar_are_native_charts(tmp_path):
         if element.get('elementType') == 'chart'
     }
     assert imported_types == {'area', 'doughnut', 'radar'}
+
+
+#: A hand-authored ink theme: body text $ink on $bg, a dark slate $primary
+#: used only for fills (the career deck's theme, PIPELINE_FINDINGS D3).
+_INK_FILL_THEME = {'bg': '#101820', 'ink': '#EDF2F6', 'primary': '#22313F',
+                   'accent': '#D9B36C', 'muted': '#A9B6C2', 'hairline': '#2B3A48'}
+
+
+@pytest.mark.parametrize('colors', [_INK_FILL_THEME] + [
+    dict(theme.colors) for theme in
+    __import__('lib.design_sys.themes', fromlist=['THEMES']).THEMES])
+def test_process_labels_are_readable_on_their_chevrons_in_every_theme(colors):
+    """Each step label is drawn on its chevron, so the pair must contrast for
+    any theme whose body text ($ink on $bg) is readable; $bg text on a $primary
+    chevron assumed $primary contrasts with $bg, which a theme need not do."""
+    from lib.slides.components import expand_page_components
+    from lib.slides.pptd import contrast_ratio, resolve_color
+
+    theme = {'colors': colors}
+    theme_id = colors['primary']
+    elements = expand_page_components({'components': [
+        {'componentId': 'steps', 'componentType': 'process',
+         'bounds': [80, 100, 1000, 300],
+         'items': [{'label': '发现'}, {'label': '解释'}, {'label': '行动'}]}]})
+    by_id = {element['elementId']: element for element in elements}
+    for index in (1, 2, 3):
+        shape = by_id[f'steps--item-{index}-shape']
+        label = by_id[f'steps--item-{index}-label']
+        fill = resolve_color(shape['fill']['color'], theme)
+        text = resolve_color(label['content']['color'], theme)
+        assert contrast_ratio(text, fill) >= 4.5, (theme_id, text, fill)

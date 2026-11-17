@@ -389,6 +389,92 @@ def test_measured_line_break_is_repaired_without_new_findings(tmp_path, title, k
     assert narrowed[0] == 40 and narrowed[2] < 19 * 40
 
 
+def test_heading_phrase_breaks_are_written_as_explicit_line_breaks():
+    from lib.slides.layout_qa import line_break_repairs
+
+    title = {'elementId': 'title', 'elementType': 'text',
+             'bounds': [56, 35, 1090, 117],
+             'content': {'style': '$title', 'align': ['left', 'top'],
+                         'text': '<p><strong>先定位根因， '
+                                 '<span style="color:$accent">17%</span>'
+                                 '&amp;优于外采</strong></p>\n'}}
+    page = {'elements': [title]}
+    # Breaks are counted in visible non-space characters: after "，" (6)
+    # and after "&" (10, an entity counts as one character).
+    flaw = {'type': 'text_line_break', 'elements': ['title'], 'widow': False,
+            'split': True, 'painted': False, 'innerWidth': 1090,
+            'balancedWidth': 0, 'cleanWidth': 0, 'phraseBreaks': [6, 10]}
+    repairs = line_break_repairs(page, [flaw])
+    assert repairs == {'title': {'text': (
+        '<p><strong>先定位根因，<br/><span style="color:$accent">17%</span>'
+        '&amp;<br/>优于外采</strong></p>\n')}}
+    apply_relayout(page, repairs)
+    assert title['bounds'] == [56, 35, 1090, 117]
+    assert title['content']['text'] == repairs['title']['text']
+
+
+@pytest.mark.parametrize('title,expected', [
+    # Greedy wrapping fills 19 glyphs, then strands 7: the heading breaks
+    # at its comma instead, into two balanced lines.
+    ('一二三四五六七八九十一二，三四五六七八九十一二三四五',
+     '一二三四五六七八九十一二，<br/>三四五六七八九十一二三四五'),
+    # The browser dictionary does not know 外采 and would split it; the
+    # heading breaks at a phrase boundary, never inside an unknown word.
+    ('六组回放先定位根因，降到十七了，优于外采二十四的新方案',
+     '六组回放先定位根因，降到十七了，<br/>优于外采二十四的新方案'),
+])
+def test_cjk_heading_breaks_at_the_most_balanced_phrase_boundary(
+        tmp_path, title, expected):
+    pytest.importorskip('playwright.sync_api')
+    from lib.slides.layout_qa import inspect_deck_layout
+    from lib.slides.pptd import Deck, parse_page_text
+    page_yaml = yaml.safe_dump({'elements': [{
+        'elementId': 'title', 'elementType': 'text',
+        'bounds': [40, 40, 19 * 40, 200],
+        'content': {'style': '$title', 'text': title, 'fontSize': 40,
+                    'lineHeight': 1.2, 'align': ['left', 'top']}}]},
+        allow_unicode=True)
+    deck = Deck(title='t', size=(1280, 720), theme={},
+                pages=[parse_page_text(page_yaml, path='pages/01.page')],
+                root=str(tmp_path))
+    before = inspect_deck_layout(deck)
+    if not before.get('ran'):
+        pytest.skip(f'no browser: {before.get("reason")}')
+    assert [b['elements'] for b in before['line_breaks']] == [['title']]
+
+    text, trial = recipe._repair_page_line_breaks(deck, 0, page_yaml,
+                                                  abort_check=None)
+    element = yaml.safe_load(text)['elements'][0]
+    assert element['content']['text'] == expected
+    assert element['bounds'] == [40, 40, 19 * 40, 200]
+    after = inspect_deck_layout(trial)
+    assert after['line_breaks'] == [] and after['findings'] == []
+
+
+def test_body_text_and_single_line_headings_keep_browser_wrapping(tmp_path):
+    pytest.importorskip('playwright.sync_api')
+    from lib.slides.layout_qa import inspect_deck_layout
+    from lib.slides.pptd import Deck, parse_page_text
+    page_yaml = yaml.safe_dump({'elements': [
+        {'elementId': 'body', 'elementType': 'text',
+         'bounds': [40, 40, 19 * 40, 200],
+         'content': {'style': '$body', 'fontSize': 40, 'lineHeight': 1.2,
+                     'text': '一二三四五六七八九十一二，三四五六七八九十一二三四五'}},
+        {'elementId': 'title', 'elementType': 'text',
+         'bounds': [40, 300, 19 * 40, 100],
+         'content': {'style': '$title', 'fontSize': 40, 'lineHeight': 1.2,
+                     'text': '一二三四五，六七八九十'}}]},
+        allow_unicode=True)
+    deck = Deck(title='t', size=(1280, 720), theme={},
+                pages=[parse_page_text(page_yaml, path='pages/01.page')],
+                root=str(tmp_path))
+    result = inspect_deck_layout(deck)
+    if not result.get('ran'):
+        pytest.skip(f'no browser: {result.get("reason")}')
+    assert not any(flaw.get('phraseBreaks') for flaw in result['line_breaks'])
+    assert all(flaw['elements'] == ['body'] for flaw in result['line_breaks'])
+
+
 # ── Containers: text placed in a card stays in it ──
 
 def _record(element_id, z, top, bottom, left=100, right=300):
@@ -628,6 +714,13 @@ def test_an_arrow_must_point_at_an_element():
                           'bounds': [100, 109, 160, 2], 'points': '0,1 160,1'}]}
     assert relayout_repairs(page, arrows, page_height=720) == {}
     assert 'drop its arrowhead' in findings_text(arrows[1:])
+    # An arrow that stops short names its target and the exact end point:
+    # told only "pointing at no element", the author ended it on the text
+    # box's bounds (y=338) while the measured text starts lower (live e2e).
+    assert arrows[0]['target'] == 'next-step' and arrows[0]['gap'] == 40
+    assert 'stops 40px short of "next-step"' in arrows[0]['message']
+    assert 'x=300, y=110' in findings_text(arrows[:1])
+    assert 'no element' not in arrows[0]['message']
 
 
 def test_table_cell_text_below_wcag_contrast_on_its_own_fill_is_a_finding():

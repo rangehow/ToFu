@@ -37,6 +37,30 @@ logger = get_logger(__name__)
 api_v1_mcp_bp = Blueprint('api_v1_mcp', __name__)
 
 
+def _follow_in_execution(server: str, action: str) -> dict:
+    """Repeat a management action on the execution host's bridge.
+
+    This process's bridge already applied it. In the two-process runtime Turns
+    call tools through the execution host's own bridge, which would otherwise
+    keep its boot-time view (docs/modules/tools_execution.md, "MCP management
+    reaches the execution host"). The response reports the outcome so a
+    client can tell an unreachable executor from a scheduled reconcile.
+    """
+    from quart import current_app
+
+    from lib.tasks_pkg.command_control_runtime import execution_mcp_reconcile
+    from lib.tasks_pkg.command_control_transport import CommandControlUnavailable
+    try:
+        result = execution_mcp_reconcile(current_app, user_id=request_user_id(),
+                                         server=server, action=action)
+    except CommandControlUnavailable as exc:
+        logger.warning('[MCP.v1] execution host did not take %s %s: %s', action, server, exc)
+        return {'state': 'unavailable', 'error': str(exc)}
+    if result is None:
+        return {'state': 'not_split'}
+    return {'state': 'scheduled' if result.get('scheduled') else 'refused'}
+
+
 def _enabled_tool_summary(bridge) -> dict:
     """Best-effort compact projection; never fail the owning MCP operation."""
     try:
@@ -187,7 +211,8 @@ def delete_server_v1(name):
 
     cfg_remove(name, user_id=request_user_id())
     logger.info('[MCP.v1] config removed: %s', name)
-    return api_ok(message=f'Server "{name}" removed')
+    return api_ok(message=f'Server "{name}" removed',
+                  execution=_follow_in_execution(name, 'disconnect'))
 
 
 # ── Lifecycle ────────────────────────────────────────────────────────
@@ -222,6 +247,7 @@ def connect_servers_v1():
                 'server': target,
                 'tools_count': len(tools),
                 'tool_names': [t.name for t in tools],
+                'execution': _follow_in_execution(target, 'connect'),
             })
         except MCPConnectError as e:
             logger.error('[MCP.v1] connect %s failed: %s', target, e)
@@ -238,6 +264,7 @@ def connect_servers_v1():
         return api_ok({
             'servers': {k: {'tools': v} for k, v in result.items()},
             'total_tools': total_tools,
+            'execution': {k: _follow_in_execution(k, 'connect') for k in result},
         })
     except Exception as e:
         logger.error('[MCP.v1] connect_all failed: %s', e, exc_info=True)
@@ -260,15 +287,20 @@ def disconnect_servers_v1():
         try:
             bridge._disconnect_one(target, forget=True)
             logger.info('[MCP.v1] disconnected %s', target)
-            return api_ok(message=f'Disconnected from "{target}"')
+            return api_ok(message=f'Disconnected from "{target}"',
+                          execution=_follow_in_execution(target, 'disconnect'))
         except Exception as e:
             logger.error('[MCP.v1] disconnect %s failed: %s', target, e,
                          exc_info=True)
             return api_internal_error(e, source='api_v1.mcp.disconnect')
 
     try:
+        names = [row['name'] for row in bridge.list_servers()]
         bridge.disconnect_all()
-        return api_ok({'message': 'All MCP servers disconnected'})
+        from lib.mcp.config import load_mcp_config
+        names = sorted(set(names) | set(load_mcp_config(user_id=request_user_id())))
+        return api_ok({'message': 'All MCP servers disconnected',
+                       'execution': {name: _follow_in_execution(name, 'disconnect') for name in names}})
     except Exception as e:
         logger.error('[MCP.v1] disconnect_all failed: %s', e, exc_info=True)
         return api_internal_error(e, source='api_v1.mcp.disconnect_all')
@@ -355,6 +387,7 @@ def set_server_tools_v1(name):
         'server': name,
         'disabled_tools': disabled_tools,
         'mcp_tool_summary': _enabled_tool_summary(bridge),
+        'execution': _follow_in_execution(name, 'tools'),
     })
 
 
@@ -611,6 +644,7 @@ def _connect_after_install(server_id, server_cfg, display_name, *, extra=None):
             'message': f'{display_name} installed and connected',
             'tools_count': len(tools),
             'tool_names': [t.name for t in tools],
+            'execution': _follow_in_execution(server_id, 'connect'),
             **extra,
         })
     except MCPConnectError as e:
@@ -722,6 +756,7 @@ def uninstall_from_catalog_v1():
                         '(purge=%s)', server_id, purge)
         except Exception as e:
             logger.warning('[MCP.v1] disconnect %s failed: %s', server_id, e)
+    _follow_in_execution(server_id, 'disconnect')
 
     if purge:
         cfg_remove(server_id, user_id=request_user_id())

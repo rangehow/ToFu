@@ -195,9 +195,15 @@ pub(crate) fn validation_fence(reason: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, ValidationFence(reason))
 }
 
-/// Literal reason of a deterministic ownership conflict.
+/// Literal reason of a deterministic ownership or identity conflict.
 #[derive(Debug)]
 struct ConflictReason(&'static str);
+
+/// A command ID whose stored receipt names another request or operation. The
+/// SQL authority refuses with the same text (`receipt_codec.py`); clients tell
+/// an already accepted command from an ordinary conflict by this literal
+/// (`lib.agent_core.storage_errors.is_command_id_reuse`).
+pub(crate) const COMMAND_ID_REUSED: &str = "command_id was reused for a different request";
 
 impl fmt::Display for ConflictReason {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {

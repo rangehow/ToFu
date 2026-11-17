@@ -32,6 +32,7 @@ from lib.storage.commit_events import CommittedEventOrder, defer_committed_event
 from lib.storage.errors import (
     ProjectionRebaseRequired,
     StorageError,
+    is_command_id_reuse,
     is_resource_bound_refusal,
 )
 from lib.storage.protocol import FrozenPayload, encode_json_value
@@ -671,6 +672,11 @@ def commit_user_steer(
     ``author`` (``lib.turn_initiation.steer_author``) is stored once with the
     record and is what makes the steered message forwardable as its author's
     words (docs/ROUTER.md R2); a replayed command keeps the original.
+
+    ``command_reused``: the authority already holds this conversation's
+    receipt for ``command_id``, committed with another text or into another
+    attempt; nothing was written. ``steer_window_closed``: the attempt no
+    longer takes steers.
     """
     user_id = require_user_id(user_id, context='commit user steer')
     payload: dict[str, Any] = {
@@ -693,6 +699,8 @@ def commit_user_steer(
     except StorageError as exc:
         if exc.code == 'database_not_found':
             raise LifecycleNotFound(str(exc)) from exc
+        if is_command_id_reuse(exc):
+            raise LifecycleConflict('command_reused', str(exc)) from exc
         if exc.code in {'database_conflict', 'turn_in_progress'}:
             raise LifecycleConflict('steer_window_closed', str(exc)) from exc
         raise

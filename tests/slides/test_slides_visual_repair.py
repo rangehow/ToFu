@@ -98,6 +98,9 @@ def repair_case(tmp_path, monkeypatch):
                 or state['remaining'] else []}
 
     monkeypatch.setattr(vqa, 'qa_frame', review)
+    # No paired verdict: adoption falls back to comparing the two reviews.
+    monkeypatch.setattr(vqa, 'qa_compare', lambda *a, **k: {
+        'ok': False, 'reason': 'no verdict', 'present': []})
     return ctx, state, source, preview, seed, candidate
 
 
@@ -301,3 +304,111 @@ def test_a_visual_repair_that_drops_a_number_is_rejected(repair_case, monkeypatc
     assert state['author_calls'] == 1
     assert result['rejectedPages'] == [1] and result['repaired'] == 0
     assert source.read_text() == numbered
+
+
+def _paired_case(monkeypatch, ctx, versions, standalone, present):
+    """Scripted repair: ``standalone[text]`` is the independent review of the
+    page whose title reads ``text``; ``present(issue, before, after)`` is the
+    paired before/after verdict on one finding."""
+    import lib.design_sys.visual_qa as vqa
+    seeds = []
+
+    def author(deck, brief, index, total, **kwargs):
+        seeds.append(kwargs['seed_yaml'])
+        return {'mode': 'authored', 'yaml': versions[len(seeds) - 1]}
+
+    def render(deck, index, output, **kwargs):
+        Path(output).write_bytes(
+            deck.pages[0].raw['elements'][0]['content']['text'].encode())
+
+    def major(issue):
+        return {'check': 'claim-scope', 'element': 'title', 'issue': issue,
+                'severity': 'major', 'fix': 'Reword'}
+
+    def review(path, **kwargs):
+        if kwargs['label'] == 'deck-coherence':
+            return {'ok': True, 'findings': []}
+        text = Path(path).read_bytes().decode()
+        return {'ok': True, 'findings': [major(i) for i in standalone[text]]}
+
+    compared = []
+
+    def compare(before, after, findings, **kwargs):
+        pair = (Path(before).read_bytes().decode(),
+                Path(after).read_bytes().decode())
+        compared.append((pair, [f['issue'] for f in findings]))
+        return {'ok': True, 'reason': '', 'present': [
+            present(f['issue'], *pair) for f in findings]}
+
+    monkeypatch.setattr('lib.slides.author.author_page', author)
+    monkeypatch.setattr('lib.slides.render_png.render_page_png', render)
+    monkeypatch.setattr('lib.slides.layout_qa.inspect_deck_layout',
+                        lambda deck, **kwargs: {'ran': True, 'ok': True,
+                                                'findings': [], 'line_breaks': []})
+    monkeypatch.setattr(vqa, 'qa_frame', review)
+    monkeypatch.setattr(vqa, 'qa_compare', compare)
+    return seeds, compared
+
+
+def test_repair_judged_against_the_findings_both_versions_share(
+        repair_case, monkeypatch):
+    """The e2e non-convergence: the repair fixes the split title, and its
+    independent re-review reports two scope problems the first review never
+    sampled although the original has them too. A count of the two reviews
+    rejected the fix (1 -> 2 majors) forever. Judged side by side, the
+    original has three problems and the candidate two, so the fix is kept
+    and the next round targets the two that remain."""
+    ctx, state, source, preview, seed, candidate = repair_case
+    preview.write_bytes(b'Original')
+    versions = [candidate.replace('Improved', f'Improved-{n}') for n in 'ab']
+    standalone = {'Original': ['split'], 'Improved-a': ['window', 'path'],
+                  'Improved-b': []}
+    still = {'Original': {'split', 'window', 'path'},
+             'Improved-a': {'window', 'path'}, 'Improved-b': set()}
+    seeds, compared = _paired_case(
+        monkeypatch, ctx, versions, standalone,
+        lambda issue, before, after: (issue in still[before],
+                                      issue in still[after]))
+    result = recipe._run_visual_qa(ctx)
+    assert seeds == [seed, versions[0]]
+    assert compared[0] == (('Original', 'Improved-a'), ['split', 'window', 'path'])
+    assert compared[1][0] == ('Improved-a', 'Improved-b')
+    assert source.read_text() == versions[1]
+    assert result['repairedPages'] == [1] and result['remaining'] == []
+
+
+def test_a_repair_that_trades_a_fix_for_a_new_problem_is_rejected(
+        repair_case, monkeypatch):
+    ctx, state, source, preview, seed, candidate = repair_case
+    preview.write_bytes(b'Original')
+    versions = [candidate.replace('Improved', 'Improved-a')]
+    standalone = {'Original': ['split'], 'Improved-a': ['overlap']}
+    still = {'Original': {'split'}, 'Improved-a': {'overlap'}}
+    seeds, _compared = _paired_case(
+        monkeypatch, ctx, versions, standalone,
+        lambda issue, before, after: (issue in still[before],
+                                      issue in still[after]))
+    result = recipe._run_visual_qa(ctx)
+    assert seeds == [seed]
+    assert source.read_text() == seed
+    assert result['rejectedPages'] == [1]
+    assert [f['issue'] for f in result['remaining']] == ['split']
+
+
+def test_paired_repairs_stop_once_the_known_problems_stop_falling(
+        repair_case, monkeypatch):
+    """Every round's candidate is judged better than its own original, yet
+    the page never gets better than the first adopted state: the chain of
+    adopted states must strictly improve, so the loop ends."""
+    ctx, state, source, preview, seed, candidate = repair_case
+    preview.write_bytes(b'Original')
+    versions = [candidate.replace('Improved', f'Improved-{n}') for n in 'abc']
+    standalone = {'Original': ['p0'], 'Improved-a': ['p1'],
+                  'Improved-b': ['p2'], 'Improved-c': ['p3']}
+    # Each original is judged to have one more problem than its candidate.
+    seeds, _compared = _paired_case(
+        monkeypatch, ctx, versions, standalone,
+        lambda issue, before, after: (True, issue == standalone[after][0]))
+    result = recipe._run_visual_qa(ctx)
+    assert seeds == [seed, versions[0]]
+    assert source.read_text() == versions[0]

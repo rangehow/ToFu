@@ -7,6 +7,7 @@ import time
 
 from lib.log import get_logger
 from lib.storage import get_storage_client
+from lib.storage.port import query_many
 from runtime_guards import storage_backup_timeout_seconds
 
 
@@ -57,6 +58,8 @@ def recover_active_work_items() -> int:
 
     client = get_storage_client(write=True)
     recovered = 0
+    # One boot pass resolves each project checkout's identity once.
+    checkouts: dict = {}
     cursor = None
     page_number = 0
     while True:
@@ -78,7 +81,7 @@ def recover_active_work_items() -> int:
         # Legacy index rows may repeat a project within this bounded page.
         # Acknowledge each owner/project/work identity once; failed intents
         # remain eligible, and the next page still reads fresh authority state.
-        settled_work = set()
+        active_work: dict[tuple[int, str, str], str] = {}
         for project in snapshot.get('projects') or ():
             owner_user_id = int(project.get('ownerUserId') or 0)
             project_key = str(project.get('projectKey') or '')
@@ -90,73 +93,73 @@ def recover_active_work_items() -> int:
                 # it on every boot, even while a pinned binary is upgraded.
                 if work.get('status') != 'active':
                     continue
-                task_id = str(work.get('taskId') or '')
-                work_id = str(work.get('id') or '')
-                identity = (owner_user_id, project_key, work_id)
-                if identity in settled_work:
-                    continue
-                task = client.query('task_results.replay_get', {
-                    'key': task_id, 'user_id': owner_user_id,
-                    'include_terminal_payload': False,
-                    'include_metadata': True,
-                })
-                # replay_get stores terminal evidence in metadata, unlike the
-                # in-memory task carrier. Copy only verdict fields; never infer
-                # a finish reason from a nominal terminal status.
-                task = dict(task or {})
-                metadata = task.get('metadata')
-                if isinstance(metadata, dict):
-                    for key in ('finishReason', 'streamState', 'aborted', '_abort_reason'):
-                        if key not in task and key in metadata:
-                            task[key] = metadata[key]
-                status = workspace_outcome(task)
-                if status == 'cancelled':
-                    summary = 'Execution was cancelled before server restart recovery.'
-                elif status == 'completed':
-                    summary = 'Execution completed before server restart recovery.'
-                else:
-                    error = (task or {}).get('error')
-                    summary = str(error or 'Execution lacked verified completion before server restart.')
-                # Recover only this work item's existing registration. Missing
-                # execution evidence never licenses adoption of sibling trees.
-                recovery_task = dict(task or {}, id=task_id, _userId=owner_user_id)
-                recovery_task['config'] = dict(
-                    (task or {}).get('config') or {}, projectPath=project_key)
-                try:
-                    receipt = record_task_workspace_intents(recovery_task, project_key)
-                    if receipt and (receipt.get('errors') or receipt.get('status') == 'error'):
-                        raise RuntimeError('Workspace terminal intent remains unacknowledged')
-                except Exception as exc:
-                    # The active work item is the durable retry eligibility.
-                    # Finishing it here would remove it from the next snapshot.
-                    logger.warning(
-                        '[ProjectBrain] recovery intent pending work=%s task=%s: %s',
-                        work_id, task_id, exc)
-                    continue
-                if status == RESTART_INTERRUPTED:
-                    # The restart paused this task: its non-denied workspace receipt
-                    # is recorded above, and its resumed attempt keeps the same task
-                    # identity and settles the work item. Finishing it here closed
-                    # resumed lanes' work as 'cancelled' (2026-11-06, 18 items).
-                    logger.info('[ProjectBrain] work=%s task=%s paused by the restart; '
-                                'left active for its resumed attempt', work_id, task_id)
-                    settled_work.add(identity)
-                    continue
-                delivery_summary = work_result_summary(recovery_task)
-                if delivery_summary:
-                    summary = summary[:3000] + '\n' + delivery_summary
-                client.command(
-                    'project_brain.work.finish', {
-                        'owner_user_id': owner_user_id,
-                        'project_key': project_key,
-                        'work_id': work_id,
-                        'status': status,
-                        'result_summary': summary[:4000],
-                    },
-                    f'project-work-recovery:{work_id}',
-                )
-                settled_work.add(identity)
-                recovered += 1
+                identity = (owner_user_id, project_key, str(work.get('id') or ''))
+                active_work.setdefault(identity, str(work.get('taskId') or ''))
+        # The page's task results are independent reads: one pipelined exchange.
+        answers = query_many(client, [('task_results.replay_get', {
+            'key': task_id, 'user_id': owner_user_id,
+            'include_terminal_payload': False, 'include_metadata': True,
+        }) for (owner_user_id, _project_key, _work_id), task_id in active_work.items()])
+        for ((owner_user_id, project_key, work_id), task_id), task in zip(
+                active_work.items(), answers):
+            if isinstance(task, BaseException):
+                raise task
+            # replay_get stores terminal evidence in metadata, unlike the
+            # in-memory task carrier. Copy only verdict fields; never infer
+            # a finish reason from a nominal terminal status.
+            task = dict(task or {})
+            metadata = task.get('metadata')
+            if isinstance(metadata, dict):
+                for key in ('finishReason', 'streamState', 'aborted', '_abort_reason'):
+                    if key not in task and key in metadata:
+                        task[key] = metadata[key]
+            status = workspace_outcome(task)
+            if status == 'cancelled':
+                summary = 'Execution was cancelled before server restart recovery.'
+            elif status == 'completed':
+                summary = 'Execution completed before server restart recovery.'
+            else:
+                error = (task or {}).get('error')
+                summary = str(error or 'Execution lacked verified completion before server restart.')
+            # Recover only this work item's existing registration. Missing
+            # execution evidence never licenses adoption of sibling trees.
+            recovery_task = dict(task or {}, id=task_id, _userId=owner_user_id)
+            recovery_task['config'] = dict(
+                (task or {}).get('config') or {}, projectPath=project_key)
+            try:
+                receipt = record_task_workspace_intents(
+                    recovery_task, project_key, checkouts=checkouts)
+                if receipt and (receipt.get('errors') or receipt.get('status') == 'error'):
+                    raise RuntimeError('Workspace terminal intent remains unacknowledged')
+            except Exception as exc:
+                # The active work item is the durable retry eligibility.
+                # Finishing it here would remove it from the next snapshot.
+                logger.warning(
+                    '[ProjectBrain] recovery intent pending work=%s task=%s: %s',
+                    work_id, task_id, exc)
+                continue
+            if status == RESTART_INTERRUPTED:
+                # The restart paused this task: its non-denied workspace receipt
+                # is recorded above, and its resumed attempt keeps the same task
+                # identity and settles the work item. Finishing it here closed
+                # resumed lanes' work as 'cancelled' (2026-11-06, 18 items).
+                logger.info('[ProjectBrain] work=%s task=%s paused by the restart; '
+                            'left active for its resumed attempt', work_id, task_id)
+                continue
+            delivery_summary = work_result_summary(recovery_task)
+            if delivery_summary:
+                summary = summary[:3000] + '\n' + delivery_summary
+            client.command(
+                'project_brain.work.finish', {
+                    'owner_user_id': owner_user_id,
+                    'project_key': project_key,
+                    'work_id': work_id,
+                    'status': status,
+                    'result_summary': summary[:4000],
+                },
+                f'project-work-recovery:{work_id}',
+            )
+            recovered += 1
         if not snapshot.get('capped'):
             break
         cursor = next_cursor

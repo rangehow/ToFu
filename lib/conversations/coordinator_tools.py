@@ -52,6 +52,40 @@ def coordinator_folder(scope: dict):
     return (source.get('settings') or {}).get('folderId')
 
 
+def _publish_report_files(task: dict, scope: dict, paths) -> list[dict]:
+    """Publish a report's attached files as owned response files, all or none.
+
+    Uses the same verified-root publisher as ``publish_response_file``; each
+    receipt becomes a ``reportFile`` (project_coordination_v1.schema.json).
+    """
+    if paths is None:
+        return []
+    if not isinstance(paths, list) or any(not isinstance(path, str) or not path.strip() for path in paths):
+        raise ValueError('files must be a list of file paths')
+    from lib.artifacts.events import emit_artifact_event
+    from lib.tools.rich_response import publish_file_for_task
+    files, receipts = [], []
+    for path in dict.fromkeys(path.strip() for path in paths):
+        try:
+            receipt = publish_file_for_task(task, path, '', scope['project_path'])
+        except InterruptedError:
+            raise
+        except Exception as error:
+            raise ValueError(f'Cannot attach {path}: {type(error).__name__}: {error}. Attach an existing '
+                             'PDF, Office, Markdown, HTML, SVG, text or ZIP file inside this project.') from error
+        receipts.append(receipt)
+        filename = receipt['filename']
+        if filename.lower().endswith(('.pptx', '.pptd')):
+            kind = 'deck'
+        else:
+            kind = 'file' if receipt['format'] == 'file' else 'document'
+        files.append({'artifactId': receipt['artifactId'], 'filename': filename, 'kind': kind,
+                      'sizeBytes': receipt['sizeBytes'], 'path': path})
+    for receipt in receipts:
+        emit_artifact_event(task, receipt['artifact'])
+    return files
+
+
 _READ_FOLDER = object()
 
 
@@ -229,10 +263,14 @@ def execute_coordinator_tool(task: dict, name: str, arguments: dict, *, runtime_
                     lambda: reread_on_contention(task, command, label='coordinator ' + name))
         elif name == 'report_to_user':
             from lib.conversations.coordinator_reports import CoordinatorReports
+            request = {key: value for key, value in arguments.items() if key != 'files'}
+            files = _publish_report_files(task, scope, arguments.get('files'))
             result = CoordinatorReports(scope['user_id'], scope['project_path']).publish({
                 'owner': scope['user_id'], 'projectPath': scope['project_path'],
                 'coordinatorId': scope['conversation_id'], 'bindingRevision': scope['binding_revision'],
-            }, arguments)
+            }, request, files=files)
+            if files:
+                result = {**result, 'files': files}
         elif name == 'update_task_progress':
             from lib.conversations.coordinator_progress import progress_view, publish_task_board
             from lib.tools.todo import render_todo_snapshot

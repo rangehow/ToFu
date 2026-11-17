@@ -59,3 +59,20 @@ def test_result_pages_do_not_generate_synthetic_evidence(scenario, provided):
     else:
         assert page['visual_modality'] == 'native-diagram'
         assert page['asset_mode'] == 'code'
+
+
+@pytest.mark.parametrize('lang,rules', [
+    ('zh', ('对照基线', '时间窗', '因果', '署名')),
+    ('en', ('names its baseline', 'time window', 'never as a cause',
+            'attribution exactly')),
+])
+def test_key_messages_keep_the_scope_of_their_evidence(lang, rules):
+    """The key message becomes the slide title, so the planner may not
+    compress away a baseline, a scope, the difference between before/after
+    and cause, or an attribution: visual review refuses those titles."""
+    prompt = _build_outline_prompt(
+        '面试项目复盘', lang=lang, max_pages=6,
+        scenarios_doc='career-interview', style_hint='',
+        material='[M1] 规则上线后，每周人工复核由约 340 条降至约 60 条。')
+    for rule in rules:
+        assert rule in prompt

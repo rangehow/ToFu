@@ -95,3 +95,16 @@ def test_session_metrics_and_stage_attribution():
     assert profile['stages']['persistence (storage client, turn lifecycle, events)'] == 0.75
     assert profile['top_self_frames'][0] == ['request (lib/storage/v2_client.py)', 0.75]
     assert run.quantiles([1, 2, 3, 4])['median'] == 2.5
+
+
+def test_api_host_never_shares_the_host_global_heartbeat(tmp_path):
+    """The live Tofu's wedge evidence lives in the default /tmp/tofu/heartbeat."""
+    import argparse
+    import run
+    deployment = run.TofuDeployment.__new__(run.TofuDeployment)
+    deployment.root = tmp_path
+    deployment.port = 9
+    deployment.api_connection_file = tmp_path / 'run' / 'storage-connection-api.json'
+    deployment.args = argparse.Namespace()
+    heartbeat = Path(deployment.api_environment()['TOFU_HEARTBEAT_DIR'])
+    assert tmp_path in heartbeat.parents

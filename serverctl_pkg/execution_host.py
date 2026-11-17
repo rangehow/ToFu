@@ -17,7 +17,7 @@ import threading
 
 from serverctl_pkg.execution_service import RECORD_FORMAT
 from serverctl_pkg.execution_plan import (
-    ExecutionSourceChanged, SOURCE_CHANGED_BEFORE_BOOT, require_plan_match,
+    ExecutionSourceChanged, SOURCE_CHANGED_BEFORE_BOOT, SOURCE_FIELDS, require_plan_match,
 )
 from serverctl_pkg.resident_service import (
     await_published_record, manager_control_matches, process_matches, write_record,
@@ -25,7 +25,7 @@ from serverctl_pkg.resident_service import (
 
 
 def create_application(shutdown_requested, plan):
-    from serverctl_pkg.execution_plan import prepare_plan
+    from serverctl_pkg.execution_plan import prepare_launch_policy, prepare_plan
     project = Path(os.environ['TOFU_PROJECT_PATH'])
     environment = dict(os.environ)
     require_plan_match(plan, prepare_plan(project, environment), stage='after preparation')
@@ -39,12 +39,27 @@ def create_application(shutdown_requested, plan):
     try:
         retained = pins.freeze()
         require_plan_match(plan, {**plan, **retained}, stage='while retaining source')
-        app = server.create_app()
+        # ``import server`` already assembled the module application with the
+        # composition server.py serves; a second create_app() would rebuild
+        # every blueprint and route rule only to leave the first unused.
+        app = server.app
         server.register_server_runtime_lifecycle(app, shutdown_requested=shutdown_requested)
         # Same source owner as server.py/asgi.py. Preserve __file__ paths and
         # lazy optional imports; finish current sweeps before admitting work.
         pins.join()
-        require_plan_match(plan, prepare_plan(project, environment), stage='during application construction')
+        # Running Turns is this host's whole work, so its executor is part of
+        # the application here, not a lazy import the first Turn after a boot
+        # pays for (the API host never imports it).
+        import lib.tasks_pkg.orchestrator.api  # noqa: F401
+        import lib.llm.stream  # noqa: F401
+        # Retained pins equal the plan (checked above), so a checkout that still
+        # holds them holds the plan; only a changed checkout is re-hashed.
+        stage = 'during application construction'
+        if pins.unchanged_since_freeze():
+            require_plan_match(plan, {**prepare_launch_policy(project, environment),
+                                      **{field: plan.get(field) for field in SOURCE_FIELDS}}, stage=stage)
+        else:
+            require_plan_match(plan, prepare_plan(project, environment), stage=stage)
         app.extensions['tofu_execution_import_source'] = pins
         return app
     except BaseException:

@@ -145,7 +145,9 @@ _OUTLINE_CONTENT_RULES_ZH = (
     '页面围绕这些结果,而不是平均覆盖每一节;\n'
     'b. content 页的 key_message 是一句带具体数字或具体对象的判断,可直接作页标题'
     '(如“新检索器把召回率从 61% 提到 78%,延迟不变”),'
-    '禁止“结果”“概览”“设计理念”式的栏目名;\n'
+    '禁止“结果”“概览”“设计理念”式的栏目名;它会成为页标题,压缩时不得超出证据:'
+    '相对数字写明对照基线,保留结果的时间窗、样本和条件,前后对比或同期变化不写成因果'
+    '(证据写明原因时除外),署名与角色照证据原样写;\n'
     'c. content_notes 逐条列出本页要放的证据:每条写出原样的数字、单位、对照、'
     '条件和限定语,并标注 [M#]/[S#];不写泛泛的描述;\n'
     'd. 有证据时,每个 content 页至少引用一个证据编号;\n'
@@ -162,6 +164,11 @@ _OUTLINE_CONTENT_RULES_EN = (
     'assertion carrying its specific number or object, usable as the slide '
     'title (e.g. "The new retriever lifts recall from 61% to 78% at equal '
     'latency"), never a topic label such as "Results" or "Overview". '
+    'It becomes the slide title, so compressing it never goes beyond the '
+    'evidence: a relative number names its baseline; a result keeps its '
+    'time window, sample and conditions; a before/after or concurrent '
+    'change is stated as such, never as a cause unless the evidence states '
+    'one; roles keep their attribution exactly as written. '
     'content_notes lists the page evidence item by item with the exact '
     'numbers, units, baselines, conditions and qualifiers, each citing '
     '[M#]/[S#]; no generic description. When evidence exists every content '
@@ -313,14 +320,56 @@ def _build_outline_prompt(topic: str, *, lang: str, max_pages: int,
         'layout variety.\n' + _OUTLINE_CONTENT_RULES_EN)
 
 
+def _json_object_closes(text: str, start: int) -> bool:
+    depth = 0
+    in_string = escaped = False
+    for char in text[start:]:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == '\\':
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char in '{[':
+            depth += 1
+        elif char in '}]':
+            depth -= 1
+            if depth == 0:
+                return True
+    return False
+
+
+def _outline_json(content: str, usage: dict) -> dict:
+    """The reply's first JSON object; a reply cut off at the output limit is
+    named as such (the greedy ``{.*}`` match used to end at the last complete
+    page and surface as "Expecting ',' delimiter")."""
+    text = str(content or '')
+    start = text.find('{')
+    usage = usage if isinstance(usage, dict) else {}
+    cut_off = (str(usage.get('finish_reason') or '') == 'length'
+               or (start >= 0 and not _json_object_closes(text, start)))
+    if cut_off:
+        tokens = usage.get('completion_tokens')
+        raise ValueError(
+            'outline reply was cut off at the output limit'
+            + (f' ({tokens} completion tokens)' if tokens else '')
+            + ' before its JSON closed')
+    if start < 0:
+        raise ValueError('outline reply has no JSON object')
+    raw, _end = json.JSONDecoder().raw_decode(text, start)
+    if not isinstance(raw, dict):
+        raise ValueError('outline reply is not a JSON object')
+    return raw
+
+
 def _outline_candidate(content: str, *, topic: str, research: dict,
                        maximum: int, usage: dict) -> dict:
     """Parse and enrich one candidate without mutating stage feedback."""
     from lib.design_sys.themes import SCENARIOS, classify_scenario
-    match = _OUTLINE_JSON_RE.search(content or '')
-    if not match:
-        raise ValueError('outline reply has no JSON object')
-    raw = json.loads(match.group(0))
+    raw = _outline_json(content, usage)
     pages = raw.get('pages')
     if not isinstance(pages, list) or len(pages) < _MIN_PAGES:
         raise ValueError(f'outline has {len(pages or [])} pages '
@@ -2036,7 +2085,8 @@ def _run_page_visual_reviews(ctx: dict, previews: list, *, theme, vqa,
         try:
             identity = vqa.qa_frame_input_sha256(
                 png, theme=theme, subject='幻灯片页面', model=qa_model,
-                review_context=review_contexts[index])
+                review_context=review_contexts[index],
+                lang=ctx.get('lang', 'zh'))
         except (OSError, ValueError) as exc:
             logger.debug('[Slides:qa] page %d cache identity unavailable: %s',
                          index + 1, exc)
@@ -2061,6 +2111,7 @@ def _run_page_visual_reviews(ctx: dict, previews: list, *, theme, vqa,
                 png, theme=theme, label=f'page-{index + 1:02d}',
                 subject='幻灯片页面', model=qa_model,
                 review_context=review_contexts[index],
+                lang=ctx.get('lang', 'zh'),
                 abort_check=abort_check,
                 max_429_attempts=max_429_attempts,
                 owner_user_id=ctx.get('owner_user_id'),
@@ -2151,7 +2202,7 @@ def _run_visual_qa(ctx: dict) -> dict:
         try:
             identity = vqa.qa_frame_input_sha256(
                 path, theme=theme, subject=subject, model=qa_model,
-                review_context=review_context)
+                review_context=review_context, lang=ctx.get('lang', 'zh'))
         except (OSError, ValueError):
             identity = None
         result = (_cached_visual_result(cache['entries'].get(key), identity)
@@ -2159,7 +2210,7 @@ def _run_visual_qa(ctx: dict) -> dict:
         if result is None:
             result = vqa.qa_frame(
                 path, theme=theme, label=label, subject=subject, model=qa_model,
-                review_context=review_context,
+                review_context=review_context, lang=ctx.get('lang', 'zh'),
                 abort_check=abort_check, max_429_attempts=ctx.get('max_429_attempts'),
                 owner_user_id=ctx.get('owner_user_id'),
                 provider_pin_id=ctx.get('provider_pin_id') or '')
@@ -2191,6 +2242,9 @@ def _run_visual_qa(ctx: dict) -> dict:
     repaired = []
     rejected = []
     reviewed_results = list(results)
+    # Score of each adopted page state, as judged against its predecessor;
+    # a further repair must beat it, so the adopted chain strictly improves.
+    known_bound: dict = {}
 
     def deck_score(deck_review_findings, page_results):
         return _visual_score(deck_review_findings + [
@@ -2226,7 +2280,8 @@ def _run_visual_qa(ctx: dict) -> dict:
                 if (candidate.get('mode') != 'authored' or yaml_text == seed
                         or len(yaml_text.encode('utf-8')) > _MAX_PAGE_YAML_BYTES
                         or _validate_page_text(deck, deck.pages[index].path, yaml_text,
-                                               briefs[index])):
+                                               briefs[index],
+                                               lang=ctx.get('lang', 'zh'))):
                     logger.info('[Slides:qa] page %d repair rejected: no valid '
                                 'authored change (mode=%s)', index + 1,
                                 candidate.get('mode'))
@@ -2256,17 +2311,27 @@ def _run_visual_qa(ctx: dict) -> dict:
                 except Exception as exc:
                     logger.warning('[Slides:qa] page %d repair unverified: %s', index + 1, exc)
                     return False
-                if (not checked.get('ok')
-                        or _visual_score(_actionable_visual_findings(checked))
-                        >= _visual_score(actionable)):
+                seed_known, known = (_judged_repair(
+                    vqa, actionable, checked, previews[index], trial_png,
+                    model=qa_model, label=f'page-{index + 1:02d}',
+                    review_context=build_review_context(
+                        outline, page_index=index, request=ctx.get('topic') or '',
+                        **_page_review_evidence(ctx, outline, index, yaml_text,
+                                                total=len(previews))),
+                    abort_check=abort_check,
+                    max_429_attempts=ctx.get('max_429_attempts'),
+                    owner_user_id=ctx.get('owner_user_id'),
+                    provider_pin_id=ctx.get('provider_pin_id') or '')
+                    if checked.get('ok') else (actionable, []))
+                _raise_if_aborted(ctx, 'visual QA')
+                bound = known_bound.get(index, _visual_score(seed_known))
+                if not checked.get('ok') or _visual_score(known) >= bound:
                     logger.info(
                         '[Slides:qa] page %d repair rejected: re-review %s, '
                         '(blockers, majors) %s -> %s: %s', index + 1,
                         'ok' if checked.get('ok') else checked.get('reason'),
-                        _visual_score(actionable),
-                        _visual_score(_actionable_visual_findings(checked)),
-                        '; '.join(str(f.get('issue'))[:120] for f in
-                                  _actionable_visual_findings(checked)))
+                        bound, _visual_score(known),
+                        '; '.join(str(f.get('issue'))[:120] for f in known))
                     return False
                 if index not in originals:
                     visual_repair.remember(index, page_path, previews[index], seed)
@@ -2278,13 +2343,20 @@ def _run_visual_qa(ctx: dict) -> dict:
                     rollback(index)
                     raise
                 deck = trial
-                results[index] = checked
+                minor = [f for f in checked.get('findings') or []
+                         if f not in _actionable_visual_findings(checked)]
+                if index not in known_bound:
+                    reviewed_results[index] = {**reviewed_results[index], 'findings': [
+                        f for f in reviewed_results[index].get('findings') or []
+                        if f not in _actionable_visual_findings(reviewed_results[index])
+                    ] + seed_known}
+                known_bound[index] = _visual_score(known)
+                results[index] = {**checked, 'findings': minor + known}
                 if index + 1 not in repaired:
                     repaired.append(index + 1)
                 logger.info('[Slides:qa] page %d repair adopted: (blockers, '
                             'majors) %s -> %s', index + 1,
-                            _visual_score(actionable),
-                            _visual_score(_actionable_visual_findings(checked)))
+                            bound, _visual_score(known))
                 return True
 
             # Repair to a fixed point, like the layout stage: a page whose
@@ -2375,6 +2447,7 @@ def _run_visual_qa(ctx: dict) -> dict:
                 **(_page_review_evidence(ctx, outline, page_index, page_text,
                                          total=len(previews))
                    if page_index is not None else {})),
+            lang=ctx.get('lang', 'zh'),
             abort_check=abort_check,
             max_429_attempts=ctx.get('max_429_attempts'),
             owner_user_id=ctx.get('owner_user_id'),
@@ -2413,6 +2486,20 @@ def _run_visual_qa(ctx: dict) -> dict:
             'coherenceReviewed': bool(initial_deck_review.get('ok')),
             'coherence_findings': len(deck_findings), 'coherence': deck_findings,
             'remaining': remaining}
+
+
+def _judged_repair(vqa, actionable: list, checked: dict, before: str,
+                   after: str, **compare) -> tuple:
+    """``(original's findings, candidate's findings)`` among the major and
+    blocker problems either review reported, each judged on both renders
+    side by side (``vqa.qa_compare``). Without a complete verdict, each
+    version keeps its own review's findings."""
+    items = actionable + _actionable_visual_findings(checked)
+    verdict = vqa.qa_compare(before, after, items, **compare)
+    if not verdict.get('ok'):
+        return actionable, _actionable_visual_findings(checked)
+    return ([f for f, (was, _now) in zip(items, verdict['present']) if was],
+            [f for f, (_was, now) in zip(items, verdict['present']) if now])
 
 
 def _relayout_page_text(deck, index: int, yaml_text: str, *, abort_check):

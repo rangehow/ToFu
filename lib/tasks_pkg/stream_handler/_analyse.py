@@ -418,8 +418,7 @@ def analyse_stream_result(
         terminal_result = recover_abnormal_terminal(
             assistant_msg, last_finish_reason, task,
             round_num=round_num, model=model, result=result, usage=usage,
-
-            messages=messages,
+            messages=messages, silence_refused=bool(rejected_empty),
         )
         if terminal_result is not None:
             return terminal_result

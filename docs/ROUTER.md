@@ -338,7 +338,11 @@ tool round's `[SILENT]` lives only in its private provider replay
 (`assistantModelContent`), stored answers, segments and channel replies strip
 it, and a refused declaration whose only text was the token is an empty
 response that Python recovers as an empty stop and Native settles as
-`abnormal_stop`, never a raw provider instruction shown to people. The native
+`abnormal_stop`, never a raw provider instruction shown to people. Python's
+recovery request names the refusal (`REFUSED_SILENCE_RECOVERY_NOTICE`) and
+asks for a brief reply; the generic "no usable text" notice let the model
+repeat `[SILENT]` until both attempts were spent. Every refusal logs
+`[Router] silence refused: <reason>`. The native
 Turn projection takes its system-note kinds from the contract (generated
 `generated_system_note_vocabulary.rs`). Automatic review failures/interruption
 send an out-of-band command-chat warning naming the failure cause; successful

@@ -1,7 +1,6 @@
 /** Single-pass code DOM projection with an empty scratch tree after each call.
  * Entry point: createMarkdownCodeProjection. Dependencies: ports.
- * Lazy highlighter and grammar completion upgrade this renderer's mounted,
- * terminal code only.
+ * Lazy grammar completion upgrades this renderer's mounted, terminal code only.
  */
 import type { MarkdownRenderEnvironment, MarkdownRendererPorts } from './ports';
 import { selectionIntersects } from './deferred-enrichment';
@@ -13,7 +12,6 @@ export function createMarkdownCodeProjection(ports: MarkdownRendererPorts, inval
   defer: (document: Document, job: () => boolean) => void) {
   const owner = String(++rendererSequence);
   const pendingLanguages = new Map<string, Promise<void>>();
-  let pendingHighlighter: Promise<void> | null = null;
   let scratch: HTMLDivElement | null = null;
   let disposed = false;
   const report = (error: unknown) => ports.reportFailure?.(error);
@@ -46,41 +44,6 @@ export function createMarkdownCodeProjection(ports: MarkdownRendererPorts, inval
       });
     }).catch(report).finally(() => pendingLanguages.delete(language));
     pendingLanguages.set(language, request);
-  }
-
-  function requestHighlighter(): void {
-    if (!ports.loadHighlighter || pendingHighlighter) return;
-    pendingHighlighter = Promise.resolve().then(() => disposed ? undefined : ports.loadHighlighter!()).then(() => {
-      const environment = ports.getEnvironment();
-      const highlighter = environment.highlighter;
-      if (disposed || !highlighter || !environment.document) return;
-      invalidateCache();
-      defer(environment.document, () => {
-        const current = ports.getEnvironment();
-        if (current.document !== environment.document || current.highlighter !== highlighter) return true;
-        let selected = false;
-        for (const code of environment.document!.querySelectorAll<HTMLElement>(
-          `code[data-markdown-renderer="${owner}"][data-markdown-highlighter="pending"]`)) {
-          if (!code.isConnected || code.dataset.markdownStreaming === 'true') continue;
-          if (selectionIntersects(code)) { selected = true; continue; }
-          delete code.dataset.markdownHighlighter;
-          const language = code.className.match(/language-([\w+-]+)/)?.[1];
-          try {
-            if (language && highlighter.getLanguage(language)) {
-              code.innerHTML = highlighter.highlight(code.textContent ?? '', { language }).value;
-              delete code.dataset.markdownRenderer;
-            } else {
-              code.innerHTML = highlighter.highlightAuto(code.textContent ?? '').value;
-              if (language && ports.ensureHighlightLanguage
-                && (ports.canEnsureHighlightLanguage?.(language) ?? true)) requestLanguage(language, environment);
-              else delete code.dataset.markdownRenderer;
-            }
-          } catch (error) { report(error); }
-          code.classList.add('hljs');
-        }
-        return !selected;
-      });
-    }).catch(report).finally(() => { pendingHighlighter = null; });
   }
 
   return {
@@ -120,12 +83,6 @@ export function createMarkdownCodeProjection(ports: MarkdownRendererPorts, inval
               }
             } catch (error) { cacheable = false; report(error); }
             code.classList.add('hljs');
-          } else if (!highlighter && !streaming && ports.loadHighlighter) {
-            code.dataset.markdownRenderer = owner;
-            code.dataset.markdownStreaming = 'false';
-            code.dataset.markdownHighlighter = 'pending';
-            cacheable = false;
-            requestHighlighter();
           }
           const header = pre.querySelector('.code-header');
           if (environment.projectActive && header) {
@@ -152,9 +109,6 @@ export function createMarkdownCodeProjection(ports: MarkdownRendererPorts, inval
         return { html: node.innerHTML, cacheable };
       } finally { node.replaceChildren(); }
     },
-    dispose(): void {
-      disposed = true; pendingLanguages.clear(); pendingHighlighter = null;
-      scratch?.replaceChildren(); scratch = null;
-    },
+    dispose(): void { disposed = true; pendingLanguages.clear(); scratch?.replaceChildren(); scratch = null; },
   };
 }

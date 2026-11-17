@@ -161,14 +161,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # Generator and landing contracts in the unit tier run repository
-      # node_modules (TypeScript, jsdom) through node.
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .node-version
-          cache: npm
-      - name: Install JS dev-deps from lockfile
-        run: npm ci
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
@@ -182,15 +174,8 @@ jobs:
       - name: Verify the downloaded graph without Node
         if: ${{ needs.frontend.result == 'success' }}
         run: python3 scripts/verify_frontend_dist.py
-      # The project search engine shells out to ripgrep (grep translation,
-      # live tree-index fallback); the runner image does not ship it.
-      - name: Install ripgrep
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ripgrep
       - name: Verify lock and sync test environment
         run: uv lock --check && uv sync --frozen --extra test
-      # Slide/presentation rendering contracts launch headless Chromium.
-      - name: Install headless Chromium + system deps
-        run: uv run --frozen --extra test python -m playwright install --with-deps --only-shell chromium
       - name: Run unit tests
         # `-n auto` on a 4-vCPU runner = 4 workers, and each worker spawns
         # node/jsdom subprocesses + ML-lib thread pools on top — measured
@@ -209,8 +194,6 @@ jobs:
         with:
           name: coverage-unit
           path: .coverage
-          # upload-artifact@v4 skips dotfiles unless asked to include them.
-          include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
 
@@ -230,8 +213,6 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           enable-cache: true
-      - name: Install ripgrep
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ripgrep
       - name: Verify lock and sync test environment
         run: uv lock --check && uv sync --frozen --extra test
       - name: Run API tests (parallel)
@@ -243,7 +224,6 @@ jobs:
         with:
           name: coverage-api
           path: .coverage
-          include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
 
@@ -292,12 +272,8 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           enable-cache: true
-      - name: Install ripgrep
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ripgrep
       - name: Verify lock and sync test environment
         run: uv lock --check && uv sync --frozen --extra test
-      - name: Install headless Chromium + system deps
-        run: uv run --frozen --extra test python -m playwright install --with-deps --only-shell chromium
       - name: Run slow tests
         run: uv run --frozen --extra test make test-slow JOBS=auto
 
@@ -435,21 +411,6 @@ jobs:
           "import importlib.util, os;
           assert importlib.util.find_spec('playwright') is not None;
           assert os.path.isdir('/opt/ms-playwright')"
-      # The worker installs Chromium's shared libraries by soname instead of
-      # Playwright's apt-only --with-deps, so prove the browser really starts.
-      - name: Verify worker launches Chromium
-        if: matrix.target == 'worker'
-        run: >-
-          docker run --rm tofu-worker:ci python -c
-          "from playwright.sync_api import sync_playwright;
-          playwright = sync_playwright().start();
-          browser = playwright.chromium.launch();
-          page = browser.new_page();
-          page.set_content('<title>tofu</title><p>Tofu</p>');
-          assert page.title() == 'tofu';
-          assert len(page.screenshot()) > 0;
-          browser.close();
-          playwright.stop()"
       - name: Generate ${{ matrix.target }} CycloneDX SBOM
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:

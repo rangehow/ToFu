@@ -258,13 +258,9 @@ def _settle(pid):
 
 def test_inherited_reaping_spares_live_pending_reused_and_foreign_pids():
     orphan, pending, reused, live = _forked(3), _forked(4), _forked(6), _forked()
-    # This zombie is a grandchild: only its own parent may reap it. The parent
-    # never waits, so the zombie stays; a shell parent (dash) reaps its
-    # finished background job before exec.
+    # This zombie is a grandchild: only its own parent may reap it.
     parent = subprocess.Popen(
-        [sys.executable, '-c',
-         'import os, time\npid = os.fork()\nif pid == 0:\n    os._exit(0)\n'
-         'print(pid, flush=True)\ntime.sleep(30)'],
+        ['sh', '-c', '(exit 0) & echo $!; exec sleep 30'],
         stdout=subprocess.PIPE, text=True)
     owned = None
     try:

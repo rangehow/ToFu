@@ -34,13 +34,10 @@ import hashlib
 import json
 
 from lib.identity import PrincipalContext, require_user_id
-from lib.log import get_logger
 from lib.scheduler.tool_defs import (
     CREATOR_GRANT_KEY, OWNER_PAUSE_KEY, PROJECT_WAKE_TYPE, ROLE_CREATE_TASK_TYPES,
     SCHEDULABLE_TASK_TYPES,
 )
-
-logger = get_logger(__name__)
 
 # Built-in types run system-scoped or deployment-wide work (manager._execute_task).
 BUILTIN_TASK_TYPES = frozenset({
@@ -329,8 +326,6 @@ def creator_state(owner: int, row: dict) -> dict:
             return {'state': 'ended', 'reason': 'binding_changed'}
         return {'state': 'active'}
     except Exception as error:
-        logger.debug('Creator state lookup failed for %s creator: %s',
-                     creator.get('role'), type(error).__name__)
         return {'state': 'unknown', 'reason': type(error).__name__}
 
 

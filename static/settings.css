@@ -134,6 +134,16 @@
    OAuth Subscription Login Tab
    ══════════════════════════════════════════════════════ */
 /* China-access banner — same amber language as .stg-oauth-note */
+.oauth-china-note {
+  margin: 0 0 14px;
+  padding: 10px var(--space-3);
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+  color: #8a5a00;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1.5px solid rgba(245, 158, 11, 0.4);
+  border-radius: var(--s-radius);
+}
 
 .oauth-provider-card {
   border: var(--s-border);
@@ -475,6 +485,16 @@
 .pref-learned-box .pl-dismiss:hover{background:rgba(148,163,184,0.12)}
 .pref-learned-box .pl-resolved{opacity:0.75}
 /* ── Preferences settings tab — pending-proposal rows ── */
+.prefs-pending-list{display:flex;flex-direction:column;gap:var(--space-2);margin:6px 0 var(--space-1) 0}
+.prefs-pending-row{
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:var(--space-2) var(--space-3);border-radius:8px;
+  background:rgba(99,102,241,0.06);border:1px solid rgba(99,102,241,0.18);
+}
+.prefs-pending-text{flex:1;min-width:0;color:var(--text-primary,#e4e4e7);font-size:12.5px}
+.prefs-pending-text b{font-weight:600}
+.prefs-pending-evidence{font-size:10.5px;opacity:0.65;margin-top:2px}
+.prefs-pending-actions{display:flex;gap:6px;flex-shrink:0}
 /* ══════════════════════════════════════════════════════
    My Context settings tab — "paper dossier" (2026-08 redesign)
    Index-card archive metaphor on the tofu block system: highlighter
@@ -544,13 +564,111 @@
   .ctx-groups{columns:1}
 }
 .ctx-groups[aria-busy="true"]{opacity:.55}
+.ctx-group{
+  min-width:0;margin:0 0 14px;padding:var(--space-4);break-inside:avoid;
+  border:var(--s-border);background:var(--s-white);box-shadow:var(--s-shadow-xs);
+  transition:transform .12s ease,box-shadow .12s ease;
+}
+.ctx-group:hover{transform:translate(-1px,-1px);box-shadow:var(--s-shadow-sm)}
+.ctx-group-head{display:flex;align-items:flex-start;gap:11px;margin-bottom:13px}
+.ctx-group-icon{
+  display:flex;align-items:center;justify-content:center;width:34px;height:34px;flex:0 0 34px;
+  border:var(--s-border-sm);background:var(--s-cream);color:var(--s-ink);
+  box-shadow:2px 2px 0 var(--s-ink);
+}
+.ctx-group-icon svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.ctx-group-work_rule .ctx-group-icon{background:rgba(201,153,63,.16)}
+.ctx-group-copy{min-width:0;flex:1}
+.ctx-group-title-row{display:flex;align-items:center;gap:var(--space-2)}
+.ctx-group-title-row h3{margin:0;font-size:13.5px;font-weight:800;letter-spacing:.01em;color:var(--s-ink)}
+.ctx-group-title-row span{
+  min-width:20px;padding:1px 7px;text-align:center;
+  font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:800;
+  background:var(--s-gold);color:var(--s-ink);border:1.5px solid var(--s-ink);
+}
+.ctx-group-copy p{margin:5px 0 0;font-size:11.5px;line-height:1.6;color:var(--s-ink-soft);opacity:.85}
+.ctx-add-btn{
+  display:flex;align-items:center;gap:5px;flex:none;padding:5px 10px;
+  border:1.5px dashed rgba(26,24,20,.4);border-radius:0;background:transparent;color:var(--s-ink-soft);
+  font:inherit;font-size:var(--font-size-xs);font-weight:700;cursor:pointer;transition:all .12s ease;
+}
+.ctx-add-btn:hover{border-style:solid;border-color:var(--s-ink);color:var(--s-ink);background:var(--s-cream);box-shadow:2px 2px 0 var(--s-ink);transform:translate(-1px,-1px)}
+.ctx-add-btn svg{width:12px;height:12px}
 
 /* ── Fact/rule cards: numbered index cards ── */
+.ctx-items{display:flex;flex-direction:column;gap:var(--space-2);counter-reset:ctxcard}
+.ctx-empty{
+  width:100%;padding:var(--space-4) var(--space-3);border:1.5px dashed rgba(26,24,20,.3);border-radius:0;background:transparent;
+  color:rgba(61,54,44,.55);font:inherit;font-size:11.5px;font-weight:600;cursor:pointer;transition:all .12s ease;
+}
+.ctx-empty:hover{border-color:var(--s-gold-dim);color:var(--s-gold-dim);background:rgba(201,153,63,.05)}
+.ctx-item{
+  counter-increment:ctxcard;position:relative;overflow:hidden;
+  border:1.5px solid var(--s-ink);background:var(--s-white);
+  box-shadow:2px 2px 0 rgba(26,24,20,.12);
+  transition:transform .12s ease,box-shadow .12s ease;
+}
+.ctx-item:hover{transform:translate(-1px,-1px);box-shadow:3px 3px 0 var(--s-ink)}
+.ctx-item.is-editing{transform:translate(-1px,-1px);box-shadow:3px 3px 0 var(--s-gold)}
+.ctx-item-view{display:flex;align-items:flex-start;gap:10px;padding:10px var(--space-3);cursor:pointer}
 /* archive counter: 01 / 02 / 03 … */
+.ctx-item-view::before{
+  content:counter(ctxcard,decimal-leading-zero);flex:none;margin-top:2px;
+  font-family:'JetBrains Mono',monospace;font-size:9.5px;font-weight:800;letter-spacing:.05em;
+  color:rgba(26,24,20,.38);
+}
+.ctx-item:hover .ctx-item-view::before,.ctx-item.is-editing .ctx-item-view::before{color:var(--s-gold-dim)}
+.ctx-item-content{min-width:0;flex:1}
+.ctx-item-text{margin:0;color:var(--s-ink);font-size:12.5px;line-height:1.65;overflow-wrap:break-word}
+.ctx-item-meta{margin-top:6px;font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.04em;color:rgba(61,54,44,.5)}
+.ctx-item-actions{display:flex;gap:2px;opacity:0;transition:opacity .15s ease}
+.ctx-item:hover .ctx-item-actions,.ctx-item:focus-within .ctx-item-actions{opacity:1}
+.ctx-item-actions button{
+  display:flex;align-items:center;justify-content:center;width:24px;height:24px;
+  border:1.5px solid transparent;border-radius:0;background:transparent;color:rgba(61,54,44,.6);
+  cursor:pointer;transition:all .1s ease;
+}
+.ctx-item-actions button:hover{border-color:var(--s-ink);background:var(--s-cream);color:var(--s-ink)}
+.ctx-item-actions button.is-danger:hover{border-color:#b3261e;background:rgba(179,38,30,.08);color:#b3261e}
+.ctx-item-actions button svg{width:12px;height:12px}
 
 /* ── WHEN→DO: punched-ticket rule rows, stitched by a dashed link ── */
+.ctx-rule-line{display:grid;grid-template-columns:26px minmax(0,1fr);align-items:start;gap:var(--space-2)}
+.ctx-rule-line+.ctx-rule-line{margin-top:7px}
+.ctx-rule-line>span{
+  position:relative;display:flex;align-items:center;justify-content:center;height:19px;
+  background:var(--s-ink);color:var(--s-white);
+  font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:800;
+}
+.ctx-rule-line.is-action>span{background:var(--s-gold);color:var(--s-ink)}
+.ctx-rule-line:not(.is-action)>span::after{
+  content:'';position:absolute;left:50%;top:100%;height:8px;
+  border-left:1.5px dashed rgba(26,24,20,.35);
+}
+.ctx-rule-line p{margin:1px 0 0;color:var(--s-ink);font-size:12.5px;line-height:1.6;overflow-wrap:break-word}
 
 /* ── Inline editor ── */
+.ctx-item-editor{padding:2px var(--space-3) var(--space-3);border-top:1.5px dashed rgba(26,24,20,.18)}
+.ctx-item-editor label{display:block;margin-top:10px}
+.ctx-item-editor label span{
+  display:block;margin-bottom:5px;
+  font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:800;letter-spacing:.06em;color:var(--s-ink-soft);
+}
+.ctx-item-editor textarea{
+  box-sizing:border-box;width:100%;resize:vertical;min-height:56px;padding:var(--space-2) 10px;
+  border:1.5px solid var(--s-ink);border-radius:0;background:var(--s-white);
+  color:var(--s-ink);font:inherit;font-size:12.5px;line-height:1.6;outline:none;
+  transition:border-color .12s ease,box-shadow .12s ease;
+}
+.ctx-item-editor textarea:focus{border-color:var(--s-gold-dim);box-shadow:2px 2px 0 var(--s-gold-glow)}
+.ctx-editor-done{
+  display:block;margin:9px 0 0 auto;padding:5px 14px;
+  border:var(--s-border-sm);border-radius:0;background:var(--s-ink);color:var(--s-white);
+  font:inherit;font-size:var(--font-size-xs);font-weight:800;letter-spacing:.04em;cursor:pointer;
+  box-shadow:2px 2px 0 rgba(26,24,20,.25);
+  transition:transform .1s ease,box-shadow .1s ease,background .1s ease,color .1s ease;
+}
+.ctx-editor-done:hover{background:var(--s-gold);color:var(--s-ink);transform:translate(1px,1px);box-shadow:1px 1px 0 rgba(26,24,20,.25)}
 
 /* ── Experience-memory zone: a separate section under a hairline ── */
 .ctx-memory-zone{margin-top:var(--space-6);padding-top:var(--space-5);border-top:1px solid var(--s-line-strong)}
@@ -573,6 +691,7 @@
   .ctx-toolbar-actions{justify-content:flex-end}
   .ctx-groups{columns:1}
   .ctx-memory-actions{width:100%;flex-wrap:wrap}
+  .ctx-item-actions{opacity:1}
 }
 
 
@@ -762,6 +881,49 @@
   .mcp-catalog-grid { grid-template-columns: 1fr; }
 }
 /* ── Skills pagination ── */
+.skills-pagination {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: 6px;
+  padding: var(--space-2) 2px 2px;
+  border-top: 1px dashed rgba(26, 24, 20, 0.18);
+  font-size: var(--font-size-xs);
+  color: var(--s-ink-soft);
+}
+.skills-page-info { opacity: .75; font-weight: 600; }
+.skills-page-ctrls { display: flex; align-items: center; gap: 3px; }
+.skills-page-btn {
+  min-width: 26px;
+  height: 26px;
+  padding: 0 7px;
+  border: 1.5px solid rgba(26, 24, 20, 0.25);
+  background: var(--s-white);
+  color: var(--s-ink-soft);
+  border-radius: var(--s-radius);
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+  font-weight: 800;
+  line-height: 1;
+  font-family: inherit;
+  transition: transform 0.1s, box-shadow 0.1s, border-color 0.1s, color 0.1s;
+}
+.skills-page-btn:hover:not([disabled]):not(.is-active) {
+  border-color: var(--s-line-strong);
+  color: var(--s-ink);
+  transform: translateY(-1px);
+  box-shadow: var(--s-shadow-sm);
+}
+.skills-page-btn.is-active {
+  background: rgba(201, 153, 63, 0.14);
+  color: var(--s-ink);
+  border-color: rgba(201, 153, 63, 0.45);
+  cursor: default;
+}
+.skills-page-btn[disabled] { opacity: .35; cursor: not-allowed; }
+.skills-page-ellipsis { opacity: .5; padding: 0 2px; }
 /* ── App card ── */
 .mcp-app-card {
   position: relative;
@@ -875,7 +1037,22 @@
 /* Credential-expired badge: the server is connected (live subprocess) but its
    stored cookie/token no longer authenticates. Amber-warning tone, distinct
    from the green "ON" so it reads as "attention needed, not offline". */
+.mcp-app-status.cred-expired {
+  background: #7c2d12; color: #fdba74;
+  display: inline-flex; align-items: center; gap: 3px;
+}
+.mcp-app-status.cred-expired > svg { display: block; }
 /* Amber edge on a connected-but-stale-credentials card. */
+.mcp-app-card.cred-expired {
+  border-color: #b45309;
+}
+.mcp-app-reconnecting-note {
+  font-size: 10px;
+  font-weight: 700;
+  color: #b45309;
+  font-family: 'JetBrains Mono', monospace;
+  white-space: nowrap;
+}
 /* Description — clamped at 2 lines AND reserved at 2 lines (2 × 1.45em):
  * a one-line description keeps the same body height as a two-line one, so
  * it contributes zero variance to the row's height alignment. */
@@ -909,6 +1086,29 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.mcp-app-compat-notice {
+  grid-column: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 5px;
+  margin-top: 3px;
+  padding: 3px 7px;
+  border: 1px solid rgba(180, 83, 9, .35);
+  border-radius: var(--s-radius);
+  background: rgba(245, 158, 11, .08);
+  color: #92400e;
+  font-size: 10px;
+  line-height: 1.35;
+  font-weight: 700;
+}
+.mcp-app-compat-notice { max-width: 100%; }
+.mcp-app-compat-notice > svg { flex: 0 0 auto; }
+.mcp-app-compat-notice > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .mcp-install-modal-note {
   margin-top: 6px;
   padding: 6px var(--space-2);
@@ -922,14 +1122,81 @@
 /* "Where do I get this key" — a real link + optional ordered steps, rendered
  * ABOVE the credential input. Replaces cramming a console breadcrumb into the
  * placeholder (uncklickable, truncated, and gone as soon as the user types). */
+.mcp-obtain {
+  margin: 2px 0 5px;
+}
+.mcp-obtain-link {
+  display: inline-block;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--accent, #2563eb);
+  text-decoration: none;
+}
+.mcp-obtain-link:hover { text-decoration: underline; }
+.mcp-obtain-steps {
+  margin: var(--space-1) 0 0;
+  padding-left: 18px;
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--s-ink-soft);
+}
+.mcp-env-saved-note,
+.mcp-env-shared-note {
+  display: block;
+  margin-top: var(--space-1);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+.mcp-env-shared-note { color: var(--accent, #2563eb); }
 /* Empty-state suggestion strip: shown when nothing is installed yet. Only
  * lists servers the user can finish installing unaided, so a chip never leads
  * to a dead end. */
+.mcp-suggest {
+  margin: 10px auto 0;
+  max-width: 560px;
+  text-align: center;
+}
+.mcp-suggest-title {
+  font-size: 11.5px;
+  color: var(--s-ink-soft);
+  margin-bottom: var(--space-2);
+}
+.mcp-suggest-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+}
+.mcp-suggest-chip {
+  padding: 5px 10px;
+  font-size: 11.5px;
+  color: var(--s-ink);
+  background: var(--s-white);
+  border: var(--s-border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.mcp-suggest-chip:hover {
+  border-color: var(--accent, #2563eb);
+  background: var(--s-bg-soft, rgba(0, 0, 0, .03));
+}
 /* Card footer: repo link + action
  * Use min-height matching the .btn-xs height so the left-side text
  * (Repo) and the right-side buttons (卸载/连接/…) share a common
  * vertical axis regardless of whether the right side is rendered as
  * plain text only (no button), plain buttons, or text + button. */
+.mcp-app-footer {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: 6px;
+  padding-top: 6px;
+  min-height: 26px;   /* = compact card .btn-xs height (see action rule below) */
+  border-top: 1px dashed rgba(26, 24, 20, 0.18);
+}
 .mcp-app-repo {
   display: inline-flex;
   align-items: center;
@@ -945,15 +1212,104 @@
 }
 .mcp-app-repo svg { flex-shrink: 0; }
 .mcp-app-repo:hover { opacity: 1; color: var(--s-ink); text-decoration: underline; }
+.mcp-app-tools-count {
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--s-ink);
+  font-family: 'JetBrains Mono', monospace;
+  opacity: 0.7;
+  line-height: 1;
+}
 /* Per-tool toggle (pt_53065dbe86bb4286): the tools badge is a BUTTON that
  * expands the per-tool checkbox panel — reset button chrome, keep the badge
  * look, signal clickability on hover. */
+.mcp-tools-toggle {
+  border: 1px solid transparent;
+  background: none;
+  padding: 2px var(--space-1);
+  border-radius: var(--s-radius);
+  cursor: pointer;
+}
+.mcp-tools-toggle:hover {
+  opacity: 1;
+  border-color: rgba(26, 24, 20, 0.18);
+  background: rgba(201, 153, 63, 0.08);
+}
 /* Recessed paper tray: pinned toolbar on top (live count + bulk actions),
  * multi-column switch grid below — only the grid scrolls, so the toolbar
  * stays put on long lists. */
+.mcp-tool-panel {
+  grid-column: 1 / -1;
+  margin-top: var(--space-2);
+  border: var(--s-border-sm);
+  border-radius: var(--s-radius);
+  background: var(--s-cream);
+  box-shadow: inset 0 2px 4px rgba(74, 63, 47, 0.07);
+  padding: 7px 10px 9px;
+}
+.mcp-tool-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 2px 7px;
+  margin-bottom: 7px;
+  border-bottom: 1px dashed rgba(26, 24, 20, 0.18);
+}
+.mcp-tool-panel-count {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: var(--s-ink-soft);
+  font-family: 'JetBrains Mono', monospace;
+}
+.mcp-tool-bulk { display: inline-flex; gap: 2px; flex-shrink: 0; }
+.mcp-tool-bulk-btn {
+  border: 1px solid transparent;
+  background: none;
+  padding: 2px 7px;
+  border-radius: var(--s-radius);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--s-ink-soft);
+  cursor: pointer;
+  font-family: inherit;
+  transition: color 0.1s, background 0.1s, border-color 0.1s;
+}
+.mcp-tool-bulk-btn:hover {
+  color: var(--s-ink);
+  background: rgba(201, 153, 63, 0.12);
+  border-color: rgba(26, 24, 20, 0.18);
+}
+.mcp-tool-loading { font-size: var(--font-size-xs); color: var(--s-ink-soft); padding: 6px 2px; }
+.mcp-tool-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(175px, 1fr));
+  gap: 1px 10px;
+  max-height: 216px;
+  overflow-y: auto;
+  padding: 1px 2px;
+}
 /* Must out-specificy the ambient `.modal label` / `.settings-panel label`
  * resets (0,1,1 — display:block + margin-bottom + uppercase text), which
  * otherwise flatten this flex row and push the switch off the text axis. */
+.mcp-tool-grid .mcp-tool-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  padding: 3px 6px;
+  border-radius: 6px;
+  font-size: var(--font-size-xs);
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.mcp-tool-row:hover { background: rgba(201, 153, 63, 0.10); }
 /* The switch is the house .stg-toggle component (styles.css): its real
  * input is visually hidden, so the ambient modal/panel input resets
  * (.modal input padding, [data-theme] .modal:not(...) input:not(...)
@@ -961,8 +1317,38 @@
  * visible track/thumb spans. Do NOT restyle the input here — a previous
  * appearance:none reskin lost that fight (0,4,1 ambient specificity)
  * and rendered as an inflated, misaligned, never-gold pill. */
+.mcp-tool-row .stg-toggle { margin-left: auto; }
+.mcp-tool-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  color: var(--s-ink);
+}
+.mcp-tool-row:has(input:not(:checked)) .mcp-tool-name { opacity: 0.45; }
 /* Version badge: server-reported upstream version (InitializeResult.serverInfo.version) */
+.mcp-app-version {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--s-ink-soft);
+  font-family: 'JetBrains Mono', monospace;
+  padding: 2px 5px;
+  border: 1px solid rgba(26, 24, 20, 0.18);
+  border-radius: var(--s-radius);
+  background: rgba(201, 153, 63, 0.08);
+  line-height: 1;
+  white-space: nowrap;
+}
 /* Action buttons cluster — share the button baseline with left-side text */
+.mcp-app-action {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+  align-items: center;
+}
 /* Card actions are btn-xs, but the tofu pixel skin
  * ([data-theme="tofu"] .btn-primary/.btn-secondary — padding:9px 20px,
  * font-size:13px at 0,2,0) inflates them into slabs that swallow the
@@ -985,6 +1371,14 @@
   background: var(--s-cream);
   color: var(--s-ink-soft);
   border: 1px solid var(--s-ink-soft);
+  animation: mcp-reconnect-pulse 1.6s ease-in-out infinite;
+}
+.mcp-app-pending-note {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--s-ink-soft);
+  font-family: 'JetBrains Mono', monospace;
+  white-space: nowrap;
   animation: mcp-reconnect-pulse 1.6s ease-in-out infinite;
 }
 /* ── Header quick action ──
@@ -1023,11 +1417,21 @@
   transform: none !important;
 }
 /* Advanced toggle */
+.mcp-advanced-toggle {
+  margin-top: var(--space-1);
+}
+.mcp-advanced-toggle summary { list-style: none; }
+.mcp-advanced-toggle summary::-webkit-details-marker { display: none; }
 .mcp-add-form {
   padding: 14px;
   border: var(--s-border);
   border-radius: var(--s-radius);
   background: var(--s-cream);
+}
+.mcp-add-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: 10px;
 }
 /* Install Modal */
 .mcp-install-modal-overlay {
@@ -1085,6 +1489,14 @@
   color: var(--s-ink-soft);
   margin-top: 2px;
 }
+.mcp-install-noenv {
+  font-size: var(--font-size-sm);
+  color: var(--s-ink-soft);
+  padding: var(--space-2);
+  text-align: center;
+  background: var(--s-cream);
+  border-radius: var(--s-radius);
+}
 .mcp-install-modal-actions {
   display: flex;
   gap: var(--space-2);
@@ -1120,6 +1532,17 @@
   color: var(--s-ink);
 }
 .mcp-env-input:focus { outline: none; border-color: var(--s-gold); box-shadow: 0 0 0 3px var(--s-gold-glow); }
+.mcp-env-select {
+  width: 100%;
+  padding: 5px var(--space-2);
+  font-size: var(--font-size-sm);
+  font-family: 'JetBrains Mono', monospace;
+  border: var(--s-border);
+  border-radius: var(--s-radius);
+  background: var(--s-white);
+  color: var(--s-ink);
+}
+.mcp-env-select:focus { outline: none; border-color: var(--s-gold); box-shadow: 0 0 0 3px var(--s-gold-glow); }
 /* ── Skills Settings tab ── App-Store layout (brutalist tofu) ── */
 /* Header count badges — tofu stamp chips. Same markup lives in the MCP tab
  * header, so both store tabs get the same chip language here. (The shared
@@ -1146,27 +1569,60 @@
 /* Skills grid empty / loading / load-failed state — one centered block with
  * an icon, a headline, and (when there is a next step) a one-line hint.
  * Replaces the bare <p class="stg-empty"> that left a dead void. */
+.skills-empty{grid-column:1 / -1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--space-2);padding:var(--space-10) var(--space-6);text-align:center}
+.skills-empty-icon{color:var(--s-ink-soft);opacity:.55;margin-bottom:var(--space-1)}
+.skills-empty-title{font-size:var(--font-size-md);font-weight:700;color:var(--s-ink)}
+.skills-empty-hint{font-size:var(--font-size-sm);color:var(--s-ink-soft);line-height:1.55;max-width:44ch}
+.skills-empty-action{margin-top:var(--space-2)}
 /* Skill card uses mcp-app-card as base; add skill-specific accents.
  * The base .mcp-app-card is a 2-col grid (44px icon | 1fr content). The
  * skill-only children (author line, requirement warning, footer) MUST be
  * pinned to the content column / full width — otherwise the grid
  * auto-places them in column 1 under the icon and the card looks broken. */
+.mcp-app-card.skill-card .mcp-app-icon{filter:saturate(1.1)}
 /* Featured tag — the catalog sorts featured entries first; the solid gold
  * stamp makes that ranking visible instead of silent. */
+.mcp-app-card .skill-badge-featured{display:inline-flex;align-items:center;gap:3px;padding:1px 6px;border:1px solid var(--s-gold-dim);border-radius:var(--s-radius);background:var(--s-gold);color:var(--s-ink);font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;flex-shrink:0}
+.mcp-app-card .skill-badge-official{display:inline-flex;align-items:center;gap:3px;padding:1px 6px;border:1px solid rgba(168,125,46,.55);border-radius:var(--s-radius);background:rgba(201,153,63,.1);color:var(--s-gold-dim);font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;flex-shrink:0}
 /* One line, ellipsized: requirement warnings can list several bins/env
  * names and were a row-height outlier. Content is a single text node
  * (⚠ + text), so block display makes the ellipsis actually render —
  * text-overflow on a flex container does nothing. */
+.mcp-app-card .skill-badge-warn{grid-column:2;justify-self:start;display:block;padding:2px 7px;margin-top:var(--space-1);border:1px solid rgba(168,125,46,.45);border-radius:var(--s-radius);background:rgba(201,153,63,.12);color:var(--s-gold-dim);font-size:10px;font-weight:700;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mcp-app-card .skill-author{grid-column:2;font-size:10.5px;color:var(--s-ink-soft);opacity:.8;margin-top:1px}
+.mcp-app-card .skill-card-footer{grid-column:1 / -1;display:flex;align-items:center;justify-content:space-between;gap:var(--space-2);margin-top:6px;padding-top:6px;min-height:26px;border-top:1px dashed rgba(26,24,20,.18)}
+.mcp-app-card .skill-card-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
 /* Per-skill env/key bindings (credential-vault backed). One row per variable:
  * name chip + state + actions; the editor unfolds under the row. */
+.skill-env-section{grid-column:1 / -1;display:flex;flex-direction:column;gap:var(--space-1);margin-top:6px;padding-top:6px;border-top:1px dashed rgba(26,24,20,.18)}
+.skill-env-row{display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap}
+.skill-env-name{font-size:10.5px;font-weight:700;padding:1px 7px;border:1px solid rgba(26,24,20,.25);border-radius:var(--s-radius);background:var(--s-cream);color:var(--s-ink)}
+.skill-env-state{font-size:10px;font-weight:700;letter-spacing:.02em}
+.skill-env-state.is-ok{color:var(--s-gold-dim)}
+.skill-env-state.is-missing{color:#b3462e}
+.skill-env-editor{display:flex;gap:6px;align-items:center;padding:var(--space-1) 0 2px}
+.skill-env-input{flex:1;min-width:0;padding:5px var(--space-2);font-size:var(--font-size-xs);border:var(--s-border-sm);border-radius:var(--s-radius);background:var(--s-white);color:var(--s-ink)}
+.skill-env-input:focus{outline:none;border-color:var(--s-gold);box-shadow:0 0 0 3px var(--s-gold-glow)}
 /* Installed state — same gold language as .mcp-app-card.connected: the
  * card reads 'already yours' without the old green wash. */
 .mcp-app-card.is-installed{background:linear-gradient(180deg,rgba(201,153,63,.06) 0%,var(--s-white) 60%);border-color:rgba(201,153,63,.45);box-shadow:var(--s-shadow-xs)}
 .mcp-app-card.is-installed:hover{box-shadow:var(--s-shadow-sm)}
+.mcp-app-card .skill-installed-tag{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border:1px solid rgba(201,153,63,.4);border-radius:var(--s-radius);background:rgba(201,153,63,.14);color:var(--s-gold-dim);font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;align-self:center;font-family:'JetBrains Mono',monospace}
 /* Skills file browser list */
 .skills-files-modal{max-width:640px;max-height:80vh;max-height:calc(var(--vh100,100vh)*0.8);display:flex;flex-direction:column}
 .skills-files-list{flex:1;overflow-y:auto;margin:var(--space-3) 0;padding:6px 0;border:var(--s-border-sm);border-radius:var(--s-radius);background:var(--s-white);max-height:50vh;max-height:calc(var(--vh100,100vh)*0.5)}
+.skills-file-row{display:flex;align-items:center;gap:10px;padding:6px var(--space-3);font-size:12.5px;color:var(--s-ink);border-bottom:1px solid rgba(26,24,20,.07)}
+.skills-file-row:last-child{border-bottom:none}
+.skills-file-row:hover{background:var(--s-cream)}
+.skills-file-kind{flex:0 0 16px;font-size:var(--font-size-lg);text-align:center;color:var(--s-ink-soft)}
+.skills-file-kind svg{width:14px;height:14px;vertical-align:middle}
+.skills-file-path{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-mono,monospace);font-size:11.5px;color:var(--s-ink)}
+.skills-file-size{flex:0 0 auto;font-size:10px;color:var(--s-ink-soft);opacity:.7;font-variant-numeric:tabular-nums}
+.skills-file-row.is-skill{background:rgba(201,153,63,.12);font-weight:600}
 /* Toast used by catalog install */
+.skills-toast{position:fixed;bottom:var(--space-6);left:50%;transform:translateX(-50%);padding:10px 18px;background:var(--s-white);color:var(--s-ink);border:var(--s-border);border-radius:var(--s-radius);font-size:12.5px;font-weight:700;box-shadow:var(--s-shadow-sm);z-index:10020;animation:skillsToastIn .25s cubic-bezier(.2,1,.3,1)}
+.skills-toast.is-error{border-color:var(--s-blocked);background:rgba(248,113,113,.1);color:#b91c1c}
+.skills-toast.is-success{border-color:var(--s-gold-dim);background:rgba(201,153,63,.08)}
 
 
 /* ══ api(access-matrix) / general(system-prompt) / preset(visibility) settings pages (moved from styles.css 2026-07-18) ══ */
@@ -1190,6 +1646,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.sysprompt-summary.has-value { color: var(--s-ink); }
 /* ── Per-block system-prompt editor ── */
 .sysprompt-blocks-head {
   display: flex;
@@ -1205,17 +1662,123 @@
   align-items: center;
   gap: var(--space-2);
 }
+.sysprompt-preview-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+}
+.sysprompt-blocks-mode-label {
+  opacity: 0.65;
+}
 .sysprompt-blocks-list {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
+.sysprompt-block {
+  position: relative;
+  border: 1px solid var(--border-color, rgba(128,128,128,0.2));
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-elevated, var(--bg-secondary, rgba(128,128,128,0.03)));
+  transition: border-color .12s, background .12s;
+}
 /* Accent edge bar shows on/off at a glance without reading the toggle. */
+.sysprompt-block::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: var(--accent, #4caf50);
+  transition: background .12s;
+}
+.sysprompt-block.is-off { background: transparent; }
+.sysprompt-block.is-off::before { background: var(--border-color, rgba(128,128,128,0.25)); }
+.sysprompt-block-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px var(--space-3) 9px 14px;
+  cursor: pointer;
+}
+.sysprompt-block-head:hover { background: rgba(128,128,128,0.06); }
+.sysprompt-block-chevron {
+  flex: 0 0 auto;
+  width: 14px; height: 14px;
+  color: var(--text-tertiary);
+  transition: transform .15s;
+}
+.sysprompt-block.is-open .sysprompt-block-chevron { transform: rotate(90deg); }
+.sysprompt-block-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  min-width: 0;
+  flex: 1;
+}
+.sysprompt-block-title > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sysprompt-block.is-off .sysprompt-block-title { color: var(--text-tertiary); }
+.sysprompt-block-badge {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--accent-soft, rgba(120,120,200,0.16));
+  color: var(--text-secondary);
+  flex: 0 0 auto;
+}
 /* Project-affected blocks: blocks whose text differs in code/project mode.
    Distinct amber badge + a thicker, amber accent edge so the user can see at
    a glance which sections "code/project mode" actually rewrites. */
+.sysprompt-block-badge.is-project-badge {
+  background: var(--accent-amber-soft, rgba(212, 160, 23, 0.18));
+  color: var(--accent-amber, #c79100);
+  cursor: help;
+}
+.sysprompt-block.is-project:not(.is-off)::before {
+  width: 4px;
+  background: var(--accent-amber, #d4a017);
+}
+.sysprompt-block.is-project:not(.is-off) {
+  border-color: var(--accent-amber-soft, rgba(212, 160, 23, 0.35));
+}
+.sysprompt-block-toggle {
+  flex: 0 0 auto;
+}
+.sysprompt-block-text {
+  margin: 0;
+  padding: 2px 14px var(--space-3) 14px;
+  max-height: 220px;
+  overflow: auto;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-secondary);
+  border-top: 1px solid var(--border-color, rgba(128,128,128,0.12));
+}
+.sysprompt-block:not(.is-open) .sysprompt-block-text { display: none; }
 
 /* Source selection and disk provenance for the skill library. */
+.skills-library-controls { display:flex; flex-wrap:wrap; align-items:center; gap:var(--space-3); margin-bottom:var(--space-4); }
+.skills-library-controls[hidden] { display:none; }
+.skills-library-filter { flex:1 1 100%; min-width:0; }
+.skills-library-controls select { max-width:100%; }
+.skill-source-path { grid-column:2 / -1; min-width:0; overflow-wrap:anywhere; font-size:var(--font-size-xs); color:var(--s-ink-soft); }
+.skills-library-warning { flex-basis:100%; white-space:pre-line; overflow-wrap:anywhere; }
 
 @keyframes skillsToastIn{from{opacity:0;transform:translate(-50%,10px)}to{opacity:1;transform:translate(-50%,0)}}
 /* ══════════════════════════════════════
@@ -1605,6 +2168,8 @@
 .pp-enabled-control input:checked + .pp-switch-track { background: var(--s-gold); }
 .pp-enabled-control input:checked + .pp-switch-track > span { transform: translateX(13px); }
 .pp-enabled-control input:focus-visible + .pp-switch-track { outline: 2px solid var(--s-accent); outline-offset: 2px; }
+
+.proxy-pool-body { padding: var(--space-3); }
 #settingsTab_network .pp-url-field {
   display: flex;
   flex-direction: column;
@@ -1653,6 +2218,27 @@
 .pp-url-visibility:hover { background: var(--s-gold); color: var(--s-ink); }
 .pp-url-visibility:disabled { opacity: .45; cursor: wait; }
 .pp-url-help { min-height: 15px; color: var(--s-ink-soft); font-size: 10.5px; line-height: 1.45; }
+
+.pp-more { margin-top: 10px; border-top: 1px dashed color-mix(in srgb, var(--s-ink) 25%, transparent); }
+.pp-more > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+  padding: 9px 1px 0;
+  color: var(--s-ink);
+  font-size: var(--font-size-xs);
+  font-weight: 800;
+  cursor: pointer;
+  list-style: none;
+}
+.pp-more > summary::-webkit-details-marker { display: none; }
+.pp-more > summary::before { content: '+'; flex: none; margin-right: -7px; color: var(--s-gold-dim); font: 900 14px/1 'JetBrains Mono', monospace; }
+.pp-more[open] > summary::before { content: '−'; }
+.pp-more > summary > span:first-of-type { flex: none; white-space: nowrap; }
+.pp-more-summary { flex: 1 1 auto; overflow: hidden; min-width: 0; color: var(--s-ink-soft); font-size: 10.5px; font-weight: 600; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.pp-more-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(170px, .85fr); gap: 10px; padding-top: 10px; }
 #settingsTab_network .pp-field {
   display: flex;
   flex-direction: column;
@@ -1713,6 +2299,15 @@
 }
 .pp-result.ok { border-left-color: var(--s-done); color: var(--s-ink); }
 .pp-result.err { border-left-color: var(--s-blocked); color: var(--s-blocked); }
+.proxy-pool-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  color: var(--s-ink-soft);
+  font-size: 10.5px;
+  font-weight: 650;
+}
 .proxy-pool-empty {
   display: flex;
   flex-direction: column;
@@ -1789,6 +2384,7 @@
 @media (max-width: 620px) {
   .proxy-pool-head { flex-direction: row; align-items: center; gap: var(--space-2); }
   .pp-enabled-control { flex-basis: 70px; min-width: 70px; }
+  .pp-more-fields { grid-template-columns: 1fr; }
   .proxy-pool-card-footer { align-items: flex-start; flex-wrap: wrap; }
   .pp-card-actions { margin-left: auto; }
   .proxy-bypass-footer { flex-direction: column; }
@@ -1796,6 +2392,7 @@
   .proxy-bypass-rules-help > summary { text-align: left; }
 }
 @media (max-width: 420px) {
+  .proxy-pool-footer { align-items: flex-start; flex-direction: column; }
   .pp-reorder > span { display: none; }
   .pp-delete-btn span { display: none; }
   .proxy-bypass-rules-help > div { grid-template-columns: 1fr; }
@@ -2204,6 +2801,7 @@
   flex-wrap: wrap;
   margin: var(--space-1) 0 14px;
 }
+.search-status-label { font-size: var(--font-size-sm); font-weight: 800; color: var(--s-ink-soft); }
 .search-status-badge {
   font-size: 11.5px;
   font-weight: 700;
@@ -2576,7 +3174,9 @@
    (07-access-matrix.css); this file carries the card chrome, the shared
    picker/catalog overlay shell, and the small inline parts (capability chips,
    structured pricing, status filter chips) the matrix reuses. */
-.stg-v2-manager-brand span{color:var(--text-muted,#777);font-size:var(--font-size-sm)}
+.stg-v2-intro{display:flex;align-items:baseline;justify-content:space-between;gap:var(--space-4);margin:0 0 var(--space-3);padding:10px 0;border-bottom:1px solid var(--border,#ddd)}
+.stg-v2-intro strong{font-size:var(--font-size-md)}
+.stg-v2-intro span,.stg-v2-manager-brand span{color:var(--text-muted,#777);font-size:var(--font-size-sm)}
 
 /* The v2 card reuses the legacy .stg-provider-card chrome (hard border, offset
    shadow, cream head hover) from the application shell; the rules below only
@@ -2629,6 +3229,21 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
 .stg-provider-card-v2 .stg-provider-foot-actions .stg-toggle{padding-top:6px;padding-bottom:0}
 .stg-provider-card-v2 .stg-models-section{margin-top:14px;padding-top:14px;border-top:1px solid var(--s-line,rgba(26,24,20,.08))}
 /* Capability chips — matrix root-row meta line and picker/catalog rows. */
+.stg-provider-card-v2 .stg-cap,.stg-v2-manager .stg-cap{padding:2px var(--space-2);border:0;border-radius:999px;background:rgba(26,24,20,.06);color:var(--s-ink-soft,#3d362c);font-size:10px;font-weight:700;letter-spacing:.03em;text-transform:uppercase}
+.stg-provider-card-v2 .stg-cap.text,.stg-v2-manager .stg-cap.text{color:#2563eb;background:rgba(96,165,250,.14)}
+.stg-provider-card-v2 .stg-cap.vision,.stg-v2-manager .stg-cap.vision{color:#7c3aed;background:rgba(167,139,250,.14)}
+.stg-provider-card-v2 .stg-cap.cheap,.stg-v2-manager .stg-cap.cheap{color:#15803d;background:rgba(74,222,128,.14)}
+.stg-provider-card-v2 .stg-cap.image_gen,.stg-v2-manager .stg-cap.image_gen{color:#db2777;background:rgba(244,114,182,.14)}
+.stg-provider-card-v2 .stg-cap.embedding,.stg-v2-manager .stg-cap.embedding{color:#0d9488;background:rgba(45,212,191,.14)}
+.stg-provider-card-v2 .stg-cap.thinking,.stg-v2-manager .stg-cap.thinking{color:#c2410c;background:rgba(251,146,60,.15)}
+.stg-provider-card-v2 .stg-cap.video,.stg-v2-manager .stg-cap.video{color:#a16207;background:rgba(250,204,21,.16)}
+.stg-provider-card-v2 .stg-cap.audio_chat,.stg-v2-manager .stg-cap.audio_chat{color:#0369a1;background:rgba(56,189,248,.14)}
+.stg-provider-card-v2 .stg-cap.video_gen,.stg-v2-manager .stg-cap.video_gen{color:#9333ea;background:rgba(192,132,252,.15)}
+.stg-provider-card-v2 .stg-cap.audio_gen,.stg-v2-manager .stg-cap.audio_gen{color:#b45309;background:rgba(251,191,36,.16)}
+.stg-provider-card-v2 .stg-cap.tts,.stg-v2-manager .stg-cap.tts{color:#0e7490;background:rgba(34,211,238,.13)}
+.stg-provider-card-v2 .stg-cap.transcription,.stg-v2-manager .stg-cap.transcription{color:#4338ca;background:rgba(129,140,248,.14)}
+.stg-provider-card-v2 .stg-cap.reranking,.stg-v2-manager .stg-cap.reranking{color:#4d7c0f;background:rgba(163,230,53,.16)}
+.stg-tpl-wizard-alias{color:var(--s-gold-dim,#a87d2e)!important}
 
 .stg-v2-close{border:1px solid var(--border,#ddd);background:var(--bg-primary,#fff);color:var(--text-primary,#222);font:600 12px/1.2 inherit;cursor:pointer}
 .stg-v2-close:focus-visible{outline:2px solid var(--accent,#6d5dfc);outline-offset:2px}
@@ -2655,14 +3270,39 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
 .stg-v2-catalog-icon{display:grid;place-items:center}
 
 /* ── 结构化价格件（矩阵根行 meta / catalog 行共用）── */
+.stg-v2-price-cur{margin-right:5px;font-weight:700}
+.stg-v2-price-io{margin-right:2px;color:var(--s-gold-dim,#a87d2e);font-size:9px;font-weight:800}
+.stg-v2-price-sep{margin:0 var(--space-1);opacity:.45}
+.stg-v2-price-tag{margin-left:6px;padding:0 5px;border-radius:4px;background:rgba(201,153,63,.13);color:var(--s-gold-dim,#a87d2e);font-size:9px;font-weight:800;white-space:nowrap}
 
 /* ── 状态过滤 chips（矩阵 manage row 的全部/已启用/已停用/待确认）── */
+.stg-v2-filter-chip{display:inline-flex;align-items:center;gap:5px;padding:var(--space-1) 11px;border:1px solid var(--s-line-strong,rgba(26,24,20,.15));border-radius:999px;background:var(--s-white,#faf8f3);color:var(--s-ink-soft,#3d362c);font-size:var(--font-size-xs);font-weight:700;cursor:pointer;transition:border-color .14s,background .14s,color .14s}
+.stg-v2-filter-chip em{color:var(--text-muted,#777);font-size:10px;font-style:normal;font-weight:800}
+.stg-v2-filter-chip:hover{border-color:var(--s-gold-dim,#a87d2e);color:var(--s-gold-dim,#a87d2e)}
+.stg-v2-filter-chip.active{border-color:var(--s-gold,#c9993f);background:var(--s-gold-glow,rgba(201,153,63,.14));color:var(--s-ink,#1a1814)}
+.stg-v2-filter-chip.active em{color:var(--s-gold-dim,#a87d2e)}
+.stg-v2-filter-chip:focus-visible{outline:2px solid var(--s-gold,#c9993f);outline-offset:2px}
 
 .stg-tpl-wizard{width:min(720px,94vw)}
 .stg-tpl-wizard .stg-modal-body{display:grid;gap:var(--space-3)}
 .stg-tpl-wizard-keylabel{display:grid;gap:6px;color:var(--s-ink,#1a1814);font-size:var(--font-size-sm);font-weight:800}
 .stg-tpl-wizard-key{width:100%;min-height:38px;padding:var(--space-2) 10px;border:var(--s-border,1px solid rgba(26,24,20,.15));border-radius:8px;background:#fff;color:var(--s-ink,#1a1814);font:12px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace}
-.stg-tpl-wizard-key:focus{outline:none;border-color:var(--s-gold,#c9993f);box-shadow:0 0 0 3px var(--s-gold-glow,rgba(201,153,63,.18))}
+.stg-tpl-wizard-key:focus,.stg-tpl-wizard-search:focus{outline:none;border-color:var(--s-gold,#c9993f);box-shadow:0 0 0 3px var(--s-gold-glow,rgba(201,153,63,.18))}
+.stg-tpl-wizard-keyhint{color:var(--s-ink-soft,#3d362c);font-size:var(--font-size-xs);font-weight:500}
+.stg-tpl-wizard-toolbar{display:flex;align-items:center;gap:var(--space-2)}
+.stg-tpl-wizard-search{flex:1;min-width:0;min-height:36px;padding:7px 10px;border:var(--s-border,1px solid rgba(26,24,20,.15));border-radius:8px;background:#fff;color:var(--s-ink,#1a1814);font-size:var(--font-size-sm)}
+.stg-tpl-wizard-count{color:var(--s-ink-soft,#3d362c);font-size:var(--font-size-xs);font-weight:700;white-space:nowrap}
+.stg-tpl-wizard-link{padding:2px var(--space-1);border:0;background:transparent;color:var(--s-gold-dim,#a87d2e);font-size:var(--font-size-xs);font-weight:800;cursor:pointer;white-space:nowrap}
+.stg-tpl-wizard-link:hover{color:var(--s-gold,#c9993f)}
+.stg-tpl-wizard-link:focus-visible{outline:2px solid var(--s-gold,#c9993f);outline-offset:2px}
+.stg-tpl-wizard-list{display:grid;max-height:min(470px,55vh);overflow:auto;border:var(--s-border,1px solid rgba(26,24,20,.15));border-radius:10px;background:#fff}
+.stg-tpl-wizard-row{display:grid;grid-template-columns:auto minmax(0,1fr) minmax(120px,.65fr);align-items:center;gap:10px;min-height:52px;padding:var(--space-2) 10px;border-bottom:1px solid color-mix(in srgb,var(--s-ink,#1a1814) 18%,transparent);cursor:pointer}
+.stg-tpl-wizard-row:last-child{border-bottom:0}
+.stg-tpl-wizard-row:hover{background:var(--s-cream,#f2ecda)}
+.stg-tpl-wizard-identity{display:grid;min-width:0;gap:3px}
+.stg-tpl-wizard-mid{overflow:hidden;color:var(--s-ink,#1a1814);font:800 12px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;text-overflow:ellipsis;white-space:nowrap}
+.stg-tpl-wizard-alias{overflow:hidden;font:10px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;text-overflow:ellipsis;white-space:nowrap}
+.stg-tpl-wizard-meta{color:var(--s-ink-soft,#3d362c);font-size:10px;text-align:right}
 /* ── 本地部署 preset chooser — grouped card tiles（不影响服务商模板下拉的紧凑样式）── */
 .stg-local-deploy .stg-modal-body{gap:var(--space-2)}
 .stg-local-deploy .stg-modal-desc{margin-bottom:6px}
@@ -2721,6 +3361,7 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
   .stg-template-grid{grid-template-columns:minmax(0,1fr)}
   .stg-template-item,.stg-template-info,.stg-template-name{min-width:0}
   .stg-template-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .stg-v2-intro{align-items:flex-start;flex-direction:column;gap:var(--space-1)}
   .stg-provider-head-v2{align-items:flex-start;flex-wrap:wrap}
   .stg-provider-head-v2 .stg-provider-info{flex:1}
   .stg-provider-head-v2 .stg-provider-badges{order:3;width:100%;justify-content:flex-start;padding-left:42px}
@@ -2734,6 +3375,10 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
   .stg-v2-picker-row-price{display:none}
   .stg-v2-catalog-row{grid-template-columns:24px minmax(0,1fr)}
   #stgModelCatalogSearch{width:100%}
+  .stg-tpl-wizard-row{grid-template-columns:auto minmax(0,1fr)}
+  .stg-tpl-wizard-meta{grid-column:2;text-align:left}
+  .stg-tpl-wizard-toolbar{align-items:stretch;flex-wrap:wrap}
+  .stg-tpl-wizard-search{flex-basis:100%}
 }
 
 @media (prefers-reduced-motion:reduce){.stg-v2-manager-overlay{backdrop-filter:none}}
@@ -2784,32 +3429,208 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
    identify each credential by its masked key hint (kind string as fallback
    for hint-less rows). */
 
+.stg-matrix { margin-top: 10px; }
+
 /* ── Manage row: substring search + exclusive status buckets + 添加模型 ── */
+.stg-mx-manage {
+  display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap;
+  margin-bottom: 10px;
+}
 /* Scoped to beat the global `.modal input` stretch (width:100%) so the
    field flexes inside the manage row instead of overflowing it. */
+.stg-matrix .stg-mx-search {
+  flex: 1 1 200px; width: auto; min-width: 140px; max-width: 320px;
+  min-height: 32px; margin: 0; padding: 6px 10px;
+  border: var(--s-border, 1px solid rgba(26,24,20,0.15)); border-radius: 8px;
+  background: #fff; color: var(--s-ink);
+  font: 12px/1.3 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  box-sizing: border-box;
+}
+.stg-matrix .stg-mx-search:focus {
+  outline: none; border-color: var(--s-gold);
+  box-shadow: 0 0 0 3px var(--s-gold-glow, rgba(201,153,63,0.18));
+}
+.stg-mx-filters { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.stg-mx-addmodel { flex: none; margin-left: auto; white-space: nowrap; }
 
 /* Empty states: no offerings at all, or offerings but zero credentials. */
+.stg-mx-empty, .stg-mx-nokeys {
+  padding: var(--space-4);
+  text-align: center;
+  font-size: var(--font-size-sm);
+  color: var(--s-ink-soft);
+  border: 1.5px dashed var(--s-ink);
+  border-radius: var(--s-radius);
+}
+.stg-mx-nokeys {
+  padding: 10px var(--space-3);
+  font-size: var(--font-size-xs);
+  border-style: dotted; border-color: var(--s-line-strong);
+}
+.stg-matrix-table td.stg-mx-nomatch {
+  padding: var(--space-4) 6px;
+  text-align: center;
+  color: var(--s-ink-soft); font-size: var(--font-size-xs);
+}
+.stg-matrix-toolbar {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 10px; flex-wrap: wrap;
+  margin-bottom: var(--space-2);
+}
+.stg-matrix-tools {
+  display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap;
+}
 /* Probe status / error line: its own full-width row under the toolbar so a
    long message (contract errors, counts) never squeezes the tool buttons. */
+.stg-mx-status {
+  margin: -2px 0 var(--space-2);
+  font-size: var(--font-size-xs); font-weight: 700; color: var(--s-ink-soft);
+  font-family: 'JetBrains Mono', monospace;
+  line-height: 1.5;
+  word-break: break-word;
+}
+.stg-mx-status.running { color: #b45309; }
+.stg-mx-status.error { color: #b91c1c; }
 /* Spin the bolt glyph only — rotating the whole button flings its
    "probing…" status text around the toolbar. */
+.stg-mx-probe.running svg { animation: stg-mx-spin 0.7s linear infinite; }
+.stg-mx-apply {
+  background: rgba(74, 222, 128, 0.14) !important;
+  border-color: #16a34a !important;
+  color: #15803d !important;
+}
+.stg-matrix-legend {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 10px; color: var(--s-ink-soft); font-weight: 700;
+}
+.stg-mx-leg { display: inline-flex; align-items: center; gap: var(--space-1); }
+.stg-mx-leg .stg-mx-dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  border: 1px solid var(--s-line-strong);
+}
+.stg-mx-leg.on .stg-mx-dot { background: #16a34a; border-color: #16a34a; }
+.stg-mx-leg.off .stg-mx-dot { background: var(--s-white); }
+.stg-matrix-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--s-line-strong);
+  border-radius: var(--s-radius);
+  /* A shadow CANNOT overflow its own element's border-radius, so both fade
+     masks live on the single scroll wrapper: the ::before block is
+     position:sticky so it paints the right-edge fade and stays pinned to
+     the visible corner while content scrolls underneath. */
+  position: relative;
+}
 /* Right-edge fade: a sticky zero-size block with the shadow drawn by its
    ::before. The block is sticky right:0 so it tracks the visible right
    edge while content scrolls left. */
+.stg-matrix-scroll::before {
+  content: '';
+  display: block;
+  position: sticky;
+  float: right;
+  right: 0;
+  width: 0; height: 0;
+  margin-right: 0;
+  z-index: 3;
+  pointer-events: none;
+}
 /* The fade itself, hung off the zero-size anchor. Right/bottom inset 2px
    so it starts inside the border, not on top of it. */
+.stg-matrix-scroll::after {
+  content: '';
+  position: absolute;
+  top: 0; right: 2px; bottom: 2px;
+  width: 56px;
+  background: linear-gradient(to right, transparent, rgba(28,25,23,0.13));
+  pointer-events: none;
+  z-index: 3;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.stg-matrix-scroll.can-scroll-right::after { opacity: 1; }
 /* Left-edge fade sits over the sticky first column when content is
    scrolled: implemented via a ::before on the table wrapper is not
    possible (sticky columns), so a class toggled from scroll events
    lights a shadow on the first column's right border instead. */
+.stg-matrix-table {
+  border-collapse: collapse;
+  font-size: var(--font-size-xs);
+  width: max-content;
+  min-width: 100%;
+}
 /* Wide-screen relief: when an OPEN matrix would overflow the settings
    panel, widen the panel itself instead of forcing horizontal scrolling.
    Applied/removed by _fitMatrixPanelWidth() on render, poll and resize.
    The 6vw cap keeps the panel from blowing past the viewport when a
    provider has many credentials; the matrix's own scroller takes over
    beyond that. */
+@media (min-width: 1100px) {
+  .modal.settings-panel.stg-matrix-wide {
+    width: min(1160px, 94vw);
+    max-width: 94vw;
+    /* The widen must not be instant: on settings pages with several
+       matrices (long page, inner overlay scroll) each matrix re-fit lands
+       in the SAME frame, and a 180ms width transition re-fires
+       ResizeObserver on every step — with all observers mutating panel
+       width that's a loop. A short transition still reads as a smooth
+       grow. */
+    transition: width 0.18s ease, max-width 0.18s ease;
+  }
+}
+.stg-matrix-table th, .stg-matrix-table td {
+  border-bottom: 1px solid var(--s-line);
+  border-right: 1px solid var(--s-line);
+  padding: var(--space-1) 6px;
+}
+.stg-matrix-table thead th {
+  background: var(--s-cream);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--s-ink-soft);
+  border-bottom: 1px solid var(--s-line-strong);
+  position: sticky; top: 0; z-index: 2;
+}
+.stg-mx-corner {
+  text-align: left;
+  position: sticky; left: 0; z-index: 4 !important;
+  background: var(--s-cream);
+  /* Shrink-to-fit: the table's min-width:100% surplus must go to the
+     credential columns, not the label column. auto layout ignores td
+     max-width, so width:1% is the working constraint; min-width keeps a
+     floor for short ids; long ids widen the column past that floor —
+     request names are never abbreviated, the matrix scroller takes over. */
+  width: 1%;
+  min-width: 170px;
+}
 /* Credential column headers: a static label (序号 + kind) with a reserved
    right lane for the column probe trigger. */
+.stg-mx-keyhead {
+  position: relative;
+  min-width: 92px;
+  padding-right: 28px !important;
+  text-align: center;
+}
+.stg-mx-credname {
+  display: block;
+  font-size: 10.5px; font-weight: 800;
+  color: var(--s-ink);
+  text-transform: none; letter-spacing: normal;
+}
+.stg-mx-credkind {
+  display: block;
+  font-size: 8.5px; font-weight: 700;
+  color: var(--s-ink-soft);
+  font-family: 'JetBrains Mono', monospace;
+  text-transform: none; letter-spacing: normal;
+  margin: 1px auto 0;
+  /* A masked key hint (up to 64 chars) must not stretch the credential
+     column: a max-width-capped block contributes the cap as its intrinsic
+     width, and the overflow ellipsizes. The full hint stays in the title. */
+  max-width: 150px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 /* Model label cells: sticky first column, brand icon + id. */
 .stg-mx-model {
   position: sticky; left: 0;
@@ -2824,7 +3645,32 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
 }
 /* A model whose offering is disabled keeps its column clickable but is
    clearly dimmed. */
+.stg-mx-model.model-off .stg-mx-mid,
+.stg-mx-model.model-off .stg-mx-brand { opacity: 0.45; }
+.stg-mx-gtoggle {
+  margin-right: 5px;
+  vertical-align: -4px;
+  transform: scale(0.8);
+  transform-origin: left center;
+}
+.stg-mx-brand {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px;
+  margin-right: 5px;
+  vertical-align: -3px;
+  flex-shrink: 0;
+}
+.stg-mx-mid {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: var(--font-size-xs); font-weight: 700;
+  /* Full request names, never abbreviated: the shrink-to-fit label column
+     widens past its 170px floor and the matrix scroller absorbs the rest. */
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: middle;
+}
 /* Catalog-retired root ids strike through (the red 已下线 chip explains). */
+.stg-mx-mid.retired { text-decoration: line-through; text-decoration-thickness: 1.5px; }
 
 /* ── Root-row state chips: 待确认 / 已下线 ── */
 .stg-mx-chip {
@@ -2899,37 +3745,241 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
 
 /* ── Root-row meta line: capability chips + context / release / pricing,
    on its own line under the id, aligned past the toggle + brand icon ── */
+.stg-mx-meta {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 3px var(--space-2);
+  max-width: 340px; margin: 3px 0 1px 34px;
+  font-size: 10px; color: var(--s-ink-soft);
+}
+.stg-mx-meta .stg-cap { padding: 1px 7px; font-size: 9px; }
+.stg-mx-meta-bit {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9.5px; font-weight: 600;
+  white-space: nowrap;
+}
+.stg-mx-meta-bit.stg-mx-price { display: inline-flex; align-items: baseline; }
+.stg-mx-aliascount {
+  margin-left: 5px;
+  font-size: 8.5px; font-weight: 800; line-height: 1;
+  padding: 1.5px 5px; border-radius: 4px;
+  border: 1.5px solid var(--s-ink); color: var(--s-ink-soft);
+  background: var(--s-white);
+  vertical-align: 2px;
+  white-space: nowrap;
+}
 /* The trailing border of the sticky label column doubles as the row-group
    separator; rows of one offering read as a unit. */
+.stg-mx-row { border-bottom: none; }
+.stg-mx-row td { border-bottom: 1px dashed rgba(0,0,0,0.08); }
+.stg-mx-row.group-end td { border-bottom: 1px solid var(--s-line-strong); }
+.stg-mx-row:not(.grouped):not(.is-alias) td { border-bottom: 1.5px solid var(--s-ink); }
 /* ── Logical root row: the canonical model id of an offering whose every
    deployment routes to a DIFFERENT upstream id. It is not sent on the
    wire, so it renders as a header strip (global toggle + count, no
    per-credential cells). ── */
 .stg-mx-model.logical { background: var(--s-cream); }
+.stg-mx-cell.logical {
+  background: repeating-linear-gradient(45deg, transparent, transparent 6px, rgba(0,0,0,0.05) 6px, rgba(0,0,0,0.05) 12px);
+}
+.stg-mx-preset {
+  margin-left: 6px;
+  font-size: 8px; font-weight: 800; line-height: 1;
+  text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 1px 5px; border-radius: 3px;
+  border: 1.5px dashed var(--s-ink-soft); color: var(--s-ink-soft);
+  background: none;
+  vertical-align: 1px;
+}
 /* ── Wire-id rows: a concrete id mapping under an offering ── */
+.stg-mx-row.is-alias .stg-mx-model.alias {
+  padding-left: 14px !important;
+  background: linear-gradient(90deg,
+    hsla(var(--alias-hue, 265), 70%, 55%, 0.10), transparent 55%);
+}
+.stg-mx-tree {
+  display: inline-block; width: 14px;
+  color: var(--s-ink-soft); font-weight: 700;
+  font-family: 'JetBrains Mono', monospace; margin-right: 2px;
+}
+.stg-mx-aliasidx {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 20px; height: 16px; padding: 0 var(--space-1); margin-right: 6px;
+  font-size: 9px; font-weight: 900; line-height: 1;
+  font-family: 'JetBrains Mono', monospace;
+  border-radius: 4px;
+  color: hsl(var(--alias-hue, 265), 65%, 40%);
+  background: hsla(var(--alias-hue, 265), 70%, 55%, 0.16);
+  border: 1.5px solid hsl(var(--alias-hue, 265), 60%, 55%);
+}
+.stg-mx-mid.alias-id { font-weight: 600; font-size: 10.5px; }
+.stg-mx-row.is-alias .stg-mx-brand { opacity: 0.85; }
 /* ── Attempts selector (false-429 filter) ── */
 /* Specificity must beat the global form resets `.modal label` / `.modal
    select` (0,1,1): they otherwise flip the label to display:block with
    uppercase text and stretch the select to width:100%, which overflows the
    label's dashed border and covers the probe button beside it. */
+.stg-matrix-toolbar .stg-mx-attempts {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-xs); font-weight: 700; color: var(--s-ink-soft);
+  line-height: 1;
+  text-transform: none;
+  letter-spacing: normal;
+  height: 30px;
+  margin: 0;
+  padding: 0 var(--space-2);
+  border: 2px dashed var(--s-ink-soft);
+  border-radius: var(--s-radius);
+  background: none;
+  white-space: nowrap;
+  box-sizing: border-box;
+}
+.stg-matrix-toolbar .stg-mx-attempts select {
+  width: auto;
+  flex: none;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: var(--font-size-xs); font-weight: 800;
+  height: 22px;
+  margin: 0;
+  padding: 0 var(--space-1);
+  border: 1.5px solid var(--s-ink);
+  border-radius: 4px;
+  background: var(--s-white); color: var(--s-ink);
+  cursor: pointer;
+  box-sizing: border-box;
+  vertical-align: middle;
+  line-height: 1;
+  box-shadow: none;
+}
+.stg-matrix-toolbar .stg-mx-attempts select:focus {
+  box-shadow: none;
+  transform: none;
+}
 /* Once widgets/dropdown.js enhances the attempts select, the visible control
    is a .tofu-dd-trigger BUTTON, not the <select> (which collapses to the
    visually-hidden .tofu-dd-native). The `select` rules above stop applying,
    so without an override the base 34px trigger blows the 30px dashed label
    apart. Match the dashed-box geometry: 22px-tall, mono, hairline border, and
    let the wrapper shrink-to-fit. */
+.stg-matrix-toolbar .stg-mx-attempts .tofu-dd { flex: none; height: 22px; }
+.stg-matrix-toolbar .stg-mx-attempts .tofu-dd .tofu-dd-trigger {
+  height: 22px;
+  gap: var(--space-1);
+  padding: 0 var(--space-5) 0 6px;
+  border: 1.5px solid var(--s-ink);
+  border-radius: 4px;
+  background: var(--s-white);
+  box-shadow: none;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: var(--font-size-xs); font-weight: 800;
+}
+.stg-matrix-toolbar .stg-mx-attempts .tofu-dd .tofu-dd-trigger:hover,
+.stg-matrix-toolbar .stg-mx-attempts .tofu-dd .tofu-dd-trigger:focus-visible {
+  border-color: var(--s-gold-dim);
+  background: var(--s-white);
+  box-shadow: none;
+}
+.stg-matrix-toolbar .stg-mx-attempts .tofu-dd .tofu-dd-arrow {
+  right: 5px;
+  margin-top: -5px;
+  background-size: 10px;
+}
 /* ── Cells ── */
+.stg-mx-cell {
+  position: relative;
+  text-align: center;
+  vertical-align: middle;
+  height: 44px;
+  min-width: 92px;
+  transition: background 0.12s;
+}
+.stg-mx-cell.on { background: rgba(74, 222, 128, 0.10); }
+.stg-mx-cell.off { background: repeating-linear-gradient(45deg, var(--s-cream), var(--s-cream) 5px, rgba(0,0,0,0.04) 5px, rgba(0,0,0,0.04) 10px); }
+.stg-mx-toggle {
+  border: none; background: none; cursor: pointer;
+  padding: var(--space-1); display: inline-flex; align-items: center; justify-content: center;
+}
+.stg-mx-cell .stg-mx-dot {
+  width: 16px; height: 16px; border-radius: 50%;
+  border: 1.5px solid var(--s-ink);
+  transition: transform 0.1s, background 0.12s;
+}
+.stg-mx-cell.on .stg-mx-dot { background: #16a34a; border-color: #16a34a; box-shadow: 0 0 0 3px rgba(74,222,128,0.25); }
+.stg-mx-cell.off .stg-mx-dot { background: var(--s-white); }
+.stg-mx-toggle:hover .stg-mx-dot { transform: scale(1.18); }
 /* Probe-status health pip (top-right of a cell) */
+.stg-mx-probe-pip {
+  position: absolute; top: 2px; right: 3px;
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 15px; height: 15px; padding: 0 3px;
+  font-size: 9px; font-weight: 900; line-height: 1;
+  border-radius: 4px;
+  border: 1.5px solid currentColor;
+  font-family: 'JetBrains Mono', monospace;
+  pointer-events: auto;
+}
+.stg-mx-probe-pip.ok     { color: #16a34a; background: rgba(74,222,128,0.18); }
+.stg-mx-probe-pip.rate   { color: #c2410c; background: rgba(251,146,60,0.20); }
+.stg-mx-probe-pip.unauth { color: #b91c1c; background: rgba(248,113,113,0.20); }
+.stg-mx-probe-pip.nf     { color: #6b7280; background: rgba(156,163,175,0.20); }
+.stg-mx-probe-pip.skip   { color: #6b7280; background: rgba(156,163,175,0.20); }
+.stg-mx-probe-pip.down   { color: #a16207; background: rgba(250,204,21,0.20); }
+.stg-mx-probe-pip.err    { color: #b91c1c; background: rgba(248,113,113,0.20); }
 /* When a cell is flagged (non-ok pip) but still enabled, nudge attention. */
+.stg-mx-cell:has(.stg-mx-probe-pip.rate) .stg-mx-dot,
+.stg-mx-cell:has(.stg-mx-probe-pip.unauth) .stg-mx-dot,
+.stg-mx-cell:has(.stg-mx-probe-pip.down) .stg-mx-dot { box-shadow: 0 0 0 2px rgba(194,65,12,0.25); }
 
 /* ── Scoped probe triggers (row / column / cell) — one shared mini bolt
    button in the matrix's hover-reveal language ── */
+.stg-mx-zap {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; padding: 0;
+  border: 1.5px solid var(--s-ink); border-radius: 4px;
+  background: var(--s-white); color: var(--s-ink);
+  cursor: pointer;
+  transition: opacity 0.12s, transform 0.1s, background 0.12s;
+  box-sizing: border-box;
+}
+.stg-mx-zap svg { width: 10px; height: 10px; display: block; }
+.stg-mx-zap:hover { background: var(--s-gold); transform: scale(1.12); }
+.stg-mx-zap:disabled { opacity: 0.3; cursor: default; transform: none; background: var(--s-cream); }
+.stg-mx-zap.probing { pointer-events: none; opacity: 1; background: var(--s-gold); }
+.stg-mx-zap.probing svg { animation: stg-mx-spin 0.7s linear infinite; }
 /* Column scope: vertically centered in the header's reserved right lane. */
+.stg-mx-zap.col { position: absolute; top: 50%; right: var(--space-1); margin-top: -9px; opacity: 0.4; }
+.stg-mx-keyhead:hover .stg-mx-zap.col { opacity: 1; }
 /* Row scope: the row-action lane at the right edge of the (sticky) model
    label cell — row probe + add request name + remove offering on root rows,
    row probe + remove request name on alias rows. Hover-revealed, opaque so
    the buttons never sit on top of ellipsized id text. */
+.stg-mx-rowacts {
+  position: absolute; top: 50%; right: var(--space-1); margin-top: -9px;
+  display: inline-flex; align-items: center; gap: 3px;
+  padding-left: 6px;
+  border-radius: 4px;
+  background: var(--s-white);
+  opacity: 0; transition: opacity 0.12s;
+}
+.stg-mx-model:hover .stg-mx-rowacts,
+.stg-mx-rowacts:focus-within,
+.stg-mx-rowacts:has(.probing) { opacity: 1; }
+.stg-mx-model.logical .stg-mx-rowacts { background: var(--s-cream); }
+.stg-mx-rowacts .stg-mx-zap.row { position: static; margin: 0; opacity: 1; }
 /* Mini square action button — the zap's sibling in the lane. */
+.stg-mx-act {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; padding: 0;
+  border: 1.5px solid var(--s-ink); border-radius: 4px;
+  background: var(--s-white); color: var(--s-ink);
+  font-size: var(--font-size-sm); font-weight: 800; line-height: 1;
+  cursor: pointer; box-sizing: border-box;
+  transition: background 0.12s, transform 0.1s, color 0.12s, border-color 0.12s;
+}
+.stg-mx-act svg { width: 10px; height: 10px; display: block; }
+.stg-mx-act:hover { background: var(--s-gold); transform: scale(1.12); }
+.stg-mx-act.danger { color: #b42318; border-color: rgba(180,35,24,0.5); }
+.stg-mx-act.danger:hover { background: rgba(248,113,113,0.16); border-color: #b42318; }
 /* Reserved right lanes so id text never slides under the action lane:
    root = probe+add+del (3×18 + gaps), alias = probe+del (2×18 + gap). */
 .stg-mx-model.root { padding-right: 74px !important; }
@@ -2941,11 +3991,23 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
 }
 /* Cell scope: bottom-left corner, hover-revealed (only when no pip yet —
    once a verdict exists the pip itself is the re-probe trigger). */
+.stg-mx-zap.cell { position: absolute; bottom: 2px; left: 3px; opacity: 0; }
+.stg-mx-cell:hover .stg-mx-zap.cell { opacity: 0.9; }
+.stg-mx-zap.cell.probing { opacity: 1; }
 /* Unmatched identity has a probe result, but no official model grant toggle. */
+.stg-mx-cell.provider-model { background: var(--s-cream); }
+.stg-mx-cell.provider-model .stg-mx-zap.cell,
+.stg-mx-cell.provider-model .stg-mx-probe-pip { position: static; opacity: 1; }
 /* The verdict pip doubles as the re-probe trigger for its own cell. */
+.stg-mx-probe-pip.clickable { cursor: pointer; transition: transform 0.1s; }
+.stg-mx-probe-pip.clickable:hover { transform: scale(1.2); }
 
 @keyframes stg-mx-spin {
   to { transform: rotate(360deg); }
+}
+
+@media (max-width: 640px) {
+  .stg-mx-keyhead, .stg-mx-cell { min-width: 76px; }
 }
 /* ===== settings/08-local-deploy.css ===== */
 /* 本地部署 page: hardware probe strip, ranked recommendation cards with
@@ -3059,6 +4121,555 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
     outline-offset: 2px;
   }
 }
+/* Database Settings: source markup is settings-panels/database.html.
+   Layout/evidence only; interactive controls remain owned by the UI kit.
+   One rule per role, theme tokens throughout, native disclosure/focus behavior. */
+
+#settingsTab_database {
+
+  --db-secondary: var(--s-ink-soft);
+  color: var(--s-ink);
+  font-size: var(--font-size-md);
+  line-height: var(--leading-body);
+}
+
+#settingsTab_database [hidden] {
+  display: none !important;
+}
+
+#settingsTab_database .db-page-heading {
+  margin-bottom: var(--space-5);
+}
+
+
+#settingsTab_database .settings-section-title {
+  margin: 0;
+  color: var(--s-ink);
+  font-size: var(--font-size-xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-title);
+  letter-spacing: normal;
+}
+
+#settingsTab_database .db-save-note {
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  color: var(--s-ink-soft);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-body);
+}
+
+#settingsTab_database .db-card {
+  min-width: 0;
+  margin-bottom: var(--space-4);
+  padding: var(--space-4);
+  border: var(--s-border);
+  border-radius: var(--s-radius);
+  background: var(--s-white);
+}
+
+#settingsTab_database .db-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+  min-width: 0;
+}
+
+#settingsTab_database .db-card-title {
+  color: var(--s-ink);
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-title);
+}
+
+#settingsTab_database .db-engine-identity {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+#settingsTab_database #dbEngineName {
+  font-size: var(--font-size-lg);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-title);
+}
+
+#settingsTab_database .db-state-pill {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-pill);
+  background: var(--warning-bg);
+  color: var(--warning-text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-tight);
+  overflow-wrap: anywhere;
+}
+
+#settingsTab_database .db-state-pill:empty {
+  display: none;
+}
+
+#settingsTab_database .db-state-pill--ok {
+  border-color: var(--success-border);
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+
+#settingsTab_database .db-state-pill--bad {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+  color: var(--error-text);
+}
+
+/* Native summaries have one full-row target and a trailing disclosure mark. */
+#settingsTab_database details {
+  min-width: 0;
+}
+
+#settingsTab_database summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--control-h-md);
+  min-width: 0;
+  list-style: none;
+  cursor: pointer;
+  color: var(--db-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-medium);
+}
+
+#settingsTab_database summary::-webkit-details-marker {
+  display: none;
+}
+
+#settingsTab_database summary::after {
+  content: '';
+  justify-self: end;
+  flex: 0 0 auto;
+  width: var(--space-2);
+  height: var(--space-2);
+  margin-inline-start: auto;
+  border-inline-end: 1px solid currentColor;
+  border-block-end: 1px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform var(--motion-fast) var(--ease-standard);
+}
+
+#settingsTab_database details[open] > summary::after {
+  transform: rotate(225deg);
+}
+
+#settingsTab_database summary:hover {
+  color: var(--s-ink);
+}
+
+#settingsTab_database summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: var(--space-1);
+  border-radius: var(--radius-sm);
+}
+
+#settingsTab_database .db-disclosure {
+  border-top: 1px solid var(--s-line);
+  padding-top: var(--space-2);
+}
+
+#settingsTab_database .db-disclosure-body {
+  min-width: 0;
+  padding-top: var(--space-4);
+}
+
+/* Engine choices use shared button factories; feature classes own layout. */
+#settingsTab_database .db-engine-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+#settingsTab_database .db-engine-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  height: auto;
+  padding: var(--space-4);
+  text-align: left;
+  white-space: normal;
+}
+
+#settingsTab_database .db-engine-option--current,
+#settingsTab_database .db-engine-option--selected {
+  border-color: var(--accent);
+}
+
+#settingsTab_database .db-engine-option--current {
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+#settingsTab_database .db-engine-option--unavailable {
+  opacity: 0.55;
+}
+
+#settingsTab_database .db-engine-option > span {
+  display: block;
+  color: var(--db-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-regular);
+  white-space: normal;
+}
+
+#settingsTab_database .db-switch-row,
+#settingsTab_database .db-backup-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+#settingsTab_database .db-migration {
+  margin-top: var(--space-4);
+}
+
+/* Overview and exact launch evidence are separate from editable drafts. */
+#settingsTab_database .db-path-current {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--s-line);
+}
+
+#settingsTab_database .db-overview-item,
+#settingsTab_database .db-meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+#settingsTab_database .db-meta-label,
+#settingsTab_database .db-index-detail > .settings-field-hint {
+  color: var(--db-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-body);
+}
+
+#settingsTab_database .db-overview-value {
+  color: var(--s-ink);
+  font-size: var(--font-size-lg);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+#settingsTab_database .db-engine-meta,
+#settingsTab_database .db-index-status {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+#settingsTab_database .db-engine-meta > .db-index-detail {
+  grid-column: 1 / -1;
+}
+
+#settingsTab_database .db-index-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--space-1) var(--space-3);
+  min-width: 0;
+}
+
+#settingsTab_database .db-index-detail > .settings-field-hint,
+#settingsTab_database .db-index-detail > .db-path-value {
+  grid-column: 1;
+}
+
+#settingsTab_database .db-index-detail > button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+}
+
+#settingsTab_database .db-meta-value,
+#settingsTab_database .db-path-value {
+  min-width: 0;
+  color: var(--s-ink);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-body);
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+#settingsTab_database .db-index-detail--pending > .settings-field-hint {
+  color: var(--warning-text);
+}
+
+/* Flat settings rows share one divider rhythm, rather than nested cards. */
+#settingsTab_database .db-config-list {
+  display: grid;
+  gap: 0;
+  margin-top: var(--space-3);
+}
+
+#settingsTab_database .db-subgroup {
+  min-width: 0;
+  border-top: 1px solid var(--s-line);
+}
+
+#settingsTab_database .db-config-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto) var(--space-2);
+  gap: var(--space-3);
+  padding: var(--space-4) 0;
+}
+
+#settingsTab_database .db-config-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+#settingsTab_database .db-index-required {
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--s-cream);
+  color: var(--db-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-tight);
+}
+
+#settingsTab_database .db-config-status {
+  max-width: 28ch;
+  min-width: 0;
+  color: var(--db-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-title);
+  overflow-wrap: anywhere;
+}
+
+#settingsTab_database #dbBackupSummary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#settingsTab_database .db-subgroup .db-disclosure-body {
+  margin: 0;
+  padding: 0 0 var(--space-4);
+}
+
+#settingsTab_database .db-toggle-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+#settingsTab_database .db-toggle-row .settings-toggle-desc,
+#settingsTab_database .db-toggle-text {
+  flex: 1;
+  min-width: 0;
+}
+
+#settingsTab_database .db-toggle-row > :last-child {
+  flex-shrink: 0;
+}
+
+#settingsTab_database .settings-toggle-desc {
+  color: var(--db-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-body);
+  overflow-wrap: anywhere;
+}
+
+#settingsTab_database .db-subgroup-body {
+  min-width: 0;
+  margin-top: var(--space-3);
+}
+
+#settingsTab_database .db-subgroup-body .settings-field-hint {
+  display: block;
+  margin-top: var(--space-2);
+}
+
+#settingsTab_database .db-projection-controls {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+#settingsTab_database .db-projection-controls > .ui-field {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+#settingsTab_database .db-projection-controls > button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+#settingsTab_database .db-index-actions {
+  margin-top: var(--space-3);
+}
+
+#settingsTab_database .db-lock-note {
+  margin: 0 var(--space-4) var(--space-4);
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+  color: var(--warning-text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-regular);
+  overflow-wrap: anywhere;
+}
+
+/* Probe-backed candidates remain one native shared-button target each. */
+#settingsTab_database .db-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+#settingsTab_database #dbSearchProjectionCandidates {
+  margin-top: var(--space-4);
+}
+
+#settingsTab_database .db-candidate {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  width: 100%;
+  height: auto;
+  padding: var(--space-3);
+  text-align: left;
+  white-space: normal;
+}
+
+#settingsTab_database .db-candidate--selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+#settingsTab_database .db-candidate-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+#settingsTab_database .db-candidate-path {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+#settingsTab_database .db-candidate-meta,
+#settingsTab_database .db-candidates-empty {
+  color: var(--db-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-regular);
+  overflow-wrap: anywhere;
+}
+
+#settingsTab_database .db-candidate-badge {
+  flex-shrink: 0;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--info-bg);
+  color: var(--info-text);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-medium);
+}
+
+#settingsTab_database .db-path-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--s-line);
+}
+
+#settingsTab_database .db-status-message {
+  padding: var(--space-3);
+  margin-bottom: var(--space-4);
+  border: 1px solid var(--s-line);
+  border-radius: var(--radius-sm);
+  background: var(--s-white);
+  color: var(--db-secondary);
+  font-size: var(--font-size-sm);
+}
+
+#settingsTab_database .db-path-error {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--error-border);
+  border-radius: var(--radius-sm);
+  background: var(--error-bg);
+  color: var(--error-text);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  #settingsTab_database .db-card {
+    padding: var(--space-4);
+  }
+
+  #settingsTab_database .db-config-summary {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--space-2) var(--space-3);
+    padding: var(--space-3) 0;
+  }
+
+  #settingsTab_database .db-config-heading {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  #settingsTab_database .db-config-summary::after {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  #settingsTab_database .db-config-status {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  #settingsTab_database .db-engine-options,
+  #settingsTab_database .db-index-status,
+  #settingsTab_database .db-engine-meta {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+}
 /* Subscription login reuse; typed owner: settings/codex-shared-login.ts. */
 .codex-shared-login {
   display: flex;
@@ -3104,8 +4715,11 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
 }
 .codex-shared-login:is([data-state="connected"], [data-state="own"]) .codex-shared-feedback { margin: 0; }
 .codex-shared-login[data-state="error"] .codex-shared-feedback { color: var(--warning-text); }
-/* Static channel page headings (settings-panels/dx.html, github.html). The
-   channel presentation itself loads with features/settings/channel-settings-view.ts. */
+/* Channel Settings panels: 大象 (settings-panels/dx.html, features/settings/
+   dx-channel.ts) and GitHub (settings-panels/github.html, github-channel.ts)
+   share one presentation through features/settings/channel-settings-view.ts,
+   in the Database panel's card language (11-database.css). Controls come
+   from the UI kit; feature classes own layout, rhythm and status tone. */
 
 :is(#settingsTab_dx, #settingsTab_github) .channel-page-heading {
   margin-bottom: var(--space-5);
@@ -3136,6 +4750,818 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
   color: var(--s-ink);
   font-size: var(--font-size-md);
   line-height: var(--leading-title);
+}
+
+/* ── Cards: head (title + state chip or action), then hairline sections ── */
+.channel-settings .channel-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-4);
+  border: var(--s-border);
+  border-radius: var(--s-radius);
+  background: var(--s-white);
+}
+
+.channel-settings .channel-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+  min-height: var(--control-h-sm);
+}
+
+.channel-settings .channel-card-title {
+  color: var(--s-ink);
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-title);
+}
+
+.channel-settings .channel-section,
+.channel-settings .channel-facts,
+.channel-settings .channel-table,
+.channel-settings .channel-outbox,
+.channel-settings .channel-advanced {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--s-line);
+}
+
+.channel-settings .channel-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.channel-settings .channel-hint,
+.channel-settings .channel-empty {
+  margin: 0;
+  color: var(--s-ink-soft);
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-body);
+}
+
+.channel-settings .channel-empty {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--s-line);
+}
+
+.channel-settings .channel-link {
+  color: var(--s-ink);
+  font-weight: var(--weight-medium);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ── Facts: label above value, two columns ── */
+.channel-settings .channel-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3) var(--space-4);
+  margin: 0;
+}
+
+.channel-settings .channel-fact {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.channel-settings .channel-facts dt {
+  color: var(--s-ink-soft);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-regular);
+}
+
+.channel-settings .channel-facts dd {
+  max-width: 100%;
+  margin: 0;
+  color: var(--s-ink);
+  overflow-wrap: anywhere;
+}
+
+/* ── Tone chips: account state, command chat, outbox item state ── */
+.channel-settings .channel-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--s-line-strong);
+  border-radius: var(--radius-pill);
+  background: var(--s-white);
+  color: var(--s-ink-soft);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-tight);
+  overflow-wrap: anywhere;
+}
+
+.channel-settings .channel-chip-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--s-skin);
+}
+
+.channel-settings .channel-chip[data-tone="ok"] .channel-chip-dot {
+  background: var(--s-done);
+}
+
+.channel-settings .channel-chip[data-tone="busy"] {
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+  color: var(--warning-text);
+}
+
+.channel-settings .channel-chip[data-tone="busy"] .channel-chip-dot {
+  background: var(--s-gold);
+}
+
+.channel-settings .channel-chip[data-tone="bad"] {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+  color: var(--error-text);
+}
+
+.channel-settings .channel-chip[data-tone="bad"] .channel-chip-dot {
+  background: var(--s-danger);
+}
+
+/* ── Rows of buttons, and fields whose buttons align with the control ── */
+.channel-settings .channel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.channel-settings .channel-field {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* The Settings modal's ambient form rules (`.modal input, .modal select` in
+   05-paper-report-media.css, `.settings-panel input|select|label` in
+   07-settings-providers-onboarding.css) out-specify the kit: a bottom margin
+   that pushed each field below its buttons, an uppercase label, and a
+   different surface for inputs than for selects. These panels restore one
+   field treatment for both. */
+.channel-settings .ui-field {
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.channel-settings .ui-field__label {
+  margin: 0;
+  color: var(--s-ink-soft);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-medium);
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.channel-settings :is(input.ui-input, .ui-select > select) {
+  height: var(--control-h-md);
+  margin: 0;
+  padding-block: 0;
+  border: var(--s-border);
+  border-radius: var(--radius-xs);
+  background-color: var(--bg-primary);
+  box-shadow: none;
+  color: var(--s-ink);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-md);
+}
+
+.channel-settings input.ui-input {
+  padding-inline: var(--space-3);
+}
+
+.channel-settings :is(input.ui-input, .ui-select > select):focus {
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.channel-settings :is(input.ui-input, .ui-select > select):disabled {
+  background-color: var(--bg-tertiary);
+  color: var(--text-tertiary);
+}
+
+.channel-settings .ui-field__hint {
+  color: var(--s-ink-soft);
+}
+
+/* ── Thread table: one header row; each cell's own label is for assistive
+   tech and narrow panes ── */
+.channel-settings .channel-table {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.channel-settings .channel-table-head,
+.channel-settings .channel-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.channel-settings .channel-table-head {
+  padding-bottom: var(--space-2);
+  color: var(--s-ink-soft);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-medium);
+}
+
+.channel-settings .channel-row {
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--s-line);
+}
+
+.channel-settings .channel-row:last-child {
+  padding-bottom: 0;
+}
+
+.channel-settings .channel-row-title {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.channel-settings .channel-row-name {
+  color: var(--s-ink);
+  font-weight: var(--weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.channel-settings .channel-key {
+  color: var(--s-ink-soft);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.channel-settings a.channel-key:hover {
+  color: var(--s-ink);
+  text-decoration: underline;
+}
+
+.channel-settings .channel-cell {
+  position: relative;
+  min-width: 0;
+}
+
+.channel-settings .channel-cell > :is(.ui-field__label, .channel-cell-caption) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.channel-settings .channel-cell-static {
+  display: flex;
+  align-items: center;
+  min-height: var(--control-h-md);
+}
+
+/* ── Outbox ── */
+.channel-settings .channel-outbox {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.channel-settings .channel-outbox-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3) 0;
+}
+
+.channel-settings .channel-outbox-item:first-child {
+  padding-top: 0;
+}
+
+.channel-settings .channel-outbox-item:last-child {
+  padding-bottom: 0;
+}
+
+.channel-settings .channel-outbox-item + .channel-outbox-item {
+  border-top: 1px solid var(--s-line);
+}
+
+.channel-settings .channel-outbox-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+}
+
+.channel-settings .channel-outbox-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.channel-settings .channel-outbox-thread {
+  font-weight: var(--weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.channel-settings .channel-outbox-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.channel-settings .channel-outbox-text {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-xs);
+  background: var(--s-cream);
+  line-height: var(--leading-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.channel-settings .channel-outbox-error {
+  color: var(--error-text);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.channel-settings .channel-outbox-attachments {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.channel-settings .channel-outbox-attachment {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.channel-settings .channel-outbox-thumbnail {
+  flex: none;
+  width: var(--control-h-md);
+  height: var(--control-h-md);
+  border-radius: var(--radius-xs);
+  object-fit: cover;
+  background: var(--s-cream);
+}
+
+.channel-settings .channel-outbox-attachment-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.channel-settings .channel-outbox-attachment-name {
+  overflow-wrap: anywhere;
+}
+
+.channel-settings .channel-outbox-attachment-meta {
+  color: var(--s-ink-soft);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+/* ── GitHub Enterprise disclosure (Database panel summary treatment) ── */
+.channel-settings .channel-advanced > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--control-h-sm);
+  list-style: none;
+  cursor: pointer;
+  color: var(--s-ink-soft);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-medium);
+}
+
+.channel-settings .channel-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.channel-settings .channel-advanced > summary::after {
+  content: '';
+  flex: 0 0 auto;
+  width: var(--space-2);
+  height: var(--space-2);
+  margin-inline-start: auto;
+  border-inline-end: 1px solid currentColor;
+  border-block-end: 1px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform var(--motion-fast) var(--ease-standard);
+}
+
+.channel-settings .channel-advanced[open] > summary::after {
+  transform: rotate(225deg);
+}
+
+.channel-settings .channel-advanced > summary:hover {
+  color: var(--s-ink);
+}
+
+.channel-settings .channel-advanced > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: var(--space-1);
+  border-radius: var(--radius-xs);
+}
+
+.channel-settings .channel-advanced[open] > summary {
+  margin-bottom: var(--space-3);
+}
+
+.channel-settings .channel-advanced > .channel-actions + .channel-hint {
+  margin-top: var(--space-2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .channel-settings .channel-advanced > summary::after {
+    transition: none;
+  }
+}
+
+/* ── 大象 tab (features/settings/dx-channel.ts, dx-account.ts, dx-thread-list.ts) ── */
+
+/* Each card renders into its own slot; the card stays the column's flex item. */
+#settingsTab_dx .dx-slot {
+  display: contents;
+}
+
+.channel-settings .dx-account-value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+}
+
+/* The Settings shell's ambient `label` / `input` rules (see the field note
+   above) would turn kit choices into uppercase blocks around padded,
+   shadowed boxes; these panels restore the kit's choice treatment. */
+.channel-settings .ui-choice {
+  display: inline-flex;
+  margin: 0;
+  color: var(--s-ink);
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-regular);
+  letter-spacing: normal;
+  line-height: var(--leading-title);
+  text-transform: none;
+}
+
+.channel-settings .ui-choice > input {
+  padding: 0;
+  box-shadow: none;
+}
+
+.channel-settings .ui-choice > input:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+/* Thread list: toolbar, selection bar, then one row per thread. */
+.channel-settings .dx-thread-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.channel-settings .dx-thread-tools {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+}
+
+.channel-settings .dx-thread-search {
+  position: relative;
+  flex: 1 1 16rem;
+}
+
+.channel-settings .dx-thread-reply {
+  position: relative;
+  flex: 0 1 12rem;
+  min-width: 9rem;
+}
+
+/* Search placeholders and reply options name themselves; the labels stay for assistive tech. */
+.channel-settings :is(.dx-thread-search, .dx-thread-reply) > .ui-field__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.channel-settings .dx-thread-filter,
+.channel-settings .dx-thread-mode {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  min-width: 0;
+}
+
+.channel-settings .dx-thread-bulk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+  min-height: var(--control-h-sm);
+}
+
+.channel-settings .dx-thread-bulk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.channel-settings .dx-thread-selected {
+  color: var(--s-ink-soft);
+  font-size: var(--font-size-sm);
+}
+
+.channel-settings .dx-thread-rows {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* Two lines per thread: the name with its facts, then its controls under the
+   name, so a long name never shares its width with the controls. */
+.channel-settings .dx-thread-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--s-line);
+}
+
+.channel-settings .dx-thread-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  min-width: 0;
+}
+
+.channel-settings .dx-thread-name {
+  min-width: 0;
+  font-weight: var(--weight-medium);
+  overflow-wrap: anywhere;
+}
+
+/* Controls (and the command chat's name, which has no checkbox) start where
+   a checkbox's name does. */
+.channel-settings :is(.dx-thread-controls, .dx-thread-row--command .dx-thread-head) {
+  padding-inline-start: calc(var(--space-4) + var(--space-2));
+}
+
+.channel-settings .dx-thread-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  min-width: 0;
+  min-height: var(--control-h-md);
+}
+
+.channel-settings .dx-thread-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+  color: var(--s-ink-soft);
+  font-size: var(--font-size-sm);
+}
+
+/* Command chat picker: a bounded, scrolling list under its search. */
+.channel-settings .dx-chat-options {
+  display: flex;
+  flex-direction: column;
+  max-height: min(50vh, 24rem);
+  overflow-y: auto;
+  border: var(--s-border);
+  border-radius: var(--radius-xs);
+}
+
+.channel-settings .dx-chat-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+}
+
+.channel-settings .dx-chat-option + .dx-chat-option {
+  border-top: 1px solid var(--s-line);
+}
+
+.channel-settings :is(.dx-thread-row, .dx-thread-reply, .dx-thread-bulk-actions, .dx-chat-option)[hidden] {
+  display: none;
+}
+
+/* Notification robot (dx-robot.ts): the refusal's fix under its detail, numbered setup steps. */
+.channel-settings .dx-robot-fix {
+  margin-top: var(--space-1);
+  font-weight: var(--weight-medium);
+}
+
+.channel-settings .dx-robot-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  padding-inline-start: var(--space-5);
+  color: var(--s-ink);
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-body);
+  overflow-wrap: anywhere;
+}
+
+/* The owner's assistant (dx-assistant.ts, C11): notes are multi-line fields
+   with the panel's input surface; a thread's note sits under its controls. */
+.channel-settings textarea.ui-input {
+  margin: 0;
+  border: var(--s-border);
+  box-shadow: none;
+  color: var(--s-ink);
+}
+
+.channel-settings textarea.ui-input:focus {
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.channel-settings :is(.dx-thread-note, .dx-thread-note-editor) {
+  padding-inline-start: calc(var(--space-4) + var(--space-2));
+}
+
+.channel-settings .dx-thread-note {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: var(--s-ink-soft);
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-body);
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.channel-settings .dx-thread-note-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.channel-settings :is(.dx-thread-note, .dx-thread-note-editor)[hidden] {
+  display: none;
+}
+
+/* A draft's approval code, typed back in a chat: monospace, on the text's surface. */
+.channel-settings .channel-outbox-code {
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-xs);
+  background: var(--s-cream);
+  color: var(--s-ink);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+}
+
+/* Audit (channel-settings-view.ts createAuditList): the outbox's item rhythm, read-only. */
+.channel-settings .channel-audit-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.channel-settings .channel-audit-items {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--s-line);
+}
+
+.channel-settings .channel-audit-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3) 0;
+}
+
+.channel-settings .channel-audit-item:first-child {
+  padding-top: 0;
+}
+
+.channel-settings .channel-audit-item:last-child {
+  padding-bottom: 0;
+}
+
+.channel-settings .channel-audit-item + .channel-audit-item {
+  border-top: 1px solid var(--s-line);
+}
+
+.channel-settings :is(.channel-audit-time, .channel-audit-fact) {
+  color: var(--s-ink-soft);
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-body);
+  overflow-wrap: anywhere;
+}
+
+.channel-settings .channel-audit-more {
+  align-self: flex-start;
+}
+
+/* Narrow panes stack each thread and show every cell's own label. */
+@media (max-width: 720px) {
+  .channel-settings .channel-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .channel-settings .channel-actions > .channel-field {
+    flex-basis: 100%;
+  }
+
+  .channel-settings .channel-table-head {
+    display: none;
+  }
+
+  .channel-settings .channel-row {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .channel-settings .channel-table-head + .channel-row {
+    border-top: 0;
+    padding-top: 0;
+  }
+
+  .channel-settings .channel-cell > :is(.ui-field__label, .channel-cell-caption) {
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip-path: none;
+    white-space: normal;
+  }
+
+  .channel-settings .channel-cell-static {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-1);
+    min-height: 0;
+  }
+
+  .channel-settings .channel-cell-caption {
+    color: var(--s-ink-soft);
+    font-size: var(--font-size-sm);
+    font-weight: var(--weight-medium);
+  }
+
+  /* A thread's facts take their own line, aligned with its name and controls. */
+  .channel-settings .dx-thread-meta {
+    flex-basis: 100%;
+    padding-inline-start: calc(var(--space-4) + var(--space-2));
+  }
+
+  .channel-settings .dx-thread-row--command .dx-thread-meta {
+    padding-inline-start: 0;
+  }
 }
 /* ── 消息平台 tab (settings-panels/messaging.html, features/settings/messaging-platforms.ts) ──
    Every chat platform is one collapsible section: its name and a one-line

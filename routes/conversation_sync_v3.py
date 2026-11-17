@@ -12,7 +12,6 @@ import json
 import math
 import re
 import time
-from typing import TypedDict
 
 import orjson
 from quart import Response, request
@@ -606,17 +605,14 @@ async def conversation_round_directory(conversation_id: str):
             raise BadRequest(
                 "Invalid laneId or anchorTurnId",
                 field="laneId" if not lane or len(lane) > 128 else "anchorTurnId")
-        def integer(name: str, default: int | None, maximum: int) -> int:
+        def integer(name, default, maximum):
             raw = request.args.get(name)
-            if raw is None:
-                if default is None:
-                    raise BadRequest(f"{name} is required", field=name)
-                value = default
-            else:
-                try:
-                    value = int(raw)
-                except (TypeError, ValueError, OverflowError) as exc:
-                    raise BadRequest(f"Invalid {name}", field=name) from exc
+            if raw is None and default is None:
+                raise BadRequest(f"{name} is required", field=name)
+            try:
+                value = int(raw) if raw is not None else default
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise BadRequest(f"Invalid {name}", field=name) from exc
             if value < (1 if name == "limit" else 0) or value > maximum:
                 raise BadRequest(f"Invalid {name}", field=name)
             return value
@@ -680,11 +676,12 @@ async def conversation_turn_history_page(conversation_id: str):
     except ConversationSyncNotFound as exc:
         return api_not_found(str(exc))
     except ConversationTurnPageStale as exc:
-        if exc.current_sync_sequence is not None:
-            return api_error(
-                "history_page_stale", status=409,
-                currentSyncSeq=exc.current_sync_sequence)
-        return api_error("history_page_stale", status=409, reason=exc.reason)
+        return api_error(
+            "history_page_stale",
+            status=409,
+            **({"currentSyncSeq": exc.current_sync_sequence}
+               if exc.current_sync_sequence is not None else {"reason": exc.reason}),
+        )
     except StorageError as exc:
         return storage_failure_response(
             exc, operation="conversation.sync.turn_page"
@@ -834,19 +831,13 @@ async def conversation_turn_image(
     return response
 
 
-class _DiagnosticOptions(TypedDict, total=False):
-    diagnostic_payload: str
-    provider_replay_payload: str
-
-
-def _diagnostic_options() -> _DiagnosticOptions:
+def _diagnostic_options() -> dict[str, str]:
     """Decode the representation selectors shared by both event streams."""
     diagnostic_values = request.args.getlist("diagnosticPayload")
     if len(diagnostic_values) > 1 or (diagnostic_values and diagnostic_values[0] not in {"full", "none"}):
         raise BadRequest(
             "Invalid conversation diagnostic payload", field="diagnosticPayload")
-    options: _DiagnosticOptions = (
-        {"diagnostic_payload": "none"} if diagnostic_values == ["none"] else {})
+    options = {"diagnostic_payload": "none"} if diagnostic_values == ["none"] else {}
     if _provider_replay_payload() == "none":
         options["provider_replay_payload"] = "none"
     return options
@@ -885,7 +876,7 @@ async def _conversation_change_frames(
     delivered_cursor: str,
     catch_up_budget: int | None,
     page_bytes: int = _CHANGE_PAGE_MAX_BYTES,
-    diagnostic_options: _DiagnosticOptions,
+    diagnostic_options: dict[str, str],
     frame: Callable[..., str],
 ):
     """Ordered replay of one subscription: catch-up budget, heartbeats, wedges.
@@ -1214,7 +1205,7 @@ async def _multiplexed_stream_frames(
     user_id,
     principal: str,
     stream_client_id: str,
-    diagnostic_options: _DiagnosticOptions,
+    diagnostic_options: dict[str, str],
 ):
     """One conversation's replay on the multiplexed response.
 

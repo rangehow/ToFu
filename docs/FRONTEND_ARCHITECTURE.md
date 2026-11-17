@@ -503,6 +503,23 @@ debt (see Paper's `panel-owners.ts` below); shipping the memory fix without cras
 detection, which leaves those crashes unrecorded. Ratchet the ceiling down when a
 structural saving lands.
 
+**Total budget scope.** `scripts/frontend_budget.py` caps the total at 1026 KiB
+gzip. That total counts every file the primary entries (`main.ts`, `admin.ts`)
+load eagerly, each file once: their startup sets and every shared static chunk
+they import. **Problem:** the total used to count the whole module graph,
+including on-demand chunks. Once the feature set outgrew the budget, it reached
+1589.7 KiB on 2026-11-17, and about 430 KiB of that was pdfjs, KaTeX, CodeMirror,
+html2canvas, highlight.js and marked, all in use. Lazy-loading a feature then
+could not lower the number, so the only way to pass was to drop features.
+**Decision (owner, 2026-11-17):** the total excludes on-demand chunks.
+Each async chunk keeps its 120 KiB ceiling, and the pdf.worker keeps its
+standalone URL-asset ceiling. The startup entry, per-chunk and stylesheet
+limits stay as strict as before. A startup regression still fails both its
+entry line and the total. **Alternatives rejected:** raising the total to the
+measured size, because startup bloat could then hide inside headroom that lazy
+chunks no longer use; dropping or replacing in-use libraries to fit a number
+that users don't pay for at startup.
+
 Self-hosted font delivery uses lossless WOFF2 generated from the retained TTF
 sources: the nine converted files total 259,548 bytes instead of 771,600 bytes.
 Glyph maps, glyph order, advance widths and vertical metrics are preserved;

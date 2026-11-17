@@ -56,7 +56,7 @@ _HARNESS = textwrap.dedent(
     let opened = 0;
     let closed = 0;
     let upgradeRequested = false;
-    window.openLocalControlModal = (options) => {
+    window.openBrowserExtensionModal = (options) => {
       opened += 1;
       upgradeRequested = options?.browserUpgrade === true;
     };
@@ -186,11 +186,11 @@ def test_upgrade_row_names_versions_missing_abilities_and_opens_recovery():
     assert "浏览器扩展 v1.8.0" in detail and "v2.4.0" in detail
     assert "网页结构快照" in detail and "填写表单" in detail
     assert rendered["closed"] == 1 and rendered["opened"] == 1, (
-        "the recovery button must close Settings and open the real Local Control "
+        "the recovery button must close Settings and open the real browser "
         "extension install/upgrade surface"
     )
     assert rendered["upgradeRequested"] is True, (
-        "Local Control must retain the capability-mismatch intent; legacy clients "
+        "The extension dialog must retain the capability-mismatch intent; legacy clients "
         "often report no extension version, so version comparison alone is a dead end"
     )
 
@@ -285,7 +285,7 @@ def test_browser_api_failures_clear_loading_copy_and_report_policy_errors():
     assert rendered["deny_failure"]["toasts"] == ["policy update failed"]
 
 
-def test_search_connection_install_button_targets_the_real_local_control_action():
+def test_search_connection_install_button_targets_the_real_extension_dialog_action():
     panel = SEARCH_PANEL.read_text(
         encoding="utf-8",
     )
@@ -293,7 +293,7 @@ def test_search_connection_install_button_targets_the_real_local_control_action(
         line for line in panel.splitlines()
         if 'data-i18n="settings.browserInstallUpgrade"' in line
     )
-    assert 'data-tofu-action="closeSettings();openLocalControlModal()"' in install
+    assert 'data-tofu-action="closeSettings();openBrowserExtensionModal()"' in install
     assert "openLocalControl()" not in install, (
         "the old action name does not exist; it rendered an install/upgrade "
         "button that silently did nothing"

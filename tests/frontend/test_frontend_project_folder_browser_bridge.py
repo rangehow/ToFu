@@ -40,7 +40,7 @@ const { check, report } = setup({
   html: '<!DOCTYPE html><body>' +
     '<div id="projectModal" class="open"><div class="modal project-modal pm-workbench">' +
     '<span id="pmMobileCount"></span><div class="pm-body">' +
-    '<div class="pm-browser-pane"><div id="remoteDevicesSection" style="display:none"></div></div>' +
+    '<div class="pm-browser-pane"></div>' +
     '</div></div></div></body>',
   targets: [process.argv[2]],
   globals: {
@@ -69,7 +69,6 @@ const staged = (path) => tags().find((tag) => tag.path === path);
 
 await browseDirectory('/root');
 check('browser_mounted_in_pane', !!document.querySelector('.pm-browser-pane > #folderBrowser'));
-check('remote_group_adopted_as_prelude', !!browser().querySelector('#remoteDevicesSection'));
 check('rows_rendered', !!row('/root/alpha') && !!row('/root/beta'));
 
 row('/root/alpha').querySelector('[data-action="add"]').click();
@@ -126,5 +125,5 @@ process.exit(0);
 def test_copilot_bridge_keeps_workspace_and_browser_in_step(scenario):
     run_harness(
         _PROJECT_JS, _BODY, extra_targets=[scenario],
-        expect_pass=17, label=f'folder browser bridge ({scenario})',
+        expect_pass=16, label=f'folder browser bridge ({scenario})',
     )

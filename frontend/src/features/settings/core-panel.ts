@@ -53,7 +53,6 @@ type CorePanelGlobals = Window & ModelRoutingAuthorityPorts & {
   _renderPresetsTab?: (cfg?: unknown) => void;
   _populatePreferencesTab?: () => void;
   _refreshSttStatus?: () => void;
-  _populateDevicesTab?: () => void;
   _deactivateKnowledgeSettingsTab?: (tabId: string) => void;
   _populateDatabaseTab?: () => void;
   _populateSpeechTab?: (cfg?: unknown) => void;
@@ -180,9 +179,6 @@ function switchSettingsTab(tabId: string): void {
   activateIndependentSettingsTab(tabId);
   if (tabId === 'speech' && typeof bridge._refreshSttStatus === 'function') {
     bridge._refreshSttStatus();
-  }
-  if (tabId === 'devices' && typeof bridge._populateDevicesTab === 'function') {
-    bridge._populateDevicesTab();
   }
 
   /* The 模型 tab is a read-only registry view: repaint on activation so it

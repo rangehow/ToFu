@@ -648,19 +648,6 @@ function _applyImageGenUI(enabled) {
     _scheduleReflow();
   }
 }
-function _applyDesktopUI(enabled) {
-  desktopEnabled = !!enabled;
-  document
-    .getElementById("desktopToggle")
-    ?.classList.toggle("active", desktopEnabled);
-  document
-    .getElementById("desktopBadge")
-    ?.classList.toggle("visible", desktopEnabled);
-  /* The desktop agent now shares ONE toolbar entry with the browser bridge
-   * (#localControlToggle). Its summary badge counts both capabilities, so it
-   * is repainted here rather than toggled per-flag. */
-  if (typeof _lcUpdateBadge === "function") _lcUpdateBadge();
-}
 function captureActiveConversationSettings() {
   const conv = getActiveConv();
   if (!conv) return;
@@ -686,7 +673,9 @@ function captureActiveConversationSettings() {
   conv.fetchEnabled = !!fetchEnabled;
   conv.codeExecEnabled = !!codeExecEnabled;
   conv.browserEnabled = !!browserEnabled;
-  conv.desktopEnabled = !!desktopEnabled;
+  /* Computer control has no browser surface (owner decision 2026-11-17), so
+   * the browser never grants it and revokes a grant stored earlier. */
+  conv.desktopEnabled = false;
   conv.memoryEnabled = !!memoryEnabled;
   conv.schedulerEnabled = !!schedulerEnabled;
   conv.autopilotEnabled = !!autopilotEnabled;
@@ -769,7 +758,6 @@ function restoreConversationSettingsToComposer(conv, modelEligible) {
   _applyFetchEnabledUI(true);  // always on
   _applyCodeExecUI(!!conv.codeExecEnabled);
   _applyBrowserUI(true);  // always on
-  _applyDesktopUI(!!conv.desktopEnabled);
   _applyMemoryUI(conv.memoryEnabled !== undefined ? !!conv.memoryEnabled : true);
   _applyAgentModeUI(_restoredInteraction.agentMode);
   _applyFlowUI(_restoredInteraction.activeFlow);
@@ -835,14 +823,6 @@ function _resetToolsToDefaults() {
   _applyFetchEnabledUI(true);
   _applyCodeExecUI(false);
   _applyBrowserUI(true);
-  /* Desktop was the ONE tool flag this function never reset, so a new chat
-   * silently inherited computer control from whatever conversation came
-   * before — `restoreConversationSettingsToComposer` sets it per conversation,
-   * nothing cleared it, and
-   * the merged badge then reported it as active on a conversation the user
-   * never granted it on. It is the highest-risk flag here (shell, file writes,
-   * GUI), so inheriting it by omission is the wrong default. */
-  _applyDesktopUI(false);
   _applyMemoryUI(true);
   /* Execution strategy is independent from project attachment. Every new
    * conversation starts in Standard agent mode; attaching a project changes
@@ -1033,7 +1013,7 @@ function _startBuildWatch() {
       toggleSearch: toggleSidebarSearch, closeSearch: closeSidebarSearch,
       closeApply: closeApplyModal, closePreview,
       closeSettings: () => runtimeScope.closeSettings(), closeProject: () => runtimeScope.closeProjectModal(),
-      closeLocalControl: () => runtimeScope.closeLocalControlModal(), closeDailyReport: () => runtimeScope.closeDailyReport(),
+      closeBrowserExtension: () => runtimeScope.closeBrowserExtensionModal(), closeDailyReport: () => runtimeScope.closeDailyReport(),
     },
   }));
   initSidebarSearch();

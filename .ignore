@@ -8,7 +8,7 @@ frontend/src/runtime/image-generation-runtime.generated.js
 frontend/src/runtime/myday-presenters.generated.js
 frontend/src/runtime/knowledge-presenters.generated.js
 frontend/src/runtime/project-presenters.generated.js
-frontend/src/runtime/local-control-presenters.generated.js
+frontend/src/runtime/browser-extension-presenters.generated.js
 frontend/src/runtime/diagnostics-presenters.generated.js
 frontend/src/runtime/compaction-viewer-presenters.generated.js
 frontend/src/runtime/utility-panels-runtime.generated.js

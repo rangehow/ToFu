@@ -222,7 +222,7 @@ def test_find_for_platform_matches_the_shared_table(tmp_store):
     rows = store.find_for_platform('windows', 'x86_64')
     assert [r['filename'] for r in rows] == ['Tofu-Setup-0.14.2-win64.exe']
     # macOS with an UNKNOWN arch must offer BOTH DMGs — see the macOS trap
-    # documented in tests/server/test_devices_panel_and_platform_download.py.
+    # documented in tests/server/test_platform_download.py.
     both = store.find_for_platform('macos', '')
     assert sorted(r['arch'] for r in both) == ['arm64', 'x86_64']
     assert store.find_for_platform('plan9', '') == []

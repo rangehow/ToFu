@@ -30,7 +30,7 @@ the same thing; the tool field keeps the name `device`.
 | Local subscription adapter / borrowed Codex login | `lib/desktop/adapter.py`, agent `_adapter.py`; [Codex login owner](../IDENTITY.md#borrowing-an-existing-codex-login) |
 | Desktop app launcher, join dialog, role window | `desktop/launcher.py`, `desktop/connect_ui.py`, `desktop/role_window.py` |
 | Build and artifact store | `lib/desktop_dist/`, `tofu.spec`, release scripts |
-| Settings UI | `frontend/src/features/settings/devices.ts` |
+| Browser UI | None since 2026-11-17: computer control left the frontend until the multi-device design places it ([frontend record](../FRONTEND_ARCHITECTURE.md)); the Settings desktop download card (`frontend/src/features/settings/client-downloads.ts`) is a download, not a control |
 
 ## Trust and identity
 
@@ -185,7 +185,7 @@ Decision: one node model.
   node keeps one outbound bridge loop per joined server (node-to-server only,
   so NAT, ssh tunnels and reverse proxies need no inbound route) and shares
   one permission set, read-only by default, across them.
-- Joining is pairing. Local Control's "Add a machine" mints one pairing
+- Joining is pairing. A pairing is minted
   (`POST /api/v1/desktop/pair-code?base=<page origin + prefix>`, owner-bound,
   one-shot, 5 minutes): a `link` of the form
   `<server base>/#tofu-pair=<secret>[&via=<route>]*` and the same pairing as a
@@ -235,7 +235,7 @@ Alternatives considered:
   a node joining several servers covers the multi-server need without a
   trust relationship between servers.
 
-Distribution: Local Control offers only the full desktop app, for the
+Distribution: the Settings desktop card offers only the full desktop app, for the
 visitor's OS and architecture; an empty `downloads` list keeps the release
 link. Remote node builds no longer exist. Stable registry/install-directory,
 bundle IDs and protocol/config keys preserve upgrades.
@@ -274,8 +274,8 @@ cadence instead of waiting out the max age. A check that finds the release the
 store already holds stops at the probe (`checked_at`); the verifying sync,
 which re-hashes every installer, keeps the max-age cadence. Each `downloads`
 row carries `version` and `older_than_server`, the status payload adds
-`server_version` and `installers_refreshing`, and both download surfaces
-(Local Control, Settings) label an older installer as such instead of
+`server_version` and `installers_refreshing`, and the download surface
+(the Settings desktop card) labels an older installer as such instead of
 presenting it as current.
 
 ## Bridge owner across the API/execution split
@@ -365,8 +365,7 @@ selection.
 Run focused tests under `tests/desktop/`, desktop distribution and installer
 parity under `tests/desktop_dist/`, remote worktree routing under `tests/tasks_pkg/`
 and `tests/tools/`, and asynchronous polling under `tests/browser/`. Device waits:
-`tests/desktop/test_device_waits.py`, `tests/api/test_api_v4_device_waits.py`
-and `tests/frontend/test_frontend_devices_tab.py`.
+`tests/desktop/test_device_waits.py` and `tests/api/test_api_v4_device_waits.py`.
 
 Hope large-checkpoint publication is owned by the private environment provider's
 [Worker result publication contract](../../bundles/yourprovider/environment-provider/README.md#worker-result-publication).
@@ -539,7 +538,8 @@ tool errors name `await_device` only when the task can wait.
 The owner lists pending waits (`GET /api/v4/desktop/device-waits`, which pages
 the pending index; `includeClosed=true` pages every record in registration
 order) and cancels one (`POST /api/v4/desktop/device-waits/<waitId>/cancel`,
-idempotent; another owner's wait is not found) in Settings → Devices. Deleting
+idempotent; another owner's wait is not found) through the API; the Settings
+→ Devices list left the UI with computer control on 2026-11-17. Deleting
 a conversation cancels its pending waits; restoring it does not revive them.
 Nothing is polled and nothing expires; closed records stay as owner history.
 Pointers are written before records, so a delivery keeps a pointer whose record

@@ -107,16 +107,6 @@
       }
     },
     {
-      "key": "devices",
-      "scheme": "setting",
-      "tab": "devices",
-      "tabLevel": true,
-      "name": {
-        "zh": "设备",
-        "en": "Devices"
-      }
-    },
-    {
       "key": "preferences",
       "scheme": "setting",
       "tab": "preferences",

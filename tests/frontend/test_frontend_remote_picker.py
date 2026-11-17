@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""tests/frontend/test_frontend_remote_picker.py — RWA P4b-2a:项目选择器「远程设备」分组.
+"""tests/frontend/test_frontend_remote_picker.py — a conversation bound to a
+remote-device pseudo-path keeps its workspace without a server write.
 
-拍板 6A(docs/REMOTE_WORKTREE_DESIGN.md §5 P4):
-  * 伪路径短路:conv.projectPath = ``remote:<agent>:<root>`` 的会话
-    **绝不**调 Api.project.setPaths(服务器 fs 上没有这个路径,
-    调了就是 400/误清),项目栏渲染合成态(active,路径徽章);
-  * 目录浏览弹窗顶部「远程设备」分组:在线 agent 的共享根可一键
-    ``mpAddBrowsedPath('remote:…')``;离线 agent 灰显且不可加;
-  * 装配钉:index.html 容器 / browseDirectory 触发渲染 / _isRemotePath。
+拍板 6A(docs/REMOTE_WORKTREE_DESIGN.md §5 P4):conv.projectPath =
+``remote:<agent>:<root>`` 的会话**绝不**调 Api.project.setPaths(服务器 fs
+上没有这个路径,调了就是 400/误清),项目栏渲染合成态(active,路径徽章)。
+The remote-device picker that added such paths left the UI with computer
+control (owner decision 2026-11-17); existing bindings still restore.
 
 Run isolated: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests/frontend/test_frontend_remote_picker.py
 """
@@ -24,10 +23,9 @@ from tests._runtime_sections import native_module_path
 pytestmark = pytest.mark.unit
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-# Epic-E sub-7 split (2026-08-01): the STATE seam (_restoreConvProject /
-# _isRemotePath / _applyRemoteProjectState) lives in project_state.js (core);
-# the PANEL renderer (_renderRemoteDevicesSection / browseDirectory) stays in
-# project.js (deferred). The jsdom harness evals BOTH, in bundle order.
+# The STATE seam (_restoreConvProject / _isRemotePath /
+# _applyRemoteProjectState) lives in project_state.js (core); project.js
+# (deferred) is evaluated too, in bundle order.
 _PROJECT_STATE_JS = os.path.join(JS_DIR, 'project_state.js')
 _PROJECT_JS = os.path.join(JS_DIR, 'project.js')
 _PROJECT_BROWSE_JS = native_module_path(
@@ -52,61 +50,20 @@ def _read(path):
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  1. 装配钉
-# ══════════════════════════════════════════════════════════════════════
-
-def test_browse_modal_has_remote_section_container():
-    html = _read(os.path.join(PROJECT_ROOT, 'index.html'))
-    assert 'id="remoteDevicesSection"' in html, (
-        '目录浏览弹窗缺 remoteDevicesSection 容器')
-
-
-def test_project_js_has_remote_seams():
-    # The typed controller seam (createConversationProjectController applying
-    # projectConversationWorkspace) is executed, not text-matched, by
-    # test_remote_picker_behaviour_jsdom and its NEUTER below.
-    state_src = _read(_PROJECT_STATE_JS)
-    panel_src = _read(_PROJECT_JS)
-    assert '_renderRemoteDevicesSection' in panel_src, '缺远程分组渲染函数'
-    # 打开弹窗必须触发分组渲染(每次打开都新鲜);分组作为共享浏览器的 prelude 挂入
-    assert '_renderRemoteDevicesSection()' in panel_src
-    assert 'prelude: document.getElementById("remoteDevicesSection")' in panel_src
-
-
-def test_i18n_remote_group_key():
-    for locale in ('en.json', 'zh.json'):
-        src = _read(os.path.join(
-            PROJECT_ROOT, 'frontend', 'src', 'i18n', 'locales', locale))
-        assert '"devices.remoteGroup"' in src, (
-            f'{locale} 缺 devices.remoteGroup')
-
-
-# ══════════════════════════════════════════════════════════════════════
-#  2. 行为(jsdom 真驱)
+#  行为(jsdom 真驱)
 # ══════════════════════════════════════════════════════════════════════
 
 _PICKER_BODY = r"""
 (async () => {
 const { setup } = require(process.env.JSDOM_HARNESS);
 
-const calls = { setPaths: [], devices: [] };
-const devicesFixture = {
-  agents: [
-    { agent_id: 'aaaa1111', name: 'macbook', platform: 'darwin', online: true,
-      share_roots: [{ name: 'myapp', path: '/code/myapp' },
-                    { name: 'lib', path: '/code/lib' }] },
-    { agent_id: 'bbbb2222', name: 'winbox', platform: 'win32', online: false,
-      share_roots: [{ name: 'legacy', path: 'C:/code/legacy' }] },
-  ],
-  tokens: [],
-};
+const calls = { setPaths: [] };
 
 const { check, report } = setup({
   root: process.argv[3],
   html: '<!DOCTYPE html><body>' +
     '<div id="projectBar"></div><div id="projectBadge"></div>' +
     '<div id="projectBarStats"></div><div id="projectBarFolders"></div>' +
-    '<div id="remoteDevicesSection"></div>' +
     '</body>',
   targets: [process.argv[5], process.argv[2], process.argv[4], process.argv[6]],
   globals: {
@@ -127,9 +84,6 @@ const { check, report } = setup({
       project: {
         setPaths: async (paths, ro) => { calls.setPaths.push(paths);
           return { ok: true, json: async () => ({}) }; },
-      },
-      desktop: {
-        devices: async () => { calls.devices.push(1); return devicesFixture; },
       },
     },
   },
@@ -153,31 +107,6 @@ check('remote_restore_badge_title_keeps_pseudo',
 check('bar_badge_shows_agent_root', applied.path.includes('aaaa1111:myapp'));
 check('bar_badge_not_raw_remote_prefix', applied.path.startsWith('remote:'));
 
-// ── C. 远程分组渲染:在线可加、离线灰显 ──
-let added = [];
-window._mpFolders = [];
-window._mpRenderTags = () => {};
-window._browseState = { path: '~' };
-window.browseDirectory = async () => {};
-global.mpAddBrowsedPath = window.mpAddBrowsedPath = (p) => { added.push(p); };
-await _renderRemoteDevicesSection();
-for (let _i = 0; _i < 6; _i++) await Promise.resolve();
-const sec = document.getElementById('remoteDevicesSection');
-const html = sec.innerHTML;
-check('section_fetched_devices', calls.devices.length >= 1);
-check('section_shows_online_agent', html.includes('macbook'));
-check('section_shows_offline_agent', html.includes('winbox'));
-const addBtns = sec.querySelectorAll('.remote-root-add');
-check('online_roots_have_add_buttons', addBtns.length === 2);
-const offlineRow = sec.querySelector('.remote-agent-offline');
-check('offline_agent_greyed', !!offlineRow);
-check('offline_has_no_add',
-      !offlineRow.innerHTML.includes('remote-root-add'));
-
-// 点击第一个 add → mpAddBrowsedPath 收到伪路径
-addBtns[0].click();
-check('add_emits_pseudo_path', added[0] === 'remote:aaaa1111:myapp');
-
 report();
 process.exit(0);
 })().catch((e) => { console.error(e); process.exit(1); });
@@ -189,7 +118,7 @@ def test_remote_picker_behaviour_jsdom():
         target_js=_PROJECT_STATE_JS,
         body_js=_PICKER_BODY,
         extra_targets=[_PROJECT_JS, _PROJECT_BROWSE_JS, _PROJECT_CONTROLLER_JS],
-        min_pass=13,
+        min_pass=6,
         label='remote picker',
     )
 

@@ -31,8 +31,6 @@ export interface FolderBrowserOptions {
    * host's state if the server refuses the delete. */
   onDeleted?: (path: string) => (() => void) | void;
   notify?: (message: string, variant: 'success' | 'error') => void;
-  /** Host-owned content placed between the filter and the folder list. */
-  prelude?: HTMLElement | null;
 }
 
 export interface FolderBrowserHandle {
@@ -233,13 +231,7 @@ export function createFolderBrowser(options: FolderBrowserOptions): FolderBrowse
     } });
   footer.append(current, addCurrent);
 
-  el.append(bar, search);
-  if (options.prelude) {
-    const prelude = node('div', 'folder-browser-prelude');
-    prelude.append(options.prelude);
-    el.append(prelude);
-  }
-  el.append(list, footer);
+  el.append(bar, search, list, footer);
 
   function labelButton(button: HTMLButtonElement, text: string): void {
     button.setAttribute('aria-label', text);

@@ -9,7 +9,8 @@ import {
   resolveRuntimeAction,
   setRuntimeService,
 } from './runtime/app-runtime.js';
-import { _onLanguageChange, t } from './i18n';
+import { _onLanguageChange, ready as i18nReady, t } from './i18n';
+import { toast } from './ui/toast';
 import { installActionRegistry, registerAction, resolveRegisteredAction } from './action-registry';
 import { type FeatureCallable } from './runtime-bridge';
 import { connectFeatureRuntime, getFeatureBinding } from './feature-registry';
@@ -63,10 +64,8 @@ const utilityPanelEntries = new Set([
 const projectEntries = new Set([
   'openProjectModal', 'closeProjectModal',
 ]);
-const localControlEntries = new Set([
-  'openLocalControlModal', 'closeLocalControlModal',
-  'toggleBrowserFromLocalModal', 'toggleDesktopFromLocalModal',
-  '_lcEnsureAgentRelay',
+const browserExtensionEntries = new Set([
+  'openBrowserExtensionModal', 'closeBrowserExtensionModal',
 ]);
 const diagnosticsPresenterEntries = new Set([
   'toggleDebug', 'closeDebug', 'copyDebugContent',
@@ -86,7 +85,7 @@ const miscEntries = new Set([
 const routedFeatureEntries = new Set([
   ...settingsEntries, ...memoryEntries, ...skillsEntries, ...imageEntries,
   ...projectBrainEntries, ...mydayEntries, ...utilityPanelEntries,
-  ...projectEntries, ...localControlEntries,
+  ...projectEntries, ...browserExtensionEntries,
   ...diagnosticsPresenterEntries, ...compactionViewerEntries,
   ...miscEntries, ...paperEntries,
   ...paperPreviewEntries, ...slidesEntries,
@@ -105,7 +104,7 @@ const domainLoaders = Object.freeze({
   myday: () => import('./features/myday'),
   utilityPanels: () => import('./features/utility-panels'),
   project: () => import('./features/project'),
-  localControl: () => import('./features/local-control'),
+  browserExtension: () => import('./features/browser-extension'),
   diagnosticsPresenters: () => import('./features/diagnostics-presenters'),
   compactionViewer: () => import('./features/compaction-viewer'),
   misc: () => import('./features/misc'),
@@ -126,7 +125,7 @@ function domainLoader(name: string): () => Promise<DomainModule> {
   if (mydayEntries.has(name)) return domainLoaders.myday;
   if (utilityPanelEntries.has(name)) return domainLoaders.utilityPanels;
   if (projectEntries.has(name)) return domainLoaders.project;
-  if (localControlEntries.has(name)) return domainLoaders.localControl;
+  if (browserExtensionEntries.has(name)) return domainLoaders.browserExtension;
   if (diagnosticsPresenterEntries.has(name)) {
     return domainLoaders.diagnosticsPresenters;
   }
@@ -236,17 +235,17 @@ connectFeatureRuntime(
   setRuntimeService,
 );
 
-// The native agent can open this exact deep link when an authenticated browser
-// must carry its SSO-protected polls. Only that entry pays for Local Control at
-// boot; ordinary sessions wait for the first explicit panel action.
+// The desktop node opens /#tofu-agent-relay to borrow this tab's login for its
+// polls. Computer control has no browser surface (owner decision 2026-11-17,
+// docs/FRONTEND_ARCHITECTURE.md), so the link explains that instead of
+// leaving a page that silently does nothing.
 try {
   if (window.location.hash === '#tofu-agent-relay') {
-    void window.TofuModules.prepareFeature('_lcEnsureAgentRelay').catch((error: unknown) => {
-      console.warn('[modules] Local Control relay deep link failed', error);
-    });
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+    void i18nReady().then(() => toast(t('uiNav.jumpUnavailable'), { variant: 'error' }));
   }
 } catch (error) {
-  console.warn('[modules] Local Control relay location unavailable', error);
+  console.warn('[modules] computer-control deep link location unavailable', error);
 }
 
 /* Page-jump links (`[label](page:<key>)` in assistant markdown) resolve

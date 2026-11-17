@@ -38,7 +38,7 @@ PANELS_DIR = os.path.join(PROJECT_ROOT, 'static', 'settings_panels')
 # tests/mcp_protocol/test_mcp_catalog_internal_only.py).
 _EXPECTED_TABS = frozenset({
     'general', 'api', 'models', 'preset', 'knowledge', 'search', 'translate', 'speech',
-    'network', 'devices', 'messaging', 'oauth', 'mcp', 'skills', 'tools',
+    'network', 'messaging', 'oauth', 'mcp', 'skills', 'tools',
     'preferences', 'database', 'advanced', 'experiments',
 })
 # Chat platforms have no nav button: each is a collapsible section of the
@@ -273,10 +273,6 @@ _SETTINGS_ONLY_CSS_PREFIXES = (
     r'\.stg-dropdown-visibility',           # preset / display (batch C)
     r'\.chip\b', r'\.auth-src',             # search / network (batch D)
     r'\.two-col',                           # settings row layout (batch D)
-    # The project-folder remote-device picker remains available before
-    # Settings loads. Settings-tab `.devices-*` rules now live beside the lazy
-    # typed owner and are enforced by test_devices_panel_and_platform_download.
-    r'\.remote-agent', r'\.remote-root', r'\.remote-devices',
     # Tools inventory styles now live beside its lazy typed owner and are
     # enforced by test_frontend_tools_panel.py.
 )

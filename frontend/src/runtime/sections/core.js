@@ -144,7 +144,6 @@ let _igSelectedCount = 1;
 let fetchEnabled = true,
   codeExecEnabled = false,
   browserEnabled = true,   // always on — no toggle; a connected extension gates the tools
-  desktopEnabled = false,
   memoryEnabled = true,
   schedulerEnabled = false,
   autopilotEnabled = false,

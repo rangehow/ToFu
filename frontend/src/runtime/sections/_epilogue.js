@@ -177,13 +177,6 @@ const ProjectPresentationShellState = Object.freeze({
   },
 });
 
-// Local Control keeps the desktop permission flag in retained conversation
-// state (the browser is always on). Its demand-loaded presentation must always
-// observe the current value after navigation or a settings restore.
-const LocalControlShellState = Object.freeze({
-  get desktopEnabled() { return desktopEnabled; },
-});
-
 Object.assign(runtimeScope, {
   // Lazy retained feature runtimes declare and validate every lexical service
   // they consume. Keep this list explicit: a moved section must not fall back
@@ -196,15 +189,12 @@ Object.assign(runtimeScope, {
   CompactionHistoryState,
   ImageGenerationComposerState,
   DebugShellState,
-  LocalControlShellState,
   ProjectPresentationShellState,
   _applyProjectData,
   _applyBrowserUI,
   _applyCodeExecUI,
-  _applyDesktopUI,
   _applyFetchEnabledUI,
   _applyFlowUI,
-  _lcUpdateBadge,
   _agentInteractionChangeBlocked,
   _applyModelUI,
   _applySearchModeUI,

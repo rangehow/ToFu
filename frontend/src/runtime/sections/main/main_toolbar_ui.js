@@ -715,8 +715,6 @@ function toggleSubmenu(id) {
       t.classList.add("open");
       t.setAttribute('aria-expanded', 'true');
     }
-    if (el.querySelector("#localControlToggle")
-        && typeof _lcRefreshReach === "function") _lcRefreshReach();
   }
 }
 // Close sub-menus on outside click
@@ -758,16 +756,10 @@ function updateSubmenuCounts() {
   // (Scheduler, Swarm and Browser are default tools — no toggles — so they
   // don't count.)
   const extrasCount = (autoTranslate ? 1 : 0) + (humanGuidanceEnabled ? 1 : 0)
-    + (desktopEnabled ? 1 : 0) + (imageGenEnabled ? 1 : 0);
+    + (imageGenEnabled ? 1 : 0);
   _setCount(document.getElementById("submenuExtrasCount"), extrasCount);
   const extrasTrigger = document.querySelector("#submenuExtras .submenu-trigger");
   if (extrasTrigger) extrasTrigger.classList.toggle("has-active", extrasCount > 0);
-
-  /* Browser + desktop share ONE merged row (#localControlToggle); its summary
-   * badge counts the desktop switch (the browser has none). Repaint here so
-   * the row reflects state restored from a conversation, not just state
-   * changed through the modal's switch. */
-  if (typeof _lcUpdateBadge === "function") _lcUpdateBadge();
 
   /* A pill appeared/disappeared → toolbar's intrinsic width shifted by the
    * pill's box.  Re-measure so .ps-label gets its space back. */

@@ -1,4 +1,4 @@
-"""tests/local_serve/test_local_control_browser_probe.py — the extension-install guidance
+"""tests/local_serve/test_browser_extension_probe.py — the extension-install guidance
 must be driven by a real browser PROBE, not by ``remote_addr``.
 
 WHAT THIS GUARDS
@@ -26,9 +26,8 @@ logging "no Chrome-family browser found on this machine"):
 THE INVARIANT PINNED HERE
 -------------------------
 **A control that cannot achieve what it claims must not invite the click.**
-``static/js/local-control.js`` states this rule in its own header and
-enforces it for the desktop capability switch; this route's button was the one
-place that broke it. So the fix is not a nicer failure message — the button
+The browser extension dialog (``browser-extension.js``) states this rule in
+its own header; this route's button was the one place that broke it. So the fix is not a nicer failure message — the button
 must NOT EXIST when the probe cannot find a browser to drive.
 
 And the probe is the RIGHT criterion, strictly stronger than the IP test: if
@@ -61,10 +60,9 @@ pytestmark = pytest.mark.unit
 ROOT = Path(__file__).resolve().parent.parent.parent
 from tests._runtime_sections import runtime_section_path
 
-LC_JS = Path(runtime_section_path('local-control.js'))
-STYLES = ROOT / "static" / "styles.css"
+BE_JS = Path(runtime_section_path('browser-extension.js'))
 STYLE_ROOT = ROOT / "frontend" / "src" / "styles" / "application"
-LOCAL_CONTROL_FEATURE_ENTRY = 'frontend/src/features/local-control.ts'
+BROWSER_EXTENSION_FEATURE_ENTRY = 'frontend/src/features/browser-extension.ts'
 
 # ══════════════════════════════════════════════════════════
 #  Backend: the probe is the single source of truth
@@ -282,11 +280,9 @@ def _node() -> str:
 
 
 _SETUP_HTML = (
-    '<div id="lcBrowserStatus"><span class="browser-status-dot"></span>'
-    '<span class="lc-status-text"></span></div>'
-    '<div id="lcBrowserAbout"></div>'
-    '<div id="lcBrowserSetup"></div>'
-    '<div id="localControlBadge"></div><div id="localControlToggle"></div>'
+    '<div id="beBrowserStatus"><span class="browser-status-dot"></span>'
+    '<span class="be-status-text"></span></div>'
+    '<div id="beBrowserSetup"></div>'
 )
 
 _HARNESS = textwrap.dedent(r"""
@@ -296,7 +292,7 @@ _HARNESS = textwrap.dedent(r"""
   const dom = new JSDOM('<!doctype html><body>' + %(html)s + '</body>');
   global.window = dom.window; global.document = dom.window.document;
   global.navigator = dom.window.navigator;
-  global.browserEnabled = false; global.desktopEnabled = false;
+  global.runtimeScope = {};
   global.escapeHtml = (s) => String(s == null ? '' : s)
       .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
       .replace(/"/g,'&quot;');
@@ -305,22 +301,21 @@ _HARNESS = textwrap.dedent(r"""
   global.Api = { browser: { openExtensions: () => Promise.resolve(null) } };
 
   // Splice the SHIPPED renderer in, so the guard tracks production.
-  const src = fs.readFileSync(%(lc)s, 'utf8');
-  eval(src.replace(/\bif \(typeof window !== 'undefined'\) \{[\s\S]*$/, ''));
+  eval(fs.readFileSync(%(be)s, 'utf8'));
 
   const out = {};
   for (const [name, payload] of Object.entries(%(cases)s)) {
-    document.getElementById('lcBrowserSetup').innerHTML = '';
-    _lcBrowserUpgradeRequested = payload.forceBrowserUpgrade === true;
-    _lcRenderBrowser(payload);
-    const el = document.getElementById('lcBrowserSetup');
+    document.getElementById('beBrowserSetup').innerHTML = '';
+    _beUpgradeRequested = payload.forceBrowserUpgrade === true;
+    _beRenderBrowser(payload);
+    const el = document.getElementById('beBrowserSetup');
     out[name] = {
-      hasOpenBtn: !!el.querySelector('#lcExtOpenBtn'),
-      hasDownloadBtn: !!el.querySelector('#lcExtDownloadBtn'),
+      hasOpenBtn: !!el.querySelector('#beExtOpenBtn'),
+      hasDownloadBtn: !!el.querySelector('#beExtDownloadBtn'),
       hasPath: el.textContent.includes('/srv/tofu/browser_extension'),
       text: el.textContent.trim(),
-      statusText: document.querySelector('#lcBrowserStatus .lc-status-text').textContent,
-      state: _lcBrowserSetupState(payload),
+      statusText: document.querySelector('#beBrowserStatus .be-status-text').textContent,
+      state: _beBrowserSetupState(payload),
     };
   }
   console.log(JSON.stringify(out));
@@ -332,7 +327,7 @@ def _render_cases(cases: dict) -> dict:
     require_node_modules('jsdom')
     script = _HARNESS % {
         'html': json.dumps(_SETUP_HTML),
-        'lc': json.dumps(str(LC_JS)),
+        'be': json.dumps(str(BE_JS)),
         'cases': json.dumps(cases),
     }
     proc = subprocess.run([_node(), "-e", script], cwd=ROOT,
@@ -403,7 +398,7 @@ def test_capability_upgrade_request_keeps_a_download_action_without_version_data
     """Legacy protocol clients often report no manifest version.
 
     Settings already has authoritative evidence that such a client lacks a
-    required adapter capability.  Opening Local Control from that warning must
+    required adapter capability.  Opening the extension dialog from that warning must
     not let the ordinary "connected" branch erase every setup action merely
     because version comparison has no left-hand value.
     """
@@ -507,97 +502,44 @@ def test_stale_banner_ignores_other_devices_stale_extensions():
 
 
 # ══════════════════════════════════════════════════════════
-#  CSS rendering: .lc-substep must carry its own typography
+#  CSS rendering: every instruction line carries its own typography
 # ══════════════════════════════════════════════════════════
 
-def _local_control_css() -> str:
-    """The cascade an open Local Control modal runs under: the critical sheet,
-    then the deferred sheets its feature entry imports (the dialog body moved
-    out of the critical sheet in e7f266f04; Vite admits it before the modal
-    shows, so its rules follow the critical sheet in document order)."""
+def _browser_extension_css() -> str:
+    """The deferred sheets the dialog's feature entry imports."""
     manifest = json.loads((STYLE_ROOT / 'manifest.json').read_text(encoding='utf-8'))
-    sheets = [STYLES.read_text(encoding='utf-8')]
-    for row in manifest['deferredSections']:
-        if row.get('featureEntry') == LOCAL_CONTROL_FEATURE_ENTRY:
-            sheets.append((STYLE_ROOT / row['path']).read_text(encoding='utf-8'))
-    assert len(sheets) > 1, (
-        f'no deferred sheet is imported by {LOCAL_CONTROL_FEATURE_ENTRY}')
+    sheets = [(STYLE_ROOT / row['path']).read_text(encoding='utf-8')
+              for row in manifest['deferredSections']
+              if row.get('featureEntry') == BROWSER_EXTENSION_FEATURE_ENTRY]
+    assert sheets, f'no deferred sheet is imported by {BROWSER_EXTENSION_FEATURE_ENTRY}'
     return '\n'.join(sheets)
 
 
-def _decl(selector: str) -> dict:
-    """Effective declarations for ``selector``, merged across ALL rules.
-
-    A single-rule lookup would be asserting the SHAPE of the stylesheet
-    ("this property must appear in this literal rule"), which is exactly the
-    kind of implementation-coupled guard that goes red when someone factors
-    two rules into a grouped selector without changing a single rendered
-    pixel. What matters is the value that actually lands, so this merges every
-    rule whose selector list contains ``selector`` in document order.
-
-    All the selectors involved here are single classes (specificity 0,1,0), so
-    document order alone decides the winner — no specificity model needed.
-    """
-    css = _local_control_css()
-    # Strip comments FIRST. Without this, the selector capture below swallows
-    # any preceding /* ... */ block, so ".lc-step" ends up glued to the comment
-    # text and no longer compares equal to a bare selector part.
-    css = re.sub(r'/\*.*?\*/', '', css, flags=re.S)
-    out: dict[str, str] = {}
-    hits = 0
+def test_instruction_lines_carry_their_own_typography():
+    """A bare text node in an instruction line (the open-the-page result note)
+    once inherited the modal's default size because its class declared only
+    margin. ``.be-step`` is the one instruction class the renderer emits."""
+    css = re.sub(r'/\*.*?\*/', '', _browser_extension_css(), flags=re.S)
+    declared = {}
     for sel_list, body in re.findall(r'([^{}]+)\{([^}]*)\}', css):
-        parts = [s.strip() for s in sel_list.split(',')]
-        if selector not in parts:
-            continue
-        hits += 1
-        for decl in body.split(';'):
-            if ':' in decl:
-                k, v = decl.split(':', 1)
-                out[k.strip()] = v.strip()
-    assert hits, f"selector {selector} not found in the Local Control cascade"
-    return out
-
-
-def test_lc_substep_carries_its_own_typography():
-    """``.lc-substep`` declared ONLY ``margin``, so a bare-text node inside it
-    inherited the modal's default size and rendered visibly larger than the
-    ``.lc-step`` lines beside it.
-
-    It looked fine everywhere else purely by accident: the other two
-    ``.lc-substep`` uses wrap an ``<a class="lc-dl-link">``, and *that* class
-    sets its own font-size — a child was silently covering for the parent.
-    """
-    sub = _decl('.lc-substep')
-    missing = [p for p in ('font-size', 'color', 'line-height')
-               if p not in sub]
-    assert not missing, (
-        f".lc-substep is missing {missing} — a bare text node inside it "
-        f"renders at the modal's default size instead of matching the "
-        f".lc-step lines beside it. Declared: {sub}")
-
-
-def test_substep_and_step_share_one_font_size():
-    """Both are secondary instruction text in the same panel; two different
-    literals here is the drift that let this diverge unnoticed."""
-    assert _decl('.lc-substep')['font-size'] == _decl('.lc-step')['font-size'], (
-        "sibling instruction lines disagree on font-size")
-
-
-def test_the_dl_link_form_is_not_regressed():
-    """The two ``.lc-dl-link`` uses must still look right after the parent
-    gains a size — this is the form that was accidentally already correct,
-    so it is the one a fix could quietly break."""
-    assert 'font-size' in _decl('.lc-dl-link'), (
-        ".lc-dl-link lost its own font-size; it is nested in .lc-substep and "
-        "both forms must render correctly")
+        if '.be-step' in [part.strip() for part in sel_list.split(',')]:
+            for decl in body.split(';'):
+                if ':' in decl:
+                    key, value = decl.split(':', 1)
+                    declared[key.strip()] = value.strip()
+    missing = [p for p in ('font-size', 'color', 'line-height') if p not in declared]
+    assert not missing, f".be-step is missing {missing}; declared: {declared}"
+    classes = set(re.findall(r'class="(be-[a-z-]+)', BE_JS.read_text(encoding='utf-8')))
+    assert classes and all('.' + cls in css for cls in classes), (
+        f"browser-extension.js emits classes without a rule: {classes}")
 
 
 # ══════════════════════════════════════════════════════════
 #  The probe is CACHED — and the cache must not blind it
 # ══════════════════════════════════════════════════════════
 #
-# `_detect_local_browser` hangs off GET /status, which the Local Control modal
-# polls every 3s (`_LC_POLL_MS`). Uncached, the miss path is the expensive one:
+# `_detect_local_browser` hangs off GET /status, which the browser extension dialog
+# polls every 3s (`_BE_POLL_MS`). Uncached, the miss path is the expensive one:
 # with no browser installed, every candidate name misses and each miss walks
 # the WHOLE PATH. Measured on this host — 51 PATH entries, ~408 stat() calls
 # and ~6ms per probe, and that is a local disk; on network FUSE mounts

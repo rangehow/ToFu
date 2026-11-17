@@ -452,11 +452,7 @@ function updateMobileSheet() {
   const map = {
     mobileTranslate:   "translateToggle",
     mobileImageGen:    "imageGenToggle",
-    mobileHumanGuidance: "humanGuidanceToggle",
-    /* Browser bridge + desktop agent share ONE row now (see
-     * frontend/src/runtime/local-control.js); the merged entry is .active when either
-     * capability is on. */
-    mobileLocalControl: "localControlToggle"
+    mobileHumanGuidance: "humanGuidanceToggle"
   };
   let activeCount = agentMode === 'standard' && !activeFlow ? 0 : 1;
   for (const [mobileId, desktopId] of Object.entries(map)) {

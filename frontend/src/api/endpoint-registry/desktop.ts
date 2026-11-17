@@ -1,8 +1,10 @@
-/** desktop endpoint facade. Owns wire paths and projections; transport/retry policy arrives through explicit ports. */
-import type { EndpointPorts, JsonObject } from './contracts';
+/** desktop endpoint facade. Owns wire paths and projections; transport/retry policy arrives through explicit ports.
+ * Only the installer status remains: computer control (nodes, pairing, device
+ * waits, diagnostics, SSO relay) has no browser surface since 2026-11-17. */
+import type { EndpointPorts } from './contracts';
 import type {RequestOptions} from '../transport';
 export function createDesktopEndpoints(ports: EndpointPorts) {
-  const { request, get, post, del } = ports;
+  const { get } = ports;
   const desktop = {
     /* `arch` is the architecture the CLIENT resolved for itself via
      * navigator.userAgentData.getHighEntropyValues(['architecture']). It is
@@ -12,54 +14,6 @@ export function createDesktopEndpoints(ports: EndpointPorts) {
      * ambiguous (correct, two-choice) answer comes back. */
     status: (arch = '', options: Pick<RequestOptions, 'signal'> = {}) =>
       get('/api/v4/desktop/status', {onError: 'null', query: arch ? {arch} : {}, ...options}),
-    devices:     () => get('/api/v4/desktop/devices', {
-      onError: 'null', coalesce: true
-    }),
-    mintToken:   (name: string) => post('/api/v4/desktop/token', { name: name || '' }),
-    revokeToken: (keyId: string) => del(`/api/v4/desktop/token/${encodeURIComponent(keyId)}`),
-    /* The caller's nodes (NodeListing in contracts/desktop_node_v1.schema.json). */
-    nodes:       () => get('/api/v4/desktop/nodes', { onError: 'null' }),
-    /* Revokes the node's credential and disconnects it (409 for the desktop
-     * app's in-process node, which has no credential). */
-    removeNode:  (nodeId: string) => del(`/api/v4/desktop/nodes/${encodeURIComponent(nodeId)}`),
-    /* Mint a one-time pairing link + 6-digit code. `base` is the page's live
-     * origin+BASE_PATH (the proxy strips the prefix, so only the browser
-     * knows it); the server pins it to the request Host. */
-    pairCode:    (base: string) => post('/api/v4/desktop/pair-code', {},
-      { query: base ? { base: base } : {} }),
-    /* Conversations waiting for one of the owner's devices (await_device);
-     * wire shapes: contracts/device_waits_v1.schema.json. */
-    deviceWaits: (cursor = '') => get('/api/v4/desktop/device-waits', {
-      onError: 'null', query: cursor ? { cursor } : {},
-    }),
-    cancelDeviceWait: (waitId: string) => post(
-      `/api/v4/desktop/device-waits/${encodeURIComponent(waitId)}/cancel`, {}),
-    /* The diagnostics inbox (2026-08-06): the agent's「复制诊断信息」bundle,
-     * pasted in the Local Control panel, stored server-side for debugging. */
-    submitDiag:  (text: string) => post('/api/v4/desktop/client-diag', { text: text }),
-    listDiags:   () => get('/api/v4/desktop/client-diag', { onError: 'null' }),
-    /* Browser-assisted SSO relay: forward the agent's validated poll through
-     * this authenticated page, while keeping the endpoint and request shape
-     * owned by the unified API client. A raw Response is required because the
-     * browser must return both the exact status and body to the local broker. */
-    relayPoll:   (payload: JsonObject, bridgeSecret: string) => request<Response | null>('/api/desktop/poll', {
-      method: 'POST',
-      json: payload || {},
-      headers: Object.assign(
-        { 'Accept': 'application/json' },
-        bridgeSecret ? { 'X-Bridge-Secret': bridgeSecret } : {} as Record<string, string>),
-      credentials: 'include',
-      parse: 'response',
-    }),
-    /* A node redeeming its one-shot pairing link through the same relay; the
-     * pairing secret in the payload is the only credential. */
-    relayPair:   (payload: JsonObject) => request<Response | null>('/api/desktop/pair', {
-      method: 'POST',
-      json: payload || {},
-      headers: { 'Accept': 'application/json' },
-      credentials: 'include',
-      parse: 'response',
-    }),
   };
   return desktop;
 }

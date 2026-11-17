@@ -59,8 +59,6 @@ const _modelRoutingDropdownModels = runtimeScope._modelRoutingDropdownModels;
 if (typeof _modelRoutingDropdownModels !== 'function') throw new Error('settings-presenters runtime dependency is unavailable: _modelRoutingDropdownModels');
 const _modelShortName = runtimeScope._modelShortName;
 if (typeof _modelShortName !== 'function') throw new Error('settings-presenters runtime dependency is unavailable: _modelShortName');
-const _populateDevicesTab = runtimeScope._populateDevicesTab;
-if (typeof _populateDevicesTab !== 'function') throw new Error('settings-presenters runtime dependency is unavailable: _populateDevicesTab');
 const _populateModelDropdown = runtimeScope._populateModelDropdown;
 if (typeof _populateModelDropdown !== 'function') throw new Error('settings-presenters runtime dependency is unavailable: _populateModelDropdown');
 const _populatePreferencesTab = runtimeScope._populatePreferencesTab;

@@ -134,7 +134,6 @@
       out.push({ label: sm === 'single' ? 'Search' : 'Search ×N', tone: 'search' });
     }
     if (typeof fetchEnabled !== 'undefined' && fetchEnabled) out.push({ label: 'Fetch', tone: 'net' });
-    if (typeof desktopEnabled !== 'undefined' && desktopEnabled) out.push({ label: 'Desktop', tone: 'net' });
     if (typeof codeExecEnabled !== 'undefined' && codeExecEnabled) out.push({ label: 'Code Exec', tone: 'code' });
     if (typeof memoryEnabled !== 'undefined' && memoryEnabled) out.push({ label: 'Memory', tone: 'ai' });
     // Scheduler and Browser are default tools (always on, no toggle) — like

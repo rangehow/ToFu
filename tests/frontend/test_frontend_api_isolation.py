@@ -139,12 +139,6 @@ process.stdout.write(JSON.stringify(result));
 _ALLOWED_VARIABLE_FETCHES = {
     # Cross-origin OAuth provider token endpoint (Anthropic/OpenAI), not /api/*.
     'settings/oauth.js': 1,
-    # Browser-assisted desktop transport talks to the TofuRemote's
-    # loopback-only broker (127.0.0.1:15180..15189), not a Tofu /api route.
-    # It intentionally needs cross-origin/PNA RequestInit fields that do not
-    # belong in the authenticated backend API client. The actual same-origin
-    # /api/desktop/poll hop is routed through Api.desktop.relayPoll().
-    'local-control.js': 1,
     # (tofu-pet.js HAD a carve-out here for fetching its SVG frames; the
     # 2026-07-30 raster revamp loads frames with new Image() instead — zero
     # fetch() calls — so the entry was removed, tightening the ratchet.)

@@ -50,7 +50,7 @@ FAMILY = (
     'settings/other_tabs.js', 'settings/speech.js',
     'settings/auth_sources.js', 'settings/private_hosts.js',
     'settings/save_export.js', 'settings/system_prompt_editor.js',
-    'settings/oauth.js', 'settings/mcp.js', 'settings/devices.js',
+    'settings/oauth.js', 'settings/mcp.js',
 )
 ENTRY_STUBS = ('openSettings', 'closeSettings',
                'saveSettings', 'switchSettingsTab', '_oauthLogin')
@@ -64,7 +64,6 @@ NATIVE_OWNERS = {
     'settings/speech.js': 'frontend/src/features/settings/speech.ts',
     'settings/auth_sources.js': 'frontend/src/features/settings/auth-sources.ts',
     'settings/private_hosts.js': 'frontend/src/features/settings/private-hosts.ts',
-    'settings/devices.js': 'frontend/src/features/settings/devices.ts',
 }
 
 

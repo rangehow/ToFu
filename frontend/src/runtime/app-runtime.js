@@ -1514,7 +1514,6 @@ let _igSelectedCount = 1;
 let fetchEnabled = true,
   codeExecEnabled = false,
   browserEnabled = true,   // always on — no toggle; a connected extension gates the tools
-  desktopEnabled = false,
   memoryEnabled = true,
   schedulerEnabled = false,
   autopilotEnabled = false,
@@ -4203,8 +4202,7 @@ const _FEATURE_ENTRY_POINTS = [
   'openDailyReport', 'closeDailyReport',
   'openKnowledgeBase',
   'openProjectModal', 'closeProjectModal',
-  'openLocalControlModal', 'closeLocalControlModal',
-  'toggleDesktopFromLocalModal',
+  'openBrowserExtensionModal', 'closeBrowserExtensionModal',
   'toggleDebug', 'closeDebug', 'copyDebugContent',
   'openRequestInspectorForTask', 'openToolDebugPanel',
   'openCompactionViewer', 'openSlidesEditor',
@@ -15595,7 +15593,7 @@ function loadConversation(id) {
       fetchEnabled: !!fetchEnabled,
       codeExecEnabled: !!codeExecEnabled,
       browserEnabled: !!browserEnabled,
-      desktopEnabled: !!desktopEnabled,
+      desktopEnabled: false,
       memoryEnabled: !!memoryEnabled,
       schedulerEnabled: !!schedulerEnabled,
       autopilotEnabled: !!autopilotEnabled,
@@ -16182,7 +16180,7 @@ function _buildToolbarOverrides() {
     memoryEnabled,
     schedulerEnabled,
     browserEnabled,
-    desktopEnabled,
+    desktopEnabled: false,
     imageGenEnabled,
     imageGenMode,
     imageGenModel: _igSelectedModel,
@@ -16201,7 +16199,7 @@ function _buildToolbarOverrides() {
     // translates the assistant reply to it instead of the old Chinese hard-pin.
     uiLang: (typeof _i18nLang !== 'undefined' ? _i18nLang : 'zh'),
     autoApply: autoApplyWrites,
-    /* _browserClientId is refreshed only while the Local Control panel is
+    /* _browserClientId is refreshed only while the browser extension dialog is
      * open. Outside it, fall back to the DOM stamp the LOCAL extension left
      * on this document (origin_marker.js) so a conversation started without
      * ever opening the panel still pins automation to THIS machine instead
@@ -18104,8 +18102,6 @@ function toggleSubmenu(id) {
       t.classList.add("open");
       t.setAttribute('aria-expanded', 'true');
     }
-    if (el.querySelector("#localControlToggle")
-        && typeof _lcRefreshReach === "function") _lcRefreshReach();
   }
 }
 // Close sub-menus on outside click
@@ -18147,16 +18143,10 @@ function updateSubmenuCounts() {
   // (Scheduler, Swarm and Browser are default tools — no toggles — so they
   // don't count.)
   const extrasCount = (autoTranslate ? 1 : 0) + (humanGuidanceEnabled ? 1 : 0)
-    + (desktopEnabled ? 1 : 0) + (imageGenEnabled ? 1 : 0);
+    + (imageGenEnabled ? 1 : 0);
   _setCount(document.getElementById("submenuExtrasCount"), extrasCount);
   const extrasTrigger = document.querySelector("#submenuExtras .submenu-trigger");
   if (extrasTrigger) extrasTrigger.classList.toggle("has-active", extrasCount > 0);
-
-  /* Browser + desktop share ONE merged row (#localControlToggle); its summary
-   * badge counts the desktop switch (the browser has none). Repaint here so
-   * the row reflects state restored from a conversation, not just state
-   * changed through the modal's switch. */
-  if (typeof _lcUpdateBadge === "function") _lcUpdateBadge();
 
   /* A pill appeared/disappeared → toolbar's intrinsic width shifted by the
    * pill's box.  Re-measure so .ps-label gets its space back. */
@@ -18988,11 +18978,7 @@ function updateMobileSheet() {
   const map = {
     mobileTranslate:   "translateToggle",
     mobileImageGen:    "imageGenToggle",
-    mobileHumanGuidance: "humanGuidanceToggle",
-    /* Browser bridge + desktop agent share ONE row now (see
-     * frontend/src/runtime/local-control.js); the merged entry is .active when either
-     * capability is on. */
-    mobileLocalControl: "localControlToggle"
+    mobileHumanGuidance: "humanGuidanceToggle"
   };
   let activeCount = agentMode === 'standard' && !activeFlow ? 0 : 1;
   for (const [mobileId, desktopId] of Object.entries(map)) {
@@ -20284,19 +20270,6 @@ function _applyImageGenUI(enabled) {
     _scheduleReflow();
   }
 }
-function _applyDesktopUI(enabled) {
-  desktopEnabled = !!enabled;
-  document
-    .getElementById("desktopToggle")
-    ?.classList.toggle("active", desktopEnabled);
-  document
-    .getElementById("desktopBadge")
-    ?.classList.toggle("visible", desktopEnabled);
-  /* The desktop agent now shares ONE toolbar entry with the browser bridge
-   * (#localControlToggle). Its summary badge counts both capabilities, so it
-   * is repainted here rather than toggled per-flag. */
-  if (typeof _lcUpdateBadge === "function") _lcUpdateBadge();
-}
 function captureActiveConversationSettings() {
   const conv = getActiveConv();
   if (!conv) return;
@@ -20322,7 +20295,9 @@ function captureActiveConversationSettings() {
   conv.fetchEnabled = !!fetchEnabled;
   conv.codeExecEnabled = !!codeExecEnabled;
   conv.browserEnabled = !!browserEnabled;
-  conv.desktopEnabled = !!desktopEnabled;
+  /* Computer control has no browser surface (owner decision 2026-11-17), so
+   * the browser never grants it and revokes a grant stored earlier. */
+  conv.desktopEnabled = false;
   conv.memoryEnabled = !!memoryEnabled;
   conv.schedulerEnabled = !!schedulerEnabled;
   conv.autopilotEnabled = !!autopilotEnabled;
@@ -20405,7 +20380,6 @@ function restoreConversationSettingsToComposer(conv, modelEligible) {
   _applyFetchEnabledUI(true);  // always on
   _applyCodeExecUI(!!conv.codeExecEnabled);
   _applyBrowserUI(true);  // always on
-  _applyDesktopUI(!!conv.desktopEnabled);
   _applyMemoryUI(conv.memoryEnabled !== undefined ? !!conv.memoryEnabled : true);
   _applyAgentModeUI(_restoredInteraction.agentMode);
   _applyFlowUI(_restoredInteraction.activeFlow);
@@ -20471,14 +20445,6 @@ function _resetToolsToDefaults() {
   _applyFetchEnabledUI(true);
   _applyCodeExecUI(false);
   _applyBrowserUI(true);
-  /* Desktop was the ONE tool flag this function never reset, so a new chat
-   * silently inherited computer control from whatever conversation came
-   * before — `restoreConversationSettingsToComposer` sets it per conversation,
-   * nothing cleared it, and
-   * the merged badge then reported it as active on a conversation the user
-   * never granted it on. It is the highest-risk flag here (shell, file writes,
-   * GUI), so inheriting it by omission is the wrong default. */
-  _applyDesktopUI(false);
   _applyMemoryUI(true);
   /* Execution strategy is independent from project attachment. Every new
    * conversation starts in Standard agent mode; attaching a project changes
@@ -20669,7 +20635,7 @@ function _startBuildWatch() {
       toggleSearch: toggleSidebarSearch, closeSearch: closeSidebarSearch,
       closeApply: closeApplyModal, closePreview,
       closeSettings: () => runtimeScope.closeSettings(), closeProject: () => runtimeScope.closeProjectModal(),
-      closeLocalControl: () => runtimeScope.closeLocalControlModal(), closeDailyReport: () => runtimeScope.closeDailyReport(),
+      closeBrowserExtension: () => runtimeScope.closeBrowserExtensionModal(), closeDailyReport: () => runtimeScope.closeDailyReport(),
     },
   }));
   initSidebarSearch();
@@ -22572,7 +22538,6 @@ let backgroundConversationActivity = new Map();
       out.push({ label: sm === 'single' ? 'Search' : 'Search ×N', tone: 'search' });
     }
     if (typeof fetchEnabled !== 'undefined' && fetchEnabled) out.push({ label: 'Fetch', tone: 'net' });
-    if (typeof desktopEnabled !== 'undefined' && desktopEnabled) out.push({ label: 'Desktop', tone: 'net' });
     if (typeof codeExecEnabled !== 'undefined' && codeExecEnabled) out.push({ label: 'Code Exec', tone: 'code' });
     if (typeof memoryEnabled !== 'undefined' && memoryEnabled) out.push({ label: 'Memory', tone: 'ai' });
     // Scheduler and Browser are default tools (always on, no toggle) — like
@@ -23249,74 +23214,6 @@ let backgroundConversationActivity = new Map();
     _scheduleRailTracks();
   }
 })();
-/* ===== migrated source: local-control-state.js ===== */
-/* Responsibility: retained Local Control badge projection only.
- * Entry: _lcUpdateBadge, called when conversation tool flags change;
- * _lcRefreshReach, called when the row is about to be seen.
- * Dependencies: the retained desktop wire flag and the optional
- * demand-loaded LocalControlPresentationState reachability port. */
-
-function _lcBadgeT(key, fallback) {
-  if (typeof t === 'function') {
-    var translated = t(key);
-    if (translated && translated !== key) return translated;
-  }
-  return fallback;
-}
-
-/* ONE summary badge on the merged toolbar entry, counting the switchable
- * capability when it is on; the merged row is `active` with it. The browser
- * is always on with no switch, so like the other default tools it never
- * counts: a permanent count, or a permanent stale warning for everyone
- * without the extension, would be noise.
- *
- * Enabled is not the same as working: an enabled capability confirmed
- * unreachable ships zero tools. The presentation owner publishes its live
- * reachability object only after that chunk is requested; absence means
- * "not probed", which must never be presented as broken. */
-function _lcUpdateBadge() {
-  var dOn = (typeof desktopEnabled !== 'undefined' && desktopEnabled);
-  var n = dOn ? 1 : 0;
-  var presentation = runtimeScope.LocalControlPresentationState;
-  var reach = (presentation && typeof presentation.reach === 'object'
-      && presentation.reach)
-    ? presentation.reach : { browser: null, desktop: null };
-  var stale = (dOn && reach.desktop === false) ? 1 : 0;
-  var badge = document.getElementById('localControlBadge');
-  if (badge) {
-    badge.textContent = n > 0 ? String(n) : '';
-    badge.style.display = n > 0 ? '' : 'none';
-    badge.classList.toggle('visible', n > 0);
-    badge.classList.toggle('lc-badge-stale', stale > 0);
-    if (stale > 0) {
-      badge.title = _lcBadgeT('local.badgeStale',
-        '已开启，但当前未连接 —— AI 实际拿不到这些工具。');
-    } else {
-      badge.removeAttribute('title');
-    }
-  }
-  var row = document.getElementById('localControlToggle');
-  if (row) {
-    row.classList.toggle('active', n > 0);
-    row.classList.toggle('lc-row-stale', stale > 0);
-    if (typeof _paintToolExposureState === 'function') {
-      var available = !(reach.browser === false
-                     && reach.desktop === false);
-      _paintToolExposureState(row, n > 0 && stale < n, available);
-    }
-  }
-}
-
-/* Reachability is a past observation: the lazy owner's modal poll stops on
- * close, so ask that owner to re-confirm it before the row is seen again. An
- * owner that was never requested has nothing to refresh and is not loaded
- * for this — unprobed stays unprobed. */
-function _lcRefreshReach() {
-  var presentation = runtimeScope.LocalControlPresentationState;
-  if (presentation && typeof presentation.refresh === 'function') {
-    presentation.refresh();
-  }
-}
 /* ===== migrated source: onboarding.js ===== */
 /* ═══════════════════════════════════════════════════════════════════
    onboarding.js — first-run setup wizard.
@@ -26261,13 +26158,6 @@ const ProjectPresentationShellState = Object.freeze({
   },
 });
 
-// Local Control keeps the desktop permission flag in retained conversation
-// state (the browser is always on). Its demand-loaded presentation must always
-// observe the current value after navigation or a settings restore.
-const LocalControlShellState = Object.freeze({
-  get desktopEnabled() { return desktopEnabled; },
-});
-
 Object.assign(runtimeScope, {
   // Lazy retained feature runtimes declare and validate every lexical service
   // they consume. Keep this list explicit: a moved section must not fall back
@@ -26280,15 +26170,12 @@ Object.assign(runtimeScope, {
   CompactionHistoryState,
   ImageGenerationComposerState,
   DebugShellState,
-  LocalControlShellState,
   ProjectPresentationShellState,
   _applyProjectData,
   _applyBrowserUI,
   _applyCodeExecUI,
-  _applyDesktopUI,
   _applyFetchEnabledUI,
   _applyFlowUI,
-  _lcUpdateBadge,
   _agentInteractionChangeBlocked,
   _applyModelUI,
   _applySearchModeUI,

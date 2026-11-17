@@ -455,10 +455,10 @@ Rejected: arbitrary splits retaining ambient dependencies; repeated suffix scans
 **Composer/Inspector styles:** Problem: `02-messages-composer.css` mixed 85,875 bytes / 920 lines of field, menus, updates, image receipts and diagnostics. Decision: 22 ordered owners plus the extracted shell owner (largest 83 lines); 17 unchanged copies retain exact admission hashes, while field/Inspector edits pass tokens without exemptions. Only five Inspector owners defer; visible tool anchors, persisted image receipts and Update remain critical. Measurement: critical CSS falls 1,296,877 → 1,275,273 bytes (279,294 → 274,293 gzip); all deferred authoring still counts toward budgets. Alternatives rejected: deferring the whole sheet breaks chat receipts; renamed raw edits evade token admission; a second CSS loader races native preload. Reading and interaction evidence is in `RENDER_CONTRACT.md`.
 
 **Capability and conversation styles:** Problem: one 81,436-byte sheet mixed
-browser setup, Local Control, Memory, branches, references, agent evidence,
+browser setup, Local Control (now the browser extension dialog), Memory, branches, references, agent evidence,
 toasts and reasoning controls. Decision: ten explicit owners (largest 18,987
 bytes), with unchanged copied rules admitted by exact manifest hashes.
-Memory body and Local Control styles use their existing feature imports and
+Memory body and browser extension dialog styles use their existing feature imports and
 Vite's before-visible CSS admission. Memory frame/palette rules remain critical
 before shared mobile rules; shared modal links and capability toggles have a
 critical owner. Memory's responsive body rules move with its panel, and Skills
@@ -791,7 +791,7 @@ requesting the application preserves the waterfall. Tests: `main.test.ts`,
   conversation/mode changes release the panel and its PDF resources. Search,
   outline and logs open on demand; verified build locations can follow edits.
   See [Paper builds](PAPER_BUILDS.md#chat-preview) for bounds and verification.
-- Settings retained presenters are demand-loaded as the manifest-owned `settings-presenters` runtime. `frontend/src/features/settings.ts` evaluates the typed Settings owners before that retained island, so every declared typed service is present when the generated runtime closes its dependency boundary. The shell routes `openSettings`, `closeSettings`, `saveSettings`, `switchSettingsTab`, and onboarding's immediate `_oauthLogin` through the feature bridge. Saving keeps its busy latch until feature-toggle writes are acknowledged; a rejected, missing, or failed acknowledgement reaches the footer error and leaves Settings open for retry. Routing-authority reads are coalesced and retried before dependent speech/routing persistence. Reassignable shell state and Settings working copies cross the private registry through live accessors; a captured array, set, boolean, or cache reference is not an acceptable lazy-runtime dependency. Optional panel presentation follows the same residency boundary: the Devices tab imports `frontend/src/features/settings/devices.css`, the Tools inventory owns its complete base/comfort rules in `tools-inventory.css`, and shared modal-only refinements live in `settings-comfort.css`. A manifest-generated CSS entry imports ordered base sections before those refinements; Vite waits for CSS before invocation. The project-folder remote-device picker stays eager because it can render without opening Settings.
+- Settings retained presenters are demand-loaded as the manifest-owned `settings-presenters` runtime. `frontend/src/features/settings.ts` evaluates the typed Settings owners before that retained island, so every declared typed service is present when the generated runtime closes its dependency boundary. The shell routes `openSettings`, `closeSettings`, `saveSettings`, `switchSettingsTab`, and onboarding's immediate `_oauthLogin` through the feature bridge. Saving keeps its busy latch until feature-toggle writes are acknowledged; a rejected, missing, or failed acknowledgement reaches the footer error and leaves Settings open for retry. Routing-authority reads are coalesced and retried before dependent speech/routing persistence. Reassignable shell state and Settings working copies cross the private registry through live accessors; a captured array, set, boolean, or cache reference is not an acceptable lazy-runtime dependency. Optional panel presentation follows the same residency boundary: the Tools inventory owns its complete base/comfort rules in `tools-inventory.css`, and shared modal-only refinements live in `settings-comfort.css`. A manifest-generated CSS entry imports ordered base sections before those refinements; Vite waits for CSS before invocation. The project-folder remote-device picker stays eager because it can render without opening Settings.
 - The composer has one compact **conversation bar**, owned by `features/conversation-bar/{project-context,context-meter,turn-navigation}.ts` and `25-conversation-bar.css`. Project location is the left segment of a content-sized project cluster: Auto stays beside the names. Idle width lives in the strip between Auto and the meter, not inside a stretched trigger. Names that fit that leftover (strip minus Auto/meter/turns/chrome) join with a middle dot; `+N` only counts names that do not. Labels are measured at `max-content` so ellipsis stretch cannot collapse a fit to `+N`. A ResizeObserver on the strip/bar (and sibling mutations) refits the list and is disconnected on destroy. A literal context meter and fixed previous/count/next follow it. There is no pet, scene, pocket, separate project card or ornamental sphere. Native buttons open shared nonmodal `disclosure.ts` panels for full paths and permissions, context counts/compaction actions, and a TurnStore jump list. Named container queries compact labels by actual pane width, not only screen width. Narrow panes move Auto/Manual into project details; the bar never wraps. Panels become fixed before anchor measurement so body flex cannot shift the UI. Escape returns focus; native outside click/focus wins, and resize/scroll/ hidden-page dismissal releases the panel's temporary listeners. Retained project/context/turn adapters inject existing command and accounting ports, not another store. Exact rank jumps hydrate stable IDs through the v3 coordinator, then the Surface mounts its bounded 80-turn window and aligns through the viewport owner. Instant alignment and one cancellable layout correction replace competing native smooth scrolling; lazy-history frames are invalidated before a jump. The directory shows the authoritative round total and mounts at most 50 rows with numeric/first/last access, not loaded-body arithmetic. Late history responses are fenced by view generation; project permission/clear completion shares the project controller's navigation generation. Manual compaction is single-flight per page and its progress is visible only in the originating conversation. UI previews cap text at 24,000 characters; durable summaries stay server-owned. Specs: `node --test tests/context_meter.test.cjs tests/turn_navigation.test.cjs tests/project_location.test.cjs`, `tests/conversation/test_conversation_bar_browser.py`, Surface window/reveal tests and `tests/visual/test_visual_turn_jump_scroll.py`.
 - Timer creation settles an immutable `timerReceipt` through ordinary tool-result metadata; typed cards describe the background handoff after reload without a waiting-task spinner or browser timer. Live panel rows distinguish code predicates, ready dispatch, fired, failed and expired states; desktop/mobile evidence lives in `tests/visual/test_visual_timer_panel.py`. Update, Timer, and Optimizer retained presenters are one demand-loaded
   `utility-panels` runtime behind `frontend/src/features/utility-panels.ts`.
@@ -833,36 +833,37 @@ requesting the application preserves the waterfall. Tests: `main.test.ts`,
   `runtimeScope`, while the lazy presenter is the sole writer, preserving drop
   arbitration without a browser global or captured state.
 - The Project folder workbench is the manifest-owned, demand-loaded `project-presenters` runtime behind `frontend/src/features/project.ts`. Core project state, bar rendering, restore/SSE reconciliation, and background rescan remain retained because they run without the modal. A conversation restore carries its primary recent-path intent inside the same `setPaths` request; an explicit workbench apply carries a primary-first prefix of at most 32 selected roots without truncating the authoritative project list. The browser owns no second recent-path write, and background/status reconciliation omits the optional intent. Write approvals, subprocess stdin, and apply-code confirmation remain in the small retained `execution-interactions.js` section, so coding actions neither wait for nor retain the folder browser. The generated presenter imports its typed browse coordinator, the shared folder browser (`features/project/folder-browser.ts`) and static icon owner only on demand; the section only binds the staged workspace, drop zone and remote-device group to that browser. Mutable conversation/project authority crosses one frozen `ProjectPresentationShellState` live accessor object; individual values must not be captured through `featureRegistry`. The retained clear path probes the optional `ProjectModalPresentation` cleanup owner and never invokes the open/close feature stub, preventing an idle clear from fetching the workspace.
-- Local Control's modal, capability status probes, node list and pairing
-  ("Add a machine": one click mints `POST /api/v4/desktop/pair-code?base=`
-  with the page's live origin + `BASE_PATH`, shows the link, 6-digit code and
-  a countdown until a new node appears; Remove uses
-  `DELETE /api/v4/desktop/nodes/<id>` or revokes an offline credential),
-  download/diagnostic presentation, three-second open-modal poll, and
-  browser-assisted desktop poll relay are the manifest-owned, demand-loaded
-  `local-control-presenters`
-  runtime behind `frontend/src/features/local-control.ts`. The retained
-  `local-control-state.js` section owns only the merged permission badge,
-  which counts the desktop switch (the browser is always on and has no
-  switch), and reads reachability through the optional live
-  `LocalControlPresentationState`; an absent owner means unprobed, not broken.
-  Reachability is an observation that only the open modal's poll maintains,
-  so opening the menu that holds the row asks a loaded owner to re-probe both
-  status endpoints once (reachability and the row only; the closed modal is
-  not repainted). The row therefore never presents a closed session's answer,
-  and a never-requested owner is not loaded for it. Clearing reachability on
-  close was rejected because unknown reads as healthy (an enabled desktop whose
-  agent dropped would look live), and a background poll would add an interval
-  for a row that is visible only while its menu is open.
-  The independent browser/desktop wire flags cross one frozen
-  `LocalControlShellState` getter port and remain conversation-owned. Normal
-  boot, generic `misc` commands, badge repaint, and modal close paths do not
-  import the workbench. The exact `#tofu-agent-relay` native-agent deep link is
-  the sole boot-time exception: the typed feature prepares the relay owner for
-  thirty minutes without opening the modal. Opening the modal starts its
-  bounded status poll and closing it clears that interval; modal open alone
-  never scans localhost because Chromium may require Local Network Access
-  permission.
+- **Computer control has no browser surface (owner decision 2026-11-17).**
+  Problem: the "Local Control" (本机控制) surface framed device control as
+  local, while Tofu is moving to seamless, consistent connections with many
+  kinds of devices; its pairing, node list, Settings → Devices tab and
+  Project-panel remote-device picker would have to be relearned under the new
+  design. Decision: remove every frontend entry point for computer control —
+  the composer Extras and mobile rows, the dialog with its desktop switch,
+  pairing, node list, diagnostics inbox and browser-assisted SSO poll relay,
+  the Settings → Devices tab and its `setting:devices` jump target, and the
+  Project-panel remote-device group — removed, not flag-hidden, with the copy
+  that only served them. The browser no longer grants the desktop tool family:
+  it sends `desktopEnabled: false` and so revokes a grant stored earlier,
+  because a capability the user cannot see or switch off must not stay on.
+  The `#tofu-agent-relay` deep link the desktop node opens answers with the
+  common "page or setting unavailable" toast; an unknown `setting:devices`
+  link does the same through `jumpToSetting`. The backend (desktop wire,
+  node protocol, pairing, device waits, remote worktrees and their HTTP
+  routes) is unchanged, and conversations already bound to a `remote:` path
+  still restore. Where multi-device connectivity lives in the UI is decided by
+  the multi-device design in [remote execution](modules/remote_execution.md).
+  Alternatives rejected: hiding the surface behind a feature flag (dead code
+  that still ships and drifts) and keeping the desktop half under a new name
+  (pre-empts the multi-device design).
+- The browser extension dialog (install, upgrade and connection status of the
+  Tofu extension) is the manifest-owned, demand-loaded
+  `browser-extension-presenters` runtime behind
+  `frontend/src/features/browser-extension.ts`, opened from Settings → Search
+  & Web Access ("Install or upgrade extension") and from a site adapter's
+  upgrade action. It shows one detected-state instruction over a static
+  floor, polls `GET /api/v4/browser/status` every three seconds only while
+  open, and clears the interval on close.
 - Debug Panel and Request Inspector DOM, task/payload/trace reads, live TurnStore subscription, poll and six Inspector CSS owners belong to the demand-loaded `diagnostics-presenters` entry. Native `diagnostics-message-disclosure.ts` supplies UI disclosure buttons. CSS preload completes before markup; closed panels load neither these sheets nor the runtime. The retained
   `core/debug_state.js` authority owns only evidence that must exist before a
   panel opens: diagnostics/error and per-task snapshot bounds, clipboard
@@ -1360,7 +1361,7 @@ sufficient.
 | Demand-loaded Image Generation presentation and live composer state | manifest bundle `image-generation` + `frontend/src/features/image.ts` + `ImageGenerationComposerState` |
 | Demand-loaded local Knowledge Workbench in Settings and drop state | manifest bundle `knowledge-presenters` + `frontend/src/features/settings/knowledge-tab.ts` |
 | Demand-loaded Project workspace with retained state/coding interactions | manifest bundle `project-presenters` + `frontend/src/features/project.ts` + `ProjectPresentationShellState` |
-| Demand-loaded Local Control with retained merged badge | manifest bundle `local-control-presenters` + `frontend/src/features/local-control.ts` + `LocalControlShellState` |
+| Demand-loaded browser extension dialog | manifest bundle `browser-extension-presenters` + `frontend/src/features/browser-extension.ts` |
 | Demand-loaded Debug/Request Inspector with retained bounded evidence | manifest bundle `diagnostics-presenters` + `frontend/src/features/diagnostics-presenters.ts` + `DebugShellState` |
 | Demand-loaded Compaction Viewer with typed bounded history projection | manifest bundle `compaction-viewer-presenters` + `frontend/src/features/compaction-viewer.ts` + `core/compaction-history-state.ts` |
 | Generated Orchestration request projection and stable endpoint facade | `frontend/src/features/orchestration/request-contracts.generated.ts` + `api-client.ts` |

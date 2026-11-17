@@ -46,7 +46,7 @@ function fixture() {
       reportFailure: e => errors.push(e) },
     geometry: { updateActiveTurn: () => calls.push(['turn']), updateScrollButton: () => calls.push(['scroll-button']), reportFailure: e => errors.push(e) },
     shortcuts: Object.fromEntries(['toggleSearch', 'closeSearch', 'closeApply', 'closePreview', 'closeSettings', 'closeProject',
-      'closeLocalControl', 'closeDailyReport'].map(name => [name, () => calls.push([name])])) };
+      'closeBrowserExtension', 'closeDailyReport'].map(name => [name, () => calls.push([name])])) };
   function fire(node, type, properties = {}) {
     const event = new w.Event(type, { bubbles: true, cancelable: true });
     for (const [key, value] of Object.entries(properties)) Object.defineProperty(event, key, { value });

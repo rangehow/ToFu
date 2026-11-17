@@ -101,7 +101,6 @@ function openProjectModal() {
   pmMobileTab("browse");
   // Docked browser: populate it from the primary folder (or home) on open.
   browseDirectory(_mpFolders.length ? _mpFolders[0] : "~");
-  _renderRemoteDevicesSection();
   _attachFolderDropZone();
   setTimeout(() => _projectWorkspaceRail().input.focus(), 100);
 }
@@ -489,7 +488,6 @@ function _projectFolderBrowser() {
     notify: function (message, variant) {
       if (typeof showToast === "function") showToast(message, variant);
     },
-    prelude: document.getElementById("remoteDevicesSection"),
   });
   // The drop zone and its tests address the browser by this stable id.
   handle.el.id = "folderBrowser";
@@ -571,57 +569,6 @@ function _unstageDeletedFolder(path) {
   };
 }
 
-/* RWA P4b-2a(拍板 6A):目录浏览弹窗顶部「远程设备」分组。
-   在线 agent 的每个共享根一行,点 + 把伪路径加入工作区
-   (与本地文件夹同一套 _mpFolders/保存/持久化机制);离线 agent 灰显、
-   不可加。无 agent 时整段隐藏(本地使用零干扰)。 */
-async function _renderRemoteDevicesSection() {
-  const sec = document.getElementById('remoteDevicesSection');
-  if (!sec || typeof Api === 'undefined' || !Api.desktop) return;
-  let data = null;
-  try {
-    data = await Api.desktop.devices();
-  } catch (e) {
-    data = null;
-  }
-  const agents = (data && data.agents) || [];
-  if (!agents.length) {
-    sec.innerHTML = '';
-    sec.style.display = 'none';
-    return;
-  }
-  let html = '<div class="remote-devices-title">' +
-    escapeHtml(t('devices.remoteGroup')) + '</div>';
-  agents.forEach(function (a) {
-    const roots = a.share_roots || [];
-    const online = !!a.online;
-    html += '<div class="remote-agent-row' +
-      (online ? '' : ' remote-agent-offline') + '">' +
-      '<span class="remote-agent-name">' +
-      (online ? '● ' : '○ ') + escapeHtml(a.name || a.agent_id) +
-      ' <span class="stg-dim">' + escapeHtml(a.platform || '') + '</span></span>';
-    roots.forEach(function (r) {
-      const pseudo = 'remote:' + a.agent_id + ':' + (r.name || r.path);
-      html += '<span class="remote-root-row">' +
-        '<span class="remote-root-name">' +
-        escapeHtml(r.name || r.path) + '</span>';
-      if (online) {
-        html += '<button class="remote-root-add" data-pseudo="' +
-          escapeHtml(pseudo) + '" title="' + escapeHtml(pseudo) + '">+</button>';
-      }
-      html += '</span>';
-    });
-    html += '</div>';
-  });
-  sec.innerHTML = html;
-  sec.style.display = '';
-  sec.querySelectorAll('.remote-root-add').forEach(function (btn) {
-    btn.onclick = function (ev) {
-      ev.stopPropagation();
-      mpAddBrowsedPath(btn.getAttribute('data-pseudo'));
-    };
-  });
-}
 
 
 /* ═══════════════════════════════════════════════════════

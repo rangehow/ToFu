@@ -692,14 +692,9 @@
       "featureEntry": "frontend/src/features/diagnostics-presenters.ts"
     },
     {
-      "path": "14-local-control.css",
-      "responsibility": "Local Control dialog capability cards and connection evidence",
-      "featureEntry": "frontend/src/features/local-control.ts"
-    },
-    {
-      "path": "14-local-control-nodes.css",
-      "responsibility": "Local Control node list and pairing link",
-      "featureEntry": "frontend/src/features/local-control.ts"
+      "path": "14-browser-extension.css",
+      "responsibility": "Browser extension dialog: capability card, install instruction and connection status",
+      "featureEntry": "frontend/src/features/browser-extension.ts"
     },
     {
       "path": "14-memory-panel.css",

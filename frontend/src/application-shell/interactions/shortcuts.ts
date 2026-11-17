@@ -7,14 +7,14 @@ export interface ShellShortcutPorts {
   closePreview(): void;
   closeSettings(): void;
   closeProject(): void;
-  closeLocalControl(): void;
+  closeBrowserExtension(): void;
   closeDailyReport(): void;
 }
 export function installShellShortcuts(scope: LifecycleScope, document: Document, ports: ShellShortcutPorts): void {
   const priorities: readonly [string, () => void][] = [
     ['applyModal', ports.closeApply], ['previewModal', ports.closePreview],
     ['settingsModal', ports.closeSettings], ['projectModal', ports.closeProject],
-    ['localControlModal', ports.closeLocalControl], ['dailyReportModal', ports.closeDailyReport],
+    ['browserExtensionModal', ports.closeBrowserExtension], ['dailyReportModal', ports.closeDailyReport],
   ];
   scope.listen(document, 'keydown', event => {
     const e = event as KeyboardEvent;

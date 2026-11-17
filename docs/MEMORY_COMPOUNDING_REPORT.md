@@ -6,8 +6,9 @@ through `debug/inspect_conversation.py`'s `_DiagnosticAPI`. Section 6 adds the r
 (`evaluations/owner_memory/replay.py`) and its first measurement. Section 7 diagnoses its retrieval misses, replays from
 the defect point, adds a cross-request arm (`evaluations/owner_memory/midtask.py`) and measures one candidate mechanism. Section 8
 measures and ships lesson triggers (`evaluations/owner_memory/triggers.py`). Section 9 scales the defect replay to 126 cases
-with power and diagnoses why lessons in context still fail (`evaluations/owner_memory/scale.py`). Private owner content is
-reported only as counts and topics.
+with power and diagnoses why lessons in context still fail (`evaluations/owner_memory/scale.py`). Section 10 measures
+action-time lesson selection with one-time delivery on the same frozen cases (`evaluations/owner_memory/action_time.py`).
+Private owner content is reported only as counts and topics.
 
 ## 给主人的一页摘要
 
@@ -75,13 +76,22 @@ reported only as counts and topics.
 - **试了一个结构性修复：在下一步动作前，把已选中的经验改写成一句"遇到 X 时，做 Y"的检查。** 预先登记的三条上线条件全部满足：避开率 34.8% → 56.0%（+21.3 个百分点 [+14.3, +28.3]），选中的经验完全不变，80 个无关任务的质量不降（99.7% 对 99.7%）。
 - **但没有上线。** 生产的上下文组装器不能做到"只在动作前出现一次"。能做到的方式是每轮工具调用后重发一份，实测效果归零（+0.3 个百分点 [−4.6, +5.5]），模型把每轮都出现的话当成背景。下一步是只在"即将执行的工具调用和经验的触发情境匹配时"出现一次检查，需要找到不靠阈值的匹配规则。
 
+**第五次测量（2026-11-17/18，见第 10 节）：检索问题解决了一大半，但结果收益不够稳，没有上线，`lib/` 不变。"越用越好"仍然没有证明。**
+
+- **做法（无任何新参数）。** 每轮工具调用结束后，用这一轮"做了什么、报了什么错"（工具名+参数，失败时加报错文本）作为查询，复用开头预取的同一套打分、门槛、角色过滤和每次 2 条；已经出现过的经验不再发；新选中的经验只在这一轮结果之后、以"遇到 X 时：做 Y"的检查出现一次，不改写历史。设计先写进预登记文件再实现和测量。
+- **检索大幅提升。** 对的经验在踩坑那一刻在模型眼前：25/127 → 61/127（+28.3 个百分点 [+20.6, +36.6]）；复发案例 9/99 → 38/99。
+- **无关任务不受影响。** 76 个可评分的无关任务，在正轨率 99.9% → 100%。
+- **避开率：只按"有评分的行"算是通过的**（19.3% → 24.5%，+6.1 个百分点 [+0.7, +11.7]，113 个案例），**但不稳。** 新方案让 96/762 行没有评分（30 次模型拒答、66 次评审拒答，集中在被送了 910C/TAUD/Hope 经验的 Turn），其他组只有约 2%。把这些行算作"没避开"、覆盖全部 126 个案例后，区间包含 0（+2.6 [−3.2, +8.5]）。预登记写的是"126 个案例"，所以判为不通过。
+- **代价也大。** 每个 Turn 平均多送 32.6 条经验（中位 27 条、约 34 KB）。收益集中在"新送到了对的经验"的 28 个案例（+15.5 个百分点），其余几乎为零，说明多送的大部分是噪音。
+- **下一步。** 选择方向是对的（检索 2.4 倍）。要上线需要：(1) 不让一轮里的常见词把同一主题的大量经验刷进来（例如每条经验在一个 Turn 里只按它触发情境里最独特的标识符命中一次）；(2) 先处理网关对 910C 内容的拒答，否则任何把这类经验送得更多的方案都会丢数据。
+
 ## 1. Verdict: not shown
 
 | Claim part | Evidence | Status |
 |---|---|---|
 | Memory helps at one point in time | MEMORY-EVAL baseline: application 31.7% with prefetch, 28.3% without; Coordinator full context 56.2% → 43.8% without prefetch (`docs/modules/context_engineering.md`, "Owner understanding: design record", Decision 8; `docs/OLD_REPO_RECOVERY_MEMORY.md`, "Experiment findings"; raw `.eval-runs/owner-memory/private/baseline-report.txt`, coordinator/full `appliedRate` 0.5625) | partially shown (small effect, one snapshot) |
 | An always-present owner profile helps at one point in time | 1b K1 +20.0 pp; 1c K1 +16.1 pp [+5.4, +28.6] but 1c NOT PASSED (K3) (`k3-1c/REPORT-k3.md`); FM-2x2 PASS (`fm2x2/private/analysis.json` `verdict: {profile|L1: PASS, profile|L0: PASS}`) | shown in the lab; **not in production**: Phase 1 is unmerged (`docs/OLD_REPO_RECOVERY_MEMORY.md` §A) and My Context has 0 active items |
-| The system improves as it is used (compounding) | Earlier experiments never varied corpus age. The before/after-lesson replay (§6, 2026-11-16) now does: on 23 real defects, avoidance is 4.3% before and 4.3% after the lesson, difference 0.0 pp, 95% CI [−8.3, +7.3]. From the defect point (§7.3, 11 cases): −3.0 pp [−21.2, +15.2]. In later, different requests that met the same defect (§7.4, 7 requests): 0 of 21 avoided with or without the earlier lesson. With lesson triggers (§8): defect point +3.0 pp [−15.2, +24.2], later requests 0/21 → 1/21. At scale (§9, 126 cases, 6 trials): production +1.8 pp [−1.5, +5.3] (power ≈ 1.0 for 10 pp); with the lesson in front of the model +17.4 pp [+10.9, +24.6] | **not shown in production, now with power: a lesson the model sees helps clearly, but production shows the right lesson in 25 of 126 cases, and a model with the lesson in context mostly ignores it (17 of 25 hits). A pre-action check fixes that (+21.3 pp) but has no deliverable form yet (§9.4)** |
+| The system improves as it is used (compounding) | Earlier experiments never varied corpus age. The before/after-lesson replay (§6, 2026-11-16) now does: on 23 real defects, avoidance is 4.3% before and 4.3% after the lesson, difference 0.0 pp, 95% CI [−8.3, +7.3]. From the defect point (§7.3, 11 cases): −3.0 pp [−21.2, +15.2]. In later, different requests that met the same defect (§7.4, 7 requests): 0 of 21 avoided with or without the earlier lesson. With lesson triggers (§8): defect point +3.0 pp [−15.2, +24.2], later requests 0/21 → 1/21. At scale (§9, 126 cases, 6 trials): production +1.8 pp [−1.5, +5.3] (power ≈ 1.0 for 10 pp); with the lesson in front of the model +17.4 pp [+10.9, +24.6] | **not shown in production, now with power: a lesson the model sees helps clearly, but production shows the right lesson in 25 of 126 cases, and a model with the lesson in context mostly ignores it (17 of 25 hits). A pre-action check fixes that (+21.3 pp) but has no deliverable form yet (§9.4). Action-time selection with one-time delivery (§10) shows the right lesson in 61 of 127 cases and holds unrelated quality, but its avoidance gain (+6.1 pp [+0.7, +11.7] on judged rows) does not survive counting the rows it makes fail (+2.6 pp [−3.2, +8.5]); not shipped** |
 | Live use makes memory better | §2: the corpus grows, but injection is fixed at 2 items per Turn, 3.4% of injected items are opened, 1 of 477 is cited, owner items are 0, and lifecycle states are 0 | **not shown**; inputs accumulate, use does not visibly improve |
 
 So "the more it's used, the better it gets" is **not demonstrated**. What is demonstrated: memory and the profile each help a little
@@ -912,4 +922,106 @@ python -m evaluations.owner_memory scale --private $P --key-hints 6672 --stop-on
 python -m evaluations.owner_memory scale --private $P --run-name <name> --stage report
 python -m evaluations.owner_memory scale --private $P --key-hints 6672 --stop-on-429 --jobs 8 --run-name <other> \
   --stage interference --fix trailing_check,trailing_check_every
+```
+
+## 10. Fifth measurement: action-time selection with one-time delivery (2026-11-17/18)
+
+Code: this change (`evaluations/owner_memory/action_time.py`, the `event` arm in `scale.py`/`midtask.py`), merged with
+`eval/opencode-glm53-tb21`. Private evidence: `.eval-runs/memory-replay/private/scale/PREREGISTRATION-event.txt`
+(digest at writing `b15a2a13…`, results appended as section 6 after all data), `runs/scale-v1/` (`event` arm,
+`report.json`, `report-event-itt.json`, `report-event-missing-bounds.json`, `retrieval-event-per-case.tsv`) and
+`runs/scale-event-unrelated/`. **`lib/` is unchanged.**
+
+**Plain answer: the retrieval bottleneck can be fixed structurally (25 → 61 of 127). The resulting avoidance gain is
+real only on judged rows and does not survive the rows the candidate itself makes fail, so it is not shipped. "Better with
+use" is still not shown.**
+
+### 10.1 Design (pre-registered before it was built or measured)
+
+§9 found two owner-level bottlenecks: selection reads only the request, and a lesson shown at turn start is ignored 37 tool
+steps later. Both point at one mechanism: select by what the agent actually does, and show the lesson right then, once.
+
+- **Selection (owner `lib/memory/prefetch`).** After every closed tool round, the existing turn-start stages run again
+  (corpus listing, BM25 pool `PREFETCH_BM25_TOP_N`, confidence gate, role fit, `PREFETCH_MAX_INJECTED`, hydration). The
+  query is the round's actions and errors: each call's name and arguments, and for an error result (the compaction
+  ledger's error class) its text. Successful output is left out. Lessons already in model-visible history are dropped and
+  nothing is backfilled. The lesson document already contains its trigger (§8). No new threshold, cap, window or flag.
+- **Delivery (owner: context composer).** The round's new lessons are appended once, right after that round's results,
+  as one registered, instanced `lesson_check` block through `append_context_blocks`. History is never rewritten and no
+  lesson repeats in a Turn: §9's "once, next to the action" without the every-round re-send that §9.4 showed to fail.
+  Each line reads `- When <trigger>: <description> (lesson: <name>; trust: <class>; <path or id>)`.
+- **Exploration disclosed.** Before writing the rule, I compared selection rules offline on the same cases (no model
+  call): failed rounds only (§7.2) 41/127 at 3.1 lessons per case; every round with the existing stages 62/127 at 33 per
+  case; trigger-only index 56/127; tool-name filter 40/127; exact-identifier gate 51/127; unique trigger keys 52/127 at 44
+  per case; request-pool intersections 38–63/127. The chosen rule was the widest that adds no stage. Its retrieval
+  count is therefore a development number; no outcome was looked at for any rule.
+- **Ship rule.** (R) the case lesson in front of the model at the decision point rises with a CI excluding 0; (A) avoided
+  rate, production → event over the 126 cases, cluster-bootstrap CI lower bound > 0; (Q) unrelated on-task CI lower bound
+  > −0.10 and point estimate ≥ 0.
+- **As measured.** The arm replays the shipped-candidate function after every closed tool round of the Turn up to the
+  decision point, over the time-sliced store, on top of the recorded production turn-start carrier. 6 trials, the §9 blind
+  mid-task judge (lesson names masked, no arm; it never sees the carriers).
+
+### 10.2 Results
+
+| Condition | Measured | Holds? |
+|---|---|---|
+| R. Case lesson in front of the model | production 25/127 → **61/127**, +28.3 pp [+20.6, +36.6]; own 16 → 23 of 28, recurrence **9 → 38 of 99**; none lost | yes |
+| A. Avoidance, judged rows (the §9 convention) | 19.3% → 24.5%, **+6.1 pp [+0.7, +11.7]**, 113 cases, 30 up / 16 down; recurrence +5.9 pp [+0.4, +11.8] | — |
+| A. Avoidance, all 126 cases, missing rows not avoided in every arm | +2.6 pp [−3.2, +8.5] (recurrence +4.4 [−1.3, +10.2]) | **no** |
+| A. Same, worst case (missing event rows hit, missing production rows avoided) | +0.1 pp [−7.0, +6.9] | no |
+| Q. Unrelated, 76 of 80 tasks judged, 6 trials | on-task 99.9% → 100%, +0.1 pp [0.0, +0.4]; identical turn-start selection; provider refusals 42 vs 43 rows | yes |
+
+- **Why the judged-row pass is not taken.** The `event` arm lost 96 of 762 rows: 30 provider refusals (empty output) and
+  66 responses that the judge model refused 3 times. `without` lost 18 rows and `shown` 20. The refusals cluster in Turns
+  whose checks carried 910C/TAUD/Hope lessons (S040, S026, S047, S025, S027), the gateway content §6.7 and §8.1 already met.
+  The rule says "over the 126 cases" and names no missing-data rule. Passing would mean dropping rows the candidate made
+  fail, and every analysis that keeps them has a CI including 0.
+- **Where the gain is.** Cases where the check newly delivered the case lesson (28): +15.5 pp on average. Where turn start
+  already showed it (23): +3.8 pp. Where the case lesson never arrived (62): +2.7 pp. The mechanism works when it brings the
+  right lesson. Most of what it brings is not that lesson.
+- **Volume.** A median of 27 lessons per Turn up to the defect point (mean 32.6, max 124), median 34 KB of carriers.
+  Every closed round's actions share words with many triggers, so each round admits the cap of two lessons until the
+  topic's lessons are used up. This is the same noise problem as §7.2's 23% relevance, now spread over every round.
+- **Per-case table:** `runs/scale-v1/retrieval-event-per-case.tsv` (case, kind, shown under production, shown under
+  event, lessons delivered, avoided/rows for `without`, `production`, `event`).
+
+### 10.3 Decision and owner-level verdict
+
+- **Not shipped; `lib/` is unchanged.** The candidate code moved to `evaluations/owner_memory/action_time.py`. It
+  registers its composer block only inside the evaluation process, and a dry run rebuilds all 635 case and 160 unrelated
+  recorded requests byte-identically, so the measurement reproduces.
+- **What is now established at the owner level.**
+  1. *Retrieval:* matching lessons against the turn's actual actions and errors, rather than only the opening text,
+     reaches the right lesson 2.4× as often (recurrences 4.2×). The selection owner can be fixed without new knobs.
+  2. *Delivery:* a lesson appended once at the round its trigger matches is buildable in the composer without rewriting
+     history. It helps where it is the right lesson (+15.5 pp), but at this precision the added text mostly dilutes.
+  3. *Outcome:* production does not get measurably better with use. The only shippable form tested so far gives
+     +2.6 to +6.1 pp, depending on how refused rows are counted.
+- **What would make it shippable (next experiment, not built).** (a) Precision without a threshold: let a lesson fire on
+  an identifier from its own trigger that appears in the round's actions or errors, rather than on shared words (the
+  exact-identifier stage that already exists in the confidence gate). (b) Resolve the gateway's refusal of 910C/TAUD
+  lesson text, which removes rows from any arm that delivers more of those lessons.
+
+### 10.4 Limits and run notes
+
+- The judge is the same model family as the agent (as in §9).
+- The server restarted on its own during the run (2026-11-18 02:14, `logs/server-manager.log`). Both stage processes
+  survived; no rows were lost.
+- **Cost.** Event case replays plus unrelated replays: the run directory's replay total rose to $3,752.90 from §9's
+  $3,001.75 (event arm ≈ $751), judge $133.51 total (≈ $24 new). Unrelated run (80 tasks × 2 arms × 6 trials): replays $1,061.24, judge $26.41. About
+  $1,860 in all; the offline rule comparison of 10.1 made no model call.
+
+### 10.5 Reproduce
+
+```bash
+P=<canonical>/.eval-runs/memory-replay/private
+python -m evaluations.owner_memory scale --private $P --run-name scale-v1 --stage run --dry-run --trials 6 \
+  --fix trailing_check,trailing_check_every,event        # free; refuses if any recorded request changes
+python -m evaluations.owner_memory scale --private $P --key-hints 6672 --stop-on-429 --jobs 16 --run-name scale-v1 \
+  --stage run --trials 6 --fix trailing_check,trailing_check_every,event
+python -m evaluations.owner_memory scale --private $P --key-hints 6672 --stop-on-429 --jobs 16 --run-name scale-v1 --stage judge
+python -m evaluations.owner_memory scale --private $P --run-name scale-v1 --stage report
+python -m evaluations.owner_memory scale --private $P --key-hints 6672 --stop-on-429 --jobs 16 \
+  --run-name scale-event-unrelated --stage interference --trials 6 --fix event
 ```

@@ -843,12 +843,8 @@ requesting the application preserves the waterfall. Tests: `main.test.ts`,
   pairing, node list, diagnostics inbox and browser-assisted SSO poll relay,
   the Settings → Devices tab and its `setting:devices` jump target, and the
   Project-panel remote-device group — removed, not flag-hidden, with the copy
-  that only served them. The browser no longer grants the desktop tool family:
-  it sends `desktopEnabled: false` and so revokes a grant stored earlier,
-  because a capability the user cannot see or switch off must not stay on.
-  The `#tofu-agent-relay` deep link the desktop node opens answers with the
-  common "page or setting unavailable" toast; an unknown `setting:devices`
-  link does the same through `jumpToSetting`. The backend (desktop wire,
+  that only served them. Device tools, the deep link and Settings → Devices
+  now belong to the Devices workspace below. The backend (desktop wire,
   node protocol, pairing, device waits, remote worktrees and their HTTP
   routes) is unchanged, and conversations already bound to a `remote:` path
   still restore. Where multi-device connectivity lives in the UI is decided by
@@ -856,6 +852,32 @@ requesting the application preserves the waterfall. Tests: `main.test.ts`,
   Alternatives rejected: hiding the surface behind a feature flag (dead code
   that still ships and drifts) and keeping the desktop half under a new name
   (pre-empts the multi-device design).
+- **Devices workspace: computer control returns as a device capability**
+  ([multi-device design](MULTI_DEVICE_NETWORK_DESIGN.md) §9, decision 4).
+  Problem: the removal above left pairing, fleet health and permissions with
+  no home, and a Settings tab cannot show a fleet. Decision: a top-level
+  workspace `#/devices` (`page-host.ts` workspace `devices`,
+  `features/devices.ts`, lazy chunk with `38-devices.css`) holds the Home
+  card, the fleet grouped by kind with live health, the add-device wizard
+  (`#/devices/add[/<nodeId>]`: kind → one-shot code/link/one-line headless
+  command → confirm the pending node with its fingerprint → name, Home-ceiling
+  preset, default), the device drawer (`#/devices/<key>`: health, Home /
+  Device (read-only) / Effective capability table, default per kind, remove &
+  revoke) and the topology explainer. A sidebar-foot pill
+  (`#sidebarDevicesPill`, a plain link; `features/devices-pill.ts` loads at
+  idle) shows `online/total` and attention. One store
+  (`features/devices/live.ts`) joins the Home's registries and re-reads only
+  on the owner `notify` frame `devices.changed` and on push reconnect — no
+  polling; while the push channel is down rows say "last known", a failed
+  source keeps its last good value and is named, and a changed Home boot ID is
+  announced as a restart. Settings → Devices keeps only the default device
+  per kind and pending device waits, plus a link to the page. The browser no
+  longer sends `desktopEnabled`: the Home decides device tools for the owner's
+  attended turn (`lib/conv_config/_resolve.py`, Home ceiling ∩ device switch).
+  The node's `#tofu-agent-relay` deep link starts the browser relay
+  (`features/devices/relay.ts`, broker protocol unchanged) and lands on the
+  page. Alternatives rejected: keeping the fleet in Settings (no health at a
+  glance) and a sidebar device list (grows with every device).
 - The browser extension dialog (install, upgrade and connection status of the
   Tofu extension) is the manifest-owned, demand-loaded
   `browser-extension-presenters` runtime behind

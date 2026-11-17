@@ -38,7 +38,7 @@ PANELS_DIR = os.path.join(PROJECT_ROOT, 'static', 'settings_panels')
 # tests/mcp_protocol/test_mcp_catalog_internal_only.py).
 _EXPECTED_TABS = frozenset({
     'general', 'api', 'models', 'preset', 'knowledge', 'search', 'translate', 'speech',
-    'network', 'messaging', 'oauth', 'mcp', 'skills', 'tools',
+    'network', 'devices', 'messaging', 'oauth', 'mcp', 'skills', 'tools',
     'preferences', 'database', 'advanced', 'experiments',
 })
 # Chat platforms have no nav button: each is a collapsible section of the

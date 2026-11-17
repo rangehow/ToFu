@@ -1976,6 +1976,57 @@ body[data-workspace="world"] .main > .chat-wrapper {
     grid-template-columns: 0 minmax(0, 1fr);
   }
 }
+/* Sidebar Devices pill (features/devices-pill.ts fills the status; the link itself is static index.html markup).
+ * Critical because the anchor is painted with the shell; the live status arrives at idle. */
+.sidebar-devices-pill {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+  margin: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  text-decoration: none;
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-tight);
+  transition: background var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard);
+}
+.sidebar-devices-pill:hover { background: var(--bg-hover); }
+.sidebar-devices-pill:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.sidebar-devices-pill[aria-current="page"] { border-color: var(--accent); background: var(--accent-subtle); }
+.sidebar-devices-pill__dot {
+  width: var(--space-2);
+  height: var(--space-2);
+  flex-shrink: 0;
+  border-radius: var(--radius-pill);
+  background: var(--text-tertiary);
+}
+.sidebar-devices-pill[data-tone="ok"] .sidebar-devices-pill__dot { background: var(--success-text); }
+.sidebar-devices-pill[data-tone="warn"] .sidebar-devices-pill__dot { background: var(--warning-text); }
+.sidebar-devices-pill[data-tone="off"] .sidebar-devices-pill__dot { background: var(--error-text); }
+.sidebar-devices-pill__text { display: flex; flex-direction: column; min-width: 0; }
+.sidebar-devices-pill__label { font-weight: var(--weight-semibold); }
+.sidebar-devices-pill__status {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-devices-pill__status:empty { display: none; }
+.sidebar.paper-active .sidebar-devices-pill { display: none; }
+
+/* The Devices workspace shows its own page in .main; the top bar keeps only the narrow-screen sidebar toggle. */
+#devicesPageContainer { display: none; }
+body[data-workspace="devices"] #devicesPageContainer { display: block; flex: 1; min-height: 0; overflow: auto; }
+body[data-workspace="devices"] .main > :not(#devicesPageContainer):not(.topbar) { display: none; }
+body[data-workspace="devices"] .topbar > :not(.toggle-sidebar-btn) { display: none; }
+@media (min-width: 769px) {
+  body[data-workspace="devices"] .topbar { display: none; }
+}
 /* ── 字母配色 — 两处共用同一套渐变。侧栏此前是紫渐变(#8b6cf6→#a78bfa)、欢迎屏是
    豆腐奶油-琥珀金渐变,dark 下实测就是「侧栏紫 Tofu + 欢迎屏金 Tofu」同一品牌两个
    颜色。保留金系(它是豆腐本身的颜色;紫是早年通用 accent 的遗留)。 ── */

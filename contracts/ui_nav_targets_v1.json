@@ -107,6 +107,16 @@
       }
     },
     {
+      "key": "device-defaults",
+      "scheme": "setting",
+      "tab": "devices",
+      "tabLevel": true,
+      "name": {
+        "zh": "设备",
+        "en": "Devices"
+      }
+    },
+    {
       "key": "preferences",
       "scheme": "setting",
       "tab": "preferences",
@@ -550,6 +560,14 @@
       "name": {
         "zh": "软件更新",
         "en": "Software Update"
+      }
+    },
+    {
+      "key": "devices",
+      "scheme": "page",
+      "name": {
+        "zh": "设备",
+        "en": "Devices"
       }
     }
   ]

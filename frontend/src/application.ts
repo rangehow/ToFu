@@ -9,8 +9,7 @@ import {
   resolveRuntimeAction,
   setRuntimeService,
 } from './runtime/app-runtime.js';
-import { _onLanguageChange, ready as i18nReady, t } from './i18n';
-import { toast } from './ui/toast';
+import { _onLanguageChange, t } from './i18n';
 import { installActionRegistry, registerAction, resolveRegisteredAction } from './action-registry';
 import { type FeatureCallable } from './runtime-bridge';
 import { connectFeatureRuntime, getFeatureBinding } from './feature-registry';
@@ -19,7 +18,7 @@ import {
   installLegacyApiBindings,
   request,
 } from './api/transport';
-import { installWorkspaceNavigation, showWorkspace, workspacePath } from './application-shell/page-host';
+import { goToWorkspace, installWorkspaceNavigation, showWorkspace, workspacePath } from './application-shell/page-host';
 import { createFeatureLoadRecovery, installFeatureLoadRecovery } from './core/feature-load-recovery';
 import { createFeatureModuleCache } from './core/feature-module-cache';
 import type { TurnRuntime } from './core/turn-runtime';
@@ -110,11 +109,13 @@ const domainLoaders = Object.freeze({
   misc: () => import('./features/misc'),
   slides: () => import('./features/slides'),
   orchestration: () => import('./features/orchestration'),
+  devices: () => import('./features/devices'),
   infrastructure: () => import('./features/infrastructure'),
 });
 
 function domainLoader(name: string): () => Promise<DomainModule> {
   if (name === 'openWorld') return domainLoaders.world;
+  if (name === '_mountDevicesPage') return domainLoaders.devices;
   if (settingsEntries.has(name)) return domainLoaders.settings;
   if (memoryEntries.has(name)) return domainLoaders.memory;
   if (skillsEntries.has(name)) return domainLoaders.skills;
@@ -236,21 +237,24 @@ connectFeatureRuntime(
 );
 
 // The desktop node opens /#tofu-agent-relay to borrow this tab's login for its
-// polls. Computer control has no browser surface (owner decision 2026-11-17,
-// docs/FRONTEND_ARCHITECTURE.md), so the link explains that instead of
-// leaving a page that silently does nothing.
+// polls (route "browser relay"). Only that entry pays for the relay at boot; it
+// lands on the Devices page, which shows the relay's state.
 try {
   if (window.location.hash === '#tofu-agent-relay') {
-    history.replaceState(null, '', window.location.pathname + window.location.search);
-    void i18nReady().then(() => toast(t('uiNav.jumpUnavailable'), { variant: 'error' }));
+    history.replaceState(null, '', `${window.location.pathname}${window.location.search}#/devices`);
+    void import('./features/devices/relay').then(relay => relay.ensureRelay()).catch((error: unknown) => {
+      console.warn('[modules] device relay deep link failed', error);
+    });
   }
 } catch (error) {
-  console.warn('[modules] computer-control deep link location unavailable', error);
+  console.warn('[modules] device relay deep link location unavailable', error);
 }
 
 /* Page-jump links (`[label](page:<key>)` in assistant markdown) resolve
  * through the eager registry; every target entry point lazy-loads itself. */
 registerAction('jumpToPage', jumpToPage);
+/* The Devices page is a workspace: opening it is navigation, so the address is deep-linkable. */
+registerAction('openDevices', () => goToWorkspace('devices'));
 
 /* The settings language picker (static/settings_panels/general.html) names
  * `_onLanguageChange('<code>')` in declarative data-tofu-action attributes.
@@ -283,9 +287,15 @@ const idleCallback = (window as Window & {
 }).requestIdleCallback;
 // Idle owners carry subscription/day notices and automatic update checks.
 // Routed UI features load through their explicit action or workspace intent.
+const mountDevicesPill = (): void => {
+  import('./features/devices-pill').then(module => module.mountDevicesPill()).catch((error: unknown) => {
+    console.warn('[modules] devices pill load failed', error);
+  });
+};
 const preloadIdleFeatures = (): void => {
   preloadBackground();
   preloadUtilityPanels();
+  mountDevicesPill();
 };
 export function startApplication(): Promise<void> {
   return Promise.resolve(runtimeReady).then(() => {
@@ -296,7 +306,7 @@ export function startApplication(): Promise<void> {
         showWorkspace('chat');
         return;
       }
-      const name = page === 'world' ? 'openWorld' : 'togglePaperMode';
+      const name = page === 'world' ? 'openWorld' : page === 'devices' ? '_mountDevicesPage' : 'togglePaperMode';
       await loadDomain(name);
       if (workspacePath().split('/')[0] !== page) return;
       const open = getFeatureBinding(name);

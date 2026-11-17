@@ -23,6 +23,7 @@
       "path": "01-shell-navigation.css"
     },
     { "path": "01-workspace-dock.css", "responsibility": "World workspace shell grid: the office scene with the conversation column docked beside it" },
+    { "path": "38-devices-pill.css", "responsibility": "Sidebar Devices status pill and the Devices workspace shell rules" },
     { "path": "01-message-surfaces.css", "responsibility": "Avatar letter gradients, reading measure, message media, live translation and search result cards" },
     { "path": "01-conversation-review.css", "responsibility": "Completed replies awaiting review in the conversation sidebar" },
 
@@ -579,6 +580,11 @@
     }
   ],
   "deferredSections": [
+    {
+      "path": "38-devices.css",
+      "responsibility": "Devices workspace: fleet page, device drawer, add-device wizard and topology",
+      "featureEntry": "frontend/src/features/devices.ts"
+    },
     {
       "path": "27-world-office.css",
       "featureEntry": "frontend/src/features/world.ts"

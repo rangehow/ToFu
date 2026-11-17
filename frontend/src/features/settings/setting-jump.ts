@@ -52,6 +52,7 @@ export const SETTING_JUMP_TARGETS: Readonly<Record<string, SettingJumpTarget>> =
   'speech': { tab: 'speech' },
   'knowledge': { tab: 'knowledge' },
   'network': { tab: 'network' },
+  'device-defaults': { tab: 'devices' },
   'preferences': { tab: 'preferences' },
   'skills': { tab: 'skills' },
   'tools': { tab: 'tools' },

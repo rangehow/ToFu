@@ -29,6 +29,7 @@ import './settings/private-hosts';
 import './settings/site-packs';
 import './settings/search-gateway';
 import './settings/browser-access';
+import './settings/devices-defaults';
 import './settings/speech';
 import './settings/catpaw-settings';
 import './settings/kimi-code-login';

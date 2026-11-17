@@ -18,6 +18,7 @@ const panels: Readonly<Record<string, {populate: string; destroy?: string; refre
   qq: {populate: '_populateQqTab', destroy: '_destroyQqTab', refreshOnVisit: true},
   wechat: {populate: '_populateWechatTab', destroy: '_destroyWechatTab', refreshOnVisit: true},
   messaging: {populate: '_populateMessagingTab', refreshOnVisit: true},
+  devices: {populate: '_populateDevicesTab', destroy: '_destroyDevicesTab', refreshOnVisit: true},
 };
 const visits = new WeakMap<SettingsReadSession, Set<string>>();
 

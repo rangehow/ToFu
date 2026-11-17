@@ -4106,6 +4106,7 @@ runtimeScope.pushSubscribe = pushSubscribe;
 runtimeScope.pushUnsubscribe = pushUnsubscribe;
 runtimeScope.pushIsConnected = pushIsConnected;
 runtimeScope.pushOnReconnect = pushOnReconnect;
+runtimeScope.pushOnLatency = pushOnLatency;
 runtimeScope.pushRpcRequest = pushRpcRequest;
 /* ===== migrated source: feature-bridge.js ===== */
 /* Required Vite feature-entry bridge.
@@ -15593,7 +15594,6 @@ function loadConversation(id) {
       fetchEnabled: !!fetchEnabled,
       codeExecEnabled: !!codeExecEnabled,
       browserEnabled: !!browserEnabled,
-      desktopEnabled: false,
       memoryEnabled: !!memoryEnabled,
       schedulerEnabled: !!schedulerEnabled,
       autopilotEnabled: !!autopilotEnabled,
@@ -16180,7 +16180,6 @@ function _buildToolbarOverrides() {
     memoryEnabled,
     schedulerEnabled,
     browserEnabled,
-    desktopEnabled: false,
     imageGenEnabled,
     imageGenMode,
     imageGenModel: _igSelectedModel,
@@ -20295,9 +20294,8 @@ function captureActiveConversationSettings() {
   conv.fetchEnabled = !!fetchEnabled;
   conv.codeExecEnabled = !!codeExecEnabled;
   conv.browserEnabled = !!browserEnabled;
-  /* Computer control has no browser surface (owner decision 2026-11-17), so
-   * the browser never grants it and revokes a grant stored earlier. */
-  conv.desktopEnabled = false;
+  /* Device tools are the Home's decision (Devices page: Home ceiling ∩ device switch;
+   * lib/conv_config/_resolve.py), never a per-conversation browser switch. */
   conv.memoryEnabled = !!memoryEnabled;
   conv.schedulerEnabled = !!schedulerEnabled;
   conv.autopilotEnabled = !!autopilotEnabled;

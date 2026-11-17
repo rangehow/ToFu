@@ -2,7 +2,7 @@
  * Entry points: showWorkspace, releaseWorkspace, installWorkspaceNavigation.
  * Dependencies: injected navigation loader and existing shell DOM; no feature imports.
  */
-export type Workspace = 'chat' | 'paper' | 'world';
+export type Workspace = 'chat' | 'paper' | 'world' | 'devices';
 let active: Workspace = 'chat';
 let disposePage: (() => void) | undefined;
 let routePage: ((path: string) => void) | undefined;
@@ -68,7 +68,7 @@ export function installWorkspaceNavigation(
   const changed = () => {
     const path = workspacePath();
     const name = path.split('/')[0] || 'chat';
-    if (!['chat', 'paper', 'world'].includes(name)) return;
+    if (!['chat', 'paper', 'world', 'devices'].includes(name)) return;
     // Release hidden-workspace resources before lazy imports compete for sockets.
     workspaceChanged?.(name as Workspace);
     if (name === active) { routePage?.(path); return; }

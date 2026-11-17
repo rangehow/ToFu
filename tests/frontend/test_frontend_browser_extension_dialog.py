@@ -3,10 +3,12 @@ extension dialog and the removal of computer control from the UI.
 
 WHAT THIS GUARDS
 ----------------
-1. Computer control ("Local Control" / 本机控制) has no browser entry point
-   (owner decision 2026-11-17): no toolbar or mobile row, no dialog, no
-   Settings → Devices tab or jump target, no remote-device picker, and its
-   deep link (#tofu-agent-relay) is answered with "not available".
+1. Computer control ("Local Control" / 本机控制) left the composer and
+   Settings (owner decision 2026-11-17) and returned as a device capability of
+   the Devices workspace (docs/MULTI_DEVICE_NETWORK_DESIGN.md §9): no toolbar
+   or mobile row, no Local Control dialog, no remote-device picker; Settings →
+   Devices keeps only defaults and a link; the node's #tofu-agent-relay deep
+   link starts the Devices feature's browser relay.
 2. The browser extension dialog that remains shows ONE instruction chosen by
    detected state, paints a followable floor before any response, keeps it on
    a failed status call, and stops polling when closed.
@@ -41,25 +43,32 @@ def _modal_markup() -> str:
     return match.group(0)
 
 
-# ── 1. No computer-control entry point remains ───────────────────────────
+# ── 1. Computer control lives only in the Devices workspace ──────────────
 
-def test_shell_markup_has_no_computer_control_entry():
+def test_shell_markup_has_no_local_control_entry():
     html = INDEX_HTML.read_text(encoding='utf-8')
     for gone in ('localControlToggle', 'mobileLocalControl', 'localControlModal',
-                 'openLocalControlModal', 'data-tab="devices"', 'SETTINGS_PANEL:devices',
-                 'remoteDevicesSection', 'lcDesktop', 'data-i18n="local.'):
+                 'openLocalControlModal', 'remoteDevicesSection', 'lcDesktop', 'data-i18n="local.'):
         assert gone not in html, f'index.html still carries {gone!r}'
-    assert not (SETTINGS_PANELS / 'devices.html').exists()
     for panel in SETTINGS_PANELS.glob('*.html'):
         text = panel.read_text(encoding='utf-8')
         assert '本机控制' not in text and 'openLocalControlModal' not in text, panel.name
+    assert 'href="#/devices"' in html, 'the sidebar Devices pill links to the Devices workspace'
 
 
-def test_catalogs_carry_no_computer_control_copy():
+def test_settings_devices_tab_keeps_only_defaults_and_a_link():
+    panel = (SETTINGS_PANELS / 'devices.html').read_text(encoding='utf-8')
+    assert 'devicesSettingsRoot' in panel
+    owner = (ROOT / 'frontend/src/features/settings/devices-defaults.ts').read_text(encoding='utf-8')
+    assert "'/devices'" in owner
+    for gone in ('pairCode', 'setCeiling', 'client.remove(', 'client.confirm('):
+        assert gone not in owner, f'Settings must not carry the Devices page control {gone!r}'
+
+
+def test_catalogs_carry_no_local_control_copy():
     for path in (ROOT / 'frontend' / 'src' / 'i18n' / 'locales').glob('*.json'):
         catalog = json.loads(path.read_text(encoding='utf-8'))
-        stale = [k for k in catalog if k.startswith(('local.', 'devices.'))
-                 or k == 'settings.tabDevices']
+        stale = [k for k in catalog if k.startswith(('local.', 'devices.'))]
         assert not stale, f'{path.name} keeps computer-control keys: {stale[:5]}'
     zh = json.loads((ROOT / 'frontend/src/i18n/locales/zh.json').read_text(encoding='utf-8'))
     en = json.loads((ROOT / 'frontend/src/i18n/locales/en.json').read_text(encoding='utf-8'))
@@ -67,19 +76,18 @@ def test_catalogs_carry_no_computer_control_copy():
     assert not [k for k, v in en.items() if 'Local Control' in v]
 
 
-def test_devices_is_not_a_jump_target():
-    jump = (ROOT / 'frontend/src/features/settings/setting-jump.ts').read_text(encoding='utf-8')
-    assert "'devices'" not in jump
+def test_devices_jump_targets_open_the_devices_workspace():
     contract = json.loads((ROOT / 'contracts/ui_nav_targets_v1.json').read_text(encoding='utf-8'))
-    assert 'devices' not in json.dumps(contract), 'the model-facing directory still offers devices'
+    keys = {(target['scheme'], target['key']) for target in contract['targets']}
+    assert ('page', 'devices') in keys and ('setting', 'device-defaults') in keys
 
 
-def test_computer_control_deep_link_reports_unavailable():
+def test_agent_relay_deep_link_starts_the_devices_relay():
     application = (ROOT / 'frontend/src/application.ts').read_text(encoding='utf-8')
     branch = application[application.index("'#tofu-agent-relay'"):]
     branch = branch[:branch.index('} catch')]
-    assert "t('uiNav.jumpUnavailable')" in branch
-    assert 'prepareFeature' not in branch, 'the deep link must not load a feature'
+    assert "import('./features/devices/relay')" in branch
+    assert 'ensureRelay' in branch
 
 
 # ── 2. The browser extension dialog ──────────────────────────────────────

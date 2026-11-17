@@ -247,6 +247,11 @@ def test_vite_transport_is_the_only_native_fetch_owner():
                 with open(path, encoding='utf-8') as fh:
                     sources[os.path.relpath(path, FRONTEND_DIR).replace(os.sep, '/')] = fh.read()
     actual = {path: count for path, count in _scan_native_fetches(sources).items() if count}
+    # The device relay's one native fetch talks only to the node's loopback broker; its backend
+    # forwarding goes through api/transport.ts (features/devices/relay.ts).
+    relay = _strip_comments(sources['features/devices/relay.ts'])
+    assert actual.pop('features/devices/relay.ts', 0) == 1 and 'http://127.0.0.1:' in relay
+    assert "request<Response>(isPair ? '/api/desktop/pair' : '/api/desktop/poll'" in relay
     assert actual == {'api/transport.ts': 1, 'i18n/index.ts': 1}, (
         'native backend calls must use api/transport.ts and static locale data '
         f'must use only i18n/index.ts; fetch owners were {actual}'

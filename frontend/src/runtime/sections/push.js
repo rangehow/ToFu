@@ -711,4 +711,5 @@ runtimeScope.pushSubscribe = pushSubscribe;
 runtimeScope.pushUnsubscribe = pushUnsubscribe;
 runtimeScope.pushIsConnected = pushIsConnected;
 runtimeScope.pushOnReconnect = pushOnReconnect;
+runtimeScope.pushOnLatency = pushOnLatency;
 runtimeScope.pushRpcRequest = pushRpcRequest;

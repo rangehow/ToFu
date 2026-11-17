@@ -16,8 +16,9 @@ import { createButton, createDrawer, createField } from '../ui';
 import { t } from '../i18n';
 import type {
   CoordinatorProgressHistoryGroup, CoordinatorProgressHistoryPage, CoordinatorProgressHistoryTask,
+  CoordinatorProgressTranslation,
 } from '../api/project-coordination.generated';
-import { coordinatorProgressGlyph } from './coordinator-progress';
+import { coordinatorProgressGlyph, coordinatorProgressText } from './coordinator-progress';
 import {
   HISTORY_GROUPS, appendPage, historyRows, historyTotal, rowOffsets, rowSignature, visibleRange,
   type HistoryCounts, type HistoryFilter, type HistoryRow,
@@ -74,7 +75,10 @@ export function createCoordinatorTaskHistory(ports: CoordinatorTaskHistoryPorts)
   const state = {
     filter: 'all' as HistoryFilter, query: '', tasks: [] as CoordinatorProgressHistoryTask[],
     counts: EMPTY_COUNTS, nextCursor: null as string | null, recorded: true,
+    translation: undefined as CoordinatorProgressTranslation | undefined,
   };
+  // A task on the board shows its board text, so the board's display translation covers it.
+  const displayed = (text: string) => coordinatorProgressText(state.translation, text);
   let generation = 0, loading = false, loadingMore = false, failed = false, moreFailed = false, refreshQueued = false;
   let loaded = false, alive = true;
   let reading: AbortController | null = null, readingMore: AbortController | null = null;
@@ -123,16 +127,16 @@ export function createCoordinatorTaskHistory(ports: CoordinatorTaskHistoryPorts)
     if (task.dropped) row.dataset.dropped = 'true';
     const line = node('div', 'coordinator-history-task-line');
     const glyph = coordinatorProgressGlyph(task.status);
-    const title = node('span', 'coordinator-history-task-title', task.title);
+    const title = node('span', 'coordinator-history-task-title', displayed(task.title));
     title.id = `coordinator-history-${task.key}`;
     row.setAttribute('aria-labelledby', title.id);
     line.append(glyph, title);
     if (task.onBoard) line.append(badge('board', t('coordinatorHistory.onBoard')));
     if (task.dropped) line.append(badge('dropped', groupLabel('dropped')));
-    const note = node('div', 'coordinator-history-task-note', task.progress ?? '');
+    const note = node('div', 'coordinator-history-task-note', displayed(task.progress ?? ''));
     const facts = [t('coordinatorHistory.firstSeen', { time: when(task.firstSeenAt, at) }),
       t(task.onBoard ? 'coordinatorHistory.updated' : 'coordinatorHistory.lastSeen', { time: when(task.onBoard ? task.changedAt : task.lastSeenAt, at) })];
-    if (task.formerTitles?.length) facts.push(t('coordinatorHistory.formerTitles', { titles: task.formerTitles.join(' / ') }));
+    if (task.formerTitles?.length) facts.push(t('coordinatorHistory.formerTitles', { titles: task.formerTitles.map(displayed).join(' / ') }));
     // The promise leads the time facts, so it stays visible however narrow the row.
     const meta = node('div', 'coordinator-history-task-meta');
     if (task.dueOutcome && task.dueAt !== undefined) {
@@ -140,8 +144,9 @@ export function createCoordinatorTaskHistory(ports: CoordinatorTaskHistoryPorts)
     }
     meta.append(node('span', 'coordinator-history-task-facts', facts.join(' · ')));
     // Each line is cut to fit its fixed row; the tooltip keeps every text.
-    row.title = [task.title, ...(task.formerTitles ?? []).map(former => t('coordinatorHistory.formerTitles', { titles: former })),
-      task.progress ?? ''].filter(Boolean).join('\n');
+    row.title = [...new Set([displayed(task.title), task.title]),
+      ...(task.formerTitles ?? []).map(former => t('coordinatorHistory.formerTitles', { titles: displayed(former) })),
+      displayed(task.progress ?? '')].filter(Boolean).join('\n');
     row.append(line, note, meta);
     return row;
   }
@@ -175,7 +180,9 @@ export function createCoordinatorTaskHistory(ports: CoordinatorTaskHistoryPorts)
     let previous: Element | null = null;
     for (let index = first; index < end; index++) {
       const row = rows[index];
-      const signature = rowSignature(row);
+      const signature = row.kind === 'task'
+        ? rowSignature(row) + JSON.stringify([row.task.title, row.task.progress ?? '', ...(row.task.formerTitles ?? [])].map(displayed))
+        : rowSignature(row);
       let entry = mounted.get(row.id);
       if (!entry || entry.signature !== signature) {
         const element = row.kind === 'group' ? groupRow(row) : taskRow(row.task);
@@ -234,6 +241,7 @@ export function createCoordinatorTaskHistory(ports: CoordinatorTaskHistoryPorts)
     state.counts = page.counts;
     state.nextCursor = page.nextCursor;
     state.recorded = page.recorded;
+    state.translation = page.translation;
   }
 
   /** reset: the first page of a new query. refresh: re-read as many tasks as are loaded. */

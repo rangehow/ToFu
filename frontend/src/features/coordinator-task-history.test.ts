@@ -212,3 +212,21 @@ it('keeps scrolling through 5,000 tasks cheap: bounded DOM and fast windows', as
   expect(projected).toBeLessThan(50);
   m.view.destroy();
 });
+
+it('shows tasks on the board in the board\'s display translation, with the original in the tooltip', async () => {
+  const tasks = [task(1, { status: 'in_progress', onBoard: true, title: 'Book flights', progress: 'Comparing fares' }), task(2)];
+  const read = vi.fn(async (): Promise<CoordinatorProgressHistoryPage> => ({
+    projectPath: '/project', conversationId: 'leader', bindingRevision: 1, recorded: true, counts: countsOf(tasks), tasks,
+    nextCursor: null, coverage: 'complete',
+    translation: { target: 'Chinese', texts: [{ source: 'Book flights', text: '订机票' }, { source: 'Comparing fares', text: '比较票价' }] } }));
+  const view = createCoordinatorTaskHistory({ read, now: () => NOW, subscribe: () => () => {} });
+  document.body.append(view.el);
+  const viewport = view.el.querySelector<HTMLElement>('.coordinator-history-viewport')!;
+  Object.defineProperty(viewport, 'clientHeight', { configurable: true, get: () => 600 });
+  await vi.waitFor(() => expect(view.el.querySelectorAll('.coordinator-history-task')).toHaveLength(2));
+  const rows = [...view.el.querySelectorAll<HTMLElement>('.coordinator-history-task')];
+  expect(rows.map(row => row.querySelector('.coordinator-history-task-title')!.textContent)).toEqual(['订机票', 'Task 2']);
+  expect(rows[0].querySelector('.coordinator-history-task-note')!.textContent).toBe('比较票价');
+  expect(rows[0].title).toBe('订机票\nBook flights\n比较票价');
+  view.destroy();
+});

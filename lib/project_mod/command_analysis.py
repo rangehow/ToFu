@@ -27,9 +27,11 @@ from collections import Counter, namedtuple
 
 from lib.log import get_logger
 from lib.project_mod.command_structure import (
+    ItemRun,
     ShellStructureUnknown,
     SimpleCommand,
     Subshell,
+    control_structure,
     parse_shell_structure,
 )
 from lib.project_mod.config import DANGEROUS_PATTERNS
@@ -3216,12 +3218,6 @@ def unwrap_process_wrappers(words):
     return words
 
 
-# Reserved words in front of a delete-guard segment. The program the segment
-# runs is read through :func:`_program_views`, shared with the
-# dangerous-command guard (``time`` is its process wrapper there).
-_DELETE_PREFIX_KEYWORDS = _PREFIX_KEYWORDS | {'}'}
-
-
 # ── Literal shell-state tracking for delete-target resolution ──────
 #
 # The second-generation guard expanded ``$VAR`` with ``os.path.expandvars``
@@ -3240,18 +3236,32 @@ _DELETE_PREFIX_KEYWORDS = _PREFIX_KEYWORDS | {'}'}
 #   * a dynamic/unset variable is judged as possibly EMPTY (the Steam
 #     ``$STEAMROOT/`` bug class): ``rm -rf "$D/"`` with ``D`` empty deletes
 #     ``/``; a suffix deep enough to survive the collapse (``$D/build/out``)
-#     is allowed, as is a bare ``"$D"`` (an empty operand deletes nothing);
+#     is allowed, as is a bare ``"$D"`` (an empty operand deletes nothing).
+#     A value built from one keeps that shape: after ``E="$D/x"``, ``"$E"``
+#     is judged as ``/x`` if ``$D`` expands empty;
 #   * literal ``cd`` hops update the tracked cwd set (with the failure
 #     fallback kept across ``;``/``||``) so ``cd / && rm -rf mnt`` is judged
 #     as a delete of ``/mnt``;
 #   * relative operands are judged against the tracked cwd (``rm -rf ../../..``
 #     from a deep workspace climbs to a shallow path and is refused);
 #   * deleting the home directory, the tracked cwd, or an ancestor of it is
-#     refused even when the numeric depth rule would pass.
+#     refused even when the numeric depth rule would pass;
+#   * the state follows the shell's control flow (see "Delete operands come
+#     only from commands a shell would run" below): an assignment that may
+#     not run never replaces the value the name held before;
+#   * a name the command never bound holds its value in the environment the
+#     command's shell starts with, which the caller passes (run_command: the
+#     child environment it built); a caller that does not know it (the
+#     cwd-less pre-hook) leaves every operand reading it to the executor.
 #
-# A value set is a tuple of candidate strings; None marks "no provable
-# literal value" (dynamic or unset). Sets stay bounded; when they overflow
-# the name simply loses its proven value.
+# A value set is a tuple of candidate strings in which ``_DYNAMIC`` stands
+# for "or no provable literal value" (a path left the name dynamic or
+# unset) and a ``_Collapsed`` for the empty collapse of a value built from
+# such names; None is the set holding only ``_DYNAMIC``. ``_DEFERRED`` is a
+# value read from an environment the caller does not know. Sets stay
+# bounded; when they overflow the name simply loses its proven value: it
+# holds ``_OVERFLOW``, judged like ``_DYNAMIC`` but kept by every join, so a
+# loop that keeps growing a value (``n=x$n``) reaches its fixpoint.
 _DELETE_BINDING_CAP = 8
 _CWD_CAP = 8
 _MKSTEMP_VALUE = '/tmp/.tofu-delete-guard-mktemp'  # depth-2 placeholder
@@ -3259,6 +3269,57 @@ _DELETE_ASSIGN_HEADS = frozenset({'export', 'readonly', 'declare', 'local'})
 _DELETE_STATE_RESET_HEADS = frozenset({
     'eval', 'source', '.', 'read', 'set', 'unset', 'typeset', 'let', 'exec',
 })
+
+
+class _ValueMarker:
+    """A value-set element that is no literal string."""
+
+    __slots__ = ('name',)
+
+    def __init__(self, name):
+        self.name = name
+
+    def __repr__(self):
+        return self.name
+
+
+_DYNAMIC = _ValueMarker('_DYNAMIC')
+_DEFERRED = _ValueMarker('_DEFERRED')
+_OVERFLOW = _ValueMarker('_OVERFLOW')
+
+
+class _Collapsed:
+    """The value a binding holds when the unproven *names* it was built from
+    expand empty (``E="$D/x"`` with ``D`` dynamic holds ``/x``)."""
+
+    __slots__ = ('text', 'names')
+
+    def __init__(self, text, names):
+        self.text = text
+        self.names = frozenset(names)
+
+    def __eq__(self, other):
+        return (isinstance(other, _Collapsed) and self.text == other.text
+                and self.names == other.names)
+
+    def __hash__(self):
+        return hash((self.text, self.names))
+
+    def __repr__(self):
+        return f'_Collapsed({self.text!r}, {sorted(self.names)})'
+
+
+class _EnvironmentDeferred(Exception):
+    """An expansion read the environment or cwd of a caller that does not
+    know them; the executor's pass judges that operand."""
+
+
+class _RecursiveFunction(Exception):
+    """A shell function called itself; this guard does not follow recursion."""
+
+    def __init__(self, name):
+        super().__init__(name)
+        self.name = name
 
 
 def _mkstemp_value(source):
@@ -3303,56 +3364,87 @@ def _mkstemp_value(source):
                         '.tofu-delete-guard-mktemp')
 
 
-def _resolve_delete_value(raw, get_value, cwd_candidates, home):
+def _resolve_delete_value(raw, state, home):
     """Resolve one assignment VALUE text to a bounded candidate tuple.
 
     ``raw`` is the RAW text after ``NAME=`` (quotes intact — an assignment
     word is never word-split, so ``D=\"a b\"`` binds ``a b``). Returns None
     when the value is not provably literal (any substitution other than a
-    tracked ``pwd``/``mktemp`` producer, an unproven variable, a glob).
-    Values may themselves reference earlier bindings (``BAD=$R/frontend``).
+    tracked ``pwd``/``mktemp`` producer, an unproven variable alone), and
+    ``_DEFERRED`` when it reads an environment the caller does not know. A
+    candidate built from an unproven name keeps its empty collapse as a
+    ``_Collapsed`` (``_DYNAMIC`` when that collapse is empty itself). Values
+    may themselves reference earlier bindings (``BAD=$R/frontend``).
     """
     if not raw or raw.endswith('\\'):
         return None
-    expanded = _expand_delete_operand(raw, get_value, cwd_candidates, home,
-                                      for_binding=True)
-    return expanded[0] if expanded else None
+    try:
+        expanded = _expand_delete_operand(raw, state, home, for_binding=True)
+    except _EnvironmentDeferred:
+        return _DEFERRED
+    if expanded is None or expanded is _OVERFLOW:
+        return expanded
+    values = tuple(dict.fromkeys(
+        candidate if not names else _Collapsed(candidate, names) if candidate
+        else _DYNAMIC
+        for candidate, names in zip(expanded.candidates, expanded.collapsed)))
+    return None if values == (_DYNAMIC,) else values
 
 
-def _expand_delete_operand(raw, get_value, cwd_candidates, home,
-                           *, for_binding=False):
+_Expansion = namedtuple('_Expansion', ['candidates', 'unproven', 'collapsed'])
+
+
+def _expand_delete_operand(raw, state, home, *, for_binding=False):
     """Expand one word like the shell would, without executing anything.
 
-    Returns ``(candidates, unproven_names)``: ``candidates`` is a tuple of
-    strings (a single word, quotes stripped), ``unproven_names`` the set of
-    variable names that had no provable literal value and were substituted
-    EMPTY — the unset-collapse case (``rm -rf \"$D/\"`` with ``D`` unset or
-    dynamic deletes ``/``). A proven literal binding contributes its own
-    value(s). Command substitutions contribute only when the producer is
-    tracked (``pwd``, ``mktemp``); anything else substitutes EMPTY and names
-    no variable (an anonymous ``$(…)`` still collapses to the empty shape).
-    Glob characters in an unquoted position keep the candidate but mark the
-    path as pattern-shaped via a trailing '\x00glob' flag consumed by the
-    depth judgement.
+    Returns an ``_Expansion``: ``candidates`` is a tuple of strings (a single
+    word, quotes stripped); ``collapsed`` holds, per candidate, the variable
+    names that had no provable literal value on its path and were
+    substituted EMPTY — the unset-collapse case (``rm -rf \"$D/\"`` with
+    ``D`` unset or dynamic deletes ``/``); ``unproven`` is their union. A
+    proven literal binding contributes its own value(s). Command
+    substitutions contribute only when the producer is tracked (``pwd``,
+    ``mktemp``); anything else substitutes EMPTY and names no variable (an
+    anonymous ``$(…)`` still collapses to the empty shape). Glob characters
+    in an unquoted position keep the candidates but mark them pattern-shaped
+    via a trailing '\x00glob' flag consumed by the depth judgement.
 
-    ``for_binding=True`` (assignment VALUES) is stricter: any unproven piece
-    makes the whole binding unproven (None) so its USES name the variable
-    (``D=$(some_cmd); rm -rf $D/`` refuses as "if $D expands empty", not as
-    a bare "resolves to /").
+    ``for_binding=True`` (assignment VALUES) is stricter: an anonymous
+    substitution makes the whole binding unproven (None) so its USES name
+    the variable (``D=$(some_cmd); rm -rf $D/`` refuses as "if $D expands
+    empty", not as a bare "resolves to /").
 
     Returns None when the word cannot even be enumerated (unterminated
-    quote, arithmetic, a candidate-count blowup).
+    quote, arithmetic, a candidate-count blowup); for a binding, a blowup
+    or a name that lost its proven value returns ``_OVERFLOW``. Raises
+    ``_EnvironmentDeferred`` when it reads the environment or the cwd of a
+    caller that does not know them.
     """
-    candidates = ['']
-    globbed = [False]
-    unproven = set()
+    pieces = [('', frozenset())]  # (candidate text, names collapsed into it)
+    globbed = False
     quote = None
     index = 0
     length = len(raw)
 
     def _push(chunk):
-        nonlocal candidates
-        candidates = [head + chunk for head in candidates]
+        nonlocal pieces
+        pieces = [(text + chunk, names) for text, names in pieces]
+
+    def _substitute(values, name=None):
+        nonlocal pieces
+        combined = []
+        for text, names in pieces:
+            for value in values:
+                if value is _DYNAMIC:
+                    combined.append((text, names | {name}))
+                elif isinstance(value, _Collapsed):
+                    combined.append((text + value.text, names | value.names))
+                else:
+                    combined.append((text + value, names))
+        if len(combined) > _DELETE_BINDING_CAP:
+            return False
+        pieces = combined
+        return True
 
     while index < length:
         char = raw[index]
@@ -3390,24 +3482,12 @@ def _expand_delete_operand(raw, get_value, cwd_candidates, home,
                 end = _substitution_end(raw, index + 2)
                 if end is None:
                     return None
-                body = raw[index + 2:end]
-                stripped = body.strip()
-                if stripped in ('pwd', 'pwd -P', 'pwd -L', 'command pwd'):
-                    values = tuple(cwd_candidates)
-                    if not values:
-                        return None
-                else:
-                    mkstemp = _mkstemp_value(stripped)
-                    if mkstemp is None:
-                        if for_binding:
-                            return None
-                        values = ('',)
-                    else:
-                        values = (mkstemp,)
-                combined = [head + value for head in candidates for value in values]
-                if len(combined) > _DELETE_BINDING_CAP:
+                values = _substitution_values(
+                    raw[index + 2:end].strip(), state, for_binding)
+                if values is None:
                     return None
-                candidates = combined
+                if not _substitute(values):
+                    return _OVERFLOW if for_binding else None
                 index = end + 1
                 continue
             reference = _re.match(
@@ -3417,24 +3497,21 @@ def _expand_delete_operand(raw, get_value, cwd_candidates, home,
                 name = reference.group(1) or reference.group(3)
                 guarded = reference.group(2) is not None
                 if name == 'PWD':
-                    values = tuple(cwd_candidates)
-                    if not values:
+                    values = state.cwd_values()
+                    if values is None:
                         return None
                 elif name == 'HOME':
                     values = (home,) if home else ()
                 else:
-                    values = get_value(name)
-                if values is None:
-                    if guarded:
-                        return None  # ${X:?…} aborts the shell when unset
-                    if for_binding:
-                        return None
-                    values = ('',)  # unset/dynamic: judge the empty collapse
-                    unproven.add(name)
-                combined = [head + value for head in candidates for value in values]
-                if len(combined) > _DELETE_BINDING_CAP:
-                    return None
-                candidates = combined
+                    values = state.get_value(name)
+                    if values is _OVERFLOW and for_binding:
+                        return _OVERFLOW
+                    if values is None or values is _OVERFLOW:
+                        values = (_DYNAMIC,)  # unset/dynamic: the empty collapse
+                if guarded and _DYNAMIC in values:
+                    return None  # ${X:?…} aborts the shell when unset
+                if not _substitute(values, name):
+                    return _OVERFLOW if for_binding else None
                 index += reference.end()
                 continue
             # $$, $?, $1, … — special parameters, never delete-relevant paths.
@@ -3445,26 +3522,16 @@ def _expand_delete_operand(raw, get_value, cwd_candidates, home,
             close = raw.find('`', index + 1)
             if close < 0:
                 return None
-            body = raw[index + 1:close].strip()
-            if body in ('pwd', 'pwd -P', 'pwd -L'):
-                values = tuple(cwd_candidates)
-                if not values:
-                    return None
-            else:
-                mkstemp = _mkstemp_value(body)
-                if mkstemp is None:
-                    if for_binding:
-                        return None
-                    values = ('',)
-                else:
-                    values = (mkstemp,)
-            candidates = [head + value for head in candidates for value in values]
-            if len(candidates) > _DELETE_BINDING_CAP:
+            values = _substitution_values(
+                raw[index + 1:close].strip(), state, for_binding)
+            if values is None:
                 return None
+            if not _substitute(values):
+                return _OVERFLOW if for_binding else None
             index = close + 1
             continue
         if quote is None and char in '*?[':
-            globbed = [True] * len(candidates)
+            globbed = True  # pathname expansion applies to the whole word
             _push(char)
             index += 1
             continue
@@ -3472,10 +3539,22 @@ def _expand_delete_operand(raw, get_value, cwd_candidates, home,
         index += 1
     if quote is not None:
         return None  # unterminated quote: stay opaque
-    if any(globbed):
-        candidates = [c + '\x00glob' if g else c
-                      for c, g in zip(candidates, globbed)]
-    return tuple(candidates), unproven
+    marker = '\x00glob' if globbed else ''
+    collapsed = tuple(names for _text, names in pieces)
+    return _Expansion(tuple(text + marker for text, _names in pieces),
+                      set().union(*collapsed), collapsed)
+
+
+def _substitution_values(body, state, for_binding):
+    """Values of a ``$(…)`` or backtick *body*: the cwd for ``pwd``, a deep
+    placeholder for ``mktemp``, EMPTY for anything else (None in a binding,
+    whose uses then name the variable)."""
+    if body in ('pwd', 'pwd -P', 'pwd -L', 'command pwd'):
+        return state.cwd_values()
+    mkstemp = _mkstemp_value(body)
+    if mkstemp is not None:
+        return (mkstemp,)
+    return None if for_binding else ('',)
 
 
 def _could_run_delete(text):
@@ -3605,54 +3684,209 @@ def _candidate_depth(path):
     return normalized, len([c for c in normalized.split('/') if c])
 
 
-def _literal_loop_binding(words):
-    """For-segment words → (variable, value candidates) when fully literal."""
-    # for d in a b c  →  ('d', ('a', 'b', 'c')); anything dynamic → None.
-    if len(words) >= 4 and words[0] == 'for' and words[2] == 'in':
-        values = []
-        for raw in words[3:]:
-            if shell_source_has_expansion(raw):
-                return None
-            values.append(raw)
-        return words[1], tuple(values)
-    return None
+def _loop_variable(header, state, home):
+    """``(name, values, runs at least once)`` of a ``for``/``select`` header.
+
+    Each listed word is expanded like an assignment value; a word that may
+    become zero or several words (``$(ls)``, ``*.log``, ``"$@"``) adds a
+    dynamic value and may leave the list empty. An arithmetic ``for ((…))``
+    binds nothing; ``select`` and ``for x`` (the positional parameters) may
+    run the body any number of times. An empty list yields ``()`` values.
+    """
+    words = header[1:]
+    if not words or words[0].startswith('(('):
+        return None, None, False
+    if words[1:2] != ('in',):
+        return words[0], None, False
+    listed = words[2:]
+    single = [raw for raw in listed if not _shell_word_shape(raw).multiple]
+    runs = header[0] == 'for' and bool(single)
+    values = [_DYNAMIC] if len(single) < len(listed) else []
+    for raw in single:
+        value = _resolve_delete_value(raw, state, home)
+        if value is _DEFERRED or value is _OVERFLOW:
+            return words[0], value, runs
+        values.extend((_DYNAMIC,) if value is None else value)
+    values = tuple(dict.fromkeys(values))
+    return words[0], None if values == (_DYNAMIC,) else values, runs
+
+
+def _join_values(mine, theirs):
+    """The value set a name holds where two paths meet."""
+    for absorbing in (_DEFERRED, _OVERFLOW):
+        if mine is absorbing or theirs is absorbing:
+            return absorbing
+    merged = tuple(dict.fromkeys(
+        ((_DYNAMIC,) if mine is None else mine)
+        + ((_DYNAMIC,) if theirs is None else theirs)))
+    if merged == (_DYNAMIC,):
+        return None
+    return _OVERFLOW if len(merged) > _DELETE_BINDING_CAP else merged
+
+
+class _Exits:
+    """States that leave a loop (``breaks``, ``continues``) or a function
+    call (``returns``) early, joined; ``saved`` holds, joined, what the names
+    a call made ``local`` held before ``local`` ran."""
+
+    __slots__ = ('breaks', 'continues', 'returns', 'saved')
+
+    def __init__(self):
+        self.breaks = self.continues = self.returns = None
+        self.saved = {}
+
+    def reach(self, kind, state):
+        reached = getattr(self, kind)
+        if reached is None:
+            setattr(self, kind, state.branch())
+        else:
+            reached.join(state)
+
+    def join_into(self, state, *kinds):
+        for kind in kinds:
+            reached = getattr(self, kind)
+            if reached is not None:
+                state.join(reached)
+
+
+class _Jumps:
+    """Where ``break``/``continue`` (the enclosing ``loops``, innermost
+    last) and ``return`` (the innermost function ``call``) lead."""
+
+    __slots__ = ('loops', 'call')
+
+    def __init__(self, loops=(), call=None):
+        self.loops = loops
+        self.call = call
+
+
+_NO_JUMPS = _Jumps()
+
+
+class _Definition:
+    """One definition of a shell function: its body node and script items."""
+
+    __slots__ = ('body', 'items')
+
+    def __init__(self, body, items):
+        self.body = body
+        self.items = items
+
+    def __eq__(self, other):
+        return (isinstance(other, _Definition) and self.body is other.body
+                and self.items is other.items)
+
+    def __hash__(self):
+        return hash((id(self.body), id(self.items)))
 
 
 class _DeleteGuardState:
-    """Mutable literal shell state carried across a command's segments."""
+    """Literal shell state at one point of a command, as this guard tracks it.
 
-    __slots__ = ('bindings', 'cwds', 'cwd_known')
+    ``environment`` is the mapping the command's shell starts with (None when
+    the caller does not know it); ``functions`` maps a name to its possible
+    definitions (None among them where the name may be undefined).
+    ``jumps`` and ``calls`` describe the position rather than the state:
+    where ``break``/``continue``/``return`` lead, and the functions being
+    run. ``memo`` keeps one parse and structure per script for the whole
+    judgement, so a script read twice defines the same functions.
+    """
 
-    def __init__(self, cwd):
+    __slots__ = ('bindings', 'cwds', 'cwd_known', 'cwd_given', 'environment',
+                 'functions', 'jumps', 'calls', 'memo')
+
+    def __init__(self, cwd, environment):
         start = os.path.normpath(cwd) if cwd and os.path.isabs(cwd) else None
         self.bindings = {}
         self.cwds = [start] if start else []
-        self.cwd_known = start is not None
+        self.cwd_known = self.cwd_given = start is not None
+        self.environment = environment
+        self.functions = {}
+        self.jumps = _NO_JUMPS
+        self.calls = frozenset()
+        self.memo = {}
 
-    def fork(self, *, child_shell=False):
-        """State of a subshell; a separate *child_shell* process (``bash <<'EOF'``,
-        ``sh -c '…'``) inherits the cwd but no unexported binding."""
-        clone = _DeleteGuardState(None)
-        clone.bindings = {} if child_shell else dict(self.bindings)
+    def branch(self):
+        """This shell on another path through the same commands."""
+        clone = object.__new__(_DeleteGuardState)
+        for slot in self.__slots__:
+            setattr(clone, slot, getattr(self, slot))
+        clone.bindings = dict(self.bindings)
         clone.cwds = list(self.cwds)
-        clone.cwd_known = self.cwd_known
+        clone.functions = dict(self.functions)
         return clone
 
-    def get_value(self, name):
+    def fork(self, *, child_shell=False):
+        """State of a subshell (``( … )``, a pipeline stage, a substitution),
+        which cannot jump to this shell's loops or calls; a separate
+        *child_shell* process (``bash <<'EOF'``, ``sh -c '…'``) inherits the
+        cwd and the environment but no unexported binding or function."""
+        clone = self.branch()
+        clone.jumps = _NO_JUMPS
+        if child_shell:
+            clone.bindings, clone.functions, clone.calls = {}, {}, frozenset()
+        return clone
+
+    def assign(self, other):
+        """Take the state *other* reached at this same point."""
+        self.bindings, self.cwds = other.bindings, other.cwds
+        self.cwd_known, self.functions = other.cwd_known, other.functions
+
+    def join(self, other):
+        """Add the state *other* reached at this same point on another path."""
+        for name in dict.fromkeys([*self.bindings, *other.bindings]):
+            self.bindings[name] = _join_values(self._held(name), other._held(name))
+        for cwd in other.cwds:
+            if cwd not in self.cwds:
+                self.cwds.append(cwd)
+        del self.cwds[_CWD_CAP:]
+        self.cwd_known = self.cwd_known or other.cwd_known
+        for name in dict.fromkeys([*self.functions, *other.functions]):
+            self.functions[name] = tuple(dict.fromkeys(
+                self.functions.get(name, (None,)) + other.functions.get(name, (None,))))
+
+    def signature(self):
+        """The values, cwds and definitions a join can add to."""
+        return ({name: frozenset(value) if isinstance(value, tuple) else value
+                 for name, value in self.bindings.items()},
+                frozenset(self.cwds), self.cwd_known,
+                {name: frozenset(found) for name, found in self.functions.items()})
+
+    def _held(self, name):
+        """The value *name* holds here: its binding, else the environment's."""
         if name in self.bindings:
             return self.bindings[name]
-        env = os.environ.get(name)
-        return (env,) if env else None
+        if self.environment is None:
+            return _DEFERRED
+        value = self.environment.get(name)
+        return (value,) if value else None
+
+    def get_value(self, name):
+        value = self._held(name)
+        if value is _DEFERRED:
+            raise _EnvironmentDeferred(name)
+        return value
+
+    def cwd_values(self):
+        """Candidates of ``$PWD`` and ``$(pwd)``: None once a ``cd`` target
+        could not be followed; unknown to a caller that gave no cwd."""
+        if self.cwds:
+            return tuple(self.cwds)
+        if not self.cwd_given:
+            raise _EnvironmentDeferred('PWD')
+        return None
 
     def change_directory(self, raw, home):
-        expanded = _expand_delete_operand(raw, self.get_value, self.cwds, home)
-        dests = expanded[0] if expanded else None
-        if dests is None:
+        try:
+            expanded = _expand_delete_operand(raw, self, home)
+        except _EnvironmentDeferred:
+            expanded = None
+        if expanded is None:
             self.cwd_known = False
             self.cwds = []
             return
         resolved = []
-        for dest in dests:
+        for dest in expanded.candidates:
             if not dest:
                 continue  # `cd ''` fails; keep the previous cwd
             if os.path.isabs(dest):
@@ -3674,42 +3908,269 @@ class _DeleteGuardState:
 # ── Delete operands come only from commands a shell would run ──────
 #
 # ``command_structure.parse_shell_structure`` delimits the command the way a
-# shell does. The walk below yields the operands of every rm/rmdir/unlink
-# simple command that may run: in the command itself, in each ( … ) group
-# (judged with the group's own bindings and cd hops), in command and process
-# substitution bodies, and in text a shell executes — a heredoc or
-# here-string read by a stdin shell (directly or later in its pipeline) and a
-# ``-c`` string. Heredoc bodies, quoted strings and Git pathspecs are data.
-# Text the parser cannot delimit refuses only when it could run a delete.
+# shell does and ``control_structure`` pairs its reserved words into the
+# compound commands a shell executes. The walk below yields the operands of
+# every rm/rmdir/unlink simple command that may run: in the command itself,
+# in each ( … ) group (judged with the group's own bindings and cd hops), in
+# command and process substitution bodies, in every branch, loop body and
+# function body, and in text a shell executes — a heredoc or here-string
+# read by a stdin shell (directly or later in its pipeline) and a ``-c``
+# string. Heredoc bodies, quoted strings and Git pathspecs are data. Text the
+# parser cannot delimit refuses only when it could run a delete.
+#
+# The state follows the shell's control flow. An ``&&``/``||`` operand, an
+# ``if``/``case`` branch and a loop body run on their own copies of the
+# state, and the state after the construct joins every path that reaches
+# its end: an assignment that may not run never replaces the value the name
+# held before. A loop's head is the fixpoint of its iterations; ``break``,
+# ``continue`` and ``return`` carry their state to where they lead; a
+# function body runs on the caller's state where the function is called.
+# Decision: "Catastrophic-delete guard control flow" in
+# docs/modules/tools_execution.md.
 
 def _delete_events(items, state):
     """Yield ``('operand', raw word, state)`` for each delete operand the
     parsed script may run, in execution order, and ``('opaque', text,
     error)`` for shell-executed text that cannot be parsed. *state* follows
-    the script's literal bindings and ``cd`` hops; groups and substitution
-    bodies run in a fork."""
-    for index, item in enumerate(items):
-        for script in item.nested:
+    the script's literal bindings, ``cd`` hops and function definitions
+    along its control flow; groups and substitution bodies run in a fork."""
+    known = state.memo.get(id(items))
+    if known is None:
+        known = state.memo[id(items)] = (items, control_structure(items))
+    if known[1] is None:
+        yield from _unstructured_events(items, state)
+    else:
+        yield from _list_events(known[1], items, state)
+
+
+def _list_events(script, items, state):
+    for and_or in script:
+        yield from _and_or_events(
+            and_or, items, state.fork() if and_or.background else state)
+
+
+def _and_or_events(and_or, items, state):
+    """``a && b || c``: an operand runs once the list so far succeeded
+    (``&&``) or failed (``||``); the state after it joins both outcomes."""
+    (_, first), *rest = and_or.pipelines
+    yield from _pipeline_events(first, items, state)
+    if not rest:
+        return
+    succeeded, failed = state.branch(), state.branch()
+    for operator, pipeline in rest:
+        runs, other = (succeeded, failed) if operator == '&&' else (failed, succeeded)
+        yield from _pipeline_events(pipeline, items, runs)
+        other.join(runs)
+    succeeded.join(failed)
+    state.assign(succeeded)
+
+
+def _pipeline_events(pipeline, items, state):
+    if len(pipeline.commands) == 1:
+        yield from _node_events(pipeline.commands[0], items, state)
+        return
+    for node in pipeline.commands:
+        # Every stage of a pipeline runs in a subshell of its own.
+        yield from _node_events(node, items, state.fork())
+
+
+def _node_events(node, items, state):
+    if isinstance(node, ItemRun):
+        yield from _item_events(node, items, state)
+        return
+    for index in node.items:
+        yield from _nested_events(items[index], state)
+    yield from _COMPOUND_EVENTS[node.kind](node.parts, items, state)
+
+
+def _nested_events(item, state):
+    """Delete events of the substitutions an item's words and redirects run."""
+    for script in item.nested:
+        yield from _delete_events(script, state.fork())
+    for heredoc in item.heredocs:
+        for script in heredoc.nested:
             yield from _delete_events(script, state.fork())
-        for heredoc in item.heredocs:
-            for script in heredoc.nested:
-                yield from _delete_events(script, state.fork())
-        if isinstance(item, Subshell):
-            yield from _delete_events(item.body, state.fork())
-            continue
-        piped = isinstance(item, SimpleCommand) and (
-            item.separator == '|'
-            or (index + 1 < len(items) and items[index + 1].separator == '|'))
-        backgrounded = (index + 1 < len(items)
-                        and items[index + 1].separator == '&')
-        if piped or backgrounded:
-            # A pipeline stage and a `&`-backgrounded command run in their own
-            # subshells: their bindings and cd hops never reach this shell.
-            yield from _shell_input_events(items, index, state.fork())
-            yield from _simple_command_events(item, state.fork())
-        else:
-            yield from _shell_input_events(items, index, state)
-            yield from _simple_command_events(item, state)
+
+
+def _item_events(run, items, state):
+    item = items[run.index]
+    yield from _nested_events(item, state)
+    if isinstance(item, Subshell):
+        yield from _delete_events(item.body, state.fork())
+        return
+    yield from _shell_input_events(items, run.index, state)
+    yield from _simple_command_events(run.words, state)
+
+
+def _group_events(parts, items, state):
+    yield from _list_events(parts[0], items, state)
+
+
+def _if_events(parts, items, state):
+    """Each condition runs once those before it failed; at most one body
+    runs, none when every condition fails and there is no ``else``."""
+    clauses, else_body = parts
+    outcomes = []
+    for condition, body in clauses:
+        yield from _list_events(condition, items, state)
+        taken = state.branch()
+        yield from _list_events(body, items, taken)
+        outcomes.append(taken)
+    rest = state.branch()
+    if else_body is not None:
+        yield from _list_events(else_body, items, rest)
+    outcomes.append(rest)
+    state.assign(_joined(outcomes))
+
+
+def _while_events(parts, items, state):
+    """``while``/``until``: the condition runs before every iteration and
+    once more before the loop ends; the body runs any number of times."""
+    condition, body = parts
+    exits = _Exits()
+
+    def iteration(path):
+        yield from _list_events(condition, items, path)
+        yield from _list_events(body, items, path)
+
+    path = _in_loop(_loop_head(state, exits, iteration), state, exits)
+    yield from _list_events(condition, items, path)
+    leaving = path.branch()
+    yield from _list_events(body, items, path)
+    exits.join_into(leaving, 'breaks')
+    state.assign(leaving)
+
+
+def _for_events(parts, items, state):
+    """``for``/``select``: the body runs once per listed word, any number of
+    times for a computed list, ``select`` or an arithmetic ``for ((…))``."""
+    header, body = parts
+    name, values, runs = _loop_variable(header, state, os.path.expanduser('~'))
+    if values == ():
+        return  # an empty list never runs the body
+    exits = _Exits()
+
+    def iteration(path):
+        if name is not None:
+            path.bindings[name] = values
+        yield from _list_events(body, items, path)
+
+    head = _loop_head(state, exits, iteration)
+    path = _in_loop(head, state, exits)
+    yield from iteration(path)
+    exits.join_into(path, 'continues', 'breaks')
+    if not runs:
+        path.join(head)
+    state.assign(path)
+
+
+def _case_events(parts, items, state):
+    """At most one clause runs, unless ``;&`` falls through or ``;;&`` tests
+    the patterns after it; none when no pattern matches (``*`` always does)."""
+    outcomes, carried, matches_all = [], None, False
+    for marker, body, terminator in parts[0]:
+        path = state.branch()
+        if carried is not None:
+            path.join(carried)
+        yield from _nested_events(items[marker], path)
+        yield from _list_events(body, items, path)
+        outcomes.append(path)
+        matches_all = matches_all or '*' in items[marker].patterns
+        if terminator in (';&', ';;&'):
+            carried = path if carried is None else _joined([carried, path])
+    if not matches_all:
+        outcomes.append(state.branch())
+    state.assign(_joined(outcomes))
+
+
+def _function_events(parts, items, state):
+    """A definition runs nothing: its body is judged here, and runs on the
+    caller's state wherever the name is called."""
+    name, body = parts
+    yield from _node_events(body, items, state.fork())
+    state.functions[name] = (_Definition(body, items),)
+
+
+_COMPOUND_EVENTS = {
+    'group': _group_events, 'if': _if_events, 'while': _while_events,
+    'until': _while_events, 'for': _for_events, 'case': _case_events,
+    'function': _function_events,
+}
+
+
+def _in_loop(head, state, exits):
+    """A path into a loop from *head* whose ``break``/``continue`` lead to
+    *exits*."""
+    path = head.branch()
+    path.jumps = _Jumps(state.jumps.loops + (exits,), state.jumps.call)
+    return path
+
+
+def _loop_head(state, exits, iteration):
+    """The state at a loop's head: its entry joined with the end of every
+    iteration and every ``continue`` until no path adds anything. The events
+    of *iteration(path)* are judged later, once, from the returned head."""
+    head = state.branch()
+    while True:
+        path = _in_loop(head, state, exits)
+        for _event in iteration(path):
+            pass
+        merged = head.branch()
+        merged.join(path)
+        exits.join_into(merged, 'continues')
+        if merged.signature() == head.signature():
+            return head
+        head = merged
+
+
+def _joined(states):
+    joined = states[0].branch()
+    for state in states[1:]:
+        joined.join(state)
+    return joined
+
+
+# Words that open, separate or close compound syntax, skipped in front of a
+# command of a script whose reserved words do not pair up.
+_UNPAIRED_SYNTAX = frozenset({
+    '{', '}', '!', 'if', 'then', 'elif', 'else', 'fi', 'while', 'until', 'do',
+    'done', 'time'})
+
+
+def _unstructured_events(items, state):
+    """A script whose reserved words do not pair up (a shell rejects it, but
+    may run the lines before the error): every item may run or not, any
+    number of times, in order."""
+    def iteration(path):
+        for index in range(len(items)):
+            step = path.branch()
+            yield from _unstructured_item_events(items, index, step)
+            path.join(step)
+
+    path = _loop_head(state, _Exits(), iteration).branch()
+    yield from iteration(path)
+    state.assign(path)
+
+
+def _unstructured_item_events(items, index, state):
+    item = items[index]
+    yield from _nested_events(item, state)
+    if isinstance(item, Subshell):
+        yield from _delete_events(item.body, state.fork())
+        return
+    if not isinstance(item, SimpleCommand):
+        return  # a case clause marker
+    yield from _shell_input_events(items, index, state)
+    words = list(item.words)
+    while words and words[0] in _UNPAIRED_SYNTAX:
+        del words[0]
+    if words[:1] in (['for'], ['select']):
+        name, values, _runs = _loop_variable(
+            tuple(words), state, os.path.expanduser('~'))
+        if name is not None and values != ():
+            state.bindings[name] = values
+        return
+    yield from _simple_command_events(words, state)
 
 
 def _reads_shell_stdin(item):
@@ -3805,44 +4266,46 @@ def _shell_input_events(items, index, state):
 
 def _delete_text_events(text, state):
     """Delete events of shell source *text* run with *state*."""
-    try:
-        body = parse_shell_structure(text)
-    except ShellStructureUnknown as error:
+    parsed = state.memo.get(text)
+    if parsed is None:
+        try:
+            parsed = parse_shell_structure(text)
+        except ShellStructureUnknown as error:
+            parsed = error
+        state.memo[text] = parsed
+    if isinstance(parsed, ShellStructureUnknown):
         if _could_run_delete(text):
-            yield 'opaque', text, error
+            yield 'opaque', text, parsed
         return
-    yield from _delete_events(body, state)
+    yield from _delete_events(parsed, state)
 
 
-def _simple_command_events(item, state):
-    """Apply one simple command to *state*; yield its delete operands."""
-    texts = list(item.words)
-    leading = 0
-    while leading < len(texts) and texts[leading] in _DELETE_PREFIX_KEYWORDS:
-        leading += 1
-    texts = texts[leading:]
+def _simple_command_events(words, state):
+    """Apply one simple command (its *words* after any reserved words) to
+    *state*; yield its delete operands."""
+    texts = list(words)
     if not texts:
         return
     home = os.path.expanduser('~')
-    loop = _literal_loop_binding(texts)
-    if loop is not None:
-        state.bindings[loop[0]] = loop[1]
-        return
     # Literal assignment commands bind for the rest of the command.
     head_texts = texts[1:] if texts[0] in _DELETE_ASSIGN_HEADS else texts
     if head_texts and all(_ENV_ASSIGNMENT_GUARD_RE.match(t) for t in head_texts):
+        call = state.jumps.call if texts[0] in ('local', 'declare') else None
         for token in head_texts:
             name, _, raw_value = token.partition('=')
-            values = _resolve_delete_value(
-                raw_value, state.get_value, state.cwds, home)
-            if item.separator == '||' and name not in state.bindings \
-                    and os.environ.get(name) is None:
-                # `false || D=/mnt` may never run: D may stay unset, and
-                # unset expands EMPTY — judge both.
-                values = tuple(values) + ('',) if values else None
-            state.bindings[name] = values
+            if call is not None:
+                # The function's return gives a local name its old value back.
+                held = state._held(name)
+                call.saved[name] = (_join_values(call.saved[name], held)
+                                    if name in call.saved else held)
+            state.bindings[name] = _resolve_delete_value(raw_value, state, home)
         if len(state.bindings) > 64:
             state.bindings.clear()
+        return
+    command = next(word for word in texts if not _ENV_ASSIGNMENT_GUARD_RE.match(word))
+    head = _literal_command_word(command)
+    if head in ('break', 'continue', 'return'):
+        _jump(head, texts[texts.index(command) + 1:], state)
         return
     views = _program_views(texts)
     if views is _UNKNOWN_PROGRAM:
@@ -3855,6 +4318,44 @@ def _simple_command_events(item, state):
         return
     for literal, raw in views:
         yield from _program_delete_events(literal, raw, state, home)
+    if head in state.functions:
+        yield from _function_call_events(head, state)
+
+
+def _jump(head, arguments, state):
+    """Carry *state* to where ``break``/``continue`` [N] or ``return`` lead."""
+    if head == 'return':
+        if state.jumps.call is not None:
+            state.jumps.call.reach('returns', state)
+        return
+    loops = state.jumps.loops
+    count = arguments[0] if arguments else '1'
+    if count.isdigit() and int(count) > 0:
+        loops = loops[max(len(loops) - int(count), 0):][:1]
+    for exits in loops:  # an unknown count may leave any of them
+        exits.reach('breaks' if head == 'break' else 'continues', state)
+
+
+def _function_call_events(name, state):
+    """Run the body of shell function *name* on the caller's *state*."""
+    if name in state.calls:
+        raise _RecursiveFunction(name)
+    outcomes = []
+    for definition in state.functions[name]:
+        path = state.branch()
+        if definition is not None:
+            exits = _Exits()
+            path.jumps = _Jumps(state.jumps.loops, exits)
+            path.calls = state.calls | {name}
+            yield from _node_events(definition.body, definition.items, path)
+            exits.join_into(path, 'returns')
+            for local, saved in exits.saved.items():
+                # A path that made the name local gets its old value back; a
+                # path that never ran `local` keeps what it assigned.
+                path.bindings[local] = _join_values(saved, path._held(local))
+            path.jumps, path.calls = state.jumps, state.calls
+        outcomes.append(path)
+    state.assign(_joined(outcomes))
 
 
 def _program_delete_events(literal, raw, state, home):
@@ -3948,14 +4449,15 @@ class _DeleteJudge:
         return None
 
     def __call__(self, raw_operand, state):
-        expanded = _expand_delete_operand(
-            raw_operand, state.get_value, state.cwds, self.home)
+        try:
+            expanded = _expand_delete_operand(raw_operand, state, self.home)
+        except _EnvironmentDeferred:
+            return None  # the executor's pass knows the environment and cwd
         if expanded is None:
             return (raw_operand, 'unproven',
                     'the operand mixes expansions this guard cannot prove '
                     'statically; use a literal absolute path')
-        candidates, unproven_names = expanded
-        for candidate in candidates:
+        for candidate, unproven_names in zip(expanded.candidates, expanded.collapsed):
             glob_marked = candidate.endswith('\x00glob')
             text = candidate[:-len('\x00glob')] if glob_marked else candidate
             if not text:
@@ -4010,7 +4512,7 @@ def _unparsed_delete_verdict(text, error):
             'as its own command with a literal path')
 
 
-def _catastrophic_delete_detail(command, cwd=None):
+def _catastrophic_delete_detail(command, cwd=None, *, environment=os.environ):
     """Judge *command* for catastrophic deletes; return (target, reason, detail).
 
     *target* is the operand text as written, *reason* is one of ``shallow``,
@@ -4018,6 +4520,12 @@ def _catastrophic_delete_detail(command, cwd=None):
     and *detail* is a short human-readable explanation for the refusal
     message. Returns None when every delete target the command may touch is
     provably scoped.
+
+    *environment* is the mapping the command's shell starts with: by default
+    this process's, which the children it starts inherit; run_command passes
+    the child environment it built. None means the caller does not know it
+    (the cwd-less safety pre-hook): an operand that reads a name the command
+    never bound, or ``$PWD`` without a cwd, is left to the executor's pass.
     """
     if not command or not command.strip():
         return None
@@ -4036,15 +4544,23 @@ def _catastrophic_delete_detail(command, cwd=None):
     except ShellStructureUnknown as error:
         return _unparsed_delete_verdict(command, error)
     judge = _DeleteJudge(cwd, ws_real)
-    for kind, payload, context in _delete_events(items, _DeleteGuardState(cwd)):
-        verdict = (_unparsed_delete_verdict(payload, context) if kind == 'opaque'
-                   else judge(payload, context))
-        if verdict is not None:
-            return verdict
+    try:
+        for kind, payload, context in _delete_events(
+                items, _DeleteGuardState(cwd, environment)):
+            verdict = (_unparsed_delete_verdict(payload, context) if kind == 'opaque'
+                       else judge(payload, context))
+            if verdict is not None:
+                return verdict
+    except _RecursiveFunction as recursion:
+        if _could_run_delete(command):
+            return (recursion.name, 'unproven',
+                    f'shell function {recursion.name} calls itself and this '
+                    'guard does not follow recursion; run the delete as its '
+                    'own command with a literal path')
     return None
 
 
-def resolve_delete_targets(command, cwd=None):
+def resolve_delete_targets(command, cwd=None, *, environment=os.environ):
     """Resolve every rm/rmdir/unlink operand to absolute candidate paths.
 
     Returns a list of ``(operand_text, [absolute candidates], unproven_names)``
@@ -4056,6 +4572,7 @@ def resolve_delete_targets(command, cwd=None):
     shell text that cannot be resolved. This is the shared operand resolver:
     the catastrophic-depth guard and the desktop agent's share-root
     containment judge the SAME resolved targets instead of re-parsing.
+    *environment* is the one :func:`_catastrophic_delete_detail` takes.
     """
     if not command or not command.strip():
         return []
@@ -4067,31 +4584,38 @@ def resolve_delete_targets(command, cwd=None):
         return [(_unparsed_excerpt(command, error), None, {'<opaque>'})]
     home = os.path.expanduser('~')
     resolved_targets = []
-    for kind, payload, context in _delete_events(items, _DeleteGuardState(cwd)):
-        if kind == 'opaque':
+    try:
+        for kind, payload, context in _delete_events(
+                items, _DeleteGuardState(cwd, environment)):
             resolved_targets.append(
-                (_unparsed_excerpt(payload, context), None, {'<opaque>'}))
-            continue
-        state = context
-        expanded = _expand_delete_operand(
-            payload, state.get_value, state.cwds, home)
-        if expanded is None:
-            resolved_targets.append((payload, None, {'<opaque>'}))
-            continue
-        candidates, unproven = expanded
-        paths = []
-        for candidate in candidates:
-            text = candidate[:-len('\x00glob')] \
-                if candidate.endswith('\x00glob') else candidate
-            if not text:
-                continue
-            if os.path.isabs(text):
-                paths.append(os.path.normpath(text))
-            else:
-                paths.extend(os.path.normpath(os.path.join(base, text))
-                             for base in state.cwds)
-        resolved_targets.append((payload, paths, unproven))
+                (_unparsed_excerpt(payload, context), None, {'<opaque>'})
+                if kind == 'opaque' else _resolved_target(payload, context, home))
+    except _RecursiveFunction as recursion:
+        if _could_run_delete(command):
+            resolved_targets.append((recursion.name, None, {'<opaque>'}))
     return resolved_targets
+
+
+def _resolved_target(operand, state, home):
+    """``(operand, absolute candidates, unproven names)`` of one operand."""
+    try:
+        expanded = _expand_delete_operand(operand, state, home)
+    except _EnvironmentDeferred:
+        expanded = None
+    if expanded is None:
+        return operand, None, {'<opaque>'}
+    paths = []
+    for candidate in expanded.candidates:
+        text = candidate[:-len('\x00glob')] \
+            if candidate.endswith('\x00glob') else candidate
+        if not text:
+            continue
+        if os.path.isabs(text):
+            paths.append(os.path.normpath(text))
+        else:
+            paths.extend(os.path.normpath(os.path.join(base, text))
+                         for base in state.cwds)
+    return operand, paths, expanded.unproven
 
 
 _DELETE_REFUSAL_MESSAGES = {
@@ -4118,7 +4642,7 @@ def delete_refusal_message(detail):
     return f'Command blocked for safety: {lead} {target!r} — {why}.'
 
 
-def _is_catastrophic_delete(command, cwd=None):
+def _is_catastrophic_delete(command, cwd=None, *, environment=os.environ):
     """Return the offending path if *command* deletes a forbidden target.
 
     Three independent rules; any one rejects:
@@ -4146,8 +4670,11 @@ def _is_catastrophic_delete(command, cwd=None):
     heredoc bodies, quoted strings and Git pathspecs are data, while ( … )
     groups, command/process substitutions and text a shell executes (stdin
     heredocs of ``bash``/``| sh``, ``sh -c`` strings) are judged as commands.
-    Literal in-command bindings and ``cd`` hops are tracked per shell, and
-    an unproven variable is judged as possibly EMPTY (the
+    Literal in-command bindings, ``cd`` hops and function definitions are
+    tracked per shell along the command's control flow (a branch, loop or
+    function body that may not run never replaces a value), a variable the
+    command never binds takes its value from the starting *environment*,
+    and an unproven variable is judged as possibly EMPTY (the
     ``rm -rf "$UNSET/"`` collapse). The program a command runs is read
     through :func:`_program_views`, the view the dangerous-command guard
     reads: assignment prefixes, wrappers (``sudo``/``doas``, ``env``,
@@ -4158,7 +4685,7 @@ def _is_catastrophic_delete(command, cwd=None):
     options are not understood, are refused only when they could run a
     delete command.
     """
-    detail = _catastrophic_delete_detail(command, cwd=cwd)
+    detail = _catastrophic_delete_detail(command, cwd=cwd, environment=environment)
     return detail[0] if detail else None
 
 

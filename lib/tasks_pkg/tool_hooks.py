@@ -309,12 +309,14 @@ def _run_command_safety_hook(tool_name: str, args: dict,
     # mrltpk1t43e0mw). Delegate to the argument-parsing depth/workspace guard
     # that run_command itself uses, so only a genuine root-ish delete (``/``,
     # ``/mnt``, ``~``, ``/*``) is refused while ``/tmp/scoped/path`` passes.
-    # The hook runs without a known cwd: the guard's anchor/containment rules
-    # that need one defer to the executor's cwd-aware pass (run_command.py).
+    # The hook knows neither the command's cwd nor the environment its shell
+    # starts with: the anchor/containment rules that need a cwd, and every
+    # operand that reads a variable the command does not bind, defer to the
+    # executor's pass (run_command.py), which judges with both.
     try:
         from lib.project_mod.command_analysis import (
             _catastrophic_delete_detail, delete_refusal_message)
-        _bad = _catastrophic_delete_detail(command)
+        _bad = _catastrophic_delete_detail(command, environment=None)
     except Exception as e:
         from lib.project_mod.command_log import command_log_fields
         logger.debug('[Hooks] catastrophic-delete parse failed %s: %s',

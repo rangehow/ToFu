@@ -39,6 +39,10 @@ from collections.abc import Mapping
 import os
 import posixpath
 
+from lib.log import get_logger
+
+logger = get_logger(__name__)
+
 SAFE_CLASSES = frozenset({'read_only', 'idempotent', 'verifiable'})
 
 # Git subcommands that write only the worktree, its index and the checked-out
@@ -172,6 +176,7 @@ def _segment_classes(command, cwd: str, worktree: str) -> list[str]:
             verdict, cwd = _segment_class(segment, cwd, worktree)
             classes.append(verdict)
     except Exception:
+        logger.debug('restart-cut command classification refused by the parser', exc_info=True)
         return ['unknown']  # A parser refusal proves nothing.
     return classes
 

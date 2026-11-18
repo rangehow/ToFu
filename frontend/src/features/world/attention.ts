@@ -53,7 +53,8 @@ export function openQuestions(conversationId: string, turns: ReadonlyArray<Quest
       const answered = blocking
         ? round.status !== 'awaiting_human'
         : turns.some(later => later.actor === 'human' && later.ordinal > turn.ordinal);
-      if (answered) continue;
+      // A lead withdrew it once the conversation settled it (the owner-question index omits it too).
+      if (answered || round.guidanceWithdrawn) continue;
       open.push({
         conversationId, turnId: turn.turnId, ordinal: turn.ordinal, blocking, question, createdAt: turn.createdAt,
         guidanceId: typeof round.guidanceId === 'string' ? round.guidanceId : `${turn.turnId}:${open.length}`,

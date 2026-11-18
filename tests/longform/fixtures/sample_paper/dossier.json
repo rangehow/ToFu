@@ -1,0 +1,158 @@
+{
+  "bib": "references.bib",
+  "facts": [
+    {
+      "id": "setup",
+      "kind": "background",
+      "status": "sourced",
+      "text": "All runs train GPT-2 small (124M parameters) on 10B tokens of OpenWebText with AdamW and identical hyperparameters.",
+      "source": {
+        "path": "results/summary.json"
+      }
+    },
+    {
+      "id": "stale",
+      "kind": "result",
+      "status": "sourced",
+      "text": "Stale-update fraction for round-to-nearest BF16 updates: 18.2% at step 1000, 44.7% at step 5000, 61.5% at step 20000; stochastic rounding: 0.0% at every step.",
+      "source": {
+        "path": "results/stale_updates.csv"
+      }
+    },
+    {
+      "id": "predictor",
+      "kind": "result",
+      "status": "sourced",
+      "text": "The half-ulp test (update magnitude below half a BF16 ulp of the weight) identifies stale updates with precision 0.98 and recall 0.96; selecting the top 8.7% of gradient norms reaches precision 0.41 and recall 0.37.",
+      "source": {
+        "path": "results/staleness_predictor.csv"
+      }
+    },
+    {
+      "id": "selective",
+      "kind": "result",
+      "status": "sourced",
+      "text": "Validation loss: stochastic rounding everywhere 3.124; stochastic rounding only on the 8.7% of parameters flagged by the half-ulp test 3.125; the same 8.7% chosen at random 3.171. Random bits drawn relative to rounding everywhere: 0.087.",
+      "source": {
+        "path": "results/selective.csv"
+      }
+    },
+    {
+      "id": "loss",
+      "kind": "result",
+      "status": "sourced",
+      "text": "Validation loss after 10B tokens: FP32 master weights 3.112, BF16 round-to-nearest update 3.205, BF16 stochastic-rounded update 3.124 (perplexity 22.47, 24.66 and 22.74).",
+      "source": {
+        "path": "results/main_results.csv"
+      }
+    },
+    {
+      "id": "acc",
+      "kind": "result",
+      "status": "sourced",
+      "text": "Average zero-shot accuracy: FP32 master weights 41.8, BF16 round-to-nearest 39.2, BF16 stochastic-rounded 41.3.",
+      "source": {
+        "path": "results/main_results.csv"
+      }
+    },
+    {
+      "id": "memory",
+      "kind": "result",
+      "status": "sourced",
+      "text": "Optimizer state per parameter: 12 bytes with FP32 master weights, 8 bytes with BF16 stochastic-rounded updates.",
+      "source": {
+        "path": "results/summary.json"
+      }
+    },
+    {
+      "id": "mechanism",
+      "kind": "contribution",
+      "status": "sourced",
+      "text": "Pure BF16 training stalls because updates smaller than half a BF16 ulp round back to the old weight: 61.5% of updates are stale by step 20000, and the half-ulp test predicts them with precision 0.98 and recall 0.96.",
+      "source": {
+        "path": [
+          "results/stale_updates.csv",
+          "results/staleness_predictor.csv"
+        ]
+      },
+      "evidence": [
+        "stale",
+        "predictor"
+      ]
+    },
+    {
+      "id": "c_selective",
+      "kind": "contribution",
+      "status": "sourced",
+      "text": "Stochastically rounding only the 8.7% of parameters that fail the half-ulp test matches stochastic rounding everywhere (validation loss 3.125 versus 3.124) with 0.087 of the random bits, while a random 8.7% reaches only 3.171.",
+      "source": {
+        "path": [
+          "results/selective.csv",
+          "results/staleness_predictor.csv"
+        ]
+      },
+      "evidence": [
+        "selective",
+        "predictor"
+      ]
+    },
+    {
+      "id": "c_match",
+      "kind": "contribution",
+      "status": "sourced",
+      "text": "BF16 training with stochastically rounded updates and no FP32 master copy matches FP32 master-weight training: validation loss 3.124 versus 3.112, a 0.39% gap.",
+      "source": {
+        "path": "results/summary.json"
+      },
+      "evidence": [
+        "loss",
+        "fig:loss"
+      ]
+    },
+    {
+      "id": "c_recover",
+      "kind": "contribution",
+      "status": "sourced",
+      "text": "It recovers 2.1 of the 2.6 accuracy points that round-to-nearest BF16 updates lose.",
+      "source": {
+        "path": "results/summary.json"
+      },
+      "evidence": [
+        "acc"
+      ]
+    },
+    {
+      "id": "c_memory",
+      "kind": "contribution",
+      "status": "sourced",
+      "text": "Removing the FP32 master copy cuts optimizer-state memory from 12 to 8 bytes per parameter, a 33.3% saving.",
+      "source": {
+        "path": "results/summary.json"
+      },
+      "evidence": [
+        "memory"
+      ]
+    },
+    {
+      "id": "c_scale",
+      "kind": "claim",
+      "status": "sourced",
+      "text": "The half-ulp test keeps its parity with FP32 at 1B parameters and beyond.",
+      "source": {
+        "path": "results/summary.json"
+      },
+      "evidence": []
+    }
+  ],
+  "figures": [
+    {
+      "label": "fig:loss",
+      "file": "figures/loss_curve.pdf",
+      "caption": "Validation loss during training. Stochastically rounding the BF16 update tracks FP32 master weights; round-to-nearest updates stall.",
+      "supports": [
+        "loss",
+        "c_match"
+      ]
+    }
+  ]
+}

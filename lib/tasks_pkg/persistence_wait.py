@@ -178,6 +178,23 @@ def _announce_slow_event_barrier(task: dict, *, checkpoint: str, round_num: int,
 # A ``ready`` boundary whose events the pre-request boundary awaits:
 # (round, accepted position at the ready boundary).
 _DEFERRED_READY_KEY = '_invocationReadyEventsThrough'
+_STATE_EVIDENCE_TAIL_KEY = '_invocationStateEvidenceTail'
+
+
+def mark_state_evidence_tail(task: dict, before: int, after: int) -> None:
+    """Lane positions around the post-tool state snapshot just accepted.
+
+    A ``ready`` round end whose accepted events end exactly there defers its
+    barrier through ``before``: the snapshot is Request Inspector evidence,
+    which (owner decision 2026-10-28) never blocks a paid request, and its
+    delivery heads its own storage run, so the receipts before it commit
+    without its bytes. It still persists in FIFO order; the next
+    ``tools_in_flight`` or terminal barrier covers it.
+    """
+    if after == before + 1:
+        task[_STATE_EVIDENCE_TAIL_KEY] = (before, after)
+    else:
+        task.pop(_STATE_EVIDENCE_TAIL_KEY, None)
 
 
 def checkpoint_invocation(task: dict, messages: list, round_num: int, *, phase: str,
@@ -212,8 +229,12 @@ def checkpoint_invocation(task: dict, messages: list, round_num: int, *, phase: 
     if phase == 'ready' and is_child_invocation(task):
         await_events = False
     deferred = task.pop(_DEFERRED_READY_KEY, None)
+    evidence_tail = task.pop(_STATE_EVIDENCE_TAIL_KEY, None)
     if await_events and defer_events and not callable(sink):
-        task[_DEFERRED_READY_KEY] = (round_num, task_event_position(task))
+        through = task_event_position(task)
+        if phase == 'ready' and evidence_tail is not None and evidence_tail[1] == through:
+            through = evidence_tail[0]
+        task[_DEFERRED_READY_KEY] = (round_num, through)
         return 0
     awaited = 0
     if deferred is not None and not await_events:

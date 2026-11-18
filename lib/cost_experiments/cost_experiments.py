@@ -296,10 +296,12 @@ def _load_cached_cost_experiment_config() -> dict:
     try:
         mtime_ns = os.stat(path).st_mtime_ns
     except OSError as exc:
-        # Missing/unreadable file means "no experiment"; never let a stat
-        # hiccup break the chat hot path.
+        # A stat racing a replace can miss an existing file; read_json
+        # decides absence under the writers' lock. Never cache that answer.
         logger.debug('[CostExperiment] server_config stat failed: %s', exc)
-        return normalize_cost_experiment_config({})
+        saved = read_json(path, default={})
+        return normalize_cost_experiment_config(
+            saved.get('cost_experiment') if isinstance(saved, dict) else {})
     with _CONFIG_CACHE_LOCK:
         cached = _CONFIG_CACHE
         if cached['mtime_ns'] == mtime_ns and cached['config'] is not None:
@@ -320,7 +322,7 @@ def load_cost_experiment_config() -> dict:
 
 def _compiled_cost_application(spec: dict):
     """Return a generation-aware application plan for the turn hot path."""
-    providers = experiment_registry()
+    providers = experiment_registry(discover=False)
     key = (str(spec.get('specDigest') or ''), providers.generation)
     with _APPLICATION_CACHE_LOCK:
         if (_APPLICATION_CACHE['key'] == key

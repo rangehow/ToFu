@@ -80,7 +80,12 @@ def _live_turn_records(task: dict[str, Any], reads: Any = None) -> list[dict[str
     if isinstance(view, tuple) and view[0] == revision:
         return view[1]
     written = executor_written_steers(task)
-    if written is not None and written[0] == revision:
+    # The executor's last write is a revision-fenced update, so its records
+    # hold every steer committed up to that revision: they answer a head read
+    # at it or before it (the round's reads may be sent before the round's
+    # deferred events land). Only a later revision is another writer's.
+    if (written is not None and isinstance(revision, int)
+            and not isinstance(revision, bool) and written[0] >= revision):
         records = written[1]
     else:
         turn = get_turn(conversation_id, turn_id, user_id=owner)

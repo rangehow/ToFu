@@ -119,8 +119,13 @@ from the original policy, with no spend ceiling or deadline. Stalled turns retry
 with backoff before a blocked report; `request_decision` keeps a request open and
 applies the recommendation when the human stays silent. Timed wakes are a
 process-local reminder over durable due times; startup/settlement recovery is the
-authority. No synthetic human, durable scheduler or new task store. Verify
-continuation race/Stop/backoff/decision tests and the native Coordinator journey.
+authority. A wake refused `lane_busy` waits for the refusing Turn's settlement
+drain (`hold_lane`), a final authority verdict settles the request once
+(`authority_ended`), and a results wake the lane's last completed Turn was
+already told about waits for its request's next settlement (`observe_turn_end`).
+No synthetic human, durable scheduler or new task store. Verify
+continuation race/Stop/backoff/decision tests, `test_coordinator_wake_lane_events.py`
+and the native Coordinator journey.
 
 `pending_wakes.py` keeps only the obligation to run a recovery pass again when one
 could not complete (`source:`, `recipient:`, `dependents:`, `project` entries in the

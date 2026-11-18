@@ -154,6 +154,13 @@ def start_shutdown_hard_deadline(
         _shutdown_timing_to_stderr(
             'graceful shutdown exceeded %.1fs hard deadline; forcing exit'
             % delay)
+        # The stacks name what held exit; the 2026-11-18 07:16 overrun left
+        # only the line above, the logger below being the stuck part itself.
+        try:
+            import faulthandler
+            faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+        except (OSError, ValueError, RuntimeError):
+            pass
         log.critical(
             '[Server] Graceful shutdown exceeded %.1fs hard deadline; '
             'forcing process exit so the supervisor can restore service.',

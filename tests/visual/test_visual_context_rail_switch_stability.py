@@ -74,12 +74,15 @@ def _seed(context, origin, cid, rounds, huge_last_reply=False):
                create=index == 0)
         segments, rounds_ = [], []
         if huge_last_reply and index == rounds - 1:
-            # Large enough that the byte-budgeted first page holds only this reply.
+            # Large enough that the byte-budgeted first page holds only this reply:
+            # above the budget of the whole 1680x1000 viewport (~2.2 MiB,
+            # conversation-load-budget.ts), so pane-layout changes cannot re-admit
+            # the round's input Turn to the first page.
             for step in range(120):
                 identity = {'llmRound': step, 'attemptId': 'attempt', 'taskId': 'task'}
                 record = {**identity, 'roundNum': step + 1, 'toolCallId': f'call-{step}',
                           'toolName': 'read_files', 'status': 'done', 'toolArgs': {'path': 'x.txt'},
-                          'toolContent': 'Synthetic historical result ' * 200}
+                          'toolContent': 'Synthetic historical result ' * 400}
                 rounds_.append(record)
                 segments += [
                     {'type': 'thinking', 'blockId': f'thinking-{step}', 'text': 'thought ' * 50, **identity},

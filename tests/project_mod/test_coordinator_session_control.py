@@ -443,3 +443,98 @@ def test_a_nonhuman_wake_follows_up_its_workers_once_the_owner_message_reaches_i
     assert result['assignment_id'] == row['id'] and result['turn']['turnId'] == 'follow-up-turn'
     [(conv, body)] = created
     assert conv == worker['conversation_id'] and args['instruction'] in body['inputTurn']['content']
+
+
+def test_hold_then_resume_keeps_the_assignment_and_grant_and_the_worker_completes(worker_runtime, monkeypatch):
+    """A lead's hold stops the exact Attempt without withdrawing the grant (never the Stop
+    path); resume continues the held Turn with its settlement's resume option under the same
+    assignment and grant revision, and the Worker then completes for review."""
+    from lib.project_dispatch.admission import TrustedDispatch
+    from lib.project_dispatch.continuation import worker_phase, worker_summaries
+    from lib import turn_lifecycle
+    from lib.conversation_sync import runtime
+    r = worker_runtime
+    worker = r.call('delegate_project_work', **r.args)
+    row = r.c.repo.read(worker['assignment_id'])
+    execution = row['execution']
+    trusted = TrustedDispatch(r.c.repo.admission(row['id']))
+    r.attempts[execution['attemptId']].update(status='running', config=trusted.capture(
+        {}, 7, trusted.principal, worker['conversation_id']))
+    r.turns[execution['turnId']].update(currentAttemptId=execution['attemptId'], projectionRevision=3,
+                                        status='running')
+    monkeypatch.setattr(turn_lifecycle, 'get_turn', r.c.repo.turn_get)
+    monkeypatch.setattr(turn_lifecycle, 'get_attempt', r.c.repo.attempt_get)
+    calls = []
+    anchor = {'type': 'tool_checkpoint', 'keptToolRounds': 2}
+
+    class Commands:
+        def hold_project_attempt(self, attempt_id, owner, *, provenance):
+            calls.append(('hold', attempt_id, provenance))
+            # The executor settles the Turn interrupted with cause lead_hold.
+            r.attempts[attempt_id]['status'] = 'interrupted'
+            r.turns[execution['turnId']].update(status='interrupted', projectionRevision=4, settlement={
+                'cause': 'lead_hold', 'resumeOptions': [
+                    {'operation': 'checkpoint_resume', 'anchor': anchor},
+                    {'operation': 'regenerate', 'anchor': {'type': 'turn_start'}}]})
+            return SimpleNamespace(value={'attemptId': attempt_id, 'status': 'abort_signaled'})
+
+        def abort_attempt(self, *args, **kwargs):
+            pytest.fail('A hold never takes the Stop path, which withdraws the dispatch grant')
+
+        def create_attempt(self, conv, turn_id, owner, body, **kwargs):
+            calls.append(('resume', body['operation'], body.get('resumeAnchor')))
+            r.attempts['resumed'] = {'conversationId': conv, 'turnId': turn_id, 'attemptId': 'resumed',
+                                     'taskId': '', 'status': 'running', 'commandId': body['commandId']}
+            r.turns[turn_id].update(currentAttemptId='resumed', status='running')
+            kwargs['trusted_dispatch'].continue_execution(turn_id, 'resumed')
+            return SimpleNamespace(value={'turn': r.turns[turn_id], 'attempt': r.attempts['resumed']})
+
+    monkeypatch.setattr(runtime, 'conversation_turn_commands', Commands())
+    session = dict(conversation_id=worker['conversation_id'], turn_id=execution['turnId'])
+    held = r.call('control_conversation', action='hold', attempt_id=execution['attemptId'],
+                  idempotency_key='hold', **session)
+    assert 'error' not in held, held
+    assert calls[0][:2] == ('hold', execution['attemptId']) and 'coordinator' in calls[0][2]
+    [summary] = worker_summaries(r.c.repo, [r.c.repo.read(row['id'])])
+    assert (summary['status'], worker_phase(summary)) == ('held', 'on_hold')
+    assert r.c.repo.read(row['id'])['grant'] == row['grant']
+    resumed = r.call('control_conversation', action='resume', attempt_id=execution['attemptId'],
+                     expected_revision=4, idempotency_key='resume', **session)
+    assert 'error' not in resumed and resumed['action'] == 'resume', resumed
+    assert calls[1] == ('resume', 'checkpoint_resume', anchor)
+    after = r.c.repo.read(row['id'])
+    assert after['grant'] == row['grant'] and after['execution']['attemptId'] == 'resumed'
+    r.attempts['resumed']['status'] = 'completed'
+    [summary] = worker_summaries(r.c.repo, [after])
+    assert (summary['status'], worker_phase(summary)) == ('completed', 'needs_review')
+
+
+@pytest.mark.parametrize('action', ['hold', 'resume'])
+def test_hold_and_resume_refuse_a_session_no_lead_dispatched(sessions, action):
+    sessions.attempts['original']['status'] = 'running' if action == 'hold' else 'interrupted'
+    sessions.turn['settlement']['cause'] = 'lead_hold'
+    with pytest.raises(PermissionError, match='Worker session a lead dispatched'):
+        sessions.control(action=action)
+    assert not sessions.calls
+
+
+def test_resume_refuses_a_turn_no_lead_held(worker_runtime, monkeypatch):
+    """A restart- or person-interrupted Turn keeps its own resume operations; resume is the hold's pair."""
+    from lib.project_dispatch.admission import TrustedDispatch
+    from lib import turn_lifecycle
+    r = worker_runtime
+    worker = r.call('delegate_project_work', **r.args)
+    row = r.c.repo.read(worker['assignment_id'])
+    execution = row['execution']
+    trusted = TrustedDispatch(r.c.repo.admission(row['id']))
+    r.attempts[execution['attemptId']].update(status='interrupted', config=trusted.capture(
+        {}, 7, trusted.principal, worker['conversation_id']))
+    r.turns[execution['turnId']].update(currentAttemptId=execution['attemptId'], projectionRevision=3,
+                                        status='interrupted', settlement={'cause': 'user_abort', 'resumeOptions': [
+                                            {'operation': 'continue', 'anchor': {'type': 'replay_only'}}]})
+    monkeypatch.setattr(turn_lifecycle, 'get_turn', r.c.repo.turn_get)
+    monkeypatch.setattr(turn_lifecycle, 'get_attempt', r.c.repo.attempt_get)
+    refused = r.call('control_conversation', action='resume', conversation_id=worker['conversation_id'],
+                     turn_id=execution['turnId'], attempt_id=execution['attemptId'], expected_revision=3,
+                     idempotency_key='resume')
+    assert 'resume continues a Worker a lead held' in refused['error'], refused

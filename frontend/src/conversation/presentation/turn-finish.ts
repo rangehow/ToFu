@@ -9,7 +9,7 @@ export type ResumeOption = Omit<Partial<TurnResumeOption>, 'operation'> & {
 
 export interface TurnFinishPresentation {
   tone: 'success' | 'warning' | 'error';
-  label: 'Completed' | 'Interrupted' | 'Truncated' | 'Refused' | 'Failed';
+  label: 'Completed' | 'Interrupted' | 'Held' | 'Truncated' | 'Refused' | 'Failed';
   detail: string;
   errorKind?: string;
   retryable?: boolean;
@@ -75,6 +75,16 @@ export function presentTurnFinish(
   const settlement = turn.settlement ?? {};
   if (turn.status === 'completed') {
     return { tone: 'success', label: 'Completed', detail: '' };
+  }
+  if (turn.status === 'interrupted' && settlement.cause === 'lead_hold') {
+    /* A project lead paused this Worker and keeps its grant (`lib/turn_verdict`
+     * LEAD_HOLD); the lead resumes it, so it is not a failure or a Stop. */
+    return {
+      tone: 'warning',
+      label: 'Held',
+      detail: 'paused by its project lead',
+      resumeOptions: resumeTurnOptions(turn),
+    };
   }
   if (turn.status === 'interrupted') {
     /* Recovery explains an interruption it will not continue by itself (a

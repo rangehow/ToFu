@@ -202,7 +202,7 @@ def test_slow_prefetched_read_attributes_its_wall_time(clock, tmp_path, monkeypa
     (tmp_path / 'notes.txt').write_text('private-file-content\n')
     steps = {(coordinator_policy, 'coordinator_scope'): 0.5,
              (workspace_delivery, 'route_project_tool_args'): 1,
-             (project_guidance, 'read_scoped_guidance'): 2,
+             (project_guidance, 'resolved_scoped_guidance'): 2,
              (file_snapshot, 'read_project_snapshot'): 3,
              (read_tools, '_extract_symbols'): 4}
     for (owner, name), seconds in steps.items():
@@ -254,8 +254,8 @@ def test_slow_prefetched_search_and_find_share_admission_phases(
     (tmp_path / 'AGENTS.md').write_text('private-rule-content')
     (tmp_path / 'notes.txt').write_text('private-file-content\n')
     seconds = TOOL_EXECUTION_BUDGETS_MS[name] / 1000 + 1
-    monkeypatch.setattr(project_guidance, 'read_scoped_guidance',
-                        _slow(clock, seconds, project_guidance.read_scoped_guidance))
+    monkeypatch.setattr(project_guidance, 'resolved_scoped_guidance',
+                        _slow(clock, seconds, project_guidance.resolved_scoped_guidance))
     task = _project_task(tmp_path, f'prefetch-{name}-task')
     with caplog.at_level(logging.WARNING, logger=timing.logger.name):
         _prefetch(task, tmp_path, name, arguments, f'call-{name}')

@@ -827,22 +827,33 @@ class StorageV2Session:
             correlation, command_id=command_id,
             read_frame=lambda before_payload: recv_frame(self._sock, before_payload=before_payload))
 
-    def request_many(
+    def send_many(
         self,
         requests: Iterable[tuple[str, dict[str, Any] | None]],
         *,
         deadline_unix_ms: int,
-    ) -> list[StorageV2Response | None]:
-        """Pipelined queries: each response is read only after every request is sent.
+    ) -> Any:
+        """The send half of ``request_many``; ``.receive()`` on the result reads it.
 
-        The daemon serves a session's frames in order, so responses arrive in
-        request order and each is validated exactly as ``request`` validates
-        one. Requests go out in segments that fit this socket's send buffer:
-        a send never waits for a peer that is itself waiting for its responses
-        to be read. A request whose payload needs a streamed upload is not
-        sent: its element is ``None``, and the caller sends it alone with
-        ``request``.
+        Only an exchange whose requests all fit one send segment and need no
+        streamed upload splits (then a send never waits on the peer); for any
+        other this sends nothing and returns None. Between the halves the
+        session carries the exchange and serves nothing else.
         """
+        frames, slots = self._request_frames(requests, deadline_unix_ms)
+        send_capacity = self._sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
+        if (not frames or None in slots
+                or sum(len(frame) for _, frame in frames) > send_capacity):
+            return None
+        self._sock.sendall(b"".join(frame for _, frame in frames))
+        session = self
+
+        class _Pending:
+            def receive(self) -> list[StorageV2Response]:
+                return session._receive_many(frames)
+        return _Pending()
+
+    def _request_frames(self, requests, deadline_unix_ms):
         frames, slots = [], []
         for operation, payload in requests:
             payload_bytes = _payload_bytes(payload if payload is not None else {})
@@ -863,6 +874,37 @@ class StorageV2Session:
                 FIELD_OPERATION: operation,
                 FIELD_PAYLOAD: payload_bytes,
             }))))
+        return frames, slots
+
+    def _receive_many(self, frames) -> list[StorageV2Response]:
+        from ._frame_body import ReceiveBuffer
+        received = ReceiveBuffer(self._sock, _closed_receive)
+        responses = [self._receive_response(
+            correlation, command_id=None,
+            read_frame=lambda before_payload: _recv_frame(
+                received.read_exact, before_payload=before_payload))
+            for correlation, _ in frames]
+        if not received.drained:
+            raise StorageV2ProtocolError("storage.v2 peer sent bytes after the pipelined responses")
+        return responses
+
+    def request_many(
+        self,
+        requests: Iterable[tuple[str, dict[str, Any] | None]],
+        *,
+        deadline_unix_ms: int,
+    ) -> list[StorageV2Response | None]:
+        """Pipelined queries: each response is read only after every request is sent.
+
+        The daemon serves a session's frames in order, so responses arrive in
+        request order and each is validated exactly as ``request`` validates
+        one. Requests go out in segments that fit this socket's send buffer:
+        a send never waits for a peer that is itself waiting for its responses
+        to be read. A request whose payload needs a streamed upload is not
+        sent: its element is ``None``, and the caller sends it alone with
+        ``request``.
+        """
+        frames, slots = self._request_frames(requests, deadline_unix_ms)
         from ._frame_body import ReceiveBuffer
         received = ReceiveBuffer(self._sock, _closed_receive)
         send_capacity = self._sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)

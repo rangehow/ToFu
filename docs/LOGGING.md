@@ -127,7 +127,21 @@ A descriptor whose file a peer's retention already unlinked is stale too: the
 FUSE mount fails its `fstat` with ENOENT, which once escaped to `handleError`
 and dropped the record (57 `--- Logging error ---` reports on 2026-11-17 from
 writers idle across a peer's rollover and pruning); the writer now reopens
-the path. A rollover keeps the outgoing file locked until its successor is open. File
+the path. A rollover keeps the outgoing file locked until its successor is open.
+A `flock` belongs to the open file description, and closing one descriptor of a
+description another process still holds keeps the lock: a writer unlocks every
+file before closing it, and a forked child drops the descriptions it inherited
+and opens its own (`os.register_at_fork`). The execution shard fork server
+opens these files at `import server`; its shards shared that description, so
+a shard's rollover left the outgoing `app.log` locked while the fork server
+lived and the API host blocked on its next record (silent from 2026-11-18
+06:08:43 until the 07:16 restart). If a listener sink still wedges, the bounded
+listener stop removes that sink from `logging.shutdown`'s exit flush, so the
+process still exits (next to the drain contract in
+[infra_runtime](modules/infra_runtime.md), "Exit after the lifespan"). Specs:
+`tests/server/test_logging_shared_rotation.py`
+(`test_a_forked_writer_never_leaves_a_rolled_file_locked`),
+`tests/server/test_logging_nonblocking_queue.py`. File
 names, policies and readers are unchanged; platforms without `fcntl` keep the
 stock handlers. Files damaged before the fix are left as they are. The native
 storage host is a third writer of `app.log`, `error.log` and `incident.jsonl`
@@ -636,6 +650,7 @@ and `kind`:
 | `round_prep_timing` | `round_prep_timing.finish_round_prep`, every lead `[RoundPrepTiming]` record | the record itself |
 | `owner_delegation_action` | `lifecycle_approval`, each delegated action the owner's "Act for me" grant covers (every scope, `lead_authority` included): its acceptance, a refusal recorded under a grant, and each settlement | `actionId`, `scope`, `action` (the settled lead tool, else the target's action/kind), `actor` (the acting lead conversation), `actorTurn`, `trigger` (kind, Turn ids such as `triggerTurnId` of the waking input, `source`: how that input arrived; never the owner's quoted words), `target`, `grantRevision`, `outcome` (accepted/refused/restarting/completed/failed), `code`, `detail` |
 | `restart_outcome` | `server_manager.LifecycleManager._settle_restart` (`outcome` refused/retrying/deferred/spawned/paused with the `lastRestart` fields), its first readiness (`outcome=ready`, `bootSeconds`, `secondsSinceRequest`), and `serverctl restart` (`cli_succeeded`/`cli_failed`, `stage`, `message`) | as listed |
+| `model_switch` | `tasks_pkg.llm_fallback._switch`, each model switch of a project Worker: a `content_filter`/availability fallback and the next round's return to the primary (docs/contracts/TURN_SETTLEMENT.md) | `task`, `conv`, `turn`, `direction` (`fallback`/`primary`), `from`, `to`, `round`, `reason` |
 
 Lead conversations are `coordinator-*` (Project and Global Routers, Router
 Watchdog). Growth measured by replaying the retained logs of 2026-11-17 15:25

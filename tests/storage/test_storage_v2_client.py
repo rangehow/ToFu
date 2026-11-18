@@ -165,6 +165,82 @@ def test_query_many_rereads_every_read_after_a_failed_exchange() -> None:
     assert _FakeSession.calls == 3
 
 
+class _SplitSession(_FakeSession):
+    """Adds the send half; ``receive`` pops the scripted answers like request_many."""
+
+    sends: int = 0
+
+    def send_many(self, requests, *, deadline_unix_ms):
+        type(self).sends += 1
+        session = self
+
+        class Pending:
+            def receive(self):
+                return session.request_many(requests, deadline_unix_ms=deadline_unix_ms)
+        return Pending()
+
+
+def test_send_query_many_answers_exactly_as_query_many(monkeypatch) -> None:
+    monkeypatch.setattr(v2_module, 'StorageV2Session', _SplitSession)
+    _SplitSession.sends = 0
+    scripted = [[_FakeResponse(0, b'{"n": 1}'),
+                 _FakeResponse(503, b'', 'database_busy', 'busy', True),
+                 _FakeResponse(400, b'', 'database_protocol_error', 'bad read', False)],
+                _FakeResponse(0, b'{"n": 2}')]
+    reads = [('record.get', {'namespace': 'n', 'key': str(index)}) for index in range(3)]
+    _FakeSession.responses = list(scripted)
+    client = _client()
+    pending = client.send_query_many(reads, deadline=5.0)
+    assert _SplitSession.sends == 1 and _FakeSession.calls == 0  # sent, not yet read
+    split = pending.answers()
+    _FakeSession.responses = list(scripted)
+    whole = _client().query_many(reads, deadline=5.0)
+    assert [type(o) for o in split] == [type(o) for o in whole]
+    assert split[:2] == whole[:2] == [{'n': 1}, {'n': 2}]
+    assert split[2].code == whole[2].code == 'database_protocol_error'
+    # The session went back to the pool aligned and serves the next read.
+    _FakeSession.responses = [_FakeResponse(0, b'{"n": 9}')]
+    constructed = _FakeSession.constructed
+    assert client.query('record.get', {'namespace': 'n', 'key': '9'}) == {'n': 9}
+    assert _FakeSession.constructed == constructed
+
+
+def test_an_unread_sent_exchange_retires_its_session(monkeypatch) -> None:
+    import gc
+    monkeypatch.setattr(v2_module, 'StorageV2Session', _SplitSession)
+    client = _client()
+    retired = []
+    monkeypatch.setattr(client._pool, 'release',
+                        lambda session, *, broken: retired.append(broken))
+    pending = client.send_query_many([('record.get', {'key': 'a'}), ('record.get', {'key': 'b'})])
+    del pending
+    gc.collect()
+    assert retired == [True]
+
+
+def test_a_discarded_sent_exchange_reads_its_answers_and_keeps_its_session(monkeypatch) -> None:
+    import gc
+    monkeypatch.setattr(v2_module, 'StorageV2Session', _SplitSession)
+    client = _client()
+    released = []
+    release = client._pool.release
+    monkeypatch.setattr(client._pool, 'release', lambda session, *, broken: (
+        released.append(broken), release(session, broken=broken)))
+    _FakeSession.responses = [[_FakeResponse(0, b'{"n": 1}'), _FakeResponse(0, b'{"n": 2}')]]
+    pending = client.send_query_many([('record.get', {'key': 'a'}), ('record.get', {'key': 'b'})])
+    pending.discard()
+    del pending
+    gc.collect()
+    assert released == [False] and _FakeSession.responses == []
+
+
+def test_a_session_without_a_send_half_declines_and_stays_pooled() -> None:
+    client = _client()
+    assert client.send_query_many([('record.get', {'key': 'a'}), ('record.get', {'key': 'b'})]) is None
+    assert client.send_query_many([('record.get', {'key': 'a'})]) is None
+    assert _FakeSession.calls == 0
+
+
 def test_query_does_not_overwrite_explicit_owner() -> None:
     _FakeSession.responses = [_FakeResponse(0, b'{}')]
     _client().query('conversation.count', {'user_id': 9}, deadline=5.0)

@@ -49,6 +49,8 @@ WHAT THIS ASSERTS (results, not constants)
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 from tests.support.context_rail_probe import RAIL_PROBE_STYLED, with_rail_probe_host
@@ -147,10 +149,31 @@ _SCROLL_AND_MEASURE = """(y) => {
 
 
 def _boot(page):
+    from tests.conftest import _dismiss_onboarding_modals
+
     page.wait_for_selector('#userInput', state='visible', timeout=20000)
     page.wait_for_function(
         "typeof window.TofuModules?.resolveAction('renderTurnCtxNote') === 'function'",
         timeout=20000)
+    # Boot opens the last-active conversation, else the session server's
+    # newest one (main.js _bootRestoreActiveConv), which an earlier spec may
+    # have left; landing after the plant, it shifts every probe mid-measure.
+    # Pin boot to this spec's own conversation, then plant into a new chat.
+    # The page fixture deletes the conversation with the others it created.
+    boot_cid = 'rail-sticky-boot-' + uuid.uuid4().hex[:10]
+    origin = page.evaluate('location.origin')
+    created = page.request.post(f'{origin}/api/v4/conversations/{boot_cid}/turns/settled', data={
+        'commandId': boot_cid + '-reply', 'actor': 'assistant', 'kind': 'text',
+        'projection': {'content': 'Boot anchor', 'segments': [{'type': 'text', 'blockId': 'answer',
+                       'text': 'Boot anchor', 'terminal': True, 'deliverable': True}]},
+        'conversation': {'allowCreate': True, 'title': boot_cid, 'createdAt': 100, 'settings': {}}})
+    assert created.status == 200, created.text()
+    page.context.add_init_script(f"sessionStorage.setItem('tofu_activeConvId', '{boot_cid}');")
+    page.reload(wait_until='domcontentloaded')
+    _dismiss_onboarding_modals(page)
+    page.locator(f'#chatInner .conversation-surface[data-conversation-id="{boot_cid}"]'
+                 ' [data-turn-id]').first.wait_for(timeout=20000)
+    page.evaluate("window.TofuModules.resolveAction('newChat')()")
     page.set_viewport_size({'width': 1600, 'height': 900})
     page.evaluate("() => { const s = document.querySelector('.sidebar');"
                   " if (s) s.classList.add('collapsed'); }")

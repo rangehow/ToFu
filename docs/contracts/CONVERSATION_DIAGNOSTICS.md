@@ -383,7 +383,10 @@ scanned file's header with its marked/omitted counts, likewise) and
 `contextInjections` (with `--context`). Values JSON cannot encode are written with `str()`. Absence
 yields `{"conversationId": …, "found": false, "exitCode": 2}`. A database, API or
 IO failure (exit 1) and a usage error leave stdout empty; an unreadable log file
-is reported on stderr instead of in the discarded report. `--json` excludes
+is reported on stderr instead of in the discarded report, and so is partial
+evidence: exit 3 writes the report's coverage, `INCOMPLETE`, resume, `BEST-EFFORT`
+and `LIVE` lines to stderr (a lead whose Turns exceed the 32 MiB default exited 3
+with no word that its newest Turns were unread). `--json` excludes
 `--raw`. `serverctl.py inspect-conversation` forwards only its own fixed flag
 subset; run the script directly for these flags.
 

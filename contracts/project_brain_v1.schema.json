@@ -16,7 +16,13 @@
     },
     "recoverySnapshotRequest": {
       "type": "object",
-      "properties": {"cursor": {"$ref": "#/$defs/recoveryCursor"}},
+      "properties": {
+        "cursor": {"$ref": "#/$defs/recoveryCursor"},
+        "include_cancelled": {
+          "description": "Also return each scanned project's cancelled work items (the restart-interruption repair walk); the page then carries includesCancelled.",
+          "type": "boolean"
+        }
+      },
       "additionalProperties": false
     },
     "recoveryProject": {
@@ -26,6 +32,10 @@
         "ownerUserId": {"type": "integer", "minimum": 1},
         "projectKey": {"type": "string", "minLength": 1, "maxLength": 4096},
         "workItems": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/projectWorkItem"}
+        },
+        "cancelledWorkItems": {
           "type": "array",
           "items": {"$ref": "#/$defs/projectWorkItem"}
         }
@@ -42,6 +52,7 @@
           "items": {"$ref": "#/$defs/recoveryProject"}
         },
         "capped": {"type": "boolean"},
+        "includesCancelled": {"const": true},
         "nextCursor": {"$ref": "#/$defs/recoveryCursor"}
       },
       "if": {"properties": {"capped": {"const": true}}},
@@ -71,7 +82,7 @@
         "conversationId": {"type": "string", "minLength": 1, "maxLength": 256},
         "title": {"type": "string", "minLength": 1, "maxLength": 500},
         "trigger": {"enum": ["todo_write", "file_write", "isolated_workspace"]},
-        "status": {"enum": ["active", "completed", "failed", "cancelled"]},
+        "status": {"enum": ["active", "completed", "failed", "cancelled", "interrupted"]},
         "changedPaths": {
           "type": "array", "uniqueItems": true,
           "items": {"type": "string", "minLength": 1, "maxLength": 4096}

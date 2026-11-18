@@ -1238,6 +1238,7 @@ pub enum TransactionIrStep {
     },
     ProjectBrainRecoverySnapshot {
         cursor: Option<crate::project_brain::RecoveryCursor>,
+        include_cancelled: bool,
         slot: usize,
     },
     ProjectBrainGet {
@@ -8968,11 +8969,16 @@ fn prepare_transaction_ir_mode(
                     &mut transaction,
                 )?));
             }
-            TransactionIrStep::ProjectBrainRecoverySnapshot { slot, cursor } => {
+            TransactionIrStep::ProjectBrainRecoverySnapshot {
+                slot,
+                cursor,
+                include_cancelled,
+            } => {
                 slots[*slot] = Some(Some(crate::project_brain::recovery_snapshot(
                     database,
                     &mut transaction,
                     cursor.as_ref(),
+                    *include_cancelled,
                 )?));
             }
             TransactionIrStep::ProjectBrainRebuild {

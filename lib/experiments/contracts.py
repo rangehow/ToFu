@@ -191,7 +191,7 @@ def resolve_experiment_spec(
     if provider_registry is None:
         from .registry import registry
 
-        provider_registry = registry()
+        provider_registry = registry(discover=False)
 
     experiment_id = _identifier(raw.get("experimentId"), "experimentId")
     assignment_unit = str(raw.get("assignmentUnit") or "conversation")

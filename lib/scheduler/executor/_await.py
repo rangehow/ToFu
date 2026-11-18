@@ -36,9 +36,9 @@ def _task_snapshot(task: dict) -> str:
 
 def _aborted_wait(parent_task: dict) -> str:
     """A person's Stop keeps its words; a restart's cut is a pause, never a Stop."""
-    from lib.turn_verdict import RESTART_ABORT_REASONS, aborted_wait_text
+    from lib.turn_verdict import PAUSE_ABORT_REASONS, aborted_wait_text
     reason = parent_task.get('_abort_reason')
-    if str(reason or '') in RESTART_ABORT_REASONS:
+    if str(reason or '') in PAUSE_ABORT_REASONS:
         return aborted_wait_text(reason)
     return 'Wait cancelled: your task was aborted by the user.'
 

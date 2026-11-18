@@ -1,0 +1,11 @@
+{
+  "model": "GPT-2 small (124M), 10B tokens of OpenWebText",
+  "val_loss": {"fp32_master": 3.112, "bf16_sr_update": 3.124},
+  "loss_gap_vs_fp32_pct": 0.39,
+  "naive_accuracy_drop_points": 2.6,
+  "sr_accuracy_recovered_points": 2.1,
+  "optimizer_state_bytes_per_param": {"fp32_master": 12, "bf16_sr_update": 8},
+  "optimizer_memory_saving_pct": 33.3,
+  "stale_update_fraction_naive_pct": 61.5,
+  "stale_update_fraction_sr_pct": 0.0
+}

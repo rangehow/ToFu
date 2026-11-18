@@ -15,7 +15,8 @@ This domain is the shared execution layer for long-running “prompt to delivera
 | Time-aware research evidence and gates | `lib/production/research.py` |
 | Finite background model/image transport budgets | `lib/production/llm_policy.py`, `lib/production/image_policy.py` |
 | Generic task discovery and streaming | `routes/api_v1/tasks.py`, task runtime |
-| Capability recipes | `lib/motion_video/`, `lib/slides/`, `lib/longform/`, `lib/research/`, `lib/paper/podcast_engine/` |
+| Shared candidate critic and blind A/B (slides, film, documents) | `lib/production/critic.py` |
+| Capability recipes | `lib/motion_video/`, `lib/slides/`, `lib/longform/` (reports; staged papers/resumes in `lib/longform/documents/`, [`DOCUMENT_PIPELINE.md`](../DOCUMENT_PIPELINE.md)), `lib/research/`, `lib/paper/podcast_engine/` |
 | Binary publication | each capability’s artifact/deliverable service |
 
 `lib.production` is the only public Python entry point for shared production contracts. A capability imports the specific owner module when it needs a narrow dependency. Historical capability-local copies and import shims are not part of the architecture.

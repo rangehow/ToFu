@@ -380,6 +380,51 @@ def test_a_ready_round_end_persists_while_the_next_round_prepares(root):
     assert settle_deferred_ready_events(task) == 0
 
 
+def _append_state_snapshot(task, round_num):
+    from lib.tasks_pkg.event_delivery import task_event_position
+    from lib.tasks_pkg.manager import append_event
+    from lib.tasks_pkg.persistence_wait import mark_state_evidence_tail
+    before = task_event_position(task)
+    append_event(task, build_event(EventType.MESSAGES_SNAPSHOT, kind='state', model='fixture-model',
+                                   roundNum=round_num, turn='1', label='state', messages=[]))
+    mark_state_evidence_tail(task, before, task_event_position(task))
+
+
+def test_a_trailing_state_snapshot_never_holds_the_next_paid_request(root):
+    """The post-tool state snapshot is Request Inspector evidence: a ready round
+    end that ends with it defers through the receipts before it, which commit in
+    their own storage run; the snapshot persists behind the request, in order,
+    and the next tools_in_flight barrier drains it."""
+    from lib.tasks_pkg.manager import append_event
+    task, authority = root.task, root.authority
+    authority.hold('messages_snapshot')
+    append_event(task, build_event(EventType.ROUND_END, roundNum=0, reason='tools'))
+    _append_state_snapshot(task, 0)
+    assert checkpoint_invocation(task, _MESSAGES, 1, phase='ready', defer_events=True) == 0
+    assert authority.entered.wait(5), 'the snapshot never reached storage'
+    dispatch = _in_thread(lambda: checkpoint_model_dispatch(task, _MESSAGES, 1))
+    assert dispatch.done.wait(5) and dispatch.error is None, 'the request waited for the snapshot'
+    assert [kind for _, kind in authority.committed] == ['round_end']
+    tools = _in_thread(lambda: checkpoint_invocation(task, _MESSAGES, 1, phase='tools_in_flight'))
+    assert not tools.done.wait(0.2), 'an effect preceded the evidence'
+    authority.released.set()
+    assert tools.done.wait(5) and tools.error is None
+    assert [kind for _, kind in authority.committed] == ['round_end', 'messages_snapshot']
+
+
+def test_a_receipt_after_the_state_snapshot_keeps_the_whole_ready_set_awaited(root):
+    from lib.tasks_pkg.manager import append_event
+    task, authority = root.task, root.authority
+    authority.hold('messages_snapshot')
+    _append_state_snapshot(task, 0)
+    append_event(task, build_event(EventType.ROUND_END, roundNum=0, reason='tools'))
+    assert checkpoint_invocation(task, _MESSAGES, 1, phase='ready', defer_events=True) == 0
+    dispatch = _in_thread(lambda: checkpoint_model_dispatch(task, _MESSAGES, 1))
+    assert not dispatch.done.wait(0.2), 'a paid request preceded a ready receipt'
+    authority.released.set()
+    assert dispatch.done.wait(5) and dispatch.error is None
+
+
 def test_a_deferred_ready_boundary_holds_any_other_paid_request(root):
     from lib.tasks_pkg.manager import append_event
     from lib.tasks_pkg.persistence_wait import settle_deferred_ready_events
@@ -413,7 +458,10 @@ def test_an_effect_free_tool_batch_leaves_its_events_to_the_next_paid_request(ro
     """Only result-reusable reads: no external effect waits, the next request does."""
     from lib.tasks_pkg.manager import append_event
     task, authority = root.task, root.authority
-    authority.hold('model_request_complete')
+    # Hold the first event: whether a warm delivery worker commits the start
+    # before the completion is accepted is a race, so holding the completion
+    # left one or two events undurable at the barrier.
+    authority.hold('model_request_start')
     append_event(task, _request_span(1))
     append_event(task, _request_span(1, complete=True))
     assert authority.entered.wait(2)

@@ -289,6 +289,12 @@
     flex: 0 0 100%;
     order: 10;
   }
+  /* The row aligns to its top edge, so a failure or warning pill (taller
+   * than the metadata line) would drop its middle below the action line. It
+   * keeps the metadata line's layout height and paints its edge outside. */
+  .conversation-surface .ptool-result-header[data-action-summary]:has(> .ptool-text > .ptool-artifact-header) > :is(.ptool-badge-err, .ptool-badge-reject, .ptool-badge-warn, .ptool-badge-skip, .ptool-badge-interrupted) {
+    margin-block: calc((var(--leading-title) * var(--conversation-font-size-meta) - var(--space-5) - 2 * var(--control-edge-inset)) / 2);
+  }
 }
 
 /* Step controls (command/output folds, per-call debug anchors) and disclosure

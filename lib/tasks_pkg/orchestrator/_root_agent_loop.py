@@ -362,6 +362,24 @@ class _RootLoopHooks:
     ) -> ProviderStreamResult:
         request = self.request
         state = self.state
+        # Next round after a content_filter fallback retries the primary ONLY
+        # when the refused history actually changed (compaction / cleared tool
+        # results / new injections). Otherwise the attempt stays on the
+        # fallback: refusals track the history and come in runs, so an
+        # unchanged-history probe adds a refused, billed request to every
+        # round of exactly the lanes that refuse most. Flip BEFORE
+        # prepare_round_context/build_round_request so every model-bound field
+        # matches the dispatched model. _call's own stamp then finds the round
+        # already on the primary and does not switch again. Only the DISPATCH
+        # path does this, not a standalone build_round_request (wire parity).
+        from lib.tasks_pkg.llm_fallback import _switch as _model_switch
+        if (state.model and self.task.get('_fallback_model') == state.model
+                and self.task.get('_fallback_kind') == 'content_filter'
+                and self.task.get('_fallback_from')
+                and self.task['_fallback_from'] != state.model
+                and not (self.task.get('config') or {}).get('disableModelFallback')):
+            if _model_switch.refused_history_changed(self.task, self.messages):
+                state.model = self.task['_fallback_from']
         prepare_round_context(self.task, self.messages, round_num=round_num,
             tid=request.tid, model=state.model, project_path=request.project_path,
             project_enabled=request.project_enabled, round_tools=round_tools)
@@ -726,6 +744,10 @@ class _RootLoopHooks:
                               defer_events=phase == 'ready')
         run_round_checkpoint_and_close(
             self.task, round_num=round_num, tid=self.request.tid)
+        if phase == 'ready':
+            # The next round's boundary reads overlap its start (round_reads.py).
+            from lib.tasks_pkg.round_reads import prefetch_round_reads
+            prefetch_round_reads(self.task)
 
     def observe_abort(
         self,
@@ -771,6 +793,8 @@ def run_root_agent_loop(request: RootLoopRequest) -> RootLoopResult:
         on_round_end=hooks.close_round,
         on_abort=hooks.observe_abort,
     )
+    from lib.tasks_pkg.round_reads import end_round_reads
+    end_round_reads(request.task)
     if request.state.exit_reason == 'running':
         request.state.exit_reason = outcome.exit_reason
     if request.task.get('_executionLimitReason'):

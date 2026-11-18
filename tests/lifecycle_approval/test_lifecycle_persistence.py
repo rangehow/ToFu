@@ -18,7 +18,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 sys.path.insert(0, ROOT)
 
 import lib.lifecycle_approval as la
-from lib.json_store import JsonStoreReadError, write_json_atomic
+from lib.json_store import JsonStoreReadError, update_json_atomic, write_json_atomic
+from tests.support.replace_window import ReplaceWindow
 
 HUMAN_UI = {'kind': 'human-ui', 'ownerUserId': 1, 'subject': 'session-key', 'credential': 'session',
             'browser': 'fetch-metadata', 'userAgent': 'Mozilla/5.0', 'remoteAddr': '127.0.0.1'}
@@ -215,3 +216,27 @@ def test_delayed_older_stamp_cannot_shorten_newer_cooldown(store):
         Path(la._STATE_FILE).read_text(encoding='utf-8'))
     assert approval_document['last_restart_at'] == 2000
     assert state_document['last_restart_at'] == 2000
+
+
+
+@pytest.mark.parametrize('stamped_store', ['approvals', 'legacy-state'])
+def test_restart_cooldown_holds_while_its_stamp_is_being_replaced(
+        store, monkeypatch, stamped_store):
+    """A cooldown read racing its store's replace still sees the stamp."""
+    monkeypatch.setattr(la, 'RESTART_COOLDOWN_SEC', 900)
+    now = time.time()
+    if stamped_store == 'approvals':
+        path = la._APPROVALS_FILE
+        document = {'records': [], 'last_restart_at': now,
+                    'last_restart_pid': os.getpid()}
+    else:
+        path = la._STATE_FILE
+        document = {'last_restart_at': now}
+    update_json_atomic(path, lambda _cur: dict(document))
+    assert la.restart_cooldown_remaining(now=now) > 0
+
+    window = ReplaceWindow(monkeypatch, path)
+    window.run_writer(lambda: write_json_atomic(path, document))
+    remaining = window.read_during_gap(lambda: la.restart_cooldown_remaining(now=now))
+
+    assert remaining > 0

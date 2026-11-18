@@ -22,7 +22,12 @@ ASK_HUMAN_TOOL = {
             "blocking=false shows the question and returns at once: state in the "
             "question which default you apply meanwhile and keep working on what does "
             "not depend on the answer; the reply arrives later as a normal user message "
-            "quoting the question."
+            "quoting the question. A lead (project Coordinator or Global Router) "
+            "withdraws its own open question that the conversation has since settled "
+            "with `withdraw: {guidance_id, reason}` and nothing else: the card is "
+            "marked withdrawn and stops counting as an open owner question; it stays "
+            "answerable, and an owner answer that comes anyway still arrives and "
+            "overrides the withdrawal."
         ),
         "parameters": {
             "type": "object",
@@ -116,29 +121,49 @@ ASK_HUMAN_TOOL = {
                         "(or form) and return at once."
                     ),
                 },
+                "withdraw": {
+                    "type": "object",
+                    "properties": {
+                        "guidance_id": {
+                            "type": "string",
+                            "maxLength": 256,
+                            "description": "The hg_ id of your own open question.",
+                        },
+                        "reason": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 2000,
+                            "description": "What settled it, e.g. the owner's answer in chat.",
+                        },
+                    },
+                    "required": ["guidance_id", "reason"],
+                    "description": (
+                        "Withdraw your own open question instead of asking; send no "
+                        "other field."
+                    ),
+                },
             },
-            "required": ["response_type"],
             "anyOf": [
                 {
                     "properties": {
                         "response_type": {"const": "free_text"},
                         "questions": {"minItems": 2},
                     },
-                    "required": ["questions"],
+                    "required": ["questions", "response_type"],
                 },
                 {
                     "properties": {
                         "response_type": {"const": "choice"},
                         "questions": {"minItems": 2},
                     },
-                    "required": ["questions"],
+                    "required": ["questions", "response_type"],
                 },
                 {
                     "properties": {
                         "response_type": {"const": "free_text"},
                         "question": {"minLength": 1},
                     },
-                    "required": ["question"],
+                    "required": ["question", "response_type"],
                 },
                 {
                     "properties": {
@@ -146,8 +171,9 @@ ASK_HUMAN_TOOL = {
                         "question": {"minLength": 1},
                         "options": {"minItems": 1},
                     },
-                    "required": ["question", "options"],
+                    "required": ["question", "options", "response_type"],
                 },
+                {"required": ["withdraw"]},
             ],
         },
     },

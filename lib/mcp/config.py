@@ -139,11 +139,11 @@ def load_mcp_config(*, user_id) -> dict[str, MCPServerConfig]:
         Empty dict if no config file exists.
     """
     path = _config_path(user_id)
-    if not os.path.isfile(path):
+    data = read_json(path, default=None, strict=True, max_bytes=4 * 1024 * 1024)
+    if data is None:
         logger.debug('[MCP:Config] No config file at %s', path)
         return {}
     _harden_config_permissions(path)
-    data = read_json(path, default=None, strict=True, max_bytes=4 * 1024 * 1024)
     if not isinstance(data, dict):
         logger.warning('[MCP:Config] Config file is not a valid object, ignoring: %s',
                        path)

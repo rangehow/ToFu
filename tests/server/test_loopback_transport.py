@@ -193,3 +193,60 @@ def test_mutating_control_failure_after_connect_is_never_replayed(monkeypatch, s
         transport.urlopen(request, timeout=2)
     assert raised.value is error
     assert calls == ['created', 'connected', 'dispatched', 'closed']
+
+
+@pytest.mark.parametrize('status', [200, 409])
+def test_post_reads_a_keep_alive_reply_in_full(status):
+    """An HTTP/1.1 server may keep the connection open despite ``Connection: close``.
+
+    The caller reads the whole answer to a mutating POST, then closing the reply
+    releases the connection (the server sees it end).
+    """
+    import http.server
+    import threading
+
+    from tests.support.loopback import LoopbackThreadingHTTPServer
+
+    answer = b'{"accepted":true,"detail":"' + b'x' * 70000 + b'"}'
+    released = threading.Event()
+
+    class KeepAlive(http.server.BaseHTTPRequestHandler):
+        protocol_version = 'HTTP/1.1'
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers['Content-Length']))
+            self.send_response(status)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(answer)))
+            self.send_header('Connection', 'keep-alive')
+            self.end_headers()
+            self.wfile.write(answer)
+
+        def finish(self):
+            super().finish()
+            released.set()
+
+        def log_message(self, *args):
+            pass
+
+    server = LoopbackThreadingHTTPServer(('127.0.0.1', 0), KeepAlive)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = urllib.request.Request(f'http://127.0.0.1:{server.server_address[1]}/control',
+                                        data=b'{"action":"repair"}', method='POST')
+        if status >= 300:
+            with pytest.raises(urllib.error.HTTPError) as raised:
+                transport.urlopen(request, timeout=10)
+            assert raised.value.code == status
+            assert raised.value.read() == answer
+            raised.value.close()
+        else:
+            with transport.urlopen(request, timeout=10) as response:
+                assert response.status == 200
+                assert response.headers['Content-Type'] == 'application/json'
+                assert response.read() == answer
+        assert released.wait(10)
+    finally:
+        server.shutdown()
+        server.server_close()

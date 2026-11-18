@@ -37,6 +37,10 @@ from lib.runtime.loopback_relay import RelayUnavailable, is_cancelled
 FORMAT = 'tofu.browser-bridge-relay/v1'
 RECORD_NAME = 'browser-bridge-relay.json'
 _NAME = 'browser bridge'
+# Registry reads answered at once from the owner's memory; a Turn keeps one
+# connection for them (lib/runtime/loopback_relay.py, "Session verbs").
+SESSION_METHODS = frozenset({'client_protocol', 'connected_clients', 'extension_connected',
+                             'client_owner'})
 
 __all__ = ['FORMAT', 'RECORD_NAME', 'RelayClient', 'RelayServer', 'RelayUnavailable',
            'configure_bridge_owner', 'is_cancelled', 'record_path', 'selected_relay',
@@ -98,7 +102,8 @@ class RelayServer(loopback_relay.RelayServer):
     """Loopback listener owned by the API process for the browser queue."""
 
     def __init__(self, path: Path):
-        super().__init__(path, format=FORMAT, methods=_method_table(), name=_NAME)
+        super().__init__(path, format=FORMAT, methods=_method_table(), name=_NAME,
+                         session_methods=SESSION_METHODS)
 
 
 # ── Caller side (execution process) ─────────────────────────────────────
@@ -108,7 +113,7 @@ class RelayClient(loopback_relay.RelayClient):
 
     def __init__(self, path: Path):
         from lib.browser.queue._dispatch import CANCEL_OBSERVATION_SECONDS
-        super().__init__(path, format=FORMAT, name=_NAME,
+        super().__init__(path, format=FORMAT, name=_NAME, session_methods=SESSION_METHODS,
                          cancel_observation_seconds=CANCEL_OBSERVATION_SECONDS)
 
 

@@ -36,7 +36,8 @@ export function findQuestionFocus(turns: ReadonlyArray<QuestionFocusTurn>, guida
       const id = text(round.guidanceId);
       const question = questionText(round);
       if (!id || !question) continue;
-      const open = round.guidanceBlocking === false ? !laterHuman : round.status === 'awaiting_human';
+      const open = !round.guidanceWithdrawn
+        && (round.guidanceBlocking === false ? !laterHuman : round.status === 'awaiting_human');
       if (guidanceId ? id !== guidanceId : !open) continue;
       return { turnId: turn.turnId, ordinal: turn.ordinal, guidanceId: id, quote: guidanceReplyQuote(id, question) };
     }

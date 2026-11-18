@@ -35,7 +35,6 @@ withheld behind a typed notice (docs/contracts/TOOL_EXECUTION_POLICY.md).
 from __future__ import annotations
 
 import contextvars
-import json
 import os
 import shlex
 import shutil
@@ -44,6 +43,7 @@ import time
 import uuid
 from typing import Any, NamedTuple
 
+from lib.json_store import locked_path, read_json, write_json_atomic
 from lib.log import get_logger
 from lib.tools.resource_policy import tool_result_cache_capacity
 
@@ -910,20 +910,16 @@ def _injected_redaction(record: dict) -> _RecordRedaction:
 
 
 def _write_record(paths: dict, record: dict) -> None:
-    tmp = paths['record'] + '.tmp'
-    with open(tmp, 'w', encoding='utf-8') as fh:
-        json.dump(record, fh)
-    os.replace(tmp, paths['record'])
+    # The other host reads this record to decide whether a conversation still
+    # has an unsettled command; publish under the lock its read consults.
+    with locked_path(paths['record']):
+        write_json_atomic(paths['record'], record, fsync=False, indent=None)
 
 
 def _read_record(rdir: str) -> dict | None:
-    try:
-        with open(os.path.join(rdir, 'record.json'), encoding='utf-8') as fh:
-            record = json.load(fh)
-        if isinstance(record, dict) and record.get('command_id'):
-            return record
-    except (OSError, ValueError):
-        pass
+    record = read_json(os.path.join(rdir, 'record.json'), default=None)
+    if isinstance(record, dict) and record.get('command_id'):
+        return record
     return None
 
 

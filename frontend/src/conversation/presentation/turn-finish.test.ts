@@ -20,6 +20,16 @@ describe('presentTurnFinish', () => {
     expect(finish?.resumeOptions?.[0]?.operation).toBe('continue');
   });
 
+  it('labels a Worker its project lead holds as held, not interrupted, and keeps its resume', () => {
+    const finish = presentTurnFinish(interrupted({
+      outcome: 'interrupted', cause: 'lead_hold', error: null,
+      resumeOptions: [{ operation: 'continue', anchor: { type: 'replay_only' } }],
+    }));
+    expect(finish?.label).toBe('Held');
+    expect(finish?.tone).toBe('warning');
+    expect(finish?.resumeOptions?.[0]?.operation).toBe('continue');
+  });
+
   it('falls back to the cause when the interruption carries no explanation', () => {
     const finish = presentTurnFinish(interrupted({ outcome: 'interrupted', cause: 'server_restart', error: null }));
     expect(finish?.detail).toBe('server_restart');

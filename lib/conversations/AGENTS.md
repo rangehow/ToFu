@@ -14,7 +14,8 @@ in `lib/integration_control.py`. Read
 - Scope every query and command by explicit owner plus the canonical project
   key. Do not add a process-global user or storage/path shortcut.
 - Work items derive only from successful runtime signals. Their conversation
-  is immutable and their state is exactly active/completed/failed/cancelled;
+  is immutable and their state is exactly
+  active/completed/failed/cancelled/interrupted (a restart drain);
   never add claim, lease, block, reopen, transfer, or autonomous dispatch.
 - Project Context is a final user-role dynamic suffix. Never modify the system
   prompt, replay snapshots, or acknowledge narrative before provider success.

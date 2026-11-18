@@ -107,9 +107,9 @@ def test_reasoning_controls_real_app(browser, live_server, tmp_path):
             slider.focus()
             page.keyboard.press('ArrowLeft')
             assert saved()['thinkingDepth'] == 'lowest'
-        slider.focus()
-        page.locator('#thinkingDepthSection [data-depth-default]').click()
-        assert saved()['thinkingDepth'] == 'default'
+        # The Default button is gone; the declared default rung is marked on the
+        # slider instead (cb63f6352c).
+        expect(page.locator('#thinkingDepthSection [data-depth-default]')).to_have_count(0)
         slider.focus()
         page.keyboard.press('End')
         page.keyboard.press('Home')

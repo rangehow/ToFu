@@ -30,6 +30,21 @@ import pytest
 
 from tests.visual_check import VisualVerdict, analyze_screenshot
 
+
+@pytest.fixture(scope='module', autouse=True)
+def _durable_workers(flask_app):
+    """Run sent Turns through the claimed execution owner production uses.
+
+    The HTTP command only enqueues its accepted Attempt for the durable worker
+    (tests/e2e/test_e2e_smoke.py arms it the same way); without it a sent
+    Turn stays pending forever and the composer never leaves its Stop state.
+    """
+    from lib.durable_worker.runtime import ensure_workers_started, stop_workers
+
+    ensure_workers_started(flask_app)
+    yield
+    stop_workers(flask_app)
+
 # ═══════════════════════════════════════════════════════════
 #  Helpers
 # ═══════════════════════════════════════════════════════════
@@ -89,21 +104,17 @@ def _check(path: str, desc: str, elements: list[str]) -> VisualVerdict:
 def _send_message(page, text: str, *, wait_done: bool = True, timeout: float = 30000):
     """Type a message and send it, optionally waiting for the response to complete."""
     textarea = page.locator("#userInput")
+    turns_before = page.locator(".conversation-turn").count()
     textarea.fill(text)
     page.locator("#sendBtn").click()
 
     if wait_done:
-        # Wait for streaming to finish — the streaming-msg element should disappear
-        # or a .message element with assistant role should appear
-        try:
-            # Wait for streaming indicator to appear then disappear
-            page.wait_for_selector("#streaming-msg", state="attached", timeout=5000)
-            page.wait_for_selector("#streaming-msg", state="detached", timeout=timeout)
-        except Exception:
-            # Might have completed too fast for us to catch streaming-msg
-            pass
-        # Small settle delay for DOM to update
-        time.sleep(0.5)
+        # The exchange has settled once its input and reply Turns are mounted
+        # and the composer's button has left its Stop state.
+        page.wait_for_function(
+            """n => document.querySelectorAll('.conversation-turn').length >= n + 2
+              && !document.querySelector('#sendBtn').classList.contains('stop-btn')""",
+            arg=turns_before, timeout=timeout)
 
 
 def _wait_for_app_ready(page, timeout: float = 10000):

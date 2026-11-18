@@ -556,6 +556,33 @@ def _rebind_proof(task, config, pin, input_turn_id, revision):
     return 'rebound'
 
 
+def _clean_finish_closing_message(task, messages):
+    """Close a harness-ended tool round with the Turn's answer, as a cold rebuild does.
+
+    A clean finish (``_toolLoopCleanFinish``: an idle Coordinator wait, an
+    accepted background task) settles the Turn completed right after a tool
+    round, with no model round after the results; its deterministic text is the
+    Turn's final content. The cold rebuild renders such a Turn as its tool
+    rounds followed by that content, so publishing the same closing row keeps
+    the checkpoint identical to what the next request would otherwise rebuild,
+    while the compacted working view survives. Only a complete trailing batch
+    qualifies; anything else stays ``missing_final_model_message``.
+    """
+    content = task.get('content')
+    if not task.get('_toolLoopCleanFinish') or not isinstance(content, str) or not content.strip():
+        return None
+    start = len(messages)
+    while start and messages[start - 1].get('role') == 'tool':
+        start -= 1
+    if start in (0, len(messages)) or messages[start - 1].get('role') != 'assistant':
+        return None
+    calls = messages[start - 1].get('tool_calls') or []
+    answered = sorted(str(message.get('tool_call_id')) for message in messages[start:])
+    if not calls or sorted(str(call.get('id')) for call in calls) != answered:
+        return None
+    return {'role': 'assistant', 'content': content}
+
+
 def prepare_completed_task(task):
     """Prepare a bounded candidate; only Sidecar may mint its settled witness."""
     config = task.get('config') or {}
@@ -586,6 +613,9 @@ def prepare_completed_task(task):
             return
     try:
         messages = task.get('messages') or []
+        closing = _clean_finish_closing_message(task, messages)
+        if closing is not None:
+            messages = [*messages, closing]
         if not messages or messages[-1].get('role') != 'assistant':
             _publication_status(task, 'missing_final_model_message')
             return

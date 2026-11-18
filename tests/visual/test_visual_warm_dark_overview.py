@@ -78,8 +78,10 @@ def test_warm_dark_round_overview(frontend_visual_page, timeline_bundle, tmp_pat
           color:css.color,font:css.fontFamily,x:box.x,width:box.width}];}))'''),indent=2))
     assert page.evaluate('getComputedStyle(document.documentElement).getPropertyValue("--bg-primary").trim().toLowerCase()') == '#24221f'
     expect(page.locator('.conversation-round-header')).to_contain_text('24')
-    expect(page.locator('.conversation-round-fold')).to_contain_text('17')
-    assert page.locator('.conversation-block--tool:visible').count() == 7
+    # The round never folds mounted calls: the tool panel is their one
+    # disclosure (a95d001a1c, docs/RENDER_CONTRACT.md "drop middle fold").
+    expect(page.locator('.conversation-round-fold')).to_have_count(0)
+    assert page.locator('.conversation-block--tool:visible').count() == 24
     expect(page.locator('[data-block-id="call-23"]')).to_contain_text('截图服务未返回图像')
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1')
     # Every routine call is one compact row inside the tool-panel card, led by
@@ -95,14 +97,11 @@ def test_warm_dark_round_overview(frontend_visual_page, timeline_bundle, tmp_pat
           '.conversation-block:not([data-action-state="attention"]) [data-action-summary]')]
           .filter(n=>n.offsetParent).map(n=>n.getBoundingClientRect().height)''')
         assert heights and max(heights) <= 36, heights
-    fold=page.locator('.conversation-round-fold');fold.focus();fold.press('Enter')
-    assert page.locator('.conversation-block--tool:visible').count() == 24
     first=page.locator('[data-block-id="call-0"] summary').first
     first.focus();first.press('Enter')
     expect(page.locator('[data-block-id="call-0"] details').first).to_have_attribute('open','')
     page.evaluate('()=>surface.render(selectConversationViewModel({...state,conversationRevision:2}))')
     expect(first).to_be_focused()
-    fold.click()
     search=page.locator('.conversation-round-search');search.fill('component-7')
     page.locator('.conversation-round-matches button').first.click()
     expect(page.locator('[data-block-id="call-7"]')).to_be_focused()

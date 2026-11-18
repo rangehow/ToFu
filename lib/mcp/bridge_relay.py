@@ -64,6 +64,9 @@ OWNER_ROLE = 'execution'
 RELAY_ROLES = ('execution_shard',)
 # The cancel observation MCPBridge._run_async already uses for a local call.
 CANCEL_OBSERVATION_SECONDS = 0.1
+# Answered at once from the owner's in-memory catalog; a Turn keeps one
+# connection for them (lib/runtime/loopback_relay.py, "Session verbs").
+SESSION_METHODS = frozenset({'catalog', 'list_servers'})
 
 __all__ = ['FORMAT', 'RECORD_NAME', 'RelayedMCPBridge', 'configure_mcp_owner',
            'record_path', 'relayed_bridge', 'stop_mcp_owner']
@@ -155,14 +158,15 @@ class RelayServer(loopback_relay.RelayServer):
     """Loopback listener owned by the execution host for its MCP bridge."""
 
     def __init__(self, path: Path):
-        super().__init__(path, format=FORMAT, methods=_method_table(), name=_NAME)
+        super().__init__(path, format=FORMAT, methods=_method_table(), name=_NAME,
+                         session_methods=SESSION_METHODS)
 
 
 # ── Caller side (execution shard) ───────────────────────────────────────
 
 class RelayClient(loopback_relay.RelayClient):
     def __init__(self, path: Path):
-        super().__init__(path, format=FORMAT, name=_NAME,
+        super().__init__(path, format=FORMAT, name=_NAME, session_methods=SESSION_METHODS,
                          cancel_observation_seconds=CANCEL_OBSERVATION_SECONDS,
                          owner_label='execution host')
 

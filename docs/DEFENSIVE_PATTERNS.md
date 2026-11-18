@@ -82,6 +82,44 @@ writer uses the original open descriptor without reopening the staging file
 or materializing an encoded text copy. Keeping independent cleanup loops was
 rejected because every resource fix would otherwise need two implementations.
 
+## A missing store is decided under its writers' lock
+
+Problem: on the data root's FUSE mount (DolphinFS), `open()` racing a
+writer's `os.replace` can fail with ENOENT although the store exists before
+and after (29 of 2000 opens measured). `read_json`/`read_text` turned that
+into `default`, so one read of an in-force Act-for-me grant, a restart
+cooldown stamp, an auth mode or an allowlist saw an empty store; readers that
+cache or write back the default made it last or persisted it.
+Decision: `lib/json_store.read_json` and `read_text` keep the lock-free read
+of an existing file and decide absence only under the writers' lock
+("Consistent absence" in that module): after a FileNotFoundError they take the
+path's thread lock and, when `<path>.lock` exists, its flock, then read once
+more. No replace is in flight there, so the answer is the one a fully locked
+read gives. A thread already inside `locked_path(path)` or an
+`update_json_atomic(path)` mutator answers directly (no self-deadlock); a
+store no locked writer ever published creates no lock file or directory. So
+every store whose writers publish under `locked_path(store)` or
+`update_json_atomic(store)` is covered, and writers of decision state publish
+that way even when another lock serializes them (`<cache>.write`,
+`_store_lock`, `_STATE_LOCK`): the store's own lock is the one readers consult.
+`key_stats` readers hold `_lock`, which a commit takes inside the flock, so
+they cannot ask the writers; a store that vanishes after a loaded snapshot
+keeps that snapshot deciding until a publication changes it, as an unreadable
+store does. A pre-check (`os.path.isfile`, `os.stat`) races the same way and
+never decides absence on its own (`mcp/config.load_mcp_config`,
+`cost_experiments`).
+Alternatives rejected: retrying on ENOENT (a retry count or interval is a
+knob and a truly absent store is real); locking every read (a flock per read
+on hot paths, and readers inside a mutator of the same path would deadlock);
+per-call-site locked reads only (each new reader would reintroduce the race).
+Residual: stdlib-only `server_manager` state read by `oob_alert`, and
+project-directory stores outside the data root (`file_history/tracked.json`,
+`integration_radar` records) still publish without the store's lock.
+Specs: `tests/json_store/test_replace_window_reads.py` (the window is
+reproduced by `tests/support/replace_window.py`),
+`tests/lifecycle_approval/test_lifecycle_persistence.py::test_restart_cooldown_holds_while_its_stamp_is_being_replaced`,
+`tests/key_stats/test_key_stats_persistence.py::test_store_missing_mid_replace_keeps_the_loaded_decisions`.
+
 ## Process-global locks guard one-time work, never reads
 
 Problem: one process-global lock in the memory store wrapped its one-time

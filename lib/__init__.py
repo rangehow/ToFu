@@ -1,4 +1,3 @@
-import json as _json
 import os
 
 # ── Public API ──
@@ -43,16 +42,9 @@ def _load_server_config():
     Called ONCE at import time. All persistent config lives in-tree under
     ``<project>/data/config/``; see ``lib.config_dir``.
     """
-    try:
-        with open(_SERVER_CONFIG_PATH, encoding='utf-8') as config_file:
-            loaded = _json.load(config_file)
-            return loaded if isinstance(loaded, dict) else {}
-    except FileNotFoundError:
-        return {}
-    except Exception as _e:
-        import logging as _logging
-        _logging.getLogger(__name__).debug('Could not load server config: %s', _e)
-    return {}
+    from lib.json_store import read_json
+    loaded = read_json(_SERVER_CONFIG_PATH, default={})
+    return loaded if isinstance(loaded, dict) else {}
 
 _SAVED_CONFIG = _load_server_config()
 
@@ -81,7 +73,9 @@ def _cfg(env_key, saved_key, default, *, empty_env_is_unset=False):
 # requests and Settings-managed providers route through owner-scoped v2.
 # Preferred: LLM_API_KEYS=key1,key2,key3  (comma-separated, any number)
 # Legacy single-var: LLM_API_KEY still works (for 1 key only)
-_DEFAULT_KEYS = []  # No hardcoded or persisted-provider fallback.
+_DEFAULT_KEYS = [
+    # Add your API keys here, or set LLM_API_KEYS env var
+]  # No hardcoded or persisted-provider fallback.
 
 def _parse_api_keys():
     """Build legacy direct-call keys strictly from explicit environment."""
@@ -157,17 +151,9 @@ _FEATURES_CONFIG_PATH = _config_path('features.json')
 
 
 def _load_features_config():
-    try:
-        with open(_FEATURES_CONFIG_PATH, encoding='utf-8') as features_file:
-            loaded = _json.load(features_file)
-            return loaded if isinstance(loaded, dict) else {}
-    except FileNotFoundError:
-        return {}
-    except Exception as _e:
-        import logging as _logging
-        _logging.getLogger(__name__).debug(
-            'Could not read features.json: %s', _e)
-        return {}
+    from lib.json_store import read_json
+    loaded = read_json(_FEATURES_CONFIG_PATH, default={})
+    return loaded if isinstance(loaded, dict) else {}
 
 
 _SAVED_FEATURES = _load_features_config()

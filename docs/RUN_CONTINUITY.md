@@ -410,67 +410,52 @@ twin; the `d8e7021b` pin, which fails with the pre-R3 `_validated_binding`),
 and `tests/conversation/test_worker_attempt_real_start.py` (real quiesce, boot
 recovery, and a resumed Worker that makes tool calls and completes).
 
-## A resumed Turn continues on the model it was running on
+## A resumed Turn returns to the accepted model
 
 *(running contract; owner `lib/tasks_pkg/orchestrator/_model_continuation.py`)*
 
 **Problem:** an in-Attempt refusal (`content_filter`) or availability fallback
-lives only in process memory (`task['_fallback_model']`). When the interrupted
-Turn is resumed — `continue` / `checkpoint_resume`, restart resume, project
-dispatch continuation, durable worker recovery, all through orchestrator
-`run_task` — the new Attempt used to return to the Turn's accepted
-`config.model`, even though the interrupted Attempt had switched models for its
-remaining rounds. The resumed first request paid a full prompt-cache write on
-the primary model (observed: 360K tokens re-written, `cache_read=0`), then the
-primary refused again and the Attempt fell back to the same model it had
-already been running on — the same large prompt billed twice.
+lives only in process memory (`task['_fallback_model']`). A
+`content_filter` refusal is a per-request content verdict, not a demotion —
+yet a resume used to re-elect the interrupted Attempt's last paid
+response-authoring model from the durable `checkpointApiRounds` ledger. A
+paper Worker that fell back once therefore stayed on the fallback for hours
+across restarts (observed 2026-11-18: one Worker on kimi since 02:15, another
+since 05:55), silently concentrating load on the fallback's serving key.
 
-**Decision:** a resumed Attempt continues on the logical model of the
-interrupted Attempt's last paid, response-authoring round: the highest integer
-`round` in the durable `checkpointApiRounds` ledger whose row does not carry
-`responseAuthoring: false` and whose `tag` is not a discarded/refused charge
-(those attempts were billed but their response was never adopted). The
-continuation applies only when all three hold:
+**Decision:** a resume continues the WORK, it does not re-decide the model. A
+resumed Attempt runs on the conversation's accepted model — the owner/lead's
+conversation or session choice, already resolved by the admission boundary
+(`project_dispatch/admission`). The only exception is a deliberate model
+choice the owner or a lead made for this resume: the acceptance-time
+`_resumeModelSwitchFrom` marker (`RESUME_MODEL_SWITCH_FROM_CONFIG_KEY`),
+stamped by `command_service.create_attempt` on a pause → set_model → continue.
+It lives in the durable Attempt config, so request replay and durable worker
+recovery decide identically. If the primary refuses again on the first
+resumed round, that round falls back again for that round only (see
+TURN_SETTLEMENT.md). No new marker, knob, or threshold.
 
-1. that model differs from the accepted `config.model`;
-2. the resume did not explicitly choose a different model;
-3. the model is still admitted for this task by the same admission boundary
-   the refusal fallback path uses
-   (`llm_fallback._retry._get_fallback_model`, which honors the configured
-   fallback model and the per-task `disableModelFallback` opt-out). Otherwise
-   normal selection applies.
+The paid ledger still records every round that ran on the fallback;
+`fallback_rounds` / `model_fallback_receipt` derive the review-visible receipt
+from it (or from the in-process ledger for a live attempt), so a draft written
+partly on the fallback is never relabelled as primary-only work
+(`project_dispatch/service.py` `execution.result.modelFallback`).
+`last_authoring_model` is retained only because that receipt needs the last
+row's model; it no longer decides the resume's model.
 
-*Explicit choice* is defined by the existing acceptance-time marker
-`_resumeModelSwitchFrom` (`RESUME_MODEL_SWITCH_FROM_CONFIG_KEY`):
-`command_service.create_attempt` stamps it when a
-continue/checkpoint_resume/answer_guidance request's `config.model` differs
-from the submitted Turn's rail snapshot model — the pause → switch-model →
-continue sequence. It is read before storage rebinds the snapshot, lives in
-the durable Attempt config, and therefore decides identically on request
-replay and durable worker recovery. No new marker, knob, or threshold is
-introduced.
+**Alternatives rejected:** (a) the previous rule — "highest-round paid
+response-authoring row elects the model" — was a cost optimization against a
+known-trigger request, but it made a per-request refusal a permanent model
+downgrade and was the dominant source of fallback-key load; (b) rewriting the
+accepted Attempt config would falsify the owner's recorded choice and leak
+into every later resume; (c) a resume-time switch-back marker separate from
+`_resumeModelSwitchFrom` would add a second authority for the same decision.
 
-The continued model is resolved BEFORE tools and context are assembled:
-`run_task` re-resolves the model config with the continued model, so
-`max_tokens`, the executable tool catalog, and the context window the
-compaction thresholds measure against all belong to the model that actually
-runs. Preset and thinking stay the round's own values, exactly as the
-in-Attempt refusal fallback keeps them. `task['_fallback_model']` /
-`_fallback_from` are restamped (kind `resume_continuation`) so done/persist
-still report `fallbackModel` / `actualModel`; one log line names the
-continuation.
-
-**Alternatives rejected:** rewriting the accepted Attempt config would falsify
-the owner's recorded choice and leak into every later resume; persisting
-`conv_affinity` (a provider-key stickiness hint) cannot carry a logical model
-decision and would cross credential boundaries; always retrying the primary
-first pays a refusal plus a full cache write on every restart.
-
-Verification: `tests/tasks_pkg/test_resume_model_continuation.py` (last paid
-authoring row elects the fallback with unchanged preset/thinking, unadmitted
-model falls back to accepted, refused/discarded rows skipped, explicit switch
-wins, fallback reporting preserved, and `run_task` resolves tools/context for
-the continued model before assembly).
+Verification: `tests/tasks_pkg/test_resume_model_continuation.py` (resume
+returns to the accepted model after a fallback, an unadmitted/different
+fallback does not demote, refused/discarded rows never elect a model, an
+explicit switch wins, done reports the accepted model, and `run_task`
+resolves tools/context for the accepted model before assembly).
 
 ## Problem
 

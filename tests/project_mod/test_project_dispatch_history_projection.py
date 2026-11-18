@@ -223,3 +223,34 @@ def test_build_whose_client_left_before_it_started_reads_nothing(bound_rows):
     with pytest.raises(HistoryBuildCancelled):
         service.history_page(principal=c.principal, cancelled=lambda: True)
     assert c.client.reads == before and reads == []
+
+
+def test_lead_view_names_the_rounds_that_ran_on_the_fallback(evidence):
+    """A paper drafted partly on the fallback is visible at review."""
+    c, assignment, service, turn, _, _, _ = evidence
+    turn['projection']['fallbackModel'] = 'kimi-k3.1-pro'
+    turn['projection']['fallbackFrom'] = 'claude-opus-5.5'
+    turn['projection']['apiRounds'] = [
+        {'round': 1, 'model': 'claude-opus-5.5', 'tag': 'R1'},
+        {'round': 2, 'model': 'claude-opus-5.5', 'tag': 'R2-REFUSED',
+         'responseAuthoring': False},
+        {'round': 3, 'model': 'kimi-k3.1-pro', 'tag': 'R3-FALLBACK'},
+        {'round': 4, 'model': 'kimi-k3.1-pro', 'tag': 'R4'},
+    ]
+    view = service.view_for_coordinator(assignment['id'], scope={'user_id': 7, 'project_path': '/project', 'conversation_id': 'coordinator', 'binding_revision': 1})
+    result = view['execution']['result']
+    fb = result['modelFallback']
+    assert fb['primaryModel'] == 'claude-opus-5.5'
+    assert fb['fallbackRounds'] == [3, 4]
+    assert fb['byModel']['kimi-k3.1-pro'] == [3, 4]
+    assert fb['byModel']['claude-opus-5.5'] == [1]
+    assert 'claude-opus-5.5' in fb['notice']
+    assert 'kimi-k3.1-pro' in fb['notice']
+    assert fb['totalRounds'] == 3
+    _validate_schema(view, 'view')
+
+
+def test_lead_view_has_no_fallback_section_for_a_clean_run(evidence):
+    c, assignment, service, *_ = evidence
+    view = service.view_for_coordinator(assignment['id'], scope={'user_id': 7, 'project_path': '/project', 'conversation_id': 'coordinator', 'binding_revision': 1})
+    assert 'modelFallback' not in view['execution']['result']

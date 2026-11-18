@@ -10,6 +10,10 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
+from lib.log import get_logger
+
+logger = get_logger(__name__)
+
 
 @runtime_checkable
 class StoragePort(Protocol):
@@ -78,7 +82,8 @@ class PrefetchedReads:
     """Independent reads of several owners, sent together in one ``query_many``.
 
     The first ``query`` for any listed (operation, payload) pair sends the
-    whole exchange on its own thread (no hand-off to another thread, which
+    whole exchange on its own thread, or reads the answers of the exchange
+    ``send_now`` already put on the wire (no hand-off to another thread, which
     in a busy interpreter waits for the lock); later ones wait for it if it is
     still in flight. Each answer serves as many reads as the request was
     listed (two owners that read one row list it twice); any other read, a
@@ -101,16 +106,48 @@ class PrefetchedReads:
         self._lock = threading.Lock()
         self._exchange_lock = threading.Lock()
         self._answers: list[Any] | None = None
+        self._pending: Any = None
 
     def _exchange(self) -> list[Any] | None:
         with self._exchange_lock:
             if self._answers is None:
-                from lib.storage.errors import StorageError
+                pending, self._pending = self._pending, None
                 try:
-                    self._answers = query_many(self._client, self._requests)
-                except StorageError:
+                    self._answers = (pending.answers() if pending is not None
+                                     else query_many(self._client, self._requests))
+                except Exception as error:
+                    logger.debug('[StoragePort] round exchange of %d read(s) failed; each read goes through '
+                                 'query instead: %s', len(self._requests), error, exc_info=True)
                     self._answers = []
             return self._answers
+
+    def send_now(self) -> None:
+        """Put the exchange on the wire now from this thread; readers take its answers.
+
+        The authority answers while the caller works on; the first reader
+        only reads the answers. A client that cannot split an exchange
+        (``send_query_many`` absent or declining) leaves it to the first
+        reader, as before.
+        """
+        send = getattr(self._client, 'send_query_many', None)
+        if send is None or len(self._requests) < 2:
+            return
+        with self._exchange_lock:
+            if self._answers is None and self._pending is None:
+                try:
+                    self._pending = send(self._requests)
+                except Exception as error:
+                    # Nothing usable was sent: the first reader sends the exchange itself.
+                    logger.debug('[StoragePort] round exchange not sent early; its first reader sends it: %s', error)
+                    self._pending = None
+
+    def close(self) -> None:
+        """Drop an exchange sent by ``send_now`` that no reader took, keeping its session."""
+        with self._exchange_lock:
+            pending, self._pending = self._pending, None
+        discard = getattr(pending, 'discard', None)
+        if discard is not None:
+            discard()
 
     def _take(self, key: str) -> int | None:
         with self._lock:

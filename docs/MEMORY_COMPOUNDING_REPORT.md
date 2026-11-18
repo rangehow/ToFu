@@ -8,6 +8,9 @@ the defect point, adds a cross-request arm (`evaluations/owner_memory/midtask.py
 measures and ships lesson triggers (`evaluations/owner_memory/triggers.py`). Section 9 scales the defect replay to 126 cases
 with power and diagnoses why lessons in context still fail (`evaluations/owner_memory/scale.py`). Section 10 measures
 action-time lesson selection with one-time delivery on the same frozen cases (`evaluations/owner_memory/action_time.py`).
+Section 11 diagnoses its two failures (provider/judge refusals and a median of 27 lessons per Turn), and measures a
+signature-matched candidate with a neutral check line against a production arm run concurrently, under a pre-registration
+with an explicit missing-data rule.
 Private owner content is reported only as counts and topics.
 
 ## 给主人的一页摘要
@@ -85,13 +88,21 @@ Private owner content is reported only as counts and topics.
 - **代价也大。** 每个 Turn 平均多送 32.6 条经验（中位 27 条、约 34 KB）。收益集中在"新送到了对的经验"的 28 个案例（+15.5 个百分点），其余几乎为零，说明多送的大部分是噪音。
 - **下一步。** 选择方向是对的（检索 2.4 倍）。要上线需要：(1) 不让一轮里的常见词把同一主题的大量经验刷进来（例如每条经验在一个 Turn 里只按它触发情境里最独特的标识符命中一次）；(2) 先处理网关对 910C 内容的拒答，否则任何把这类经验送得更多的方案都会丢数据。
 
+**第六次测量（2026-11-18，见第 11 节）：两个缺陷都修好了，但结果仍然不显著，没有上线，`lib/` 不变。**
+
+- **拒答的真相有两层。** 评审根本看不到经验文本，昨天能评的输入今天也拒答——§10 的"多丢的行"有一大半是网关几小时内的漂移，不是候选本身；这次测量让 production 对照组和候选组在同一个交错顺序里重新跑，消掉这个混淆。但经验文本确实会引起拒答：把 event 组送过的 802 条经验逐条单独发给模型，有 9 条被拒（8 条三次全拒），7 条是 slime/Megatron/sglang 在 Hope/910C（含 TAUD）上的训练运维内容；另外 31 条同主题经验 0 次拒答。不是主题词，是累积起来的情境描述。
+- **修法在渲染与选择这两个负责人处。** 检查行不再复述整条 trigger，只写"当你碰到 `<标识符>` 时：<做法>"，这 8 条经验的拒答从 24/24 降到 5/27；选择只在"这条经验 trigger 里的标识符在本轮新出现"时才放行（成功的轮次还要求这个标识符在语料里只指向一条经验），同一 Turn 内不重复。没有任何新阈值或 top-k。
+- **实测结果。** 案例组缺行率 11.5%（production）/12.7%（event）/11.8%（signature），拒答 36/42/39 次——不再有多丢的行。每个 Turn 多送的经验中位数 27 → 10 条，文本 34 KB → 8.8 KB（−74%）。对的经验送到 49/127（production 25，event 61），复发案例 9/99 → 27/99，没丢掉 production 已覆盖的案例。
+- **但上线条件没过。** 全部 126 个案例、缺行算没避开：避开率 +2.5 个百分点 [−1.7, +7.2]，区间含 0。80 个无关任务在已评分行上 99.77% → 99.65%（−0.05 [−0.69, +0.64]），没有质量损失；把每个未评分的行都算作偏离，点估计 −1.4，来源是拒答而不是答偏（854 行评分里只有 5 个 partial）。
+- **结论。** 在"新送到了对的经验"的 24 个案例里避开率 4.9% → 16.7%，机制有效；问题是送到的案例数不够多，剩下的瓶颈是选择的精度与覆盖面（没有标识符的 trigger 永远不触发），不是渲染或噪音。"越用越好"仍未证明。
+
 ## 1. Verdict: not shown
 
 | Claim part | Evidence | Status |
 |---|---|---|
 | Memory helps at one point in time | MEMORY-EVAL baseline: application 31.7% with prefetch, 28.3% without; Coordinator full context 56.2% → 43.8% without prefetch (`docs/modules/context_engineering.md`, "Owner understanding: design record", Decision 8; `docs/OLD_REPO_RECOVERY_MEMORY.md`, "Experiment findings"; raw `.eval-runs/owner-memory/private/baseline-report.txt`, coordinator/full `appliedRate` 0.5625) | partially shown (small effect, one snapshot) |
 | An always-present owner profile helps at one point in time | 1b K1 +20.0 pp; 1c K1 +16.1 pp [+5.4, +28.6] but 1c NOT PASSED (K3) (`k3-1c/REPORT-k3.md`); FM-2x2 PASS (`fm2x2/private/analysis.json` `verdict: {profile|L1: PASS, profile|L0: PASS}`) | shown in the lab; **not in production**: Phase 1 is unmerged (`docs/OLD_REPO_RECOVERY_MEMORY.md` §A) and My Context has 0 active items |
-| The system improves as it is used (compounding) | Earlier experiments never varied corpus age. The before/after-lesson replay (§6, 2026-11-16) now does: on 23 real defects, avoidance is 4.3% before and 4.3% after the lesson, difference 0.0 pp, 95% CI [−8.3, +7.3]. From the defect point (§7.3, 11 cases): −3.0 pp [−21.2, +15.2]. In later, different requests that met the same defect (§7.4, 7 requests): 0 of 21 avoided with or without the earlier lesson. With lesson triggers (§8): defect point +3.0 pp [−15.2, +24.2], later requests 0/21 → 1/21. At scale (§9, 126 cases, 6 trials): production +1.8 pp [−1.5, +5.3] (power ≈ 1.0 for 10 pp); with the lesson in front of the model +17.4 pp [+10.9, +24.6] | **not shown in production, now with power: a lesson the model sees helps clearly, but production shows the right lesson in 25 of 126 cases, and a model with the lesson in context mostly ignores it (17 of 25 hits). A pre-action check fixes that (+21.3 pp) but has no deliverable form yet (§9.4). Action-time selection with one-time delivery (§10) shows the right lesson in 61 of 127 cases and holds unrelated quality, but its avoidance gain (+6.1 pp [+0.7, +11.7] on judged rows) does not survive counting the rows it makes fail (+2.6 pp [−3.2, +8.5]); not shipped** |
+| The system improves as it is used (compounding) | Earlier experiments never varied corpus age. The before/after-lesson replay (§6, 2026-11-16) now does: on 23 real defects, avoidance is 4.3% before and 4.3% after the lesson, difference 0.0 pp, 95% CI [−8.3, +7.3]. From the defect point (§7.3, 11 cases): −3.0 pp [−21.2, +15.2]. In later, different requests that met the same defect (§7.4, 7 requests): 0 of 21 avoided with or without the earlier lesson. With lesson triggers (§8): defect point +3.0 pp [−15.2, +24.2], later requests 0/21 → 1/21. At scale (§9, 126 cases, 6 trials): production +1.8 pp [−1.5, +5.3] (power ≈ 1.0 for 10 pp); with the lesson in front of the model +17.4 pp [+10.9, +24.6] | **not shown in production, now with power: a lesson the model sees helps clearly, but production shows the right lesson in 25 of 126 cases, and a model with the lesson in context mostly ignores it (17 of 25 hits). A pre-action check fixes that (+21.3 pp) but has no deliverable form yet (§9.4). Action-time selection with one-time delivery (§10) shows the right lesson in 61 of 127 cases and holds unrelated quality, but its avoidance gain (+6.1 pp [+0.7, +11.7] on judged rows) does not survive counting the rows it makes fail (+2.6 pp [−3.2, +8.5]). The signature-matched, neutrally rendered form (§11) removes the excess missing rows and two thirds of the added text and still gives only +2.5 pp [−1.7, +7.2] over all 126 cases; not shipped** |
 | Live use makes memory better | §2: the corpus grows, but injection is fixed at 2 items per Turn, 3.4% of injected items are opened, 1 of 477 is cited, owner items are 0, and lifecycle states are 0 | **not shown**; inputs accumulate, use does not visibly improve |
 
 So "the more it's used, the better it gets" is **not demonstrated**. What is demonstrated: memory and the profile each help a little
@@ -1024,4 +1035,137 @@ python -m evaluations.owner_memory scale --private $P --key-hints 6672 --stop-on
 python -m evaluations.owner_memory scale --private $P --run-name scale-v1 --stage report
 python -m evaluations.owner_memory scale --private $P --key-hints 6672 --stop-on-429 --jobs 16 \
   --run-name scale-event-unrelated --stage interference --trials 6 --fix event
+```
+
+## 11. Sixth measurement: signature-matched checks, neutral rendering, and what the missing rows really were (2026-11-18)
+
+Code: this change (`evaluations/owner_memory/action_time.py`: `select_by_signature`, `render_signature_check`,
+`deliver_signature_lessons`; the `signature` arm in `scale.py`/`midtask.py`, `--base-arms`, the
+`missingNotAvoided` analysis). Private evidence: `scale/PREREGISTRATION-signature.txt` (digest at writing
+`3f81bea9…`, before any arm of this candidate was run), `runs/scale-signature/`, `runs/scale-signature-unrelated/`,
+`diagnosis/refusals-2026-11-18/` (probe scripts and cached probe answers). **`lib/` is unchanged.**
+
+### 11.1 Which delivered texts make the model or judge refuse
+
+Two separate mechanisms, both measured, not inferred from topic names.
+
+- **The judge never sees a lesson.** Its input is the task request, the work so far, the defect rubric and the
+  response, with lesson names masked. Re-sending today the judge inputs of rows that were judged successfully on
+  2026-11-17 (S041 `shown` and `without`, S117 `production`) is refused 3/3. A line-level delta-debug of S041's
+  judge input leaves exactly one line: the case rubric's "SIGNS OF AVOIDING IT" text about RL training-run
+  supervision (`Before any resubmit, the response checks for existing supervisors per job … run_slime.sh …
+  RESUME_CKPT …`). **A large part of §10's missing rows is drift over hours in what the gateway refuses, not the
+  delivered lesson text.** Concretely: S040's recorded `production` request (0 of 6 refused on 2026-11-17) is now
+  refused 2 of 3, its `event` request 3 of 3, and the `event` arm had been run hours after the arms it was compared
+  with. Any arm comparison against rows recorded hours earlier inherits this drift; that is why this measurement
+  re-runs `production` in the same seeded interleaved order (`--base-arms production`).
+- **Delivered lesson text does cause refusals, and it is identifiable.** Each of the 802 lessons the `event` arm
+  delivered, sent alone as its event check line (`- When <trigger>: <description> (lesson: <name>)`) to the agent
+  model: 9 refused, 8 of them 3/3 on retest (`diagnosis/refusals-2026-11-18/isolate-line.json`, `retest.json`).
+  Seven are about LLM RL training operations — slime/Megatron/sglang training on Hope/Ascend (910C), including TAUD:
+  `910c_9b_gate_nvme_staging_mandatory_fp32_master_on_cpu_910c_exp_config`,
+  `a100_sglang_tp4_custom_all-reduce_crash_hope_in-place_container_crash_loops`,
+  `hope_80g_mem-fraction_queue_admission_supervisor_migration`,
+  `run_slime_zero-padded_tracker_octal_crash_hope_submit_drift_2026-11-17`,
+  `taud_resume_cold_start_102_gb_dcp_load_from_ins_60_min_5_mbs`,
+  `taud_smoke_launcher_traps_py_unbound_post-restart_hope_cli_fallback`, `slime-9b-save-cost-and-ray-liveness` —
+  plus one UI lesson (`emit-content-block-styling-and-json-pretty-print`) whose refusal is not reproducible enough to
+  explain. The other 31 Hope/910C/TAUD/slime lessons in the store: 0 refusals. **It is not the topic words:**
+  word-level delta-debugging finds no stable trigger word (minimal word sets reproduce only 0–1 of 3 times); it is
+  the accumulated situation prose.
+- **The rendering fix is at the rendering owner.** Rendering the same lessons as one line that names the identifiers
+  the round already contains plus the lesson's action — `- When you touch \`<identifier>\`: <description>
+  (trust: <class>; path: <path>)`, no trigger prose, no name — takes those lessons from 24 of 24 refused probe calls
+  to 5 of 27, and three of those five are one credential-handling description (`internal_push_credentials…`, which
+  should also be shortened at write time). The trigger no longer restates the situation, which is also what made it
+  verbose. The real corpus is not rewritten: replay materializes a slice, so this is a store/rendering-owner change,
+  not a data patch.
+
+### 11.2 Noise: a lesson fires on its own trigger's identifier, once
+
+A lesson is eligible at a closed tool round only when an identifier of its recorded trigger (the confidence gate's
+`_SPECIFIC_RE`, registered tool names excluded) appears in that round's actions or errors and in no earlier round of
+the conversation. A failed round matches any such identifier; a successful round matches only a *key*, an identifier
+in exactly one listed lesson's signature (a shared identifier names a topic, not a situation). Already-shown lessons
+are dropped by the history scan as before; the existing BM25 scorer ranks the eligible lessons over the round's
+evidence; role fit and the existing two-per-round cap apply as at turn start. No threshold, top-k, window or flag.
+
+Offline on the 127 cases (no model call, disclosed in the pre-registration): the case lesson is in front of the model
+at the defect point in 49 cases (production 25, §10's event 61), and the added text per Turn drops from a median of
+27 lessons / 34 KB to 10 lessons / 8.8 KB (in the built run manifest: median 11 / 9.3 KB, max 44 lessons, against 124
+and 168 KB). Alternatives measured and not taken: every new identifier (49 cases, median 19), failed rounds only
+(32, 2), identifiers inside the BM25 pool and gate (42, 12), identifiers also named in the description (41, 13).
+
+### 11.3 Results (6 trials per arm, all arms run concurrently, missing rows counted as not avoided / not on task)
+
+| Condition | Measured | Holds? |
+|---|---|---|
+| A. Avoided rate, production → signature, all 126 cases, missing = not avoided | 15.6% → 18.1%, **+2.5 pp [−1.7, +7.2]**, 83 Turn clusters | **no** |
+| A. Same, judged rows only (secondary) | +2.7 pp [−1.8, +8.0], 114 units | — |
+| A. Recurrence subset (99) | +1.5 pp [−2.8, +6.5] | no |
+| A. Own subset (27) | +6.2 pp [−4.3, +19.1] | no |
+| A. production → event, re-run concurrently (reference) | +4.4 pp [−0.7, +9.6] | no |
+| A. event → signature | −1.9 pp [−7.2, +3.7] | equal within noise |
+| Q. Unrelated on-task, 80 tasks, judged rows | 99.77% → 99.65%, −0.05 pp [−0.69, +0.64], 3 partial verdicts in 854 | yes |
+| Q. Same, every missing row scored 0 (strictest reading) | 89.4% → 88.0%, −1.4 pp [−5.5, +2.6] | point estimate < 0 |
+
+- **The refusal defect is gone.** Case arms, planned rows with no verdict: production 87/756 = 11.5%, event
+  96/756 = 12.7%, signature 86/726 = 11.8%; provider refusals 36, 42, 39 respectively. The fix arm loses
+  rows at the other arms' level, not 96 against ~18 as in §10. Unrelated: 10.4% vs 11.7%, provider refusals
+  39 production vs 36 signature. Note that today's baseline refusal level is higher than on 2026-11-17 (both
+  provider and judge), and it is roughly symmetric between arms, which is exactly why this measurement
+  re-ran production concurrently rather than comparing with recorded rows.
+- **The noise defect is gone.** Lessons added per Turn: median **27 → 10**, mean 32.6 → 12.3, max 124 → 44;
+  carrier bytes median **34,162 → 8,803** (−74%), max 167,926 → 37,555. On the 80 unrelated tasks: median
+  8.5 lessons, 6.4 KB. No new threshold, top-k or cap: the eligibility rule plus the existing two-per-round
+  cap and the already-shown dedupe.
+- **Retrieval is lower than the noisy candidate's, as predicted.** The case lesson is in front of the model at
+  the defect point in 49 of 127 cases (production 25, §10's event 61); recurrence 9/99 → 27/99 (event 38/99).
+  No case production covered was lost. Per-case table: `runs/scale-signature/retrieval-signature-per-case.tsv`.
+- **The mechanism still works where it fires.** In the 24 cases where the signature arm newly brings the case
+  lesson, avoidance goes 4.9% → 16.7% (+11.8 pp). In the 25 cases both arms reach it, 35.3% → 33.3%. In the
+  77 cases where neither reaches it, 12.6% → 13.6%. Delivering the right lesson at the right moment helps;
+  this candidate does it less often than §10's, and 12 fewer covered cases is roughly the size of the effect
+  being looked for.
+
+### 11.4 Decision and owner-level verdict
+
+**Not shipped; `lib/` is unchanged.** The pre-registered ship rule fails: over all 126 cases with missing rows
+counted as not avoided, avoidance improves by +2.5 pp with a 95% CI of [−1.7, +7.2], which includes 0. Quality
+on the 80 unrelated tasks holds on judged rows (−0.05 pp [−0.69, +0.64]); under the strictest reading, where every
+unjudged row is scored off-task, the point estimate is −1.4 pp, and that number is produced by refusals, not by
+off-task answers (5 partial verdicts in 854 judged rows).
+
+What this sixth measurement establishes:
+
+1. **Both §10 defects were structural and are fixed at their owners.** Rendering a lesson as one line naming the
+   identifiers the round already touched plus its action, instead of restating its whole trigger, removes the
+   refusal excess; gating eligibility on the lesson's own trigger identifiers (new in this round, key-only on
+   successful rounds) removes two thirds of the added text. Neither needs a tuned threshold or top-k.
+2. **Much of §10's "candidate-specific" missing data was measurement design, not the candidate.** The judge never
+   sees lesson text, and judge inputs that passed on 2026-11-17 are refused today. Comparing an arm run now with
+   arms run hours earlier confounds content with drift. Any later experiment here must re-run its control arm in
+   the same interleaved order; the harness now supports that (`--base-arms production`).
+3. **The remaining bottleneck is precision, not volume or rendering.** Both candidates avoid the defect more often
+   where they deliver the right lesson at the right round, and neither lifts the all-case rate significantly,
+   because they reach 49–61 of 126 cases and the per-case gain (~12–16 pp where newly delivered) is not large
+   enough to clear the Turn-cluster noise. To get a shippable effect, selection must reach the case lesson in
+   substantially more cases without re-admitting the topic noise: the trigger-signature index needs to cover
+   lessons whose trigger has no identifier (they never fire today), and the matching must tolerate paraphrase
+   without falling back to BM25-over-everything.
+4. **"Tofu gets better the more it is used" is still not shown.** Six measurements, one shipped mechanism (lesson
+   triggers, §8), and the best outcome result remains a point estimate of +2.5 to +4.4 pp with intervals including
+   zero, on 126 frozen cases with 6 replays per arm.
+
+### 11.5 Reproduce
+
+```bash
+P=<canonical>/.eval-runs/memory-replay/private
+# free; refuses if any recorded request would change
+python -m evaluations.owner_memory scale --private $P --run-name scale-signature --stage run --dry-run   --trials 6 --base-arms production --fix event,signature
+python -m evaluations.owner_memory scale --private $P --key-hints 6672 --stop-on-429 --jobs 16   --run-name scale-signature --stage run --trials 6 --base-arms production --fix event,signature
+python -m evaluations.owner_memory scale --private $P --key-hints 6672 --stop-on-429 --jobs 16   --run-name scale-signature --stage judge
+python -m evaluations.owner_memory scale --private $P --run-name scale-signature --stage report
+python -m evaluations.owner_memory scale --private $P --key-hints 6672 --stop-on-429 --jobs 16   --run-name scale-signature-unrelated --stage interference --trials 6 --fix signature
+# resume-until-done wrapper (server restarts do not kill it): $P/scale/drive-signature.sh cases|unrelated
 ```

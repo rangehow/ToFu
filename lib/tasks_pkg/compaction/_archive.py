@@ -29,6 +29,20 @@ ARCHIVE_MESSAGES_BUDGET_BYTES = (
     - MAX_COMPACTION_ARCHIVE_RECEIPT_BYTES)
 
 
+# compaction_archive.list returns a conversation's archives OLDEST first and
+# accepts at most this many (SQL operations_pkg/_archives.py and the native
+# semantic_executor.rs both bound ``limit`` to 1..1000, as prune bounds
+# ``keep``). A smaller limit selects the oldest archives, never the newest.
+ARCHIVE_LIST_LIMIT = 1000
+
+
+def newest_compaction_archives(store, conv_id, *, user_id, count, **scoped) -> list[dict]:
+    """The ``count`` newest archive metadata rows of a conversation, newest first."""
+    archives = store.list_compaction_archives(
+        conv_id, user_id=user_id, limit=ARCHIVE_LIST_LIMIT, **scoped)
+    return list(reversed(archives[-count:]))
+
+
 def summary_dispatch_calls(usage) -> list[dict]:
     """Bound observed call identities only; selection is not dispatch proof."""
     if not isinstance(usage, dict):

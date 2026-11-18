@@ -1,0 +1,21 @@
+{
+  "type": "paper",
+  "venue": "acl",
+  "title": "Half an ULP Decides: Predicting Which BF16 Updates Need Stochastic Rounding",
+  "authors": "Anonymous",
+  "topic": "predicting stale bfloat16 weight updates half ulp selective stochastic rounding without FP32 master weights",
+  "novelty_queries": [
+    "BF16 stochastic rounding optimizer master weights",
+    "stale updates bfloat16 rounding weight update"
+  ],
+  "audience": "ACL / NLP efficiency reviewers",
+  "goal": "Explain why pure-BF16 training stalls (updates below half an ulp round away), show that a half-ulp test predicts exactly which updates stall, and that stochastically rounding only those parameters matches FP32 master weights at a fraction of the random-bit cost.",
+  "voice": "confident, precise, no hedging",
+  "lang": "en",
+  "page_limit": 4,
+  "writer_model": "gpt-6.1-sol",
+  "judge_model": "gpt-5.5",
+  "project_lead": "sample-paper project lead",
+  "previous_pdf": "previous/previous.pdf",
+  "output_dir": "delivered"
+}

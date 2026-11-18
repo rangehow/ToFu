@@ -310,9 +310,12 @@ def test_surface_opens_current_image_with_pointer_and_keyboard_then_disposes(
     assert page.evaluate('previewImages.length') == before + 2
     page.evaluate('''() => {
       const root = imageSurface.root;
+      const retained = ['image-ratios', 'injection-preview'].map(id => document.getElementById(id));
       imageSurface.dispose();
-      // Reattach the retired root so leaked listeners can actually receive events.
+      // Dispose releases the root and its rendered nodes. Reattach both so
+      // leaked listeners can actually receive events.
       document.getElementById('markdown-image-host').append(root);
+      root.append(...retained);
     }''')
     image.click()
     image.focus()

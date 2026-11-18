@@ -489,18 +489,16 @@ def _script_digest(candidate: dict) -> dict:
 
 def _script_critic_choice(ctx: dict, candidates: list[dict]) \
         -> tuple[int, str, dict]:
-    prompt = (
+    from lib.production.critic import critic_prompt, parse_critic_choice
+    prompt = critic_prompt(
         'You are an independent short-video creative director. Select the '
         'stronger script/storyboard. Judge factual grounding, spoken narrative '
         'flow, shot and modality diversity, asset-to-claim relevance, executable '
         'motion, and visual continuity. Penalize repeated templates, decorative '
         'motion, generic media searches, and visuals that do not prove the '
-        'spoken claim. Output ONLY JSON: {"winner":1,"reason":"specific '
-        'concise reason","scores":[{"content":0,"evidence":0,"motion":0,'
-        '"coherence":0},{"content":0,"evidence":0,"motion":0,'
-        '"coherence":0}]}. Scores are integers 0..10. Candidates:\n'
-        + json.dumps([_script_digest(item) for item in candidates],
-                     ensure_ascii=False, separators=(',', ':'))[:28000])
+        'spoken claim.',
+        ('content', 'evidence', 'motion', 'coherence'),
+        [_script_digest(item) for item in candidates])
     _raise_if_script_aborted(ctx, 'before critic')
     content, usage = _llm_chat(
         [{'role': 'user', 'content': prompt}], max_tokens=1200,
@@ -511,17 +509,12 @@ def _script_critic_choice(ctx: dict, candidates: list[dict]) \
             max_429_attempts=ctx.get('max_429_attempts')),
         log_prefix='[Recipe:script-critic]')
     _raise_if_script_aborted(ctx, 'after critic')
-    match = _JSON_BLOCK_RE.search(content or '')
-    if not match:
-        raise ValueError('script critic reply has no JSON object')
-    raw = json.loads(match.group(0))
-    winner = int(raw.get('winner') or 0) - 1
-    if winner < 0 or winner >= len(candidates):
-        raise ValueError('script critic selected an invalid candidate')
-    reason = re.sub(r'\s+', ' ', str(raw.get('reason') or '')).strip()[:500]
-    return winner, reason or 'critic selected the stronger script', {
+    winner, reason, scores = parse_critic_choice(
+        content, len(candidates), label='script critic',
+        default_reason='critic selected the stronger script')
+    return winner, reason, {
         'usage': usage if isinstance(usage, dict) else {},
-        'scores': raw.get('scores') if isinstance(raw.get('scores'), list) else [],
+        'scores': scores,
     }
 
 

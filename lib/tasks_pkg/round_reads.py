@@ -14,11 +14,26 @@ read path, which answers exactly the requests named here and reads anything
 else (a continued Turn's source record, a retry after a transient failure)
 live.
 
-Freshness: one round. The exchange is sent at the round's first boundary
-read and dropped once the round's prompt is admitted; a later reader of the
-same rows (the finalizer's steer check) reads live.
+Sending: the exchange is a storage round trip, so the Turn thread puts it on
+the wire (``PrefetchedReads.send_now``: the send half of one pipelined
+exchange on a pooled session) as soon as its rows can no longer change before
+the boundary reads them: at the previous round's ``ready`` end (its tools have
+settled; the round's deferred events persist meanwhile), or at the round's
+preparation when there was none (the first round, a ``tools_in_flight`` round
+end). The authority answers while the Turn thread runs the round close, the
+next round's tool assembly, input translation and hygiene; the steer check
+then only reads the answers. A hand-off to an executor thread was measured
+first and did not help: under the GIL a worker waits for the busy Turn thread's
+switch interval before it can send.
+A steer committed between the send and the boundary is no different from one
+committed just after the boundary read: the next boundary, a blocking wait or
+the finalizer (which reads live) delivers it.
 
-Entry: begin_round_reads, round_reads, end_round_reads.
+Freshness: one round. The exchange is dropped once the round's prompt is
+admitted (or the loop ends); a later reader of the same rows (the finalizer's
+steer check) reads live.
+
+Entry: prefetch_round_reads, begin_round_reads, round_reads, end_round_reads.
 Dependencies: lib.storage.port, lib.turn_lifecycle, lib.acceptance.turns,
 lib.memory.working_facts.repository.
 """
@@ -31,6 +46,8 @@ from lib.log import get_logger
 logger = get_logger(__name__)
 
 ROUND_READS_KEY = '_roundReads'
+# Set by prefetch_round_reads: the next begin_round_reads keeps that exchange.
+_PREFETCHED_KEY = '_roundReadsPrefetched'
 
 
 def _requests(task: dict[str, Any]) -> list:
@@ -59,9 +76,11 @@ def _requests(task: dict[str, Any]) -> list:
     return requests
 
 
-def begin_round_reads(task: dict[str, Any]):
-    """Issue this round's boundary reads in one exchange; the previous round's are dropped."""
-    task.pop(ROUND_READS_KEY, None)
+def _send(task: dict[str, Any]):
+    from lib.tasks_pkg.conversation_delivery import storage_free_runtime
+    if storage_free_runtime(task):
+        # The storage-free agent wheel does not ship lib.storage.
+        return None
     from lib.storage import get_storage_client
     from lib.storage.port import PrefetchedReads
     try:
@@ -69,6 +88,7 @@ def begin_round_reads(task: dict[str, Any]):
         if not requests:
             return None
         reads = PrefetchedReads(get_storage_client(), requests)
+        reads.send_now()
     except Exception:
         # Each owner reads live and reports its own failure.
         logger.debug('[Task %s] round reads not issued', task.get('id'), exc_info=True)
@@ -77,10 +97,33 @@ def begin_round_reads(task: dict[str, Any]):
     return reads
 
 
+def prefetch_round_reads(task: dict[str, Any]):
+    """Send the next round's boundary reads now, at a ``ready`` round end."""
+    end_round_reads(task)
+    reads = _send(task)
+    if reads is not None:
+        task[_PREFETCHED_KEY] = reads
+    return reads
+
+
+def begin_round_reads(task: dict[str, Any]):
+    """This round's boundary reads: the prefetched exchange, else one sent now."""
+    prefetched = task.pop(_PREFETCHED_KEY, None)
+    if prefetched is not None and task.get(ROUND_READS_KEY) is prefetched:
+        return prefetched
+    end_round_reads(task)
+    return _send(task)
+
+
 def round_reads(task: dict[str, Any]):
     """This round's ``PrefetchedReads``, or None (owners then read live)."""
     return task.get(ROUND_READS_KEY)
 
 
 def end_round_reads(task: dict[str, Any]) -> None:
-    task.pop(ROUND_READS_KEY, None)
+    reads = task.pop(ROUND_READS_KEY, None)
+    task.pop(_PREFETCHED_KEY, None)
+    if reads is not None:
+        # The last round end's exchange has no next round: read and drop its
+        # answers (already sent long ago) so its pooled session stays usable.
+        reads.close()

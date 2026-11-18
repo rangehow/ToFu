@@ -37,7 +37,9 @@ def test_ordinary_turn_review_in_actual_application(page, owner, tmp_path, width
         page.wait_for_function("typeof window.TofuModules?.resolveAction?.('loadConversation')==='function'")
         page.locator(f'.conv-item[data-conv-id="{task["convId"]}"]').wait_for(state='attached')
         page.evaluate("id=>window.TofuModules.resolveAction('loadConversation')(id)", task['convId'])
-        action = page.locator('[data-conversation-action="review"]')
+        # Scoped to this Turn: loading replaces a previously open conversation
+        # asynchronously, and its replies carry review actions too.
+        action = page.locator(f'[data-turn-id="{task["_turnId"]}"] [data-conversation-action="review"]')
         action.click()
         dialog = page.locator('[data-turn-review-dialog]')
         review = dialog.locator('[data-turn-review]')
@@ -146,7 +148,7 @@ def test_changed_delivery_keeps_independent_evidence_and_requires_exact_version_
         _dismiss_onboarding_modals(page)
         page.wait_for_function("typeof window.TofuModules?.resolveAction?.('loadConversation')==='function'")
         page.evaluate("id=>window.TofuModules.resolveAction('loadConversation')(id)", task['convId'])
-        page.locator('[data-conversation-action="review"]').click()
+        page.locator(f'[data-turn-id="{task["_turnId"]}"] [data-conversation-action="review"]').click()
     try:
         current = read()
         configured = page.request.post(origin + path, data={

@@ -59,46 +59,20 @@ def call_configured_fallback(
         # Notify via phase event (transient UI status, does NOT pollute
         # assistantMsg.content).  The done event already carries
         # fallbackModel / fallbackFrom / fallbackReason for the persistent badge.
-        if isinstance(e, ModelRefusalError):
-            task_events.append_event(
-                task,
-                build_phase(
-                    Phase.RETRYING,
-                    detail=(
-                        f'⚠️ 模型 {original_model} 拒绝回答 — '
-                        f'已自动改用 {fallback_model} 重新生成…'
-                    ),
-                    detailKey='stream.phase.refusalFallback',
-                    detailArgs={'model': original_model, 'fallback': fallback_model},
-                ),
-            )
-        else:
-            task_events.append_event(
-                task,
-                build_phase(
-                    Phase.RETRYING,
-                    detail=(
-                        f'⚠️ 模型 {original_model} 请求失败（{_fb_kind}）：'
-                        f'{_fb_detail[:120]} — 已自动回退到 {fallback_model} 继续生成…'
-                    ),
-                ),
-            )
         # Publish the decision before streaming so live and reloaded clients can
         # explain a long-running fallback. Clear the stamp if no reply is produced.
-        task_events.append_event(
-            task,
-            build_event(
-                EventType.MODEL_FALLBACK,
-                fallbackModel=fallback_model,
-                fallbackFrom=original_model,
-                fallbackKind=_fb_kind,
-                fallbackReason=_fb_reason[:300],
-            ),
-        )
-        task['_fallback_model'] = fallback_model
-        task['_fallback_from'] = original_model
-        task['_fallback_reason'] = _fb_reason[:300]
-        task['_fallback_kind'] = _fb_kind
+        from . import _switch
+        if isinstance(e, ModelRefusalError):
+            _switch.stamp_model_switch(
+                task, source=original_model, destination=fallback_model,
+                kind=_fb_kind, reason=_fb_reason,
+                detail_key='stream.phase.refusalFallback',
+                detail_args={'model': original_model, 'fallback': fallback_model},
+                round_num=round_num)
+        else:
+            _switch.stamp_model_switch(
+                task, source=original_model, destination=fallback_model,
+                kind=_fb_kind, reason=_fb_reason, round_num=round_num)
         # A model fallback is a significant state change — record it in the
         # audit trail so the optimizer/operator can see WHICH model failed,
         # how often, and why (the analyzer already mines 'model_fallback').
@@ -121,6 +95,10 @@ def call_configured_fallback(
             fallback_model,
             _fb_reason[:200],
         )
+        if _fb_kind == 'content_filter':
+            # Remember the exact history the primary refused; the next round
+            # retries the primary only if this history actually changed.
+            _switch.record_refused_history(task, messages)
 
         fallback_body, _vision_fallback_from = _requests.prepare_fallback_body(
             task,

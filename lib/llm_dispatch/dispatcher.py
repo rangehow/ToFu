@@ -1052,17 +1052,37 @@ class LLMDispatcher:
         The order never empties the candidates.
         """
         limited = rotate_models or {}
+        self._expire_shared_contention_locked(time.monotonic())
         fresh = [slot for slot in candidates
                  if _model_identity(slot) not in limited]
         if not fresh:
             oldest = min(limited[_model_identity(slot)] for slot in candidates)
-            return [slot for slot in candidates
-                    if limited[_model_identity(slot)] == oldest]
-        self._expire_shared_contention_locked(time.monotonic())
+            return self._off_rejecting_credentials_locked(
+                [slot for slot in candidates
+                 if limited[_model_identity(slot)] == oldest])
         rejecting = {_model_identity(slot) for slot in fresh
                      if self._rejecting_locked(slot)}
-        return [slot for slot in fresh
-                if _model_identity(slot) not in rejecting] or fresh
+        return self._off_rejecting_credentials_locked(
+            [slot for slot in fresh
+             if _model_identity(slot) not in rejecting] or fresh)
+
+    def _off_rejecting_credentials_locked(self, pool) -> list[Slot]:
+        """Prefer *pool*'s slots whose credential is not in a rejection run.
+
+        A gateway AppId throttled on one Model is usually throttled on its
+        others too (2026-11-18: AppId …5409 refused gemini-3.8-flash and then
+        gpt-6-luna within one fetch_url extract while other AppIds served
+        both). Only a per-credential lane gate is evidence about an AppId; a
+        provider/model project limit is not. Never empties the pool.
+        """
+        rejecting = {(provider, credential)
+                     for (provider, credential, _model), state
+                     in self._contention_strikes.items()
+                     if credential and state.rejecting_since is not None}
+        if not rejecting:
+            return pool
+        return [slot for slot in pool
+                if slot.quota_lane()[:2] not in rejecting] or pool
 
     def _rejecting_locked(self, slot) -> bool:
         """Whether a gate of *slot* is inside an unbroken rejection run."""

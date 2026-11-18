@@ -75,15 +75,37 @@ not the binding barrier. `conversationId` is immutable once created.
 Title priority is active todo, unfinished todo, Goal title, request first line,
 then first edited path. One later higher-priority signal may refine the title.
 
-`ProjectWorkItem.status` is exactly `active | completed | failed | cancelled`.
+`ProjectWorkItem.status` is exactly `active | completed | failed | cancelled | interrupted`.
 `completed` requires the canonical completed verdict plus a terminal success
 status (a normal question reply can qualify); missing finish evidence, truncation
-and internal fences are `failed`, user abort/revocation is `cancelled`. There is
+and internal fences are `failed`, user abort/revocation is `cancelled`.
+`settle_work_item` derives the status with the restart-aware `workspace_outcome`,
+so an attempt a server restart drained (`_abort_reason='server_shutdown'`,
+SYSTEM_RECOVERY evidence) is `interrupted`, rendered in Project Context as
+`已中断·重启后继续` (interrupted by restart, resumed). It is terminal: the resumed
+attempt is a new physical task (`conversation-attempt:<attempt>`) with its own
+work item. Problem: drained Workers finished `cancelled` and the feed called them
+`已取消`. Alternatives rejected: leaving the item active for the resumed attempt
+(it never settles another task's item) and lifting a later completion over a
+recorded status. The one permitted rewrite of a terminal status is
+`cancelled -> interrupted`, which both authorities accept on `work.finish` and
+fold without a second `work_result` row. Boot recovery
+(`repair_restart_cancelled_work_items`, run first by `recover_active_work_items`)
+walks `project_brain.recovery.snapshot` with `include_cancelled`, relabels a
+cancelled item only when its own task result reads `interrupted`, and records
+receipt `project_brain.repairs.v1/restart-drain-cancelled-to-interrupted` after a
+complete walk; later boots skip it, and an authority without
+`includesCancelled` leaves the receipt unwritten. Engines deploy only once
+certified (NATIVE_STORAGE_LIFECYCLE "Engine certification gate"), so the
+application may run against a store that still refuses `interrupted`
+(`Invalid Project work terminal status`): settlement then finishes the item
+`cancelled` rather than leaving it active, and this repair relabels it after
+the engine that accepts `interrupted` is deployed. There is
 no open/claimed/blocked/lease/dependency/reopen/transfer state. Later turns create
 new work. Neither work completion nor candidate `merged` confirms canonical
 delivery: settlement records intent separately in Integration `origin.delivery`.
 
-A terminal `work_result` narrative is emitted only when the work produced changed paths/artifacts or ended failed/cancelled. Ordinary no-output success does not grow Feed. Startup reads task metadata/verdict evidence for orphaned `active` items; it acknowledges workspace intent before `work.finish`, preserving active retry eligibility if intent persistence fails. Missing execution evidence fails closed, never adopts a sibling checkout or changes conversation ownership. Problem: a one-shot 1000-project snapshot blocked boot once project history reached the scan limit, even with no active work. Decision: the recovery operation returns bounded pages (1000 scanned projects plus one lookahead) with a storage-issued `nextCursor` whenever `capped` is true. Startup settles one page before reading the next, including empty active-work pages. The continuation names the last scanned project in the authority's stable project-identity order (native digest-keyed project documents, SQL primary key): settlement never moves a project across it, and a complete walk reads each project once. Offsets or update-time order would skip or revisit projects as settlement changes that order, and legacy native update-index rows repeated projects on every page. Missing/nonadvancing cursors fail closed. Raising the global limit or accepting incomplete recovery was rejected: neither guarantees complete recovery with bounded page memory. The request/page schema lives in `project_brain_v1.schema.json`.
+A terminal `work_result` narrative is emitted only when the work produced changed paths/artifacts or ended failed/cancelled/interrupted. Ordinary no-output success does not grow Feed. Startup reads task metadata/verdict evidence for orphaned `active` items; it acknowledges workspace intent before `work.finish`, preserving active retry eligibility if intent persistence fails. Missing execution evidence fails closed, never adopts a sibling checkout or changes conversation ownership. Problem: a one-shot 1000-project snapshot blocked boot once project history reached the scan limit, even with no active work. Decision: the recovery operation returns bounded pages (1000 scanned projects plus one lookahead) with a storage-issued `nextCursor` whenever `capped` is true. Startup settles one page before reading the next, including empty active-work pages. The continuation names the last scanned project in the authority's stable project-identity order (native digest-keyed project documents, SQL primary key): settlement never moves a project across it, and a complete walk reads each project once. Offsets or update-time order would skip or revisit projects as settlement changes that order, and legacy native update-index rows repeated projects on every page. Missing/nonadvancing cursors fail closed. Raising the global limit or accepting incomplete recovery was rejected: neither guarantees complete recovery with bounded page memory. The request/page schema lives in `project_brain_v1.schema.json`.
 
 ### `work_result` entry composition
 

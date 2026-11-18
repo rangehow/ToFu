@@ -1170,32 +1170,9 @@ B was faster in every pair: `noop` 49.4/52.5/51.7/52.5/51.2/52.0 →
 7.5 % to 1.0 % of the Turn thread and the prefetch identity left the tool
 worker's critical path.
 
-### What remains (floor)
-
-`noop` is 47 ms against codex's 38. In the after profile
-(`profiles/after`), per round:
-
-- request preparation 9 % (Anthropic translation of the new rows, the
-  recount, sealing, raw-archive capture, the request-diagnostic event);
-- awaiting the `read_files` worker 8 %: the worker runs about half of that
-  (project-guidance `Path.resolve`, the read, the prefetch identity of the
-  small values); the rest is the hand-off;
-- the pre-request barrier 8 %: it awaits the previous round's `ready` events,
-  which queue behind that round's post-tool state snapshot. Emitting the
-  snapshot after the `ready` position was measured: about 1 ms, inside the
-  noise, and it reorders the evidence log, so it was not taken;
-- send and response headers 7 %, the steer check's storage round trip 6 %,
-  tool pipeline CPU 8 % (freshness `stat`, settlement, aggregate budget);
-- the MCP relay 3 %: the round's tool partitions ask the execution host's
-  bridge whether MCP is connected, one relay connection per round (the
-  endpoint file read and a TCP connect each time). Only `mcp__` names can be
-  MCP tools, but the partitions feed several consumers that read the whole
-  write set, so a lazy MCP lookup is a wider change than this one;
-- event appends (projection capture, frame detach) 3 %.
-
-Not per round, but visible in the same profile: each execution shard's first
-Turn scans `importlib.metadata` entry points for experiment plugins (about
-50 ms of its time to first request), once per process.
+The remainder it named (barrier behind the state snapshot, the `read_files`
+worker, the steer read, the MCP relay, the experiment-plugin scan) is taken
+up in "Round floor III" below, which also holds the current floor.
 
 ### Alternatives considered
 
@@ -1204,8 +1181,143 @@ Turn scans `importlib.metadata` entry points for experiment plugins (about
 - **Storing section results on the composer message dicts**: messages are
   mutable and their private fields reach snapshots; a `str`-keyed memo cannot
   go stale.
-- **Deferring the post-tool snapshot behind the `ready` position**: measured
-  at about 1 ms, and it changes the event order the Inspector reads.
+- **Emitting the post-tool snapshot after the `ready` position**: measured at
+  about 1 ms, and it changes the event order the Inspector reads ("Round
+  floor III" keeps the order and splits the storage run instead).
+
+## Round floor III: the itemized remainder (2026-11-18)
+
+Owners: `lib/tasks_pkg/persistence_wait.py` (`mark_state_evidence_tail`),
+`lib/tasks_pkg/event_delivery.py` (`starts_run`), `lib/tasks_pkg/round_reads.py`,
+`lib/storage/port.py` (`PrefetchedReads.send_now`), `lib/storage/v2_client.py`
+(`send_query_many`), `tofu_db/wire.py` (`send_many`),
+`lib/tasks_pkg/committed_steers.py`, `lib/runtime/loopback_relay.py`
+(`relay_session`, session verbs), `lib/project_mod/instructions.py`
+(`resolved_scoped_guidance`), `lib/experiments/registry.py`.
+Artifacts: `output/harness_perf/round-floor-iii-20261118/` (`abab/` the
+final comparison, `abab-pre-drain/` the run before change 3's drain,
+`profiles/` py-spy after each step).
+
+### Problem
+
+"Round floor II" left `noop` at 47 ms against codex's 38 and named five
+items: the pre-request barrier waiting behind the previous round's state
+snapshot, the `read_files` worker, the steer check's storage read, one MCP
+relay connection per round, and a one-off ~50 ms experiment-plugin scan on
+each shard's first Turn.
+
+### Changes
+
+1. **The barrier no longer waits for the state snapshot.** The post-tool
+   state snapshot is Request Inspector evidence, which by the 2026-10-28
+   owner decision never blocks a paid request. Its delivery now heads its own
+   storage run (`_Delivery.starts_run`), so the receipts before it commit
+   without its bytes, and a `ready` round end whose accepted events end with
+   it defers its barrier only through the position before it. The order of
+   the event log is unchanged; the next `tools_in_flight` or terminal barrier
+   drains it. A receipt appended after the snapshot keeps the whole set
+   awaited.
+2. **The steer read is sent at the previous round's `ready` end, by the Turn
+   thread itself.** The round's boundary exchange (Turn head, requirements,
+   working facts) is split into a send half and a receive half on one pooled
+   storage session (`StorageV2Session.send_many`,
+   `StorageV2Client.send_query_many`, `PrefetchedReads.send_now`; contract in
+   [Storage](STORAGE.md)). The authority answers while the Turn thread closes
+   the round, assembles the next round's tools and runs hygiene; the steer
+   check then only reads the answers. A Turn head that predates the round's
+   deferred event write (now the usual case) reuses the executor's last
+   revision-fenced write instead of reading the whole Turn: that write holds
+   every steer committed up to its revision.
+3. **An untaken exchange is drained.** The last round end of a Turn sends
+   reads no round takes; dropping them retired a pooled session per Turn,
+   which cost a reconnect later and showed as a worse `noop` p95 in
+   `abab-pre-drain/`. `end_round_reads` now reads and drops them.
+4. **One relay connection per Turn for catalog reads.** Each Turn invocation
+   opens a `relay_session`; a bridge's declared session verbs (MCP `catalog`,
+   `list_servers`; the browser registry reads), which answer at once from
+   the owner's memory and change nothing, share one kept connection instead
+   of an endpoint-record read and a TCP connect per round. A failed kept
+   connection is closed and the read is sent once on a fresh one (a pure
+   read, never an effect); every other verb keeps one connection per call.
+5. **The guidance check stops re-resolving.** `check_project_guidance`
+   resolved each target and root once and `read_scoped_guidance` resolved
+   them again; the tool worker now calls `resolved_scoped_guidance`. The rest
+   of the worker's time is the read itself and the prefetch identity.
+6. **No entry-point scan for built-in experiment specs.** A version-pinned
+   reference whose key is mounted is exact whatever discovery would add
+   (registration refuses a second owner of a key), so the registry scans
+   `importlib.metadata` only for a miss or an unpinned reference. The Turn
+   prelude's context-cost spec is pinned to built-ins: the scan left the
+   profile entirely (65 samples before, 0 after).
+
+Specs: `tests/tasks_pkg/test_pre_request_checkpoint.py` (trailing snapshot,
+receipt after it), `tests/tasks_pkg/test_task_event_batch_delivery.py`
+(`starts_run`), `tests/tasks_pkg/test_round_reads_prefetch.py`,
+`tests/tasks_pkg/test_committed_steers_revision.py`, the `send_many` /
+`send_query_many` cases of `tests/tofudb/test_tofudb_v2_client.py` and
+`tests/storage/test_storage_v2_client.py`,
+`tests/server/test_loopback_relay_session.py`, and the discovery cases of
+`tests/experiments/test_experiment_framework.py`. Each new behavioral spec
+fails on the previous code.
+
+### ABAB (`round_profile.py --no-spy`, 10 pairs, fresh roots, host load 7-48)
+
+Arm A `0c4a093e5d` ("Round floor II" delivered), arm B `192a5ac8a9`.
+Median / p95 (n), ms; codex and pi from the fixed-stub reference run
+("Round hops").
+
+| metric | A | B | codex | pi |
+|---|---|---|---|---|
+| `noop` steady round | 47.7 / 60.2 (570) | **45.7** / 56.1 (570) | 38.3 | 3.0 |
+| `run_command true` round | 57.4 / 89.0 (120) | **56.8** / 86.4 (120) | 187.9 | 21.5 |
+
+`noop` per pair 47.2/47.0/48.5/50.2/47.2/46.6/47.7/48.4/47.3/47.2 →
+45.3/46.1/44.4/45.7/45.9/45.7/45.7/45.8/47.0/44.6 (B faster in 10/10);
+`true` 56.9/58.2/57.7/56.7/57.2/56.8/57.8/58.8/56.9/57.5 →
+54.8/56.7/56.3/58.5/57.3/56.5/57.2/57.0/57.1/56.1 (7/10).
+
+### What remains (floor)
+
+`noop` is 45.7 ms, 7.4 ms above codex. The five items are closed as waits:
+in the final profile (`profiles/final`) the pre-request barrier is 5.5 % of
+the Turn thread (10 % before change 1), the steer read 2.2 % (6-7 %), the MCP
+relay about 1 % (3 %), the plugin scan gone. Wall time fell less than those
+shares because the round is bound by Python CPU under one interpreter lock
+and by the event pump's storage commits: a removed wait mostly becomes CPU
+that another thread was waiting to run. What is left per round:
+
+- request preparation 13 % (translation, recount, sealing, raw-archive
+  capture, request diagnostics) and request build/snapshot 6 %;
+- the provider send and response headers 8 %; SSE parsing 3 %;
+- awaiting the `read_files` worker 8 %: its read (`read_project_snapshot`'s
+  per-component `openat` walk) and the prefetch identity's canonical JSON of
+  the small config values, plus the GIL hand-off back;
+- tool pipeline CPU 8 % (freshness `stat`, settlement, aggregate budget),
+  the post-tool snapshot build 4 %, event appends 4.5 %;
+- the barrier 5.5 %: the round's tool receipts' own commit, a durability
+  contract (receipts ACK before the next paid request); the event pump's
+  commits are the storage engine's round trips (`_read_exact` dominates the
+  pump's busy samples), so shortening it means fewer or cheaper engine
+  commits, not more overlap.
+
+The structural next step is fewer Python passes per round (request
+preparation is now the largest single owner), not more overlap: under the
+GIL, overlap only helps where both sides wait on I/O.
+
+### Alternatives considered
+
+- **Sending the round reads from the context-provider executor** (measured
+  first): the steer share did not move, because the worker waited up to the
+  5 ms switch interval for the busy Turn thread before it could send. The
+  Turn thread sending the request bytes itself has no hand-off.
+- **Caching the MCP catalog answer per Turn**: changes freshness (a catalog
+  change mid-Turn would apply only to the next Turn); the kept connection
+  keeps per-round freshness.
+- **Warming experiment discovery at shard boot**: still pays the scan in
+  every shard (startup cost, Design principle 3's lazy loading); pinned
+  built-in references need no scan at all.
+- **Retiring an untaken exchange's session**: simplest, but measured as a
+  reconnect per Turn in the `noop` tail.
 
 ## Alternatives considered
 

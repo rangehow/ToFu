@@ -534,8 +534,8 @@ def _restart_after_acceptance(owner: int, action_id: str, requester: dict, reque
 
 
 def delegated_conversation_control(task: dict, scope: dict, arguments: dict, *, control):
-    """``control_conversation`` with ``owner_delegation``: Continue, checkpoint resume, Stop
-    or a session model change (``set_model``).
+    """``control_conversation`` with ``owner_delegation``: Continue, checkpoint resume, Stop,
+    a Worker hold/resume or a session model change (``set_model``).
 
     The grant, the owner trigger and the audit record precede ``control``, the
     shared session command (``session_control.control_session``). It runs as
@@ -557,9 +557,9 @@ def delegated_conversation_control(task: dict, scope: dict, arguments: dict, *, 
         if not isinstance(arguments.get(name), str) or not arguments[name].strip():
             raise ValueError(f'{name} is required')
     action = arguments.get('action')
-    if action not in ('continue', 'checkpoint_resume', 'stop', 'set_model'):
-        raise ValueError('Under the owner\u2019s delegation, only continue, checkpoint_resume, stop and '
-                         'set_model are available; regenerate needs the owner\u2019s own request, and '
+    if action not in ('continue', 'checkpoint_resume', 'stop', 'hold', 'resume', 'set_model'):
+        raise ValueError('Under the owner\u2019s delegation, only continue, checkpoint_resume, stop, hold, '
+                         'resume and set_model are available; regenerate needs the owner\u2019s own request, and '
                          'follow_up belongs to the Worker\u2019s own Project Coordinator')
     owner = scope['user_id']
     requester = router_requester(task, scope)

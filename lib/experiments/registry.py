@@ -171,7 +171,10 @@ class ExperimentRegistry:
     provider exists; ambiguity is rejected instead of silently picking latest.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, discover: Callable[[], Any] | None = None) -> None:
+        # ``discover`` mounts the external bundles before the first lookup a
+        # version-pinned built-in hit cannot answer exactly (see _require_provider).
+        self._discover = discover
         self._lock = threading.RLock()
         self._plugins: dict[tuple[str, str], ExperimentPlugin] = {}
         self._strategies: dict[tuple[str, str, str], StrategyProvider] = {}
@@ -257,6 +260,12 @@ class ExperimentRegistry:
                           *, kind: str, plugin_id: str, capability_id: str,
                           version: str | None) -> Any:
         version = self._require_version(version)
+        if self._discover is not None and (
+                version is None or (plugin_id, capability_id, version) not in providers):
+            # A pinned key that is mounted is the exact answer whatever else
+            # discovery mounts (registration refuses a second owner of a key);
+            # a miss or an unpinned reference needs the complete catalog.
+            self._discover()
         with self._lock:
             if version is not None:
                 provider = providers.get((plugin_id, capability_id, version))
@@ -348,7 +357,7 @@ class ExperimentRegistry:
         }
 
 
-_REGISTRY = ExperimentRegistry()
+_REGISTRY = ExperimentRegistry(discover=lambda: discover_experiment_plugins())
 _LOAD_LOCK = threading.RLock()
 _BUILTINS_LOADED = False
 _DISCOVERY_LOADED = False
@@ -409,7 +418,12 @@ def discover_experiment_plugins(*, entries: Any = None,
 
 
 def registry(*, discover: bool = True) -> ExperimentRegistry:
-    """Return the process registry after mounting built-in capabilities."""
+    """Return the process registry after mounting built-in capabilities.
+
+    ``discover=False`` defers the entry-point scan to the first lookup that
+    needs it, so resolving a spec pinned to built-in providers (the context-
+    cost experiment on every Turn's prelude) never scans package metadata.
+    """
     _load_builtins()
     if discover:
         discover_experiment_plugins()

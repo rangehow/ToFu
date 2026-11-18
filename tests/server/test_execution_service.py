@@ -238,6 +238,37 @@ def test_joined_stop_records_the_exit_a_successor_host_reads_as_dead(tmp_path, m
     assert owners.owner_state(owner) == 'dead'
 
 
+def test_exit_record_awaits_the_kernel_proof_of_a_host_still_exiting(tmp_path):
+    """2026-11-18 05:13 and 07:17: the stop saw the lease and command line gone
+    while the host still ran its last thread (state R), and recorded nothing."""
+    import lib.process_owner as owners
+    service = ProbeService(str(tmp_path), sys.executable)
+    exiting = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(0.5)'])
+    try:
+        owner = {**owners.process_owner(), 'pid': exiting.pid,
+                 'started': owners._started(exiting.pid)}
+        record = {'pid': exiting.pid, 'processStartTime': int(owner['started']),
+                  'processOwner': owner, 'exitEvidence': str(tmp_path / 'process-exits')}
+        assert owners.owner_state(owner) == 'alive'
+        service._record_exit(record, time.monotonic() + 30)
+        assert list((tmp_path / 'process-exits').iterdir())
+    finally:
+        exiting.wait(30)
+
+
+def test_exit_record_gives_up_at_the_stop_deadline(tmp_path, caplog):
+    import lib.process_owner as owners
+    service = ProbeService(str(tmp_path), sys.executable)
+    owner = {**owners.process_owner()}
+    record = {'pid': owner['pid'], 'processStartTime': int(owner['started']),
+              'processOwner': owner, 'exitEvidence': str(tmp_path / 'process-exits')}
+    started = time.monotonic()
+    service._record_exit(record, started + 0.3)
+    assert time.monotonic() - started < 5
+    assert not (tmp_path / 'process-exits').exists()
+    assert 'was not recorded' in caplog.text
+
+
 def test_resident_launch_uses_prepared_interpreter_after_marker_changes(tmp_path):
     import shlex
     service = ProbeService(str(tmp_path), '/unusable-manager/python')

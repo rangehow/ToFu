@@ -502,6 +502,23 @@ It caches nothing beyond the object; its owner scopes freshness. The model
 round's boundary reads use it (`lib/tasks_pkg/round_reads.py`,
 [Harness performance](HARNESS_PERFORMANCE.md), "Round floor").
 
+`PrefetchedReads.send_now()` puts the exchange on the wire from the calling
+thread before anyone reads it: storage.v2 splits `query_many` into
+`StorageV2Client.send_query_many` (a pooled session sends every request,
+`StorageV2Session.send_many`) and the returned pending exchange's `answers()`
+(the receive half on the same session, then exactly `query_many`'s outcome
+rules). Only an exchange of two or more single-frame reads that fits one send
+segment splits, so a send never waits for the peer; otherwise nothing is sent
+and the first reader sends as before. Between the halves the session serves
+nothing else, and a pending exchange that is never read returns its session
+retired. The round's boundary reads send this way at the previous round's
+`ready` end, so the authority answers while the Turn thread works on; a
+hand-off to an executor thread was measured first and gained nothing, because
+under the GIL the worker waits for the busy Turn thread's switch interval.
+Specs: the `send_many` cases of `tests/tofudb/test_tofudb_v2_client.py`, the
+`send_query_many` cases of `tests/storage/test_storage_v2_client.py`,
+`tests/tasks_pkg/test_round_reads_prefetch.py`.
+
 - same command ID + same operation and canonical payload returns the committed
   response;
 - same command ID + different operation or payload is `database_conflict`
@@ -1524,8 +1541,37 @@ The existing authority and shadow remain untouched for explicit recovery.
 peer, and workflow turn sources waiting behind a conversation task. Dequeue
 leases rather than deletes a source; only accepted Turn/attempt creation may
 finalize it.
-leases rather than deletes a source; only accepted Turn/attempt creation may
-finalize it.
+
+### A queued Turn pair runs before any later source (2026-11-18)
+
+**Problem:** two kinds of row share the queue. A queued Turn pair (a human
+submit or a requeued steer behind a live Turn) commits its input/output Turns
+at once; every other source (peer message, workflow step, a locally drained
+steer salvaged with `enqueue_message`) gets its Turns only when dispatched.
+Dequeue ordered all of them by `(priority, position)`, and a pair's binding
+priority (100) sorts after every declared kind. On the watchdog lead the
+ending Turn salvaged a fault signal (priority 10, no Turn yet) and a scheduled
+review (pair, Turns 198/199); the signal ran first and created Turns 200/201,
+so the review found only a checkpoint ending after its own position
+(`checkpoint_not_before_target`), rebuilt 1.77M tokens of history, and its
+own checkpoint was rejected.
+
+**Decision:** `queue.dequeue` (SQL `_queue_dequeue`, native `queue.rs`
+`Request::Dequeue`) serves a row whose Turn pair exists before every
+Turn-less source, earliest pair first, and returns nothing while that pair's
+lease is held instead of jumping it. Priority still orders the Turn-less
+sources among themselves; their Turns are appended at dispatch and cannot
+strand anyone. `message_queue.next_dispatchable_turn` mirrors the order.
+Durable Turn order is never rewritten.
+
+**Alternatives rejected:** sorting pairs by binding priority (a pair's Turn
+order is already fixed, so reordering pairs strands one); creating a human
+submit's Turns only at dispatch (the transcript must show the queued input
+when it is accepted); reordering durable Turns at dispatch (breaks every
+ordinal consumer, checkpoints included).
+Specifications: `test_queued_turns_run_in_turn_order_whatever_a_later_source_priority`
+(`tests/conversation/test_conversation_command_inject_mode.py`) and
+`queue::completion_outcome_tests::a_queued_turn_pair_runs_before_a_later_higher_priority_source`.
 
 **Problem:** a queued Turn pair commits its input Turn plus a `pending` output
 Turn whose attempt carries `queueBinding`, long before any executor task owns

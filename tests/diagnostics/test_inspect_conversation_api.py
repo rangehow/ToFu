@@ -461,6 +461,26 @@ def test_api_json_mode_absence_errors_and_partial_evidence(monkeypatch, capsys):
     assert payload['document']['diagnostic_resume_total_mib'] == 5
 
 
+def test_api_json_partial_evidence_says_why_on_stderr(monkeypatch, capsys):
+    """Exit 3 under --json named nothing: the report holding the reason was discarded.
+
+    Measured 2026-11-18 on coordinator-4950501b…: 126 Turns exceed the 32 MiB
+    default allowance; --json exited 3 with messages only up to 06:16 and no
+    word that 30 later Turns were unread or how to read them.
+    """
+    monkeypatch.setattr(inspector._DiagnosticAPI, 'MAX_TOTAL_BYTES', 3 * 1024 * 1024)
+    with api_server(lambda request: pages(
+            request, total=1, projection={'content': 'x' * (3 * 1024 * 1024)})) as url:
+        assert inspector.main(['conversation', '--api-url', url, '--json',
+                               '--no-anomalies']) == 3
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)['exitCode'] == 3
+    assert 'partial evidence (exit 3)' in captured.err
+    assert '0 read, 1 unread' in captured.err
+    assert 'INCOMPLETE: Turn 0 alone needs' in captured.err
+    assert 'resume: --start-index 0 --max-turns 1 --api-max-total-mib 5' in captured.err
+
+
 def _rule_note(llm_round):
     return {'type': 'system_note', 'noteKind': 'system-intervention',
             'reason': 'project_scoped_rules', 'llmRound': llm_round,

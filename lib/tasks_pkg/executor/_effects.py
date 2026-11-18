@@ -318,27 +318,33 @@ def is_tool_cancellation(exception):
                                   CommandAdmissionCancelled))
 
 
-def restart_unstarted_result(tool_name):
-    """A call a restart's quiesce cut before it started: interrupted and repeatable.
+def restart_unstarted_result(tool_name, task=None):
+    """A call a pause (restart quiesce or lead hold) cut before it started: interrupted and repeatable.
 
-    A restart's quiesce is a pause, not the owner's decision: the resumed attempt
-    must be able to run the call (incidents 2026-11-13 04:28 and 12:31).
+    A restart's quiesce or a lead's hold is a pause, not the owner's decision: the
+    resumed attempt must be able to run the call (incidents 2026-11-13 04:28 and 12:31).
     """
     from lib.tools.result_envelope import typed_tool_error
+    subject = _pause_subject(task)
     return typed_tool_error('tool_execution_interrupted', retryable=True, next_action=(
-        'A server restart paused this work before the call started; this was not a '
+        f'{subject[:1].upper()}{subject[1:]} paused this work before the call started; this was not a '
         'person\'s Stop and not a revoked authorization. Repeat the call when the work '
         'continues, through the normal tool gateway and authorization checks. Continue '
         'independent authorized work.'),
-        message=f'Tool "{tool_name}" never started: a server restart stopped the task first.',
+        message=f'Tool "{tool_name}" never started: {subject} stopped the task first.',
     ).to_envelope_text()
 
 
+def _pause_subject(task):
+    from lib.turn_verdict import pause_subject
+    return pause_subject(task.get('_abort_reason') if isinstance(task, dict) else '') or 'a server restart'
+
+
 def paused_by_restart(task):
-    """Whether a server restart (not a person, fence or authority) stopped ``task`` first."""
-    from lib.turn_verdict import RESTART_ABORT_REASONS
+    """Whether a pause (a server restart or a lead's hold), not a person, fence or authority, stopped ``task``."""
+    from lib.turn_verdict import PAUSE_ABORT_REASONS
     return (isinstance(task, dict) and bool(task.get('aborted'))
-            and task.get('_abort_reason') in RESTART_ABORT_REASONS)
+            and task.get('_abort_reason') in PAUSE_ABORT_REASONS)
 
 
 def tool_exception_result(task, tool_name, round_entry, exception, *, message=None):
@@ -354,7 +360,7 @@ def tool_exception_result(task, tool_name, round_entry, exception, *, message=No
     if message is None and is_tool_cancellation(exception) and paused_by_restart(task):
         # The cause's own text ("Agent stopped while waiting for persistence")
         # reads as a Stop to the resumed model; the restart is the cause.
-        message = (f'Tool "{tool_name}" was interrupted by a server restart before it '
+        message = (f'Tool "{tool_name}" was interrupted by {_pause_subject(task)} before it '
                    'returned; whether it took effect is unknown.')
     message = message or f'Tool "{tool_name}" failed with {type(exception).__name__}: {text_value(exception)}'
     if isinstance(exception, TimeoutError):
@@ -408,7 +414,7 @@ def tool_exception_result(task, tool_name, round_entry, exception, *, message=No
                      and (effect is None or isinstance(effect, dict)
                           and effect.get('state') == 'not_started'))
     if cancelled and never_entered and paused_by_restart(task):
-        return restart_unstarted_result(tool_name)
+        return restart_unstarted_result(tool_name, task)
     http_kind = http_status = None
     if not cancelled and not isinstance(exception, (PermissionError,
             FileNotFoundError, NotADirectoryError, ConnectionError)):
@@ -423,7 +429,8 @@ def tool_exception_result(task, tool_name, round_entry, exception, *, message=No
         action = 'Respect the cancellation; do not resume this operation automatically.'
         if paused_by_restart(task):
             # Restart-cut, but neither proven unstarted nor declared repeatable.
-            action = ('A server restart interrupted this call, not a person\'s Stop and not a revoked '
+            subject = _pause_subject(task)
+            action = (f'{subject[:1].upper()}{subject[1:]} interrupted this call, not a person\'s Stop and not a revoked '
                       'authorization. When this Turn continues, check whether the operation took '
                       'effect before repeating it, and continue the task.')
     elif isinstance(exception, PermissionError):

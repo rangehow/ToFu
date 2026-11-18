@@ -7,6 +7,10 @@ delegation, or for the Global Router the owner's delegation
 conversation_sync/turn_lifecycle, never an executor, route, database or
 synthetic human message. A follow_up gives an ended Worker session its next
 instruction as a new Turn through the project dispatch service, never a regenerate.
+A hold pauses a dispatched Worker's exact Attempt as a Stop does, but keeps its
+grant, checkout and assignment; resume continues that held Turn with the resume
+operation its settlement offers (docs/PROJECT_COORDINATION.md, "A lead holds a
+Worker without losing it").
 """
 from __future__ import annotations
 
@@ -200,9 +204,9 @@ def _control_session(task, scope, arguments, *, acting_principal=None):
             return set_session_model(task, scope, acting_principal, arguments, delegated=True)
         return set_session_model(task, scope, source_for_task(ProjectDispatchRepository(
             scope['user_id'], scope['project_path']), task, delegated=True)[0], arguments)
-    if action not in {'continue', 'checkpoint_resume', 'regenerate', 'stop', 'follow_up'}:
-        raise ValueError('action must be continue, checkpoint_resume, regenerate, stop, follow_up '
-                         'or set_model')
+    if action not in {'continue', 'checkpoint_resume', 'regenerate', 'stop', 'follow_up', 'hold', 'resume'}:
+        raise ValueError('action must be continue, checkpoint_resume, regenerate, stop, hold, resume, '
+                         'follow_up or set_model')
     if arguments.get('attachments') and action != 'follow_up':
         raise ValueError('attachments go with a follow_up instruction only')
     # Under the owner's delegation the grant was checked and recorded before this call.
@@ -211,7 +215,7 @@ def _control_session(task, scope, arguments, *, acting_principal=None):
     turn_id, attempt_id = _text(arguments, 'turn_id'), _text(arguments, 'attempt_id')
     key = _text(arguments, 'idempotency_key')
     expected = arguments.get('expected_revision')
-    if action != 'stop' and (type(expected) is not int or expected < 1):
+    if action not in ('stop', 'hold') and (type(expected) is not int or expected < 1):
         raise ValueError('expected_revision must be the observed Turn projectionRevision')
     principal = acting_principal or source_for_task(ProjectDispatchRepository(
         scope['user_id'], scope['project_path']), task, delegated=True)[0]
@@ -237,11 +241,12 @@ def _control_session(task, scope, arguments, *, acting_principal=None):
     command_id = 'session-control:' + digest
     if action == 'follow_up':
         return _follow_up(task, scope, arguments, turn=turn, config=config, command_id=command_id)
+    replayed = None
     if turn.get('currentAttemptId') != attempt_id:
-        if action == 'stop':
+        if action in ('stop', 'hold'):
             raise ValueError('The current Attempt changed; read get_conversation_status before acting')
-        current = get_attempt(turn['currentAttemptId'], user_id=owner)
-        if current.get('commandId') != command_id:
+        replayed = get_attempt(turn['currentAttemptId'], user_id=owner)
+        if replayed.get('commandId') != command_id:
             raise ValueError('The current Attempt changed; read get_conversation_status before acting')
 
     trusted = turn_dispatch(conversation_id, turn, config, user_id=owner)
@@ -254,25 +259,35 @@ def _control_session(task, scope, arguments, *, acting_principal=None):
         elif principal.kind != 'user':
             worker_control(repository_for(trusted.binding), task, trusted.checked())
 
+    if action in ('hold', 'resume') and trusted is None:
+        raise PermissionError(f'{action} applies to a Worker session a lead dispatched; use stop, continue or '
+                              'checkpoint_resume for any other session')
     if action == 'stop':
         # A repeated Stop of a settled Attempt must not plant a fresh
         # conversation-wide withdrawal against work started after that Stop.
         result = (conversation_turn_commands.abort_attempt(attempt_id, owner).value
                   if attempt['status'] in {'pending', 'running'} else
                   {'attemptId': attempt_id, 'status': attempt['status'], 'alreadyTerminal': True})
+    elif action == 'hold':
+        result = _hold(task, scope, turn, attempt)
+    elif action == 'resume' and replayed is not None:
+        # The held Turn already continues under this command: report it, start nothing.
+        result = {'turn': turn, 'attempt': replayed, 'idempotentReplay': True}
     else:
+        operation, anchor = (_held_resume_option(turn) if action == 'resume'
+                             else (action, arguments.get('resume_anchor')))
         if trusted is not None:
             target_principal = trusted.principal
             public_config = {}
         else:
             target_principal, _ = restore_execution_identity({**config, '_turnOwnerUserId': owner})
             public_config = {name: deepcopy(value) for name, value in config.items() if not name.startswith('_')}
-        body = {'commandId': command_id, 'operation': action,
+        body = {'commandId': command_id, 'operation': operation,
                 'expectedProjectionRevision': expected, 'config': public_config}
-        if arguments.get('resume_anchor') is not None:
+        if anchor is not None:
             # Anchors are exact values returned by canonical resumeOptions;
             # the command owner validates them, just as for a browser click.
-            body['resumeAnchor'] = arguments['resume_anchor']
+            body['resumeAnchor'] = anchor
         result = conversation_turn_commands.create_attempt(
             conversation_id, turn_id, owner, body, request_started_at=time.time(),
             principal=target_principal, trusted_dispatch=trusted).value
@@ -283,7 +298,48 @@ def _control_session(task, scope, arguments, *, acting_principal=None):
             'receipt': {key: value for key, value in result.items()
                         if key in {'aborted', 'attemptId', 'status', 'alreadyTerminal', 'cancelled',
                                    'dispatchWithdrawal', 'queueId', 'deletedTurnIds', 'conversationRevision'}},
-            'next_step': 'Read get_conversation_status to observe execution; acceptance is not completion.'}
+            'next_step': _HOLD_NEXT_STEP if action == 'hold' else (
+                'Read get_conversation_status to observe execution; acceptance is not completion.')}
+
+
+_HOLD_NEXT_STEP = ('The Worker stops at its checkpoint: its Turn settles interrupted with cause lead_hold and '
+                   'poll/get_project_workers show it as held. Its grant, checkout and assignment stay. When '
+                   'you want it to run again, read get_conversation_status and call action=resume with the held '
+                   "Turn's currentAttemptId and projectionRevision; cancel_project_work ends it instead.")
+
+
+def _hold(task, scope, turn, attempt):
+    """Stop the Worker's exact running Attempt at its checkpoint; its grant stays."""
+    from lib.conversation_sync.runtime import conversation_turn_commands
+    from lib.turn_verdict import LEAD_HOLD
+    if attempt['status'] not in {'pending', 'running'}:
+        if turn.get('status') == 'interrupted' and (turn.get('settlement') or {}).get('cause') == LEAD_HOLD:
+            return {'attemptId': attempt['attemptId'], 'status': attempt['status'], 'alreadyTerminal': True}
+        raise ValueError(f'This Attempt is {attempt["status"]}, not running: there is nothing to hold')
+    if (attempt.get('queueBinding') or {}).get('queueId'):
+        raise ValueError('This Attempt is still queued; hold a Worker once its Attempt runs')
+    provenance = (f'held by project lead conversation {scope["conversation_id"]} '
+                  f'(task {task.get("id")}, Turn {task.get("_turnId")})')
+    return conversation_turn_commands.hold_project_attempt(
+        attempt['attemptId'], scope['user_id'], provenance=provenance).value
+
+
+def _held_resume_option(turn):
+    """``(operation, anchor)`` resuming a held Turn: the option its settlement offers."""
+    from lib.conversations.restart_resume import RESUME_OPERATIONS
+    from lib.turn_verdict import LEAD_HOLD
+    settlement = turn.get('settlement') or {}
+    if turn.get('status') != 'interrupted' or settlement.get('cause') != LEAD_HOLD:
+        raise ValueError('resume continues a Worker a lead held; this Turn is '
+                         f'{turn.get("status")} ({settlement.get("cause") or "no cause"}). Use the '
+                         'operation its settlement.resumeOptions offers instead')
+    options = [option for option in settlement.get('resumeOptions') or () if isinstance(option, Mapping)]
+    for operation in RESUME_OPERATIONS:
+        for option in options:
+            if option.get('operation') == operation:
+                return operation, deepcopy(option.get('anchor'))
+    raise ValueError('This held Turn offers no continue or checkpoint_resume; follow_up gives it a new '
+                     'instruction instead')
 
 
 def _instruction(arguments):

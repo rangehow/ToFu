@@ -243,6 +243,33 @@ def test_continue_rebuilds_current_authority_and_keeps_run_id(authority, monkeyp
     assert '_principalContext' not in saved.call_args.kwargs['config']['parent_cfg']
 
 
+def test_continue_rebinds_workers_to_admitted_model_not_parents_fallback(authority, monkeypatch):
+    """A parent resumed on its refusal fallback must not silently move workers.
+
+    ``continue_resumed_model`` keeps the interrupted parent on the fallback
+    (``task['model']``) while the accepted selection stays in its config.
+    Workers follow the admitted selection, as a fresh spawn does; a worker
+    that fell back itself continues there through its own checkpoint.
+    """
+    row, task, *_ = authority
+    task['config']['model'] = 'accepted-model'
+    task['model'] = 'fallback-model'
+    task['_fallback_model'] = 'fallback-model'
+    task['_fallback_kind'] = 'resume_continuation'
+    published = {}
+    factory = Mock(return_value=SimpleNamespace(rehydrate_in_background=Mock()))
+    monkeypatch.setattr(_rehydrate, '_get_session', lambda key: published.get(key))
+    monkeypatch.setattr(_rehydrate, '_set_session', lambda key, value, **kw: published.setdefault(key, value))
+    monkeypatch.setattr(_rehydrate, 'MasterOrchestrator', factory)
+    monkeypatch.setattr(_rehydrate, '_resolve_output_dir', lambda key: '')
+    monkeypatch.setattr('lib.swarm.integration._state.add_session_alias', Mock())
+    monkeypatch.setattr('lib.swarm.persistence.save_session', Mock())
+    monkeypatch.setattr('lib.agent_inbox.untombstone', Mock())
+    tools = [{'type': 'function', 'function': {'name': 'allowed'}}]
+    assert _rehydrate._rehydrate_one(row, resume_task=task, tool_list=tools)
+    assert factory.call_args.kwargs['model'] == 'accepted-model'
+
+
 @pytest.mark.parametrize('receipt,catalog,expected', [
     (['grep_search'], ['search_files', 'new_privilege'], ['search_files']),
     # A habit alias names a different capability and never inherits authority.

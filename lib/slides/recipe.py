@@ -483,19 +483,16 @@ def _outline_digest(candidate: dict) -> dict:
 
 
 def _critic_choice(ctx: dict, candidates: list[dict]) -> tuple[int, str, dict]:
-    prompt = (
+    from lib.production.critic import critic_prompt, parse_critic_choice
+    prompt = critic_prompt(
         'You are an independent presentation creative director. Select the '
         'stronger outline. Judge: evidence grounding, narrative progression, '
         'visual-modality and layout diversity, cross-page continuity, content '
         'richness, and feasibility as editable native slides. Penalize generic '
         'card grids, unsupported charts, repeated compositions, and decorative '
-        'imagery that proves nothing. Output ONLY JSON: '
-        '{"winner":1,"reason":"specific concise reason","scores":['
-        '{"content":0,"evidence":0,"design":0,"coherence":0},'
-        '{"content":0,"evidence":0,"design":0,"coherence":0}]}. '
-        'Scores are integers 0..10. Candidates:\n'
-        + json.dumps([_outline_digest(item) for item in candidates],
-                     ensure_ascii=False, separators=(',', ':'))[:28000])
+        'imagery that proves nothing.',
+        ('content', 'evidence', 'design', 'coherence'),
+        [_outline_digest(item) for item in candidates])
     _raise_if_aborted(ctx, 'outline critic')
     content, usage = _llm_chat(
         [{'role': 'user', 'content': prompt}], max_tokens=1200,
@@ -507,17 +504,12 @@ def _critic_choice(ctx: dict, candidates: list[dict]) -> tuple[int, str, dict]:
             max_429_attempts=ctx.get('max_429_attempts')),
         log_prefix='[Slides:outline-critic]')
     _raise_if_aborted(ctx, 'outline critic')
-    match = _OUTLINE_JSON_RE.search(content or '')
-    if not match:
-        raise ValueError('outline critic reply has no JSON object')
-    raw = json.loads(match.group(0))
-    winner = int(raw.get('winner') or 0) - 1
-    if winner < 0 or winner >= len(candidates):
-        raise ValueError('outline critic selected an invalid candidate')
-    reason = re.sub(r'\s+', ' ', str(raw.get('reason') or '')).strip()[:500]
-    return winner, reason or 'critic selected the stronger plan', {
+    winner, reason, scores = parse_critic_choice(
+        content, len(candidates), label='outline critic',
+        default_reason='critic selected the stronger plan')
+    return winner, reason, {
         'usage': usage if isinstance(usage, dict) else {},
-        'scores': raw.get('scores') if isinstance(raw.get('scores'), list) else [],
+        'scores': scores,
     }
 
 

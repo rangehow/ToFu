@@ -181,11 +181,74 @@ def _finalize_superseded(task, fn_name, rn, round_entry, title, extra):
     return _SUPERSEDED_CONTENT
 
 
+_WITHDRAWN_CONTENT = (
+    'Withdrew owner question {guidance_id}: {reason}\n'
+    '{card} It no longer counts as an open owner question. The card stays '
+    'answerable: if the owner answers it anyway, '
+    'his answer still reaches you and overrides this withdrawal and anything '
+    'you decided meanwhile.')
+
+
+def _handle_withdraw_question(task, fn_name, tc_id, withdraw, rn, round_entry):
+    """The ask_human ``withdraw`` action: a lead withdraws its own open owner question.
+
+    Only a bound lead's question is indexed (``_relay_to_global_router``), so
+    only a bound lead can withdraw, and only a question of its own conversation
+    (``lib.router.proactive.questions.withdraw_question``).
+    """
+    from lib.router.proactive.questions import QuestionNotWithdrawable, withdraw_question
+    withdraw = withdraw if isinstance(withdraw, dict) else {}
+    guidance_id = str(withdraw.get('guidance_id') or '').strip()
+    reason = str(withdraw.get('reason') or '').strip()
+    refusal = None
+    if not guidance_id:
+        refusal = 'withdraw.guidance_id is required (the hg_ id of your open question).'
+    else:
+        try:
+            from lib.tasks_pkg.coordinator_policy import coordinator_scope
+            scope = coordinator_scope(task)
+        except Exception:
+            logger.warning('[Executor] ask_human withdraw: lead role lookup failed, task=%s',
+                           task_log_tag(task.get('id', '?')), exc_info=True)
+            scope = None
+        if scope is None:
+            refusal = ('Only a bound lead (project Coordinator or Global Router) withdraws '
+                       'owner questions, and only its own.')
+        else:
+            try:
+                _record, card = withdraw_question(
+                    scope['user_id'], scope['conversation_id'], guidance_id, reason=reason,
+                    live_rounds=task.get('toolRounds'))
+            except QuestionNotWithdrawable as error:
+                refusal = f'Cannot withdraw {guidance_id}: {error}.'
+    if refusal is not None:
+        logger.info('[Executor] ask_human withdraw refused: guidance_id=%s, task=%s',
+                    guidance_id, task_log_tag(task.get('id', '?')))
+        meta = _build_simple_meta(fn_name, refusal, source='HumanGuidance', title='Question not withdrawn',
+                                  snippet=refusal[:200], badge='error')
+        _finalize_tool_round(task, rn, round_entry, [meta])
+        return tc_id, refusal, False
+    logger.info('[Executor] ask_human withdrew owner question: guidance_id=%s, card=%s, task=%s',
+                guidance_id, card, task_log_tag(task.get('id', '?')))
+    tool_content = _WITHDRAWN_CONTENT.format(
+        guidance_id=guidance_id, reason=reason,
+        card=('Its card is marked withdrawn.' if card != 'unmarked'
+              else 'Its card could not be marked (its Turn is running elsewhere or unreadable).'))
+    meta = _build_simple_meta(fn_name, tool_content, source='HumanGuidance',
+                              title=f'Withdrew question {guidance_id}', snippet=reason[:200],
+                              badge='withdrawn', extra={'withdrawnGuidanceId': guidance_id})
+    _finalize_tool_round(task, rn, round_entry, [meta])
+    return tc_id, tool_content, False
+
+
 @tool_registry.handler('ask_human', category='human_guidance',
                        description='Ask the user a question and wait for their response')
 def _handle_ask_human(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, project_path, project_enabled, all_tools=None):
     """Handle ask_human tool — block until the user responds unless blocking=false."""
     from lib.ids import short_id
+
+    if fn_args.get('withdraw') is not None:
+        return _handle_withdraw_question(task, fn_name, tc_id, fn_args['withdraw'], rn, round_entry)
 
     # Batch mode: questions[] takes precedence over single-question fields.
     questions = fn_args.get('questions')

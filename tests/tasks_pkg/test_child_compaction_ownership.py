@@ -164,7 +164,7 @@ def test_archived_prior_receipt_uses_authorized_child_scope_without_parent_fallb
     class ScopedStore:
         def list_compaction_archives(self, conv_id, *, user_id, limit, archive_scope):
             assert conv_id == root['convId'] and user_id == child['_userId']
-            assert archive_scope == child['_archiveScope'] and limit == 8
+            assert archive_scope == child['_archiveScope']
             calls.append('list')
             return [{'id': 'child-receipt'}]
 

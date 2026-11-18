@@ -885,6 +885,37 @@
         },
         "_bgCommandInjects": {
           "type": "array"
+        },
+        "modelFallback": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Review receipt of the rounds that ran on a non-primary model. Present only when some authoring round ran on a model other than the accepted one (a content_filter or availability fallback). The final content stays the Worker's own; this names the models/rounds so a lead sees a partly-fallback draft without opening the transcript.",
+          "properties": {
+            "primaryModel": {
+              "type": "string"
+            },
+            "byModel": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              }
+            },
+            "fallbackRounds": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            },
+            "totalRounds": {
+              "type": "integer"
+            },
+            "notice": {
+              "type": "string"
+            }
+          }
         }
       }
     },
@@ -2349,14 +2380,33 @@
     "coordinatorSettlement": {
       "type": "object",
       "additionalProperties": false,
+      "description": "A request's final receipt. Every reason but authority_ended names the report Turn the Coordinator finished with; authority_ended records a Stop, rebinding or changed human source recovery found, which has no report.",
       "required": [
         "sourceAttemptId",
-        "reportTurnId",
         "turnId",
         "attemptId",
         "taskId",
         "reason"
       ],
+      "if": {
+        "properties": {
+          "reason": {
+            "const": "authority_ended"
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "required": [
+            "reportTurnId"
+          ]
+        }
+      },
+      "else": {
+        "required": [
+          "reportTurnId"
+        ]
+      },
       "properties": {
         "sourceAttemptId": {
           "$ref": "#/$defs/id"
@@ -2378,7 +2428,8 @@
             "complete",
             "needs_user",
             "budget",
-            "no_progress"
+            "no_progress",
+            "authority_ended"
           ]
         }
       }

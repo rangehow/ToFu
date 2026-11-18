@@ -2884,13 +2884,15 @@ summary.thinking-header::-webkit-details-marker{display:none}
  * A smaller label on the prose baseline sinks the pill below the line, so the
  * label scales with the prose (floored at --font-size-xs) and one em raise
  * centres the pill inside the line box at every prose size from 13px up.
+ * The raise is .15em: at .125em the Inter (dark) 14.5px prose, where the
+ * label sits on its floor, left the pill 1.06px low.
  * Rejected: vertical-align:middle targets the Latin x-height and still sinks
  * under CJK; a fixed-px label needs a different raise per prose size. The
  * side margin separates the pill from CJK text, which has no word spaces.
  * The chevron is a flex-centred mask: a '›' glyph sat on the x-height below
  * CJK labels and leaked into the accessible name. forced-color-adjust keeps
  * the mask visible in forced-colors mode. */
-.md-ui-jump{display:inline-flex;align-items:center;gap:var(--space-1);padding:0 var(--space-2);margin:0 var(--space-1);border:1px solid var(--accent);border-radius:var(--radius-xs);background:var(--accent-subtle);color:var(--accent);font-family:inherit;font-size:max(var(--font-size-xs),.75em);font-weight:var(--weight-semibold);line-height:1.625;cursor:pointer;vertical-align:.125em;transition:background-color var(--transition),color var(--transition)}
+.md-ui-jump{display:inline-flex;align-items:center;gap:var(--space-1);padding:0 var(--space-2);margin:0 var(--space-1);border:1px solid var(--accent);border-radius:var(--radius-xs);background:var(--accent-subtle);color:var(--accent);font-family:inherit;font-size:max(var(--font-size-xs),.75em);font-weight:var(--weight-semibold);line-height:1.625;cursor:pointer;vertical-align:.15em;transition:background-color var(--transition),color var(--transition)}
 .md-ui-jump::after{
   content:'';flex:none;width:.375em;height:.75em;background:currentColor;forced-color-adjust:none;
   -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 16'%3E%3Cpath d='M1.75 3.5 6.25 8 1.75 12.5' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/contain no-repeat;
@@ -24576,6 +24578,12 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
     flex: 0 0 100%;
     order: 10;
   }
+  /* The row aligns to its top edge, so a failure or warning pill (taller
+   * than the metadata line) would drop its middle below the action line. It
+   * keeps the metadata line's layout height and paints its edge outside. */
+  .conversation-surface .ptool-result-header[data-action-summary]:has(> .ptool-text > .ptool-artifact-header) > :is(.ptool-badge-err, .ptool-badge-reject, .ptool-badge-warn, .ptool-badge-skip, .ptool-badge-interrupted) {
+    margin-block: calc((var(--leading-title) * var(--conversation-font-size-meta) - var(--space-5) - 2 * var(--control-edge-inset)) / 2);
+  }
 }
 
 /* Step controls (command/output folds, per-call debug anchors) and disclosure
@@ -24868,8 +24876,9 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
 
 /* A call row also holds its body's own margins (flow-root): a nested
  * receipt's spacing stays inside the row instead of collapsing through it
- * into an unpainted gap in the card's sides. */
-.conversation-surface .conversation-turn-blocks > .conversation-tool-panel[data-tool-panel-state="open"] ~ .conversation-block[data-turn-zone="process"]:not([hidden]) {
+ * into an unpainted gap in the card's sides. A program-batch member folded
+ * under its head stays out of layout (23-reading-tool-summary.css). */
+.conversation-surface .conversation-turn-blocks > .conversation-tool-panel[data-tool-panel-state="open"] ~ .conversation-block[data-turn-zone="process"]:not([hidden], [data-program-batch-folded="true"]) {
   display: flow-root;
 }
 
@@ -25088,11 +25097,19 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
 }
 
 /* A narrow pointer window cannot afford invisible controls holding width:
- * they leave layout at rest and return on hover or focus. Touch screens keep
- * them visible (tool-summary's reachability rule). */
+ * they leave layout at rest and return on hover or focus. They stay in the
+ * tab order (no display:none), so keyboard focus is what brings them back.
+ * Touch screens keep them visible (tool-summary's reachability rule). */
 @media (max-width: 600px) and (hover: hover) {
   .conversation-surface .conversation-tool-panel[data-tool-panel-state="open"] ~ .conversation-block[data-turn-zone="process"] [data-action-summary]:not(:hover, :focus-within) :is(.ptool-row-ctl, .ptool-cmd-fold:not([aria-expanded="true"])) {
-    display: none;
+    position: absolute;
+    inline-size: 0;
+    block-size: 0;
+    min-height: 0;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 }
 

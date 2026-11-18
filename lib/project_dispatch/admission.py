@@ -69,6 +69,7 @@ class DispatchTaskInterrupted(AbortedError):
         from lib.turn_verdict import RESTART_ABORT_REASONS, stopped_tool_result
         self.abort_reason = str(abort_reason or '')
         message = stopped_tool_result(self.abort_reason)
+        # A lead's hold says so in its own guidance (HOLD_CONTINUE_GUIDANCE).
         if self.abort_reason in RESTART_ABORT_REASONS:
             message += ' The project dispatch grant is unchanged.'
         super().__init__(message)

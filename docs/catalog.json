@@ -527,6 +527,7 @@
     "docs/PAPER_BUILDS.md",
     "docs/PAPER_CITATIONS.md",
     "docs/PAPER_QUALITY.md",
+    "docs/DOCUMENT_PIPELINE.md",
     "docs/STORAGE_PERFORMANCE_CHARTER.md",
     "docs/TOFUDB_PIPELINE_CRITICAL_PATH.md",
     "docs/TOFUDB_PUBLICATION_LATENCY.md",

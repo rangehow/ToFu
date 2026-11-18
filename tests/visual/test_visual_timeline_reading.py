@@ -179,11 +179,16 @@ def test_mixed_timeline_reading(frontend_visual_page, reading_tools, timeline_bu
     page.screenshot(path=str(tmp_path / f'timeline-{theme}-{width}.png'), full_page=True)
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth + 1')
     # Grouped reply: one reasoning disclosure, the live (open) tool panel with
-    # every call and note in authored order, then the prose.
-    assert page.evaluate("""()=>[...document.querySelectorAll('[data-turn-id="turn"] .conversation-turn-blocks > [data-block-id]')]
+    # every call and note in authored order, then the prose. Interim round
+    # prose reads in the narration well before the answer (ca179202e1,
+    # docs/RENDER_CONTRACT.md "narration well").
+    assert page.evaluate("""()=>[...document.querySelectorAll('[data-turn-id="turn"] .conversation-turn-blocks > [data-block-id],'
+        + '[data-turn-id="turn"] .conversation-turn-blocks > [data-narration-well] > [data-narration-well-body] > [data-block-id]')]
       .map(n=>n.dataset.blockId).filter(id=>id!=='live-status')""") == [
         'thinking-0', 'layout:tool-panel', 'read', 'command', 'note', 'checklist', 'program',
         'intro', 'narration', 'answer']
+    assert page.evaluate("""()=>[...document.querySelectorAll('[data-turn-id="turn"] [data-narration-well-body] > [data-block-id]')]
+      .map(n=>n.dataset.blockId)""") == ['intro', 'narration']
     assert page.locator('[data-block-id="thinking-1"]').count() == 0
     assert page.locator('[data-block-id="read"]').get_attribute('data-process-edge') == 'start'
     assert page.locator('[data-block-id="program"]').get_attribute('data-process-edge') == 'end'
@@ -191,11 +196,11 @@ def test_mixed_timeline_reading(frontend_visual_page, reading_tools, timeline_bu
     assert page.locator('.conversation-tool-panel__toggle').get_attribute('aria-expanded') == 'true'
     assert not page.locator('.conversation-answer-label').count()
     assert not page.locator('.user-msg .conversation-answer-label').count()
-    # Role, prose and the answer share an actual text edge. Reasoning and
-    # tools form one activity card there, with labels after their glyph tiles.
+    # Role, prose and the answer share an actual text edge. Reasoning, tools
+    # and the narration well are cards there, with labels after their glyph tiles.
     alignment = page.evaluate("""()=>{
       const box=s=>document.querySelector(s).getBoundingClientRect();
-      return {edges:['.conversation-turn:not(.user-msg) .message-role','[data-block-id="intro"] .md-content',
+      return {edges:['.conversation-turn:not(.user-msg) .message-role','[data-narration-well]',
           '.thinking-header','.conversation-tool-panel','[data-block-id="answer"] > .md-content > h3']
           .map(s=>({selector:s,x:box(s).left})),
         card:box('.conversation-tool-panel').left,tile:box('.conversation-tool-panel__glyph').right,
@@ -304,7 +309,7 @@ def test_mixed_timeline_reading(frontend_visual_page, reading_tools, timeline_bu
     assert page.evaluate("""()=>{
       const rows=[...document.querySelectorAll('[data-turn-zone="process"]')];
       const toggle=document.querySelector('.conversation-tool-panel').getBoundingClientRect();
-      const prose=document.querySelector('[data-block-id="intro"]').getBoundingClientRect();
+      const prose=document.querySelector('[data-narration-well]').getBoundingClientRect();
       return rows.every(row=>{const box=row.getBoundingClientRect();
         return box.top>=toggle.bottom-1 && box.bottom<=prose.top+1;});
     }""")

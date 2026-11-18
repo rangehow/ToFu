@@ -35,8 +35,8 @@ import threading
 
 from lib.log import get_logger
 from lib.project_mod.instructions import (
-    MAX_GUIDANCE_FILES, check_guidance_bounds, read_rule_file, read_scoped_guidance,
-    render_rule, skip_notice,
+    MAX_GUIDANCE_FILES, check_guidance_bounds, read_rule_file, render_rule,
+    resolved_scoped_guidance, skip_notice,
 )
 from lib.tools.execution_timing import timing_phase
 
@@ -119,7 +119,7 @@ def check_project_guidance(task: dict, tool_name: str, arguments: dict) -> str:
             return ''
         rows, reads = {}, {}
         for root, selected in targets:
-            for row in read_scoped_guidance(str(root), str(selected), reads=reads):
+            for row in resolved_scoped_guidance(root, selected, reads=reads):
                 rows[row['path']] = row
         if measurement is not None:
             measurement['records'] += len(rows)

@@ -104,6 +104,42 @@ def test_the_rejection_evidence_ends_with_the_gates_decay_grace(monkeypatch):
     assert dispatcher.pick_slot(capability='cheap') is flash
 
 
+def test_a_rotated_pick_leaves_the_appid_that_is_rejecting():
+    """2026-11-18: fetch_url extract got 429 on AppId …5409 for one Model,
+    then rotated to another Model on the same throttled AppId although that
+    Model's other AppIds were quiet."""
+    flash_throttled = _slot('flash', 'appid-throttled', latency=100.0)
+    luna_throttled = _slot('luna', 'appid-throttled', latency=100.0)
+    luna_quiet = _slot('luna', 'appid-quiet', latency=3000.0)
+    dispatcher = _dispatcher(flash_throttled, luna_throttled, luna_quiet)
+
+    dispatcher.note_shared_contention(flash_throttled, per_credential=True)
+    assert dispatcher.pick_slot(
+        capability='cheap', rotate_models={'flash': 1}) is luna_quiet
+    assert dispatcher.pick_slot(capability='cheap') is luna_quiet
+
+
+def test_a_rejecting_appid_still_serves_when_it_is_the_only_one():
+    flash = _slot('flash', 'appid-throttled', latency=100.0)
+    luna = _slot('luna', 'appid-throttled', latency=100.0)
+    dispatcher = _dispatcher(flash, luna)
+
+    dispatcher.note_shared_contention(flash, per_credential=True)
+    assert dispatcher.pick_slot(
+        capability='cheap', rotate_models={'flash': 1}) is luna
+
+
+def test_a_project_wide_limit_is_no_evidence_against_an_appid():
+    flash = _slot('flash', 'appid-a', latency=100.0)
+    luna_a = _slot('luna', 'appid-a', latency=100.0)
+    luna_b = _slot('luna', 'appid-b', latency=3000.0)
+    dispatcher = _dispatcher(flash, luna_a, luna_b)
+
+    dispatcher.note_shared_contention(flash, per_credential=False)
+    assert dispatcher.pick_slot(
+        capability='cheap', rotate_models={'flash': 1}) is luna_a
+
+
 def test_a_lone_rejecting_model_still_rotates_its_keys():
     limited = _slot('kimi', 'k0', latency=100.0)
     open_appid = _slot('kimi', 'k1', latency=99999.0)

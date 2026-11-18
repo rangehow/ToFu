@@ -67,15 +67,16 @@ def _archived_prior_receipt(task: dict | None) -> str:
     try:
         from lib.agent_core.store import get_conversation_store
         store = get_conversation_store()
-        archives = store.list_compaction_archives(
-            archive_conv_id, user_id=user_id, limit=8, **scoped)
+        from lib.tasks_pkg.compaction._archive import newest_compaction_archives
+        archives = newest_compaction_archives(
+            store, archive_conv_id, user_id=user_id, count=8, **scoped)
     except Exception as exc:
         logger.debug('%s archive receipt lookup failed: %s',
                      '[Summary]', exc)
         return ''
     if not isinstance(archives, list) or not archives:
         return ''
-    for meta in reversed(archives):
+    for meta in archives:
         if not isinstance(meta, dict):
             continue
         archive_id = meta.get('id') or meta.get('archiveId') or meta.get('archive_id')

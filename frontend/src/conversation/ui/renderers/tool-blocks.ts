@@ -303,13 +303,16 @@ function paintQuestionSummary(
   if (title.textContent !== label) title.textContent = label;
   if (!title.parentNode) header.prepend(title);
   const nonBlocking = round.guidanceBlocking === false;
-  const badgeText = nonBlocking
+  const withdrawn = Boolean(round.guidanceWithdrawn);
+  const badgeText = withdrawn
+    ? textFor(ports, 'toolHumanGuidance.withdrawnBadge', 'Withdrawn by the lead · an answer still counts')
+    : nonBlocking
     ? textFor(ports, 'toolHumanGuidance.nonBlockingBadge', 'Not blocking · reply anytime')
     : round.status === 'awaiting_human' ? textFor(ports, 'project.hgWaitingReply', 'Awaiting reply') : '';
   let badge = header.querySelector<HTMLElement>(':scope > .ptool-badge');
   if (!badgeText) { badge?.remove(); return; }
   badge ??= doc.createElement('span');
-  badge.className = `ptool-badge ${nonBlocking ? 'ptool-badge-info' : 'ptool-badge-warn'}`;
+  badge.className = `ptool-badge ${nonBlocking || withdrawn ? 'ptool-badge-info' : 'ptool-badge-warn'}`;
   if (badge.textContent !== badgeText) badge.textContent = badgeText;
   if (badge.parentNode !== header) title.after(badge);
 }

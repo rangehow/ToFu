@@ -34,7 +34,16 @@ recorded when they happen"):
 A failed index write never changes what a listing reports; it leaves the record
 for a later reader to decide.
 
-Entry points: record_question, answer_lane_questions, open_questions, LaneScans.
+A lead withdraws its own open question when the conversation settled it
+(``withdraw_question``, the ask_human ``withdraw`` action; R10 "A lead
+withdraws a settled question"). The record gains ``withdrawnAt`` and
+``withdrawnReason`` and no listing reports it again; its card gains
+``guidanceWithdrawn`` but stays answerable, so an owner answer that comes
+anyway is still delivered (the card's ``answer_guidance``, or a chat message,
+which ``answer_lane_questions`` still records) and overrides the withdrawal.
+
+Entry points: record_question, answer_lane_questions, open_questions,
+withdraw_question, LaneScans.
 Dependencies: turn_lifecycle (answer evidence), storage (record CAS).
 """
 from __future__ import annotations
@@ -403,7 +412,8 @@ def open_questions(owner, *, coordinator_id=None, client=None, turn_get=None, la
     found, lanes = [], {}
     for row in _rows(client, prefix):
         value = row['value']
-        if value.get('answeredAt') or (coordinator_id and value.get('coordinatorId') != coordinator_id):
+        if (value.get('answeredAt') or value.get('withdrawnAt')
+                or (coordinator_id and value.get('coordinatorId') != coordinator_id)):
             continue
         if value.get('answersRecorded') and not value.get('blocking'):
             found.append(value)
@@ -439,5 +449,95 @@ def open_questions(owner, *, coordinator_id=None, client=None, turn_get=None, la
     return found
 
 
-__all__ = ['NAMESPACE', 'LANE_SCANS', 'LaneScan', 'LaneScans', 'answer_lane_questions', 'open_questions',
-           'record_question']
+class QuestionNotWithdrawable(LookupError):
+    """The question is not this lead's open owner question; ``reason`` is shown to the model."""
+
+
+def _mark_card_withdrawn(owner, question, withdrawal, *, live_rounds, turn_get, update_projection):
+    """Stamp ``guidanceWithdrawn`` on the question's card; where it landed: 'card', 'live' or 'unmarked'.
+
+    A settled Turn is CAS-edited (``turn.projection.update``); a conflict re-reads
+    and decides again. The card of the calling task's own running Turn is its
+    live round (``live_rounds``), which the running attempt's projection writer
+    persists; any other running Turn belongs to its attempt and is left alone.
+    An answered card is left unchanged: the answer stands.
+    """
+    from lib.turn_lifecycle import LIVE_ATTEMPT_STATUSES, LifecycleConflict
+    for round_entry in live_rounds or ():
+        if isinstance(round_entry, dict) and round_entry.get('guidanceId') == question['guidanceId']:
+            round_entry['guidanceWithdrawn'] = dict(withdrawal)
+            return 'live'
+    while True:
+        turn = turn_get(question['coordinatorId'], question['turnId'], user_id=owner)
+        if turn is None or turn.get('status') in LIVE_ATTEMPT_STATUSES:
+            return 'unmarked'
+        projection = dict(turn.get('projection') or {})
+        rounds = [dict(entry) if isinstance(entry, dict) else entry for entry in projection.get('toolRounds') or []]
+        card = next((entry for entry in rounds if isinstance(entry, dict)
+                     and entry.get('guidanceId') == question['guidanceId']), None)
+        if card is None or card.get('guidanceResponse') or card.get('guidanceSuperseded'):
+            return 'unmarked'
+        if card.get('guidanceWithdrawn'):
+            return 'card'
+        card['guidanceWithdrawn'] = dict(withdrawal)
+        projection['toolRounds'] = rounds
+        try:
+            update_projection(question['coordinatorId'], question['turnId'], projection=projection,
+                              expected_projection_revision=int(turn.get('projectionRevision') or 0),
+                              user_id=owner)
+        except LifecycleConflict as error:
+            if error.code == 'turn_in_progress':
+                return 'unmarked'
+            continue
+        return 'card'
+
+
+def withdraw_question(owner, coordinator_id, guidance_id, *, reason, live_rounds=None, client=None,
+                      turn_get=None, update_projection=None):
+    """Withdraw this lead's own open owner question; ``(record, card)``.
+
+    Only the record of ``(owner, coordinator_id, guidance_id)`` is eligible, so
+    another conversation's question is never touched. An answered question is
+    refused (its answer stands); a second withdrawal returns the first. ``card``
+    says where the card's mark landed (``_mark_card_withdrawn``); a card that
+    could not be marked still leaves every listing, which reads only the record.
+    Raises QuestionNotWithdrawable.
+    """
+    owner = require_user_id(owner, context='owner questions')
+    client = _client(client)
+    reason = str(reason or '').strip()
+    if not reason:
+        raise QuestionNotWithdrawable('a reason is required: say what settled the question')
+    if turn_get is None:
+        from lib.turn_lifecycle import get_turn as turn_get
+    if update_projection is None:
+        from lib.turn_lifecycle import update_turn_projection as update_projection
+    key = _key(owner, coordinator_id, guidance_id)
+    current = client().query('record.get', {'namespace': NAMESPACE, 'key': key})
+    if current is None:
+        raise QuestionNotWithdrawable(
+            f'{guidance_id} is not an owner question of this conversation; a lead withdraws only its own')
+    row = {'key': key, 'value': current['value'], 'version': current['version']}
+    if row['value'].get('answeredAt'):
+        raise QuestionNotWithdrawable(f'{guidance_id} is already answered; the owner\u2019s answer stands')
+    answered, turn = _card(owner, row['value'], turn_get)
+    if answered:
+        _recorded(client, row, lambda value, by=turn.get('ordinal'): None if value.get('answeredAt')
+                  else _answered(value, by))
+        raise QuestionNotWithdrawable(f'{guidance_id} is already answered; the owner\u2019s answer stands')
+    withdrawal = {'reason': reason, 'at': int(time.time() * 1000)}
+    stored = _update(client, row, lambda value: None if value.get('answeredAt') or value.get('withdrawnAt')
+                     else {**value, 'withdrawnAt': withdrawal['at'], 'withdrawnReason': reason})
+    if stored is None:
+        raise QuestionNotWithdrawable(f'{guidance_id} is not an owner question of this conversation')
+    value = stored['value']
+    if value.get('answeredAt'):
+        raise QuestionNotWithdrawable(f'{guidance_id} is already answered; the owner\u2019s answer stands')
+    withdrawal = {'reason': value['withdrawnReason'], 'at': value['withdrawnAt']}
+    card = _mark_card_withdrawn(owner, value, withdrawal, live_rounds=live_rounds, turn_get=turn_get,
+                                update_projection=update_projection)
+    return value, card
+
+
+__all__ = ['NAMESPACE', 'LANE_SCANS', 'LaneScan', 'LaneScans', 'QuestionNotWithdrawable', 'answer_lane_questions',
+           'open_questions', 'record_question', 'withdraw_question']

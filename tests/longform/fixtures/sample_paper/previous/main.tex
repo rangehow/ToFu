@@ -1,0 +1,20 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\title{Towards Possibly Better BF16 Training}
+\author{Anonymous}
+\begin{document}
+\maketitle
+\begin{abstract}
+We attempt to study whether BF16 training could perhaps be improved. We believe that rounding might play a role. Our preliminary results seem to suggest some improvement, although it is possible that this does not hold in general.
+\end{abstract}
+\section{Introduction}
+BF16 is a number format. Many people use it. In this work we try to look at some aspects of it. We think this is a first step.
+\section{Method}
+We use stochastic rounding somewhere in the optimizer. The details are somewhat complicated.
+\section{Results}
+The loss was 3.124 and the FP32 loss was 3.112. This is to some extent similar. Accuracy went up a bit.
+\begin{figure}[h]\centering\includegraphics[width=0.6\linewidth]{../figures/loss_curve.pdf}\caption{Loss}\end{figure}
+\section{Conclusion}
+We hope future work will investigate this further.
+\end{document}

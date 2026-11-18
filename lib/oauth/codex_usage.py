@@ -265,9 +265,13 @@ def _write_entries(entries: dict[str, dict[str, Any]], *, now: int | None = None
     rows = [entry for entry in entries.values()
             if now is None or _retain_entry(entry, now)]
     rows.sort(key=_entry_recency)
-    write_json_atomic(_cache_path(),
-                      {'schema_version': _CACHE_SCHEMA_VERSION, 'entries': rows},
-                      mode=0o600)
+    # Writers serialize on ``<cache>.write``; the cache's own lock is what a
+    # reader racing this replace consults (json_store "Consistent absence").
+    path = _cache_path()
+    with locked_path(path):
+        write_json_atomic(path,
+                          {'schema_version': _CACHE_SCHEMA_VERSION, 'entries': rows},
+                          mode=0o600)
 
 
 def _parse_usage_available_count(payload: Any) -> int | None:

@@ -1,0 +1,4 @@
+method,val_loss,val_ppl,avg_acc
+fp32_master,3.112,22.47,41.8
+bf16_naive,3.205,24.66,39.2
+bf16_sr_update,3.124,22.74,41.3

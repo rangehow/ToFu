@@ -128,15 +128,19 @@ def _local_response(request, url, target, started, timeout, context, *, source_a
             request_options['body'] = body
         connection.request(method, path, **request_options)
         response = connection.getresponse()
-        if response.status >= 300:
-            # Never follow a redirect to a second destination in the recovery
-            # lane; HTTPError owns and closes the received response stream.
-            raise urllib.error.HTTPError(
-                url, response.status, response.reason, response.headers, response)
-        return urllib.response.addinfourl(response, response.headers, url, response.status)
-    finally:
-        # HTTPResponse's file object retains its socket until read/close.
+    except BaseException:
         connection.close()
+        raise
+    # An HTTP/1.1 keep-alive reply stays attached to its connection, and closing
+    # the connection closes the reply unread. The caller reads the reply (as much
+    # as it bounds) and closing it closes the connection.
+    answer = urllib.response.addclosehook(response, connection.close)
+    if response.status >= 300:
+        # Never follow a redirect to a second destination in the recovery
+        # lane; HTTPError owns and closes the received response stream.
+        raise urllib.error.HTTPError(
+            url, response.status, response.reason, response.headers, answer)
+    return urllib.response.addinfourl(answer, response.headers, url, response.status)
 
 
 def bind_ephemeral_loopback(sock):

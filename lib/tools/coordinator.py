@@ -41,6 +41,13 @@ COORDINATOR_TOOLS = [
           'a Turn that is not the latest of its lane is refused with code later_turns_unacknowledged and the '
           'later Turns it would delete (later_turns); only the owner can approve that in their own UI. Stop '
           'does not need expected_revision. '
+          'hold pauses a Worker session a lead dispatched without losing it: its exact current Attempt stops '
+          'at its checkpoint (Turn interrupted, cause lead_hold) and the Worker shows as held, while its '
+          'grant, checkout and assignment stay; use it to throttle lanes (for example under provider quota '
+          'pressure) instead of stop, which withdraws the grant so the Worker can never continue. hold needs '
+          'no expected_revision. resume continues a held Worker in place under the same assignment, with the '
+          'resume operation its settlement offers: pin the held Turn, its Attempt and projectionRevision. A '
+          'cancelled (revoked) Worker cannot be resumed. '
           'follow_up gives an ended Worker session you dispatched its next instruction (instruction): pin its '
           'latest settled Turn, Attempt and revision; the instruction becomes that conversation\'s next Turn and '
           'nothing is regenerated. An unreviewed, undelivered result continues under the same assignment, grant '
@@ -58,7 +65,8 @@ COORDINATOR_TOOLS = [
           'request has no owner message of its own (a standing instruction, a nonhuman notice, a wake), or the '
           'session belongs to another project you were asked to help, pass owner_delegation with the reason and '
           'the owner trigger (or under_delegation=true) to act under the delegation the owner granted ("Act for '
-          'me"); it allows continue, checkpoint_resume, stop and set_model, never regenerate, is recorded in the '
+          'me"); it allows continue, checkpoint_resume, stop, hold, resume and set_model, never regenerate, is '
+          'recorded in the '
           'owner\'s audit log, and a session of another project tells that project\'s lead (target_lead_notified). '
           'set_model changes the model of an existing Session without replacing it: the conversation, context, '
           'grant, checkout and tool checkpoint are preserved, and only the next accepted attempt (Continue, '
@@ -72,7 +80,8 @@ COORDINATOR_TOOLS = [
           {'conversation_id': {'type': 'string', 'minLength': 1},
            'turn_id': {'type': 'string', 'minLength': 1},
            'attempt_id': {'type': 'string', 'minLength': 1},
-           'action': {'type': 'string', 'enum': ['continue', 'checkpoint_resume', 'regenerate', 'stop', 'follow_up', 'set_model']},
+           'action': {'type': 'string', 'enum': ['continue', 'checkpoint_resume', 'regenerate', 'stop', 'hold',
+                                                 'resume', 'follow_up', 'set_model']},
            'model': {'type': ['string', 'null'], 'minLength': 1, 'maxLength': 256,
                      'description': 'set_model only: the session\u2019s next-attempt model; null restores its original.'},
            'reason': {'type': 'string', 'minLength': 1, 'maxLength': 2048,

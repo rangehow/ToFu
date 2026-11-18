@@ -965,3 +965,63 @@ def test_scheduled_dispatch_reports_an_accepted_command_as_replayed(
     assert (requeued.disposition, requeued.replayed) == ('queued', True)
     assert requeued.queue_id == queued.queue_id
     assert get_queue_depth('conv-command-inject', user_id=1) == 1
+
+
+def test_queued_turns_run_in_turn_order_whatever_a_later_source_priority(
+    worker_attempts, flask_client, conversation_command_db, monkeypatch,
+):
+    """Watchdog coordinator-8301fd78, 2026-11-18 08:37:55.
+
+    The ending Turn salvaged two steers: a fault signal it had drained locally
+    (queued as a source whose Turn is created only at dispatch, priority 10)
+    and a scheduled review another process committed (queued as a real Turn
+    pair at once: Turns 198/199). The drain served the higher-priority signal
+    first, so its Turns (200/201) were created after the review's, the review
+    then found only a checkpoint ending after its own position
+    (checkpoint_not_before_target), rebuilt the whole history and its
+    checkpoint was rejected. A Turn that already exists runs before any source
+    whose Turn does not exist yet.
+    """
+    import lib.message_queue as message_queue
+    from lib.tasks_pkg.orchestrator._finalize import _salvage_undelivered_steer
+    from lib.turn_lifecycle import list_turns
+
+    first, starts = _start_first_turn(flask_client, monkeypatch, executor_here=False)
+    _steer('router-watchdog-review:r', {'role': 'user', 'content': 'scheduled review'})
+    executor = _executor(first)
+    signal = {'role': 'user', 'content': 'fault signal'}
+    executor['_steer_inject_pending'] = [{
+        'value': 'fault signal', 'blockId': 'injection:user-steer:router-watchdog-signal:s',
+        '_user_msg': signal, 'config': {'model': 'gpt-4o'}}]
+    assert _salvage_undelivered_steer(executor) == 2
+    rows = message_queue.get_queue('conv-command-inject', user_id=1)
+    review = next(row for row in rows if row.get('attemptId'))
+    assert [row['queueId'] for row in rows if not row.get('attemptId')], rows
+
+    drained = threading.Event()
+    real_dispatch = message_queue.dispatch_next_queued
+
+    def spy_dispatch(conv_id, **kwargs):
+        try:
+            return real_dispatch(conv_id, **kwargs)
+        finally:
+            drained.set()
+
+    monkeypatch.setattr(message_queue, 'dispatch_next_queued', spy_dispatch)
+    assert worker_attempts.publish({
+        '_attemptId': first['attempt']['attemptId'], '_turnId': first['turn']['turnId'],
+        'status': 'done', 'finishReason': 'stop', 'content': 'answer', 'thinking': '',
+        'toolRounds': [], 'model': 'gpt-4o', 'config': {'model': 'gpt-4o'},
+        'convId': 'conv-command-inject'}, {'type': 'done', 'finishReason': 'stop'})
+    assert drained.wait(timeout=10)
+
+    assert len(starts) == 2
+    assert starts[1]['config']['_attemptId'] == review['attemptId']
+    remaining = message_queue.get_queue('conv-command-inject', user_id=1)
+    assert [row.get('attemptId') for row in remaining] == [None]
+    # The signal's Turns, created at its own dispatch, will follow the review's.
+    assert message_queue.next_dispatchable_turn(
+        'conv-command-inject', user_id=1)['queueId'] == remaining[0]['queueId']
+    turns = list_turns('conv-command-inject', user_id=1)['turns']
+    assert [turn['projection']['content'] for turn in turns if turn['actor'] == 'human'] == [
+        'first', 'scheduled review']

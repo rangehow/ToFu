@@ -595,6 +595,32 @@ def run_pdf_checks(document: dict, receipt: dict, *,
     return rows[:_MAX_ROWS]
 
 
+def run_pdf_file_checks(pdf_path: str | Path) -> list[dict]:
+    """Font-embedding and image-DPI rows for a local PDF file.
+
+    The same poppler probes and row semantics as ``run_pdf_checks``, for a
+    caller that compiled the PDF itself (the document pipeline's render QA)
+    rather than through a retained paper build.
+    """
+    rows: list[dict] = []
+    pdffonts = shutil.which('pdffonts')
+    pdfimages = shutil.which('pdfimages')
+    if pdffonts:
+        rows.extend(_fonts_rows(_run_probe([pdffonts, str(pdf_path)])))
+    else:
+        rows.append(_row('info', 'poppler_unavailable',
+                         'pdffonts not installed; font-embedding check '
+                         'unavailable', '', None))
+    if pdfimages:
+        rows.extend(_image_dpi_rows(
+            _run_probe([pdfimages, '-list', str(pdf_path)])))
+    else:
+        rows.append(_row('info', 'poppler_unavailable',
+                         'pdfimages not installed; image-DPI check '
+                         'unavailable', '', None))
+    return rows[:_MAX_ROWS]
+
+
 def _pdf_size_page_row(receipt: dict, data: bytes, owner_user_id: int,
                        document_id: str, build_id: str) -> dict:
     size = _receipt_pdf_size(receipt) or len(data)

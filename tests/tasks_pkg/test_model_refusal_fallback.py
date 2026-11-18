@@ -387,42 +387,80 @@ def _terminal_task(**extra):
     return task
 
 
-def test_refusal_fallback_stays_on_fallback_for_the_rest_of_the_turn(harness):
-    """A usage-policy refusal latches the fallback for the rest of the turn.
+def test_changed_history_retries_primary_unchanged_history_stays_on_fallback(harness):
+    """A refusal tracks the history: retry primary only when history changed.
 
-    Every remaining round dispatches on the fallback directly: no probe on
-    the primary, no second refused attempt, and the fallback's own cache
-    prefix keeps extending. The next turn tries the primary again.
+    The first fallback round serves on kimi. The next round has DIFFERENT
+    history (a compaction/cleared results) → probe opus, which answers. A
+    later round with the SAME history as the refusal stays on kimi (no
+    pointless refused probe).
     """
     harness['script'] = [
         _result('content_filter', content='Partial refused text', refusal=_REFUSAL),
         _result('stop', content='Fallback answer.'),   # round 6 served on kimi
-        _result('stop', content='More fallback.'),     # round 7 on kimi
-        _result('stop', content='Still fallback.'),    # round 8 on kimi
+        _result('stop', content='Primary again.'),     # round 7 changed history → opus
     ]
     task = _task()
-    task['_fallback_kind'] = 'content_filter'
-    task['_fallback_from'] = 'claude-opus-5.5'
     api_rounds = []
+    _call(task, api_rounds=api_rounds)  # default messages → refusal on opus, serve on kimi
 
-    first = _call(task, api_rounds=api_rounds)
-    assert first['model'] == 'kimi-k3'
-
+    # Next round: history CHANGED (new content) → primary probe.
     second = _call(task, model='kimi-k3', round_num=7,
-                   messages=[{'role': 'user', 'content': 'next'}],
+                   messages=[{'role': 'user', 'content': 'a different, compacted history'}],
                    api_rounds=api_rounds)
-    third = _call(task, model='kimi-k3', round_num=8,
-                  messages=[{'role': 'user', 'content': 'more'}],
-                  api_rounds=api_rounds)
+    assert second['model'] == 'claude-opus-5.5'
+    assert [m for m, _ in harness['streams']] == [
+        'claude-opus-5.5', 'kimi-k3', 'claude-opus-5.5']
+    switches = [e for e in harness['events'] if e.get('type') == EventType.MODEL_FALLBACK]
+    assert [e['fallbackModel'] for e in switches] == ['kimi-k3', 'claude-opus-5.5']
+    assert switches[-1]['fallbackFrom'] == 'kimi-k3'
 
-    assert [m for m, _ in harness['streams']] == ['claude-opus-5.5'] + ['kimi-k3'] * 3
-    assert second['model'] == third['model'] == 'kimi-k3'
-    assert second['preset'] == 'medium'
-    assert not any(e.get('detailKey') == 'stream.phase.refusalSwitchback'
-                   for e in harness['events'])
-    # The only refused attempt in the whole turn is the original one.
-    assert [row['tag'] for row in api_rounds
-            if str(row['tag']).endswith('-REFUSED')] == ['R7-REFUSED']
+
+def test_unchanged_history_stays_on_fallback(harness):
+    """Refusals come in runs until the history changes; don't re-probe opus."""
+    harness['script'] = [
+        _result('content_filter', content='Partial', refusal=_REFUSAL),
+        _result('stop', content='Fallback answer.'),
+        _result('stop', content='Still fallback.'),   # same history → kimi, no opus probe
+    ]
+    task = _task()
+    api_rounds = []
+    same = [{'role': 'user', 'content': 'unchanged research history'}]
+    _call(task, messages=same, api_rounds=api_rounds)
+    _call(task, model='kimi-k3', round_num=7, messages=same, api_rounds=api_rounds)
+    # Only the original opus attempt + two kimi rounds; NO second opus probe.
+    assert [m for m, _ in harness['streams']] == [
+        'claude-opus-5.5', 'kimi-k3', 'kimi-k3']
+    # No return-to-primary event was emitted.
+    assert [e['fallbackModel'] for e in harness['events']
+            if e.get('type') == EventType.MODEL_FALLBACK] == ['kimi-k3']
+
+
+def test_switch_back_and_fallback_rounds_reach_the_lead_audit(harness, monkeypatch, tmp_path):
+    """A project Worker records each switch in the durable lead-audit stream."""
+    from lib.logging_pkg import lead_audit
+    monkeypatch.setattr(lead_audit, '_default_logs_dir', lambda: str(tmp_path))
+    tmp_path.mkdir(exist_ok=True)
+    harness['script'] = [
+        _result('content_filter', content='Partial', refusal=_REFUSAL),
+        _result('stop', content='Fallback answer.'),
+        _result('stop', content='Primary answer.'),
+    ]
+    task = _task()
+    task['convId'] = 'coordinator-abc'
+    task['config']['_turnId'] = 'turn-1'
+    api_rounds = []
+    _call(task, api_rounds=api_rounds)
+    # Changed history on the next round triggers the return-to-primary switch.
+    _call(task, model='kimi-k3', round_num=7,
+          messages=[{'role': 'user', 'content': 'a changed history'}],
+          api_rounds=api_rounds)
+    import json
+    rows = [json.loads(l) for l in next(tmp_path.glob('lead-audit/lead-audit-*.jsonl')).read_text().splitlines()]
+    kinds = [(r['kind'], r.get('to'), r.get('direction')) for r in rows]
+    assert ('model_switch', 'kimi-k3', 'fallback') in kinds
+    assert ('model_switch', 'claude-opus-5.5', 'primary') in kinds
+    assert all(r['conv'] == 'coordinator-abc' for r in rows)
 
 
 def test_fallback_writeback_keeps_the_rounds_reasoning_choice(harness):
@@ -488,3 +526,69 @@ def test_unstamped_content_filter_keeps_the_historic_settlement():
     assert settlement['cause'] == 'content_filter'
     assert settlement['error'] is None
     decode('TurnSettlement', settlement)
+
+
+def test_tool_loop_appending_fallback_rounds_does_not_retry_primary(harness):
+    """A real tool loop: fallback rounds grow the history, not the refused prefix.
+
+    Refuse at round k, then append three fallback rounds (assistant + tool
+    result each). The primary must NOT be retried on any of them. Rewriting an
+    old tool result (clearing) DOES rewrite the refused prefix → one retry.
+    """
+    harness['script'] = [
+        _result('content_filter', content='Partial', refusal=_REFUSAL),
+        _result('stop', content='fallback r6'),
+        _result('stop', content='fallback r7'),
+        _result('stop', content='fallback r8'),
+        _result('stop', content='fallback r9'),
+        _result('stop', content='primary after clearing'),
+    ]
+    task = _task()
+    api_rounds = []
+    history = [
+        {'role': 'system', 'content': 'research system prompt'},
+        {'role': 'user', 'content': 'research objective'},
+        {'role': 'assistant', 'content': 'earlier answer', 'tool_calls': [
+            {'id': 'c0', 'type': 'function',
+             'function': {'name': 'read_files', 'arguments': '{}'}}]},
+        {'role': 'tool', 'tool_call_id': 'c0', 'content': 'research result'},
+    ]
+    refused_len = len(history)
+
+    # Round k: opus refuses, kimi serves.
+    _call(task, messages=history, api_rounds=api_rounds)
+    # Three more rounds, each appending its own fallback assistant + tool rows.
+    for step in range(3):
+        history = history + [
+            {'role': 'assistant', 'content': f'fallback round {step}'},
+            {'role': 'tool', 'tool_call_id': f'c{step + 1}',
+             'content': f'tool result {step}'},
+        ]
+        _call(task, model='kimi-k3', round_num=7 + step,
+              messages=history, api_rounds=api_rounds)
+
+    # Appending must not trigger a primary retry: exactly one opus call so far.
+    assert [m for m, _ in harness['streams']] == [
+        'claude-opus-5.5', 'kimi-k3', 'kimi-k3', 'kimi-k3', 'kimi-k3']
+    assert [e['fallbackModel'] for e in harness['events']
+            if e.get('type') == EventType.MODEL_FALLBACK] == ['kimi-k3']
+
+    # Clearing rewrites an OLD tool result inside the refused prefix.
+    history = [dict(row) for row in history]
+    history[refused_len - 1] = {
+        'role': 'tool', 'tool_call_id': 'c0',
+        'content': '[old tool result cleared]'}
+    _call(task, model='kimi-k3', round_num=10,
+          messages=history, api_rounds=api_rounds)
+    assert [m for m, _ in harness['streams']] == [
+        'claude-opus-5.5', 'kimi-k3', 'kimi-k3', 'kimi-k3', 'kimi-k3',
+        'claude-opus-5.5']
+    # A compaction that shortens the history below the refused length also retries.
+    harness['script'].append(_result('stop', content='primary after compaction'))
+    task['_fallback_model'] = 'kimi-k3'
+    task['_fallback_from'] = 'claude-opus-5.5'
+    task['_fallback_kind'] = 'content_filter'
+    _call(task, model='kimi-k3', round_num=11,
+          messages=history[:1] + [{'role': 'user', 'content': 'compacted summary'}],
+          api_rounds=api_rounds)
+    assert harness['streams'][-1][0] == 'claude-opus-5.5'

@@ -355,3 +355,4 @@ def test_body_build_failure_emits_fallback_snapshot_then_reraises(monkeypatch):
     assert raised.value is failure
     assert len(snapshots) == 1
     assert 'prepared_messages' not in snapshots[0][1]
+

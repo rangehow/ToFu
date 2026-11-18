@@ -1,0 +1,4 @@
+method,val_loss,params_rounded_stochastically_pct,random_bits_relative
+stochastic_rounding_everywhere,3.124,100.0,1.0
+half_ulp_selective,3.125,8.7,0.087
+random_selection_same_fraction,3.171,8.7,0.087

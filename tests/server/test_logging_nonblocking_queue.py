@@ -331,3 +331,45 @@ class TestNonBlockingLogging:
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
+
+
+def test_a_wedged_sink_never_holds_interpreter_exit(capsys):
+    """The 2026-11-18 07:16 API host: the listener was stuck in app.log's
+    handler, so logging.shutdown at exit waited on that handler's lock until
+    the hard deadline (tests/chaos/test_api_host_drain.py)."""
+    release = threading.Event()
+
+    class _Wedged(logging.Handler):
+        def emit(self, record):
+            release.wait(60)
+
+    wedged, healthy = _Wedged(), _SlowHandler(per_record_delay=0)
+    q = _queue_mod.Queue(maxsize=10)
+    listener = _BoundedQueueListener(q, wedged, healthy)
+    listener.start()
+    try:
+        q.put(logging.LogRecord('t', logging.INFO, __file__, 1, 'stuck', (), None))
+        deadline = time.monotonic() + 10
+        while wedged.lock.acquire(blocking=False):
+            wedged.lock.release()
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        assert listener.stop(timeout=0.2) is False
+        started = time.monotonic()
+        assert listener.stop(timeout=5) is False  # exit handlers repeat the stop
+        assert time.monotonic() - started < 1
+        references = [ref() for ref in logging._handlerList]
+        assert wedged not in references
+        assert healthy in references
+        finished = threading.Event()
+        ours = [ref for ref in logging._handlerList if ref() in (wedged, healthy)]
+
+        def flush_at_exit():
+            logging.shutdown(ours)
+            finished.set()
+
+        threading.Thread(target=flush_at_exit, daemon=True).start()
+        assert finished.wait(5), 'exit flush waited on the wedged sink'
+        assert 'is wedged in the listener' in capsys.readouterr().err
+    finally:
+        release.set()

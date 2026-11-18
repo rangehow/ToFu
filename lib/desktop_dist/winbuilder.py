@@ -130,11 +130,7 @@ def state() -> dict:
 
 
 def _set_state(**kw) -> None:
-    m = store.load_manifest()
-    b = m.get('winbuild') if isinstance(m.get('winbuild'), dict) else {}
-    b.update(kw)
-    m['winbuild'] = b
-    store.save_manifest(m)
+    store.update_section('winbuild', **kw)
 
 
 def start(reason: str = 'manual', target: str = 'full') -> dict:

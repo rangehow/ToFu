@@ -34,6 +34,11 @@ Design notes
   ``/* */``-block comments, and trailing commas before parsing.
 * **Errors are logged, not silenced**: read failures return ``default``
   but log a warning; write failures raise.
+* **Consistent absence**: a missing file is reported only after re-reading
+  under the writers' lock, because a FUSE open racing ``os.replace`` can
+  see ENOENT (docs/DEFENSIVE_PATTERNS.md, "A missing store is decided under
+  its writers' lock"). Writers of decision state publish under
+  ``locked_path(path)`` or ``update_json_atomic(path)`` so readers can ask.
 """
 
 from __future__ import annotations
@@ -88,12 +93,14 @@ def _path_lock(path: str) -> threading.Lock:
 # half-reliable path or newly regress hosts.
 
 @contextlib.contextmanager
-def _interprocess_lock(path: str):
+def _interprocess_lock(path: str, *, create: bool = True):
     """Hold an exclusive cross-process advisory lock for ``path``'s RMW.
 
     Blocking (waits for the lock); always yields, degrading to a no-op when
     OS-level locking is unavailable. The lock file is created next to the
     data file and is never deleted (deleting it races other holders).
+    With ``create=False`` a missing lock file means no locked writer has
+    ever published ``path``: nothing is created and nothing is waited for.
     """
     try:
         import fcntl  # POSIX only
@@ -104,6 +111,13 @@ def _interprocess_lock(path: str):
 
     lock_path = os.path.abspath(path) + '.lock'
     parent = os.path.dirname(lock_path) or '.'
+    if not create:
+        try:
+            fd = os.open(lock_path, os.O_RDWR)
+        except OSError:
+            yield
+            return
+        os.close(fd)
     if parent != '.' and not os.path.isdir(parent):
         try:
             os.makedirs(parent, exist_ok=True)
@@ -155,8 +169,52 @@ def locked_path(path: str):
     contract for non-JSON stores (for example, bounded line journals).  The
     context is deliberately non-reentrant; callers must perform their I/O
     directly rather than invoke another lock-taking helper for the same path.
+    :func:`read_json` and :func:`read_text` of ``path`` inside it are safe:
+    they know this thread already excludes the writers.
     """
-    with _path_lock(path), _interprocess_lock(path):
+    with _path_lock(path), _interprocess_lock(path), _holding(path):
+        yield
+
+
+# ── Consistent absence ─────────────────────────────────────────────
+# On the data root's FUSE mount, open() racing a writer's ``os.replace`` can
+# fail with ENOENT although the store exists before and after the replace
+# (measured 29 of 2000 opens on DolphinFS). An unlocked FileNotFoundError
+# therefore cannot distinguish "absent" from "mid-publication". Readers keep
+# the lock-free fast path for an existing file and decide absence only under
+# the writers' lock, where no replace is in flight: the answer is the one a
+# fully locked read would give, with no retry count or wait interval.
+
+_HELD = threading.local()
+
+
+def _held_paths() -> set:
+    held = getattr(_HELD, 'paths', None)
+    if held is None:
+        held = _HELD.paths = set()
+    return held
+
+
+@contextlib.contextmanager
+def _holding(path: str):
+    """Record that this thread excludes ``path``'s writers."""
+    key = os.path.abspath(path)
+    held = _held_paths()
+    held.add(key)
+    try:
+        yield
+    finally:
+        held.discard(key)
+
+
+@contextlib.contextmanager
+def _writers_excluded(path: str):
+    """Exclude ``path``'s locked writers for one read, creating nothing."""
+    if os.path.abspath(path) in _held_paths():
+        yield
+        return
+    with _path_lock(path), _interprocess_lock(path, create=False), \
+            _holding(path):
         yield
 
 
@@ -239,6 +297,25 @@ def read_json(path: str, default: Any = None, *, jsonc: bool = False,
                  or max_bytes <= 0)):
         raise ValueError("max_bytes must be a positive integer or None")
     try:
+        return _read_json_present(
+            path, default, jsonc=jsonc, strict=strict, max_bytes=max_bytes)
+    except FileNotFoundError:
+        pass
+    with _writers_excluded(path):
+        try:
+            return _read_json_present(
+                path, default, jsonc=jsonc, strict=strict,
+                max_bytes=max_bytes)
+        except FileNotFoundError as _e_audit:
+            logger.debug('[json_store] read_json caught %s: %s',
+                         type(_e_audit).__name__, _e_audit)
+            return default
+
+
+def _read_json_present(path: str, default: Any, *, jsonc: bool, strict: bool,
+                       max_bytes: int | None) -> Any:
+    """One read of ``path``; FileNotFoundError propagates to the caller."""
+    try:
         if max_bytes is None:
             with open(path, 'r', encoding='utf-8') as f:
                 text = f.read()
@@ -253,9 +330,8 @@ def read_json(path: str, default: Any = None, *, jsonc: bool = False,
                 logger.warning('[json_store] %s — returning default', message)
                 return default
             text = raw.decode('utf-8')
-    except FileNotFoundError as _e_audit:
-        logger.debug('[json_store] read_json caught %s: %s', type(_e_audit).__name__, _e_audit)
-        return default
+    except FileNotFoundError:
+        raise
     except (OSError, UnicodeError) as e:
         if strict:
             raise JsonStoreReadError(
@@ -295,13 +371,29 @@ def _parse_json_text(text: str, path: str, default: Any, *, jsonc: bool,
 
 
 def read_text(path: str, default: str = '') -> str:
-    """Read a text file. Returns ``default`` on missing file or read error."""
+    """Read a text file. Returns ``default`` on missing file or read error.
+
+    Absence is decided under the writers' lock, as in :func:`read_json`.
+    """
+    try:
+        return _read_text_present(path, default)
+    except FileNotFoundError:
+        pass
+    with _writers_excluded(path):
+        try:
+            return _read_text_present(path, default)
+        except FileNotFoundError as _e_audit:
+            logger.debug('[json_store] read_text caught %s: %s',
+                         type(_e_audit).__name__, _e_audit)
+            return default
+
+
+def _read_text_present(path: str, default: str) -> str:
     try:
         with open(path, 'r', encoding='utf-8') as f:
             return f.read()
-    except FileNotFoundError as _e_audit:
-        logger.debug('[json_store] read_text caught %s: %s', type(_e_audit).__name__, _e_audit)
-        return default
+    except FileNotFoundError:
+        raise
     except OSError as e:
         logger.warning('[json_store] Read text failed for %s: %s', path, e)
         return default
@@ -501,7 +593,7 @@ def update_json_atomic(path: str, mutator: Callable[[Any], Any], *,
     # then contends for the OS-level lock. ``_interprocess_lock`` is a no-op
     # where advisory locking is unavailable, so single-process behaviour is
     # unchanged.
-    with lock, _interprocess_lock(path):
+    with lock, _interprocess_lock(path), _holding(path):
         current = read_json(
             path, default=default, jsonc=jsonc, strict=strict)
         # Passing a deep copy is the caller's responsibility — we don't

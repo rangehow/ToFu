@@ -589,14 +589,23 @@ def _queue_dequeue(session: Session, payload: Mapping[str, Any]) -> Any:
     lease_ms = _integer(payload, "lease_ms", minimum=1, maximum=3600 * 1000)
     session.lock_key("queue-conversation", f"{user_id}:{conv_id}")
     rows = _queue_rows(session, conv_id, user_id)
-    row = next((candidate for candidate in rows
-                if candidate['kind'] not in (KIND_AUTOPILOT,
-                                              KIND_BACKGROUND_RECEIPT)
-                and not (candidate['kind'] == KIND_WORKFLOW
-                         and (_load(candidate['payload_json']) or {}).get(
-                             '_backgroundCommand'))
-                and (candidate['leased_until_ms'] is None
-                     or int(candidate['leased_until_ms']) < now_ms)), None)
+    # A row whose Turn pair already exists runs before every source whose Turn
+    # is created at dispatch, earliest pair first: serving a later source first
+    # appends its Turns after the waiting pair, which then finds only a
+    # checkpoint past its own position. Priority orders Turn-less sources only.
+    paired = next((candidate for candidate in rows if candidate['attempt_id']), None)
+    if paired is not None:
+        row = paired if (paired['leased_until_ms'] is None
+                         or int(paired['leased_until_ms']) < now_ms) else None
+    else:
+        row = next((candidate for candidate in rows
+                    if candidate['kind'] not in (KIND_AUTOPILOT,
+                                                  KIND_BACKGROUND_RECEIPT)
+                    and not (candidate['kind'] == KIND_WORKFLOW
+                             and (_load(candidate['payload_json']) or {}).get(
+                                 '_backgroundCommand'))
+                    and (candidate['leased_until_ms'] is None
+                         or int(candidate['leased_until_ms']) < now_ms)), None)
     if row is None:
         return None
     session.execute(

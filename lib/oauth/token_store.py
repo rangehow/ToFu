@@ -282,7 +282,7 @@ def save_token(provider: str, token_data: dict) -> bool:
         payload = dict(token_data)
         payload['_saved_at'] = time.strftime(
             '%Y-%m-%dT%H:%M:%SZ', time.gmtime())
-        with _store_lock(provider):
+        with _store_lock(provider), locked_path(path):
             _harden_token_permissions(path)
             write_json_atomic(path, payload, mode=0o600)
         logger.info('[TokenStore] Saved token for %s (email=%s)',

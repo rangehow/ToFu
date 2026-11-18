@@ -60,7 +60,7 @@ def test_opus_tofu_connection_uses_the_friday_anthropic_face_and_provider():
     assert deployment["wire_model_id"] == "kunlunbedrock.claude-opus-5.5-m17"
     # FRIDAY's provider id selects its Claude cache multipliers (reads 0.1x),
     # which is what the run's compaction economics must use.
-    assert doc["providers"][0]["provider_id"] == "sankuai"
+    assert doc["providers"][0]["provider_id"] == "example-corp"
     assert "vision" in doc["offerings"][0]["capabilities"]
     # No hand-written reasoning profile: the catalog's official one is used.
     assert "inference_profile" not in deployment
@@ -115,6 +115,9 @@ def test_opus_runs_use_their_production_context_window_and_per_task_urls(tmp_pat
                                       "--proxy", "http://p", "--branch", "b"])
     config = cli.frozen_config(args)
     assert config["context_tokens"] == 1_000_000
+    # The runner requires the endpoint cluster's application token; the spec
+    # supplies a synthetic one instead of inheriting this host's secret.
+    monkeypatch.setenv(runner.token_env_for("https://x/system/857"), "synthetic-test-token")
     assert config["protocol"] == "claude-6h-medium"
     live = runner.Runner(runner.RunConfig(
         work_dir=tmp_path / "work", tasks_dir=tmp_path / "tasks", tasks=["a-task"], arms=["tofu"],

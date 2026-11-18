@@ -432,8 +432,9 @@ def save_snapshot() -> bool:
             ]
         payload = {'version': _SNAPSHOT_VERSION, 'saved_at': time.time(),
                    'tokens': items}
-        from lib.json_store import write_json_atomic
-        write_json_atomic(_snapshot_path(), payload)
+        from lib.json_store import locked_path, write_json_atomic
+        with locked_path(_snapshot_path()):
+            write_json_atomic(_snapshot_path(), payload)
         logger.info('[WriteFreshness] snapshot saved (%d token(s))', len(items))
         return True
     except Exception as e:

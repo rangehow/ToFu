@@ -137,6 +137,42 @@ def test_registry_keeps_historical_versions_and_rejects_ambiguous_resolution():
     assert current["metrics"][0]["pluginVersion"] == "2.0.0"
 
 
+def test_discovery_waits_for_a_lookup_a_pinned_mounted_key_cannot_answer():
+    """The Turn prelude's built-in spec never scans entry points; misses and
+    unpinned references still see every external bundle (ambiguity intact)."""
+    scans = []
+    external = _plugin(version="2.0.0", digest="b" * 64)
+    providers = ExperimentRegistry(
+        discover=lambda: scans.append(1) or (len(scans) == 1 and providers.register(external)))
+    providers.register(_plugin(version="1.0.0"))
+
+    pinned = _resolved(providers, version="1.0.0")
+    assert scans == []
+    assert pinned["metrics"][0]["pluginVersion"] == "1.0.0"
+    with pytest.raises(ExperimentPluginError, match="version is ambiguous"):
+        _resolved(providers)
+    assert scans == [1]
+    assert _resolved(providers, version="2.0.0")["metrics"][0]["pluginVersion"] == "2.0.0"
+
+
+def test_builtin_context_cost_spec_resolves_without_scanning_entry_points(monkeypatch):
+    import importlib
+    registry_module = importlib.import_module("lib.experiments.registry")
+
+    scans = []
+
+    def scan(*_args, **_kwargs):
+        scans.append(1)
+        return []
+
+    monkeypatch.setattr(registry_module, "entry_points", scan)
+    monkeypatch.setattr(registry_module, "_DISCOVERY_LOADED", False)
+    spec = context_cost_spec(experiment_id="cost-v1", traffic_percent=10,
+                             treatment_percent=50, minimum_sample_size=20)
+    assert spec["arms"][0]["strategy"]["pluginId"]
+    assert scans == []
+
+
 def test_assignment_is_owner_scoped_deterministic_and_digest_verified():
     providers = ExperimentRegistry()
     providers.register(_plugin())

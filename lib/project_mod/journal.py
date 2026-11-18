@@ -49,8 +49,7 @@ import os
 import re
 
 from lib.json_store import (
-    _interprocess_lock,
-    _path_lock,
+    locked_path,
     read_text,
     write_text_atomic,
 )
@@ -228,8 +227,7 @@ def _archive_entries(project_root: str, entries: list[str]) -> None:
         by_month.setdefault(_month_of(e), []).append(e)
     for month, es in by_month.items():
         path = os.path.join(adir, f'JOURNAL-{month}.md')
-        lk = _path_lock(path)
-        with lk, _interprocess_lock(path):
+        with locked_path(path):
             existing = read_text(path, default='')
             if not existing.strip():
                 existing = (f'# Journal archive — {month}\n\n'
@@ -261,9 +259,8 @@ def maybe_rotate(journal_path: str, project_root: str, *,
     if size < threshold:
         return None
 
-    lock = _path_lock(journal_path)
     try:
-        with lock, _interprocess_lock(journal_path):
+        with locked_path(journal_path):
             # Re-read fresh INSIDE the lock: a top-append that already landed
             # is the newest content and will be kept; the window vs a
             # non-locking writer is the same one every RMW in this repo accepts.

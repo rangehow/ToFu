@@ -50,7 +50,10 @@ def _boot(page, url):
 
 @pytest.fixture()
 def office_page(browser, live_server):
+    from urllib.parse import quote
+
     from tests._jsdom import require_shipped_graph
+    from tests.conftest import _server_conversation_ids
 
     require_shipped_graph()
     context = browser.new_context(office=True, viewport={'width': 1440, 'height': 900})
@@ -58,9 +61,18 @@ def office_page(browser, live_server):
     _attach_js_error_capture(page)
     _boot(page, live_server)
     _dismiss_onboarding_modals(page)
+    # This fixture owns its context, so it also owns the page fixture's cleanup:
+    # ensuring the router also provisions its health-check chat, and a chat left
+    # on the session server is the one later specs boot into.
+    origin = live_server.rstrip('/')
+    ids_before = _server_conversation_ids(page, origin)
     try:
         yield page
     finally:
+        # Same mass-deletion guard as the page fixture: no exact baseline, no delete.
+        if ids_before is not None:
+            for conversation_id in (_server_conversation_ids(page, origin) or set()) - ids_before:
+                page.request.delete(f'{origin}/api/v4/conversations/{quote(conversation_id, safe="")}')
         context.close()
 
 

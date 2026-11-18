@@ -123,6 +123,13 @@ def test_candidate_merge_is_not_checkout_delivery(
         elif url.path in read_projections:
             route.fulfill(json=read_projections[url.path])
         else:
+            # Every read of this view names its project. The live server's
+            # storage is shared by the session, so a project an earlier test
+            # left in the sidebar has its own coordination and status reads;
+            # they are not this view's.
+            if parse_qs(url.query).get('path') != [project_path]:
+                route.continue_()
+                return
             unexpected_project_requests.append(f'{request.method} {url.path}')
             route.fulfill(status=404, json={'ok': False})
 

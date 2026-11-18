@@ -23,6 +23,13 @@ describe('"answer in conversation" lands on the question and replies to it', () 
     expect(findQuestionFocus(turns.slice(0, 2))).toBeNull();
   });
 
+  it('skips a question its lead withdrew, but still opens it by name', () => {
+    const withdrawn = [...turns, ask('t5', 5, { guidanceId: 'hg_withdrawn', status: 'awaiting_human',
+      guidanceQuestion: 'Settled?', guidanceWithdrawn: { reason: 'answered in chat', at: 1 } })];
+    expect(findQuestionFocus(withdrawn)).toMatchObject({ guidanceId: 'hg_queue' });
+    expect(findQuestionFocus(withdrawn, 'hg_withdrawn')).toMatchObject({ turnId: 't5' });
+  });
+
   it('numbers a form question like its form', () => {
     const form = [ask('t9', 9, { guidanceId: 'hg_form', status: 'awaiting_human', guidanceQuestion: 'summary',
       guidanceBatchQuestions: [{ question: 'Budget?' }, { question: 'Venue?' }] })];

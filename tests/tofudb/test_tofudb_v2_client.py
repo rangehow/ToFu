@@ -128,6 +128,41 @@ def test_request_many_sends_every_request_first_and_leaves_a_streamed_one_unsent
     assert [request["key"] for request in seen] == ["a", "b", "c"]
 
 
+def test_send_many_puts_the_exchange_on_the_wire_before_its_answers_are_read() -> None:
+    """The send half returns with both requests already readable by the peer;
+    ``receive`` then reads the answers in order and leaves the session aligned."""
+    session, peer_socket = _socketpair_session()
+    pending = session.send_many([("record.get", {"key": "a"}), ("record.get", {"key": "b"})],
+                                deadline_unix_ms=10_000)
+    assert pending is not None
+    requests = [recv_frame(peer_socket) for _ in range(2)]  # sent before any answer exists
+    assert [json.loads(message[FIELD_PAYLOAD])["key"] for message in requests] == ["a", "b"]
+    for index, message in enumerate(requests):
+        _answer(peer_socket, message[FIELD_CORRELATION_ID], b'{"n":%d}' % index)
+    first, second = pending.receive()
+    assert (first.payload, second.payload) == (b'{"n":0}', b'{"n":1}')
+    peer_socket.close()
+    session._sock.close()
+
+
+def test_send_many_declines_an_exchange_it_cannot_send_in_one_segment() -> None:
+    session, peer_socket = _socketpair_session()
+    try:
+        assert session.send_many([("record.get", {"key": "a"}),
+                                  ("record.get", {"key": "x" * MAX_PAYLOAD_BYTES})],
+                                 deadline_unix_ms=10_000) is None
+        capacity = session._sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
+        big = "y" * (capacity // 2 + 1)
+        assert session.send_many([("record.get", {"key": big}), ("record.get", {"key": big})],
+                                 deadline_unix_ms=10_000) is None
+        peer_socket.setblocking(False)
+        with pytest.raises(BlockingIOError):
+            peer_socket.recv(1)  # nothing was sent
+    finally:
+        peer_socket.close()
+        session._sock.close()
+
+
 @pytest.mark.parametrize("operation,command_id", [
     ("tool_result_artifact.put", "large-tool-result"),
     ("swarm.agent.save", "large-agent"),

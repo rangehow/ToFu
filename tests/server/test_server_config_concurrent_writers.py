@@ -20,7 +20,7 @@ This test drives TWO of the real writers concurrently:
 against the SAME file and asserts BOTH sets of learned values survive.
 
 NEGATIVE CONTROL (proven by hand): replace
-``    with lock, _interprocess_lock(path):`` with ``    if True:`` inside
+``    with lock, _interprocess_lock(path), _holding(path):`` with ``    if True:`` inside
 ``lib/json_store.update_json_atomic`` (disabling both locks) → the
 ``model_limits`` count comes back short (context_limits writes back a stale
 snapshot over model_info's concurrent additions) and

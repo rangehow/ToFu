@@ -425,6 +425,83 @@ the model). Specifications:
 `tests/project_mod/test_coordinator_workers.py::test_an_idle_wait_ends_the_turn_while_settlement_resumes_the_coordinator`
 and `::test_a_timeout_nothing_would_resume_keeps_the_model_round`.
 
+#### A deferred wake waits for its lane's Turn (owner request 2026-11-18)
+
+Problem: every recovery pass of a project (each held delivery receipt on a
+delivery lane, each relevant dispatch commit, each timed wake) re-derived every
+open request. For a wake whose birth the lead's running Turn refused, it then
+built the continuation context and asked for a Turn only to hear `lane_busy`
+again: the knowledge lead logged 2,555 such refusals and then 3,176 deferred
+`turn_persist` cycles (about 50 a minute for an hour) while one Turn ran.
+Decision: the refusal names the busy Turn (`LifecycleConflict.turn`), and the
+service records it as the lane's hold (`continuation.hold_lane`, process-local,
+one entry per Coordinator conversation). While the held attempt is pending or
+running, a pass skips that lane's requests after one attempt read per pass,
+before deriving anything. The Turn's own settlement drain
+(`turn_lifecycle._drain_queue_after_settlement`) is the event that runs the pass
+which births the wake, exactly once. The hold is a hint: an ended or unreadable
+holder drops it and the ordinary birth attempt arbitrates the lane, so a holder
+that settled in another process delays nothing. No interval, count or cap was
+added. Alternatives rejected: a debounce on delivery-lane wakes (a tuned
+interval that still repeats); a durable queue of deferred births (the
+authorized row already is the durable obligation).
+Specification: `tests/project_mod/test_coordinator_wake_lane_events.py`.
+
+#### A deferred wake starts with its brief rebuilt at birth (2026-11-18)
+
+Problem: wake 7a04ce76 of the tofu lead was authorized at 00:01, refused
+`lane_busy` until 08:34 and born (Turn 371ea08a) with the brief stored at
+authorization, whose instruction a 04:36 change had replaced; a commitment
+wake would equally announce promises kept meanwhile as due. Decision: the
+stored `brief` stays the authorization record (CAS equality, audit). At birth
+`continuation.wake_brief` keeps what the wake was authorized for (a restart
+note, an applied decision default), renders the instruction from the current
+`continuation_instruction`, and lists only the wake's commitments the current
+board still holds open at the same due time (none left: a plain continue).
+The appended continuation context was already read at birth. The owed wake
+itself still fires (`test_a_seen_result_still_wakes_when_nothing_else_will`).
+Alternatives rejected: revoking and re-authorizing a stale wake (a revoked
+last wake ends the request's continuation); holding back an old wake when no
+Worker needs the lead (it also suppresses the wake a request needs to report
+and finish). Specification:
+`test_a_long_deferred_wake_starts_with_its_brief_rebuilt_from_current_state`.
+
+#### A request whose authority ended is retired once (owner request 2026-11-18)
+
+Problem: a request whose Coordinator was stopped, rebound, or whose human source
+changed stayed open forever. Every pass re-derived the same "Original
+Coordinator request was stopped" verdict for it (three tofu requests, every
+lane event since 11-18 00:01). Decision: the authority checks of
+`continuation._proposal` raise `RequestAuthorityEnded` for a non-transient
+verdict, and recovery records the request's one `coordinatorSettlement` with
+reason `authority_ended` (no `reportTurnId`: there is no report). The
+settlement CAS derives the verdict again from its own snapshot, so a request
+whose authority is live is never closed. Discovery excludes settled requests,
+so the verdict is never derived again. Alternatives rejected: a process-local
+verdict memo (every process and restart re-derives it); revoking the wake grant
+(revocation is a Stop's own record, not a verdict about the request).
+
+#### A result the last Turn saw starts no Turn (owner request 2026-11-18)
+
+Problem: 4 of 9 idle-wait Turn ends were followed within 4 s by a wake that only
+polled ($4.84): a wake queued while the lane was busy, or derived from the
+ending Turn's own reviews, started after that Turn had been told the results it
+was for. Decision: when a Coordinator attempt completes, its settlement drain
+records what its polls reported (`coordinator_workers._REPORTS_KEY`: each
+Worker's settlement at attempt and delivery receipt) as the lane's observation
+(`continuation.observe_turn_end`). A results wake, newly derived or queued and
+unborn, starts no Turn while every Worker of its request that needs the lead
+(needs review, held, interrupted, ended) was reported at its current settlement
+and another Worker of the request is still running or delivering. That
+Worker's settlement is new evidence and wakes the lead; a queued wake is kept,
+not revoked, and is born then. Without a pending Worker, or for a commitment or
+decision wake, the wake starts as before. Project-message wakes already name
+the newest pending message, and a Turn that read its messages leaves none
+pending ("Messages wake an idle lead"). Alternatives rejected: time windows
+around the Turn end (a tuned interval); dropping queued wakes (loses the
+request's continuation). Specification:
+`tests/project_mod/test_coordinator_wake_lane_events.py`.
+
 #### Lead prompts carry no ceremony (owner request 2026-11-18)
 
 Problem: the 2026-11-18 lead audit (D1, D2, D4, T4, T5) found lead prompts at a
@@ -3214,6 +3291,74 @@ existing delegation boundary, then reuses the conversation command service used
 by the browser. Resumes retain the target's accepted model/config and identity;
 they add no human message, answer, approval or enlarged tool grant. Dispatch
 attempts retain their exact `TrustedDispatch` admission.
+
+**A lead holds a Worker without losing it (owner request 2026-11-18).**
+Problem: a lead's `stop` is final for a dispatched Worker. Stopping its Attempt
+withdraws the conversation's dispatch (`turn_lifecycle.abort_attempt` →
+`revoke_conversation_dispatch`), so a later `continue` fails with "Grant
+revoked" (assignment 215f1bf0, conversation worker-d51b97d5). During the
+2026-11-18 AppId …5409 quota pressure the parallel lead needed to throttle
+lanes. It could only stop them, which lost the Workers, or re-delegate them.
+Decision: `control_conversation` gains the pair `hold` / `resume`, built only
+from the existing owners. No new state or store is added:
+
+- `hold` (no `expected_revision`) applies only to a Worker session a lead
+  dispatched (`turn_dispatch` is trusted). It passes the same
+  `worker_control(session=True)` gate and the same audit as `stop`. It stops the
+  exact current Attempt through the Stop entry point with the dispatch withdrawal
+  off and the abort reason `lead_hold` (`ConversationTurnCommandService.hold_project_attempt`,
+  the counterpart of `abort_project_attempt`). That reason is a row of
+  `turn_verdict.ABORT_CAUSES` (initiator `LEAD_HOLD`). The Turn settles
+  `interrupted` with cause `lead_hold`, and settlement offers `continue` even
+  before any progress, as for `server_restart` (`PAUSE_SETTLEMENT_CAUSES`).
+  `PAUSE_ABORT_REASONS` gives a hold the same handling as a restart's quiesce.
+  A cut call is interrupted and repeatable, never "do not resume". The repeatable
+  cut batch is dropped from the resume replay. Tool results and waits say "the
+  project lead's hold … the project dispatch grant is unchanged". The grant
+  revision, checkout (work id) and assignment are untouched. Holding a held
+  Turn again is an `alreadyTerminal` receipt. A queued or settled Attempt is
+  refused.
+- `resume` takes the held Turn's `currentAttemptId` and `projectionRevision`.
+  It runs the same `create_attempt` command `continue`/`checkpoint_resume` use,
+  with the operation and anchor the settlement offers (`continue` first, then
+  `checkpoint_resume`, `restart_resume.RESUME_OPERATIONS`). It keeps the
+  `TrustedDispatch` admission, so the assignment advances in place
+  (`continue_execution`). A lost ACK replays the started Attempt. A Turn that no
+  lead held is refused with a pointer to its own resume options. A revoked grant
+  (owner Stop, `cancel_project_work`, owner withdrawal) refuses the resume
+  through the existing admission. Holding never protects a Worker from
+  revocation.
+- Held is derived, not stored. `project_dispatch.continuation.execution_status`
+  reads `held` from an interrupted Attempt whose Turn cause is `lead_hold`. The
+  Turn metadata is read only for interrupted Attempts. Coordinator views
+  (`get_project_workers`, `poll`, wake summaries) report status `held` and
+  phase `on_hold`. `held` stays the delivery-hold phase. `on_hold` is the lead's
+  own act: it is never news and never wakes the Coordinator, and a `poll`
+  lists it under `held`. It is still actionable: the request stays open, and
+  continuation context reminds the lead to resume or cancel it. The Worker's
+  Turn chrome reads "Held", and the tool cards label status `held` and the
+  `hold`/`resume` actions.
+- Under the owner's delegation (Act-for-me) `hold` and `resume` are admitted
+  beside `continue`, `checkpoint_resume`, `stop` and `set_model`, from any wake
+  kind. The owner's own Stop, `stop`, and revocation keep withdrawing the grant
+  unchanged. Project dispatch restart recovery resumes only `server_restart`
+  interruptions, so a held Worker stays held across a restart until its lead
+  resumes it.
+
+Alternatives rejected: (1) Make a lead's `stop` keep the grant. That changes
+the owner-visible Stop semantics, and leads also use `stop` to end work for
+good. (2) A hold flag or paused status in the assignment record or a scheduler
+queue. That is a parallel state machine beside the Turn settlement that both
+the executor and the restart recovery would have to keep consistent. (3) Hold
+the lane by deferring the Worker's next model call (a gate in admission). It
+keeps a live task and lease during the pause and adds a wake/poll mechanism.
+(4) Re-delegate on resume. That loses the checkout, the account and the
+assignment identity the review pins. Specification:
+`tests/router/test_lead_delegation.py`
+(`test_a_wake_holds_its_worker_and_resumes_it_under_the_same_assignment_and_grant`,
+real sqlite and native authorities, commitment, project-message and Watchdog
+wakes under Act-for-me), `tests/project_mod/test_coordinator_session_control.py`
+(hold/resume unit contract) and `tests/turn_lifecycle/test_lead_hold_settlement.py`.
 
 **Worker control is scoped by the Coordinator binding (owner follow-up
 2026-11-15; review and cancel 2026-11-16).** Problem: every server restart interrupted several Workers with

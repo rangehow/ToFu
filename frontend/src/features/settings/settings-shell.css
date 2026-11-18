@@ -257,8 +257,15 @@
   box-shadow: inset 0 2px 4px rgba(26, 24, 20, 0.10), 0 1px 2px rgba(26, 24, 20, 0.08);
 }
 .stg-mobile-platform{ display: inline-flex; flex-shrink: 0}
-.stg-mobile-name{ flex-shrink: 0}
+/* On a phone a long localized badge ("Рекомендуется") leaves no room for
+ * every fact: the version gives way first, then the name, both ellipsized
+ * (the row's title keeps the file name); the badge and Download stay whole. */
+.stg-mobile-name{ min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap}
 .stg-mobile-version {
+  flex-shrink: 1000;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-family: 'SF Mono', 'Consolas', monospace;
   font-size: 10px;
   font-weight: 700;

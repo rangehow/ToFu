@@ -4,7 +4,8 @@
 the `ReceiveBuffer` both use to read a pipelined exchange's answers;
 decoding must return owned values before mappings close. `wire.py` owns
 storage.v2 framing, authentication, bounded streaming and session
-lifetime; `StorageV2Session.request_many` pipelines single-frame queries in
+lifetime; `StorageV2Session.request_many` (and its split halves `send_many` +
+`receive`) pipelines single-frame queries in
 send-buffer segments (contract in `docs/STORAGE.md`, "Commands, queries, and
 idempotency"). The public import surface is `tofu_db`; this directory also builds the
 independent `tofu-db-client` wheel. `_crc32c_accelerator.py` owns the optional

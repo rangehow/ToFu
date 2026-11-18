@@ -127,6 +127,7 @@ from datetime import datetime, timezone
 
 from lib.json_store import (
     JsonStoreReadError,
+    locked_path,
     read_json,
     update_json_atomic,
     write_json_atomic as write_json_atomic,  # historical test/debug seam
@@ -242,8 +243,7 @@ def _document(data) -> dict:
 
 def _load() -> list:
     try:
-        return _document(read_json(
-            _APPROVALS_FILE, default=None, strict=True))['records']
+        return _document(_read_approvals())['records']
     except JsonStoreReadError as error:
         # Reads fail closed: a broken approval store never manufactures a
         # usable token, and remains untouched for operator recovery.
@@ -1052,9 +1052,22 @@ def _check_grant(document: dict, owner_key: str, requester: dict, scope: str) ->
     return record
 
 
+def _read_approvals():
+    """The approval store as its writers last committed it.
+
+    Writers replace the file (``update_json_atomic``). On the data root's FUSE
+    mount an unlocked open racing that rename can find no file (ENOENT), which
+    reads as a store that never granted anything: incident 2026-11-18 08:34:48,
+    one of three parallel lead stops refused 'Act for me is not granted' while
+    it was granted. A read takes the writers' lock, so it sees one commit.
+    """
+    with locked_path(_APPROVALS_FILE):
+        return read_json(_APPROVALS_FILE, default=None, strict=True)
+
+
 def _read_document() -> dict:
     try:
-        return _document(read_json(_APPROVALS_FILE, default=None, strict=True))
+        return _document(_read_approvals())
     except JsonStoreReadError as error:
         logger.warning('[Lifecycle] delegation store read failed: %s', error)
         raise DelegationRefused('owner_delegation_unavailable',
@@ -1772,7 +1785,7 @@ def restart_notices(*, states: tuple = _OPEN_NOTICE_STATES) -> list:
     owner-scoped by each notice's ``owner``.
     """
     try:
-        document = _document(read_json(_APPROVALS_FILE, default=None, strict=True))
+        document = _document(_read_approvals())
         notices = [dict(item) for item in _restart_notices(document) if item.get('state') in states]
     except JsonStoreReadError as error:
         logger.warning('[Lifecycle] restart notice store read failed: %s', error)

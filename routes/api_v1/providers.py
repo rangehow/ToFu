@@ -62,7 +62,7 @@ from .auth import current_auth, require_scope
 # Access-matrix probe engine (Settings → 服务商 → 访问矩阵). Plaintext keys
 # are resolved server-side from the owner-scoped secret store; the browser
 # only ever addresses credentials by their column index.
-from lib.json_store import read_json, write_json_atomic
+from lib.json_store import locked_path, read_json, write_json_atomic
 from lib.provider.provider_probe import (
     CELL_PROBE_LOCK,
     CELL_PROBE_TASKS,
@@ -547,7 +547,8 @@ def _read_persisted_probe_snapshot(
             "Provider probe was interrupted by a server restart; run it again."
         )
         try:
-            write_json_atomic(cache_path, cached, fsync=False)
+            with locked_path(cache_path):
+                write_json_atomic(cache_path, cached, fsync=False)
         except Exception as error:
             logger.warning(
                 "[CellProbe] failed to settle interrupted snapshot for %s: %s",

@@ -918,6 +918,16 @@ def _load_unlocked():
     stats_path = _stats_path()
     try:
         raw, fingerprint = _read_store_snapshot(stats_path)
+        if (raw is None and _cache['loaded'] and _cache_path == stats_path
+                and _disk_fingerprint not in (None, _FINGERPRINT_UNKNOWN)
+                and _disk_fingerprint[0] != ('missing',)):
+            # On the FUSE data root an open racing a commit's os.replace can
+            # see ENOENT. This reader holds ``_lock``, which commits take
+            # inside the flock, so it cannot ask the writers; a store that
+            # vanishes after a loaded snapshot keeps that snapshot deciding,
+            # as an unreadable one does, until a publication changes it.
+            _disk_fingerprint = _store_fingerprint(stats_path)
+            return
         document = _normalise_document(raw, today)
     except JsonStoreReadError as error:
         logger.warning('[KeyStats] Failed to read %s: %s — serving the last '

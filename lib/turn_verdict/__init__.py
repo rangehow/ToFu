@@ -65,6 +65,9 @@ RESTART_RECOVERY = 'restart_recovery'
 # the executor learns of that Stop through the fence and keeps its reading.
 STOPPED_ELSEWHERE = 'attempt_stopped_by_user'
 STUCK_NO_PROGRESS = 'stuck_no_progress'
+# A project lead paused its Worker (control_conversation action=hold): the grant,
+# checkout and assignment stay, and the lead resumes the Turn (action=resume).
+LEAD_HOLD = 'lead_hold'
 AWAITING_USER_ACTION = 'awaiting_user_action'
 
 
@@ -73,6 +76,7 @@ class AbortInitiator(str, Enum):
 
     PERSON = 'person'
     SERVER_RESTART = 'server_restart'
+    LEAD_HOLD = 'lead_hold'
     STORAGE_FENCE = 'storage_fence'
     DISPATCH_AUTHORITY = 'dispatch_authority'
     STUCK_TASK_REAPER = 'stuck_task_reaper'
@@ -123,6 +127,10 @@ ABORT_CAUSES: Mapping[str, AbortCause] = MappingProxyType({
     # checkpoint: resumable, and never stopped by a person.
     'server_shutdown': _SERVER_RESTART,
     RESTART_RECOVERY: _SERVER_RESTART,
+    # A project lead held its Worker. Like a restart this is a pause: the Turn
+    # settles interrupted (cause ``lead_hold``) and resumes from its checkpoint
+    # when the lead resumes it; no person stopped it and no grant was withdrawn.
+    LEAD_HOLD: AbortCause(AbortInitiator.LEAD_HOLD, 'project lead hold'),
     # Internal storage/attempt fences. They flip ``task['aborted']`` to halt
     # expensive work, but the Turn died because the authority rejected its
     # writes, not because anyone asked.
@@ -185,6 +193,11 @@ def _stamped_by(initiator: AbortInitiator) -> frozenset[str]:
 INTERNAL_FENCE_ABORT_REASONS = _stamped_by(AbortInitiator.STORAGE_FENCE)
 DISPATCH_AUTHORITY_ABORT_REASONS = _stamped_by(AbortInitiator.DISPATCH_AUTHORITY)
 RESTART_ABORT_REASONS = _stamped_by(AbortInitiator.SERVER_RESTART)
+# Stops that pause work rather than end it: a restart's quiesce or a lead's hold.
+# Their cut calls stay repeatable and the resumed model reads no Stop.
+PAUSE_ABORT_REASONS = RESTART_ABORT_REASONS | _stamped_by(AbortInitiator.LEAD_HOLD)
+# The settlement causes of those pauses (``_SYSTEM_STOP_VERDICTS`` below).
+PAUSE_SETTLEMENT_CAUSES = frozenset({'server_restart', LEAD_HOLD})
 
 
 def system_abort_label(abort_reason: object) -> str:
@@ -201,6 +214,24 @@ def system_abort_label(abort_reason: object) -> str:
 # on such a reading ("I stopped as you asked", "authority revoked").
 RESTART_CONTINUE_GUIDANCE = ("This was a server restart, not a person's Stop and not a "
                              'revoked authorization; continue the task when it resumes.')
+HOLD_CONTINUE_GUIDANCE = ("This was your project lead's hold, not a person's Stop and not a "
+                          'revoked authorization: the project dispatch grant is unchanged. '
+                          'Continue the task when it resumes.')
+
+
+def pause_subject(abort_reason: object) -> str:
+    """Who paused the work, as the subject of a sentence; empty for any other stop."""
+    reason = str(abort_reason or '')
+    if reason in RESTART_ABORT_REASONS:
+        return 'a server restart'
+    if reason in PAUSE_ABORT_REASONS:
+        return "the project lead's hold"
+    return ''
+
+
+def pause_continue_guidance(abort_reason: object) -> str:
+    return (RESTART_CONTINUE_GUIDANCE if str(abort_reason or '') in RESTART_ABORT_REASONS
+            else HOLD_CONTINUE_GUIDANCE)
 
 
 def stopped_tool_result(abort_reason: object) -> str:
@@ -208,8 +239,8 @@ def stopped_tool_result(abort_reason: object) -> str:
     cause = system_abort_label(abort_reason)
     if not cause:
         return 'Task aborted by user.'
-    if str(abort_reason or '') in RESTART_ABORT_REASONS:
-        return f'Task interrupted by {cause}. {RESTART_CONTINUE_GUIDANCE}'
+    if str(abort_reason or '') in PAUSE_ABORT_REASONS:
+        return f'Task interrupted by {cause}. {pause_continue_guidance(abort_reason)}'
     return f'Task interrupted by {cause}.'
 
 
@@ -221,9 +252,9 @@ def aborted_wait_text(abort_reason: object) -> str:
     interrupted poll and ended its resumed Turn.
     """
     cause = system_abort_label(abort_reason)
-    if str(abort_reason or '') in RESTART_ABORT_REASONS:
-        return ('Wait interrupted by a server restart: this wait did not finish. '
-                f'{RESTART_CONTINUE_GUIDANCE} Then check the awaited work again.')
+    if str(abort_reason or '') in PAUSE_ABORT_REASONS:
+        return (f'Wait interrupted by {pause_subject(abort_reason)}: this wait did not finish. '
+                f'{pause_continue_guidance(abort_reason)} Then check the awaited work again.')
     return f'Wait cancelled: the task was stopped by {cause}.' if cause else (
         'Wait cancelled: the task was stopped.')
 
@@ -369,6 +400,8 @@ _SYSTEM_STOP_VERDICTS = MappingProxyType({
         TurnStatus.FAILED, '', TurnTerminationEvidence.EXTERNAL_AUTHORITY),
     AbortInitiator.SERVER_RESTART: (
         TurnStatus.INTERRUPTED, 'server_restart', TurnTerminationEvidence.SYSTEM_RECOVERY),
+    AbortInitiator.LEAD_HOLD: (
+        TurnStatus.INTERRUPTED, LEAD_HOLD, TurnTerminationEvidence.SYSTEM_RECOVERY),
     AbortInitiator.STUCK_TASK_REAPER: (
         TurnStatus.FAILED, 'worker_lost', TurnTerminationEvidence.GENERATION_ERROR),
     # The run itself could not succeed; its error envelope names the guard.
@@ -692,6 +725,9 @@ __all__ = [
     'DISPATCH_GRANT_REVOKED',
     'GATEWAY_CONTENT_FILTER_CAUSE',
     'INTERNAL_FENCE_ABORT_REASONS',
+    'LEAD_HOLD',
+    'PAUSE_ABORT_REASONS',
+    'PAUSE_SETTLEMENT_CAUSES',
     'MODEL_REFUSAL_CAUSE',
     'RESTART_ABORT_REASONS',
     'RESTART_RECOVERY',
@@ -708,6 +744,8 @@ __all__ = [
     'derive_turn_verdict',
     'dispatch_authority_stop_detail',
     'normalize_turn_settlement',
+    'pause_continue_guidance',
+    'pause_subject',
     'parse_provider_stream_state',
     'require_deliverable_task',
     'stopped_tool_result',

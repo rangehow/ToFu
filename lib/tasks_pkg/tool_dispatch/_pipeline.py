@@ -723,9 +723,9 @@ def _project_spilled_artifact_alias(task, round_entry, tool_name,
 
 
 def _stopped_by_restart_or_fence(task) -> bool:
-    from lib.turn_verdict import INTERNAL_FENCE_ABORT_REASONS, RESTART_ABORT_REASONS
+    from lib.turn_verdict import INTERNAL_FENCE_ABORT_REASONS, PAUSE_ABORT_REASONS
     return (isinstance(task, dict) and bool(task.get('aborted'))
-            and task.get('_abort_reason') in RESTART_ABORT_REASONS | INTERNAL_FENCE_ABORT_REASONS)
+            and task.get('_abort_reason') in PAUSE_ABORT_REASONS | INTERNAL_FENCE_ABORT_REASONS)
 
 
 def _settle_tool_result(
@@ -2440,7 +2440,11 @@ def _emit_post_tool_snapshot(
             task.get('_flow_phase') or '')
         snap_evt = build_round_evidence(
             task, messages, ref=ref, kind='state', model=model, tools=tool_list)
+        from lib.tasks_pkg.event_delivery import task_event_position
+        from lib.tasks_pkg.persistence_wait import mark_state_evidence_tail
+        before = task_event_position(task)
         append_event(task, snap_evt)
+        mark_state_evidence_tail(task, before, task_event_position(task))
     except Exception:
         logger.warning(
             '[Task %s] messages_snapshot post-tool failed at round %d model=%s',

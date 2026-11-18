@@ -113,7 +113,9 @@ def test_create_independent_leader_and_keep_project_navigation_isolated(page, mo
     expect(rows.first).to_be_visible()
     assert rows.evaluate_all(
         '(rows) => rows.map((row) => [row.dataset.status, row.querySelector(".coordinator-progress-task-title").textContent])') == [
-        ['in_progress', 'Research New Year homestays in Tianyu Creek'], ['pending', 'Summarize the WeChat article']]
+        ['in_progress', 'Research New Year homestays in Tianyu Creek'], ['pending', 'Summarize the WeChat article'],
+        # The report published without a board task reads under the one Other row (bc97b91eb1).
+        ['history', 'Other reports and files']]
     expect(board.locator('.coordinator-progress-finished > summary')).to_have_text('Finished: 1')
     # The Worker model is a compact footer control beside Task history, never a line of its own.
     expect(board.locator('.coordinator-progress-actions > .router-worker-model')).to_have_count(1)
@@ -233,6 +235,13 @@ def test_create_independent_leader_and_keep_project_navigation_isolated(page, mo
     page.locator('#presenceStrip').get_by_role('button', name='Return to Coordinator', exact=True).click()
     page.wait_for_function('(id) => window.activeConvId === id', arg=leader)
     assert page.locator('dialog[open]').count() == 0
+    # With no folder selected, a chat filed in a folder no longer claims the sidebar
+    # slot (cf6f941615), so the sidebar resolves Alpha in Alpha's folder first.
+    page.locator(f'.folder-tab[data-folder-id="{folder_ids[0]}"]').click()
+    page.wait_for_function('''(id) => {
+        const row = document.querySelector('#projectCoordinatorEntry .coordination-leader');
+        return row && !row.hasAttribute('aria-busy') && row.dataset.coordinatorId === id;
+    }''', arg=leader)
     # Browsing Beta must not rewrite the active Alpha conversation's ownership.
     # A folder click must paint the entry inside its own handler: the list may
     # not sit empty (or jump) until the project binding read lands.
@@ -347,7 +356,9 @@ def test_coordinator_conversations_are_contained_in_a_collapsible_sidebar_group(
     expect(body.locator('.conv-item')).to_have_count(3)
     expect(body).to_contain_text('Legacy delegated worker')
     expect(body).to_contain_text('Empty delegated shell')
-    expect(body).to_contain_text('Done')
+    # None of these Workers was opened, so none has Turn evidence: an unhydrated
+    # shell shows no status rather than Done (df92e64f23).
+    expect(body.locator('.coordinator-conversations-status')).to_have_count(0)
     worker_row = body.locator(f'.conv-item[data-conv-id="{legacy}"]')
     copy_id = worker_row.locator('.conv-copy-id')
     expect(copy_id).to_have_attribute('data-conv-id', legacy)
@@ -444,6 +455,11 @@ def test_coordinator_conversations_are_contained_in_a_collapsible_sidebar_group(
                           settings={'folderId': folder_id, 'projectPath': project, '_coordinatorSource': leader},
                           messages=[{'role': 'user', 'content': f'Older delegated work {index}'}])
     page.evaluate('(id) => loadConversation(id)', leader)
+    # Leave the search and show the project's folder: a chat filed in a folder no longer
+    # claims the sidebar's Coordinator slot outside that folder (cf6f941615).
+    page.locator('#sidebarSearchInput').fill('')
+    page.locator('#sidebarSearchToggle').click()
+    page.locator(f'.folder-tab[data-folder-id="{folder_id}"]').click()
     expect(group.locator('.coordinator-conversations-count')).to_have_text('23')
     expect(body.locator('.conv-item')).to_have_count(23)
     assert body.evaluate('(el) => el.scrollHeight > el.clientHeight')
@@ -492,12 +508,17 @@ def test_sidebar_paints_each_coordinator_once_across_folder_switches(page, monke
                           settings={'folderId': folder_ids[index], 'projectPath': projects[index],
                                     '_coordinatorSource': source},
                           messages=[{'role': 'user', 'content': 'Delegated work'}])
+    # An uncategorized chat of Alpha's project: only such a chat lets the uncategorized
+    # view resolve its project's Coordinator (cf6f941615); a chat filed in a folder does not.
+    unfiled = 'alpha-unfiled-' + suffix
+    seed_conversation(unfiled, title='Unfiled Alpha chat', settings={'projectPath': projects[0]},
+                      messages=[{'role': 'user', 'content': 'Unfiled Alpha chat'}])
     page.evaluate('localStorage.setItem("tofu_ui_lang", "en")')
     page.reload()
     _dismiss_onboarding_modals(page)
     page.set_viewport_size({'width': 1440, 'height': 960})
     page.wait_for_function('(ids) => ids.every((id) => window.conversations.some((row) => row.id === id))',
-                           arg=[replaced, current, beta, *workers])
+                           arg=[replaced, current, beta, unfiled, *workers])
     history = page.locator('.coordinator-history-entry .conv-item')
     groups = page.locator('.coordination-conversation-column .coordinator-conversations:not([hidden])')
     # Uncategorized holds none of these Coordinators, so it paints none of them.
@@ -529,9 +550,9 @@ def test_sidebar_paints_each_coordinator_once_across_folder_switches(page, monke
         # Every conversation here sits in a Coordinator group, so the folder is not called empty.
         expect(page.locator('#convList .folder-view-empty')).to_have_count(0)
 
-    # Boot restores an arbitrary conversation; pin the start to an Alpha worker opened
-    # outside its folder, which resolves Alpha's binding before Alpha's folder is chosen.
-    page.evaluate('(id) => loadConversation(id)', workers[1])
+    # Boot restores an arbitrary conversation; pin the start to the uncategorized Alpha
+    # chat, which resolves Alpha's binding before Alpha's folder is chosen.
+    page.evaluate('(id) => loadConversation(id)', unfiled)
     page.wait_for_function(leader_settled, arg=current)
     visit(folder_ids[0], current, [replaced], switches_project=False)
     visit(folder_ids[1], beta, [])
@@ -593,8 +614,8 @@ def test_project_workspace_opens_from_coordinator_settings_with_server_history_r
     folder = page.request.post(origin + '/api/v4/folders', data={'name': 'Gamma', 'projectPaths': [project]})
     assert folder.ok, folder.text()
     folder_id = folder.json()['data']['id']
-    build, review = ['history-rows-' + kind + '-' + suffix for kind in ['build', 'review']]
-    for cid, title in [(build, 'Parser worker'), (review, 'Review worker')]:
+    build, review, notes_worker = ['history-rows-' + kind + '-' + suffix for kind in ['build', 'review', 'notes']]
+    for cid, title in [(build, 'Parser worker'), (review, 'Review worker'), (notes_worker, 'Notes worker')]:
         seed_conversation(cid, title=title, settings={'folderId': folder_id, 'projectPath': project},
                           messages=[{'role': 'user', 'content': title + ' transcript'}])
     unbound = page.request.get(origin + '/api/v4/project/coordination', params={'path': project}).json()['data']
@@ -626,11 +647,14 @@ def test_project_workspace_opens_from_coordinator_settings_with_server_history_r
 
     def settle(assignment_id, recipient, label, content):
         pair = started_pair(recipient, label, 'Work on ' + assignment_id)
+        # Bind before settling, as a birth does: the recipient lane's settlement
+        # births a grant it finds still unbound (214650e681), which would race
+        # this hand-built execution with a second, real one.
+        repository.bind_execution(assignment_id, pair['turn']['turnId'], pair['attempt']['attemptId'])
         assert turns.record_task_event({
             '_attemptId': pair['attempt']['attemptId'], '_userId': 1, 'id': 'task-' + label + suffix,
             'status': 'done', 'finishReason': 'stop', 'content': content, 'thinking': '', 'toolRounds': [],
             'config': {}}, {'type': 'done', 'finishReason': 'stop'})
-        repository.bind_execution(assignment_id, pair['turn']['turnId'], pair['attempt']['attemptId'])
 
     def history(**query):
         response = page.request.get(origin + '/api/v4/project/coordination/assignments',
@@ -644,7 +668,9 @@ def test_project_workspace_opens_from_coordinator_settings_with_server_history_r
     settle(parser, build, 'history-parser-run-', 'Patched src/parser.py')
     design = grant('history-design-', review, 'Review the parser design')
     settle(design, review, 'history-design-run-', 'The design holds')
-    notes = grant('history-notes-', review, 'Check the release notes')
+    # Its own idle lane: a settlement's recovery pass (asynchronous) births every
+    # still-unbound grant of the settled recipient, so an unbound row there would race it.
+    notes = grant('history-notes-', notes_worker, 'Check the release notes')
     result = next(row for row in history()['assignments'] if row['assignmentId'] == parser)['execution']['resultRevision']
     repository.record_review(parser, 'rework', 'Cover empty input', result, 1)
     # The browser receives exactly the contract's list rows; an exact lookup keeps the whole grant.
@@ -973,7 +999,10 @@ def test_task_history_keeps_every_task_the_board_ever_showed(page, monkeypatch, 
     expect(card).to_have_attribute('data-state', 'board')
     card.locator('summary.coordinator-progress-head').click()
     # The board itself shows only its current two tasks; the history keeps all six.
-    expect(card.locator('.coordinator-progress-task')).to_have_count(2)
+    expect(card.locator('.coordinator-progress-content > .coordinator-progress-tasks > .coordinator-progress-task')).to_have_count(2)
+    # The two completed tasks that left the board follow as Earlier tasks with their
+    # automatic completion reports (7a04a68805, bc97b91eb1).
+    expect(card.locator('.coordinator-progress-earlier .coordinator-progress-task')).to_have_count(2)
     assert card.get_by_role('button', name='高级管理', exact=True).count() == 0
     output = Path(__file__).resolve().parents[2] / 'output/playwright/coordinator-task-history'
     output.mkdir(parents=True, exist_ok=True)

@@ -1656,21 +1656,36 @@ pub(crate) fn execute(
             now_ms,
             lease_ms,
         } => {
+            // A row whose Turn pair already exists runs before every source
+            // whose Turn is created at dispatch, earliest pair first: serving a
+            // later source first appends its Turns after the waiting pair,
+            // which then finds only a checkpoint past its own position.
+            // Priority orders Turn-less sources only.
             let items = rows(database, tx, conversation_id)?;
-            let mut selected = None;
+            let lease_free =
+                |state: &State| state.leased_until_ms.is_none_or(|expiry| expiry < *now_ms);
+            let mut paired = None;
+            let mut source = None;
             for identity in items {
-                if identity.kind == "autopilot" || identity.kind == "background_receipt" {
-                    continue;
-                }
-                if is_legacy_completion(database, tx, &identity)? {
-                    continue;
-                }
                 let state = read_state(database, tx, &identity)?;
-                if state.leased_until_ms.is_none_or(|expiry| expiry < *now_ms) {
-                    selected = Some((identity, state));
+                if !state.attempt_id.is_empty() {
+                    paired = Some((identity, state));
                     break;
                 }
+                if source.is_some()
+                    || identity.kind == "autopilot"
+                    || identity.kind == "background_receipt"
+                    || !lease_free(&state)
+                    || is_legacy_completion(database, tx, &identity)?
+                {
+                    continue;
+                }
+                source = Some((identity, state));
             }
+            let selected = match paired {
+                Some(pair) => Some(pair).filter(|(_, state)| lease_free(state)),
+                None => source,
+            };
             let Some((identity, mut state)) = selected else {
                 return encode_response(&Value::Null);
             };
@@ -1982,6 +1997,59 @@ mod completion_outcome_tests {
                 .unwrap();
             assert_eq!(public["backgroundCommand"], *completion);
         }
+    }
+
+    #[test]
+    fn a_queued_turn_pair_runs_before_a_later_higher_priority_source() {
+        // Watchdog coordinator-8301fd78, 2026-11-18: a salvaged fault signal
+        // (priority 10, Turn created at dispatch) ran before the scheduled
+        // review whose Turn pair already existed, stranding its checkpoint.
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        execute(
+            &mut database,
+            "conversation.create",
+            json!({"conv_id":"pair-conv","user_id":11}),
+            Some("pair-create"),
+        );
+        execute(
+            &mut database,
+            "queue.enqueue",
+            json!({"conv_id":"pair-conv","user_id":11,"queue_id":"signal","kind":"real",
+                "priority":10,"message":{"text":"fault signal"},"config":{},"created_at_ms":1}),
+            Some("enqueue-signal"),
+        );
+        let restored = crate::queue_migration::execute(
+            &mut database,
+            7,
+            11,
+            "migration.queue.item.restore",
+            json!({"id":"review","conv_id":"pair-conv","payload":{"text":"scheduled review"},
+                "config":{},"position":2,"kind":"real","priority":100,"created_at_ms":2,
+                "leased_until_ms":Value::Null,"lease_task_id":"","input_turn_id":"turn-198",
+                "output_turn_id":"turn-199","attempt_id":"attempt-199"}),
+        )
+        .unwrap();
+        assert_eq!(restored["inserted"], true);
+        let lease = json!({"conv_id":"pair-conv","user_id":11,"now_ms":2000,"lease_ms":10000});
+        let first = execute(&mut database, "queue.dequeue", lease.clone(), Some("lease-1"));
+        assert_eq!(first["queueId"], "review");
+        assert_eq!(first["attemptId"], "attempt-199");
+        // While the pair's dispatch holds its lease, no later source jumps it.
+        assert_eq!(
+            execute(&mut database, "queue.dequeue", lease.clone(), Some("lease-2")),
+            Value::Null
+        );
+        execute(
+            &mut database,
+            "queue.finalize",
+            json!({"conv_id":"pair-conv","queue_id":"review","user_id":11}),
+            Some("finalize-review"),
+        );
+        assert_eq!(
+            execute(&mut database, "queue.dequeue", lease, Some("lease-3"))["queueId"],
+            "signal"
+        );
     }
 
     #[test]

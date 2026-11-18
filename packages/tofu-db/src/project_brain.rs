@@ -524,6 +524,21 @@ fn work_index(projection: &Map<String, Value>, work_id: &str) -> Option<usize> {
         })
 }
 
+/// A server restart drain ends a work item `interrupted`: its resumed attempt is
+/// a new physical task with its own work item, so the status is terminal.
+fn is_terminal_work_status(status: Option<&str>) -> bool {
+    matches!(
+        status,
+        Some("completed" | "failed" | "cancelled" | "interrupted")
+    )
+}
+
+/// Before `interrupted` existed a restart drain was recorded `cancelled`; the
+/// caller sends `interrupted` only from the attempt's own restart evidence.
+fn interruption_supersedes(current: Option<&str>, status: &str) -> bool {
+    current == Some("cancelled") && status == "interrupted"
+}
+
 fn ordered_work_items(items: &[Value]) -> Vec<Value> {
     let mut active = items
         .iter()
@@ -532,12 +547,7 @@ fn ordered_work_items(items: &[Value]) -> Vec<Value> {
         .collect::<Vec<_>>();
     let mut terminal = items
         .iter()
-        .filter(|item| {
-            matches!(
-                item.get("status").and_then(Value::as_str),
-                Some("completed" | "failed" | "cancelled")
-            )
-        })
+        .filter(|item| is_terminal_work_status(item.get("status").and_then(Value::as_str)))
         .cloned()
         .collect::<Vec<_>>();
     active.sort_by_key(|item| item.get("startedAt").and_then(Value::as_u64).unwrap_or(0));
@@ -1040,11 +1050,12 @@ pub(crate) fn recovery_snapshot(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
     cursor: Option<&RecoveryCursor>,
+    include_cancelled: bool,
 ) -> io::Result<Vec<u8>> {
     // Yield a resumable prefix between projects. A legacy projection may be
     // large, so the row cap alone is not a useful request-latency bound.
     let started = std::time::Instant::now();
-    recovery_snapshot_with_yield(database, transaction, cursor, || {
+    recovery_snapshot_with_yield(database, transaction, cursor, include_cancelled, || {
         started.elapsed() >= std::time::Duration::from_secs(1)
     })
 }
@@ -1053,6 +1064,7 @@ fn recovery_snapshot_with_yield(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
     cursor: Option<&RecoveryCursor>,
+    include_cancelled: bool,
     mut should_yield: impl FnMut() -> bool,
 ) -> io::Result<Vec<u8>> {
     // One document per project, never update-index rows: older generations
@@ -1079,17 +1091,32 @@ fn recovery_snapshot_with_yield(
         consumed += 1;
         let project_key = stored_project_key(transaction, physical, document)?;
         // The scanned envelope is the exact header its summary must match.
-        if recovery::proves_inactive(database, transaction, &project_key, document)? {
+        // Active-work summaries say nothing about cancelled history.
+        if !include_cancelled
+            && recovery::proves_inactive(database, transaction, &project_key, document)?
+        {
             continue;
         }
         let projection = load_projection(database, transaction, &project_key)?;
         let work_items = public_work_items(&projection, true)?;
-        if !work_items.is_empty() {
-            projects.push(json!({
+        let cancelled = if include_cancelled {
+            public_work_items(&projection, false)?
+                .into_iter()
+                .filter(|item| item.get("status").and_then(Value::as_str) == Some("cancelled"))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if !work_items.is_empty() || !cancelled.is_empty() {
+            let mut project = json!({
                 "ownerUserId": transaction.owner_user_id(),
                 "projectKey": project_key,
                 "workItems": work_items,
-            }));
+            });
+            if include_cancelled {
+                project["cancelledWorkItems"] = Value::Array(cancelled);
+            }
+            projects.push(project);
         }
     }
     let capped = if consumed < rows.len() {
@@ -1109,6 +1136,11 @@ fn recovery_snapshot_with_yield(
         false
     };
     let mut result = json!({"projects": projects, "capped": capped});
+    if include_cancelled {
+        // An engine that ignores the request omits this; the caller then
+        // never records its walk as complete.
+        result["includesCancelled"] = Value::Bool(true);
+    }
     if capped {
         let (physical, document) = &rows[consumed - 1];
         let cursor = RecoveryCursor {
@@ -1231,10 +1263,7 @@ fn work_authoritative_key(item: &Map<String, Value>) -> (u64, u64, bool) {
     (
         item.get("finishedAt").and_then(Value::as_u64).unwrap_or(0),
         item.get("startedAt").and_then(Value::as_u64).unwrap_or(0),
-        matches!(
-            item.get("status").and_then(Value::as_str),
-            Some("completed" | "failed" | "cancelled")
-        ),
+        is_terminal_work_status(item.get("status").and_then(Value::as_str)),
     )
 }
 
@@ -2022,17 +2051,15 @@ pub(crate) fn command(
             let index = work_index(&projection, work_id).ok_or_else(|| {
                 io::Error::new(io::ErrorKind::NotFound, "Project work item not found")
             })?;
-            if matches!(
-                projection["workItems"][index]
-                    .get("status")
-                    .and_then(Value::as_str),
-                Some("completed" | "failed" | "cancelled")
-            ) {
-                return command_result(&projection, None);
-            }
+            let current = projection["workItems"][index]
+                .get("status")
+                .and_then(Value::as_str);
             let status = required_text(&request.payload, "status", 32)?;
-            if !matches!(status, "completed" | "failed" | "cancelled") {
+            if !is_terminal_work_status(Some(status)) {
                 return Err(invalid_input("Invalid Project work terminal status"));
+            }
+            if is_terminal_work_status(current) && !interruption_supersedes(current, status) {
+                return command_result(&projection, None);
             }
             let result_summary = request
                 .payload
@@ -2432,7 +2459,16 @@ fn fold_event(projection: &mut Map<String, Value>, event: &Value) -> io::Result<
             if let Some(index) = work_index(projection, work_id) {
                 let (has_output, status, summary, title, conversation_id) = {
                     let item = projection["workItems"][index].as_object_mut().unwrap();
-                    if item.get("status").and_then(Value::as_str) != Some("active") {
+                    let current = item.get("status").and_then(Value::as_str);
+                    let status = payload.get("status").and_then(Value::as_str).unwrap_or("");
+                    if interruption_supersedes(current, status) {
+                        // The cancelled row's work_result narrative already
+                        // exists and renders the corrected status.
+                        item.insert("status".to_owned(), payload["status"].clone());
+                        projection.insert("headSequence".to_owned(), Value::from(sequence));
+                        return Ok(());
+                    }
+                    if current != Some("active") {
                         projection.insert("headSequence".to_owned(), Value::from(sequence));
                         return Ok(());
                     }
@@ -2465,7 +2501,7 @@ fn fold_event(projection: &mut Map<String, Value>, event: &Value) -> io::Result<
                 };
                 let ordered = ordered_work_items(projection["workItems"].as_array().unwrap());
                 projection.insert("workItems".to_owned(), Value::Array(ordered));
-                if has_output || matches!(status.as_str(), "failed" | "cancelled") {
+                if has_output || matches!(status.as_str(), "failed" | "cancelled" | "interrupted") {
                     let narrative = if summary.is_empty() {
                         format!(
                             "{}: {status}",
@@ -2805,7 +2841,7 @@ mod tests {
         for page_number in 0..3 {
             let mut tx = database.begin(7, 11).unwrap();
             let page: Value = serde_json::from_slice(
-                &recovery_snapshot_with_yield(&database, &mut tx, cursor.as_ref(), || true)
+                &recovery_snapshot_with_yield(&database, &mut tx, cursor.as_ref(), false, || true)
                     .unwrap(),
             )
             .unwrap();
@@ -2835,6 +2871,7 @@ mod tests {
                     &database,
                     &mut foreign,
                     Some(cursor),
+                    false,
                     || true
                 )
                 .is_err());
@@ -2874,9 +2911,10 @@ mod tests {
         database.commit(seed).unwrap();
         let hydrations = projection_hydrations();
         let mut inspect = database.begin(7, 11).unwrap();
-        let first: Value =
-            serde_json::from_slice(&recovery_snapshot(&database, &mut inspect, None).unwrap())
-                .unwrap();
+        let first: Value = serde_json::from_slice(
+            &recovery_snapshot(&database, &mut inspect, None, false).unwrap(),
+        )
+        .unwrap();
         assert_eq!(projection_hydrations() - hydrations, 1);
         assert_eq!(first["projects"].as_array().unwrap().len(), 1);
         assert_eq!(first["projects"][0]["workItems"][0]["taskId"], "task");
@@ -2892,9 +2930,10 @@ mod tests {
         database.commit(settle).unwrap();
         let hydrations = projection_hydrations();
         let mut inspect = database.begin(7, 11).unwrap();
-        let last: Value =
-            serde_json::from_slice(&recovery_snapshot(&database, &mut inspect, None).unwrap())
-                .unwrap();
+        let last: Value = serde_json::from_slice(
+            &recovery_snapshot(&database, &mut inspect, None, false).unwrap(),
+        )
+        .unwrap();
         assert_eq!(last, json!({"projects": [], "capped": false}));
         assert_eq!(
             projection_hydrations(),
@@ -2922,7 +2961,7 @@ mod tests {
         database.commit(seed).unwrap();
         let mut inspect = database.begin(7, 11).unwrap();
         let first: Value = serde_json::from_slice(
-            &recovery_snapshot_with_yield(&database, &mut inspect, None, || false).unwrap(),
+            &recovery_snapshot_with_yield(&database, &mut inspect, None, false, || false).unwrap(),
         )
         .unwrap();
         assert_eq!(first["projects"], json!([]));
@@ -2946,13 +2985,13 @@ mod tests {
         database.commit(settlement).unwrap();
         let mut inspect = database.begin(7, 11).unwrap();
         let last: Value = serde_json::from_slice(
-            &recovery_snapshot_with_yield(&database, &mut inspect, Some(&cursor), || false)
+            &recovery_snapshot_with_yield(&database, &mut inspect, Some(&cursor), false, || false)
                 .unwrap(),
         )
         .unwrap();
         assert_eq!(last, json!({"projects": [], "capped": false}));
         let mut foreign = database.begin(7, 12).unwrap();
-        assert!(recovery_snapshot(&database, &mut foreign, Some(&cursor)).is_err());
+        assert!(recovery_snapshot(&database, &mut foreign, Some(&cursor), false).is_err());
         let mut delete = database.begin(7, 11).unwrap();
         database
             .entity_delete(
@@ -2963,7 +3002,7 @@ mod tests {
         database.commit(delete).unwrap();
         let mut inspect = database.begin(7, 11).unwrap();
         let exact: Value = serde_json::from_slice(
-            &recovery_snapshot_with_yield(&database, &mut inspect, None, || false).unwrap(),
+            &recovery_snapshot_with_yield(&database, &mut inspect, None, false, || false).unwrap(),
         )
         .unwrap();
         assert_eq!(exact, json!({"projects": [], "capped": false}));
@@ -2988,7 +3027,7 @@ mod tests {
         loop {
             let mut inspect = database.begin(7, 11).unwrap();
             let page: Value = serde_json::from_slice(
-                &recovery_snapshot(&database, &mut inspect, cursor.as_ref()).unwrap(),
+                &recovery_snapshot(&database, &mut inspect, cursor.as_ref(), false).unwrap(),
             )
             .unwrap();
             let mut settle = database.begin(7, 11).unwrap();
@@ -3073,9 +3112,10 @@ mod tests {
         database.commit(finish).unwrap();
 
         let mut inspect = database.begin(7, 11).unwrap();
-        let snapshot: Value =
-            serde_json::from_slice(&recovery_snapshot(&database, &mut inspect, None).unwrap())
-                .unwrap();
+        let snapshot: Value = serde_json::from_slice(
+            &recovery_snapshot(&database, &mut inspect, None, false).unwrap(),
+        )
+        .unwrap();
         assert_eq!(snapshot["capped"], false);
         assert_eq!(snapshot["projects"].as_array().unwrap().len(), 1);
         assert_eq!(snapshot["projects"][0]["ownerUserId"], 11);
@@ -3087,6 +3127,137 @@ mod tests {
         assert!(snapshot["projects"][0]["workItems"][0]
             .get("_titlePriority")
             .is_none());
+    }
+
+    #[test]
+    fn a_restart_interruption_is_terminal_and_supersedes_only_a_recorded_cancel() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        let run = |database: &mut AuthorityDatabase, action, payload: Value, timestamp| {
+            let mut transaction = database.begin(7, 11).unwrap();
+            let result: Value = serde_json::from_slice(
+                &command(
+                    database,
+                    &mut transaction,
+                    &CommandRequest {
+                        project_key: "/project".to_owned(),
+                        action,
+                        payload: payload.as_object().unwrap().clone(),
+                        timestamp,
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            if !result["event"].is_null() {
+                database.commit(transaction).unwrap();
+            }
+            result
+        };
+        let work_id =
+            |task: &str| format!("pw_{:x}", Sha256::digest(task.as_bytes()))[..27].to_owned();
+        for task in ["drained", "legacy", "stopped"] {
+            run(
+                &mut database,
+                CommandAction::WorkStart,
+                json!({"work_item": {
+                    "id": work_id(task), "taskId": task, "conversationId": task,
+                    "title": task, "trigger": "file_write", "status": "active",
+                    "changedPaths": [], "artifacts": [], "resultSummary": "",
+                    "startedAt": 1, "finishedAt": null, "_titlePriority": 1,
+                    "_titleRefined": false}}),
+                1,
+            );
+        }
+        let finish = |status: &str, task: &str| json!({"work_id": work_id(task), "status": status, "result_summary": task});
+        run(
+            &mut database,
+            CommandAction::WorkFinish,
+            finish("interrupted", "drained"),
+            2,
+        );
+        run(
+            &mut database,
+            CommandAction::WorkFinish,
+            finish("cancelled", "legacy"),
+            2,
+        );
+        run(
+            &mut database,
+            CommandAction::WorkFinish,
+            finish("cancelled", "stopped"),
+            2,
+        );
+        // Interrupted is terminal: a later finish changes nothing.
+        let later = run(
+            &mut database,
+            CommandAction::WorkFinish,
+            finish("completed", "drained"),
+            3,
+        );
+        assert!(later["event"].is_null());
+
+        let mut inspect = database.begin(7, 11).unwrap();
+        let snapshot: Value = serde_json::from_slice(
+            &recovery_snapshot(&database, &mut inspect, None, true).unwrap(),
+        )
+        .unwrap();
+        drop(inspect);
+        assert_eq!(snapshot["includesCancelled"], true);
+        let mut cancelled = snapshot["projects"][0]["cancelledWorkItems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["taskId"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        cancelled.sort();
+        assert_eq!(cancelled, ["legacy", "stopped"]);
+
+        let repaired = run(
+            &mut database,
+            CommandAction::WorkFinish,
+            finish("interrupted", "legacy"),
+            4,
+        );
+        assert_eq!(repaired["event"]["kind"], "work_finished");
+        let replay = run(
+            &mut database,
+            CommandAction::WorkFinish,
+            finish("interrupted", "legacy"),
+            5,
+        );
+        assert!(replay["event"].is_null());
+        let statuses = repaired["projection"]["workItems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| {
+                (
+                    item["taskId"].as_str().unwrap().to_owned(),
+                    item["status"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(statuses["drained"], "interrupted");
+        assert_eq!(statuses["legacy"], "interrupted");
+        assert_eq!(statuses["stopped"], "cancelled");
+        // The drain wrote one work_result row; the repair reuses the cancel's row.
+        let rows = repaired["projection"]["narratives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["kind"] == "work_result")
+            .count();
+        assert_eq!(rows, 3);
+
+        let mut rebuild_tx = database.begin(7, 11).unwrap();
+        let rebuilt: Value =
+            serde_json::from_slice(&rebuild(&database, &mut rebuild_tx, "/project", 6).unwrap())
+                .unwrap();
+        assert_eq!(
+            rebuilt["projection"]["workItems"],
+            repaired["projection"]["workItems"]
+        );
     }
 
     #[test]

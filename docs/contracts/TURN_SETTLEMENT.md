@@ -42,22 +42,40 @@ separate lane from a genuine empty/truncated stop (`abnormal_stop` recovery)
 and from 402 credit exhaustion / 429 rate limits (routing and quota), which
 never stamp a content-filter settlement.
 
-After a usage-policy refusal the fallback is latched for the rest of the
-turn (Coordinator decision 2026-11-06, owner cost investigation). Every
-remaining round in that turn dispatches on the fallback directly; the next
-turn tries the primary again, because the context may have changed. Measured
-on 2026-11-05/06: the Global Router paid $97.75 for 41 refused attempts
-(24% of that window's spend), of which $36.21 were repeats inside the same
-turn; after a first refusal, 33 further primary attempts cost $92.00 and
-wrote 17.9M cache tokens, against 108 fallback rounds costing $25.91. Each
-probe re-billed a full primary prefix and alternated the two cache
-namespaces. The rejected alternative (2026-10-26, conv mvkpayqrsm02t5): one
-served fallback round followed by a switch-back probe
-(`stream.phase.refusalSwitchback`, the i18n key is retained for historical
-turns), latching only when the probe also refused — the primary usually
-continues on a new trajectory, but each probe and repeat refusal is a paid
-request. Anthropic's sticky-routing recommendation is a cost optimization
-against a known-trigger request, not a permanent quality downgrade.
+A `content_filter` refusal tracks the conversation history, not a single
+request: research objectives/memories in the history trip it, and refusals
+come in runs that persist until old tool results are cleared or the history
+is compacted (measured 2026-11-18, assignment 37c646e4: research-content
+segments refused 18/18; a refused round-1 payload answered once its history
+was replayed unchanged after the prefix changed). So the primary is retried
+only when the refused history actually changed. `_switch` stamps the refused
+PREFIX — its length and that prefix's digest — at the fallback; the next round
+retries the primary only when the digest of the current list's first `n`
+messages differs, or the list is shorter than `n` (compaction, cleared tool
+results), else stays on the fallback for the rest of the attempt. Comparing
+the whole list would always differ, because each served fallback round
+appends its own assistant message and tool results; appended rounds leave the
+refused prefix byte-identical and never retry. New attachments/inbox that
+land inside the prefix still count as a change. Each switch — fallback and return-to-primary — emits a
+`MODEL_FALLBACK` event (kind `content_filter` out, `primary_retry` back), and
+for a project Worker a lead-audit `model_switch` row (docs/LOGGING.md), so a
+lead follows the switches without opening the transcript. The return probe is
+gated in the dispatch path (`_root_agent_loop._dispatch_open_round`) so the
+body is built for the primary, and in `_call._llm_call_with_fallback` for
+direct callers. The review receipt (`project_dispatch`
+`execution.result.modelFallback`, from the Turn's paid `apiRounds`) names the
+rounds that ran on the fallback.
+
+Measured cost: a refused primary attempt returns in about 3 s (median; up to
+38 s under load) and bills its full prompt. Retrying the primary on EVERY
+round (the first design) would add one refused, billed request per round to
+exactly the lanes that refuse most, with no benefit while the history is
+unchanged; the history-change gate avoids that, and a resume still returns to
+the accepted model. Alternatives rejected: retrying on every round (doubles
+requests for refusing lanes); latching the fallback for the rest of the turn
+with no history-change probe (a Worker whose history is later compacted never
+returns to the primary); a cooldown or retry counter (a knob that does not
+track the actual verdict trigger).
 
 Without a distinct fallback (none configured, `disableModelFallback`, or
 already on it), or when the fallback refuses too, it settles without a
@@ -116,6 +134,29 @@ plus a verified complete `content_filter` finish, never an empty or
 truncated stop, and an HTTP 450 gateway block is a separate class that never
 switches models.
 
+Trigger attribution (measured 2026-11-18; 22 `frontier_llm` refusals between
+08:00 and 08:45 CST, 16 of them on the Watchdog). Problem: do Tofu's own
+prompts (role text, coordinator guidance, agent-safety wording) trip the
+category? Decision: no prompt-source change. Segment replays through the
+production route used `/v1/chat/completions` with explicit tools, which is
+one provider completion and no tool execution. Tofu-authored text was
+refused 0/24: the Watchdog and Worker system prompts with their tool
+catalogs, the Watchdog role block, and Worker context blocks without
+memories. The owner's LLM-training research content was refused 18/18: a
+Router-written paper assignment, prefetched project memories about
+GRPO/delegation-reward runs, and research Worker objectives that
+`watchdog_snapshot` carries verbatim. The Watchdog reaches that research
+only through snapshot objectives and transcripts it reads with
+`get_conversation`. Its refusals did not reproduce from content: all 12 of
+its refused round-1 payloads from 08:30-08:45, replayed unchanged at 09:15,
+were answered. Its refusal runs began and ended with changes to the shared
+prompt prefix; each run ended when old tool results were cleared. Worker
+payloads made of research content refused again on replay. Alternatives
+considered: rephrasing the role or safety text does not help, because that
+text does not trip the category. Trimming objectives or transcripts would
+drop evidence the Watchdog needs and add a truncation knob. Refusals
+therefore remain with the configured content-filter fallback above.
+
 Open gap (proposal, not built): a Worker / Coordinator / Router lane has no
 composer model notice, and the project surfaces show the lane's configured
 model rather than the model that answered, so an owner watching a project
@@ -135,7 +176,9 @@ a reason none of them listed read as a person's Stop at all four.
 
 Decision: `lib/turn_verdict.ABORT_CAUSES` maps every reason Tofu stamps to an
 `AbortCause`. It names who stopped the work (`AbortInitiator`: a person, a server
-restart, a storage or attempt fence, project-dispatch authority, the stuck-task
+restart, a project lead's hold (`lead_hold`, a resumable pause: see
+`docs/PROJECT_COORDINATION.md` "A lead holds a Worker without losing it"),
+a storage or attempt fence, project-dispatch authority, the stuck-task
 reaper), the label tool results show, and the error-envelope kind of a stop
 that fails the Turn. Four readers resolve a stamp through `abort_cause`:
 `derive_turn_verdict`, `system_abort_label`,

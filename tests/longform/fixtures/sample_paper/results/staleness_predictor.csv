@@ -1,0 +1,3 @@
+predictor,precision,recall
+update_below_half_ulp,0.98,0.96
+gradient_norm_top_8.7pct,0.41,0.37

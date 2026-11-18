@@ -238,6 +238,21 @@ def test_a_permanent_failure_keeps_the_run_and_withheld_marker_and_repair_retrie
     assert coordinator.snapshot()['pending_bytes'] == 0
 
 
+def test_an_item_that_starts_a_run_is_never_absorbed_by_the_run_before_it(coordinator):
+    lane = DeliveryLane({'id': 'starts-run'})
+    storage = Storage()
+    release = _blocked_head(coordinator, lane, storage)
+    _submit(coordinator, lane, storage, 1)
+    _submit(coordinator, lane, storage, 2)
+    _submit(coordinator, lane, storage, 3, starts_run=True)
+    _submit(coordinator, lane, storage, 4)
+    release.set()
+    assert coordinator.flush(lane) == 5
+    # The receipts before it commit without it; it heads the following run.
+    assert storage.calls == [('single', 0), ('batch', [1, 2]), ('batch', [3, 4])]
+    assert storage.published == list(range(5)) and storage.violations == []
+
+
 def test_items_without_a_batch_port_or_of_another_scope_end_runs(coordinator):
     lane = DeliveryLane({'id': 'boundaries'})
     storage = Storage()

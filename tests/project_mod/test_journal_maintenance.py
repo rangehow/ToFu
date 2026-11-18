@@ -179,10 +179,9 @@ class ConcurrencyTest(unittest.TestCase):
 
         def append():
             # Prepend a fresh newest entry via the same locked RMW discipline.
-            from lib.json_store import _interprocess_lock, _path_lock, read_text, write_text_atomic
+            from lib.json_store import locked_path, read_text, write_text_atomic
             for k in range(20):
-                lk = _path_lock(self.jpath)
-                with lk, _interprocess_lock(self.jpath):
+                with locked_path(self.jpath):
                     cur = read_text(self.jpath, default='')
                     h, es = J.split_entries(cur)
                     new_entry = _entry('2026-08-01', f'appended{k}', body_kb=1)

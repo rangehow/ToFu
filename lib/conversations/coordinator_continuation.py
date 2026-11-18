@@ -48,6 +48,7 @@ _PHASE_LINES = {
     'delivering': 'accepted, publishing',
     'needs_decision': 'a restart cut off a call of unknown effect: check it, then control_conversation',
     'interrupted': 'interrupted',
+    'on_hold': 'held by you: control_conversation action=resume continues it, cancel_project_work ends it',
     'ended': 'ended',
 }
 _WORKER_ITEM = re.compile(r'^- [^:\n]+: (?:' + '|'.join(map(re.escape, _PHASE_LINES.values()))
@@ -251,8 +252,11 @@ def _stated_outcomes(repository, requests, recorded_keys):
     origins = {row['request']['delegation']['attemptId'] for row in requests}
     outcomes = {}
     for row in requests:
-        execution = row.get('execution') or {}
-        turn = repository.turn_get(row['request']['recipientId'], execution.get('turnId'),
+        # An unborn request (this wake's own row at its birth, or a deferred
+        # wake) has no Turn yet; storage refuses a Turn read without an id.
+        if row.get('execution') is None:
+            continue
+        turn = repository.turn_get(row['request']['recipientId'], row['execution']['turnId'],
                                    user_id=repository.owner)
         if not isinstance(turn, dict):
             continue

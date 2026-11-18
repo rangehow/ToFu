@@ -49,6 +49,102 @@ def ensure_project_brain_cutover() -> dict:
     return {'complete': True, **result}
 
 
+_REPAIR_NAMESPACE = 'project_brain.repairs.v1'
+_RESTART_CANCEL_REPAIR = 'restart-drain-cancelled-to-interrupted'
+
+
+def _replayed_task(task) -> dict:
+    """A task result as ``workspace_outcome`` reads it.
+
+    replay_get stores terminal evidence in metadata, unlike the in-memory task
+    carrier. Copy only verdict fields; never infer a finish reason from a
+    nominal terminal status.
+    """
+    task = dict(task or {})
+    metadata = task.get('metadata')
+    if isinstance(metadata, dict):
+        for key in ('finishReason', 'streamState', 'aborted', '_abort_reason'):
+            if key not in task and key in metadata:
+                task[key] = metadata[key]
+    return task
+
+
+def repair_restart_cancelled_work_items() -> int:
+    """Relabel work a restart drain recorded ``cancelled`` as ``interrupted``.
+
+    Before ``settle_work_item`` read the restart-aware ``workspace_outcome``, a
+    Worker drained by ``server_shutdown`` finished its work item ``cancelled``.
+    Each work item belongs to one physical task, whose stored result keeps the
+    drain's ``_abort_reason``; only that evidence relabels an item, so a person's
+    Stop stays cancelled. One complete walk records a receipt and later boots
+    skip it; each relabel is an idempotent command, so an interrupted walk
+    simply runs again.
+    """
+    from lib.tasks_pkg.workspace_delivery import RESTART_INTERRUPTED, workspace_outcome
+
+    client = get_storage_client(write=True)
+    if client.query('record.get', {'namespace': _REPAIR_NAMESPACE,
+                                   'key': _RESTART_CANCEL_REPAIR}):
+        return 0
+    repaired = 0
+    cursor = None
+    while True:
+        request = {'include_cancelled': True}
+        if cursor is not None:
+            request['cursor'] = cursor
+        snapshot = client.maintenance(
+            'project_brain.recovery.snapshot', request, deadline=30.0)
+        if not snapshot.get('includesCancelled'):
+            # An authority that predates the request returns active work
+            # only; recording the receipt would skip the repair for good.
+            logger.warning('[ProjectBrain] storage cannot list cancelled work; '
+                           'restart-cancel repair waits for a newer authority')
+            return repaired
+        candidates = [
+            (int(project.get('ownerUserId') or 0), str(project.get('projectKey') or ''), work)
+            for project in snapshot.get('projects') or ()
+            for work in project.get('cancelledWorkItems') or ()
+        ]
+        answers = query_many(client, [('task_results.replay_get', {
+            'key': str(work.get('taskId') or ''), 'user_id': owner_user_id,
+            'include_terminal_payload': False, 'include_metadata': True,
+        }) for owner_user_id, _project_key, work in candidates])
+        for (owner_user_id, project_key, work), task in zip(candidates, answers):
+            if isinstance(task, BaseException):
+                raise task
+            if not task or workspace_outcome(_replayed_task(task)) != RESTART_INTERRUPTED:
+                continue
+            work_id = str(work.get('id') or '')
+            result = client.command(
+                'project_brain.work.finish', {
+                    'owner_user_id': owner_user_id,
+                    'project_key': project_key,
+                    'work_id': work_id,
+                    'status': RESTART_INTERRUPTED,
+                    'result_summary': str(work.get('resultSummary') or ''),
+                },
+                f'project-work-restart-repair:{work_id}',
+            )
+            if (result or {}).get('event'):
+                repaired += 1
+        if not snapshot.get('capped'):
+            break
+        next_cursor = snapshot.get('nextCursor')
+        if not isinstance(next_cursor, dict) or not next_cursor or next_cursor == cursor:
+            raise RuntimeError(
+                'Project Brain capped recovery page has no advancing cursor')
+        cursor = next_cursor
+    client.command('record.put', {
+        'namespace': _REPAIR_NAMESPACE, 'key': _RESTART_CANCEL_REPAIR,
+        'expected_version': 0,
+        'value': {'version': 1, 'repaired': repaired, 'completedAt': time.time()},
+    }, f'project-brain-repair:{_RESTART_CANCEL_REPAIR}')
+    if repaired:
+        logger.warning('[ProjectBrain] relabelled %d restart-drained work item(s) '
+                       'cancelled -> interrupted', repaired)
+    return repaired
+
+
 def recover_active_work_items() -> int:
     """Finish orphaned work only after its workspace intent is acknowledged."""
     from lib.tasks_pkg.workspace_delivery import (
@@ -56,6 +152,12 @@ def recover_active_work_items() -> int:
         workspace_outcome,
     )
 
+    try:
+        repair_restart_cancelled_work_items()
+    except Exception:
+        # The receipt is written only after a complete walk: the next boot
+        # retries. Active work recovery below must not wait for history.
+        logger.warning('[ProjectBrain] restart-cancel repair deferred', exc_info=True)
     client = get_storage_client(write=True)
     recovered = 0
     # One boot pass resolves each project checkout's identity once.
@@ -104,15 +206,7 @@ def recover_active_work_items() -> int:
                 active_work.items(), answers):
             if isinstance(task, BaseException):
                 raise task
-            # replay_get stores terminal evidence in metadata, unlike the
-            # in-memory task carrier. Copy only verdict fields; never infer
-            # a finish reason from a nominal terminal status.
-            task = dict(task or {})
-            metadata = task.get('metadata')
-            if isinstance(metadata, dict):
-                for key in ('finishReason', 'streamState', 'aborted', '_abort_reason'):
-                    if key not in task and key in metadata:
-                        task[key] = metadata[key]
+            task = _replayed_task(task)
             status = workspace_outcome(task)
             if status == 'cancelled':
                 summary = 'Execution was cancelled before server restart recovery.'
@@ -174,4 +268,5 @@ def recover_active_work_items() -> int:
     return recovered
 
 
-__all__ = ['ensure_project_brain_cutover', 'recover_active_work_items']
+__all__ = ['ensure_project_brain_cutover', 'recover_active_work_items',
+           'repair_restart_cancelled_work_items']

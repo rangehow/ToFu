@@ -48,7 +48,7 @@ import threading
 import time
 import uuid
 
-from lib.json_store import read_json, write_json_atomic
+from lib.json_store import locked_path, read_json, write_json_atomic
 from lib.log import get_logger
 from lib.storage_authority_sql.durability import fsync_directory
 from lib.storage.generated_v2_semantics import (
@@ -175,11 +175,12 @@ def load_state(data_dir: Path) -> dict:
 
 
 def _update_state(data_dir: Path, update: Callable[[dict], None]) -> dict:
-    with _STATE_LOCK:
+    path = str(state_path(data_dir))
+    with _STATE_LOCK, locked_path(path):
         state = load_state(data_dir)
         update(state)
         state['format'] = STATE_FORMAT
-        write_json_atomic(str(state_path(data_dir)), state, mode=0o600)
+        write_json_atomic(path, state, mode=0o600)
         return state
 
 

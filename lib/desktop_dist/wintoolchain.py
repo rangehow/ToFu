@@ -157,11 +157,7 @@ def state() -> dict:
 
 
 def _set_state(**kw) -> None:
-    m = store.load_manifest()
-    w = m.get('wintc') if isinstance(m.get('wintc'), dict) else {}
-    w.update(kw)
-    m['wintc'] = w
-    store.save_manifest(m)
+    store.update_section('wintc', **kw)
 
 
 def is_provisioned() -> bool:

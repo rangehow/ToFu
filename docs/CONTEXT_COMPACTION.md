@@ -264,6 +264,25 @@ The compaction resume witness (`compaction_resume_witness`) applies the same
 consumed/unverified rule. Specs: `tests/tasks_pkg/test_steered_checkpoint_publication.py`,
 `tests/compaction/test_continue_working_context.py`.
 
+**Clean finishes on a tool round — Problem:** an idle Coordinator wait
+(`finish_after_idle_coordinator_wait`, live 2026-11-18) and an accepted
+background task end the Turn completed right after the tool results, with no
+model round; the working view ends on a `tool` row, so publication refused
+(`missing_final_model_message`). Every idle end lost its checkpoint: the next
+wake restored an older one plus a cold rebuild of every uncovered Turn and
+force-compacted again (knowledge lead: 1.0–1.6 M tokens on each wake, although
+the previous attempt had ended at 24k). **Decision:** when `_toolLoopCleanFinish`
+is set and the trailing tool batch answers every call, the published view is
+closed by one assistant row carrying the Turn's final content — the same row a
+cold rebuild appends after that Turn's tool rounds — so the next attempt
+resumes the compacted view. An incomplete batch still refuses. The live
+messages are not changed. **Rejected:** an extra model round to obtain a
+real final message (the cost the idle end removes); setting the loop's
+terminal assistant message as explicit delivery does (adds a second round-end
+event for the same round); publishing the view ending on the tool row (every
+restore validates an assistant terminal). Spec:
+`tests/tasks_pkg/test_idle_wait_checkpoint_publication.py`.
+
 **Interrupted Turns resume their exact working view — Problem:** Continue after a
 Stop or process restart rebuilt the model view from Turn transcripts. Cold
 transcripts carry no context carriers, so the composer found none and
@@ -300,7 +319,17 @@ measured from 2026-11-07 20:57 to 2026-11-08 10:30 on the production host: 67
 non-completed root settlements (60 Turns in about 45 conversations); first-round
 prompts p50 430k, p90 645k, max 844k tokens, about 3–5 MB of view each. Without
 retirement that would add roughly 250 MB a day; with it the live bytes are at
-most one view per conversation. **Rejected:** a new Turn-private carrier store
+most one view per conversation. Restore and retirement read the newest
+candidates through `newest_compaction_archives` (`_archive.py`):
+`compaction_archive.list` returns a conversation's archives **oldest first** on
+both authorities, so asking it for eight (as both did until 2026-11-18) read the
+oldest eight; once a lead held more than eight archives every drain checkpoint
+was saved but never found (`no_witness`), nothing it superseded was retired, and
+the first resumed Turn force-compacted from a cold rebuild (tofu lead 1.09 M,
+knowledge lead 1.62 M tokens at 08:33). The helper lists up to the storage
+limit (1000, also prune's `keep` bound) and takes the tail; reversing the storage
+order was rejected because the archive route and diagnostics read it ascending.
+**Rejected:** a new Turn-private carrier store
 (a second model-view authority beside the archive owner, and a projection field
 the browser would download); reconstructing carriers from display notes (notes
 are display-only and clipped); re-running all turn-start providers and hiding

@@ -48,7 +48,10 @@ def test_network_wait_recovers_without_failure_or_switch_claim(page, tmp_path, l
     recovered = retry_phase_fields(model='gpt-6-astra', attempt=0, reason='Network recovered')
     page.evaluate('fields => paintNetworkRecovery({phase:"retrying",...fields})', recovered)
     expect(node).not_to_contain_text(locale['stream.retryReason.networkRecovery'])
-    expect(node).to_contain_text(locale['stream.phase.waitingForModel'].replace('{model}', 'gpt-6-astra'))
+    # Recovery precedes the next POST, so the row says it is connecting, never
+    # that the model already has the request (retry_i18n.retry_phase_fields).
+    expect(node).to_contain_text(locale['stream.phase.connectingModel'].replace('{model}', 'gpt-6-astra'))
+    expect(node).not_to_contain_text(locale['stream.phase.waitingForModel'].replace('{model}', 'gpt-6-astra'))
     page.evaluate("paintNetworkRecovery({phase:'llm_thinking',detailKey:'stream.phase.generatingResponse'})")
     expect(node).to_contain_text(locale['stream.phase.generatingResponse'])
     expect(node).not_to_contain_text('gpt-6-astra')
@@ -59,7 +62,8 @@ def test_long_request_model_name_wraps_in_full(page, width):
     page.set_viewport_size({'width': width, 'height': 900})
     page.add_script_tag(path=native_module_path('.native/network-recovery-renderers.js',
         ROOT / 'frontend/src/conversation/ui/classic-conversation-renderers.ts'))
-    model = 'kunlunbedrock.claude-opus-4.5-m17-' + 'very-long-deployment-suffix-' * 4 + 'end'
+    # Long enough to exceed one line of the 1280px pane in every theme's type.
+    model = 'kunlunbedrock.claude-opus-4.5-m17-' + 'very-long-deployment-suffix-' * 10 + 'end'
     page.evaluate(r"""() => {
       const node = document.createElement('div');
       node.id = 'long-model-fixture';

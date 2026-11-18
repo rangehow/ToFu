@@ -19,6 +19,12 @@ Because a human ``real`` row sorts ahead of the ``autopilot`` sentinel, a
 message the user types while autopilot is armed is ALWAYS processed first;
 autopilot only resumes once no dispatchable row remains.
 
+Priority orders only sources whose Turn is created at dispatch. A row whose
+Turn pair already exists (a queued submit or requeued steer) runs before them,
+earliest pair first, so a later source never appends its Turns ahead of a
+waiting pair (docs/STORAGE.md "A queued Turn pair runs before any later
+source").
+
 This replaces the frontend-only ``pendingMessageQueue`` Map that was lost
 on page refresh.
 
@@ -1574,7 +1580,8 @@ def _dispatchable_rows(conv_id: str, *, user_id: int) -> list[dict]:
     """Queued rows that would REALLY be dispatched, in dispatch order.
 
     Mirrors ``dequeue_next``'s non-autopilot selection without taking a lease,
-    so it is safe to ask from a decision gate.
+    so it is safe to ask from a decision gate: rows whose Turn pair already
+    exists come first, then Turn-less sources in priority order.
 
     Returns a list of ``{'queueId', 'kind', 'isHuman'}``.
     """
@@ -1585,16 +1592,17 @@ def _dispatchable_rows(conv_id: str, *, user_id: int) -> list[dict]:
         )
         or []
     )
-    out: list[dict] = []
+    paired: list[dict] = []
+    sources: list[dict] = []
     for row in rows:
         kind = row.get("kind") or KIND_REAL
         if (kind in (KIND_AUTOPILOT, KIND_BACKGROUND_RECEIPT)
                 or row.get('backgroundCommand')):
             continue
-        out.append(
+        (paired if row.get("attemptId") else sources).append(
             {"queueId": row["queueId"], "kind": kind, "isHuman": kind == KIND_REAL}
         )
-    return out
+    return paired + sources
 
 
 def next_dispatchable_turn(conv_id: str, *, user_id: int) -> dict | None:

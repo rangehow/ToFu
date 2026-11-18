@@ -605,13 +605,20 @@ class StorageV2Client:
                 operation, body, command_id=command_id, deadline_unix_ms=deadline_unix_ms),
             decode, operation, timeout=timeout, cancellation=cancellation)
 
-    def _exchange_once(self, transfer, decode, operation, *, timeout, cancellation=None):
-        """One pooled-session exchange: ``transfer`` owns the wire, ``decode`` its answer."""
+    def _exchange_once(self, transfer, decode, operation, *, timeout, cancellation=None,
+                       held=None):
+        """One pooled-session exchange: ``transfer`` owns the wire, ``decode`` its answer.
+
+        ``held`` is a session ``send_query_many`` already took from the pool
+        and sent on; the exchange finishes on it and returns it to the pool.
+        """
         stop_at = time.monotonic() + timeout
-        session = None
-        broken = False
+        session = held
+        # A held session carries unread answers until ``transfer`` completes.
+        broken = held is not None
         try:
-            session = self._pool.acquire(timeout)
+            if session is None:
+                session = self._pool.acquire(timeout)
             remaining = stop_at - time.monotonic()
             if remaining <= 0:
                 raise StorageError('database_timeout',
@@ -758,6 +765,78 @@ class StorageV2Client:
                                   cancellation=cancellation)
         )
 
+    def send_query_many(
+        self,
+        requests: Sequence[tuple[str, Mapping[str, Any] | None]],
+        deadline: float | None = None,
+    ):
+        """Send ``query_many``'s exchange now; ``.answers()`` on the result reads it.
+
+        The caller overlaps the authority's work with its own and reads the
+        answers when it needs them; they are exactly ``query_many``'s. None
+        (nothing sent) when the exchange cannot be split: fewer than two
+        reads, a session without ``send_many``, an exchange that does not fit
+        one send segment, or no session within the budget. ``.discard()``
+        drops unwanted answers and keeps the session; a pending exchange that
+        is never read or discarded returns its session to the pool retired.
+        """
+        import weakref
+        requests = [(validate_operation(operation), payload) for operation, payload in requests]
+        if len(requests) < 2:
+            return None
+        timeout = self._timeout if deadline is None else max(0.001, float(deadline))
+        started_at = time.monotonic()
+        bodies = [(operation, request_payload(operation, payload, owner_id=self._owner_id))
+                  for operation, payload in requests]
+        deadline_unix_ms = int((time.time() + timeout) * 1000)
+        try:
+            session = self._pool.acquire(timeout)
+        except StorageError:
+            return None
+        sent = None
+        try:
+            if callable(getattr(session, 'send_many', None)):
+                set_timeout = getattr(session, 'set_timeout', None)
+                if set_timeout is not None:
+                    set_timeout(timeout + _SOCKET_TIMEOUT_SLACK_S)
+                sent = session.send_many(bodies, deadline_unix_ms=deadline_unix_ms)
+        except Exception:
+            # Unknown alignment after a partial send: retire it; the reads go live.
+            self._pool.release(session, broken=True)
+            return None
+        if sent is None:
+            self._pool.release(session, broken=False)
+            return None
+        client = self
+
+        class _PendingQueries:
+            def answers(self) -> list[Any]:
+                if not abandon.detach():
+                    raise RuntimeError('pending storage exchange already read')
+                try:
+                    responses = client._exchange_once(
+                        lambda held: sent.receive(), lambda answers: answers,
+                        requests[0][0], timeout=max(0.001, timeout - (time.monotonic() - started_at)),
+                        held=session)
+                except StorageError:
+                    responses = []
+                return client._query_many_outcomes(requests, responses, started_at, deadline)
+
+            def discard(self) -> None:
+                """Read and drop the answers so the session returns to the pool aligned."""
+                if not abandon.detach():
+                    return
+                try:
+                    client._exchange_once(
+                        lambda held: sent.receive(), lambda answers: None, requests[0][0],
+                        timeout=max(0.001, timeout - (time.monotonic() - started_at)), held=session)
+                except StorageError:
+                    pass  # the failed exchange retired its session
+
+        pending = _PendingQueries()
+        abandon = weakref.finalize(pending, self._pool.release, session, broken=True)
+        return pending
+
     def query_many(
         self,
         requests: Sequence[tuple[str, Mapping[str, Any] | None]],
@@ -772,7 +851,6 @@ class StorageV2Client:
         through ``query`` and its whole replay policy.
         """
         requests = [(validate_operation(operation), payload) for operation, payload in requests]
-        outcomes: list[Any] = [_UNANSWERED] * len(requests)
         if len(requests) > 1:
             timeout = self._timeout if deadline is None else max(0.001, float(deadline))
             started_at = time.monotonic()
@@ -785,6 +863,13 @@ class StorageV2Client:
                     lambda answers: answers, requests[0][0], timeout=timeout)
             except StorageError:
                 responses = []
+            return self._query_many_outcomes(requests, responses, started_at, deadline)
+        return self._query_many_outcomes(requests, [], time.monotonic(), deadline)
+
+    def _query_many_outcomes(self, requests, responses, started_at, deadline) -> list[Any]:
+        """Decode an exchange's answers; unanswered and transient reads go through ``query``."""
+        outcomes: list[Any] = [_UNANSWERED] * len(requests)
+        if responses:
             for index, response in enumerate(responses):
                 if response is None:
                     continue  # needs a streamed upload: read alone below

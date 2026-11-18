@@ -1,11 +1,11 @@
-"""A resumed Attempt continues on the interrupted Attempt's running model.
+"""A resumed Attempt runs on the conversation's accepted model.
 
-An in-Attempt refusal fallback is process-local state. The durable paid ledger
-(``checkpointApiRounds``) survives the restart, so the resume derives the model
-from the highest-round paid response-authoring row instead of returning to the
-accepted config model and paying a fresh prompt-cache write plus a second
-refusal. The decision reuses the refusal fallback's own admission boundary and
-never overrides an explicit pause → switch-model → continue.
+A content_filter refusal is a per-request verdict, not a demotion: after an
+in-attempt fallback a restart resume returns to the accepted model instead of
+staying on the fallback for hours. Only a deliberate model choice the owner or
+a lead made (pause → switch-model → continue) survives the resume. The paid
+ledger still covers the fallback rounds, and a refusal on that first primary
+round falls back again for that round only.
 """
 from __future__ import annotations
 
@@ -59,8 +59,8 @@ def admitted(monkeypatch):
     return state
 
 
-def test_last_authoring_row_elects_the_fallback_model(admitted):
-    """(a) opus refused at R171; R262-R281 ran on the fallback → resume there."""
+def test_resume_returns_to_accepted_model_after_a_fallback(admitted):
+    """(a) opus refused at R171; R262-R281 ran on the fallback → resume on opus."""
     rounds = [
         _row(170, ACCEPTED),
         _row(171, ACCEPTED, tag='R171-REFUSED', authoring=False),
@@ -68,22 +68,8 @@ def test_last_authoring_row_elects_the_fallback_model(admitted):
         _row(281, FALLBACK),
     ]
     task = _task()
-    assert continue_resumed_model(task, _cfg(rounds), ACCEPTED) == FALLBACK
-    assert task['_fallback_model'] == FALLBACK
-    assert task['_fallback_from'] == ACCEPTED
-    assert task['_fallback_kind'] == 'resume_continuation'
-
-
-def test_model_no_longer_admitted_returns_to_accepted(admitted):
-    """(b) The fallback selection boundary withdrew the model → normal selection."""
-    admitted['admitted'] = ''  # fallback disabled / no fallback configured
-    task = _task()
-    assert continue_resumed_model(
-        task, _cfg([_row(281, FALLBACK)]), ACCEPTED) == ACCEPTED
+    assert continue_resumed_model(task, _cfg(rounds), ACCEPTED) == ACCEPTED
     assert '_fallback_model' not in task
-    admitted['admitted'] = 'another-model'
-    assert continue_resumed_model(
-        _task(), _cfg([_row(281, FALLBACK)]), ACCEPTED) == ACCEPTED
 
 
 def test_refused_and_discarded_charges_never_elect_a_model(admitted):
@@ -122,28 +108,21 @@ def test_non_resume_and_matching_model_are_untouched(admitted):
     assert '_fallback_model' not in task
 
 
-def test_done_event_reports_the_continued_fallback(admitted):
-    """(e) done/persist read task['_fallback_*'] — the continuation restamps them
-    exactly as the in-Attempt fallback does, so the finish tag shows the real
-    model instead of silently relabelling the Turn with the accepted one."""
+def test_done_event_keeps_the_accepted_model_on_resume(admitted):
+    """(e) A resumed attempt reports the accepted model it actually runs on."""
     task = _task()
-    continued = continue_resumed_model(
-        task, _cfg([_row(281, FALLBACK)]), ACCEPTED)
+    model = continue_resumed_model(task, _cfg([_row(281, FALLBACK)]), ACCEPTED)
     done = {}
-    _project_execution_facts(task, done, cfg=task['config'], model=continued,
+    _project_execution_facts(task, done, cfg=task['config'], model=model,
                              thinking_depth='high', api_rounds=[])
-    assert done['actualModel'] == FALLBACK
-    assert done['fallbackModel'] == FALLBACK
-    assert done['fallbackFrom'] == ACCEPTED
-    assert done['fallbackKind'] == 'resume_continuation'
-    assert done['fallbackReason']
+    assert done['actualModel'] == ACCEPTED
+    assert 'fallbackModel' not in done
 
 
-def test_run_task_continues_on_the_interrupted_model_before_tool_assembly(
+def test_run_task_resumes_on_the_accepted_model(
         monkeypatch, admitted):
-    """First request uses the fallback model with the round's own preset and
-    thinking; model-dependent resolution (max_tokens, compaction window) is
-    re-resolved for the continued model BEFORE tools/context are assembled."""
+    """The first resumed request uses the accepted model with its own preset
+    and thinking; tools/context resolve once for it."""
     calls = []
 
     def resolve(cfg, task):
@@ -218,13 +197,12 @@ def test_run_task_continues_on_the_interrupted_model_before_tool_assembly(
     run_mod._execute_task_invocation.__wrapped__(task, policy=ROOT_INVOCATION_POLICY)
 
     assert calls[0] == ('resolve', ACCEPTED)
-    assert ('resolve', FALLBACK) in calls
-    # Tools and context were assembled for the continued model, not accepted.
-    assert ('tools', FALLBACK) in calls
-    assert ('context', FALLBACK) in calls
+    assert ('resolve', FALLBACK) not in calls
+    assert ('tools', ACCEPTED) in calls
+    assert ('context', ACCEPTED) in calls
     loop = next(c for c in calls if c[0] == 'loop')
-    assert loop == ('loop', FALLBACK, 'high-preset', True, 4096)
-    assert task['model'] == FALLBACK
-    assert task['_fallback_model'] == FALLBACK
+    assert loop == ('loop', ACCEPTED, 'high-preset', True, 8192)
+    assert task['model'] == ACCEPTED
+    assert '_fallback_model' not in task
     assert not any(e.get('type') == EventType.MODEL_FALLBACK
                    for e in task['events'])

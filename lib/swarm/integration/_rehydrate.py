@@ -447,7 +447,11 @@ def _rehydrate_one_locked(sess: dict, *, resume_task: dict | None = None,
                      if tool_schema_name(tool) in original_names]
         original = config.get('parent_cfg') or {}
         current_cfg = policy_view.get('config') or {}
-        config['model'] = resume_task.get('model') or config.get('model')
+        # The admitted selection, not the live model: a parent resumed on its
+        # refusal fallback (continue_resumed_model) must not silently move
+        # every worker to that fallback. Mirrors spawn (_tools.py).
+        config['model'] = ((resume_task.get('config') or {}).get('model')
+                           or resume_task.get('model') or config.get('model'))
         config['thinking_enabled'] = current_cfg.get('thinkingEnabled')
         policy = execution_parent.get('_workspaceRootPolicy') or {}
         config['project_path'] = str(policy.get('primaryPath') or resume_task.get('projectPath')

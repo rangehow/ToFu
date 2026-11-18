@@ -206,7 +206,8 @@ def test_original_authority_withdrawal_cannot_wake(run, violation):
     if violation == 'rebind': r.c.binding.value['revision'] = 2
     if violation == 'source': r.turns['human-turn']['actor'] = 'virtual_user'
     if violation == 'owner': r.c.conversations.rows['coordinator']['user_id'] = 8
-    assert r.wake() == ['deferred'] and not controls(r)
+    assert r.wake() == ['retired'] and not controls(r)
+    assert r.wake() == [] and not controls(r)
 
 
 def test_deleted_first_worker_does_not_disable_request_continuation(run):

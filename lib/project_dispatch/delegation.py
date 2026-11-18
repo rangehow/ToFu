@@ -417,10 +417,15 @@ def _source_for_task(repository, task, *, for_budget, issued, delegated=False):
         source = _steered_owner_source(repository, task, turn)
         if source is None:
             source = _answered_owner_source(repository, task, turn, attempt)
+        delegation_refusal = None
+        from lib.lifecycle_approval import DelegationRefused
         if source is None and delegated:
-            source = lead_source(repository, task, scope, turn, attempt, human=human)
+            try:
+                source = lead_source(repository, task, scope, turn, attempt, human=human)
+            except DelegationRefused as error:
+                delegation_refusal = error
         if source is None:
-            raise _nonhuman_request(human, refusal) from refusal
+            raise _nonhuman_request(human, refusal, delegation_refusal) from refusal
     from .repository import stopped_after
     if stopped_after(repository.owner, scope['conversation_id'], attempt.get('createdAt', 0) / 1000,
                      client=repository.client):
@@ -512,10 +517,10 @@ def lead_source(repository, task, scope, turn, attempt, *, human=None):
     a wake, relay or notice Turn of the Global Router or a Project Router acts on
     Workers on its own judgment. The gate re-checks the live grant on every call
     (revocation refuses at once) and records one audit action per lead Attempt
-    (the idempotency key), before any effect. Returns ``None`` without a grant
-    (the caller keeps its nonhuman refusal; ``audit.log`` records it), and for
-    the Watchdog, which is not a lead. The act that used it settles the record
-    with its outcome (``lead_act``).
+    (the idempotency key), before any effect. Without a grant it raises the gate's
+    ``DelegationRefused`` (the caller's nonhuman refusal names its code;
+    ``audit.log`` records it); it returns ``None`` for the Watchdog, which is not
+    a lead. The act that used it settles the record with its outcome (``lead_act``).
     """
     from lib import lifecycle_approval as gate
     from lib.router.watchdog.binding import is_watchdog_scope
@@ -523,23 +528,17 @@ def lead_source(repository, task, scope, turn, attempt, *, human=None):
     if is_watchdog_scope(scope):
         return None
     requester = router_requester(task, scope)
-    try:
-        gate.check_delegation(repository.owner, requester, LEAD_AUTHORITY)
-    except gate.DelegationRefused:
-        return None
+    gate.check_delegation(repository.owner, requester, LEAD_AUTHORITY)
     target = {'kind': 'project_request', 'conversationId': turn['conversationId'], 'turnId': turn['turnId'],
               'attemptId': attempt['attemptId'], 'path': repository.project}
-    try:
-        record, _ = gate.begin_delegated_action(
-            repository.owner, requester, scope=LEAD_AUTHORITY, key='lead-turn:' + attempt['attemptId'],
-            reason='A lead Turn without an owner message of its own acts on Workers under the owner\u2019s '
-                   'delegation to every lead.',
-            trigger={'kind': 'owner_delegation', 'turnId': turn['turnId'], 'text': LEAD_DELEGATION_WORDS,
-                     **({'triggerTurnId': human['turnId']} if isinstance(human, Mapping)
-                        and isinstance(human.get('turnId'), str) else {})},
-            target=target, trigger_source=_input_source(human))
-    except gate.DelegationRefused:
-        return None
+    record, _ = gate.begin_delegated_action(
+        repository.owner, requester, scope=LEAD_AUTHORITY, key='lead-turn:' + attempt['attemptId'],
+        reason='A lead Turn without an owner message of its own acts on Workers under the owner\u2019s '
+               'delegation to every lead.',
+        trigger={'kind': 'owner_delegation', 'turnId': turn['turnId'], 'text': LEAD_DELEGATION_WORDS,
+                 **({'triggerTurnId': human['turnId']} if isinstance(human, Mapping)
+                    and isinstance(human.get('turnId'), str) else {})},
+        target=target, trigger_source=_input_source(human))
     if getattr(_LEAD_ACT, 'used', None) is not None:
         _LEAD_ACT.used = (repository.owner, record['id'])
     return {'conversationId': turn['conversationId'], 'turnId': turn['turnId'], 'projectionRevision': 1,
@@ -589,17 +588,23 @@ def lead_act(action):
                 logger.warning('[LeadAuthority] settlement of %s after %s failed: %s', used[1], action, error)
 
 
-def _nonhuman_request(human, refusal):
+def _nonhuman_request(human, refusal, delegation_refusal=None):
     from lib.turn_initiation import INITIATOR_HUMAN, INITIATOR_UNKNOWN, resolve_turn_initiator
     from .repository import NonhumanRequest
     initiator = resolve_turn_initiator(human)
     kind = ('nonhuman ' + initiator + ' input' if initiator not in (INITIATOR_HUMAN, INITIATOR_UNKNOWN)
             else 'not the owner\u2019s own message')
+    code = getattr(delegation_refusal, 'code', None)
+    if code is None or code == 'owner_delegation_not_granted':
+        delegation = 'the owner\u2019s delegation to every lead ("Act for me") is not granted'
+    else:
+        # The grant exists but could not be used now: name the gate's own cause.
+        delegation = (f'the owner\u2019s delegation to every lead ("Act for me") could not be used: '
+                      f'{code}: {delegation_refusal}')
     return NonhumanRequest(
         f'This turn has no request of its own: its input is {kind} ({refusal}), no owner message '
-        'has reached it, and the owner\u2019s delegation to every lead ("Act for me") is not granted. It '
-        'can read Workers, report, ask and update the board, but it cannot delegate, continue, stop or '
-        'cancel Workers.')
+        f'has reached it, and {delegation}. It can read Workers, report, ask and update the board, but '
+        'it cannot delegate, continue, stop or cancel Workers.')
 
 
 def policy_for_task(repository, task, attempt):

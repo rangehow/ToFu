@@ -134,7 +134,7 @@ def _execute_admitted_tool_one(task, tc, fn_name, tc_id, fn_args, rn, round_entr
         if is_tool_cancellation(error) and paused_by_restart(task):
             logger.info('[Executor] restart cut %s (tc_id=%s) at its tool reservation: %s',
                         fn_name, tc_id, error)
-            return tc_id, restart_unstarted_result(fn_name), False
+            return tc_id, restart_unstarted_result(fn_name, task), False
         raise
     if limit_reason:
         return tc_id, limit_reason, False

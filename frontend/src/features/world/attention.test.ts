@@ -27,6 +27,17 @@ describe('owner attention adapter', () => {
     expect(openQuestions(LEAD, [answered])).toEqual([]);
   });
 
+  it('omits a question its lead withdrew', () => {
+    const turns = [
+      ask('t1', 1, { guidanceId: 'g1', guidanceQuestion: 'Settled?', status: 'awaiting_human',
+        guidanceWithdrawn: { reason: 'answered in chat', at: 1 } }),
+      ask('t2', 2, { guidanceId: 'g2', guidanceQuestion: 'Papers first?', guidanceBlocking: false, status: 'done',
+        guidanceWithdrawn: { reason: 'settled', at: 2 } }),
+      ask('t3', 3, { guidanceId: 'g3', guidanceQuestion: 'Still open?', status: 'awaiting_human' }),
+    ];
+    expect(openQuestions(LEAD, turns).map(each => each.guidanceId)).toEqual(['g3']);
+  });
+
   it('emits the HARNESS-1C shape, ids and tier order', () => {
     const attention = deriveAttention(1000, [{
       path: '/p', coordinatorId: LEAD,

@@ -282,7 +282,7 @@ mod tests {
 
     fn snapshot(database: &AuthorityDatabase) -> Value {
         let mut transaction = database.begin(7, 11).unwrap();
-        serde_json::from_slice(&recovery_snapshot(database, &mut transaction, None).unwrap())
+        serde_json::from_slice(&recovery_snapshot(database, &mut transaction, None, false).unwrap())
             .unwrap()
     }
 
@@ -344,10 +344,16 @@ mod tests {
             let mut transaction = database.begin(7, 11).unwrap();
             let mut observed = projection_hydrations();
             let page: Value = serde_json::from_slice(
-                &recovery_snapshot_with_yield(database, &mut transaction, cursor.as_ref(), || {
-                    let now = projection_hydrations();
-                    cold && std::mem::replace(&mut observed, now) != now
-                })
+                &recovery_snapshot_with_yield(
+                    database,
+                    &mut transaction,
+                    cursor.as_ref(),
+                    false,
+                    || {
+                        let now = projection_hydrations();
+                        cold && std::mem::replace(&mut observed, now) != now
+                    },
+                )
                 .unwrap(),
             )
             .unwrap();
@@ -450,7 +456,7 @@ mod tests {
         assert!(can_skip(&database, &mut foreign, "/project").unwrap());
         assert_eq!(
             serde_json::from_slice::<Value>(
-                &recovery_snapshot(&database, &mut foreign, None).unwrap()
+                &recovery_snapshot(&database, &mut foreign, None, false).unwrap()
             )
             .unwrap(),
             json!({"projects":[], "capped":false})

@@ -164,9 +164,26 @@ def _llm_call_with_fallback(
         logger.debug('[%s] disableModelFallback flag read failed: %s', tid, _e)
     no_fallback_context = 'fallback-disabled' if fallback_disabled else 'no-fallback'
 
+    # ── Next round after a content_filter fallback: retry the primary once.
+    #    A refusal is a per-request content verdict, not unavailability; the
+    #    last round ran on the fallback. This stamps the visible return switch
+    #    before that round's primary attempt; a repeated refusal falls back
+    #    again for that round only (same _configured path as the first).
+    from . import _switch
+    if not fallback_disabled:
+        # Capture BEFORE the stamp: the stamp swaps _fallback_from/_model, so
+        # reading _fallback_from afterwards would hand back the fallback.
+        primary_again = str(task.get('_fallback_from') or '').strip()
+        if primary_again and _switch.stamp_switch_back(task, round_num, messages):
+            model = primary_again
+            body = dict(body, model=model)
+            # The body's other model-bound fields (tools, images, budget,
+            # archive) were prepared for this same model: build_round_request
+            # applies the switch BEFORE building, so only the label differs.
+
     # ── Primary model call ──
     try:
-        return _call_primary(
+        result = _call_primary(
             task,
             body,
             model,
@@ -178,6 +195,11 @@ def _llm_call_with_fallback(
             api_rounds,
             on_tool_call_ready,
         )
+        # A served primary round retires the sticky fallback reporting; the
+        # paid ledger and model_fallback_receipt still name every fallback round.
+        if task.get('_fallback_model') and task['_fallback_model'] != model:
+            _switch.clear_switch_stamps(task)
+        return result
 
     except Exception as e:
         if isinstance(e, (EventDeliveryError, EventDeliveryRevoked)):

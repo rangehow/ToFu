@@ -31,11 +31,18 @@ def test_schema_keeps_autonomy_and_markdown_qr_contracts():
     assert 'never base64' in question
     assert props['response_type']['enum'] == ['free_text', 'choice']
     assert params['type'] == 'object'
-    # The batch-questions mode made only response_type top-level required;
-    # the single-question anyOf branch still requires question.
-    assert params['required'] == ['response_type']
+    # Every asking branch requires response_type; the withdraw action is the
+    # one branch that asks nothing, so no field is required at the top level.
+    assert 'required' not in params
     branches = params.get('anyOf') or []
     assert any('question' in (branch.get('required') or []) for branch in branches)
+    asking = [branch for branch in branches if branch.get('required') != ['withdraw']]
+    assert len(asking) == len(branches) - 1
+    assert all('response_type' in branch['required'] for branch in asking)
+    validator = Draft7Validator(params)
+    assert validator.is_valid({'withdraw': {'guidance_id': 'hg_1', 'reason': 'settled'}})
+    assert not validator.is_valid({'question': 'Which?'}), 'asking still needs response_type'
+    assert not validator.is_valid({'withdraw': {'guidance_id': 'hg_1'}}), 'a withdrawal needs its reason'
 
 
 def test_schema_bounds_user_visible_and_persisted_payloads():

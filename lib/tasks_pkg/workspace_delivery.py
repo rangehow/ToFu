@@ -108,7 +108,7 @@ def workspace_outcome(task: dict) -> str:
     The abort site stamps ``_abort_reason`` and the canonical verdict reads it:
     ``server_shutdown`` is a SYSTEM_RECOVERY interruption. Restart recovery
     marks a task result it found unsettled ``interrupted``. Neither is a Stop or
-    a failure. Project Brain work statuses keep using ``task_outcome``.
+    a failure. Project Brain work statuses read it too (``settle_work_item``).
     """
     from lib.turn_verdict import TurnTerminationEvidence, derive_task_verdict
 

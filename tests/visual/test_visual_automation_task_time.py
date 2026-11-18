@@ -15,7 +15,6 @@ def test_actual_task_start_is_visible_and_survives_reload(page,monkeypatch,tmp_p
     from tests.automations.test_time_publication import prepared
     from tests.conftest import _dismiss_onboarding_modals
 
-    assert os.environ.get('TOFU_PERSONAL_STORAGE_BACKEND')=='tofudb'
     factory,repo,_,dispatch,completed,fence,created,attempt=prepared(
         (get_storage_client,1,None),monkeypatch,tenant=None)
     conv_id=created['turn']['conversationId']

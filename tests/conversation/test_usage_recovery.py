@@ -71,7 +71,7 @@ def _chat_sidecar_runtime():
     the shared helper's hard-coded SQLite authority.
     """
     from lib.storage import StorageRuntime, StorageSupervisor
-    from lib.storage.service import install_runtime_for_test
+    from tests.support.sidecar_fixtures import installed_storage_runtime
 
     backend = os.environ.get('TOFU_PERSONAL_STORAGE_BACKEND', 'sqlite')
     assert backend in {'sqlite', 'tofudb'}, f'Unsupported test backend: {backend}'
@@ -79,16 +79,14 @@ def _chat_sidecar_runtime():
     runtime = StorageRuntime(StorageSupervisor(
         project_root=root, backend=backend, startup_timeout=60,
     ), auto_restart=False)
-    install_runtime_for_test(runtime)
+    # Give the process authority back: leaving None fenced every later
+    # browser test served by a session live_server.
     try:
-        runtime.start()
-        yield runtime
+        with installed_storage_runtime(runtime):
+            runtime.start()
+            yield runtime
     finally:
-        install_runtime_for_test(None)
-        try:
-            runtime.stop()
-        finally:
-            shutil.rmtree(root, ignore_errors=True)
+        shutil.rmtree(root, ignore_errors=True)
 
 
 @pytest.fixture()

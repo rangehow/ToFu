@@ -39,7 +39,7 @@ from lib.agent_core.fair_work_lane import (
 )
 from lib.config_dir import config_path as _config_path
 from lib.error_envelope import from_exception
-from lib.json_store import write_json_atomic
+from lib.json_store import locked_path, write_json_atomic
 from lib.llm.request import strip_internal_request_fields
 from lib.llm.llm_errors import ROUTE_MISSING_MARKERS as _ROUTE_MISSING_MARKERS
 from lib.log import get_logger
@@ -1261,8 +1261,9 @@ def probe_cell_key(key_idx, model_id) -> str:
 def persist_probe_task(task: dict) -> bool:
     """Atomically write a public (key-free) snapshot; report durability."""
     try:
-        write_json_atomic(probe_cache_path(task['provider_id']),
-                          public_probe_snapshot(task), fsync=False)
+        path = probe_cache_path(task['provider_id'])
+        with locked_path(path):
+            write_json_atomic(path, public_probe_snapshot(task), fsync=False)
         return True
     except Exception as e:
         logger.warning('[CellProbe] persist failed for %s: %s',

@@ -513,8 +513,9 @@ def _without_repeatable_restart_cut(operation, turn, projection, config):
     again"). The suspended working view applies the same rule
     (``compaction._resume_projection``), so the witnessed view still matches.
     """
+    from lib.turn_verdict import PAUSE_SETTLEMENT_CAUSES
     if (operation not in ('continue', 'checkpoint_resume')
-            or (turn.get('settlement') or {}).get('cause') != 'server_restart'):
+            or (turn.get('settlement') or {}).get('cause') not in PAUSE_SETTLEMENT_CAUSES):
         return projection
     from lib.conversation_sync.worker_recovery import isolated_worktree
     from lib.tools.restart_effect_class import repeatable_restart_cut_batch, without_positions
@@ -1671,6 +1672,20 @@ class ConversationTurnCommandService:
             dict(abort_attempt(attempt_id, user_id=user_id, withdraw_dispatch=False,
                                abort_reason=DISPATCH_GRANT_REVOKED,
                                abort_detail=provenance) or {}),
+            notify_legacy_clients=False,
+        )
+
+    def hold_project_attempt(self, attempt_id: str, user_id: Any, *,
+                             provenance: str = '') -> CommandOutcome:
+        """A project lead's pause of its Worker: an exact-attempt stop that keeps every grant.
+
+        The Turn settles interrupted with cause ``lead_hold`` and offers its
+        checkpoint resume; ``provenance`` names the lead that held it.
+        """
+        from lib.turn_verdict import LEAD_HOLD
+        return CommandOutcome(
+            dict(abort_attempt(attempt_id, user_id=user_id, withdraw_dispatch=False,
+                               abort_reason=LEAD_HOLD, abort_detail=provenance) or {}),
             notify_legacy_clients=False,
         )
 

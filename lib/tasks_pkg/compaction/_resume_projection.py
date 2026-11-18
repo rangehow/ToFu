@@ -17,6 +17,7 @@ import json
 import time
 
 from lib.log import get_logger
+from lib.tasks_pkg.compaction._archive import newest_compaction_archives
 from lib.tasks_pkg.inbox_delivery import UNVERIFIED_INBOX_DELIVERY
 from lib.tasks_pkg.model_replay import policy_witness
 from lib.tasks_pkg.conv_message_builder._toolcalls import _reconstruct_tool_call_messages
@@ -151,8 +152,8 @@ def _restore_compacted_resume(task, config, rounds, fresh_messages, current_mess
             return None, 'ineligible', None
         store = get_conversation_store()
         with measure_task_startup('resume_view_read'):
-            archives = store.list_compaction_archives(
-                conversation, user_id=owner, limit=_MAX_ARCHIVE_CANDIDATES)
+            archives = newest_compaction_archives(
+                store, conversation, user_id=owner, count=_MAX_ARCHIVE_CANDIDATES)
         for metadata in archives:
             if task.get('aborted'):
                 return None, 'ineligible', None
@@ -388,8 +389,8 @@ def preserve_suspended_working_view(task, *, turn_text=None, restart_settled=Non
     from lib.agent_core.model_context_limits import MAX_ENTRY_BYTES, MAX_MESSAGES
     from lib.tasks_pkg.manager import task_user_id
     if restart_settled is None:
-        from lib.turn_verdict import RESTART_ABORT_REASONS
-        restart_settled = task.get('_abort_reason') in RESTART_ABORT_REASONS
+        from lib.turn_verdict import PAUSE_ABORT_REASONS
+        restart_settled = task.get('_abort_reason') in PAUSE_ABORT_REASONS
     trimmed = _without_repeatable_cut_batch(task, messages, _merge_tool_rounds(task),
                                             restart_settled=restart_settled)
     if trimmed is None:
@@ -465,8 +466,8 @@ def _retire_superseded_checkpoints(store, task, owner, *, keep):
     candidates, so at most one view per conversation keeps its bytes.
     """
     stale = {task.get('_resumedCheckpointArchiveId')} - {None, keep}
-    for metadata in store.list_compaction_archives(
-            task['convId'], user_id=owner, limit=_MAX_ARCHIVE_CANDIDATES):
+    for metadata in newest_compaction_archives(
+            store, task['convId'], user_id=owner, count=_MAX_ARCHIVE_CANDIDATES):
         if metadata.get('id') == keep or metadata.get('resultStatus') != 'completed':
             continue
         item = store.get_compaction_archive(

@@ -26,11 +26,25 @@ cancellation and hands the method a set cancellation event, exactly like a
 local caller's stop. There is no retry: a lost response is reported as an
 unreachable owner, never replayed.
 
+Session verbs: a bridge may declare ``session_methods``, verbs that answer at
+once from the owner's in-memory state and change nothing (catalog and liveness
+reads). Inside a ``relay_session()`` (each Turn invocation opens one) a caller
+sends them with ``keep: true`` over one connection it keeps for the scope: the
+owner answers without a peer watcher (there is no wait to cancel) and reads the
+next request on the same connection until EOF. A kept connection that fails
+is closed and the read is sent once on a fresh connection from the published
+record; that repeats a pure read, never an effect. Every other verb keeps one
+connection per call. This took the endpoint-record read and the TCP connect
+off each round's MCP catalog check (docs/HARNESS_PERFORMANCE.md, "Round floor
+III").
+
 Entry points: ``RelayServer``, ``RelayClient``, ``OwnerSelection`` (process
-role -> owner/relay/local), ``RelayUnavailable``, ``is_cancelled``.
+role -> owner/relay/local), ``relay_session``, ``RelayUnavailable``, ``is_cancelled``.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 import json
 import os
 import secrets
@@ -107,16 +121,20 @@ class RelayServer:
     admission, cancels entered calls and joins them.
     """
 
-    def __init__(self, path: Path, *, format: str, methods: dict, name: str):
+    def __init__(self, path: Path, *, format: str, methods: dict, name: str,
+                 session_methods: frozenset = frozenset()):
         self._path = Path(path)
         self._format = format
         self._name = name
         self._token = secrets.token_hex(32)
         self._methods = methods
+        self._session_methods = frozenset(session_methods) & frozenset(methods)
         self._listener = None
         self._accept_thread = None
         self._lock = threading.Lock()
         self._calls: dict[threading.Thread, threading.Event] = {}
+        # Kept connections awaiting their next request; close() shuts them down.
+        self._idle: dict[threading.Thread, socket.socket] = {}
         self._closing = threading.Event()
 
     def start(self) -> dict:
@@ -152,31 +170,67 @@ class RelayServer:
                 self._calls[thread] = cancel
             thread.start()
 
+    def _next_request(self, connection, deadline):
+        """The next request, or None once a kept connection's caller closed it."""
+        if deadline is None:
+            current = threading.current_thread()
+            with self._lock:
+                if self._closing.is_set():
+                    return None
+                self._idle[current] = connection
+            try:
+                connection.settimeout(None)
+                first = connection.recv(_LENGTH.size)
+            except OSError:
+                return None
+            finally:
+                with self._lock:
+                    self._idle.pop(current, None)
+            if not first:
+                return None
+            header = first + (_read_exact(connection, _LENGTH.size - len(first), None)
+                              if len(first) < _LENGTH.size else b'')
+        else:
+            header = _read_exact(connection, _LENGTH.size, deadline)
+        return json.loads(_read_exact(connection, _LENGTH.unpack(header)[0], deadline))
+
     def _serve(self, connection, cancel):
         watcher = None
         fmt = self._format
         try:
             deadline = time.monotonic() + ACKNOWLEDGEMENT_SECONDS
-            length = _LENGTH.unpack(_read_exact(connection, _LENGTH.size, deadline))[0]
-            request = json.loads(_read_exact(connection, length, deadline))
-            if not (isinstance(request, dict) and request.get('format') == fmt
-                    and isinstance(request.get('token'), str)
-                    and secrets.compare_digest(request['token'], self._token)
-                    and request.get('method') in self._methods
-                    and isinstance(request.get('params'), dict)):
-                response = {'format': fmt, 'result': None, 'error': 'relay_refused'}
-            else:
-                watcher = threading.Thread(target=self._watch_peer, args=(connection, cancel),
-                                           name=f'{self._name}-relay-peer', daemon=True)
-                watcher.start()
-                try:
-                    result = self._methods[request['method']](request['params'], cancel)
-                    response = {'format': fmt, 'result': result, 'error': None}
-                except (KeyError, TypeError, ValueError) as exc:
-                    response = {'format': fmt, 'result': None,
-                                'error': f'relay_bad_request: {type(exc).__name__}'}
-            connection.settimeout(ACKNOWLEDGEMENT_SECONDS)
-            connection.sendall(_encode(response))
+            while True:
+                request = self._next_request(connection, deadline)
+                if request is None:
+                    break
+                keep = False
+                if not (isinstance(request, dict) and request.get('format') == fmt
+                        and isinstance(request.get('token'), str)
+                        and secrets.compare_digest(request['token'], self._token)
+                        and request.get('method') in self._methods
+                        and isinstance(request.get('params'), dict)):
+                    response = {'format': fmt, 'result': None, 'error': 'relay_refused'}
+                else:
+                    keep = (request.get('keep') is True
+                            and request['method'] in self._session_methods)
+                    if not keep:
+                        watcher = threading.Thread(target=self._watch_peer,
+                                                   args=(connection, cancel),
+                                                   name=f'{self._name}-relay-peer', daemon=True)
+                        watcher.start()
+                    try:
+                        result = self._methods[request['method']](request['params'], cancel)
+                        response = {'format': fmt, 'result': result, 'error': None}
+                    except (KeyError, TypeError, ValueError) as exc:
+                        response = {'format': fmt, 'result': None,
+                                    'error': f'relay_bad_request: {type(exc).__name__}'}
+                    if keep:
+                        response['kept'] = True
+                connection.settimeout(ACKNOWLEDGEMENT_SECONDS)
+                connection.sendall(_encode(response))
+                if not keep:
+                    break
+                deadline = None
         except (OSError, ValueError, TypeError, struct.error) as exc:
             logger.info('[BridgeRelay] %s call ended without a response: %s',
                         self._name, type(exc).__name__)
@@ -218,8 +272,14 @@ class RelayServer:
                 pass
         with self._lock:
             calls = dict(self._calls)
+            idle = list(self._idle.values())
         for cancel in calls.values():
             cancel.set()
+        for connection in idle:
+            try:
+                connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
         deadline = None if timeout is None else time.monotonic() + timeout
         for thread in calls:
             thread.join(None if deadline is None else max(0.0, deadline - time.monotonic()))
@@ -237,16 +297,63 @@ class RelayServer:
 
 # ── Caller side (execution process) ─────────────────────────────────────
 
+class _Session:
+    """One scope's kept connections, one per relay record path."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._connections: dict[Path, tuple[threading.Lock, list]] = {}
+        self._closed = False
+
+    def slot(self, path: Path):
+        with self._lock:
+            if self._closed:
+                return None
+            return self._connections.setdefault(path, (threading.Lock(), [None]))
+
+    def close(self):
+        with self._lock:
+            self._closed = True
+            slots = list(self._connections.values())
+            self._connections.clear()
+        for lock, holder in slots:
+            with lock:
+                if holder[0] is not None:
+                    holder[0][1].close()
+                    holder[0] = None
+
+
+_SESSION: ContextVar[_Session | None] = ContextVar('loopback_relay_session', default=None)
+
+
+@contextmanager
+def relay_session():
+    """Keep one connection per relay for session verbs called in this context."""
+    session = _Session()
+    token = _SESSION.set(session)
+    try:
+        yield
+    finally:
+        _SESSION.reset(token)
+        session.close()
+
+
 class RelayClient:
-    """Forwards one bridge verb per connection to the published bridge owner."""
+    """Forwards bridge verbs to the published bridge owner.
+
+    One connection per call, except ``session_methods`` inside a
+    ``relay_session``, which share the scope's kept connection.
+    """
 
     def __init__(self, path: Path, *, format: str, name: str,
-                 cancel_observation_seconds: float, owner_label: str = 'API process'):
+                 cancel_observation_seconds: float, owner_label: str = 'API process',
+                 session_methods: frozenset = frozenset()):
         self._path = Path(path)
         self._format = format
         self._name = name
         self._owner_label = owner_label
         self._cancel_observation_seconds = cancel_observation_seconds
+        self._session_methods = frozenset(session_methods)
 
     def _endpoint(self) -> dict:
         try:
@@ -270,6 +377,14 @@ class RelayClient:
         Returns the owner's result, or the cancellation sentinel
         (:func:`is_cancelled`) once ``cancel_event`` is set.
         """
+        session = _SESSION.get() if method in self._session_methods else None
+        slot = session.slot(self._path) if session is not None else None
+        if slot is not None and slot[0].acquire(blocking=False):
+            # A concurrent reader of this scope takes its own one-shot connection.
+            try:
+                return self._session_call(slot[1], method, params)
+            finally:
+                slot[0].release()
         from tofu_db._loopback import create_connection
         endpoint = self._endpoint()
         deadline = (None if wait_seconds is None else
@@ -293,12 +408,58 @@ class RelayClient:
             raise RelayUnavailable(
                 f'The {self._name} owner ({self._owner_label}) is unreachable: {type(exc).__name__}'
             ) from exc
+        return self._result(response)
+
+    def _result(self, response):
         if (not isinstance(response, dict) or response.get('format') != self._format
                 or response.get('error') is not None):
             raise RelayUnavailable(
                 f'The {self._name} owner refused the relay call: '
                 f'{(response or {}).get("error") if isinstance(response, dict) else "malformed"}')
         return response.get('result')
+
+    def _exchange_kept(self, connection, token, method, params):
+        deadline = time.monotonic() + ACKNOWLEDGEMENT_SECONDS
+        connection.settimeout(ACKNOWLEDGEMENT_SECONDS)
+        connection.sendall(_encode({'format': self._format, 'token': token, 'method': method,
+                                    'params': params, 'keep': True}))
+        length = _LENGTH.unpack(_read_exact(connection, _LENGTH.size, deadline))[0]
+        return json.loads(_read_exact(connection, length, deadline))
+
+    def _session_call(self, holder: list, method: str, params: dict):
+        """A session verb over the scope's kept connection (``holder[0]``)."""
+        from tofu_db._loopback import create_connection
+        kept = holder[0]
+        if kept is not None:
+            try:
+                response = self._exchange_kept(kept[1], kept[0], method, params)
+                if isinstance(response, dict) and response.get('kept') is True:
+                    return self._result(response)
+            except (OSError, ValueError, TypeError, struct.error):
+                pass
+            # The owner restarted, rotated its token or closed the connection.
+            kept[1].close()
+            holder[0] = None
+        endpoint = self._endpoint()
+        try:
+            connection = create_connection((endpoint['host'], endpoint['port']),
+                                           ACKNOWLEDGEMENT_SECONDS)
+        except OSError as exc:
+            raise RelayUnavailable(
+                f'The {self._name} owner ({self._owner_label}) is unreachable: {type(exc).__name__}'
+            ) from exc
+        try:
+            response = self._exchange_kept(connection, endpoint['token'], method, params)
+        except (OSError, ValueError, TypeError, struct.error) as exc:
+            connection.close()
+            raise RelayUnavailable(
+                f'The {self._name} owner ({self._owner_label}) is unreachable: {type(exc).__name__}'
+            ) from exc
+        if isinstance(response, dict) and response.get('kept') is True:
+            holder[0] = (endpoint['token'], connection)
+        else:
+            connection.close()
+        return self._result(response)
 
 
 class OwnerSelection:

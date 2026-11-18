@@ -29,8 +29,10 @@ def test_artifact_owner_review_in_actual_application(page, owner, tmp_path, widt
         page.wait_for_function("typeof window.TofuModules?.resolveAction?.('loadConversation')==='function'")
         page.locator(f'.conv-item[data-conv-id="{task["convId"]}"]').wait_for(state='attached')
         page.evaluate("id=>window.TofuModules.resolveAction('loadConversation')(id)", task['convId'])
-        page.locator(f'[data-conversation-action="open-artifact"][data-operation="{artifacts[1]["id"]}"]').click()
+        # Published files open from the conversation's related-files list (0f637bf9f6).
+        page.locator('#convFilesBtn').click()
         panel = page.locator('#artifact-panel')
+        panel.locator(f'[data-art-lib-id="{artifacts[1]["id"]}"]').click()
         review = panel.locator('[data-art-review]')
         review.get_by_role('button', name='Acceptance review', exact=True).click()
         expect(review).to_contain_text('No acceptance criteria yet')

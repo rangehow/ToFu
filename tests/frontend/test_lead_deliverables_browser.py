@@ -191,15 +191,21 @@ def test_classic_task_board_expands_each_task_to_its_reports_and_files(page, mon
 
 
 def test_studio_desk_opens_the_delivery_itself(browser, live_server, monkeypatch, tmp_path):
-    from tests.conftest import _attach_js_error_capture, _dismiss_onboarding_modals
+    from urllib.parse import quote
+
+    from tests.conftest import _attach_js_error_capture, _dismiss_onboarding_modals, _server_conversation_ids
     from tests._jsdom import require_shipped_graph
     require_shipped_graph()
     context = browser.new_context(viewport={'width': 1440, 'height': 900})
     page = context.new_page()
     _attach_js_error_capture(page)
+    # This spec owns its context, so it also owns the page fixture's cleanup: a lead
+    # conversation left on the session server is the one later specs boot into.
+    ids_before = None
     try:
         page.goto(live_server, wait_until='domcontentloaded')
         _dismiss_onboarding_modals(page)
+        ids_before = _server_conversation_ids(page, live_server.rstrip('/'))
         _, leader, report_turn, _, _ = _seed(page, tmp_path, monkeypatch)
         OUTPUT.mkdir(parents=True, exist_ok=True)
         page.evaluate('() => { localStorage.setItem("tofu_ui_lang", "en"); localStorage.setItem("tofu_landing_workspace", "world"); }')
@@ -228,4 +234,8 @@ def test_studio_desk_opens_the_delivery_itself(browser, live_server, monkeypatch
         _settle(page)
         page.screenshot(path=str(OUTPUT / 'studio-source-turn.png'), animations='disabled')
     finally:
+        # Same mass-deletion guard as the page fixture: no exact baseline, no delete.
+        if ids_before is not None:
+            for conversation_id in (_server_conversation_ids(page, live_server.rstrip('/')) or set()) - ids_before:
+                context.request.delete(f'{live_server.rstrip("/")}/api/v4/conversations/{quote(conversation_id, safe="")}')
         context.close()

@@ -51,8 +51,13 @@ def test_published_presentation_card_download_and_preview(page, owner, tmp_path,
         page.wait_for_function("typeof window.TofuModules?.resolveAction?.('loadConversation')==='function'")
         page.locator(f'.conv-item[data-conv-id="{task["convId"]}"]').wait_for(state='attached')
         page.evaluate("id=>window.TofuModules.resolveAction('loadConversation')(id)", task['convId'])
-        page.locator(f'[data-conversation-action="open-artifact"][data-operation="{receipt["id"]}"]').click()
+        # Published files open from the conversation's one related-files list
+        # (topbar #convFilesBtn), not a per-turn chip (0f637bf9f6).
+        files = page.locator('#convFilesBtn')
+        expect(files.locator('[data-conv-files-count]')).to_have_text('1')
+        files.click()
         panel = page.locator('#artifact-panel')
+        panel.locator(f'[data-art-lib-id="{receipt["id"]}"]').click()
         card = panel.locator('.artifact-file-card')
         expect(card).to_be_visible()
         expect(card.locator('.artifact-file-card-name')).to_have_text('实习岗位_LLM_Agent.pptx')

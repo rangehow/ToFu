@@ -55,6 +55,10 @@ ATTRIBUTION = {
     'user_abort': PERSON,
     'server_shutdown': RESTART,
     'restart_recovery': RESTART,
+    # A project lead held its Worker (control_conversation action=hold): a pause like a
+    # restart, resumable from its checkpoint, never a person's Stop.
+    'lead_hold': (('interrupted', 'lead_hold', 'system_recovery'), 'project lead hold', 'aborted', None,
+                  ('aborted', None)),
     'worker_lease_lost': _fence('worker_lease_lost'),
     'turn_attempt_stale_fence': _fence('turn_attempt_stale_fence'),
     'conversation_attempt_stale_fence': _fence('conversation_attempt_stale_fence'),

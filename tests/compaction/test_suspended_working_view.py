@@ -44,8 +44,9 @@ class _Archives:
         return 0
 
     def list_compaction_archives(self, conversation, *, user_id, limit):
+        # Both storage authorities list a conversation's archives oldest first.
         return [{'id': archive, 'resultStatus': row['receipt'].get('status', 'legacy')}
-                for archive, row in reversed(self.rows.items())][:limit]
+                for archive, row in self.rows.items()][:limit]
 
     def get_compaction_archive(self, conversation, archive, *, user_id,
                                include_messages, include_post_messages, **kwargs):
@@ -230,6 +231,48 @@ def test_completion_retires_the_checkpoint_it_restored(archives):
     assert row['receipt']['status'] == 'retired'
 
 
+def _older_compactions(archives, count):
+    for _ in range(count):
+        archive = f'archive-{len(archives.rows) + 1}'
+        archives.rows[archive] = {'receipt': {'status': 'completed', 'summary': {
+            'accepted': True}}, 'post': ['older compaction']}
+
+
+def test_continue_restores_the_newest_checkpoint_behind_many_older_archives(archives):
+    """A long-lived lead holds more archives than restore's candidate window.
+
+    Measured 2026-11-18 08:33: the tofu lead held 14 archives and the knowledge
+    lead 19; the restart drain saved each Turn's checkpoint, but restore read
+    the OLDEST eight, reported ``no_witness`` and the first resumed Turn
+    force-compacted 1.09 M / 1.62 M tokens rebuilt from history.
+    """
+    from lib.tasks_pkg.compaction._resume_projection import (
+        preserve_suspended_working_view, restore_compacted_resume, resume_background_digest,
+        resume_execution_digest)
+    _older_compactions(archives, 12)
+    rounds = [_round(0), _round(1)]
+    task = _interrupted(_task(), rounds, None)
+    view = deepcopy(task['messages'])
+    preserve_suspended_working_view(task)
+    saved = task['_suspendedCompactionArchiveId']
+    config = deepcopy(task['config']) | {
+        '_resumeBackgroundDigest': resume_background_digest([]),
+        '_resumeExecutionDigest': resume_execution_digest('', '')}
+    resumed = _task()
+    resumed['_attemptId'] = 'continue-attempt'
+    assert restore_compacted_resume(resumed, config, rounds, fresh_messages=[]) == view
+    assert resumed['_compactionResumeOutcome'] == {'reason': 'restored', 'archiveId': saved}
+
+
+def test_a_new_checkpoint_retires_its_newest_predecessors(archives):
+    from lib.tasks_pkg.compaction._resume_projection import preserve_suspended_working_view
+    _older_compactions(archives, 12)
+    earlier = _live_checkpoint(archives, 'turn')
+    task = _interrupted(_task(), [_round(0)], None)
+    preserve_suspended_working_view(task)
+    assert archives.rows[earlier]['receipt']['status'] == 'retired'
+
+
 @pytest.mark.parametrize('backend', ['sqlite', 'tofudb'])
 def test_checkpoint_lifecycle_on_real_storage_survives_restart(monkeypatch, tmp_path, backend):
     from pathlib import Path
@@ -255,6 +298,14 @@ def test_checkpoint_lifecycle_on_real_storage_survives_restart(monkeypatch, tmp_
         monkeypatch.setattr(lib.agent_core.store, 'get_conversation_store', lambda: store)
         supervisor.client.command('conversation.create',
             {'conv_id': 'conversation', 'user_id': 1}, uuid.uuid4().hex)
+        # More completed archives than the restore candidate window: the real
+        # list order (oldest first) must still yield the newest checkpoint.
+        for index in range(10):
+            older = store.archive_transcript('conversation', [{'role': 'user', 'content': 'old'}],
+                                             user_id=1, trigger='force', task_id=f'old-{index}')
+            store.update_archive_summary(older, 'summary', 1, 1, user_id=1,
+                receipt={'status': 'completed', 'summary': {'accepted': True}},
+                post_messages=[{'role': 'user', 'content': 'old'}])
         rounds = [_round(i) for i in range(2)]
         task = _interrupted(_task(), rounds, None)
         view = deepcopy(task['messages'])

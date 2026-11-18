@@ -4,19 +4,27 @@
   const rows = {wire: [], dom: [], inputs: [], longTasks: [], opened: [], keydowns: [], eventTimings: [], wheels: [], scrolls: []};
   let conversation = '', turn = '', latest = -1, observer;
   const NativeEventSource = window.EventSource;
+  // The application carries every live conversation on one page-wide stream
+  // (tofu.conversation-sync.multiplexed-events/v1): `streams` names each
+  // member's conversation and every frame's data leads with its stream index.
   window.EventSource = class extends NativeEventSource {
     constructor(url, options) {
       super(url, options);
-      if (!String(url).includes('/conversations/')) return;
+      const parsed = new URL(String(url), location.href);
+      if (!parsed.pathname.endsWith('/api/v4/conversation-events')) return;
+      const streams = JSON.parse(parsed.searchParams.get('streams') || '[]')
+        .map(stream => stream.conversationId);
       this.addEventListener('open', () => rows.opened.push({url: String(url), at: performance.now()}));
       for (const kind of ['turn.upsert', 'turn.patch', 'turn.deleted', 'attempt.event',
         'conversation.activity', 'sync.heartbeat', 'sync.reset_required']) {
         this.addEventListener(kind, event => {
-          if (!conversation || !String(url).includes(`/conversations/${conversation}/`)) return;
-          const at = performance.now(), body = JSON.parse(event.data);
+          const framing = /^(\d+)\n/.exec(event.data);
+          if (!conversation || !framing || streams[Number(framing[1])] !== conversation) return;
+          const data = event.data.slice(framing[0].length);
+          const at = performance.now(), body = JSON.parse(data);
           rows.wire.push({at, sequence: body.syncSeq, kind,
-            bytes: new TextEncoder().encode(event.data).length,
-            markers: [...event.data.matchAll(/PIPELINE_(\d{5})/g)].map(match => Number(match[1]))});
+            bytes: new TextEncoder().encode(data).length,
+            markers: [...data.matchAll(/PIPELINE_(\d{5})/g)].map(match => Number(match[1]))});
         });
       }
     }

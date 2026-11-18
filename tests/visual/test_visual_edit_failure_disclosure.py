@@ -46,7 +46,7 @@ def _fixture(page, *, status='error'):
         }),
       });
       const node=document.querySelector('#tool');
-      window.repaint=()=>renderers.renderBlock(node,{kind:'tool',name:'edit_file',round}, {turn:{turnId:'t'}});
+      window.repaint=()=>renderers.renderBlock(node,{kind:'tool',name:'edit_file',round}, {turn:{turnId:'t',projectionRevision:7,source:{conversationId:'c'}}});
       window.completeRead=(extra={})=>requests.at(-1).resolve({...reference,toolContent:output,...extra});
       window.dispose=()=>{renderers.disposeBlock(node);node.remove();};
       repaint();

@@ -14,6 +14,7 @@ provider probe, a synchronous route that runs on the loop's default executor.
 """
 from __future__ import annotations
 
+import fcntl
 import http.client
 import json
 import os
@@ -25,6 +26,7 @@ import time
 import pytest
 
 from lib.llm_dispatch.discovery._discover import _DISCOVER_TIMEOUT
+from lib.server.server_shutdown import shutdown_hard_deadline_seconds
 from tests.chaos.instance import ChaosInstance
 
 pytestmark = [pytest.mark.api, pytest.mark.timeout(600)]
@@ -83,6 +85,51 @@ def test_api_host_exits_cleanly_without_joining_an_orphaned_request_job(tmp_path
             silent.close()
             for connection in accepted:
                 connection.close()
+            leaked = instance.leaked_processes()
+            instance.kill_leaked()
+    assert not leaked, leaked
+
+
+def test_api_host_exits_cleanly_while_its_log_listener_is_wedged(tmp_path):
+    """The 2026-11-18 07:16:34 restart: exit 1 after 60 s instead of 0.
+
+    The API host's queue listener had waited on an app.log lock since 06:08
+    (tests/server/test_logging_shared_rotation.py, the forked-writer leak); its
+    lifespan stopped every owner, then interpreter exit's ``logging.shutdown``
+    waited for that handler's lock until the hard deadline. A peer that never
+    releases the file lock stands for the leak here.
+    """
+    instance = ChaosInstance(tmp_path / 'instance', faultfs=False)
+    holder = None
+    try:
+        instance.start()
+        holder = (instance.root / 'logs' / 'app.log').open('a')
+        fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
+        for _ in range(3):  # Each request logs; the listener blocks on the first record.
+            client = http.client.HTTPConnection('127.0.0.1', instance.port, timeout=10)
+            try:
+                client.request('GET', '/api/ready')
+                client.getresponse().read()
+            finally:
+                client.close()
+        time.sleep(1)
+
+        api = instance.api
+        signalled_at = time.monotonic()
+        os.kill(api.pid, signal.SIGTERM)
+        api.wait(timeout=120)
+        elapsed = time.monotonic() - signalled_at
+        console = (instance.root / 'api-1.log').read_text(errors='replace')
+        assert api.returncode == 0, f'exit {api.returncode} after {elapsed:.1f}s:\n{console[-3000:]}'
+        assert elapsed < shutdown_hard_deadline_seconds(), elapsed
+        assert 'is wedged in the listener' in console
+        instance.api = None
+    finally:
+        try:
+            instance.stop()
+        finally:
+            if holder is not None:
+                holder.close()
             leaked = instance.leaked_processes()
             instance.kill_leaked()
     assert not leaked, leaked

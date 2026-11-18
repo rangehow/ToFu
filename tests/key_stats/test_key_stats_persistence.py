@@ -308,6 +308,35 @@ def test_cached_reader_observes_external_atomic_replacement(isolated_stats):
     assert row['enabled'] is False
 
 
+def test_store_missing_mid_replace_keeps_the_loaded_decisions(isolated_stats):
+    """On the FUSE data root an open racing ``os.replace`` can see ENOENT.
+
+    Readers never wait for a writer's flock (they hold ``_lock``, which a
+    commit takes inside it), so a store that vanishes after a loaded snapshot
+    is treated like an unreadable one: the last snapshot keeps deciding until
+    the store is published again.
+    """
+    ks, stats_path = isolated_stats
+    from lib.json_store import write_json_atomic
+    document = {
+        'day': ks._today(),
+        'stats': {PAIR: {'success': 7, 'failure': 0}},
+        'overrides': {PAIR: False},
+    }
+    write_json_atomic(stats_path, document)
+    assert ks.get_today_stats(PROVIDER, KEY)['enabled'] is False
+
+    stats_path.unlink()
+    row = ks.get_today_stats(PROVIDER, KEY)
+    assert row['enabled'] is False
+    assert row['success'] == 7
+    assert ks.is_key_enabled(PROVIDER, KEY) is False
+
+    document['stats'][PAIR]['success'] = 8
+    write_json_atomic(stats_path, document)
+    assert ks.get_today_stats(PROVIDER, KEY)['success'] == 8
+
+
 def test_malformed_store_is_preserved_and_memory_fallback_remains_usable(
         isolated_stats):
     ks, stats_path = isolated_stats

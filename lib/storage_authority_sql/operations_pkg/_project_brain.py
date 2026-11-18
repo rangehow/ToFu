@@ -30,7 +30,9 @@ NARRATIVE_TEXT_LIMIT_BYTES = 720
 EVENT_CHECKPOINT_THRESHOLD = 1200
 EVENT_CHECKPOINT_TAIL = 600
 
-_WORK_TERMINAL = frozenset({'completed', 'failed', 'cancelled'})
+# A restart drain ends work ``interrupted``: its resumed attempt is a new
+# physical task with its own work item, so the status is terminal.
+_WORK_TERMINAL = frozenset({'completed', 'failed', 'cancelled', 'interrupted'})
 _WORK_STATUSES = frozenset({'active', *_WORK_TERMINAL})
 _TRAILING_SEPARATORS = re.compile(r'[/\\]+$')
 
@@ -156,6 +158,14 @@ def _public_projection(projection: Mapping[str, Any]) -> dict[str, Any]:
         'watch': [dict(item) for item in projection.get('watch') or ()
                   if isinstance(item, Mapping)],
     }
+
+
+def _interruption_supersedes(current: Any, status: str) -> bool:
+    """Before ``interrupted`` existed a restart drain was recorded ``cancelled``.
+
+    Callers send ``interrupted`` only from the attempt's own restart evidence.
+    """
+    return current == 'cancelled' and status == 'interrupted'
 
 
 def _ordered_work_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -412,7 +422,12 @@ def _fold_event(projection: dict[str, Any], event: Mapping[str, Any]) -> None:
         if index >= 0:
             item = dict(projection['workItems'][index])
             status = str(payload.get('status') or '')
-            if item.get('status') == 'active' and status in _WORK_TERMINAL:
+            if _interruption_supersedes(item.get('status'), status):
+                # The cancelled row's work_result narrative already exists
+                # and renders the corrected status.
+                item['status'] = status
+                projection['workItems'][index] = item
+            elif item.get('status') == 'active' and status in _WORK_TERMINAL:
                 item['status'] = status
                 item['resultSummary'] = str(
                     payload.get('resultSummary') or '').strip()[:4000]
@@ -421,7 +436,7 @@ def _fold_event(projection: dict[str, Any], event: Mapping[str, Any]) -> None:
                 projection['workItems'] = _ordered_work_items(
                     list(projection['workItems']))
                 has_output = bool(item.get('changedPaths') or item.get('artifacts'))
-                if has_output or status in {'failed', 'cancelled'}:
+                if has_output or status in {'failed', 'cancelled', 'interrupted'}:
                     summary = item['resultSummary'] or (
                         f"{item.get('title') or work_id}: {status}")
                     _append_narrative(
@@ -734,7 +749,9 @@ def _project_brain_command(
         if status not in _WORK_TERMINAL:
             raise StorageError(
                 'database_protocol_error', 'Invalid Project work terminal status')
-        if projection['workItems'][index].get('status') in _WORK_TERMINAL:
+        current = projection['workItems'][index].get('status')
+        if (current in _WORK_TERMINAL
+                and not _interruption_supersedes(current, status)):
             return _command_result(projection, None)
         event_payload = {
             'workId': work_id,
@@ -1099,6 +1116,11 @@ def _project_brain_recovery_snapshot(
     continuation and a complete walk reads each projection exactly once.
     """
     cursor = payload.get('cursor')
+    include_cancelled = payload.get('include_cancelled')
+    if include_cancelled is None:
+        include_cancelled = False
+    if not isinstance(include_cancelled, bool):
+        raise StorageError('database_protocol_error', 'Invalid include_cancelled')
     where = ''
     params = ()
     if cursor is not None:
@@ -1127,13 +1149,23 @@ def _project_brain_recovery_snapshot(
             for item in projection.get('workItems') or ()
             if isinstance(item, Mapping) and item.get('status') == 'active'
         ]
-        if active:
-            projects.append({
+        cancelled = [
+            _public_work_item(item)
+            for item in projection.get('workItems') or ()
+            if isinstance(item, Mapping) and item.get('status') == 'cancelled'
+        ] if include_cancelled else []
+        if active or cancelled:
+            project = {
                 'ownerUserId': int(row['owner_user_id']),
                 'projectKey': str(row['project_key']),
                 'workItems': active,
-            })
+            }
+            if include_cancelled:
+                project['cancelledWorkItems'] = cancelled
+            projects.append(project)
     result = {'projects': projects, 'capped': capped}
+    if include_cancelled:
+        result['includesCancelled'] = True
     if capped:
         last = rows[-1]
         result['nextCursor'] = {

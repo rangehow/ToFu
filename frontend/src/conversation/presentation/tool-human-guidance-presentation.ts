@@ -56,6 +56,8 @@ const SKIPPED_PREVIEW_UNITS = 60;
 const RESPONSE_PREVIEW_UNITS = 80;
 const RESPONSE_UNITS = 32_768;
 const REPLY_QUOTE_UNITS = 4_096;
+/** The ask_human `withdraw.reason` schema bound (lib/tools/human_guidance.py). */
+const WITHDRAWN_REASON_UNITS = 2_000;
 
 export const TOOL_HUMAN_GUIDANCE_PRESENTATION_LIMITS = Object.freeze({
   identifierUnits: IDENTIFIER_UNITS,
@@ -422,19 +424,31 @@ export function createToolHumanGuidancePresentation(
     const replyAttributes = chatReply
       ? ` data-hg-reply="chat" data-hg-quote="${escapeHtmlText(replyQuote(round, responseType))}"`
       : '';
-    const badgeHtml = chatReply
-      ? translatedHtml('toolHumanGuidance.nonBlockingBadge')
-      : translatedHtml(expired && !lateAnswerable ? 'project.hgExpired' : 'project.hgWaitingReply');
-    const hintHtml = chatReply
-      ? `\n    <div class="hg-reply-hint">${translatedHtml('toolHumanGuidance.nonBlockingHint')}</div>`
+    /* A lead withdrew this question once the conversation settled it; the card
+     * stays answerable and an answer given anyway still wins. */
+    const withdrawnReason = boundedText(
+      field(field(round, 'guidanceWithdrawn'), 'reason'),
+      WITHDRAWN_REASON_UNITS,
+    );
+    const withdrawn = Boolean(withdrawnReason.value);
+    const badgeHtml = withdrawn
+      ? translatedHtml('toolHumanGuidance.withdrawnBadge')
+      : chatReply
+        ? translatedHtml('toolHumanGuidance.nonBlockingBadge')
+        : translatedHtml(expired && !lateAnswerable ? 'project.hgExpired' : 'project.hgWaitingReply');
+    const withdrawnHtml = withdrawn
+      ? `\n    <div class="hg-reply-hint hg-withdrawn-hint">${translatedHtml('toolHumanGuidance.withdrawnHint', { reason: withdrawnReason.value })}</div>`
       : '';
+    const hintHtml = (chatReply
+      ? `\n    <div class="hg-reply-hint">${translatedHtml('toolHumanGuidance.nonBlockingHint')}</div>`
+      : '') + withdrawnHtml;
     /* A rendered batch form already presents each question inside its own
      * section; the synthetic top-level summary would repeat every line. */
     const batchSectionsShown = responseType === 'batch' && inputHtml !== '';
     const questionBlock = batchSectionsShown
       ? ''
       : `<div class="hg-question">${questionHtml}${displayQuestion.truncated ? limitHtml(QUESTION_UNITS) : ''}</div>`;
-    return `<div class="hg-card${expired && !lateAnswerable ? ' hg-expired' : ''}" data-gid="${guidanceIdHtml}"${lateAttributes}${replyAttributes}>
+    return `<div class="hg-card${expired && !lateAnswerable ? ' hg-expired' : ''}${withdrawn ? ' hg-withdrawn' : ''}" data-gid="${guidanceIdHtml}"${lateAttributes}${replyAttributes}>
     <div class="hg-header">
       ${''}
       <span class="hg-title">${translatedHtml('project.hgPanelTitle')}</span>

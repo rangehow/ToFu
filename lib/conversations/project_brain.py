@@ -34,7 +34,7 @@ logger = get_logger(__name__)
 WORK_TRIGGER_TODO = 'todo_write'
 WORK_TRIGGER_FILE = 'file_write'
 WORK_TRIGGER_ISOLATED = 'isolated_workspace'
-WORK_TERMINAL_STATUSES = frozenset({'completed', 'failed', 'cancelled'})
+WORK_TERMINAL_STATUSES = frozenset({'completed', 'failed', 'cancelled', 'interrupted'})
 
 _TITLE_PATH = 100
 _TITLE_REQUEST = 200
@@ -623,7 +623,7 @@ def settle_work_item(
     result_summary: str = '',
 ) -> str:
     from lib.tasks_pkg.workspace_delivery import (
-        settle_task_workspaces, task_outcome, work_result_summary,
+        settle_task_workspaces, work_result_summary, workspace_outcome,
     )
     # This callback precedes commit-round admission; persist terminal intent
     # even for failed/cancelled work, never infer publication from work.finish.
@@ -632,18 +632,35 @@ def settle_work_item(
     if not work_id:
         return ''
     project_path = task.get('_projectWorkPath') or project_path
-    status = task_outcome(dict(task, status=task.get('status') or 'done'))
+    # A restart drain (server_shutdown) is 'interrupted', never a Stop: the
+    # resumed attempt is a new task with its own work item.
+    status = workspace_outcome(dict(task, status=task.get('status') or 'done'))
     summary = _compose_work_result_summary(
         task, result_summary=result_summary)
     delivery_summary = work_result_summary(task)
     if delivery_summary:
         summary = _bounded_utf8(summary, _MAX_NARRATIVE_BYTES - len(delivery_summary.encode('utf-8')) - 2)
         summary = (summary + '\n' + delivery_summary).strip()
-    _command(
-        'project_brain.work.finish', project_path,
-        user_id=_owner(task), command_id=f'project-work-finish:{work_id}',
-        work_id=work_id, status=status, result_summary=summary,
-    )
+    try:
+        _command(
+            'project_brain.work.finish', project_path,
+            user_id=_owner(task), command_id=f'project-work-finish:{work_id}',
+            work_id=work_id, status=status, result_summary=summary,
+        )
+    except Exception as exc:
+        if status != 'interrupted' or _OLD_ENGINE_STATUS_REFUSAL not in str(exc):
+            raise
+        # Engines deploy only once certified, possibly after this code: a
+        # store that predates 'interrupted' records the drain as cancelled
+        # rather than leaving the item active, and the boot repair
+        # (project_brain_startup) relabels it once the store accepts it.
+        status = 'cancelled'
+        _command(
+            'project_brain.work.finish', project_path,
+            user_id=_owner(task),
+            command_id=f'project-work-finish:{work_id}:pre-interrupted-store',
+            work_id=work_id, status=status, result_summary=summary,
+        )
     # End-of-task cleanup is deliberately in-memory only.  An advisory that
     # missed the next model round is discarded, never converted to history.
     task.pop('_projectOverlapAdvisories', None)
@@ -689,10 +706,13 @@ def _conversation_titles(
     return titles
 
 
+_OLD_ENGINE_STATUS_REFUSAL = 'Invalid Project work terminal status'
+
 _WORK_RESULT_VERBS = {
     'completed': '完成了',
     'failed': '未能完成',
     'cancelled': '已取消',
+    'interrupted': '已中断·重启后继续',
 }
 
 _NARRATIVE_KIND_LABELS = {

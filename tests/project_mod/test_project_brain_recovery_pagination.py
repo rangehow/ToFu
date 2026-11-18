@@ -33,6 +33,33 @@ def recovery_database():
         yield connection
 
 
+@pytest.fixture(autouse=True)
+def _no_history_repair(monkeypatch):
+    # These fakes specify active-work recovery only; the restart-cancel repair
+    # walk has its own specification (test_project_brain_restart_interruption).
+    monkeypatch.setattr(
+        'lib.conversations.project_brain_startup.repair_restart_cancelled_work_items',
+        lambda: 0)
+
+
+def test_repair_walk_lists_cancelled_work_only_on_request(recovery_database):
+    db = recovery_database
+    db.execute(
+        'INSERT INTO storage_project_brain_projects VALUES (?, ?, ?, ?)',
+        (1, '/history', json.dumps({'workItems': [
+            {'id': 'c', 'taskId': 'c', 'status': 'cancelled'},
+            {'id': 'i', 'taskId': 'i', 'status': 'interrupted'},
+            {'id': 'd', 'taskId': 'd', 'status': 'completed'}]}), 50))
+    assert _project_brain_recovery_snapshot(Session(db), {}) == {
+        'projects': [], 'capped': False}
+    page = _project_brain_recovery_snapshot(Session(db), {'include_cancelled': True})
+    assert page['includesCancelled'] is True
+    assert [item['taskId'] for item in page['projects'][0]['cancelledWorkItems']] == ['c']
+    assert page['projects'][0]['workItems'] == []
+    with pytest.raises(StorageError):
+        _project_brain_recovery_snapshot(Session(db), {'include_cancelled': 'yes'})
+
+
 @pytest.mark.parametrize('count', [1000, 1001, 2001])
 def test_pages_include_inactive_projects_and_continue_after_settlement(
         recovery_database, count):

@@ -80,6 +80,16 @@ _EXTRA_KEEPERS = {
     'tests/evaluations/test_owner_memory_replay.py',
     'tests/evaluations/test_owner_memory_scale.py',
     'tests/evaluations/test_owner_memory_triggers.py',
+    # Load host-only eval-matrix tools from this site's .eval-runs tree.
+    'tests/evaluations/test_tb_batch_report.py',
+    'tests/evaluations/test_tb_em3_watch.py',
+    'tests/evaluations/test_tb_evidence_scan.py',
+    'tests/evaluations/test_tb_key_stop_guard.py',
+    'tests/evaluations/test_tb_night_window_6672.py',
+    'tests/evaluations/test_tb_watch_relay_auth.py',
+    # A private conversation's recording; the private dx channel overlay.
+    'tests/e2e/test_e2e_turn16_replay_diag.py',
+    'tests/visual/test_visual_dx_settings_tab.py',
     'tests/deploy/test_migrate_host.py',
     'tests/deploy/test_verify_checkout_view.py',
     # Verifies the internal-only bundles/yourprovider/skills source, absent publicly.

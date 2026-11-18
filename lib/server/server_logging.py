@@ -391,10 +391,15 @@ class _BoundedQueueHandler(QueueHandler):
 class _BoundedQueueListener(QueueListener):
     """QueueListener whose shutdown is bounded even if a sink is wedged."""
 
+    _wedged = False
+
     def stop(self, timeout=5.0):
         thread = self._thread
         if thread is None:
             return True
+        if self._wedged:
+            # Exit handlers repeat the lifespan's stop; the sink stays stuck.
+            return False
         try:
             wait_s = max(0.0, float(timeout))
         except (TypeError, ValueError):
@@ -415,9 +420,42 @@ class _BoundedQueueListener(QueueListener):
                 return False
         thread.join(wait_s)
         if thread.is_alive():
+            self._wedged = True
+            self._exclude_wedged_sinks_from_exit_flush()
             return False
         self._thread = None
         return True
+
+    def _exclude_wedged_sinks_from_exit_flush(self):
+        """Keep interpreter exit from waiting on a sink the listener is stuck in.
+
+        ``logging.shutdown`` (an exit handler) takes every handler's lock
+        without a bound. The listener holds the lock of the sink it is blocked
+        in, so that acquire never returned: the 2026-11-18 07:16 API host,
+        whose listener waited on an app.log lock since 06:08, exited 1 at the
+        hard deadline instead of 0 (tests/chaos/test_api_host_drain.py).
+        Such a sink cannot be flushed or closed anyway.
+        """
+        sinks = [sink for handler in self.handlers
+                 for sink in (handler, *(getattr(handler, '_sinks', None) or ()))]
+        for handler in sinks:
+            if handler.lock is None or handler.lock.acquire(blocking=False):
+                if handler.lock is not None:
+                    handler.lock.release()
+                continue
+            # logging.shutdown's default handler list; removing the reference
+            # is what the module does when a handler is collected.
+            for reference in list(logging._handlerList):
+                if reference() is handler:
+                    logging._removeHandlerRef(reference)
+            try:
+                sys.stderr.write(
+                    '[Server] log sink %s is wedged in the listener; interpreter '
+                    'exit skips its flush\n' % (
+                        getattr(handler, 'baseFilename', None) or handler,))
+                sys.stderr.flush()
+            except (OSError, ValueError):
+                pass
 
 
 def _app_log_handler(log_dir, formatter):

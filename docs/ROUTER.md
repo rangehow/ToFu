@@ -975,8 +975,9 @@ point. Scope:
   conversation and binding revision (it never carries over to a replaced
   router), stored in the gate's own document (`lifecycle_approvals.json`,
   `delegations`). It covers `lifecycle_approval.DELEGATION_SCOPES`: `restart`
-  (`restart_server`), `conversation_control` (Continue, checkpoint resume
-  and Stop of an exact Attempt through `control_conversation(owner_delegation=…)`
+  (`restart_server`), `conversation_control` (Continue, checkpoint resume,
+  Stop and a Worker hold/resume of an exact Attempt through
+  `control_conversation(owner_delegation=…)`
   when the Router's request has no owner message of its own), `owner_settings`
   (reversible owner settings through the Settings UI's own backend, and channel
   enable/disable; R11), `project_lifecycle` (creating and configuring
@@ -1062,6 +1063,23 @@ point. Scope:
     Callers that need the owner's own words keep the old refusal: forwarding
     (`route_to_project` still forwards only owner text), standing instructions,
     request accounts and the Watchdog's review changes.
+    What woke the Turn does not matter: a project-message wake, a Watchdog
+    notice to a lead (both peer input), a relay, a keepalive or restart notice
+    (proactive) and a commitment wake hold the same authority over every Worker
+    the lead's binding dispatched, whichever request it belongs to (session
+    control is binding-scoped, docs/PROJECT_COORDINATION.md); the tool takes no
+    `owner_delegation` argument. The grant is read under the approval store's
+    writer lock (`lifecycle_approval._read_approvals`): on the data root's FUSE
+    mount an unlocked read racing a parallel act's atomic replace saw no file
+    and refused one of three parallel stops 'not granted' (2026-11-18 08:34:48,
+    `tests/router/test_lead_delegation.py`). A refusal names the gate's own
+    code when the grant exists but cannot be used (scope, store unreadable);
+    only a missing or revoked grant reads "is not granted".
+    Problem: one lead batch, one grant, three different verdicts. Decision: a
+    consistent locked read. Alternatives rejected: retrying the read on ENOENT
+    (a retry count is a knob, and a store that is truly absent is a real "never
+    granted"); a per-call `owner_delegation` argument (the lead already holds
+    the delegation; the caller was not at fault).
   - `restart_server` is in every lead's ceiling (`COORDINATOR_TOOLS`), through
     the same gate and Settings path, one restart at a time across every lead
     ("Restart single flight, blackout windows and readiness" below). Trigger `under_delegation: true`, alone,
@@ -1104,7 +1122,7 @@ point. Scope:
   other lead's next Turn. **Decision.** `control_conversation` with
   `owner_delegation` is the one audited, delegation-checked cross-project
   action of every lead (`owner_delegation.delegated_conversation_control`):
-  continue, checkpoint_resume, stop and set_model of an exact Attempt in any of
+  continue, checkpoint_resume, stop, hold, resume and set_model of an exact Attempt in any of
   the owner's projects. A Project Router uses it only under the full grant
   (scope `conversation_control`, requester `project_lead`), with any owner
   trigger or `under_delegation: true`. For a Project Router's action on another
@@ -1964,6 +1982,36 @@ answer when it happens, so no reader derives it from a lane.
   for a later reader to decide.
 - `_proactive_view` reads only its own lead's questions (`coordinator_id`), so
   the page never reads the Global Router's questions, which it omits.
+
+**A lead withdraws a settled question (2026-11-18).**
+
+*Problem.* A lead's question that the conversation later settled (the owner
+answered in chat in another lane, or a decision made it moot) stayed open:
+the owner kept seeing its card, and every continuation, digest and office
+listed it. Nothing but the owner could close it.
+
+*Decision.* `ask_human` takes `withdraw: {guidance_id, reason}`
+(`_handle_withdraw_question` → `withdraw_question` in
+`lib/router/proactive/questions.py`). The index stays the one store: only the
+record `(owner, the calling lead's conversation, guidance id)` is eligible, so
+a task that is not a bound lead, or another conversation's question, is
+refused; an answered question is refused (its answer stands and is recorded).
+The record gains `withdrawnAt`/`withdrawnReason`, which every listing skips,
+so continuation context, digest, `/router/projects` and the office drop it.
+The card's round gains `guidanceWithdrawn: {reason, at}` (a CAS
+`turn.projection.update` of the settled question Turn; the calling task's own
+running Turn marks its live round; another running Turn is left to its
+attempt). The browser shows the card as withdrawn and leaves it out of the
+attention list and the open-question focus. The withdrawal is not an answer:
+the card keeps its `answer_guidance` offer or chat reply, a late chat answer is
+still recorded by `answer_lane_questions`, and an owner answer completes the
+round and replaces the withdrawn presentation.
+
+*Alternatives considered.* Stamping `answeredAt`: it would claim an answer the
+owner never gave and stop recording a real one. A separate withdrawal store or
+tool: a second owner for the same question state (principle 4). Withdrawing by
+editing the settlement's resume offer: it would discard the owner's ability to
+answer anyway.
 
 On production, the first listing after the deploy reads each lead's lane once
 (about what one cold office pass read before); from then on no listing, office

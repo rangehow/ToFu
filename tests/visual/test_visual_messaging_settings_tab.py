@@ -32,15 +32,17 @@ def _open_app_in_chinese(page, live_server):
 def _open_messaging_tab(page):
     page.evaluate('() => window.openSettings()')
     page.locator('.settings-tab[data-tab="messaging"]').click()
-    # Every status line fills in from its own read.
-    page.wait_for_function("""() => [...document.querySelectorAll('#messagingPlatforms .msg-platform-status')]
-      .every((el) => el.textContent.trim())""")
+    # Every shown status line fills in from its own read; a section hidden for
+    # a missing overlay adapter reads nothing (af46df8e41).
+    page.wait_for_function("""() => document.querySelector('#msgPlatform_feishu .msg-platform-status')
+      ?.textContent.trim() && [...document.querySelectorAll('#messagingPlatforms > details:not([hidden])')]
+      .every((el) => el.querySelector('.msg-platform-status').textContent.trim())""")
     return page.locator('#settingsTab_messaging')
 
 
 def _sections(page):
     return page.eval_on_selector_all('#messagingPlatforms > details', """els => els.map((el) => ({
-      platform: el.dataset.platform, open: el.open,
+      platform: el.dataset.platform, open: el.open, hidden: el.hidden,
       name: el.querySelector('.msg-platform-name').textContent.trim(),
       status: el.querySelector('.msg-platform-status').textContent.trim()}))""")
 
@@ -61,8 +63,13 @@ def test_one_tab_lists_every_platform_collapsed_with_a_status_line(page, live_se
     assert [section['platform'] for section in sections] == PLATFORMS
     assert [section['name'] for section in sections] == NAMES
     assert not any(section['open'] for section in sections)
+    # 大象 is an overlay channel: shown only with its adapter (docs/PUBLIC_CORE.md).
+    from lib.channels.adapters import installed_channel_adapters
+    dx_installed = 'dx' in installed_channel_adapters()
+    assert [section['hidden'] for section in sections] == [p == 'dx' and not dx_installed for p in PLATFORMS]
     # Isolated storage holds no account of these platforms.
-    assert [section['status'] for section in sections[1:]] == ['未设置'] * 5, sections
+    shown = [section['status'] for section in sections[1:] if not section['hidden']]
+    assert shown == ['未设置'] * (5 if dx_installed else 4), sections
     for platform in PLATFORMS:
         assert not page.locator(f'#settingsTab_{platform}').is_visible()
     page.screenshot(path=str(Path(screenshot_dir) / 'messaging-settings-collapsed-desktop.png'))

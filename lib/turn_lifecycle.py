@@ -72,6 +72,7 @@ from lib.turn_verdict import (
     CONTENT_FILTER_CAUSES,
     CONTENT_FILTER_SETTLEMENT_KEY,
     DISPATCH_AUTHORITY_ABORT_REASONS,
+    PAUSE_SETTLEMENT_CAUSES,
     derive_turn_verdict,
     dispatch_authority_stop_detail,
     task_terminal_evidence,
@@ -1762,7 +1763,8 @@ def _settlement(task: dict[str, Any], raw_event: dict[str, Any],
     # blocked round) is not nothing: continuing from the input has the model
     # issue it again and repeat a side effect recovery could not confirm, so
     # that Turn keeps its held settlement.
-    restart_interrupted = (status == 'interrupted' and cause == 'server_restart'
+    # A lead's hold is the same kind of pause (PAUSE_SETTLEMENT_CAUSES).
+    restart_interrupted = (status == 'interrupted' and cause in PAUSE_SETTLEMENT_CAUSES
                            and checkpoint_prefix.blocked_position is None)
     if (resumable and not content_tail
             and (checkpoint_prefix.rounds or projection.get('thinking')
@@ -2290,6 +2292,14 @@ def _drain_queue_after_settlement(task: dict[str, Any], conversation_id: str,
             return
         from lib.tasks_pkg.manager import task_user_id
         owner_user_id = int(task_user_id(task))
+        reports = task.get('_coordinatorWorkerReports')
+        if status == 'completed' and reports:
+            # What this Coordinator attempt's polls told it: the pass below starts
+            # no wake for results it already saw while other Workers still run.
+            from lib.project_dispatch.continuation import observe_turn_end
+            with reports['lock']:
+                observe_turn_end(owner_user_id, conversation_id, task.get('_attemptId'),
+                                 dict(reports['reported']))
         from lib.message_queue import get_queue_depth
         has_queued_work = status != 'failed' and get_queue_depth(
             conversation_id, user_id=owner_user_id) > 0

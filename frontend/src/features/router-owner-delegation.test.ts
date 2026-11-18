@@ -7,7 +7,7 @@ type Scope = RouterOwnerDelegationState['grant']['scopes'][number];
 const revokedGrant = {
   version: 1 as const, owner: 1, state: 'revoked' as const, revision: 0,
   coverage: 'full' as RouterOwnerDelegationState['grant']['coverage'],
-  scopes: ['restart', 'conversation_control', 'scheduler'] as Scope[],
+  scopes: ['restart', 'conversation_control', 'scheduler', 'lead_authority'] as Scope[],
   grantee: null, grantedAt: null, grantedBy: null, assurance: null, revokedAt: null, revokedBy: null, updatedAt: null,
 };
 const router = { conversationId: 'coordinator-router', revision: 1, availability: 'available' as const };
@@ -34,7 +34,7 @@ const catalog = {
   'routerDelegation.lastUse': '最近一次：{operation}，{status}（{time}）— {reason}',
   'routerDelegation.failed': '未更改：{error}', 'routerDelegation.op.restart': '重启',
   'routerDelegation.op.conversation_control': '会话控制', 'routerDelegation.status.restarting': '正在重启',
-  'routerDelegation.op.scheduler': '定时任务',
+  'routerDelegation.op.scheduler': '定时任务', 'routerDelegation.op.lead_authority': '负责人调度 Worker',
   'routerDelegation.coversFull': '涵盖全部：{scopes}。以后新增的也包含。',
   'routerDelegation.coversOnly': '仅涵盖：{scopes}。',
 };
@@ -108,7 +108,7 @@ describe('Act for me (the owner delegation switch)', () => {
   it('shows which scopes the grant covers: every scope when full, only its own when enumerated', async () => {
     const view = await setup(on, async () => off);
     const scopes = view.entry.settings.querySelector('.router-owner-delegation-scopes') as HTMLElement;
-    await vi.waitFor(() => expect(scopes.textContent).toBe('涵盖全部：重启, 会话控制, 定时任务。以后新增的也包含。'));
+    await vi.waitFor(() => expect(scopes.textContent).toBe('涵盖全部：重启, 会话控制, 定时任务, 负责人调度 Worker。以后新增的也包含。'));
     expect(scopes.hidden).toBe(false);
     view.entry.destroy();
 

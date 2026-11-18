@@ -61,6 +61,16 @@ _SWARM_OBSERVER_EVENT_TYPES = frozenset({
 })
 
 
+def is_post_tool_state_evidence(event) -> bool:
+    """The post-tool Request Inspector state snapshot: evidence, never a receipt.
+
+    Its delivery heads its own storage run, and a ``ready`` round end whose
+    events end with it defers its barrier only through the receipts before it
+    (``persistence_wait.checkpoint_invocation``).
+    """
+    return event.get('type') == EventType.MESSAGES_SNAPSHOT and event.get('kind') == 'state'
+
+
 def _is_post_settlement_observer_event(task, event) -> bool:
     """Return whether ``event`` is a sanctioned settled-Turn observer.
 
@@ -916,7 +926,7 @@ def _append_event_ordered(task, event, *, lane=None):
                             'event': project_persistent_event(task['id'], frame.event)}
                             for frame in frames[:-1]]
                         _persist_before_push(sequence, preceding_task_events=preceding)
-                batch_port = {}
+                batch_port = {'starts_run': is_post_tool_state_evidence(event)}
                 if turn_batch:
                     from lib.agent_core.generated_task_event_delivery_contract import (
                         STRUCTURAL_BATCH_COMMAND,
@@ -941,7 +951,7 @@ def _append_event_ordered(task, event, *, lane=None):
                             raw_event=_wire, sequence=sequence,
                             projection_source=projection_source,
                             preceding_events=preceding or None, task_event=carrier)
-                    batch_port = dict(batch_scope=STRUCTURAL_BATCH_COMMAND,
+                    batch_port.update(batch_scope=STRUCTURAL_BATCH_COMMAND,
                                       persist_batch=partial(_persist_task_event_batch, task),
                                       batch_entry=batch_entry)
                 # submit checks the producer fence atomically with FIFO

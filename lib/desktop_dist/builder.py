@@ -105,11 +105,7 @@ def _run_safe(reason: str) -> None:
 
 
 def _set_state(**kw) -> None:
-    m = store.load_manifest()
-    b = m.get('build') if isinstance(m.get('build'), dict) else {}
-    b.update(kw)
-    m['build'] = b
-    store.save_manifest(m)
+    store.update_section('build', **kw)
 
 
 def _run(reason: str) -> None:

@@ -6903,6 +6903,11 @@ fn compile_project_brain(
                             .map_err(|_| SemanticExecutionError::InvalidPayload)
                     })
                     .transpose()?,
+                include_cancelled: match payload.get("include_cancelled") {
+                    None | Some(Value::Null) => false,
+                    Some(Value::Bool(value)) => *value,
+                    Some(_) => return Err(SemanticExecutionError::InvalidPayload),
+                },
                 slot: 0,
             }],
             result: TransactionIrResult::SlotOrLiteral {

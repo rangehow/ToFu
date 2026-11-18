@@ -135,7 +135,10 @@ def _append_rule(rows: list[dict], path: Path, root: Path, reads: dict | None = 
 
 
 def read_root_guidance(root: str, *, reads: dict | None = None) -> list[dict]:
-    root_path = Path(root).expanduser().resolve()
+    return _root_rules(Path(root).expanduser().resolve(), reads)
+
+
+def _root_rules(root_path: Path, reads: dict | None) -> list[dict]:
     rows = []
     for name in ROOT_RULE_FILES:
         _append_rule(rows, root_path / name, root_path, reads)
@@ -154,11 +157,20 @@ def read_scoped_guidance(root: str, target: str, *, reads: dict | None = None) -
     ``reads`` is one acquisition's memo of rule reads keyed by their exact
     arguments, so an acquisition naming several targets reads each file once.
     """
-    root_path = Path(root).expanduser().resolve()
-    selected = Path(target).expanduser().resolve()
+    return resolved_scoped_guidance(Path(root).expanduser().resolve(),
+                                    Path(target).expanduser().resolve(), reads=reads)
+
+
+def resolved_scoped_guidance(root_path: Path, selected: Path, *,
+                             reads: dict | None = None) -> list[dict]:
+    """``read_scoped_guidance`` for a root and target the caller already resolved.
+
+    A tool call's guidance check resolves both once (``_tool_targets``);
+    resolving a resolved path again only repeats its ``lstat`` walk.
+    """
     if not selected.is_relative_to(root_path):
         raise PermissionError('Instruction target is outside its declared root')
-    rows = read_root_guidance(str(root_path), reads=reads)
+    rows = _root_rules(root_path, reads)
     directory = selected if selected.is_dir() else selected.parent
     chain = [directory, *directory.parents]
     for ancestor in reversed(chain[:chain.index(root_path)] if root_path in chain else []):

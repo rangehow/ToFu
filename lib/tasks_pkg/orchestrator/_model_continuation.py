@@ -1,42 +1,36 @@
-"""A resumed Attempt continues on the model the interrupted Attempt ran on.
+"""A resumed Attempt runs on the conversation's accepted model.
 
 Entry: :func:`continue_resumed_model`, called once per ``run_task`` invocation
 between the accepted model-config resolution and tool assembly.
 
 An in-Attempt refusal/availability fallback lives only in the process: the
-interrupted Attempt's ``task['_fallback_model']`` dies with it, so a restart
-resume would silently return to the Turn's accepted ``config.model`` and pay a
-fresh prompt-cache write (and usually a second refusal) on a model the user
-already saw fail. The interrupted Attempt's paid ledger is durable
-(``checkpointApiRounds``), and each row names the logical model that produced
-that response. The highest-round paid response-authoring row therefore IS the
-model the interrupted Attempt was running on; a resume whose request did not
-deliberately switch models continues there.
+interrupted Attempt's ``task['_fallback_model']`` dies with it. A resume
+continues the WORK, it does not re-decide the model — and a ``content_filter``
+refusal is a per-request content verdict, never a demotion. So a resume returns
+to the accepted model (the owner/lead's conversation or session choice, already
+resolved by the admission boundary in ``project_dispatch/admission``), and a
+repeated refusal on the first resumed round falls back again for that round
+only. The exception is a deliberate model choice the owner or a lead made for
+this resume: the acceptance-time ``_resumeModelSwitchFrom`` marker
+(``RESUME_MODEL_SWITCH_FROM_CONFIG_KEY``) — a pause → set_model → continue.
 
-Decision rules (docs/RUN_CONTINUITY.md, "A resumed Turn continues on the model
-it was running on"):
+The paid ledger (``checkpointApiRounds``) still records every round that ran on
+the fallback, and :func:`fallback_rounds` derives the review-visible receipt
+from it (or from the in-process ledger for a live attempt), so a draft written
+partly on the fallback is never relabelled as primary-only work.
 
-* Highest integer ``round`` whose row is paid response-authoring:
-  ``responseAuthoring`` is not ``False`` and the tag is not a discarded/refused
-  charge (those attempts were billed but never adopted).
-* Only when that model differs from the accepted model, the resume did not
-  explicitly choose a different model, and the model is still admitted by the
-  same boundary the refusal fallback path uses
-  (``llm_fallback._retry._get_fallback_model``). Otherwise normal selection.
-* Explicit choice is the acceptance-time marker
-  ``_resumeModelSwitchFrom`` (``RESUME_MODEL_SWITCH_FROM_CONFIG_KEY``):
-  ``command_service.create_attempt`` stamps it when a continue /
-  checkpoint_resume / answer_guidance request's ``config.model`` differs from
-  the submitted Turn's rail snapshot model (pause → switch → continue).
-  The marker travels in the durable Attempt config, so request replay and
-  durable worker recovery honor the same choice.
-* Preset and thinking stay the round's own values, exactly as the in-Attempt
-  refusal fallback keeps them; only the model identity changes.
+Decision rules (docs/RUN_CONTINUITY.md, "A resumed Turn returns to the accepted
+model"):
 
-The model-dependent fields (``max_tokens``, the compaction context window,
-the executable catalog bound to the model) must resolve for the continued
-model BEFORE tools/context are assembled: the caller re-resolves the model
-config with the continued model and runs this before tool assembly.
+* No resume evidence (no ``checkpointApiRounds``) → accepted model.
+* Explicit switch marker → accepted model (the deliberate choice).
+* Anything else → accepted model. The old rule, "highest-round paid
+  response-authoring row elects the model", is retained as
+  :func:`last_authoring_model` only because the receipt needs that row's model;
+  it no longer decides the resume's model.
+
+Alternatives rejected and the measured cost of the previous behaviour are in
+docs/RUN_CONTINUITY.md.
 """
 
 from __future__ import annotations
@@ -82,61 +76,90 @@ def last_authoring_model(api_rounds: Any) -> str:
     return model
 
 
-def admitted_continuation_model(task: dict[str, Any], candidate: str) -> str:
-    """The candidate when the refusal-fallback admission boundary still allows it.
-
-    ``_get_fallback_model`` is the single admission check the fallback path
-    applies before switching models: it honors the per-task
-    ``disableModelFallback`` opt-out and the configured fallback model. A
-    candidate that is no longer admitted yields normal (accepted) selection.
-    """
-    from lib.tasks_pkg.llm_fallback import _retry
-
-    admitted = _retry._get_fallback_model(task)
-    return candidate if admitted and candidate == admitted else ''
-
-
 def continue_resumed_model(task: dict[str, Any], cfg: dict[str, Any],
                            accepted_model: str) -> str:
-    """Return the model this Attempt runs on, restamping fallback reporting.
+    """Return the model this Attempt runs on: the accepted model.
 
-    ``accepted_model`` is the already-resolved accepted ``mcfg['model']``.
-    Returns the accepted model unchanged for a non-resume, an explicit model
-    switch, no authoring evidence, or a no-longer-admitted candidate. On a
-    continuation, ``task['_fallback_model']`` / ``_fallback_from`` are stamped
-    exactly as the in-Attempt fallback stamps them so done/persist still
-    report ``fallbackModel`` / ``actualModel``.
+    Kept as the single decision point so the run loop's model-dependent
+    resolution stays in one place. A resume never elects a model from the paid
+    ledger; only the accepted selection (or an explicit switch, which IS the
+    accepted selection) decides. The function keeps its name and signature
+    because callers and native continuations name it.
     """
     if not cfg.get('checkpointApiRounds'):
         return accepted_model
     if str(cfg.get(RESUME_MODEL_SWITCH_FROM_CONFIG_KEY) or '').strip():
         return accepted_model
     candidate = last_authoring_model(cfg.get('checkpointApiRounds'))
-    if not candidate or candidate == accepted_model:
-        return accepted_model
-    continued = admitted_continuation_model(task, candidate)
-    if not continued:
+    if candidate and candidate != accepted_model:
+        # Evidence for the receipt and the log: the interrupted attempt ended
+        # on another model. The resume still runs on the accepted one.
         logger.info(
-            '[Task %s] Resume model continuation skipped: %s is not admitted '
-            'by the fallback selection boundary; using accepted model %s',
-            task_log_tag(task['id']), candidate, accepted_model)
-        return accepted_model
-    task['_fallback_model'] = continued
-    task['_fallback_from'] = accepted_model
-    task['_fallback_kind'] = 'resume_continuation'
-    task['_fallback_reason'] = (
-        'Resuming on the model the interrupted attempt was running on, '
-        'keeping its provider prompt cache.')
-    logger.info(
-        '[Task %s] conv=%s Resume model continuation: %s → %s '
-        '(last paid authoring round; preset/thinking unchanged)',
-        task_log_tag(task['id']), task.get('convId', ''),
-        accepted_model, continued)
-    return continued
+            '[Task %s] conv=%s Resume returns to the accepted model %s '
+            '(interrupted attempt ran on %s; a repeated refusal falls back '
+            'for that round only)',
+            task_log_tag(task['id']), task.get('convId', ''),
+            accepted_model, candidate)
+    return accepted_model
 
 
-__all__ = [
-    'admitted_continuation_model',
-    'continue_resumed_model',
-    'last_authoring_model',
-]
+def fallback_rounds(api_rounds: Any) -> dict[str, list[int]]:
+    """Round numbers per model, from the paid ledger (authoring rows only).
+
+    The source of truth for "which rounds ran on which model". Refused and
+    discarded charges are not answers, so they do not count as a model's
+    rounds; the round numbers keep the attempt's own numbering across resumes.
+    """
+    by_model: dict[str, list[int]] = {}
+    if not isinstance(api_rounds, (list, tuple)):
+        return by_model
+    for row in api_rounds:
+        if not isinstance(row, dict) or row.get('responseAuthoring') is False:
+            continue
+        round_id = row.get('round')
+        if type(round_id) is not int:
+            continue
+        tag = str(row.get('tag') or '').upper()
+        if 'REFUSED' in tag or 'DISCARDED' in tag:
+            continue
+        model = row.get('model')
+        if not isinstance(model, str) or not model.strip():
+            continue
+        by_model.setdefault(model.strip(), []).append(round_id)
+    return by_model
+
+
+def model_fallback_receipt(api_rounds: Any, accepted_model: str) -> dict[str, Any]:
+    """Review-visible receipt of the rounds that ran on a non-primary model.
+
+    ``rounds`` lists them; ``byModel`` is the full per-model breakdown so a
+    reviewer sees the primary's share too. Empty when every authoring round ran
+    on the accepted model (or the model is unknown).
+    """
+    by_model = fallback_rounds(api_rounds)
+    primary = str(accepted_model or '').strip()
+    if not primary or not by_model:
+        return {}
+    others = {model: rounds for model, rounds in by_model.items() if model != primary}
+    if not others:
+        return {}
+    rounds = sorted(r for values in others.values() for r in values)
+    total = sum(len(values) for values in by_model.values())
+    names = ', '.join(
+        f'{model} ({len(values)} round{"" if len(values) == 1 else "s"})'
+        for model, values in sorted(others.items()))
+    return {
+        'primaryModel': primary,
+        'byModel': {model: sorted(values) for model, values in by_model.items()},
+        'fallbackRounds': rounds,
+        'totalRounds': total,
+        'notice': (
+            f'{len(rounds)} of {total} model rounds ran on a fallback model '
+            f'instead of {primary}: {names}. A content_filter refusal is '
+            f'per-request, so later rounds retried the primary.'
+        ),
+    }
+
+
+__all__ = ['last_authoring_model', 'continue_resumed_model', 'fallback_rounds',
+           'model_fallback_receipt']

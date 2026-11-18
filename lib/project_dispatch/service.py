@@ -21,6 +21,7 @@ from lib.log import get_logger
 from lib.agent_core.model_context_revision import model_context_revision
 from lib.turn_initiation import INITIATOR_BRAIN, stamp_initiator
 from .admission import TrustedDispatch
+from .continuation import execution_status
 from .repository import CONTRACT, ProjectDispatchError, RestartContinuationRefused
 
 logger = get_logger(__name__)
@@ -430,11 +431,15 @@ class ProjectDispatchService:
         # live fence before its Turn exists.
         trusted = TrustedDispatch.admitted(binding, assignment)
         request = assignment['request']
+        coordinator = request.get('profile', {}).get('mode') == 'coordinator'
         content = request['brief']
+        if coordinator:
+            from .continuation import wake_brief
+            content = wake_brief(self.repository, assignment)
         if request.get('delegation'):
-            from .delegation import worker_input
-            content = worker_input(self.repository, request)
-        if request.get('profile', {}).get('mode') == 'coordinator':
+            from .delegation import worker_input_source
+            content += worker_input_source(self.repository, request)
+        if coordinator:
             from lib.conversations.coordinator_continuation import continuation_context
             content += continuation_context(self.repository, assignment)
         from .acceptance import worker_section
@@ -457,6 +462,9 @@ class ProjectDispatchService:
                 # The authorized row stays; the lane's own settlement births it.
                 logger.info('[ProjectDispatch] assignment=%s birth deferred in conversation=%s: %s',
                             assignment_id, request['recipientId'], error.code)
+                if error.code == 'lane_busy' and request.get('profile', {}).get('mode') == 'coordinator':
+                    from .continuation import hold_lane
+                    hold_lane(binding['owner'], request['recipientId'], error.turn)
                 return {**self._view(self.repository.validate_own(binding)), 'dispatch': 'deferred'}
             raise
         # The typed accepted binding is written before executor birth. A lost
@@ -593,8 +601,22 @@ class ProjectDispatchService:
                     projection = turn.get('projection') or {}
                     result = deepcopy({name: projection[name] for name in COORDINATOR_RESULT_FIELDS
                                        if name in projection} if coordinator else projection)
+                    if coordinator:
+                        # Review receipt: name the rounds that ran on a
+                        # non-primary model so a partly-fallback draft is
+                        # visible without opening the transcript. Derived
+                        # from the Turn's own paid ledger (apiRounds), which
+                        # also covers in-attempt and resume fallbacks.
+                        from lib.tasks_pkg.orchestrator._model_continuation import (
+                            model_fallback_receipt)
+                        accepted = (projection.get('fallbackFrom')
+                                    or request.get('model') or projection.get('model') or '')
+                        receipt = model_fallback_receipt(
+                            projection.get('apiRounds'), accepted)
+                        if receipt:
+                            result['modelFallback'] = receipt
                 execution = {'turnId': association['turnId'], 'attemptId': association['attemptId'],
-                    'taskId': attempt.get('taskId') or '', 'status': attempt.get('status') or 'unknown',
+                    'taskId': attempt.get('taskId') or '', 'status': execution_status(attempt, turn),
                     'resultRevision': model_context_revision(turn),
                     'result': result}
         delivery = None

@@ -52,7 +52,7 @@ from copy import deepcopy
 from urllib.parse import urlparse
 
 from lib.config_dir import config_path
-from lib.json_store import read_json, write_json_atomic
+from lib.json_store import locked_path, read_json, write_json_atomic
 from lib.log import get_logger
 
 logger = get_logger(__name__)
@@ -633,7 +633,8 @@ def _save() -> None:
             'hosts': deepcopy(list(_states.values())),
         }
     try:
-        write_json_atomic(_STORE_PATH, payload, fsync=False, indent=None)
+        with locked_path(_STORE_PATH):
+            write_json_atomic(_STORE_PATH, payload, fsync=False, indent=None)
     except Exception as e:
         # Keep the generation dirty so a later report/probe retries.  The old
         # code cleared it before I/O, permanently forgetting the failure.

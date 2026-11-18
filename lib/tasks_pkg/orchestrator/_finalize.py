@@ -201,7 +201,7 @@ def _check_suspicious_completion(task, last_finish_reason, _loop_exit_reason,
 
 # ── Suspicious-completion INTERCEPTION (act, not just warn) ───────────────
 #
-# WHY this exists (2026-07-28 09:51–10:45 incident): the sankuai gateway
+# WHY this exists (2026-07-28 09:51–10:45 incident): the example-corp gateway
 # intermittently returned a 29-char canned greeting ("Hi! How can I help you
 # today?") with ``finish_reason=stop`` for every Opus 5 request — 68 times,
 # each carrying a real M-TraceId. Tasks that had just spent N rounds doing real
@@ -1053,14 +1053,14 @@ def _settle_post_loop_finish_reason(
                 'user_abort. Loop exit was "%s" model=%s.',
                 tid, _abort_reason, loop_exit_reason, model,
             )
-        elif stop_cause.initiator is AbortInitiator.SERVER_RESTART:
-            # A restart pause: the verdict reads it as resumable interrupted
-            # work. Nobody pressed Stop, so the log must not say so either.
+        elif stop_cause.initiator in (AbortInitiator.SERVER_RESTART, AbortInitiator.LEAD_HOLD):
+            # A restart or a lead's hold pauses: the verdict reads it as resumable
+            # interrupted work. Nobody pressed Stop, so the log must not say so either.
             last_finish_reason = 'aborted'
             logger.info(
-                '[%s] Server restart paused the turn (_abort_reason=%s); loop exit '
+                '[%s] %s paused the turn (_abort_reason=%s); loop exit '
                 'was "%s", original finish_reason "%s", model=%s.',
-                tid, _abort_reason, loop_exit_reason, pre_abort_finish, model)
+                tid, stop_cause.label, _abort_reason, loop_exit_reason, pre_abort_finish, model)
         else:
             last_finish_reason = 'aborted'
             if abort_detected_phase:

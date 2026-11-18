@@ -53,7 +53,8 @@ _INTERRUPTED = {'aborted': 'cancelled', 'cancelled': 'timeout', 'pending_input':
 # every other phase is settled. A Coordinator's own review closes a result
 # (``reviewed``), so it is never news to that Coordinator.
 _PENDING = frozenset({'running', 'delivering'})
-_NOT_NEWS = _PENDING | {'reviewed', 'cancelled'}
+# A Worker its lead holds is that lead's own act, like a cancel: never news.
+_NOT_NEWS = _PENDING | {'reviewed', 'cancelled', 'on_hold'}
 # Per Coordinator attempt: the settlement each Worker was last reported at and
 # the Workers seen pending, so each settlement is reported once and a Worker
 # the wait does not name still ends it when it settles.
@@ -61,7 +62,7 @@ _REPORTS_KEY = '_coordinatorWorkerReports'
 
 
 def _phase(row) -> str:
-    """Where a Worker is: running, needs_review, reviewed, delivering, delivered, held or ended.
+    """Where a Worker is: running, needs_review, reviewed, delivering, delivered, held, on_hold or ended.
 
     A completed execution needs review until its Coordinator reviews it; any
     other end is final. Once an accepted result's publication was requested,
@@ -70,6 +71,8 @@ def _phase(row) -> str:
     """
     if row['status'] == 'cancelled':
         return 'cancelled'  # Revoked by its Coordinator or owner: their own act, never news.
+    if row['status'] == 'held':
+        return 'on_hold'  # Its lead holds it (control_conversation action=hold) until resume.
     if row['status'] not in _TERMINAL:
         return 'running'
     if row['status'] != 'completed':
@@ -788,10 +791,13 @@ def _await_born(task, scope, ids, *, deadline, mode, interruption, repository, s
     running = [row['assignment_id'] for row in rows if _phase(row) == 'running']
     delivering = [row['assignment_id'] for row in rows if _phase(row) == 'delivering']
     reported = {row['assignment_id'] for row in fresh}
+    held = [row['assignment_id'] for row in rows if _phase(row) == 'on_hold']
     unchanged = [row['assignment_id'] for row in rows
                  if row['assignment_id'] in named and _phase(row) not in _PENDING
-                 and row['assignment_id'] not in reported]
+                 and row['assignment_id'] not in reported and row['assignment_id'] not in held]
     result = {'workers': settled, 'pending': {'running': running, 'delivering': delivering}}
+    if held:
+        result['held'] = held
     if unchanged:
         result['unchanged'] = unchanged
     status = ('timeout' if outcome == 'timeout' and not fresh
@@ -804,8 +810,11 @@ def _await_born(task, scope, ids, *, deadline, mode, interruption, repository, s
         # The round's end decides (``finish_after_idle_coordinator_wait``): the Turn
         # ends there only when every call of the round is such a wait.
         task.setdefault(IDLE_WAITS_KEY, []).append(time.time())
-    return {**result, 'wait': status, 'instruction': _wait_instruction(status, settled, running, delivering,
-                                                                       unchanged, named, yields=yields)}
+    instruction = _wait_instruction(status, settled, running, delivering, unchanged, named, yields=yields)
+    if held:
+        instruction += (' held are Workers you paused (control_conversation action=hold): they keep their '
+                        'grant and run again only when you call action=resume.')
+    return {**result, 'wait': status, 'instruction': instruction}
 
 
 # Per Coordinator task: the polls of the current round that timed out with nothing

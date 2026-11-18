@@ -1,0 +1,24 @@
+{
+  "dataset": "ICLR 2025 public decisions via HF parquet ulab-ai/ResearchArcade-openreview-papers + ulab-ai/ResearchArcade-openreview-paragraphs",
+  "judge_model": "gpt-5.5",
+  "prompt_digest": "331462ef2ec0b2f24b51a26c5409fd472c7088fa86b628b00b828b963dd40ea1",
+  "per_class_requested": 50,
+  "judged": 100,
+  "failed": 0,
+  "n_calibration": 48,
+  "n_heldout": 52,
+  "heldout_accepted": 23,
+  "threshold": 4,
+  "calibration_youden_j": 0.4391534391534392,
+  "calibration_auc": 0.7751322751322751,
+  "heldout_auc": 0.7488755622188905,
+  "heldout_auc_ci95": [
+    0.6214392803598201,
+    0.8695652173913043
+  ],
+  "heldout_accuracy": 0.6730769230769231,
+  "heldout_balanced_accuracy": 0.6664167916041979,
+  "heldout_true_positive_rate": 0.6086956521739131,
+  "heldout_true_negative_rate": 0.7241379310344828,
+  "created_at": "2026-11-18T01:38:56Z"
+}

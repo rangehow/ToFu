@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlencode
 
 from lib.config_dir import config_path
-from lib.json_store import read_json, write_json_atomic
+from lib.json_store import locked_path, read_json, write_json_atomic
 from lib.log import get_logger
 from lib.oauth.codex_version import codex_client_version
 
@@ -296,7 +296,9 @@ def _write_cache(rows: list[dict], etag: str, account_fingerprint: str) -> dict:
         'account_fingerprint': account_fingerprint,
         'models': rows,
     }
-    write_json_atomic(_cache_path(), cached, mode=0o600)
+    path = _cache_path()
+    with locked_path(path):
+        write_json_atomic(path, cached, mode=0o600)
     return cached
 
 

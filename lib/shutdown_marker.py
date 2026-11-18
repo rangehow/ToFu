@@ -37,7 +37,7 @@ import socket
 import time
 from typing import Any
 
-from lib.json_store import read_json, update_json_atomic, write_json_atomic
+from lib.json_store import locked_path, read_json, update_json_atomic, write_json_atomic
 from lib.log import audit_log, get_logger
 from lib.runtime.runtime_paths import data_root
 
@@ -155,13 +155,14 @@ def arm(pid: int | None = None) -> None:
     """
     pid = pid if pid is not None else os.getpid()
     try:
-        write_json_atomic(marker_path(), {
-            'state': 'running',
-            'pid': pid,
-            'host': socket.gethostname(),
-            'boot_ts': time.time(),
-            'reason': 'boot',
-        }, fsync=True)
+        with locked_path(marker_path()):
+            write_json_atomic(marker_path(), {
+                'state': 'running',
+                'pid': pid,
+                'host': socket.gethostname(),
+                'boot_ts': time.time(),
+                'reason': 'boot',
+            }, fsync=True)
         logger.debug('[shutdown_marker] armed (pid=%d)', pid)
     except OSError as e:
         logger.warning('[shutdown_marker] arm failed (non-fatal): %s', e)

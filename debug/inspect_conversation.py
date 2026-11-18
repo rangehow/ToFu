@@ -2199,6 +2199,11 @@ def main(argv: list[str] | None = None) -> int:
             if key in collected)
     json.dump(payload, sys.stdout, ensure_ascii=False, default=str)
     sys.stdout.write('\n')
+    if code == 3:
+        print('partial evidence (exit 3); the JSON document carries the diagnostic_* fields:',
+              file=sys.stderr)
+        for line in collected.get('coverageNotes') or ():
+            print(f'  {line}', file=sys.stderr)
     return code
 
 
@@ -2382,6 +2387,14 @@ def _inspect(parser: argparse.ArgumentParser, args: argparse.Namespace,
         for line in _render_result_surfaces(document, tool_call_id=args.tool_call_id, full=args.full, max_results=args.tool_result_limit):
             print(line)
 
+    # Partial-evidence notes; --json discards the report, so main() repeats
+    # them on stderr, else exit 3 would name no reason or resume.
+    coverage_notes = collected.setdefault('coverageNotes', [])
+
+    def note(line):
+        coverage_notes.append(line.strip())
+        print(line)
+
     best_effort = document.get('diagnostic_snapshot') == 'best-effort'
     if 'diagnostic_unread_count' in document:
         if best_effort:
@@ -2389,25 +2402,25 @@ def _inspect(parser: argparse.ArgumentParser, args: argparse.Namespace,
             span = f'revisions {low}..{high}, not one snapshot'
         else:
             span = f'revision {document["diagnostic_revision"]}'
-        print(f'  coverage: {len(messages)} read, {document["diagnostic_unread_count"]} unread; '
+        note(f'  coverage: {len(messages)} read, {document["diagnostic_unread_count"]} unread; '
               f'{span}; anomalies cover read turns only')
     if best_effort:
-        print('  BEST-EFFORT: writes never paused long enough to verify every shown turn at one '
+        note('  BEST-EFFORT: writes never paused long enough to verify every shown turn at one '
               'revision. Each turn is internally consistent; one marked [as of revision N] was '
               f'last verified before revision {document["diagnostic_revision"]}, whose metadata '
               'is shown. Re-run when writes settle, or narrow --start-index / --max-turns to '
               'shorten verification.')
     if document.get('diagnostic_incomplete'):
-        print(f'  INCOMPLETE: {document["diagnostic_incomplete"]}')
+        note(f'  INCOMPLETE: {document["diagnostic_incomplete"]}')
         resume = document.get('diagnostic_resume_index')
         # A paging resume keeps the allowance that this run was given explicitly.
         total_mib = document.get('diagnostic_resume_total_mib', args.api_max_total_mib)
         if resume is not None and total_mib is not None and total_mib > API_TOTAL_MIB_MAX:
-            print(f'  resume: none; Turn {resume} alone needs more than the '
+            note(f'  resume: none; Turn {resume} alone needs more than the '
                   f'{API_TOTAL_MIB_MAX} MiB maximum --api-max-total-mib')
         elif resume is not None:
             allowance = '' if total_mib is None else f' --api-max-total-mib {total_mib}'
-            print(f'  resume: --start-index {resume} --max-turns 1{allowance} '
+            note(f'  resume: --start-index {resume} --max-turns 1{allowance} '
                   '(fresh revision; not a persisted snapshot)')
     live_turns = document.get('diagnostic_live_turns') or []
     for item in live_turns:
@@ -2416,7 +2429,7 @@ def _inspect(parser: argparse.ArgumentParser, args: argparse.Namespace,
             streamed = item['projectionRevision'] - item['structuralRevision']
             # Observed when the Turn was described; its text only grew while the
             # structural copy stayed current, so these are lower bounds.
-            print(f'  LIVE: turn #{live + 1} is still being written; shown as of its last '
+            note(f'  LIVE: turn #{live + 1} is still being written; shown as of its last '
                   f'structural write (projection revision {item["structuralRevision"]}), without '
                   f'the text streamed since (at least {item["textBytes"]} byte(s) in {streamed} '
                   'revision(s)). Re-read it once that text stream ends (its next tool call or '
@@ -2431,7 +2444,7 @@ def _inspect(parser: argparse.ArgumentParser, args: argparse.Namespace,
             when = 'when its writes pause'
         shown = ('shown as last fully read, marked [live, as of revision N]'
                  if live in (document.get('diagnostic_message_indices') or ()) else 'not shown')
-        print(f'  LIVE: turn #{live + 1} is still being written; {reason}; {shown}. '
+        note(f'  LIVE: turn #{live + 1} is still being written; {reason}; {shown}. '
               f'Re-read it {when}: --start-index {live} --max-turns 1')
 
     if args.context:

@@ -297,7 +297,8 @@ def _execute_invocation(task: dict[str, Any], *, policy: InvocationPolicy) -> No
     def run_in_scope():
         _STRICT_BILLING_STOP_ADMISSION.set(False)
         from lib.llm_sanitize.context_sections import text_memo_scope
-        with text_memo_scope():
+        from lib.runtime.loopback_relay import relay_session
+        with text_memo_scope(), relay_session():
             return _run_in_token_scope()
 
     def _run_in_token_scope():

@@ -34,6 +34,7 @@ const EXECUTION_STATUS: Readonly<Record<string, Labelled>> = Object.freeze({
   failed_to_start: ['toolCard.status.failedToStart', 'err'],
   cancelled: ['toolCard.status.cancelled', 'muted'],
   interrupted: ['toolCard.status.interrupted', 'warn'],
+  held: ['toolCard.status.held', 'warn'],
 });
 
 const DELIVERY_STATUS: Readonly<Record<string, Labelled>> = Object.freeze({
@@ -79,6 +80,8 @@ const CONTROL_ACTIONS: Readonly<Record<string, PlainKey>> = Object.freeze({
   checkpoint_resume: 'toolCard.control.checkpointResume',
   regenerate: 'toolCard.control.regenerate',
   stop: 'toolCard.control.stop',
+  hold: 'toolCard.control.hold',
+  resume: 'toolCard.control.resume',
   follow_up: 'toolCard.control.followUp',
   set_model: 'toolCard.control.setModel',
 });

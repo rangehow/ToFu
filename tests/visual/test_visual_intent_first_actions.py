@@ -116,11 +116,18 @@ def test_actions_have_one_summary_full_intent_and_independent_evidence(
 
     descriptions = frame.locator('.ptool-cmd-desc-inline')
     assert descriptions.count() == 4
-    assert descriptions.evaluate_all("""nodes=>nodes.every(n=>{
-      const s=getComputedStyle(n);return s.whiteSpace==='pre-wrap'
-        && s.textOverflow!=='ellipsis' && s.userSelect==='text'
-        && n.scrollWidth<=n.clientWidth+1 && n.scrollHeight<=n.clientHeight+1;
-    })""")
+    # docs/RENDER_CONTRACT.md (bfe091752c): a routine intent is clamped to one
+    # line on desktop and two on phones with the full text in its tooltip; a
+    # step needing attention shows its whole intent.
+    max_lines = 2 if width <= 600 else 1
+    assert descriptions.evaluate_all("""(nodes, maxLines)=>nodes.every(n=>{
+      const s=getComputedStyle(n);
+      const attention=n.closest('[data-action-state="attention"]')!==null;
+      const lines=Math.round(n.clientHeight/parseFloat(s.lineHeight));
+      return s.userSelect==='text' && n.scrollWidth<=n.clientWidth+1
+        && n.title.startsWith(n.textContent.trim())
+        && (attention ? n.scrollHeight<=n.clientHeight+1 : lines>=1 && lines<=maxLines);
+    })""", max_lines)
     browser = frame.locator('.ptool-cmd-js')
     # The shared command chrome already uses the icon and observed page title;
     # it intentionally omits the redundant Terminal/Browser text label.

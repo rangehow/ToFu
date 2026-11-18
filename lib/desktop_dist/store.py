@@ -47,7 +47,7 @@ import ntpath
 import os
 import time
 
-from lib.json_store import read_json, update_json_atomic, write_json_atomic
+from lib.json_store import locked_path, read_json, update_json_atomic, write_json_atomic
 from lib.log import get_logger
 from lib.runtime.runtime_paths import data_root
 
@@ -135,7 +135,21 @@ def load_manifest() -> dict:
 
 
 def save_manifest(m: dict) -> None:
-    write_json_atomic(_manifest_path(), m)
+    path = _manifest_path()
+    with locked_path(path):
+        write_json_atomic(path, m)
+
+
+def update_section(section: str, **fields) -> None:
+    """Merge ``fields`` into the manifest's ``section`` under the writers' lock."""
+    def _mut(m):
+        if not isinstance(m, dict):
+            m = {'artifacts': {}}
+        current = m.get(section)
+        m[section] = {**(current if isinstance(current, dict) else {}), **fields}
+        return m
+
+    update_json_atomic(_manifest_path(), _mut, default={'artifacts': {}})
 
 
 def artifacts() -> dict:

@@ -163,6 +163,10 @@ class _Delivery:
     batch_scope: object | None = None
     persist_batch: Callable[[list], None] | None = None
     batch_entry: Callable[[list[ProgressFrame] | None], object] | None = None
+    # Heads its own run: the receipts before it commit without it, so a
+    # barrier through them never waits for its bytes (persistence_wait,
+    # "post-tool state evidence").
+    starts_run: bool = False
     # Set once by the first attempt of a run; every retry persists this object.
     frozen_entry: object = _UNFROZEN
     # On a started head: how many items, itself included, its run froze.
@@ -323,7 +327,7 @@ class EventDeliveryCoordinator:
                projection_source=None, projection_bytes=0, projection_identity=None,
                progress_frame=None, persist_progress=None, progress_wire_bytes=0,
                progress_payload_bytes=0, accept_after_stop=False,
-               batch_scope=None, persist_batch=None, batch_entry=None):
+               batch_scope=None, persist_batch=None, batch_entry=None, starts_run=False):
         # The batch port is optional: ``batch_entry(progress_frames)`` freezes
         # this item's entry and ``persist_batch(entries)`` persists a FIFO run
         # of entries of one ``batch_scope`` in one storage call.
@@ -337,7 +341,7 @@ class EventDeliveryCoordinator:
                          persist_progress=persist_progress, progress_wire_bytes=progress_wire_bytes,
                          progress_payload_bytes=progress_payload_bytes,
                          batch_scope=batch_scope, persist_batch=persist_batch,
-                         batch_entry=batch_entry)
+                         batch_entry=batch_entry, starts_run=starts_run)
         owed = 0
         with self.condition, accepted_publication_context() as accepted_context:
             self._settle_abandoned_projections()
@@ -651,7 +655,8 @@ class EventDeliveryCoordinator:
             rows = head.event_count
             if head.persist_batch is not None:
                 for item in islice(lane.pending, 1, None):
-                    if item.persist_batch is None or item.batch_scope != head.batch_scope:
+                    if (item.persist_batch is None or item.batch_scope != head.batch_scope
+                            or item.starts_run):
                         break
                     if rows + item.event_count > self.structural_batch_limit:
                         break

@@ -16,7 +16,7 @@ from lib.project_mod import integration_radar as radar
 
 pytestmark = pytest.mark.unit
 
-_AUDIT_SYNTHETIC_REPO_PATHS = {'lib/shared.py', 'lib/other.py', 'lib/third.py', 'lib/new.py', 'lib/x.py'}
+_AUDIT_SYNTHETIC_REPO_PATHS = {'lib/shared.py', 'lib/other.py', 'lib/third.py', 'lib/new.py', 'lib/x.py', 'lib/once.py'}
 
 
 def git(cwd, *args) -> str:
@@ -364,3 +364,58 @@ def test_an_announced_overlap_is_not_requeried_on_later_writes(repo, monkeypatch
     assert 'unlanded changes to lib/other.py in' in advice[0]
     # A new task announces again.
     assert len(radar.note_writes(task('conv-b'), str(right_root), ['lib/shared.py'])) == 1
+
+
+def test_a_project_outside_git_is_looked_up_once_per_turn(tmp_path, repo, monkeypatch):
+    """take_notices runs at every round boundary; a project that is not a
+    checkout must not walk its parents for ``.git`` every round. A checkout
+    the Turn later writes in still joins through note_writes."""
+    plain = tmp_path / 'plain'
+    plain.mkdir()
+    lookups = []
+    original = radar.find_checkout
+    monkeypatch.setattr(radar, 'find_checkout', lambda path: lookups.append(path) or original(path))
+    turn = task('conv-once')
+    for _ in range(3):
+        assert radar.take_notices(turn, str(plain)) == []
+    assert lookups == [str(plain)]
+    write(repo, 'lib/once.py', '1\n')
+    radar.note_writes(turn, str(repo), ['lib/once.py'])
+    assert turn['_radarCommonDirs'] == [str(original(str(repo)).common_dir)]
+
+
+def _conv_a_record(repo: Path) -> Path:
+    root = worktree(repo, 'feature-a')
+    write(root, 'lib/shared.py', 'VALUE = 2\n')
+    radar.note_writes(task('conv-a'), str(root), ['lib/shared.py'])
+    (record,) = (repo / '.git' / radar.RADAR_DIR / 'writers').glob('conv-a--*.json')
+    return record
+
+
+def test_a_record_unreadable_during_its_replace_keeps_its_marker(repo, monkeypatch):
+    # On the shared FUSE volume an open racing os.replace can see ENOENT. The
+    # radar never waits for its files, so that lookup misses the record once,
+    # but it must not drop the marker: the overlap would stay unseen for good.
+    from lib.json_store import write_json_atomic
+    from tests.support.replace_window import ReplaceWindow
+    record = _conv_a_record(repo)
+    content = json.loads(record.read_text())
+    window = ReplaceWindow(monkeypatch, str(record))
+    window.run_writer(lambda: write_json_atomic(str(record), content))
+
+    window.read_during_gap(lambda: radar._records_naming(repo / '.git', ['lib/shared.py']))
+
+    assert record.name in os.listdir(radar._path_marker_dir(repo / '.git', 'lib/shared.py'))
+    named = radar._records_naming(repo / '.git', ['lib/shared.py'])
+    assert [item.writer for item in named] == ['conv-a']
+
+
+def test_a_retired_record_takes_its_markers_with_it(repo):
+    record = _conv_a_record(repo)
+    marker_dir = radar._path_marker_dir(repo / '.git', 'lib/shared.py')
+    (parsed,) = radar._records(repo / '.git')
+
+    radar._retire(parsed)
+
+    assert not record.exists()
+    assert os.listdir(marker_dir) == []

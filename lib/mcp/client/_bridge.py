@@ -1091,8 +1091,11 @@ class MCPBridge:
             handle = self._servers.get(name)
             live = handle.config if handle is not None else self._configs.get(name)
         stored, outcome = self._stored_server_config(name, refresh_browser=True)
+        # A renewal into a vault entry leaves ``env`` (the reference) unchanged.
+        renewed = getattr(outcome, 'reason', None) == 'renewed'
         if (stored is None or not stored.get('enabled', True)
-                or (stored.get('env') or {}) == ((live or {}).get('env') or {})):
+                or (not renewed and (stored.get('env') or {})
+                    == ((live or {}).get('env') or {}))):
             return None, outcome
         return stored, outcome
 
@@ -1311,11 +1314,14 @@ class MCPBridge:
             rlock = self._reconnect_locks.lock_for(name)
         if srv_cfg is None:
             raise ValueError(f'cannot reconnect unknown MCP server: {name}')
+        # A caller-resolved row is a renewed credential (``_credential_renewal``).
+        renewed = stored is not None
         if stored is None:
-            stored = self._stored_server_config(
-                name, refresh_browser=expired or failing)[0]
+            stored, outcome = self._stored_server_config(
+                name, refresh_browser=expired or failing)
+            renewed = getattr(outcome, 'reason', None) == 'renewed'
         if stored is not None:
-            if (stored.get('env') or {}) != (srv_cfg.get('env') or {}):
+            if renewed or (stored.get('env') or {}) != (srv_cfg.get('env') or {}):
                 # A verdict about the replaced credential says nothing about
                 # the new one; the reconnect's own probe sets the next one.
                 with self._lock:

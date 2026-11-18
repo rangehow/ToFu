@@ -101,3 +101,14 @@ def test_comments_are_ignored(tmp_path):
     })
     rows = audit_citations(tmp_path, files)
     assert rows == []
+
+
+def test_macro_parameters_are_not_reference_keys(tmp_path):
+    # ICLR/COLM math_commands.tex: \newcommand{\figref}[1]{figure~\ref{#1}}
+    files = _tree(tmp_path, {
+        'math_commands.tex': '\\newcommand{\\figref}[1]{figure~\\ref{#1}}\n'
+                             '\\newcommand{\\twofigref}[2]{\\ref{#1} and \\ref{ #2 }}\n',
+        'main.tex': '\\input{math_commands}\nSee \\ref{fig:a}.\n'})
+    rows = audit_citations(tmp_path, files)
+    assert [row['message'] for row in rows if row['code'] == 'undefined_reference'] == [
+        "Reference 'fig:a' has no matching \\label"]

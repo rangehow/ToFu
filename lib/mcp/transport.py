@@ -12,7 +12,10 @@ transport existed) now have one home:
    (Amap: ``https://mcp.amap.com/mcp?key=<key>``). Neither ``headers`` nor
    ``url`` may hold the secret itself: both are *templates* holding
    ``${VAR}`` references, and the value comes from the server's existing
-   ``env`` block, which is the single redacted credential store.
+   ``env`` block, which is the single redacted credential store. An env
+   value may itself be a ``vault:<entry>`` reference
+   (``lib.mcp.stdio_environment``); it resolves against the credential
+   vault before the placeholder is filled.
 
 3. **Redaction.** One function decides what a config is allowed to show an
    API caller, so a new secret-bearing field can never be added to the
@@ -94,6 +97,12 @@ def _resolve_placeholders(raw: str, env: dict, *, server_name: str,
         if not str(val).strip():
             missing.append(var)
             return ''
+        from lib.mcp.stdio_environment import (
+            resolve_vault_env_references, vault_reference_entry)
+        if vault_reference_entry(val) is not None:
+            # Same ``vault:<entry>`` form and fail-closed error as stdio env;
+            # only placeholders this template uses are resolved.
+            val = resolve_vault_env_references({var: val})[var]
         return str(val)
     return _PLACEHOLDER_RE.sub(_sub, str(raw))
 

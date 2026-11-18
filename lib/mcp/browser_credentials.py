@@ -27,14 +27,18 @@ the value is changed by any other path.
 
 ``refresh_from_browser`` reads the bound cookies from the binding's device
 (else the owner's default device), saves changed values in one locked row
-transaction, and audits ``mcp_credential_refreshed`` by key name only. The MCP
+transaction, and audits ``mcp_credential_refreshed`` by key name only. An env
+value that is a ``vault:<entry>`` reference (``lib.mcp.stdio_environment``)
+is compared, fingerprinted and learned by the entry's value, and renewed by
+writing that entry inside the same transaction: the reference stays and no
+plaintext is written back to the config. The MCP
 bridge decides when to call it (``lib/mcp/client/_bridge.py``). Values never
 reach a model, a tool result or a log line.
 
 Entry points: ``credential_bindings``, ``learn_bindings``,
 ``refresh_from_browser``, ``failure_notice``.
 Dependencies: ``lib.mcp.registry`` (catalog), ``lib.mcp.config`` (row
-transactions), ``lib.browser.queue`` and ``lib.browser.dispatch`` (owner device
+transactions), ``lib.credentials_vault`` (vault-held values), ``lib.browser.queue`` and ``lib.browser.dispatch`` (owner device
 routing; relayed from the execution host), ``lib.browser.access`` (the owner's
 read-denied domains).
 """
@@ -91,6 +95,21 @@ class RefreshOutcome:
 def _env(row) -> dict[str, Any]:
     env = row.get('env') if isinstance(row, dict) else None
     return env if isinstance(env, dict) else {}
+
+
+def _credential_values(row) -> dict[str, Any]:
+    """``_env(row)`` with each ``vault:<entry>`` reference replaced by the
+    entry's value (None when unset): the credential the server receives."""
+    from lib.mcp.stdio_environment import vault_reference_entry
+    values = {}
+    for key, value in _env(row).items():
+        entry = vault_reference_entry(value)
+        if entry is None:
+            values[key] = value
+        else:
+            from lib.credentials_vault import get_entry
+            values[key] = get_entry(entry)
+    return values
 
 
 def _stored_entries(row) -> dict[str, dict]:
@@ -211,7 +230,7 @@ def credential_bindings(name: str, row) -> dict[str, dict]:
     A catalog declaration wins over a learned binding; a learned binding
     counts only while its fingerprint still matches the stored value.
     """
-    env = _env(row)
+    env = _credential_values(row)
     stored = _stored_entries(row)
     bindings = {}
     for key, entry in stored.items():
@@ -254,7 +273,7 @@ def _learning_candidates(name: str, row, skip: frozenset[str]) -> dict[str, str]
     bound = credential_bindings(name, row)
     non_secret = _non_secret_keys(name)
     candidates = {}
-    for key, value in _env(row).items():
+    for key, value in _credential_values(row).items():
         if (key in bound or key in non_secret or not isinstance(value, str)
                 or _fingerprint(value) in skip):
             continue
@@ -403,7 +422,7 @@ def learn_bindings(name: str, *, owner_user_id,
             break
     if learned:
         def _bind(current):
-            env, stored = _env(current), _stored_entries(current)
+            env, stored = _credential_values(current), _stored_entries(current)
             fresh = {key: entry for key, entry in learned.items()
                      if isinstance(env.get(key), str)
                      and _fingerprint(env[key]) == entry['fingerprint']}
@@ -469,22 +488,35 @@ def refresh_from_browser(name: str, *, owner_user_id) -> RefreshOutcome:
                  if isinstance(cookies, list) else None)
         if value is not None:
             fresh[key], read_from[key] = value, client_id
-    env, stored_before = _env(row), _stored_entries(row)
-    changed = sorted(key for key, value in fresh.items() if env.get(key) != value)
+    from lib.mcp.stdio_environment import vault_reference_entry
+    raw, values = _env(row), _credential_values(row)
+    stored_before = _stored_entries(row)
+    changed = sorted(key for key, value in fresh.items() if values.get(key) != value)
     if not changed:
         return RefreshOutcome(row, (), 'current' if fresh else 'no_session')
     learned = {key for key in changed
                if 'fingerprint' in stored_before.get(key, {})}
-    expected = {key: env.get(key) for key in changed}
+    expected = {key: (raw.get(key), values.get(key)) for key in changed}
     applied: list[str] = []
 
     def _renew(current):
         current_env, stored = _env(current), _stored_entries(current)
+        current_values = _credential_values(current)
         # A key edited since it was read keeps the newer edit.
-        keys = [key for key in changed if current_env.get(key) == expected[key]]
+        keys = [key for key in changed
+                if (current_env.get(key), current_values.get(key)) == expected[key]]
         if not keys:
             return None
-        current['env'] = {**current_env, **{key: fresh[key] for key in keys}}
+        plain = {}
+        for key in keys:
+            entry = vault_reference_entry(current_env.get(key))
+            if entry is None:
+                plain[key] = fresh[key]
+            else:
+                # The reference stays; the renewed value goes to its entry.
+                from lib.credentials_vault import set_entry
+                set_entry(entry, fresh[key])
+        current['env'] = {**current_env, **plain}
         for key in keys:
             entry = {**stored.get(key, {}), 'client_id': read_from[key]}
             if key in learned:

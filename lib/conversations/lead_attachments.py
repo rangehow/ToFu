@@ -84,13 +84,12 @@ WORKER_PREFIX = 'worker:'
 def lead_scope(task: dict) -> dict | None:
     """The coordinator scope of a lead's task (Global Router or Project Router), else None.
 
-    Workers, the Watchdog and ordinary conversations are not leads.
+    Workers, the Watchdog and ordinary conversations are not leads. A lead's
+    continuation Turn (a wake under its own dispatch grant) is still the lead:
+    ``coordinator_scope`` reads the grant's Coordinator scope, None for a Worker's.
     """
     from lib.router.watchdog.binding import is_watchdog_scope
     from lib.tasks_pkg.coordinator_policy import coordinator_scope
-    from lib.project_dispatch.admission import is_dispatch_task
-    if is_dispatch_task(task):
-        return None
     scope = coordinator_scope(task)
     return None if scope is None or is_watchdog_scope(scope) else scope
 

@@ -1231,12 +1231,16 @@ pub(crate) fn dispatch_one_request_inner_mode(
         )
         .into()
     } else {
-        let admission = if streamed {
-            session.admit_streamed(request, admitted_at_ms)
-        } else {
-            session.admit(request, admitted_at_ms)
+        // A replay re-admits the request as it arrived: a reassembled
+        // streamed payload exceeds the single-frame bound by construction.
+        let admit = |now: u64| {
+            if streamed {
+                session.admit_streamed(request, now)
+            } else {
+                session.admit(request, now)
+            }
         };
-        match admission {
+        match admit(admitted_at_ms) {
             Err(response) => response.into(),
             Ok(admitted) if admitted.operation.name == "conversation.search" => {
                 match stores.search_projection {
@@ -1390,7 +1394,7 @@ pub(crate) fn dispatch_one_request_inner_mode(
                                         "off-lock publication failed; the replay spills inline: {error}"));
                                 }
                                 spill_window = Some(window);
-                                admitted = match session.admit(request, now_unix_ms()) {
+                                admitted = match admit(now_unix_ms()) {
                                     Ok(admitted) => admitted,
                                     Err(response) => break response.into(),
                                 };
@@ -1494,7 +1498,7 @@ pub(crate) fn dispatch_one_request_inner_mode(
                         break attempt;
                     }
                     parks += 1;
-                    admitted = match session.admit(request, now_unix_ms()) {
+                    admitted = match admit(now_unix_ms()) {
                         Ok(admitted) => admitted,
                         Err(response) => break response.into(),
                     };

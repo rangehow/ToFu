@@ -4902,17 +4902,27 @@ import { renderPublishedFile, renderScriptWarning } from '../rich-response/artif
     fmtSvg:      '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>',
   };
 
-  function _formatIcon(fmt) {
-    if (fmt === "html") return ICON.fmtHtml;
-    if (fmt === "svg")  return ICON.fmtSvg;
-    return ICON.fmtMarkdown;  // markdown + unknown share doc icon
+  const _IMAGE_KINDS = new Set(["svg", "png", "jpg", "jpeg", "gif", "webp"]);
+
+  /** Display kind: the artifact format, or a published file's extension. */
+  function _formatKind(meta) {
+    const fmt = meta?.format || "doc";
+    if (fmt !== "file") return fmt;
+    const name = (typeof meta.source_ref?.path === "string" && meta.source_ref.path) || meta.title || "";
+    const ext = /\.([a-z0-9]{1,5})$/i.exec(name);
+    return ext ? ext[1].toLowerCase() : "file";
   }
 
-  function _formatLabel(fmt) {
-    if (fmt === "markdown") return "MD";
-    if (fmt === "html")     return "HTML";
-    if (fmt === "svg")      return "SVG";
-    return (fmt || "DOC").toUpperCase();
+  function _formatIcon(kind) {
+    if (kind === "html") return ICON.fmtHtml;
+    if (kind === "markdown" || kind === "md") return ICON.fmtMarkdown;
+    if (_IMAGE_KINDS.has(kind)) return ICON.fmtSvg;
+    return ICON.docOpen;
+  }
+
+  function _formatLabel(kind) {
+    if (kind === "markdown") return "MD";
+    return (kind || "DOC").toUpperCase();
   }
 
   // ── DOM helpers ─────────────────────────────────────────────────────
@@ -5232,8 +5242,9 @@ import { renderPublishedFile, renderScriptWarning } from '../rich-response/artif
     const titleStr = meta.title || ("artifact-" + (meta.id || "").slice(0, 8));
     if (titleEl) titleEl.textContent = titleStr;
     if (fmtEl) {
-      fmtEl.textContent = _formatLabel(meta.format);
-      fmtEl.dataset.format = meta.format || "";
+      const kind = _formatKind(meta);
+      fmtEl.textContent = _formatLabel(kind);
+      fmtEl.dataset.format = kind;
     }
     if (subEl) {
       const parts = [];
@@ -5618,20 +5629,20 @@ import { renderPublishedFile, renderScriptWarning } from '../rich-response/artif
     const rows = items.map(function (a) {
       const id = _esc(a.id || "");
       const title = _esc(a.title || ("artifact-" + (a.id || "").slice(0, 8)));
-      const fmtLabel = _formatLabel(a.format);
-      const fmtClass = "artifact-format-pill artifact-format-" + (a.format || "doc");
+      const kind = _formatKind(a);
+      const fmtLabel = _formatLabel(kind);
       const ts = a.created_at ? _relativeTime(a.created_at) : "";
       const sz = a.size_bytes ? _formatBytes(a.size_bytes) : "";
       const meta = [fmtLabel, sz, ts].filter(Boolean).map(_esc).join(" · ");
       const pinClass = a.pinned ? "is-pinned" : "";
       const pinIcon = a.pinned ? ICON.pinOn : ICON.pinOff;
       return (
-        '<button class="artifact-lib-row" data-art-lib-id="' + id + '" data-art-search="' + (title + " " + meta).toLowerCase().replace(/"/g, "&quot;") + '">' +
-          '<span class="artifact-lib-icon">' + _formatIcon(a.format) + '</span>' +
+        '<button class="artifact-lib-row" data-format="' + _esc(kind) + '" data-art-lib-id="' + id + '" data-art-search="' + (title + " " + meta).toLowerCase().replace(/"/g, "&quot;") + '">' +
+          '<span class="artifact-lib-icon">' + _formatIcon(kind) + '</span>' +
           '<span class="artifact-lib-main">' +
             '<span class="artifact-lib-title">' + title + '</span>' +
             '<span class="artifact-lib-meta">' +
-              '<span class="' + fmtClass + '">' + fmtLabel + '</span>' +
+              '<span class="artifact-format-pill" data-format="' + _esc(kind) + '">' + _esc(fmtLabel) + '</span>' +
               (sz ? '<span class="artifact-lib-dim">' + _esc(sz) + '</span>' : '') +
               (ts ? '<span class="artifact-lib-dim">' + _esc(ts) + '</span>' : '') +
             '</span>' +
@@ -19424,6 +19435,10 @@ function selectTheme(theme) {
   applyTheme(theme);
 }
 
+function _syncRangeOutput(input, outputId, suffix) {
+  const output = document.getElementById(outputId);
+  if (output) output.textContent = String(input && input.value || '') + String(suffix || '');
+}
 
 /* Cost dashboard aliases — moved to myday.js */
 
@@ -25596,6 +25611,7 @@ const runtimeActions = Object.freeze({
   _safeClipboardWrite,
   _swarmCopyAgentId,
   _swarmToggleClass,
+  _syncRangeOutput,
   _timerInstructionToggle,
   _timerPollToggle,
   _timerWatcherToggle,

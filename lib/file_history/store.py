@@ -254,25 +254,35 @@ def _atomic_write_compact_json(path: str, payload) -> None:
 def load_tracked(base_path: str) -> dict:
     """Return ``{rel_path: {latest_version, deleted, mtime, size}}``.
 
-    Empty dict when no store yet.  Caller must hold the project lock.
+    Empty dict when no store yet.  Caller must hold the project lock, which
+    excludes this process only: another process's ``save_tracked`` is
+    excluded by the index's own lock, under which ``read_json`` decides that
+    the index is missing (a FUSE open racing ``os.replace`` can see ENOENT).
     """
+    from lib.json_store import read_json
     p = tracked_path(base_path)
-    if not os.path.exists(p):
+    data = read_json(p, default={})
+    if not isinstance(data, dict):
+        logger.warning('[FileHistory] tracked.json malformed (not a dict) at %s — resetting', p)
         return {}
-    try:
-        with open(p, encoding='utf-8') as f:
-            data = json.load(f)
-        if not isinstance(data, dict):
-            logger.warning('[FileHistory] tracked.json malformed (not a dict) at %s — resetting', p)
-            return {}
-        return data
-    except Exception as e:
-        logger.warning('[FileHistory] tracked.json corrupt at %s (%s) — resetting', p, e)
-        return {}
+    return data
 
 
 def save_tracked(base_path: str, tracked: dict) -> None:
+    """Publish the index. Caller holds ``locked_path(tracked_path(base_path))``
+    across its read-modify-write (``tracked_index_lock``)."""
     _atomic_write_json(tracked_path(base_path), tracked)
+
+
+def tracked_index_lock(base_path: str):
+    """The cross-process lock of one read-modify-write of ``tracked.json``.
+
+    Journal writers of different files share no project-wide lock, so two
+    processes can stage backups at once; this lock also lets readers decide
+    that the index is missing (``load_tracked``).
+    """
+    from lib.json_store import locked_path
+    return locked_path(tracked_path(base_path))
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -365,9 +375,15 @@ def stage_backup(base_path: str, rel_path: str,
 
     Caller must hold the project lock.
     """
-    if explicit_content is not None:
-        return _stage_explicit(base_path, rel_path, explicit_content,
-                               task_id=task_id)
+    with tracked_index_lock(base_path):
+        if explicit_content is not None:
+            return _stage_explicit(base_path, rel_path, explicit_content,
+                                   task_id=task_id)
+        return _stage_from_disk(base_path, rel_path, task_id=task_id)
+
+
+def _stage_from_disk(base_path: str, rel_path: str, *,
+                     task_id: str | None) -> int | None:
     abs_p = os.path.join(os.path.abspath(base_path), rel_path)
     st = _stat_or_none(abs_p)
     tracked = load_tracked(base_path)

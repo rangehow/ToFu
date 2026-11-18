@@ -17,6 +17,7 @@ import stat as stat_mode
 import time
 from typing import Any
 
+from lib.json_store import JsonStoreReadError, lock_file_path, locked_path, read_json
 from lib.storage.errors import StorageError
 from lib.storage_authority_sql.durability import fsync_directory, write_json_durable
 from runtime_guards import pid_is_alive, resolve_resource_budget
@@ -25,6 +26,7 @@ from runtime_guards import pid_is_alive, resolve_resource_budget
 _ARTIFACT_PREFIX = 'storage-sqlite-'
 _ARTIFACT_SUFFIX = '.sqlite3'
 _JOB_SUFFIX = '.job.json'
+_JOB_LOCK_SUFFIX = Path(lock_file_path(_JOB_SUFFIX)).name
 _MIN_RESERVE_BYTES = 64 * 1024 * 1024
 _DEFAULT_RETENTION = 2
 _DEFAULT_TEMP_TTL_S = 60 * 60
@@ -440,8 +442,33 @@ def write_job_manifest(
     }
     if extra:
         payload.update(extra)
-    write_json_durable(manifest, payload)
+    # Under the manifest's lock, so the reclaimer can tell a manifest being
+    # replaced from a missing one (see _job_manifest_absent).
+    with locked_path(str(manifest)):
+        write_json_durable(manifest, payload)
     return manifest
+
+
+def retire_job_manifest(temporary: Path) -> None:
+    """Remove a finished job's manifest, then its lock file."""
+    manifest = job_manifest_path(temporary)
+    manifest.unlink(missing_ok=True)
+    Path(lock_file_path(str(manifest))).unlink(missing_ok=True)
+
+
+def _job_manifest_absent(manifest: Path) -> bool:
+    """Whether no job manifest exists, decided under the manifest's lock.
+
+    On the FUSE data root an open racing ``write_job_manifest``'s
+    ``os.replace`` can see ENOENT although a live job's manifest exists;
+    ``read_json`` re-reads under the writers' lock before answering absent.
+    An unreadable manifest is present.
+    """
+    absent = object()
+    try:
+        return read_json(str(manifest), default=absent, strict=True) is absent
+    except JsonStoreReadError:
+        return False
 
 
 def cleanup_job_artifacts(temporary: Path) -> None:
@@ -451,7 +478,7 @@ def cleanup_job_artifacts(temporary: Path) -> None:
     # they belong to the same unpublished job and must not linger.
     for suffix in ('-wal', '-shm'):
         temporary.with_name(temporary.name + suffix).unlink(missing_ok=True)
-    job_manifest_path(temporary).unlink(missing_ok=True)
+    retire_job_manifest(temporary)
 
 
 def _reclaim_stale_legacy_snapshot_artifacts(
@@ -602,11 +629,13 @@ def reclaim_stale_job_artifacts(backups: Path) -> int:
                 removed += 1
             except FileNotFoundError:
                 pass
+        Path(lock_file_path(str(manifest))).unlink(missing_ok=True)
 
     for temporary in backups.glob(f'.{_ARTIFACT_PREFIX}*.tmp-*'):
-        if temporary.name.endswith(_JOB_SUFFIX) or temporary in protected:
+        if (temporary.name.endswith((_JOB_SUFFIX, _JOB_LOCK_SUFFIX))
+                or temporary in protected):
             continue
-        if job_manifest_path(temporary).exists():
+        if not _job_manifest_absent(job_manifest_path(temporary)):
             continue
         try:
             if now - temporary.stat().st_mtime <= ttl_s:
@@ -667,6 +696,7 @@ __all__ = [
     'reclaim_stale_job_artifacts',
     'prune_retained_rollbacks',
     'resolve_rollback_artifact',
+    'retire_job_manifest',
     'retained_rollback_artifacts',
     'rollback_artifact_inventory',
     'rollback_retention_count',

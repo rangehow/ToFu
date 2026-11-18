@@ -8,6 +8,7 @@ application dependency graph or database cannot be imported.
 
 from __future__ import annotations
 
+import contextlib
 import errno as errno
 import http.client  # noqa: F401 - dependency availability check
 import json
@@ -172,24 +173,66 @@ def cgroup_oom_kill_count() -> int | None:
     return None
 
 
+@contextlib.contextmanager
+def _store_lock(path: Path, *, exclusive: bool):
+    """Hold ``<path>.lock``, the file lock ``lib.json_store`` writers and readers share.
+
+    A FUSE open racing ``os.replace`` can fail with ENOENT although the store
+    exists, so absence is decided only under this lock (docs/DEFENSIVE_PATTERNS.md,
+    "A missing store is decided under its writers' lock"). A reader creates
+    nothing: no lock file means no locked writer ever published ``path``.
+    An unopenable lock file or a filesystem without advisory locks degrades
+    to no lock, as in json_store.
+    """
+    import fcntl
+    flags = os.O_RDWR | os.O_CREAT if exclusive else os.O_RDWR
+    try:
+        descriptor = os.open(f'{path}.lock', flags, 0o644)
+    except OSError:
+        yield
+        return
+    try:
+        with contextlib.suppress(OSError):
+            fcntl.flock(descriptor, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+        yield
+    finally:
+        os.close(descriptor)
+
+
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f'{path.name}.{os.getpid()}.tmp')
-    with tmp.open('w', encoding='utf-8') as fh:
-        json.dump(value, fh, ensure_ascii=False, indent=2, sort_keys=True)
-        fh.write('\n')
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(tmp, path)
+    with _store_lock(path, exclusive=True):
+        with tmp.open('w', encoding='utf-8') as fh:
+            json.dump(value, fh, ensure_ascii=False, indent=2, sort_keys=True)
+            fh.write('\n')
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
 
 
-def _read_json(path: Path) -> dict[str, Any]:
+def _read_present_json(path: Path) -> dict[str, Any]:
+    """One read of ``path``; FileNotFoundError propagates."""
     try:
         with path.open(encoding='utf-8') as fh:
             value = json.load(fh)
         return value if isinstance(value, dict) else {}
+    except FileNotFoundError:
+        raise
     except (OSError, ValueError, TypeError):
         return {}
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    try:
+        return _read_present_json(path)
+    except FileNotFoundError:
+        pass
+    with _store_lock(path, exclusive=False):
+        try:
+            return _read_present_json(path)
+        except FileNotFoundError:
+            return {}
 
 
 MANAGER_STATE_FILE = 'server-manager-state.json'

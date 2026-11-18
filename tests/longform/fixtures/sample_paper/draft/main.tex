@@ -1,0 +1,79 @@
+\documentclass[11pt]{article}
+\usepackage[review]{acl}
+\usepackage{times}
+\usepackage{latexsym}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+
+\title{Half an ULP Decides: Which BF16 Updates Need Stochastic Rounding}
+\author{Anonymous}
+
+\begin{document}
+\maketitle
+\begin{abstract}
+Pure BF16 training without an FP32 master copy is believed to lose accuracy, and we think the cause might be rounding.
+We show that updates smaller than half a BF16 ulp round back to the old weight: 61.5\% of updates are stale by step 20000.
+A half-ulp test predicts stale updates with precision 0.98 and recall 0.96.
+Stochastically rounding only the 8.7\% of parameters that fail the test reaches validation loss 3.125, against 3.124 for stochastic rounding everywhere and 3.112 for FP32 master weights.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+Mixed-precision training keeps an FP32 master copy of every weight~\citep{micikevicius2018mixed}, which costs 12 bytes of optimizer state per parameter.
+Pure BF16 training removes that copy~\citep{kalamkar2019study}, but it seems to stall.
+We believe the reason is simple: an update below half a BF16 ulp of its weight rounds away.
+Section~\ref{sec:method} turns this into a test, and Section~\ref{sec:experiments} shows that stochastically rounding only the flagged parameters is enough.
+
+\section{Method}
+\label{sec:method}
+For weight $w$ and update $\Delta$, round-to-nearest leaves $w$ unchanged whenever $|\Delta| < \tfrac{1}{2}\,\mathrm{ulp}(w)$.
+We flag exactly these parameters and apply stochastic rounding~\citep{gupta2015deep} to them only, inside AdamW~\citep{loshchilov2019decoupled}.
+All other parameters keep round-to-nearest updates.
+
+\section{Experiments}
+\label{sec:experiments}
+All runs train GPT-2 small (124M parameters) on 10B tokens of OpenWebText with identical hyperparameters.
+Figure~\ref{fig:loss} shows that round-to-nearest updates stall while stochastically rounded updates track FP32 master weights.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figures/loss_curve.pdf}
+\caption{Validation loss during training. Stochastically rounding the BF16 update tracks FP32 master weights; round-to-nearest updates stall.}
+\label{fig:loss}
+\end{figure}
+
+\begin{table}[t]
+\centering
+\begin{tabular}{lc}
+\toprule
+Method & Val.\ loss \\
+\midrule
+FP32 master weights & 3.112 \\
+BF16 round-to-nearest & 3.205 \\
+SR everywhere & 3.124 \\
+SR on half-ulp flagged 8.7\% & 3.125 \\
+SR on a random 8.7\% & 3.171 \\
+\bottomrule
+\end{tabular}
+\caption{Validation loss after 10B tokens.}
+\label{tab:loss}
+\end{table}
+
+Table~\ref{tab:loss} shows that the half-ulp selection matches rounding everywhere with 0.087 of the random bits, while a random selection of the same size does not.
+Removing the master copy cuts optimizer state from 12 to 8 bytes per parameter, a 33.3\% saving.
+
+\section{Related Work}
+Stochastic rounding for low-precision training goes back to \citet{gupta2015deep}; \citet{zamirai2020revisiting} revisit BF16 training with it applied to every parameter.
+
+\section{Conclusion}
+A half-ulp test tells which BF16 updates need stochastic rounding, and rounding only those matches FP32 master weights.
+
+\section*{Limitations}
+We test GPT-2 small only.
+
+\bibliography{references}
+\end{document}

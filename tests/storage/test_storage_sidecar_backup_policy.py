@@ -862,3 +862,66 @@ def test_backup_verification_abort_releases_lock_slot_and_artifacts(
             (tmp_path / 'data' / 'backups').glob('storage-sqlite-*'))
     finally:
         backend.close()
+
+
+def _live_job_with_stale_temporary(backups: Path) -> tuple[Path, Path]:
+    temporary = backups / '.storage-sqlite-live.sqlite3.tmp-live'
+    temporary.write_bytes(b'partial')
+    manifest = backup_policy.write_job_manifest(
+        temporary, source=backups / 'tofu.db', state='verifying')
+    old = time.time() - 10
+    os.utime(temporary, (old, old))
+    return temporary, manifest
+
+
+def test_a_live_job_manifest_replaced_during_reclaim_protects_its_temporary(
+    tmp_path, monkeypatch,
+):
+    # On the FUSE data root an open racing os.replace sees ENOENT: the
+    # manifest looked absent and a live job's temporary copy was deleted.
+    from tests.support.replace_window import ReplaceWindow
+    backups = tmp_path / 'backups'
+    backups.mkdir()
+    monkeypatch.setenv('TOFU_STORAGE_SQLITE_BACKUP_TEMP_TTL_SECONDS', '1')
+    temporary, manifest = _live_job_with_stale_temporary(backups)
+    payload = json.loads(manifest.read_text(encoding='utf-8'))
+    window = ReplaceWindow(monkeypatch, str(manifest))
+    window.run_writer(lambda: durability.write_json_durable(manifest, payload))
+
+    removed = window.read_during_gap(
+        lambda: backup_policy.reclaim_stale_job_artifacts(backups))
+
+    assert removed == 0
+    assert temporary.exists() and manifest.exists()
+
+
+def test_a_job_manifest_is_published_under_its_lock(tmp_path, monkeypatch):
+    from tests.support.replace_window import ReplaceWindow
+    backups = tmp_path / 'backups'
+    backups.mkdir()
+    temporary, manifest = _live_job_with_stale_temporary(backups)
+    window = ReplaceWindow(monkeypatch, str(manifest))
+    window.run_writer(lambda: durability.write_json_durable(manifest, {'state': 'other'}))
+
+    window.read_during_gap(lambda: backup_policy.write_job_manifest(
+        temporary, source=backups / 'tofu.db', state='published'))
+
+    assert json.loads(manifest.read_text(encoding='utf-8'))['state'] == 'published'
+
+
+def test_job_cleanup_and_reclaim_leave_no_manifest_lock_behind(tmp_path, monkeypatch):
+    backups = tmp_path / 'backups'
+    backups.mkdir()
+    finished, _ = _live_job_with_stale_temporary(backups)
+    backup_policy.cleanup_job_artifacts(finished)
+    assert list(backups.iterdir()) == []
+
+    monkeypatch.setenv('TOFU_STORAGE_SQLITE_BACKUP_TEMP_TTL_SECONDS', '1')
+    dead, manifest = _live_job_with_stale_temporary(backups)
+    payload = {**json.loads(manifest.read_text(encoding='utf-8')), 'pid': 999_999_999}
+    backup_policy.write_job_manifest(dead, source=backups / 'tofu.db', state='copying',
+                                     extra={'pid': payload['pid']})
+    old = time.time() - 10
+    os.utime(manifest, (old, old))
+    backup_policy.reclaim_stale_job_artifacts(backups)
+    assert list(backups.iterdir()) == []

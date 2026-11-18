@@ -93,6 +93,49 @@ def test_a_non_lead_conversation_still_reports_to_its_lead(channel, lead):
     assert refused.value.code == 'forbidden' and 'your lead' in str(refused.value)
 
 
+def _dispatch_task(coordinator_scope, conversation):
+    """A task running under a project-dispatch grant: a Coordinator's continuation Turn (its grant
+    names the lead's binding) or a Worker's assignment (``coordinatorScope`` None)."""
+    from lib.identity import PrincipalContext
+    from lib.project_dispatch.admission import KEY, ROLE_KEY
+    binding = {'assignmentId': 'assignment-1', 'owner': OWNER}
+    principal = PrincipalContext.system(subject_id='project-dispatch:assignment-1', owner_user_id=OWNER,
+                                        scopes={'chat'})
+    return {'id': 'task-dispatch', 'convId': conversation, '_userId': OWNER, '_turnId': 'out-1',
+            'config': {'projectPath': PROJECT, KEY: binding}, '_principalContext': principal.to_payload(),
+            ROLE_KEY: {'binding': binding, 'coordinatorScope': coordinator_scope, 'mode': 'coordinator'}}
+
+
+@pytest.fixture
+def no_watchdog(monkeypatch):
+    monkeypatch.setattr('lib.router.watchdog.binding.is_watchdog_location', lambda owner, path: False)
+
+
+def test_a_coordinator_continuation_turn_is_still_the_lead(channel, no_watchdog, audits):
+    """Live 2026-11-18 10:31: a woken Coordinator (continuation Turn under its own dispatch grant)
+    was refused 'Only a project lead sends to channels'; the grant names the lead's binding."""
+    scope = {'user_id': OWNER, 'project_path': PROJECT, 'conversation_id': LEAD, 'binding_revision': 1}
+    result = tools.execute('channel_send', {'thread': COMMAND, 'text': 'Tap the Hope card now',
+                                            'idempotency_key': 'hope'}, _dispatch_task(scope, LEAD))
+    assert result['item']['state'] == 'queued' and result['item']['origin']['conversationId'] == LEAD
+    [(event, fields)] = audits
+    assert event == 'lead_channel_send' and fields['outcome'] == 'accepted'
+    with pytest.raises(ChannelError) as refused:
+        tools.execute('channel_send', {'thread': GROUP, 'text': 'hello team', 'idempotency_key': 'g'},
+                      _dispatch_task(scope, LEAD))
+    assert refused.value.code == 'owner_chat_only'
+
+
+def test_a_worker_under_a_dispatch_grant_is_refused(channel, no_watchdog, audits):
+    with pytest.raises(ChannelError) as refused:
+        tools.execute('channel_send', {'thread': COMMAND, 'text': 'x', 'idempotency_key': 'w'},
+                      _dispatch_task(None, 'worker-a'))
+    assert refused.value.code == 'forbidden' and 'your lead' in str(refused.value)
+    assert channel.active_outbox(ThreadKey.parse(COMMAND)) == []
+    [(event, fields)] = audits
+    assert fields['outcome'] == 'refused' and fields['code'] == 'forbidden'
+
+
 def test_a_lead_attaches_a_file_of_its_own_workers_checkout(channel, lead, monkeypatch, tmp_path):
     checkout = tmp_path / 'checkout'
     (checkout / 'out').mkdir(parents=True)

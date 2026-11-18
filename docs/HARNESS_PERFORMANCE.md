@@ -1302,7 +1302,8 @@ that another thread was waiting to run. What is left per round:
 
 The structural next step is fewer Python passes per round (request
 preparation is now the largest single owner), not more overlap: under the
-GIL, overlap only helps where both sides wait on I/O.
+GIL, overlap only helps where both sides wait on I/O. "Round floor IV" took
+that step.
 
 ### Alternatives considered
 
@@ -1318,6 +1319,121 @@ GIL, overlap only helps where both sides wait on I/O.
   built-in references need no scan at all.
 - **Retiring an untaken exchange's session**: simplest, but measured as a
   reconnect per Turn in the `noop` tail.
+
+The Python passes this floor named are taken up in "Round floor IV" below,
+which holds the current floor.
+
+## Round floor IV: fewer Python passes per round (2026-11-18)
+
+Owners: `lib/llm_sanitize/lineage.py` (`range_hash`), `lib/llm/request.py`
+(`AdmittedRequest.tool_names`, `wire_tool_names`), `lib/llm/_sse_core.py`
+(`_sent_tool_names`), `lib/tasks_pkg/wire_fingerprint.py`,
+`lib/tasks_pkg/cache_tracking/_hashing.py`, `lib/utils.py`
+(`md5_holding_gil`), `lib/tasks_pkg/round_reads.py`,
+`lib/conversations/repository.py` (`conversation_read_request`),
+`lib/conversations/project_messages.py` (`scope(reads=)`),
+`lib/project_mod/integration_radar.py` (`take_notices`).
+Artifacts: `output/harness_perf/round-floor-iv-20261118/` (`abab/` the
+comparison, `profiles/p0` before and `p1` after, `byte-identity/`,
+`chaos-drain/`).
+
+### Problem
+
+After "Round floor III" a `noop` round was 45.7 ms against codex's 38.3, bound
+by Python CPU under one interpreter lock: overlap no longer helps, only doing
+less per round does. A py-spy profile (`profiles/p0`, Turn thread) itemized
+work repeated every round over inputs that had not changed.
+
+### Changes (each removes a repeated pass; no knob)
+
+1. **Lineage range hashes are hashed once per Turn.** The canonical builder
+   (`MessageLineage`), every protocol emitter's mapping check
+   (`ProjectionLineage.emit`) and sealing's verification each re-hashed the
+   same source ranges of the same immutable prompt strings; the emitters'
+   SHA-256 alone was 1.5 % of the Turn thread. `range_hash` memoizes
+   `span_hash(text[start:end])` in the Turn's existing `str`-keyed text memo
+   (two-round lifetime), so the later stages look it up. The hashes stay
+   in-GIL (`sha256_holding_gil`): whole prompt sections exceed hashlib's GIL
+   release size.
+2. **The sealed body's digest and the round fingerprints keep the GIL.** The
+   lineage `wireBodyHash` (0.9 %) and the static-prefix / cache-tracking MD5s
+   (0.4 %) hashed whole bodies with plain hashlib, handing the GIL away per
+   call (`lib/utils.py`); they now use the GIL-held helpers (identical
+   digests, `tests/utils/test_gil_held_digest.py`).
+3. **Offered tool names are bound at sealing.** The stream's
+   hallucinated-tool check read `body['tools']` from the `AdmittedRequest`,
+   which decodes the tool schemas back out of the sealed payload every round
+   (0.8 %). Sealing now records `tool_names` from the wire it just encoded.
+4. **The inbox's conversation scope joins the round exchange.**
+   `project_messages.identity` read `conversation.get` synchronously on the
+   Turn thread every round (1.8 %). `round_reads` lists that request, and the
+   scope read takes the batched answer through `scope(reads=)` (0.1 % after).
+5. **The radar looks up its checkout once per Turn.** `take_notices` walked
+   the project's parents for `.git` every round when the project is not a
+   checkout (1.9 % of `stat`). The lookup result, a miss included, is kept
+   on the task; a checkout the Turn writes in still joins via `note_writes`.
+
+`prepare_request` fell from 12.2 % to 9.6 % of the Turn thread.
+
+Specs: `tests/context/test_context_lineage.py` (emission and sealing never
+re-hash a known range, all three faces; fails on the previous code),
+`tests/llm/test_admitted_request_snapshot.py` (tool names without decoding),
+`tests/tasks_pkg/test_round_reads_prefetch.py` (inbox scope from the
+exchange), `tests/project_mod/test_integration_radar.py` (one lookup per
+Turn).
+
+### Byte identity
+
+`benchmarks/harness_perf/byte_identity.py` replays every recorded request of
+the LLM replay corpus (25 requests) through `build_body` and
+`prepare_request` on the Chat, Anthropic and Responses faces as one Turn
+would (text-memo scope, settled-row holder, managed section and event
+injection so lineage is sealed) and writes per request the sealed payload's
+SHA-256, headers, lineage evidence, identities and tool names. The 75 lines
+are byte-identical between `2a2c17e24f` and this tree, and between the
+shared branch at merge time and the merged tree (`byte-identity/`).
+`tests/meta/test_byte_identity_measure.py` keeps it complete.
+
+### ABAB (`round_profile.py --no-spy`, 14 pairs, fresh roots)
+
+Arm A `2a2c17e24f` ("Round floor III" delivered), arm B `300c9c53b2`, the
+same pinned engine for both. Host load 49-89 except pair 8 (152 at its
+start). Median / p95 (n), ms:
+
+| metric | A | B | codex |
+|---|---|---|---|
+| `noop` steady round | 46.8 / 56.1 (798) | **45.8** / 57.4 (798) | 38.3 |
+| `run_command true` round | 57.5 / 91.1 (168) | **56.7** / 86.8 (168) | 187.9 |
+
+B was faster in 12/14 pairs on `noop` and 11/14 on `true`. Arm A measured
+46.8 here against 45.7 in "Round floor III": the same tree differs by about
+1 ms between days on this host, which is why only the paired difference
+(-1.0 ms `noop`, -0.8 ms `true`) is the result.
+
+### What remains (floor)
+
+`noop` is 45.8 ms on this run's host state, about 7.5 ms above codex; the
+reduction is 1.0 ms. In `profiles/p1` the Turn thread's largest owners are
+request preparation 9.6 % (Anthropic translation 1.9 %, the final recount
+1.3 %, settling new rows), provider send/headers 9 %, the pre-request
+barrier (the tool receipts' own commit, a durability contract), tool
+pipeline 7.6 %, the post-tool snapshot 6 %, and the dispatcher's
+`key_stats` freshness `stat` of two files per pick (2.3 %; the cross-process
+freshness contract of `lib/key_stats`, not a repeated pass). None of the
+remaining items is a repeated pass over unchanged input of the kind removed
+here; the next step is a cheaper per-round representation (translation and
+recount over settled rows only), not another memo.
+
+### Alternatives considered
+
+- **A per-request lineage hash cache** (the builder's `_hashes`): did not
+  reach the emitters or sealing, which run on other objects; the Turn's text
+  memo already spans them with a bounded lifetime.
+- **Caching the conversation scope per Turn**: a project rebind or archive
+  mid-Turn would apply late; the batched read keeps per-round freshness at no
+  extra round trip.
+- **Re-checking the checkout every N rounds**: a tuned interval (Design
+  principle 5); writes already register new checkouts.
 
 ## Alternatives considered
 

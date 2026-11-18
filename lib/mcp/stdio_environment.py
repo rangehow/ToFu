@@ -23,20 +23,26 @@ _VAULT_ENV_PREFIX = 'vault:'
 _VAULT_ENTRY_RE = re.compile(r'^[a-z0-9][a-z0-9_.-]{0,63}$')
 
 
+def vault_reference_entry(value) -> str | None:
+    """The vault entry a ``vault:<entry>`` env value names, else None."""
+    if not (isinstance(value, str) and value.startswith(_VAULT_ENV_PREFIX)):
+        return None
+    return value[len(_VAULT_ENV_PREFIX):].strip()
+
+
 def resolve_vault_env_references(overlay: dict) -> dict:
     """Resolve ``vault:<entry>`` env values against the credential vault.
 
     Only this explicit prefix is interpreted; every other value passes through
     byte-identically. Values never enter logs or diagnostics.
     """
-    references = {key: value for key, value in overlay.items()
-                  if isinstance(value, str) and value.startswith(_VAULT_ENV_PREFIX)}
+    references = {key: entry for key, value in overlay.items()
+                  if (entry := vault_reference_entry(value)) is not None}
     if not references:
         return overlay
     from lib.credentials_vault import get_entry
     resolved = dict(overlay)
-    for key, value in references.items():
-        entry = value[len(_VAULT_ENV_PREFIX):].strip()
+    for key, entry in references.items():
         if not _VAULT_ENTRY_RE.match(entry):
             raise ValueError(f'MCP env {key} names an invalid credential vault entry')
         secret = get_entry(entry)

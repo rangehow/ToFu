@@ -159,3 +159,33 @@ fn a_commit_past_the_carried_bound_publishes_its_blocks_without_the_writer() {
         assert_eq!(stored["value"], value, "parallel={allow_parallel}");
     }
 }
+
+/// 2026-11-18 10:39: a turn.event.record past the single-frame payload bound
+/// arrives as a reassembled streamed request; its commit defers its spill and
+/// the replay re-admitted it as a single-frame request, so the payload bound
+/// refused it as `invalid_request` and the conversation's event delivery
+/// failed on every attempt.
+#[test]
+fn a_streamed_commit_that_defers_its_spill_replays_as_the_streamed_request_it_is() {
+    let value = json!({"body": incompressible_text(crate::protocol::MAX_PAYLOAD_BYTES / 2 + 4_096)});
+    for allow_parallel in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut authority = AuthorityDatabase::initialize(directory.path()).unwrap();
+        authority.set_write_overlay_for_test(true);
+        let session = authenticator().authenticate(&hello()).unwrap();
+        let database = Mutex::new(authority);
+        let stores = StorageV2Stores::new(&database, None);
+        let command = retention_command("record.put",
+            json!({"namespace": "spill", "key": "streamed", "value": value}),
+            &format!("streamed-spill-{allow_parallel}"));
+        assert!(command.payload.len() > crate::protocol::MAX_PAYLOAD_BYTES, "the request must need a streamed upload");
+        let RequestDispatch::Responded(response) = dispatch_one_request_inner_mode(
+            &stores, &session, &command, true, 1_000, &mut || 1_000, &mut || true, allow_parallel).unwrap()
+            else { panic!("dispatch disconnected") };
+        assert_eq!(response.status, 0, "parallel={allow_parallel}: {:?} {:?}",
+            response.error_code, response.error_message);
+        let stored = dispatched(&mut database.lock().unwrap(), &session,
+            &request("record.get", 11, json!({"namespace": "spill", "key": "streamed"})), 1_000);
+        assert_eq!(stored["value"], value, "parallel={allow_parallel}");
+    }
+}

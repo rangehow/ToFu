@@ -140,3 +140,16 @@ class SanitizeTriggerCompletenessTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def test_a_file_whose_only_internal_token_is_a_step15_name_is_opened_and_renamed():
+    """A test asserting the provider id 'example-corp' shipped unrenamed while the
+    harness it tests shipped 'example-corp' (public CI, 2026-11-18)."""
+    from export import _opensource_sanitize_triggers
+    from export_pkg._sanitize import _STEP15_RENAMED, _sanitize_source_opensource
+    rx = re.compile('|'.join(_opensource_sanitize_triggers()))
+    for ident in _STEP15_RENAMED:
+        line = 'assert provider_id == "' + ident + '"\n'
+        assert rx.search(line), ident
+        assert ident not in _sanitize_source_opensource(line, 'tests/x/test_provider.py')
+

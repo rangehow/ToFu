@@ -25,51 +25,29 @@ tells a Worker in any project how to run it on its own paper directory.
 
 ## Steps
 
-1. Put `document_brief.json` in the paper directory:
-   ```json
-   {"type": "paper", "venue": "acl", "title": "...", "authors": "Anonymous",
-    "topic": "search phrase for closest 2025-2026 work",
-    "novelty_queries": ["optional extra search phrases"],
-    "audience": "...", "goal": "...", "voice": "confident, precise, no hedging",
-    "lang": "en", "page_limit": 8,
-    "writer_model": "gpt-6.1-sol", "judge_model": "gpt-5.5",
-    "project_lead": "who receives experiment requests",
-    "previous_pdf": "path/to/current_draft.pdf", "output_dir": "delivered"}
-   ```
-   `venue` is `acl` (ACL/EMNLP/NAACL/ARR style files) or `iclr` (newest
-   `iclrYYYY`); the official template is fetched fresh every run. The judge
-   must be a different model from the writer. The review gate is calibrated
-   for `judge_model: gpt-5.5` (see the authority doc); another judge runs
-   uncalibrated and says so.
-2. Put `dossier.json` beside it: every fact you allow the paper to state.
-   `facts[]`: `id`, `kind` (`contribution`, `claim`, `result`, `background`),
-   `text`, `status` (`sourced`, `confirmed` with `source.owner`, or
-   `unconfirmed` = never written), `source` (`{"path": "results/x.csv"}`, a
-   list of paths, `{"url": ...}` or `{"owner": "..."}`), and for claims
-   `evidence` (ids of result facts and/or figure labels). Every number in a
-   fact must appear in its local source files. `figures[]`: `label`
-   (`fig:...`), `file` (PDF preferred), `caption`, `supports`. `bib`: your
-   BibTeX file. Example: `tests/longform/fixtures/sample_paper/` in Tofu.
-3. Run:
-   ```sh
-   cd "$TOFU" && .venv/bin/python3 scripts/document_pipeline.py run <paper_dir>
-   ```
-   Exit 0: delivered to `<paper_dir>/<output_dir>/` (PDF, `source/`,
-   `manifest.json`, evidence/novelty/review/blind/render reports).
-   Exit 2: a stage gate refused; the stage and its errors are printed, and
-   every artifact so far is in `<paper_dir>/.pipeline/artifacts/`
-   (`NN-<stage>.json/.md`, raw model replies under `model-replies/`).
-4. Act on a refusal instead of rewording around it:
-   - `evidence`: answer `experiment_requests.json` (send it to the project
-     lead), add the results to the dossier, rerun.
-   - `novelty`: the delta against a named 2025-2026 paper is unclear; sharpen
-     the contribution or add the evidence that separates it.
-   - `render`: overfull boxes, undefined references or page overrun remained
-     after one automatic repair; fix the cited section.
-   - `blind`: the judge preferred the previous draft; read `10-blind.md`.
-   Rerun the same command: unchanged stages resume without model calls.
-5. `scripts/document_pipeline.py rules paper` lists every rule (the owner's
-   standing corrections) and where it is enforced.
+Follow "Runbook for a project lead" in `docs/DOCUMENT_PIPELINE.md` (the
+authority for brief fields, exit codes and what to do on each refusal). In
+short:
+
+1. `scripts/document_pipeline.py venues` lists the registered venues (ACL,
+   ICLR, COLM, ICML, NeurIPS, AAAI, CVPR) with their page limits and
+   anonymity rules; `check-venue <venue>` fetches the newest official kit and
+   compiles its sample.
+2. Write `document_brief.json` in the paper directory. For a paper that
+   already exists as LaTeX, add `"draft": {"main": "main.tex"}` (or pass
+   `--draft main.tex`): the pipeline audits and revises that draft by
+   targeted edits, keeps your figures, never invents results and A/Bs
+   against it. Without a draft it writes from `dossier.json`
+   (example: `tests/longform/fixtures/sample_paper/`).
+3. Name the writer explicitly (`writer_model`, or `--writer-model`); keep
+   `judge_model: gpt-5.5` (the calibrated reviewer). Claude writers refuse
+   frontier-LLM research content (`content_filter`); pick another family.
+4. Run `cd "$TOFU" && .venv/bin/python3 scripts/document_pipeline.py run
+   <paper_dir> [--draft main.tex]`. Exit 0 delivered (PDF, `source/`,
+   `revision.patch` for drafts, reports, `models.json`); 2 a gate refused
+   (act on it, rerun: unchanged stages resume); 1 could not proceed.
+5. `status <paper_dir>/.pipeline` lists stage artifacts and the model behind
+   every call; `rules paper` lists every rule and where it is enforced.
 
 Do not edit generated artifacts to pass a gate, and do not swap the judge to
 the writer model. Report the delivered path, the blind verdict with both

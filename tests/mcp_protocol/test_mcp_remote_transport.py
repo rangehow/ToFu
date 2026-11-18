@@ -245,6 +245,74 @@ def test_env_supplies_header_value_not_a_second_secret_store():
         'Authorization': f'Bearer {SECRET}', 'X-Trace': 'plain'}
 
 
+# ── Vault-held credentials (``vault:<entry>`` env references) ────────
+
+@pytest.fixture
+def vault(monkeypatch):
+    """An in-memory credential vault; the real one is never touched."""
+    import lib.credentials_vault as credentials_vault
+    entries = {'rollinggo_api_key': SECRET}
+    monkeypatch.setattr(credentials_vault, 'get_entry', entries.get)
+    return entries
+
+
+def _vault_remote_cfg(url: str) -> dict:
+    return {**_remote_cfg(url), 'env': {'ROLLINGGO_API_KEY': 'vault:rollinggo_api_key'}}
+
+
+def test_a_vault_reference_fills_header_and_url_placeholders(vault, caplog):
+    """The same ``vault:<entry>`` form stdio env uses (stdio_environment)
+    resolves before a header or URL placeholder is filled; the reference
+    string itself is never sent upstream."""
+    import logging
+    from lib.mcp.transport import resolve_headers, resolve_url
+
+    caplog.set_level(logging.DEBUG)
+    cfg = _vault_remote_cfg('https://api.example/mcp?key=${ROLLINGGO_API_KEY}')
+    assert resolve_headers(cfg, server_name='rollinggo') == {
+        'Authorization': f'Bearer {SECRET}'}
+    assert resolve_url(cfg, server_name='rollinggo') == \
+        f'https://api.example/mcp?key={SECRET}'
+    assert SECRET not in caplog.text
+
+
+def test_an_unset_vault_entry_names_the_key_and_sends_nothing(vault):
+    from lib.mcp.transport import resolve_headers
+
+    vault.clear()
+    with pytest.raises(ValueError) as ei:
+        resolve_headers(_vault_remote_cfg('http://x/mcp'), server_name='rollinggo')
+    assert 'ROLLINGGO_API_KEY' in str(ei.value)
+    assert 'rollinggo_api_key' in str(ei.value)
+
+
+def test_an_unreferenced_vault_entry_is_not_required(vault):
+    """Only placeholders the template uses resolve; another env key's unset
+    vault entry does not block the connection."""
+    from lib.mcp.transport import resolve_headers
+
+    cfg = {'headers': {'Authorization': 'Bearer ${ROLLINGGO_API_KEY}'},
+           'env': {'ROLLINGGO_API_KEY': 'vault:rollinggo_api_key',
+                   'UNUSED': 'vault:not_configured'}}
+    assert resolve_headers(cfg) == {'Authorization': f'Bearer {SECRET}'}
+
+
+def test_bridge_reaches_a_server_whose_header_credential_is_vault_held(
+        auth_server, vault, caplog):
+    """END-TO-END: a Bearer-gated server rejects the literal reference."""
+    import logging
+    from lib.mcp.client import MCPBridge
+
+    caplog.set_level(logging.DEBUG)
+    bridge = MCPBridge()
+    try:
+        bridge.connect_server('rollinggo', _vault_remote_cfg(auth_server))
+        assert 'authenticated-ok' in str(bridge.call_tool('mcp__rollinggo__whoami', {}))
+    finally:
+        bridge.disconnect_all()
+    assert SECRET not in caplog.text
+
+
 # ── 2. Credentials never leave through the config surface ────────────
 
 def test_redacted_config_never_carries_a_secret():

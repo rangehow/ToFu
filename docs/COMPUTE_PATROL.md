@@ -36,6 +36,11 @@ Four facts constrain where each part can run (verified 2026-11-13):
    - `hopetemplate/jobs/get_yarn_apps` lists queue apps (id, name, state,
      creator, creation time, cards) and job states.
    - An expired token is an error answer, never a prompt.
+   - `get_yarn_apps` accepts any token, even one every submit rejects
+     (2026-11-18). A working listing therefore says nothing about the token.
+     The CLI's `hope ls` GET, `hopetemplate/jobs/get_supported_job_type`, does
+     check it: `return_code -2` ("Token expired") for a token Hope no longer
+     accepts.
    - Renewal is `hope login`, which needs an owner approval, so the patrol never
      renews the token.
 2. **Activity signals need the owner's MLP session, which exists only on the
@@ -85,8 +90,9 @@ leave to it, each bounded:
 *The patrol:*
 - reads the Hope token in place;
 - never copies, prints or logs it;
-- sends it only in the POST body Hope requires, to the one endpoint the patrol
-  knows (`get_yarn_apps`).
+- sends it only to the two endpoints the patrol knows, in the fields Hope
+  requires: the `get_yarn_apps` POST body, and the query of one
+  `get_supported_job_type` GET per cycle that verifies the token.
 
 *The probe:*
 - gets its MLP ticket in its own process through the adapter, only after
@@ -102,8 +108,12 @@ runs the probe end to end.
 *Renewals:*
 - every publication carries the Hope token's expiry
   (`health.hopeTokenExpiresAt`);
-- one day ahead it raises `hope_token_expiring`, and when the token stops
-  working it raises `hope_token`, naming the expiry;
+- one day ahead it raises `hope_token_expiring`;
+- it raises `hope_token` when the token's local expiry has passed, or when
+  the per-cycle check finds that Hope rejects the token. It does so even while
+  the queue listing still answers, and keeps reading the listing. If the check
+  itself cannot complete, `hope_token` reports the token as unverified, not as
+  rejected;
 - an MLP session that is not ready raises `activity_probe`;
 - renewal stays the owner's decision.
 

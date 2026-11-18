@@ -67,6 +67,16 @@
       "owner": "",
       "status": "legacy"
     },
+    "CHROME": {
+      "description": "External tooling location, not a tuning knob: path of the Chrome/Chromium binary that the game-art authoring tool scripts/gen_world_art.py launches through Playwright to rasterise its atlases; unset means Playwright's bundled browser. Authoring-time only: the server and the test gates never read it.",
+      "owner": "scripts/gen_world_art.py",
+      "status": "documented"
+    },
+    "CHROME_LD_LIBRARY_PATH": {
+      "description": "External tooling location, not a tuning knob: library directories that scripts/gen_world_art.py passes as LD_LIBRARY_PATH only to the $CHROME browser it launches (a browser whose libraries are outside the system path); unset leaves the browser's environment unchanged. Authoring-time only: the server and the test gates never read it.",
+      "owner": "scripts/gen_world_art.py",
+      "status": "documented"
+    },
     "CHROMIUM_EXTRA_LIB_DIRS": {
       "description": "",
       "owner": "",
@@ -397,6 +407,11 @@
       "owner": "",
       "status": "legacy"
     },
+    "LLM_MCP_SRC": {
+      "description": "External tooling location, not a tuning knob: the src/ directory of an llm-mcp source checkout that the legacy canvas submitter imports for its native platform API. Defaults to the FMG copy /mnt/your-fs (the INS volume is quota-frozen). Evaluation-only: the server never reads it.",
+      "owner": "evaluations/swebench/yourprovider_sandbox/tb21_switch.py",
+      "status": "documented"
+    },
     "LLM_MODEL": {
       "description": "",
       "owner": "",
@@ -422,6 +437,11 @@
       "owner": "",
       "status": "legacy"
     },
+    "MEITUAN_SSO_COOKIE": {
+      "description": "",
+      "owner": "",
+      "status": "legacy"
+    },
     "MINIMAX_MODEL": {
       "description": "Existing minimax model environment override, read through the local configuration adapter in lib/__init__.py; defaults and validation remain owned there.",
       "owner": "lib/__init__.py",
@@ -437,12 +457,62 @@
       "owner": "",
       "status": "legacy"
     },
+    "MTSSO_AUTH_MODE": {
+      "description": "Existing MTSSO authentication selection: auto (default), official or legacy; other values refuse configuration.",
+      "owner": "packages/tofu-mtsso-auth/src/tofu_mtsso_auth/__init__.py",
+      "status": "documented"
+    },
+    "MTSSO_ENV": {
+      "description": "Existing MTSSO environment fallback when no explicit environment is supplied; defaults to PROD and participates in the owner/environment authentication cache key.",
+      "owner": "packages/tofu-mtsso-auth/src/tofu_mtsso_auth/__init__.py",
+      "status": "documented"
+    },
+    "MTSSO_LOGIN_REQUESTED_AT_MS": {
+      "description": "Hand-off, not a setting: the owner's last explicit login request (ms since the epoch) for one `python -m tofu_mtsso_auth exec` launch. After an unapproved 大象 approval request, the launch may send one new request only for an owner request newer than it; malformed or absent means no request, and the value never reaches the launched command. The 大象 supervisor sets it from the account's loginRequestedAtMs (bundles/yourprovider/tofu_yourprovider/dx/login.py with_login_request).",
+      "owner": "packages/tofu-mtsso-auth/src/tofu_mtsso_auth/__main__.py",
+      "status": "documented"
+    },
+    "MTSSO_NODE_EXECUTABLE": {
+      "description": "Authoritative Node executable override for the official MTSSO agent bridge; automatic selection is used only without this override. An MCP server's field sets it for that server only; the 大象 launcher always receives TOFU_NODE's verified Node here (bundles/yourprovider/tofu_yourprovider/dx/runtime.py).",
+      "owner": "packages/tofu-mtsso-auth/src/tofu_mtsso_auth/__init__.py",
+      "status": "documented"
+    },
+    "MTSSO_NODE_VERIFIED": {
+      "description": "Hand-off, not a setting: a parent's node_runtime() record (realpath, file identity, version) for MTSSO_NODE_EXECUTABLE. While that file's identity is unchanged the child runs it without probing it again; the 大象 launcher receives it from bundles/yourprovider/tofu_yourprovider/dx/runtime.py.",
+      "owner": "packages/tofu-mtsso-auth/src/tofu_mtsso_auth/__init__.py",
+      "status": "documented"
+    },
+    "MTSSO_OFFICIAL_EXECUTABLE": {
+      "description": "Existing executable override for the official MTSSO authentication command.",
+      "owner": "packages/tofu-mtsso-auth/src/tofu_mtsso_auth/__init__.py",
+      "status": "documented"
+    },
+    "MTSSO_SESSION_SDK": {
+      "description": "Existing absolute path to the installed DataFE shared SSO auth module. An explicitly configured missing or relative path is rejected; otherwise discovery uses locally installed CLI locations without network installation.",
+      "owner": "packages/tofu-mtsso-auth/src/tofu_mtsso_auth/session.py",
+      "status": "documented"
+    },
+    "MTSSO_SESSION_TOKEN_FILE": {
+      "description": "Existing absolute path to a shared SSO session file. Relative paths are rejected; when unset, the session owner resolves the existing MLP or LLM CLI token file in the user home.",
+      "owner": "packages/tofu-mtsso-auth/src/tofu_mtsso_auth/session.py",
+      "status": "documented"
+    },
+    "MTSSO_SHARED_SESSION": {
+      "description": "Existing shared SSO selection: value 1 explicitly selects shared authentication even with incomplete configuration. Otherwise local SDK and usable same-identity session evidence govern automatic selection.",
+      "owner": "packages/tofu-mtsso-auth/src/tofu_mtsso_auth/session.py",
+      "status": "documented"
+    },
     "NEUTER": {
       "description": "",
       "owner": "",
       "status": "legacy"
     },
     "NOVITA_API_KEY": {
+      "description": "",
+      "owner": "",
+      "status": "legacy"
+    },
+    "NO_COLOR": {
       "description": "",
       "owner": "",
       "status": "legacy"
@@ -1092,6 +1162,11 @@
       "owner": "benchmarks/native_http_cli.py",
       "status": "documented"
     },
+    "TOFU_BENCHMARK_SAMPLES": {
+      "description": "Native event microbenchmark sample count; default 1000 and fewer than 100 samples are refused by its measurement entry point.",
+      "owner": "benchmarks/native_event/runtime_measure.py",
+      "status": "documented"
+    },
     "TOFU_BILLING_JANITOR": {
       "description": "",
       "owner": "",
@@ -1447,6 +1522,16 @@
       "owner": "lib/project_mod/content_shadow.py",
       "status": "documented"
     },
+    "TOFU_CONTEXT_COMPILER_OUTPUT": {
+      "description": "Destination path for the standalone context compiler benchmark JSON report.",
+      "owner": "benchmarks/context_compiler/measure.py",
+      "status": "documented"
+    },
+    "TOFU_CONTEXT_NATIVE_ENGINE": {
+      "description": "",
+      "owner": "",
+      "status": "legacy"
+    },
     "TOFU_CONTROL_RPC_WORKERS": {
       "description": "",
       "owner": "",
@@ -1712,6 +1797,11 @@
       "owner": "lib/tasks_pkg/event_log.py",
       "status": "documented"
     },
+    "TOFU_EVENT_NATIVE_ENGINE": {
+      "description": "",
+      "owner": "",
+      "status": "legacy"
+    },
     "TOFU_EVENT_PRUNE_BATCHES": {
       "description": "Existing event prune batches environment override, read through the local configuration adapter in lib/tasks_pkg/event_log.py; defaults and validation remain owned there.",
       "owner": "lib/tasks_pkg/event_log.py",
@@ -1726,6 +1816,11 @@
       "description": "",
       "owner": "",
       "status": "legacy"
+    },
+    "TOFU_EXPORT_API_URL": {
+      "description": "Origin of the running application's API from which an internal export reads the current model-routing authority and audited credential reveals. Unset uses http://127.0.0.1:$PORT (default port 15000). Only http(s) on 127.0.0.1, ::1 or localhost is accepted; requests use no proxy and follow no redirect.",
+      "owner": "export_pkg/_live_state.py",
+      "status": "documented"
     },
     "TOFU_EXPORT_SOURCE_REF": {
       "description": "",
@@ -1793,6 +1888,11 @@
       "status": "legacy"
     },
     "TOFU_GH_RELEASE_BASE": {
+      "description": "",
+      "owner": "",
+      "status": "legacy"
+    },
+    "TOFU_GH_TOKEN": {
       "description": "",
       "owner": "",
       "status": "legacy"
@@ -2056,6 +2156,11 @@
       "description": "Existing journal rotate threshold environment override, read through the local configuration adapter in lib/project_mod/journal.py; defaults and validation remain owned there.",
       "owner": "lib/project_mod/journal.py",
       "status": "documented"
+    },
+    "TOFU_JSON_BENCH_CPU": {
+      "description": "",
+      "owner": "",
+      "status": "legacy"
     },
     "TOFU_KIMI_PROVIDER_FACE": {
       "description": "",
@@ -2561,6 +2666,16 @@
       "description": "",
       "owner": "",
       "status": "legacy"
+    },
+    "TOFU_NATIVE_EVENT_LIBRARY": {
+      "description": "Path to the native event benchmark library; the harness also records its content digest.",
+      "owner": "benchmarks/native_event/runtime_measure.py",
+      "status": "documented"
+    },
+    "TOFU_NATIVE_EVENT_OUTPUT": {
+      "description": "Destination path for the native event runtime benchmark JSON report.",
+      "owner": "benchmarks/native_event/runtime_measure.py",
+      "status": "documented"
     },
     "TOFU_NATIVE_EXTRACTION_BINARY": {
       "description": "",
@@ -3111,6 +3226,11 @@
       "description": "",
       "owner": "",
       "status": "legacy"
+    },
+    "TOFU_REPOSITORY_INDEX_OUTPUT": {
+      "description": "Destination path for the repository index benchmark JSON report.",
+      "owner": "benchmarks/repository_index/measure.py",
+      "status": "documented"
     },
     "TOFU_REPO_GRAMMAR_BUNDLE": {
       "description": "Build-only path to an explicit optional native grammar bundle with grammars.json and NOTICES.txt. Must be supplied together with TOFU_REPO_GRAMMAR_MANIFEST_SHA256; packaging verifies declared library sizes and hashes rather than discovering a user cache.",
@@ -4441,9 +4561,14 @@
       "status": "documented",
       "owner": "evaluations/terminal_bench/runner.py",
       "description": "External identity, not a tuning knob: the lane name (e.g. EVAL-MATRIX-2) under which the sandbox-857 lease ledger records this runner's VM leases. Read with TOFU_857_LEASES by SandboxLeases.from_env; unset disables ledger admission. Evaluation runner only; the server never reads it."
+    },
+    "TB_RELAY_AUTH_TOOLS": {
+      "status": "documented",
+      "owner": "tests/evaluations/test_tb_watch_relay_auth.py",
+      "description": "External tooling location, not a tuning knob: the eval-matrix tools directory (watch_relay_auth.py, adopt_relay_auth.py) the relay-auth adoption spec exercises; it defaults to the lane's tools directory, and pointing it at another copy (e.g. the pre-fix tools) replays the spec against them. Test-only; the server never reads it."
     }
   },
-  "legacy_count": 574,
+  "legacy_count": 580,
   "taskConfig": {
     "compaction.summaryBudgetSeconds": {
       "description": "Legacy values are ignored, including zero and positive values. Summary completion has no wall-clock deadline; cancellation and provider transport failures still apply. Elapsed duration is telemetry, never permission to adopt incomplete output or discard its source.",

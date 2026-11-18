@@ -213,6 +213,20 @@ class ConversationCatalogPage:
     has_more: bool
 
 
+def conversation_read_request(conversation_id: str, *, user_id: int,
+                              include_messages: bool) -> tuple[str, dict[str, Any]]:
+    """The ``(operation, payload)`` of ``ConversationRepository.get`` without a window.
+
+    A batched reader (``lib.tasks_pkg.round_reads``) lists it so that the
+    repository read, routed through that reader, takes the batched answer.
+    """
+    return "conversation.get", {
+        "conv_id": _conversation_id(conversation_id),
+        "user_id": _owner_id(user_id),
+        "derive_messages": bool(include_messages),
+    }
+
+
 class ConversationRepository:
     """Stateless adapter around the semantic storage protocol."""
 
@@ -347,11 +361,8 @@ class ConversationRepository:
                 raise ValueError("before_sequence must be a non-negative integer")
             if message_window is None:
                 raise ValueError("before_sequence requires message_window")
-        payload = {
-            "conv_id": _conversation_id(conversation_id),
-            "user_id": _owner_id(user_id),
-            "derive_messages": bool(include_messages),
-        }
+        operation, payload = conversation_read_request(
+            conversation_id, user_id=user_id, include_messages=include_messages)
         if message_window is not None:
             payload["message_window"] = message_window
         if before_sequence is not None:
@@ -360,7 +371,7 @@ class ConversationRepository:
             if message_window is None or before_sequence is not None:
                 raise ValueError("anchor_turn_id requires message_window without before_sequence")
             payload["anchor_turn_id"] = anchor_turn_id
-        return self._client().query("conversation.get", payload)
+        return self._client().query(operation, payload)
 
     def list(
         self,

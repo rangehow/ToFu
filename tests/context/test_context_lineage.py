@@ -260,3 +260,42 @@ def test_text_only_image_projection_preserves_distinct_equal_events(monkeypatch)
     assert [row['status'] for row in sources] == ['located', 'located']
     assert [row['output']['part'] for row in sources] == [1, 2]
     assert [text_at(body, row['output']) for row in sources] == ['same event', 'same event']
+
+
+@pytest.mark.parametrize('protocol', ['openai', 'anthropic', 'responses'])
+def test_a_rounds_emission_and_sealing_reuse_the_ranges_already_hashed(monkeypatch, protocol):
+    """The emitters' mapping check and sealing verification hash a source range
+    only once per Turn text memo: the canonical builder hashed the same
+    immutable prompt strings, so a later stage looks the hash up."""
+    from lib.llm_sanitize import lineage
+    from lib.llm_sanitize.context_sections import next_text_memo_round, text_memo_scope
+    messages = []
+    append_injection(messages, 'worker_policy', 'policy ' * 400)
+    messages.append({'role': 'user', 'content': 'request'})
+    append_injection(messages, 'tool_progress', 'private event ' * 400)
+    hashed = []
+    original = lineage.span_hash
+    monkeypatch.setattr(lineage, 'span_hash', lambda text: hashed.append(text) or original(text))
+    with text_memo_scope():
+        for _ in range(2):
+            next_text_memo_round()
+            hashed.clear()
+            body = prepare(deepcopy(messages))
+            semantic_id = semantic_request_id(body)
+            built = len(hashed)
+            if protocol == 'anthropic':
+                from lib.llm.anthropic_outbound import openai_body_to_anthropic
+                wire = openai_body_to_anthropic(body)
+            elif protocol == 'responses':
+                from lib.llm.responses_outbound import openai_body_to_responses
+                wire, _ = openai_body_to_responses(body)
+            else:
+                from lib.llm.openai_outbound import openai_body_to_chat
+                wire = openai_body_to_chat(body)
+            sealed = seal_request(wire, model='claude-sonnet-4', protocol=protocol,
+                                  input_tokens=100, semantic_id=semantic_id)
+            assert len(hashed) == built, 'emission or sealing re-hashed a known range'
+            sources = sealed.context_diagnostics()['sources']
+            assert [row['status'] for row in sources] == ['located', 'located']
+            for row in sources:
+                assert hashlib.sha256(text_at(wire, row['output']).encode()).hexdigest() == row['spanHash']

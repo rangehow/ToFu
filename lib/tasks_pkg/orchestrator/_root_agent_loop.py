@@ -362,12 +362,10 @@ class _RootLoopHooks:
     ) -> ProviderStreamResult:
         request = self.request
         state = self.state
-        # Next round after a content_filter fallback retries the primary ONLY
-        # when the refused history actually changed (compaction / cleared tool
-        # results / new injections). Otherwise the attempt stays on the
-        # fallback: refusals track the history and come in runs, so an
-        # unchanged-history probe adds a refused, billed request to every
-        # round of exactly the lanes that refuse most. Flip BEFORE
+        # The request after a content_filter fallback returns to the primary;
+        # only the refused attempt's own appended tool rounds stay on the
+        # fallback, so one refused history does not bill a probe per round
+        # (_switch.retry_primary_for_messages). Flip BEFORE
         # prepare_round_context/build_round_request so every model-bound field
         # matches the dispatched model. _call's own stamp then finds the round
         # already on the primary and does not switch again. Only the DISPATCH
@@ -378,7 +376,7 @@ class _RootLoopHooks:
                 and self.task.get('_fallback_from')
                 and self.task['_fallback_from'] != state.model
                 and not (self.task.get('config') or {}).get('disableModelFallback')):
-            if _model_switch.refused_history_changed(self.task, self.messages):
+            if _model_switch.retry_primary_for_messages(self.task, self.messages):
                 state.model = self.task['_fallback_from']
         prepare_round_context(self.task, self.messages, round_num=round_num,
             tid=request.tid, model=state.model, project_path=request.project_path,

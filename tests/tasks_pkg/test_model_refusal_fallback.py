@@ -387,6 +387,90 @@ def _terminal_task(**extra):
     return task
 
 
+def test_next_request_after_refusal_returns_to_primary_and_audits_it(
+        harness, monkeypatch, tmp_path):
+    """A content-filter refusal is per-request: the next request returns.
+
+    Deterministic fake provider: opus refuses once (content_filter), kimi
+    serves that round, then the NEXT user request (new turn on the same
+    conversation, history extended with the fallback round's rows) must go
+    back to opus, which answers. The return is a direction=primary
+    model_switch row for a lead conversation. This is the exact 723a42af
+    incident shape: R56 refused, R57+ all ran on kimi with no primary row.
+    """
+    from lib.logging_pkg import lead_audit
+    monkeypatch.setattr(lead_audit, '_default_logs_dir', lambda: str(tmp_path))
+    tmp_path.mkdir(exist_ok=True)
+    harness['script'] = [
+        _result('content_filter', content='Partial', refusal=_REFUSAL),
+        _result('stop', content='fallback r56'),
+        _result('stop', content='primary r57'),
+    ]
+    task = _task()
+    task['convId'] = 'coordinator-723a42af833283b7f777b246d29da590'
+    task['config']['_turnId'] = 'turn-1'
+    api_rounds = []
+    history = [
+        {'role': 'system', 'content': 'research system prompt'},
+        {'role': 'user', 'content': 'research objective'},
+    ]
+    _call(task, round_num=55, messages=history, api_rounds=api_rounds)
+
+    # Next request of the same conversation: the served fallback round is
+    # appended to the history, then the lead's next Turn message arrives.
+    history = history + [
+        {'role': 'assistant', 'content': 'fallback r56'},
+        {'role': 'user', 'content': "the lead's next request"},
+    ]
+    result = _call(task, model='kimi-k3', round_num=56,
+                   messages=history, api_rounds=api_rounds)
+
+    assert result['model'] == 'claude-opus-5.5'
+    assert [m for m, _ in harness['streams']] == [
+        'claude-opus-5.5', 'kimi-k3', 'claude-opus-5.5']
+    switches = [e for e in harness['events']
+                if e.get('type') == EventType.MODEL_FALLBACK]
+    assert [e['fallbackModel'] for e in switches] == ['kimi-k3', 'claude-opus-5.5']
+    assert switches[-1]['fallbackKind'] == 'primary_retry'
+    import json
+    rows = [json.loads(l) for l in
+            next(tmp_path.glob('lead-audit/lead-audit-*.jsonl')).read_text().splitlines()]
+    kinds = [(r['kind'], r.get('to'), r.get('direction'), r.get('round')) for r in rows]
+    assert ('model_switch', 'claude-opus-5.5', 'primary', 57) in kinds
+
+
+def test_refusal_on_the_return_probe_falls_back_for_that_request_only(harness):
+    """A repeated refusal on the primary falls back again, never sticks."""
+    harness['script'] = [
+        _result('content_filter', content='Partial', refusal=_REFUSAL),
+        _result('stop', content='fallback r6'),
+        _result('content_filter', content='Partial again', refusal=_REFUSAL),
+        _result('stop', content='fallback r7'),
+        _result('stop', content='primary r8'),
+    ]
+    task = _task()
+    api_rounds = []
+    history = [{'role': 'user', 'content': 'research objective'}]
+    _call(task, messages=history, api_rounds=api_rounds)
+    history = history + [{'role': 'assistant', 'content': 'fallback r6'},
+                         {'role': 'user', 'content': 'next request'}]
+    _call(task, model='kimi-k3', round_num=7, messages=history,
+          api_rounds=api_rounds)
+    history = history + [{'role': 'assistant', 'content': 'fallback r7'},
+                         {'role': 'user', 'content': 'next request again'}]
+    result = _call(task, model='kimi-k3', round_num=8, messages=history,
+                   api_rounds=api_rounds)
+    assert result['model'] == 'claude-opus-5.5'
+    assert [m for m, _ in harness['streams']] == [
+        'claude-opus-5.5', 'kimi-k3', 'claude-opus-5.5', 'kimi-k3',
+        'claude-opus-5.5']
+    # Return probes are visible in both directions, including the re-refusal.
+    assert [(e['fallbackFrom'], e['fallbackModel']) for e in harness['events']
+            if e.get('type') == EventType.MODEL_FALLBACK] == [
+        ('claude-opus-5.5', 'kimi-k3'), ('kimi-k3', 'claude-opus-5.5'),
+        ('claude-opus-5.5', 'kimi-k3'), ('kimi-k3', 'claude-opus-5.5')]
+
+
 def test_changed_history_retries_primary_unchanged_history_stays_on_fallback(harness):
     """A refusal tracks the history: retry primary only when history changed.
 
@@ -416,24 +500,44 @@ def test_changed_history_retries_primary_unchanged_history_stays_on_fallback(har
     assert switches[-1]['fallbackFrom'] == 'kimi-k3'
 
 
-def test_unchanged_history_stays_on_fallback(harness):
-    """Refusals come in runs until the history changes; don't re-probe opus."""
+def test_same_attempt_appended_tool_rounds_stay_on_fallback(harness):
+    """Only the refused attempt's own tool rounds skip the return probe.
+
+    Between two provider requests of one attempt the tool loop appends the
+    served assistant tool-call row and its tool result — no new request. A
+    repeated refusal on that same history would otherwise bill a primary
+    probe on every round. The NEXT user message ends that exemption.
+    """
     harness['script'] = [
         _result('content_filter', content='Partial', refusal=_REFUSAL),
         _result('stop', content='Fallback answer.'),
-        _result('stop', content='Still fallback.'),   # same history → kimi, no opus probe
+        _result('stop', content='Still fallback.'),   # appended tool rows → kimi
+        _result('stop', content='Primary again.'),    # next request → opus
     ]
     task = _task()
     api_rounds = []
-    same = [{'role': 'user', 'content': 'unchanged research history'}]
-    _call(task, messages=same, api_rounds=api_rounds)
-    _call(task, model='kimi-k3', round_num=7, messages=same, api_rounds=api_rounds)
-    # Only the original opus attempt + two kimi rounds; NO second opus probe.
+    history = [{'role': 'user', 'content': 'unchanged research history'}]
+    _call(task, messages=history, api_rounds=api_rounds)
+    history = history + [
+        {'role': 'assistant', 'content': '', 'tool_calls': [
+            {'id': 'c1', 'type': 'function',
+             'function': {'name': 'read_files', 'arguments': '{}'}}]},
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': 'tool result'},
+    ]
+    _call(task, model='kimi-k3', round_num=7, messages=history,
+          api_rounds=api_rounds)
+    # The appended tool rows did not probe opus again.
     assert [m for m, _ in harness['streams']] == [
         'claude-opus-5.5', 'kimi-k3', 'kimi-k3']
-    # No return-to-primary event was emitted.
     assert [e['fallbackModel'] for e in harness['events']
             if e.get('type') == EventType.MODEL_FALLBACK] == ['kimi-k3']
+    # The conversation's next request returns to the primary.
+    history = history + [{'role': 'assistant', 'content': 'Still fallback.'},
+                         {'role': 'user', 'content': 'the next request'}]
+    result = _call(task, model='kimi-k3', round_num=8, messages=history,
+                   api_rounds=api_rounds)
+    assert result['model'] == 'claude-opus-5.5'
+    assert harness['streams'][-1][0] == 'claude-opus-5.5'
 
 
 def test_switch_back_and_fallback_rounds_reach_the_lead_audit(harness, monkeypatch, tmp_path):
@@ -557,10 +661,13 @@ def test_tool_loop_appending_fallback_rounds_does_not_retry_primary(harness):
 
     # Round k: opus refuses, kimi serves.
     _call(task, messages=history, api_rounds=api_rounds)
-    # Three more rounds, each appending its own fallback assistant + tool rows.
+    # Three more rounds of the SAME attempt, each appending only the tool
+    # rows the tool loop adds between two provider requests (no new request).
     for step in range(3):
         history = history + [
-            {'role': 'assistant', 'content': f'fallback round {step}'},
+            {'role': 'assistant', 'content': '', 'tool_calls': [
+                {'id': f'c{step + 1}', 'type': 'function',
+                 'function': {'name': 'read_files', 'arguments': '{}'}}]},
             {'role': 'tool', 'tool_call_id': f'c{step + 1}',
              'content': f'tool result {step}'},
         ]

@@ -23,9 +23,9 @@ from lib.storage_authority_sql.config import SidecarConfig
 from lib.storage_authority_sql.backup_policy import (
     capacity_preflight,
     cleanup_job_artifacts,
-    job_manifest_path,
     prune_verified_backups,
     reclaim_stale_job_artifacts,
+    retire_job_manifest,
     write_job_manifest,
 )
 from lib.storage_authority_sql.preflight import ProjectLease
@@ -341,7 +341,7 @@ def _offline_sqlite_backup(config: SidecarConfig, deadline_at: float) -> dict:
         if destination is not None:
             destination.close()
         source.close()
-        job_manifest_path(temporary).unlink(missing_ok=True)
+        retire_job_manifest(temporary)
 
 
 def _offline_sqlite_maintenance(

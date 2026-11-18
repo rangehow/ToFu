@@ -83,6 +83,7 @@ from lib.git_checkpoint_policy import (
     FORBIDDEN_CHECKPOINT_PARTS, FORBIDDEN_CHECKPOINT_ROOTS, git_policy_environment,
 )
 from lib.git_runtime import GIT_STALL_SECONDS, git_executable
+from lib.json_store import JsonStoreReadError, locked_path, read_json
 from lib.log import get_logger
 from lib.project_mod.activity_supervised_process import (
     ActivitySupervisedExchange, ProcessCancelled, ProcessStalled, run_activity_supervised,
@@ -521,12 +522,19 @@ def _write_exclude(git_dir: Path, shared, skipped) -> None:
 
 
 def _read_manifest(git_dir: Path) -> dict | None:
+    """The recorded manifest, or None when there is none.
+
+    Absence is decided under the manifest's lock (``read_json``): the folder
+    may sit on a FUSE volume, where an open racing ``_write_manifest``'s
+    ``os.replace`` can see ENOENT.
+    """
+    absent = object()
     try:
-        data = json.loads((git_dir / MANIFEST_NAME).read_text(encoding='ascii'))
-    except FileNotFoundError:
-        return None
-    except (OSError, ValueError) as error:
+        data = read_json(str(git_dir / MANIFEST_NAME), default=absent, strict=True)
+    except JsonStoreReadError as error:
         raise _failure(git_dir.parent, f'unreadable {MANIFEST_NAME}: {error}') from error
+    if data is absent:
+        return None
     if (not isinstance(data, dict) or data.get('version') != 1
             or not all(isinstance(data.get(key), list) and all(map(_safe_relative, data[key]))
                        for key in ('shared', 'skipped'))
@@ -547,7 +555,8 @@ def _write_manifest(git_dir: Path, shared, skipped, baseline: str, policy: Conte
     if shared_folders:
         data[SHARED_FOLDERS_KEY] = list(shared_folders)
     # ensure_ascii keeps undecodable (surrogate-escaped) names representable.
-    _atomic_write(git_dir / MANIFEST_NAME, json.dumps(data, indent=1).encode('ascii') + b'\n')
+    with locked_path(str(git_dir / MANIFEST_NAME)):
+        _atomic_write(git_dir / MANIFEST_NAME, json.dumps(data, indent=1).encode('ascii') + b'\n')
 
 
 def _holds_managed_path(root: Path, directory: str, known: set[str]) -> bool:

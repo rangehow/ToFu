@@ -8,6 +8,7 @@ store, the reader opens the missing file, and only then does the writer
 publish.
 """
 
+import fcntl
 import os
 import threading
 
@@ -20,8 +21,11 @@ DEADLOCK_GUARD_S = 30
 class ReplaceWindow:
     """A writer that holds ``path``'s lock with the store missing.
 
-    ``reader_waiting`` is set when another thread enters the path lock, i.e.
-    the reader asked the writers whether the store is really absent.
+    ``reader_waiting`` is set when another thread enters the path lock or
+    requests a file lock (stdlib-only owners lock ``<path>.lock`` directly),
+    i.e. the reader asked the writers whether the store is really absent.
+    A writer passed as the reader shows whether it publishes under the lock:
+    if it does, its value is the one left after the window closes.
     """
 
     def __init__(self, monkeypatch, path):
@@ -50,6 +54,15 @@ class ReplaceWindow:
         monkeypatch.setattr(
             json_store, '_path_lock',
             lambda p: _ObservedLock(real_path_lock(p)))
+        real_flock = fcntl.flock
+
+        def _observed_flock(fd, operation):
+            if (not operation & fcntl.LOCK_UN and window.gap_open.is_set()
+                    and threading.current_thread() is not window.writer):
+                window.reader_waiting.set()
+            return real_flock(fd, operation)
+
+        monkeypatch.setattr(fcntl, 'flock', _observed_flock)
         self.writer = None
 
     def run_writer(self, publish):

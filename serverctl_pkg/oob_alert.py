@@ -228,6 +228,48 @@ def _seconds(value: Any) -> float:
         return 0.0
 
 
+def _read_manager_state_once(path: Path) -> tuple[float, dict[str, Any]]:
+    """(mtime, state) of one open; FileNotFoundError propagates, other failures read as no record."""
+    try:
+        with path.open(encoding='utf-8') as stream:
+            written = os.fstat(stream.fileno()).st_mtime
+            state = json.loads(stream.read())
+    except FileNotFoundError:
+        raise
+    except (OSError, ValueError):
+        return 0.0, {}
+    return (written, state) if isinstance(state, dict) else (0.0, {})
+
+
+def _manager_state(tofu_root: Path) -> tuple[float, dict[str, Any]]:
+    """The manager's state record and its mtime; ``(0.0, {})`` when there is none.
+
+    A FUSE open racing the manager's ``os.replace`` can fail with ENOENT, so
+    absence is decided under the file lock the manager publishes under
+    (``server_manager._store_lock``, shared with ``lib.json_store``); the lock
+    file is never created here.
+    """
+    path = tofu_root / MANAGER_STATE_FILE
+    try:
+        return _read_manager_state_once(path)
+    except FileNotFoundError:
+        pass
+    try:
+        descriptor = os.open(f'{path}.lock', os.O_RDWR)
+    except OSError:
+        return 0.0, {}
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_SH)
+        except OSError:
+            pass
+        return _read_manager_state_once(path)
+    except FileNotFoundError:
+        return 0.0, {}
+    finally:
+        os.close(descriptor)
+
+
 def planned_restart(tofu_root: Path) -> dict[str, Any]:
     """The manager's planned restart whose downtime is now, from its own record; else ``{}``.
 
@@ -239,10 +281,7 @@ def planned_restart(tofu_root: Path) -> dict[str, Any]:
     restart never stopped the serving worker. Read from the manager's state
     file, so a manager too busy to answer ``/status`` still counts.
     """
-    try:
-        state = json.loads((tofu_root / MANAGER_STATE_FILE).read_text(encoding='utf-8'))
-    except (OSError, ValueError):
-        return {}
+    _written, state = _manager_state(tofu_root)
     restart = state.get('lastRestart') if isinstance(state, dict) else None
     if not isinstance(restart, dict) or state.get('lastWorkerExitKind') != 'planned':
         return {}
@@ -266,13 +305,8 @@ def manager_ready(tofu_root: Path, now: float) -> bool:
     record not written within ``PROBE_INTERVAL_S`` is no evidence: the
     manager itself may be stuck.
     """
-    path = tofu_root / MANAGER_STATE_FILE
-    try:
-        written = path.stat().st_mtime
-        state = json.loads(path.read_text(encoding='utf-8'))
-    except (OSError, ValueError):
-        return False
-    return (isinstance(state, dict) and now - written <= PROBE_INTERVAL_S and state.get('desired') == 'running'
+    written, state = _manager_state(tofu_root)
+    return (bool(state) and now - written <= PROBE_INTERVAL_S and state.get('desired') == 'running'
             and state.get('observed') == 'running' and not _seconds(state.get('unreadySince')))
 
 

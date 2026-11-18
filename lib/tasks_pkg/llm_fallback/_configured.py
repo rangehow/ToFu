@@ -4,13 +4,11 @@ Entry: call_configured_fallback. Uses request admission, shared transport,
 usage, recovery and settlement owners; stamps the model decision before I/O."""
 
 from lib import log
-from lib.agent_core.events import EventType, Phase, build_event, build_phase
 from lib.llm import AbortedError
 from lib.llm.conversion import ProtocolConversionError
 from lib.llm.llm_errors import _ERR_BODY_LIMIT, ModelRefusalError
 from lib.log import get_logger, task_log_tag
 from lib.tasks_pkg.event_delivery import EventDeliveryError, EventDeliveryRevoked
-from lib.tasks_pkg.manager import _events as task_events
 
 from . import _errors, _pool, _recovery, _refusal, _requests, _retry, _transport, _usage
 
@@ -96,8 +94,9 @@ def call_configured_fallback(
             _fb_reason[:200],
         )
         if _fb_kind == 'content_filter':
-            # Remember the exact history the primary refused; the next round
-            # retries the primary only if this history actually changed.
+            # Remember the refused request's history: the NEXT request returns
+            # to the primary; only this attempt's own appended tool rows
+            # stay on the fallback (_switch.retry_primary_for_messages).
             _switch.record_refused_history(task, messages)
 
         fallback_body, _vision_fallback_from = _requests.prepare_fallback_body(

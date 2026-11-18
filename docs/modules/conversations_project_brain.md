@@ -187,12 +187,16 @@ them from the merged sources. Delivery is notify-only, at the moment it matters:
 Advice joins the task's existing bounded queue (at most 20 keys per task, deduplicated)
 at the next round boundary after it is computed, with a `path_overlap` UI hint; notices from other writers and
 landers wait in `notices/<conversation>.jsonl` until a round boundary of that
-conversation consumes them. The radar's files are reconstructible advice, never
+conversation consumes them. A Turn looks up its project's checkout once (a miss
+included); a checkout it later writes in joins through `note_writes`. The radar's files are reconstructible advice, never
 authority: no write, landing or tool call waits for or is refused by them, and every
 failure is fail-soft. Git runs only for a candidate overlap, a first touch or a landing.
 An ordinary write reads only the records that name its paths, through the path index
 `paths/<sha256(path)>/<record file>` (empty markers; a marker whose record no longer
-names the path is removed when found), plus its own atomic record write. A writer marks
+names the path is removed when found, a retired record removes its own markers, and a
+record that cannot be read keeps them: on the FUSE volume an open racing the record's
+`os.replace` can fail with ENOENT, and the radar never waits on a lock to tell that
+from absence), plus its own atomic record write. A writer marks
 the paths it writes and, at a task's first write in a checkout, every path it recorded,
 so a record written before the index existed is found once its conversation writes
 again; landing still scans every record. Edits that bypass the write tools and the

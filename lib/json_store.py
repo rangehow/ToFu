@@ -17,6 +17,7 @@ Public API
   atomic_output_path(path, fsync=True, mode=0o644)  → temporary path context
   temporary_output_path(path, suffix='.tmp')       → cleanup-only context
   locked_path(path)                                → RMW lock context
+  lock_file_path(path)                             → its sidecar lock file
 
 Design notes
 ------------
@@ -92,6 +93,16 @@ def _path_lock(path: str) -> threading.Lock:
 # still protects the common single-process case) rather than ship a
 # half-reliable path or newly regress hosts.
 
+def lock_file_path(path: str) -> str:
+    """The sidecar file ``locked_path(path)`` locks.
+
+    It outlives every write; an owner that retires ``path`` for good (a
+    finished job's record, not a store that is rewritten) removes it after
+    the store, so retired stores leave no lock files behind.
+    """
+    return os.path.abspath(path) + '.lock'
+
+
 @contextlib.contextmanager
 def _interprocess_lock(path: str, *, create: bool = True):
     """Hold an exclusive cross-process advisory lock for ``path``'s RMW.
@@ -109,7 +120,7 @@ def _interprocess_lock(path: str, *, create: bool = True):
         yield
         return
 
-    lock_path = os.path.abspath(path) + '.lock'
+    lock_path = lock_file_path(path)
     parent = os.path.dirname(lock_path) or '.'
     if not create:
         try:

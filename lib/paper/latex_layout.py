@@ -187,14 +187,15 @@ def _extract_errors(log_text: str, limit: int = 10) -> list[str]:
 
 
 def compile_project(workdir: str | os.PathLike, engine: str = 'pdflatex',
-                    timeout_s: int = _COMPILE_TIMEOUT_S) -> dict:
+                    timeout_s: int = _COMPILE_TIMEOUT_S, main: str = '') -> dict:
     """Run latexmk on the compile root. Returns a status dict.
 
     ``engine`` is ``'pdflatex'`` or ``'xelatex'``. Synctex is always on —
-    the layout map depends on it.
+    the layout map depends on it. ``main`` names the top-level root file when
+    the caller knows it; otherwise it is discovered.
     """
     wd = Path(workdir)
-    root = find_compile_root(wd)
+    root = wd / main if main else find_compile_root(wd)
     flag = '-xelatex' if engine == 'xelatex' else '-pdf'
     # -g: force at least one full run. latexmk's fdb records a prior failure
     # and otherwise refuses to retry — which also leaves the .log stale,

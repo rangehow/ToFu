@@ -71,6 +71,10 @@ RULES: tuple[Rule, ...] = (
     Rule('draft.no-invented-numbers', 'gate', 'Every reported number '
          '(decimal or percentage) appears in a usable dossier fact.',
          'pipeline invariant', stage='draft'),
+    Rule('draft.keep-supported-results', 'gate', 'Revising an existing draft never '
+         'deletes a result the evidence audit rated strong or moderate.',
+         'first live existing-draft run, 2026-11-18 (edits emptied the abstract\'s '
+         'supported results)', stage='revise'),
     Rule('draft.no-pipeline-leaks', 'gate', 'The document never mentions the '
          'pipeline: no dossier, fact ids, sources, project lead or experiment '
          'requests in the text.', 'first sample-paper run, 2026-11-18 (table '

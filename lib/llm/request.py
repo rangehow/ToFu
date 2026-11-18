@@ -270,6 +270,9 @@ class AdmittedRequest(Mapping):
     # or None for an item that is not a string-keyed object.
     _items: Mapping = field(default=MappingProxyType({}), repr=False, compare=False)
     _context_lineage: bytes = field(default=b'', repr=False, compare=False)
+    # ``wire_tool_names`` of the sealed ``tools``, so stream checks never
+    # decode the tool schemas back out of ``payload``.
+    tool_names: frozenset = field(default=frozenset(), repr=False, compare=False)
 
     def sealed_items(self, key):
         """Offsets of each sealed ``key`` item and its top-level fields."""
@@ -439,7 +442,36 @@ def seal_request(body, *, model, provider_id='', protocol='openai',
                            local_tokens=validated_admitted_input_tokens(
                                local_tokens) or 0,
                            _items=MappingProxyType(items),
-                           _context_lineage=_seal_context_lineage(body, wire, payload))
+                           _context_lineage=_seal_context_lineage(body, wire, payload),
+                           tool_names=frozenset(wire_tool_names(
+                               wire['tools'] if type(wire.get('tools')) in _JSON_LISTS
+                               else ())))
+
+
+def wire_tool_names(tools) -> set[str]:
+    """Extract callable names from every supported wire-tool shape.
+
+    Responses Tool Search nests deferred functions inside ``namespace.tools``;
+    treating only the namespace's own name as callable would falsely report a
+    successfully searched function as hallucinated.
+    """
+    names: set[str] = set()
+    for tool in tools or ():
+        if not isinstance(tool, dict):
+            continue
+        if tool.get('type') == 'namespace':
+            names.update(wire_tool_names(tool.get('tools') or ()))
+            continue
+        func = tool.get('function')
+        if isinstance(func, dict) and func.get('name'):
+            names.add(str(func['name']))
+        elif tool.get('type') == 'function' and tool.get('name'):
+            names.add(str(tool['name']))
+        elif (tool.get('name') and tool.get('type') not in (
+                'tool_search', 'programmatic_tool_calling')):
+            # Anthropic-native function schema.
+            names.add(str(tool['name']))
+    return names
 
 
 def _seal_context_lineage(body, wire, payload):
@@ -451,7 +483,7 @@ def _seal_context_lineage(body, wire, payload):
     # Archives normalize JSON key order. Keep an exact transport digest AND
     # an order-independent artifact digest; never call the latter wire bytes.
     return _encode({**trace,
-                    'wireBodyHash': hashlib.sha256(payload).hexdigest(),
+                    'wireBodyHash': sha256_holding_gil(payload).hexdigest(),
                     'requestContentHash': _content_digest(wire)})
 
 

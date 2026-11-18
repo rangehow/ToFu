@@ -31,15 +31,15 @@ reviewer persona and rubric, and which audits apply; it never forks the graph.
 
 | # | Stage | Persisted artifact (`<workdir>/artifacts/`) | Gate (machine check) |
 |---|---|---|---|
-| 1 | intake | `01-intake.json/.md`: brief, template kit provenance, owner directives, rule ids | required brief fields; judge model ≠ writer model; previous version exists; **paper.official-template**: kit fetched in this run from the venue's official archive, with upstream commit and archive SHA-256 |
+| 1 | intake | `01-intake.json/.md`: brief, template kit provenance (landing page, archive URL, commit, SHA-256, year, page limit, anonymity rule), owner directives, rule ids, existing-draft snapshot | required brief fields; judge model ≠ writer model; page limit ≤ the venue's body limit; previous version exists; **paper.official-template**: kit fetched in this run from the venue's official source, with its archive URL and SHA-256 |
 | 2 | dossier | `02-dossier.json/.md`: facts with status/source, figures, bibliography, facts awaiting the owner | every fact sourced; local sources exist and contain every number the fact states; confirmed facts name the owner statement; figures exist, labelled, captioned; resume: first-author counts only from accepted papers |
 | 3 | evidence | `03-evidence.json/.md`, `experiment_requests.json`: claim → evidence → strength table | a row per claim; no-evidence claims rated `none`; every weak/none claim has a structured experiment request to the project lead; at least one claim supported |
 | 4 | novelty | `04-novelty.json/.md`: retrieved 2025–2026 candidates, positioning table, related-work BibTeX | a literature source answered; ≥1 retrieved 2025–2026 work positioned; each row has what-they-do / what-we-add, `delta_clear`, and cites a strong/moderate contribution |
 | 5 | outline | `05-outline.json/.md`: sections with one reader takeaway each | exact section ids and order; distinct takeaways; only usable facts; no weak/unsupported claim; every supported claim used; every figure placed once; resume: complete coverage, roles only from owner-confirmed timeline facts |
-| 6 | draft | `06-draft.json/.md`: LaTeX per section | rule lint (hedges/fences); **no invented numbers** (every decimal/percentage is in a usable fact); no pipeline internals in the text (dossier, fact ids, project lead); no pipeline internals in the text (dossier, fact ids, project lead); citations resolve; references resolve; no placeholders or stray `\section` |
+| 6 | draft | `06-draft.json/.md`: LaTeX per section | rule lint (hedges/fences); **no invented numbers** (every decimal/percentage is in a usable fact); no pipeline internals in the text (dossier, fact ids, project lead); citations resolve; references resolve; no placeholders or stray `\section` |
 | 7 | critique | `07-critique.json/.md`: venue-rubric scores, overall, owner checklist, findings, calibrated verdict | well-formed integer scores; every checklist item marked; findings name real sections |
 | 8 | revise | `08-revise.json/.md`: rewritten sections, lint refusals, blind adoption check | revised sections pass the draft gate; a rewrite is adopted only if the blind pairwise judge prefers it in both orders |
-| 9 | render | `09-render.json/.md`, `build/`: compiled PDF and QA report | compile success; 0 overfull boxes; 0 undefined refs/citations; body (a label after the conclusion, read from `.aux`) within the page limit; kit files byte-identical to the fetch; paper quality owner rows (figures captioned/labelled/referenced, fonts embedded, raster DPI) clean. One repair attempt feeds the failures back to the writer |
+| 9 | render | `09-render.json/.md`, `build/`: compiled PDF and QA report | compile success; 0 overfull boxes; 0 undefined refs/citations; body (a label after the conclusion, read from `.aux`) within the page limit; kit files byte-identical to the fetch; paper quality owner rows for the sources the document actually inputs (figures captioned/labelled/referenced, fonts embedded, raster DPI) clean; no venue-forbidden package. Repairs repeat while each one strictly lowers the failure measure; the best render is kept |
 | 10 | blind | `10-blind.json/.md`: both presentation orders with scores and reasons | **paper.blind-ab**: the new version wins in both orders; otherwise nothing is delivered |
 | 11 | deliver | `<doc_dir>/<output_dir>/`: PDF, `source/`, `manifest.json`, audit copies | delivered PDF hash equals the render-QA PDF |
 
@@ -126,6 +126,130 @@ calls: `lib.llm_dispatch.api.dispatch_chat` (CLI processes route it to the
 running server's OpenAI-compatible endpoint through the existing
 `evaluations/slides_bench/llm_bridge.py`, as the slides benchmark does).
 
+## Venues: newest official templates
+
+`venues.py` registers seven venues. Each declares its body page limit (with
+the call for papers it comes from), its anonymity rule, the unnumbered
+sections that do not count toward the limit, forbidden packages, the
+official sample paper, and the frame a freshly written paper uses. "Newest" is
+what the venue publishes, never a pinned year: year-addressed venues are
+probed for the coming conference year first, then the current one, through
+their own author-instructions page; repository venues take the official
+repository's default branch and its newest year-named kit.
+
+| Venue | Official source | Kit on 2026-11-18 | Body pages | Review build |
+|---|---|---|---|---|
+| `acl` (ACL/EMNLP/NAACL/ARR) | github.com/acl-org/acl-style-files (master) | commit `d5adc823` | 8 (long; set 4 for short) | `[review]`: anonymous, line numbers |
+| `iclr` | github.com/ICLR/Master-Template (newest `iclrYYYY/`) | `iclr2027`, commit `46ed6f4c` | 9 | default build is anonymous |
+| `colm` | github.com/COLM-org/Template (master) | `colm2026`, commit `963ddd1d` | 9 | `[submission]`: anonymous, line numbers |
+| `icml` | icml.cc/Conferences/{year}/AuthorInstructions → media.icml.cc/…/icml{year}.zip | ICML 2027 (`icml2027.sty` 2027-10-30) | 8 | no `[accepted]`: anonymous |
+| `neurips` | neurips.cc/Conferences/{year}/CallForPapers → media.neurips.cc/…zip | NeurIPS 2026 (`neurips_2026.sty`) | 9 | default (no `final`): anonymous |
+| `aaai` | aaai.org/authorkit{yy}/ | AuthorKit27 (`aaai2027.sty`) | 7 (pages 8-9 references only) | `[submission]`: anonymous; `hyperref`, `geometry`, … forbidden |
+| `cvpr` | cvpr.thecvf.com/Conferences/{year}/AuthorGuidelines → media.eventhosts.cc/…latex.zip | CVPR 2027 v1 | 8 | `[review]`: anonymous, line numbers |
+
+`scripts/document_pipeline.py check-venue <venue>` fetches the kit and
+compiles the venue's own sample paper. On 2026-11-18 all seven compiled with
+no TeX errors (ACL after installing TeX Live `mwe`; the official ICML and
+AAAI samples each carry one overfull box of their own). Evidence:
+`.eval-runs/document-pipeline/venue-check-20261118/`. The pipeline's frame for
+a freshly written paper also compiled clean in every venue.
+
+## Existing drafts
+
+Both pilot papers already exist as LaTeX. `run --draft main.tex` (brief:
+`"draft": {"main": "main.tex"}`, optional `"pdf"`) revises that draft
+instead of writing from the dossier, through the same eleven stages:
+
+- **intake** snapshots the draft tree into `<workdir>/source/` (the owner's
+  files are never written) and compares its style files with the fresh kit.
+  Outdated copies are replaced in the build, and the replacement is reported.
+- **dossier** reads the draft's own figures and `.bib`. `dossier.json` is
+  optional: facts there add to what the draft states.
+- **evidence** extracts every claim the draft makes as a verbatim quote (the
+  gate refuses paraphrases), with the figure/table labels it cites. Weak or
+  uncited claims become experiment requests to the project lead.
+- **novelty** positions the draft's claims against the closest 2025-2026 work.
+- **outline** is the draft's own section list plus one reader takeaway each.
+- **draft** imports the text unchanged and records its rule findings (hedges,
+  fences) as revision targets.
+- **revise** asks the writer for `{old, new}` edits. An edit applies only if
+  `old` occurs exactly once in the draft and `new` passes the draft gate: no
+  number absent from the draft and the dossier, no citation outside the
+  draft's bibliography, no hedges. It also must not drop a number stated by a
+  claim the evidence audit rated strong or moderate
+  (`draft.keep-supported-results`, added after the first live run, where the
+  writer emptied the abstract's supported results). The edited paper is adopted only if the
+  blind judge prefers it in both orders. `08-revise.md` shows the patch and
+  every refused edit with its reason.
+- **render** rebuilds the draft on the newest kit and repairs by targeted
+  edits. Figures are never edited: the owner's figure files pass through
+  unchanged unless the figure-QA rows fail them.
+- **blind** compares against the draft's PDF (`draft.pdf`), or the
+  unmodified draft compiled.
+- **deliver** writes `source/` (the owner's tree with the accepted edits) and
+  `revision.patch` against the draft, so the lead can apply or review it.
+
+The main file must sit at the top of the directory the pipeline runs on (it
+is compiled with its own relative `\input` paths).
+
+## Model choice and provenance
+
+The brief names `writer_model` and `judge_model` per run, and `run
+--writer-model M` overrides the writer for that run (recorded in the brief, so
+checkpoints bind to it). A brief without `writer_model` uses the documented
+routing default (`docs/MODEL_REGISTRATION.md`); the pipeline refuses if that
+default is the judge. Every model call is appended to
+`artifacts/models.json` (stage call, role, requested model, model the
+provider reported). A call answered by any other model than the one requested
+fails the stage, so nothing switches silently. The manifest carries the full
+list, and `status <workdir>` prints it.
+
+The Claude routes refuse frontier-LLM research content with
+`finish_reason: content_filter`. Another assignment showed this is bound to
+history and content, not to the prompt. The stage then fails with that reason
+and the instruction to name a writer from another model family. Rerunning
+with `--writer-model` resumes from the failed stage.
+
+## Runbook for a project lead
+
+From your paper directory (the one holding `main.tex`), with the running Tofu
+server, TeX Live (`latexmk`) and poppler (`pdftotext`, `pdffonts`) on `PATH`:
+
+1. **Check the venue once:**
+   `cd $TOFU && .venv/bin/python3 scripts/document_pipeline.py check-venue icml`.
+   Exit 0 means the newest official kit compiles here. Exit 2 prints the TeX
+   errors, usually a missing TeX Live package (`tlmgr install <name>`).
+2. **Write `document_brief.json`** in the paper directory:
+   ```json
+   {"type": "paper", "venue": "icml", "title": "…", "authors": "Anonymous",
+    "topic": "search phrase for the closest 2025-2026 work",
+    "novelty_queries": ["optional extra phrases"],
+    "audience": "ICML reviewers", "goal": "what the paper must convince them of",
+    "voice": "confident, precise, no hedging", "lang": "en",
+    "writer_model": "gpt-6.1-sol", "judge_model": "gpt-5.5",
+    "project_lead": "who runs requested experiments",
+    "draft": {"main": "main.tex", "pdf": "main.pdf"},
+    "output_dir": "pipeline_out"}
+   ```
+   `page_limit` is optional (the venue's limit applies; a smaller value is
+   allowed). Keep `judge_model: gpt-5.5`, the calibrated reviewer.
+3. **Optional `dossier.json`, built from your results:** facts the paper may
+   state beyond the draft (`id`, `kind` claim/contribution/result,
+   `text` with the numbers, `status: sourced`, `source.path` → the result file
+   that contains every number). The dossier gate checks each number against
+   its file. Without a dossier, the draft is the only evidence.
+4. **Run:**
+   `cd $TOFU && .venv/bin/python3 scripts/document_pipeline.py run <paper_dir> --draft main.tex`
+5. **Read the exit code:**
+
+   | Exit | Meaning | What to do |
+   |---|---|---|
+   | 0 | Delivered to `<paper_dir>/<output_dir>/`: PDF, `source/`, `revision.patch`, `manifest.json`, the evidence/novelty/review/blind/render reports, `models.json` | Review `revision.patch`, apply it to your draft if you agree, and send `experiment_requests.json` to whoever runs experiments |
+   | 2 | A stage gate refused. The stage, its errors and `<paper_dir>/.pipeline/artifacts/` are printed | `evidence`: answer the experiment requests. `novelty`: sharpen the delta. `render`: fix the cited overfull box, page overrun or unreferenced figure. `blind`: the judge preferred your draft; read `10-blind.md`. Writer `content_filter`: rerun with `--writer-model` from another family. Then rerun; unchanged stages resume |
+   | 1 | The run could not start or proceed: bad arguments, missing toolchain, network failure fetching the kit | Read the traceback; rerun after fixing |
+6. `scripts/document_pipeline.py status <paper_dir>/.pipeline` lists the stage
+   artifacts and the model behind every call.
+
 ## Running it on a paper (any project)
 
 A Worker in another project runs the pipeline on its own paper directory; it
@@ -133,9 +257,9 @@ needs read/write access to that directory only. Load the
 `document-pipeline` skill, or:
 
 1. In the paper directory, write `document_brief.json`:
-   `type` (`paper`), `venue` (`acl` or `iclr`), `title`, `authors`, `topic`,
+   `type` (`paper`), `venue` (one of `scripts/document_pipeline.py venues`), `title`, `authors`, `topic`,
    optional `novelty_queries`, `audience`, `goal`, `voice`, `lang`,
-   `page_limit` (body pages), `writer_model`, `judge_model` (a different
+   optional `page_limit` (body pages), `writer_model`, `judge_model` (a different
    model), `project_lead` (who receives experiment requests), `previous_pdf`
    (the current draft, for the blind A/B) and `output_dir`.
 2. Write `dossier.json`: `facts` (`id`, `kind` ∈ claim/contribution/result/
@@ -181,18 +305,13 @@ synthetic example of both files.
 
 ## Limits
 
-- Provider content filter: on 2026-11-18 the Claude routes (claude-opus-5.5,
-  claude-opus-5) answered the sample paper's outline prompt with
-  `finish_reason: content_filter` and empty content on every attempt, while
-  each half of the prompt alone passed. The pipeline reports this as
-  `<model> returned no content … (finish_reason=content_filter)`; the sample
-  brief uses `gpt-6.1-sol` as writer. The cause is upstream and was not
-  diagnosed further.
-
-- Registered venues: ACL family (`acl-org/acl-style-files`, used by ACL, EMNLP,
-  NAACL, ARR) and ICLR (`ICLR/Master-Template`, newest `iclrYYYY/`). NeurIPS
-  and ICML publish yearly archives at year-specific URLs; add them to
-  `venues.py` with their official URL when needed.
+- Claude writers refuse frontier-LLM research content (`content_filter`);
+  see "Model choice and provenance".
+- A venue that changes its author-instructions URL pattern or kit link breaks
+  `check-venue` loudly ("no official <venue> kit found") until `venues.py` is
+  updated; it never falls back to an old copy.
+- AAAI's frame uses the kit's mandated preamble; its forbidden-package list is
+  copied from AuthorKit27 and enforced on the sources the paper inputs.
 - The blind judge and the reviewer read extracted text, not page images;
   render QA is the visual gate.
 - The resume type's rules and gates are implemented and specified by tests;
@@ -234,6 +353,11 @@ calibration rerun above.
 
 `tests/longform/test_document_pipeline.py` specifies rule application, every
 stage gate, the critic contract, a full scripted run over the sample paper
-with a real TeX compile (delivery, resume without model calls) and a blind
-refusal that delivers nothing. Neighbors: `tests/production/`,
+with a real TeX compile (delivery, resume without model calls), a blind
+refusal that delivers nothing, newest-kit selection for all seven venues,
+the page-limit bound, model provenance and no-silent-switch, and an
+existing-draft run with a real compile: targeted edits only, an invented
+number refused, the outdated style file replaced, the owner's figure bytes
+and draft untouched. Real fetch-and-compile per venue is
+`scripts/document_pipeline.py check-venue`, run by hand (network). Neighbors: `tests/production/`,
 `tests/slides/` and `tests/motion_video/` critic users, `tests/paper/test_paper_quality.py`.

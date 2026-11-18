@@ -148,7 +148,8 @@ def _ctx(paper: Path, tmp_path: Path) -> dict:
 
 
 def _kit(fetched_at=200.0, commit='a' * 40):
-    return {'upstream_commit': commit, 'archive_sha256': 'b' * 64, 'files': {'x.sty': 'c'},
+    return {'upstream_commit': commit, 'archive_sha256': 'b' * 64 if commit else '',
+            'source_url': 'https://example.invalid/kit.zip', 'files': {'x.sty': 'c'},
             'fetched_at': fetched_at}
 
 
@@ -163,7 +164,7 @@ def test_intake_gate_refuses_shared_judge_and_stale_template(tmp_path):
     stale = pl._gate_intake(ctx, {**good, 'kit': _kit(fetched_at=50.0)})
     assert any('not fetched in this run' in e for e in stale)
     unproven = pl._gate_intake(ctx, {**good, 'kit': _kit(commit='')})
-    assert any('upstream commit' in e for e in unproven)
+    assert any('official archive URL or its hash' in e for e in unproven)
 
 
 def test_dossier_gate_refuses_numbers_absent_from_source(tmp_path):
@@ -297,14 +298,15 @@ def test_render_repairs_while_badness_falls_and_keeps_the_best(tmp_path, monkeyp
     from lib.longform.documents import render as render_mod
     ctx = _with_evidence(_with_dossier(_ctx(_sample(tmp_path), tmp_path)), monkeypatch)
     ctx['artifacts']['outline'] = _outline()
-    ctx['artifacts']['intake'] = {'kit': {'preamble': '\\usepackage{amsmath}', 'files': {}},
-                                  'owner_directives': {'items': []}}
+    ctx['artifacts']['intake'] = {'kit': {'files': {}, 'page_limit': 8},
+                                  'owner_directives': {'items': []}, 'draft': None}
+    ctx['artifacts']['draft'] = {'sections': {}}
     ctx['artifacts']['revise'] = {'sections': {sid: f'v0 {sid}' for sid, _t in
                                                document_type('paper').sections}}
     reports = iter([3, 1, 2])
     compiled = []
 
-    def fake_compile(build, **_k):
+    def fake_compile(build, **_k):  # noqa: ARG001
         n = next(reports, None)
         if n is None:  # the re-render of the kept best version
             n = compiled[1]
@@ -383,6 +385,22 @@ def _fake_chat(ctx, role, messages, label):
     raise AssertionError(f'unexpected model call {label}')
 
 
+def _fake_acl_kit(venue, destination):
+    """A stand-in for the fetched ACL kit (the real fetch is network)."""
+    destination.mkdir(parents=True, exist_ok=True)
+    sty = ('\\ProvidesPackage{acl}\n\\DeclareOption*{}\n\\ProcessOptions\\relax\n'
+           '\\RequirePackage[margin=1in]{geometry}\n\\RequirePackage{natbib}\n'
+           '\\bibliographystyle{plainnat}\n')
+    (destination / 'acl.sty').write_text(sty)
+    return {'venue': 'acl', 'source_url': 'https://example.invalid/kit.zip',
+            'landing_page': 'https://example.invalid', 'upstream_commit': 'f' * 40,
+            'archive_sha256': 'e' * 64, 'kit': '', 'engine': 'pdflatex', 'year': 2026,
+            'files': {'acl.sty': hashlib.sha256(sty.encode()).hexdigest()},
+            'fetched_at': __import__('time').time(), 'page_limit': 8,
+            'page_limit_source': 'test', 'anonymity': 'test',
+            'unlimited_sections': ['Limitations'], 'forbidden_packages': []}
+
+
 @pytest.mark.skipif(not _tex_ready(), reason='latexmk with pgfplots/natbib not installed')
 def test_full_pipeline_delivers_and_resumes(tmp_path, monkeypatch):
     import sys
@@ -390,20 +408,8 @@ def test_full_pipeline_delivers_and_resumes(tmp_path, monkeypatch):
     from build_sample_paper import build
     paper = build(tmp_path / 'paper')
 
-    def fake_kit(venue, destination):
-        destination.mkdir(parents=True, exist_ok=True)
-        (destination / 'tofukit.sty').write_text('\\ProvidesPackage{tofukit}\n')
-        return {'source_url': 'https://example.invalid/kit.zip', 'upstream_commit': 'f' * 40,
-                'archive_sha256': 'e' * 64, 'kit': '', 'engine': 'pdflatex',
-                'files': {'tofukit.sty': hashlib.sha256(
-                    (destination / 'tofukit.sty').read_bytes()).hexdigest()},
-                'fetched_at': __import__('time').time(),
-                'preamble': ('\\documentclass[11pt]{article}\n\\usepackage{tofukit}\n'
-                             '\\usepackage[margin=1in]{geometry}\n\\usepackage{natbib}\n'
-                             '\\usepackage{graphicx}\n\\usepackage{booktabs}\n'),
-                'bibstyle': 'plainnat'}
     calls = []
-    monkeypatch.setattr(pl, '_fetch_kit', fake_kit)
+    monkeypatch.setattr(pl, '_fetch_kit', _fake_acl_kit)
     monkeypatch.setattr(pl, '_academic_search', lambda q: (
         [{'title': 'Close 2025 Work', 'year': 2025, 'arxiv_id': '2501.00001',
           'authors': ['A. Author'], 'abstract': 'stochastic rounding'}],
@@ -431,14 +437,7 @@ def test_blind_gate_refuses_delivery_when_previous_wins(tmp_path, monkeypatch):
     sys.path.insert(0, str(FIXTURES))
     from build_sample_paper import build
     paper = build(tmp_path / 'paper')
-    monkeypatch.setattr(pl, '_fetch_kit', lambda venue, destination: (
-        destination.mkdir(parents=True, exist_ok=True),
-        (destination / 'k.sty').write_text('\\ProvidesPackage{k}\n'),
-        {'source_url': 'x', 'upstream_commit': 'f' * 40, 'archive_sha256': 'e' * 64,
-         'engine': 'pdflatex', 'fetched_at': __import__('time').time(),
-         'files': {'k.sty': hashlib.sha256(b'\\ProvidesPackage{k}\n').hexdigest()},
-         'preamble': '\\documentclass{article}\n\\usepackage{k}\n\\usepackage{natbib}\n'
-                     '\\usepackage{graphicx}\n', 'bibstyle': 'plainnat'})[2])
+    monkeypatch.setattr(pl, '_fetch_kit', _fake_acl_kit)
     monkeypatch.setattr(pl, '_academic_search', lambda q: (
         [{'title': 'Close 2025 Work', 'year': 2025, 'arxiv_id': '2501.00001'}],
         [{'source': 'arxiv', 'status': 'available'}]))
@@ -454,3 +453,280 @@ def test_blind_gate_refuses_delivery_when_previous_wins(tmp_path, monkeypatch):
     assert failure.value.stage == 'blind'
     assert not (paper / 'delivered').exists()
     assert (tmp_path / 'work' / 'artifacts' / '10-blind.json').is_file()
+
+
+# ── venues ──────────────────────────────────────────────────────────────────
+
+def _zip(entries: dict, comment: bytes = b'') -> bytes:
+    import io
+    import zipfile
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w') as archive:
+        for name, content in entries.items():
+            archive.writestr(name, content)
+        archive.comment = comment
+    return buffer.getvalue()
+
+
+_NOW_2026 = 1794960000.0   # 2026-11-17
+
+
+def _venue_downloads():
+    """Each venue's official locations, shaped like the real ones (2026-11-18)."""
+    icml = _zip({'icml2027.sty': 's', 'icml2027.bst': 'b', 'fancyhdr.sty': 'f',
+                 'example_paper.tex': 't', 'example_paper.bib': ''})
+    neurips = _zip({'neurips_2026.sty': 's', 'neurips_2026.tex': 't', 'checklist.tex': 'c'})
+    aaai = _zip({'AuthorKit27/aaai2027.sty': 's', 'AuthorKit27/aaai2027.bst': 'b',
+                 'AuthorKit27/AnonymousSubmission2027.tex': 't',
+                 'AuthorKit27/Figures/figure1.pdf': 'p'})
+    cvpr = _zip({'cvpr.sty': 's', 'ieeenat_fullname.bst': 'b', 'preamble.tex': 'p',
+                 'main.tex': 't', 'sec/1_intro.tex': 'i'})
+    colm = _zip({'Template-master/colm2026_conference.sty': 's',
+                 'Template-master/colm2026_conference.bst': 'b',
+                 'Template-master/colm2026_conference.tex': 't',
+                 'Template-master/math_commands.tex': 'm'}, b'9' * 40)
+    iclr = _zip({'Master-Template-master/iclr2026/iclr2026_conference.sty': 'old',
+                 'Master-Template-master/iclr2027/iclr2027_conference.sty': 's',
+                 'Master-Template-master/iclr2027/iclr2027_conference.tex': 't',
+                 'Master-Template-master/iclr2027/math_commands.tex': 'm'}, b'8' * 40)
+    pages = {
+        'https://icml.cc/Conferences/2027/AuthorInstructions':
+            b'<a href="https://media.icml.cc/Conferences/ICML2027/styles/icml2027.zip">',
+        'https://media.icml.cc/Conferences/ICML2027/styles/icml2027.zip': icml,
+        'https://neurips.cc/Conferences/2026/CallForPapers':
+            b'<a href="https://media.neurips.cc/Conferences/NeurIPS2026/'
+            b'Formatting_Instructions_For_NeurIPS_2026.zip">',
+        'https://media.neurips.cc/Conferences/NeurIPS2026/'
+        'Formatting_Instructions_For_NeurIPS_2026.zip': neurips,
+        'https://aaai.org/authorkit27/': aaai,
+        'https://cvpr.thecvf.com/Conferences/2027/AuthorGuidelines':
+            b'<a href="https://media.eventhosts.cc/Conferences/CVPR2027/'
+            b'author-kit-CVPR2027-v1-latex.zip">',
+        'https://media.eventhosts.cc/Conferences/CVPR2027/author-kit-CVPR2027-v1-latex.zip': cvpr,
+        'https://github.com/COLM-org/Template/archive/refs/heads/master.zip': colm,
+        'https://github.com/ICLR/Master-Template/archive/refs/heads/master.zip': iclr,
+    }
+    asked = []
+
+    def download(url):
+        asked.append(url)
+        if url not in pages:
+            raise RuntimeError(f'{url}: HTTP 404')
+        return pages[url], url
+    return download, asked
+
+
+@pytest.mark.parametrize('venue, year, kit_file, sample, limit', [
+    ('icml', 2027, 'icml2027.sty', 'example_paper.tex', 8),
+    ('neurips', 2026, 'neurips_2026.sty', 'neurips_2026.tex', 9),
+    ('aaai', 2027, 'aaai2027.sty', 'AnonymousSubmission2027.tex', 7),
+    ('cvpr', 2027, 'cvpr.sty', 'main.tex', 8),
+    ('colm', 2026, 'colm2026_conference.sty', 'colm2026_conference.tex', 9),
+    ('iclr', 2027, 'iclr2027_conference.sty', 'iclr2027_conference.tex', 9),
+])
+def test_venue_kit_is_the_newest_official_one(tmp_path, venue, year, kit_file, sample, limit):
+    from lib.longform.documents.venues import fetch_official_kit
+    download, asked = _venue_downloads()
+    kit = fetch_official_kit(venue, tmp_path / venue, download=download, now=_NOW_2026)
+    assert kit['year'] == year and kit_file in kit['files']
+    assert kit['page_limit'] == limit and kit['anonymity'] and kit['page_limit_source']
+    assert kit['sample'] == sample
+    assert (Path(kit['sample_dir']) / sample).is_file()
+    assert (tmp_path / venue / kit_file).read_text() == 's'
+    if venue == 'neurips':   # the coming year is probed first, then this year
+        assert asked[0] == 'https://neurips.cc/Conferences/2027/CallForPapers'
+    if venue == 'iclr':
+        assert 'iclr2026_conference.sty' not in kit['files']
+        assert kit['upstream_commit'] == '8' * 40
+
+
+def test_unregistered_or_unpublished_venue_is_refused(tmp_path):
+    from lib.longform.documents.venues import fetch_official_kit
+    with pytest.raises(ValueError, match='no registered official'):
+        fetch_official_kit('emnlp-findings', tmp_path)
+    with pytest.raises(ValueError, match='no official icml kit'):
+        fetch_official_kit('icml', tmp_path, download=lambda url: (_ for _ in ()).throw(
+            RuntimeError(f'{url}: HTTP 404')), now=_NOW_2026)
+
+
+def test_venue_page_limit_bounds_the_brief(tmp_path):
+    paper = _sample(tmp_path)
+    ctx = _ctx(paper, tmp_path)
+    kit = dict(_kit(), page_limit=8, page_limit_source='CFP')
+    over = dict(ctx['brief'], page_limit=9)
+    assert any('exceeds the venue' in e for e in pl._gate_intake(
+        ctx, {'brief': over, 'kit': kit, 'run_started': 100.0}))
+    unset = {k: v for k, v in ctx['brief'].items() if k != 'page_limit'}
+    assert pl._gate_intake(ctx, {'brief': unset, 'kit': kit, 'run_started': 100.0}) == []
+
+
+def test_document_cli_is_tracked_not_gitignored():
+    proc = subprocess.run(['git', 'check-ignore', '-q', 'scripts/document_pipeline.py'],
+                          cwd=Path(__file__).resolve().parents[2], check=False)
+    assert proc.returncode == 1, 'scripts/document_pipeline.py is gitignored and would not land'
+
+
+# ── existing drafts ─────────────────────────────────────────────────────────
+
+def test_existing_draft_edits_are_targeted_and_unique():
+    from lib.longform.documents import existing_draft as ed
+    files = {'main.tex': 'We believe X holds. X holds.', 'sec/a.tex': 'Y.'}
+    new, applied, rejected = ed.apply_edits(files, [
+        {'old': 'We believe X holds.', 'new': 'X holds.'},
+        {'old': 'X holds.', 'new': 'Z.'},
+        {'old': 'Y.', 'new': 'Y holds.'}])
+    assert new == {'main.tex': 'X holds. X holds.', 'sec/a.tex': 'Y holds.'}
+    assert [row['file'] for row in applied] == ['main.tex', 'sec/a.tex']
+    assert 'occurs 2 times' in rejected[0]['reason']
+    patch = ed.unified_patch(files, new)
+    assert '-We believe X holds. X holds.' in patch and '+Y holds.' in patch
+
+
+def test_existing_draft_sections_and_body_end(tmp_path):
+    from lib.longform.documents import existing_draft as ed
+    (tmp_path / 'sec').mkdir()
+    (tmp_path / 'sec' / 'intro.tex').write_text('Intro text.\n')
+    (tmp_path / 'main.tex').write_text(
+        '\\documentclass{article}\\begin{document}\\begin{abstract}Abs.\\end{abstract}\n'
+        '\\section{Introduction}\\input{sec/intro}\n\\section{Results \\& Analysis}R.\n'
+        '\\section*{Limitations}L.\n\\bibliography{refs}\n\\appendix\\section{Extra}E.\n'
+        '\\end{document}\n')
+    rows = ed.sections(ed.expand(tmp_path, 'main.tex'))
+    assert [row['id'] for row in rows] == ['abstract', 'introduction', 'results_analysis']
+    assert rows[1]['text'] == 'Intro text.'
+    marked = ed.mark_body_end((tmp_path / 'main.tex').read_text(), 'END', ('Limitations',))
+    assert marked.index('\\label{END}') < marked.index('\\section*{Limitations}')
+
+
+def test_writer_model_is_recorded_and_never_switched_silently(tmp_path, monkeypatch):
+    ctx = {'workdir': str(tmp_path), 'brief': {'writer_model': 'w', 'judge_model': 'j'}}
+    monkeypatch.setattr(pl, '_llm_chat', lambda messages, **k: ('ok', {'model': k['prefer_model']}))
+    assert pl._chat(ctx, 'writer', [{'role': 'user', 'content': 'x'}], 'draft:intro') == 'ok'
+    rows = json.loads((tmp_path / 'artifacts' / 'models.json').read_text())
+    assert rows[0] | {'at': 0} == {'stage_call': 'draft:intro', 'role': 'writer',
+                                   'requested': 'w', 'reported': 'w', 'at': 0}
+    monkeypatch.setattr(pl, '_llm_chat', lambda messages, **k: ('ok', {'model': 'other'}))
+    with pytest.raises(RuntimeError, match='refusing a silent switch'):
+        pl._chat(ctx, 'writer', [{'role': 'user', 'content': 'x'}], 'outline')
+    monkeypatch.setattr(pl, '_llm_chat', lambda messages, **k: (
+        '', {'model': 'w', 'finish_reason': 'content_filter'}))
+    with pytest.raises(RuntimeError, match='another model family'):
+        pl._chat(ctx, 'writer', [{'role': 'user', 'content': 'x'}], 'outline')
+    unnamed = {'workdir': str(tmp_path), 'brief': {'judge_model': 'j'}}
+    seen = {}
+    monkeypatch.setattr(pl, '_llm_chat', lambda messages, **k: (
+        seen.update(k), ('ok', {'model': 'routed'}))[1])
+    assert pl._chat(unnamed, 'writer', [{'role': 'user', 'content': 'x'}], 'outline') == 'ok'
+    assert seen['prefer_model'] is None and seen['strict_model'] is False
+    monkeypatch.setattr(pl, '_llm_chat', lambda messages, **k: ('ok', {'model': 'j'}))
+    with pytest.raises(RuntimeError, match='routing default writer is the judge'):
+        pl._chat(unnamed, 'writer', [{'role': 'user', 'content': 'x'}], 'outline')
+
+
+_DRAFT_CLAIM = ('Stochastically rounding only the 8.7\\% of parameters that fail the test '
+                'reaches validation loss 3.125, against 3.124 for stochastic rounding '
+                'everywhere and 3.112 for FP32 master weights.')
+
+
+def _draft_chat(calls):
+    def chat(ctx, role, messages, label):
+        calls.append(label)
+        content = messages[-1]['content']
+        if label == 'evidence-draft':
+            return json.dumps([
+                {'quote': _DRAFT_CLAIM, 'section': 'abstract', 'evidence': ['tab:loss'],
+                 'strength': 'strong', 'rationale': 'table'},
+                {'quote': 'A half-ulp test predicts stale updates with precision 0.98 and '
+                          'recall 0.96.', 'section': 'abstract', 'evidence': [],
+                 'strength': 'strong', 'rationale': 'no table shows it'}])
+        if label == 'novelty':
+            return json.dumps([{'cid': 'c1', 'what_they_do': 'SR everywhere',
+                                'what_we_add': 'only flagged parameters',
+                                'evidence': ['draft-1'], 'delta_clear': True}])
+        if label == 'outline':
+            ids = content.split('Section ids: ', 1)[1].split('\n', 1)[0].split(', ')
+            return json.dumps({'sections': [{'id': sid, 'takeaway': f'point of {sid}'}
+                                            for sid in ids]})
+        if label == 'critique':
+            return json.dumps({
+                'scores': {name: 6 for name, _m in document_type('paper').rubric},
+                'overall': 5, 'checklist': [{'rule': r.id, 'pass': True, 'quote': 'q'}
+                                            for r in rules_for('paper') if r.kind == 'checklist'],
+                'findings': [{'section': 'introduction', 'issue': 'hedged',
+                              'fix': 'state it'}]})
+        if label == 'revise:introduction':
+            return json.dumps([
+                {'old': 'but it seems to stall.', 'new': 'but it stalls.'},
+                {'old': 'We believe the reason is simple: an', 'new': 'The reason is simple: an'},
+                {'old': 'Pure BF16 training removes', 'new': 'It reaches loss 9.999 and removes'}])
+        if label == 'revise:abstract':
+            return json.dumps([
+                {'old': 'is believed to lose accuracy, and we think the cause might be rounding.',
+                 'new': 'loses accuracy, and rounding is the cause.'},
+                {'old': _DRAFT_CLAIM, 'new': 'Selective rounding works.'}])
+        if label in ('revise-ab', 'blind-ab'):
+            pair = json.loads(content.split('Candidates:\n', 1)[1])
+            newer = 0 if 'seems to stall' not in json.dumps(pair[0]) \
+                and 'seems to\\nstall' not in json.dumps(pair[0]) else 1
+            scores = [{'novelty': 5}, {'novelty': 5}]
+            scores[newer] = {'novelty': 8}
+            return json.dumps({'winner': newer + 1, 'reason': 'crisper', 'scores': scores})
+        raise AssertionError(f'unexpected model call {label}')
+    return chat
+
+
+@pytest.mark.skipif(not _tex_ready(), reason='latexmk with pgfplots/natbib not installed')
+def test_existing_draft_is_revised_in_place_by_targeted_edits(tmp_path, monkeypatch):
+    import sys
+    sys.path.insert(0, str(FIXTURES))
+    from build_sample_paper import build_draft
+    paper = build_draft(tmp_path / 'paper')
+    original = (paper / 'main.tex').read_text()
+    figure_bytes = (paper / 'figures' / 'loss_curve.pdf').read_bytes()
+    calls = []
+    monkeypatch.setattr(pl, '_fetch_kit', _fake_acl_kit)
+    monkeypatch.setattr(pl, '_academic_search', lambda q: (
+        [{'title': 'Close 2025 Work', 'year': 2025, 'arxiv_id': '2501.00001'}],
+        [{'source': 'arxiv', 'status': 'available'}]))
+    monkeypatch.setattr(pl, '_chat', _draft_chat(calls))
+    artifacts = pl.run_document_pipeline(str(paper), str(tmp_path / 'work'))
+    assert not any(label.startswith('draft:') for label in calls), 'nothing is rewritten'
+    evidence = artifacts['evidence']
+    gap = next(row for row in evidence['rows'] if row['claim_id'] == 'draft-2')
+    assert gap['strength'] == 'none'
+    assert any(req['claim_id'] == 'draft-2' for req in evidence['requests'])
+    revise = artifacts['revise']
+    assert revise['adopted'] is True
+    refused = [row for row in revise['rejected_edits'] if '9.999' in row['new']]
+    assert refused and 'no-invented-numbers' in refused[0]['reason']
+    dropped = [row for row in revise['rejected_edits'] if row['new'] == 'Selective rounding works.']
+    assert dropped and 'drops supported result' in dropped[0]['reason']
+    assert artifacts['render']['failures'] == []
+    assert artifacts['render']['replaced_template_files'] == ['acl.sty']
+    assert artifacts['blind']['preferred'] is True
+    delivered = paper / 'delivered'
+    revised = (delivered / 'source' / 'main.tex').read_text()
+    assert 'but it stalls.' in revised and 'seems to stall' not in revised
+    assert 'tofu-pipeline-body-end' not in revised and '9.999' not in revised
+    assert _DRAFT_CLAIM in revised, 'a supported result survives revision'
+    assert (delivered / 'source' / 'figures' / 'loss_curve.pdf').read_bytes() == figure_bytes
+    assert (paper / 'main.tex').read_text() == original, 'the owner\'s draft is untouched'
+    patch = (delivered / 'revision.patch').read_text()
+    assert 'seems to stall' in patch and '9.999' not in patch
+    assert '+' + _DRAFT_CLAIM not in patch, 'unflagged sentences are left alone'
+    manifest = json.loads((delivered / 'manifest.json').read_text())
+    assert manifest['mode'] == 'revised existing draft'
+    assert manifest['replaced_template_files'] == ['acl.sty']
+
+
+def test_render_judges_only_sources_the_document_inputs(tmp_path):
+    from lib.longform.documents import existing_draft as ed
+    (tmp_path / 'sec').mkdir()
+    (tmp_path / 'kit_sample').mkdir()
+    (tmp_path / 'main.tex').write_text('\\input{sec/a}\n\\include{sec/b.tex}\n')
+    (tmp_path / 'sec' / 'a.tex').write_text('\\input{c}\n')
+    (tmp_path / 'sec' / 'b.tex').write_text('B')
+    (tmp_path / 'c.tex').write_text('C')
+    (tmp_path / 'kit_sample' / 'sample.tex').write_text('\\includegraphics{myfile}')
+    assert ed.reachable_tex(tmp_path, 'main.tex') == {'main.tex', 'sec/a.tex', 'sec/b.tex',
+                                                      'c.tex'}

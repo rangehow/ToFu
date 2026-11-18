@@ -71,7 +71,6 @@ Public API
 from __future__ import annotations
 
 from dataclasses import dataclass
-import hashlib
 import json
 from typing import Any
 
@@ -79,6 +78,7 @@ import orjson
 
 from lib.conversation_sync.settled_rows import is_settled, memo_get, memo_put
 from lib.log import get_logger
+from lib.utils import md5_holding_gil
 from lib.tasks_pkg.wire_fingerprint_diff import (
     diff_canonical as diff_canonical,
     first_changed_index as first_changed_index,
@@ -96,7 +96,7 @@ logger = get_logger(__name__)
 def _md5(text: str) -> str:
     # The system and tool bytes repeat every request of a Turn.
     from lib.llm_sanitize.context_sections import memoized_text
-    return memoized_text(('md5-16', text), lambda: hashlib.md5(
+    return memoized_text(('md5-16', text), lambda: md5_holding_gil(
         text.encode('utf-8', errors='replace')).hexdigest()[:16])
 
 

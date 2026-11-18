@@ -909,7 +909,8 @@ requires the owner's Global Router conversation (resolved through
 `lib.router.binding.global_router`), except `channel_read`, which a subscriber
 of the requested thread may also use (one thread: `thread` and `event_id`,
 when both are given, must name the same thread), and `channel_send` to the
-owner's own command chat, which a Project Router may also use (ROUTER.md R9
+owner's own command chat, which a Project Router may also use, in its owner
+requests and its continuation wakes alike, never a Worker (ROUTER.md R9
 "Leads reach the owner directly": any other thread is `owner_chat_only`, and each
 call, refusals included, is a `lead_channel_send` audit record); `channel_outbox_approve`,
 `channel_configure_thread`, `channel_subscribe` and `channel_unsubscribe`

@@ -8,12 +8,12 @@ tool or message-field that changed between rounds.
 
 from __future__ import annotations
 
-import hashlib
 import json
 
 import orjson
 
 from lib.log import get_logger
+from lib.utils import md5_holding_gil
 
 logger = get_logger(__name__)
 
@@ -40,7 +40,7 @@ PrefixFieldRow = tuple[int | None, ...]
 
 def _md5(text: str) -> str:
     """Fast hash for comparison (not security)."""
-    return hashlib.md5(text.encode('utf-8', errors='replace')).hexdigest()[:16]
+    return md5_holding_gil(text.encode('utf-8', errors='replace')).hexdigest()[:16]
 
 
 # The last (system text, hash) pair. Rounds of a Turn send the same system

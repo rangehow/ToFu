@@ -438,9 +438,9 @@ def test_sender_validity_cache_is_per_injection_and_includes_invalid_senders(set
         mailbox.submit(sender, {'content': sender, 'idempotency_key': str(index)}, 'task-s')
     scope_calls = []
     original_scope = pm.scope
-    def observed_scope(owner, conversation_id, expected_project=''):
+    def observed_scope(owner, conversation_id, expected_project='', **options):
         scope_calls.append(conversation_id)
-        return original_scope(owner, conversation_id, expected_project)
+        return original_scope(owner, conversation_id, expected_project, **options)
     monkeypatch.setattr(pm, 'scope', observed_scope)
     messages = [{'role': 'user', 'content': 'Objective'}]
     pm.inject(setup.recipient, messages, 0)

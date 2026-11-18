@@ -36,9 +36,9 @@ from lib.storage_authority_sql.adapters.sqlite_read_pool import (
 from lib.storage_authority_sql.backup_policy import (
     capacity_preflight,
     cleanup_job_artifacts,
-    job_manifest_path,
     prune_verified_backups,
     reclaim_stale_job_artifacts,
+    retire_job_manifest,
     write_job_manifest,
 )
 from lib.storage_authority_sql.config import SidecarConfig
@@ -2046,7 +2046,7 @@ class SQLiteBackend(Backend):
                 try:
                     self._release_read(slot)
                 finally:
-                    job_manifest_path(temporary).unlink(missing_ok=True)
+                    retire_job_manifest(temporary)
 
     def _backup_fastpath_locked(
         self,
@@ -2176,7 +2176,7 @@ class SQLiteBackend(Backend):
                 if target.exists() and not target.with_name(
                         target.name + '.manifest.json').exists():
                     target.unlink(missing_ok=True)
-            job_manifest_path(temporary).unlink(missing_ok=True)
+            retire_job_manifest(temporary)
 
     def baseline(self, deadline_at: float) -> dict[str, Any]:
         def collect(session: SQLiteSession):

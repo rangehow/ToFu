@@ -522,8 +522,9 @@ def withdraw_question(owner, coordinator_id, guidance_id, *, reason, live_rounds
         raise QuestionNotWithdrawable(f'{guidance_id} is already answered; the owner\u2019s answer stands')
     answered, turn = _card(owner, row['value'], turn_get)
     if answered:
-        _recorded(client, row, lambda value, by=turn.get('ordinal'): None if value.get('answeredAt')
-                  else _answered(value, by))
+        answered_by = turn.get('ordinal')
+        _recorded(client, row, lambda value: None if value.get('answeredAt')
+                  else _answered(value, answered_by))
         raise QuestionNotWithdrawable(f'{guidance_id} is already answered; the owner\u2019s answer stands')
     withdrawal = {'reason': reason, 'at': int(time.time() * 1000)}
     stored = _update(client, row, lambda value: None if value.get('answeredAt') or value.get('withdrawnAt')

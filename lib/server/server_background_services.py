@@ -722,6 +722,7 @@ def stop_registered_background_services(app, *, timeout: float = 2.0) -> int:
             log.warning('Plugin shutdown hooks failed: %s', exc)
 
     try:
+        extensions[STOPPING_OWNER_KEY] = 'browser bridge relay'
         from lib.browser.bridge_relay import stop_bridge_owner
         if not stop_bridge_owner(timeout=timeout):
             late.append(LateBackgroundOwner('browser bridge relay', writes_storage=False,
@@ -733,6 +734,7 @@ def stop_registered_background_services(app, *, timeout: float = 2.0) -> int:
         log.warning('browser bridge relay shutdown failed: %s', exc)
 
     try:
+        extensions[STOPPING_OWNER_KEY] = 'desktop bridge relay'
         from lib.desktop.bridge_relay import stop_bridge_owner as stop_desktop_owner
         if not stop_desktop_owner(timeout=timeout):
             late.append(LateBackgroundOwner('desktop bridge relay', writes_storage=False,
@@ -744,6 +746,7 @@ def stop_registered_background_services(app, *, timeout: float = 2.0) -> int:
         log.warning('desktop bridge relay shutdown failed: %s', exc)
 
     try:
+        extensions[STOPPING_OWNER_KEY] = 'MCP bridge relay'
         from lib.mcp.bridge_relay import stop_mcp_owner
         if not stop_mcp_owner(timeout=timeout):
             late.append(LateBackgroundOwner('MCP bridge relay', writes_storage=False,

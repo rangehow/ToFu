@@ -974,30 +974,12 @@ def classify_status_error(status_code, err_text, *, body, log_prefix, raw_dumper
         raise mark_status_line_refusal(error)
 
 
-def _wire_tool_names(tools) -> set[str]:
-    """Extract callable names from every supported wire-tool shape.
-
-    Responses Tool Search nests deferred functions inside ``namespace.tools``;
-    treating only the namespace's own name as callable would falsely report a
-    successfully searched function as hallucinated.
-    """
-    names: set[str] = set()
-    for tool in tools or ():
-        if not isinstance(tool, dict):
-            continue
-        if tool.get('type') == 'namespace':
-            names.update(_wire_tool_names(tool.get('tools') or ()))
-            continue
-        func = tool.get('function')
-        if isinstance(func, dict) and func.get('name'):
-            names.add(str(func['name']))
-        elif tool.get('type') == 'function' and tool.get('name'):
-            names.add(str(tool['name']))
-        elif (tool.get('name') and tool.get('type') not in (
-                'tool_search', 'programmatic_tool_calling')):
-            # Anthropic-native function schema.
-            names.add(str(tool['name']))
-    return names
+def _sent_tool_names(body) -> set[str] | frozenset[str]:
+    """Callable names the request offered; a sealed request names them at sealing."""
+    from lib.llm.request import AdmittedRequest, wire_tool_names
+    if isinstance(body, AdmittedRequest):
+        return body.tool_names
+    return wire_tool_names(body.get('tools') or [])
 
 
 class SSEAccumulator:
@@ -1972,7 +1954,7 @@ class SSEAccumulator:
             # cannot be part of its identifier.
             return False
         try:
-            _sent = _wire_tool_names(self.body.get('tools') or [])
+            _sent = _sent_tool_names(self.body)
         except Exception as _e:
             logger.debug('%s toolset read failed in fragment check: %s',
                          self.log_prefix, _e)
@@ -2145,7 +2127,7 @@ class SSEAccumulator:
                 # (see lib/llm/anthropic_outbound/_to_anthropic.py). Reading
                 # only the nested form yields an EMPTY whitelist on the
                 # Anthropic line, which would skip the loop entirely.
-                _sent_names = _wire_tool_names(self.body.get('tools') or [])
+                _sent_names = _sent_tool_names(self.body)
                 if _sent_names:
                     for _idx, _tc in self.tool_calls_acc.items():
                         _nm = _tc['function']['name']

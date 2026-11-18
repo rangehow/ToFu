@@ -3,9 +3,10 @@
 Responsibility: name, at the start of each round's context preparation, the
 reads that the round's boundary owners make anyway -- the committed-steer Turn
 head (``committed_steers``), the execution requirements (attempt, Turn head and
-requirements record, ``acceptance.turns``) and the working-fact aggregate
-(``memory.working_facts``) -- so that they cost ONE pipelined ``query_many``
-instead of five sequential round trips (the Turn head they share is read
+requirements record, ``acceptance.turns``), the working-fact aggregate
+(``memory.working_facts``) and the project-message inbox's conversation scope
+(``conversations.project_messages.identity``) -- so that they cost ONE
+pipelined ``query_many`` instead of six sequential round trips (the Turn head they share is read
 once). The first of them to read (the steer check, on the Turn thread, where
 the head was read before) sends the exchange; the requirement and fact reads
 on the provider executor then find their answers. Each owner still decides
@@ -35,7 +36,7 @@ steer check) reads live.
 
 Entry: prefetch_round_reads, begin_round_reads, round_reads, end_round_reads.
 Dependencies: lib.storage.port, lib.turn_lifecycle, lib.acceptance.turns,
-lib.memory.working_facts.repository.
+lib.memory.working_facts.repository, lib.conversations.repository.
 """
 from __future__ import annotations
 
@@ -57,6 +58,16 @@ def _requests(task: dict[str, Any]) -> list:
     from lib.tasks_pkg.requirement_source import requirement_source
     from lib.turn_lifecycle import turn_read_request
     requests = []
+    if (task.get('convId') and not task.get('_parentTaskId')
+            and not task.get('_transientRuntime')):
+        # The project-message inbox's conversation scope
+        # (``project_messages.identity``).
+        from lib.conversations.repository import conversation_read_request
+        try:
+            requests.append(conversation_read_request(
+                str(task['convId']), user_id=task_user_id(task), include_messages=False))
+        except ValueError:
+            pass  # identity() refuses the same task itself, reading nothing.
     conversation_id = completion_conversation_id(task)
     if conversation_id and task.get('_turnId') and task.get('_attemptId'):
         requests.append(turn_read_request(conversation_id, task['_turnId'],

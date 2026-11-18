@@ -13,6 +13,7 @@ import pytest
 
 from lib.tasks_pkg.handlers import tool_result_artifacts as handler
 from lib.agent_core.storage_errors import StorageError
+from lib.storage_authority_sql.operations_pkg import _tool_result_query
 from lib.storage_authority_sql.operations_pkg._artifacts import (
     _tool_result_artifact_read, _tool_result_artifact_search,
 )
@@ -25,6 +26,14 @@ pytestmark = pytest.mark.unit
 @pytest.fixture(autouse=True)
 def byte_accounting(monkeypatch):
     monkeypatch.setattr(handler, '_count_tokens', lambda text, model: len(text.encode()))
+
+
+@pytest.fixture(autouse=True)
+def frozen_scan_clock(monkeypatch):
+    # The scan deadline is wall-clock; a loaded host can stall past it before
+    # the first page and get a legitimate retryable query_budget_exhausted.
+    # These specifications pin query counts and pages, not scheduling.
+    monkeypatch.setattr(_tool_result_query, 'time', SimpleNamespace(monotonic=lambda: 0.0))
 
 
 def counted_repository(store, calls):

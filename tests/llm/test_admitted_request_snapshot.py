@@ -217,3 +217,20 @@ def test_probe_wire_projection_preserves_nested_user_fields():
     assert set(wire) == {'model', 'tools'}
     assert '_user_field' in wire['tools'][0]['parameters']['properties']
     assert source == before
+
+
+@pytest.mark.parametrize('protocol', ['openai', 'anthropic', 'responses'])
+def test_sealed_tool_names_answer_stream_checks_without_decoding_the_payload(monkeypatch, protocol):
+    """The stream's offered-tool check reads the names bound at sealing; the
+    tool schemas are never decoded back out of the sealed payload."""
+    from lib.llm._sse_core import _sent_tool_names
+    from lib.llm.request import wire_tool_names
+    sealed = prepare(body(), api_protocol=protocol).body
+    assert sealed.tool_names == {'lookup'}
+    assert sealed.tool_names == wire_tool_names(json.loads(sealed.payload)['tools'])
+
+    def no_decode(*_args, **_kwargs):
+        raise AssertionError('the sealed payload was decoded')
+    monkeypatch.setattr('lib.llm.request.json.loads', no_decode)
+    assert _sent_tool_names(sealed) == {'lookup'}
+    assert _sent_tool_names({'tools': [{'name': 'native', 'input_schema': {}}]}) == {'native'}

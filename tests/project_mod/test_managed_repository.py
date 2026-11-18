@@ -463,3 +463,37 @@ def test_plan_shares_bulk_data_but_keeps_source_trees_and_occupied_directories()
              'mixed/keep.py', *(f'mixed/blob{index}.bin' for index in range(6))]
     plan = mr.plan_content(mr.Path('/nonexistent'), files, ['mixed/keep.py'], SMALL)
     assert plan.shared == {'raw': '6 data files'}
+
+
+def test_a_manifest_read_during_its_replace_still_links_shared_data(folder, tmp_path, monkeypatch):
+    # The manifest lives in the folder on the shared FUSE volume, where an open
+    # racing os.replace can see ENOENT: the checkout then got no shared data.
+    from lib.json_store import write_bytes_atomic
+    from tests.support.replace_window import ReplaceWindow
+    prepare_managed_repository(str(folder), policy=SMALL)
+    checkout = tmp_path / 'worker'
+    git(folder, 'worktree', 'add', '-q', '--detach', str(checkout), 'HEAD')
+    path = folder / '.git' / mr.MANIFEST_NAME
+    content = path.read_bytes()
+    window = ReplaceWindow(monkeypatch, str(path))
+    window.run_writer(lambda: write_bytes_atomic(str(path), content))
+
+    linked = window.read_during_gap(lambda: link_shared_paths(folder, checkout))
+
+    assert set(linked) == {'tasks/raw/bars', 'tasks/panel.parquet', 'tools/env', 'data'}
+
+
+def test_the_manifest_is_published_under_its_lock(folder, monkeypatch):
+    from lib.json_store import write_bytes_atomic
+    from tests.support.replace_window import ReplaceWindow
+    prepare_managed_repository(str(folder), policy=SMALL)
+    path = folder / '.git' / mr.MANIFEST_NAME
+    recorded = manifest(folder)
+    window = ReplaceWindow(monkeypatch, str(path))
+    window.run_writer(lambda: write_bytes_atomic(str(path), b'{"version": 1, "shared": [], "skipped": []}\n'))
+
+    window.read_during_gap(lambda: mr._write_manifest(
+        folder / '.git', recorded['shared'], recorded['skipped'], recorded['baseline'], SMALL,
+        recorded.get('nestedProjects')))
+
+    assert manifest(folder)['shared'] == recorded['shared']

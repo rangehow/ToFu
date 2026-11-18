@@ -54,11 +54,15 @@ class ProjectMessageError(ValueError):
     pass
 
 
-def scope(owner: int, conversation_id: str, expected_project: str = '') -> str:
+def scope(owner: int, conversation_id: str, expected_project: str = '', *, reads=None) -> str:
+    """The conversation's project; ``reads`` is a batched reader (``PrefetchedReads``)."""
     require_user_id(owner, context='project message owner')
     if not isinstance(conversation_id, str) or not 1 <= len(conversation_id) <= 256:
         raise ProjectMessageError('A bounded conversation ID is required')
-    snapshot = ConversationRepository().get(conversation_id, user_id=owner, include_messages=False)
+    # Construct as callers patch it: with no argument unless a reader is supplied.
+    repository = (ConversationRepository() if reads is None
+                  else ConversationRepository(lambda write=False: reads))
+    snapshot = repository.get(conversation_id, user_id=owner, include_messages=False)
     settings = snapshot.metadata.get('settings') if snapshot else None
     if not isinstance(settings, dict) or settings.get('archived') or settings.get('readOnly'):
         raise ProjectMessageError('Conversation is unavailable for project communication')
@@ -103,7 +107,7 @@ def _require_leads(owner: int, sender: str, sender_project: str, target: str, ta
         raise ProjectMessageError(NOT_A_LEAD_TARGET)
 
 
-def identity(task: dict) -> tuple[int, str, str]:
+def identity(task: dict, *, reads=None) -> tuple[int, str, str]:
     from lib.tasks_pkg.invocation import is_child_invocation
     from lib.tasks_pkg.manager import task_user_id
     if is_child_invocation(task) or task.get('_parentTaskId') or not task.get('convId'):
@@ -111,7 +115,7 @@ def identity(task: dict) -> tuple[int, str, str]:
     if task.get('aborted') or task.get('_transientRuntime') or task.get('_invocationStorageFree'):
         raise ProjectMessageError('A current durable, non-stopped conversation is required')
     owner = task_user_id(task)
-    project = scope(owner, task['convId'])
+    project = scope(owner, task['convId'], reads=reads)
     configured = normalize_project_path((task.get('config') or {}).get('canonicalProjectPath') or
                                         (task.get('config') or {}).get('projectPath') or '')
     if configured != project:
@@ -1193,7 +1197,8 @@ def inject(task: dict, messages: list[dict], round_num: int):
     if not can_append_injection(messages):
         return
     try:
-        owner, recipient, project = identity(task)
+        from lib.tasks_pkg.round_reads import round_reads
+        owner, recipient, project = identity(task, reads=round_reads(task))
         mailbox = ProjectMailbox(owner, project, recipient)
         try:
             head, _ = mailbox.absorb()

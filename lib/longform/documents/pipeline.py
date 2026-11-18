@@ -63,8 +63,7 @@ _PIPELINE_VOCABULARY = ('dossier', 'project lead', 'experiment request',
                         'fact id', 'source fact', 'positioning record',
                         'evidence_strength')
 _BRIEF_FIELDS = ('type', 'title', 'audience', 'goal', 'voice', 'lang',
-                 'page_limit', 'writer_model', 'judge_model', 'previous_pdf',
-                 'output_dir')
+                 'judge_model', 'output_dir')
 _PAPER_FIELDS = ('venue', 'project_lead', 'topic')
 
 
@@ -110,12 +109,34 @@ def _persist(ctx: dict, name: str, artifact: dict, *, markdown: str = '') -> dic
     return artifact
 
 
+def _record_model(ctx: dict, role: str, label: str, requested: str, reported: str) -> None:
+    """Append who wrote what to ``artifacts/models.json`` (one row per call)."""
+    path = Path(ctx['workdir']) / 'artifacts' / 'models.json'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else []
+    rows.append({'stage_call': label, 'role': role, 'requested': requested or 'routing default',
+                 'reported': reported or 'unreported', 'at': time.time()})
+    path.write_text(json.dumps(rows, indent=2), encoding='utf-8')
+
+
 def _chat(ctx: dict, role: str, messages: list, label: str) -> str:
-    model = ctx['brief'][f'{role}_model']
+    """One model call. The brief names the model per role; a writer the brief
+    leaves unnamed goes to the documented routing default. The model the
+    provider reports is recorded per call, and a run never continues on a
+    different model than the one requested or on the judge as writer."""
+    model = ctx['brief'].get(f'{role}_model') or ''
     content, usage = _llm_chat(
-        messages, max_tokens=None, temperature=0, prefer_model=model,
-        strict_model=True, abort_check=ctx.get('abort_check'),
+        messages, max_tokens=None, temperature=0, prefer_model=model or None,
+        strict_model=bool(model), abort_check=ctx.get('abort_check'),
         log_prefix=f'[Documents:{label}]')
+    reported = str((usage or {}).get('model') or '') if isinstance(usage, dict) else ''
+    _record_model(ctx, role, label, model, reported)
+    if model and reported and reported != model:
+        raise RuntimeError(f'{label}: requested {role} model {model!r} but the route '
+                           f'answered with {reported!r}; refusing a silent switch')
+    if role == 'writer' and reported and reported == ctx['brief'].get('judge_model'):
+        raise RuntimeError(f'{label}: the routing default writer is the judge model '
+                           f'{reported!r}; name a different writer_model in the brief')
     replies = Path(ctx['workdir']) / 'artifacts' / 'model-replies'
     replies.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime('%Y%m%dT%H%M%S')
@@ -123,8 +144,10 @@ def _chat(ctx: dict, role: str, messages: list, label: str) -> str:
         content or '', encoding='utf-8')
     if not (content or '').strip():
         reason = (usage or {}).get('finish_reason') if isinstance(usage, dict) else None
-        raise RuntimeError(f'{model} returned no content for {label} '
-                           f'(finish_reason={reason or "unknown"})')
+        hint = (' — the provider filtered this content; set a writer_model from another '
+                'model family in document_brief.json' if reason == 'content_filter' else '')
+        raise RuntimeError(f'{model or reported or "routing default"} returned no content '
+                           f'for {label} (finish_reason={reason or "unknown"}){hint}')
     return content
 
 
@@ -211,9 +234,36 @@ def _owner_directives(owner_user_id) -> dict:
     return {'items': lines, 'reason': ''}
 
 
+def _page_limit(ctx: dict) -> int:
+    """The brief's page limit, else the venue's declared body limit."""
+    kit = (ctx['artifacts'].get('intake') or {}).get('kit') or {}
+    return int(ctx['brief'].get('page_limit') or kit.get('page_limit') or 0)
+
+
+def _draft_mode(ctx: dict) -> bool:
+    return bool(ctx['brief'].get('draft'))
+
+
+def _snapshot_draft(ctx: dict, kit: dict) -> dict:
+    """Copy the existing draft; compare its style files with the fresh kit."""
+    from . import existing_draft as ed
+    paper_dir = Path(ctx['paper_dir'])
+    brief = ctx['brief']
+    exclude = tuple(filter(None, [str(brief.get('output_dir') or '').split('/')[0]]))
+    files = ed.snapshot(paper_dir, Path(ctx['workdir']) / 'source', exclude=exclude)
+    stale = sorted(rel for rel, digest in files.items()
+                   if Path(rel).name in kit.get('files', {})
+                   and kit['files'][Path(rel).name] != digest)
+    return {'main': brief['draft'].get('main') or 'main.tex', 'files': files,
+            'stale_template_files': stale,
+            'pdf': brief['draft'].get('pdf') or brief.get('previous_pdf') or ''}
+
+
 def _run_intake(ctx: dict) -> dict:
     paper_dir = Path(ctx['paper_dir'])
     brief = json.loads((paper_dir / BRIEF_FILE).read_text(encoding='utf-8'))
+    # Command-line choices are recorded in the brief, so checkpoints bind to them.
+    brief.update(ctx.get('brief_overrides') or {})
     ctx['brief'] = brief
     doc_type = document_type(str(brief.get('type') or ''))
     kit_dir = Path(ctx['workdir']) / 'kit'
@@ -233,11 +283,18 @@ def _run_intake(ctx: dict) -> dict:
                'engine': brief.get('engine') or 'xelatex',
                'fetched_at': time.time(), 'preamble': '', 'bibstyle': ''}
     directives = _owner_directives(ctx.get('owner_user_id'))
+    draft = _snapshot_draft(ctx, kit) if brief.get('draft') else None
     artifact = {'brief': brief, 'kit': kit, 'owner_directives': directives,
                 'rules': [rule.id for rule in rules_for(doc_type.name)],
-                'run_started': ctx['run_started']}
+                'run_started': ctx['run_started'], 'draft': draft}
     md = ['# Intake', '', f'- type: {brief.get("type")}',
-          f'- template: {kit.get("source_url")} @ {kit.get("upstream_commit", "")}',
+          f'- template: {kit.get("source_url")} @ {kit.get("upstream_commit", "")} '
+          f'(page limit {kit.get("page_limit")}, {kit.get("anonymity", "")})',
+          f'- writer: {brief.get("writer_model") or "routing default"}; judge: '
+          f'{brief.get("judge_model")}',
+          f'- existing draft: {draft["main"]} ({len(draft["files"])} files; outdated template '
+          f'files replaced in the build: {draft["stale_template_files"] or "none"})'
+          if draft else '- mode: write from the dossier',
           f'- owner directives applied: {len(directives["items"])}'
           + (f' ({directives["reason"]})' if directives['reason'] else '')]
     return _persist(ctx, 'intake', artifact, markdown='\n'.join(md) + '\n')
@@ -251,21 +308,37 @@ def _gate_intake(ctx: dict, art: dict) -> list:
         doc_type = document_type(str(brief.get('type') or ''))
     except ValueError as exc:
         return errors + [str(exc)]
-    if brief.get('writer_model') == brief.get('judge_model'):
+    if brief.get('writer_model') and brief.get('writer_model') == brief.get('judge_model'):
         errors.append('the judge must be a different model from the writer')
-    if not isinstance(brief.get('page_limit'), int) or brief['page_limit'] < 1:
-        errors.append('page_limit must be a positive integer')
-    previous = Path(ctx['paper_dir']) / str(brief.get('previous_pdf') or '')
-    if not previous.is_file():
-        errors.append(f'previous version {brief.get("previous_pdf")!r} not found; '
-                      'the blind A/B needs it')
     kit = art['kit']
+    limit = brief.get('page_limit')
+    if limit is not None and (not isinstance(limit, int) or limit < 1):
+        errors.append('page_limit must be a positive integer')
+    elif limit and kit.get('page_limit') and limit > kit['page_limit']:
+        errors.append(f'page_limit {limit} exceeds the venue\'s body limit '
+                      f'{kit["page_limit"]} ({kit.get("page_limit_source")})')
+    elif not limit and not kit.get('page_limit'):
+        errors.append('page_limit is missing and the template declares none')
+    draft = art.get('draft')
+    if draft:
+        if '/' in draft['main']:
+            errors.append(f'draft main {draft["main"]!r} must sit at the top of the paper '
+                          'directory; run the pipeline on the directory that holds it')
+        elif not (Path(ctx['workdir']) / 'source' / draft['main']).is_file():
+            errors.append(f'existing draft main file {draft["main"]!r} not found')
+        if draft['pdf'] and not (Path(ctx['paper_dir']) / draft['pdf']).is_file():
+            errors.append(f'previous version {draft["pdf"]!r} not found')
+    else:
+        previous = Path(ctx['paper_dir']) / str(brief.get('previous_pdf') or '')
+        if not brief.get('previous_pdf') or not previous.is_file():
+            errors.append(f'previous version {brief.get("previous_pdf")!r} not found; '
+                          'the blind A/B needs it')
     if doc_type.needs_venue:
         errors += [f'paper brief field {field!r} is missing'
                    for field in _PAPER_FIELDS if not brief.get(field)]
-        if not kit.get('upstream_commit') or not kit.get('archive_sha256'):
+        if not kit.get('archive_sha256') or not kit.get('source_url'):
             errors.append('paper.official-template: kit provenance lacks the '
-                          'upstream commit or archive hash')
+                          'official archive URL or its hash')
         if float(kit.get('fetched_at') or 0) < float(art['run_started']):
             errors.append('paper.official-template: the kit was not fetched in this run')
     elif not kit.get('files'):
@@ -281,11 +354,24 @@ def _gate_intake(ctx: dict, art: dict) -> list:
 
 def _run_dossier(ctx: dict) -> dict:
     paper_dir = Path(ctx['paper_dir'])
-    raw = json.loads((paper_dir / DOSSIER_FILE).read_text(encoding='utf-8'))
+    dossier_path = paper_dir / DOSSIER_FILE
+    if not dossier_path.is_file() and _draft_mode(ctx):
+        raw = {}   # an existing draft carries its own evidence; facts are optional
+    else:
+        raw = json.loads(dossier_path.read_text(encoding='utf-8'))
     facts = list(raw.get('facts') or [])
     figures = list(raw.get('figures') or [])
+    draft = (ctx['artifacts'].get('intake') or {}).get('draft')
+    if draft:
+        # The owner's figures stay as drawn; render QA judges them.
+        from . import existing_draft as ed
+        figures = ed.figures(ed.expand(Path(ctx['workdir']) / 'source', draft['main']))
     bib_path = paper_dir / str(raw.get('bib') or 'references.bib')
     bib = bib_path.read_text(encoding='utf-8') if bib_path.is_file() else ''
+    if draft and not raw.get('bib'):
+        source = Path(ctx['workdir']) / 'source'
+        bib = '\n'.join(path.read_text(encoding='utf-8', errors='replace')
+                        for path in sorted(source.rglob('*.bib')))
     number_gaps = {}
     for fact in facts:
         if not any((paper_dir / rel).suffix in _TEXT_SOURCE_SUFFIXES
@@ -302,6 +388,7 @@ def _run_dossier(ctx: dict) -> dict:
         'awaiting_owner': [fact.get('id') for fact in facts
                            if fact.get('status') == 'unconfirmed'],
         'digest': _digest({'facts': facts, 'figures': figures, 'bib': bib,
+                           'draft_files': (draft or {}).get('files'),
                            'figure_bytes': {
                                f.get('file'): hashlib.sha256((paper_dir / f['file']).read_bytes()).hexdigest()
                                for f in figures if f.get('file') and (paper_dir / f['file']).is_file()}}),
@@ -340,7 +427,7 @@ def _gate_dossier(ctx: dict, art: dict) -> list:
         errors.append(f'dossier.sourced: fact {fact_id} states {missing}, which its '
                       'source file does not contain')
     known = set(ids)
-    for figure in art['figures']:
+    for figure in ([] if _draft_mode(ctx) else art['figures']):
         if not str(figure.get('label', '')).startswith('fig:'):
             errors.append(f'figure {figure.get("file")!r} needs a fig: label')
         if not figure.get('caption'):
@@ -391,6 +478,47 @@ def _evidence_material(ctx: dict, refs: list) -> list[dict]:
     return material
 
 
+def _draft_text(ctx: dict) -> str:
+    """The existing draft, expanded (cached per run)."""
+    if '_draft_text' not in ctx:
+        from . import existing_draft as ed
+        draft = _art(ctx, 'intake')['draft']
+        ctx['_draft_text'] = ed.expand(Path(ctx['workdir']) / 'source', draft['main'])
+    return ctx['_draft_text']
+
+
+def _normalized(text: str) -> str:
+    return re.sub(r'\s+', ' ', text or '').strip()
+
+
+def _draft_claim_rows(ctx: dict) -> list[dict]:
+    """Every claim the existing draft makes, with the evidence it cites."""
+    prompt = (
+        'You audit an existing paper draft. List every claim it makes about its '
+        'contributions and results. For each give: a verbatim quote of the claim '
+        '(copied exactly, at most two sentences), the section, the labels of the '
+        'figures, tables or equations the draft offers as evidence, and how '
+        'strongly that evidence (as shown in the draft, including its tables and '
+        'number macros) supports the claim: strong (direct, controlled, '
+        'quantitative), moderate (a gap a reviewer would accept), weak (suggestive) '
+        'or none. For weak or none, state the experiment that would settle it. '
+        'Reply ONLY JSON: [{"quote":"...","section":"...","evidence":["label"],'
+        '"strength":"...","rationale":"...","needed_experiment":"..."}].\n\nDraft:\n'
+        + _draft_text(ctx) + _feedback(ctx, 'evidence'))
+    reply = _json_reply(_chat(ctx, 'judge', [{'role': 'user', 'content': prompt}],
+                              'evidence-draft'))
+    rows = []
+    for index, row in enumerate(reply if isinstance(reply, list) else [], 1):
+        refs = [str(ref) for ref in row.get('evidence') or [] if str(ref).strip()]
+        rows.append({'claim_id': f'draft-{index}', 'claim': str(row.get('quote') or ''),
+                     'section': str(row.get('section') or ''), 'evidence': refs,
+                     'strength': row.get('strength') if refs else 'none',
+                     'rationale': row.get('rationale') or '',
+                     'needed_experiment': row.get('needed_experiment') or '',
+                     'source': 'draft'})
+    return rows
+
+
 def _run_evidence(ctx: dict) -> dict:
     doc_type = ctx['doc_type']
     if not doc_type.evidence_audit:
@@ -426,6 +554,8 @@ def _run_evidence(ctx: dict) -> dict:
                          'strength': row.get('strength') if refs else 'none',
                          'rationale': row.get('rationale') or '',
                          'needed_experiment': row.get('needed_experiment') or ''})
+    if _draft_mode(ctx):
+        rows += _draft_claim_rows(ctx)
     requests = []
     for row in rows:
         if row['strength'] in ('weak', 'none'):
@@ -471,6 +601,16 @@ def _gate_evidence(ctx: dict, art: dict) -> list:
         if not row['evidence'] and row['strength'] != 'none':
             errors.append(f'claim {row["claim_id"]} cites no evidence but is rated '
                           f'{row["strength"]}')
+    if _draft_mode(ctx):
+        draft = _normalized(strip_latex_arguments(_draft_text(ctx)))
+        draft_rows = [row for row in art['rows'] if row.get('source') == 'draft']
+        if not draft_rows:
+            errors.append('no claim was extracted from the existing draft')
+        for row in draft_rows:
+            quote = _normalized(strip_latex_arguments(row['claim']))
+            if not quote or quote not in draft:
+                errors.append(f'claim {row["claim_id"]} is not a verbatim quote of the draft: '
+                              f'{row["claim"][:120]!r}')
     requested = {req['claim_id'] for req in art['requests']}
     gaps = {row['claim_id'] for row in art['rows'] if row['strength'] in ('weak', 'none')}
     if gaps - requested:
@@ -532,6 +672,9 @@ def _run_novelty(ctx: dict) -> dict:
                       'strength': strengths.get(fact['id'])}
                      for fact in _usable_facts(ctx)
                      if fact.get('kind') in ('claim', 'contribution')]
+    contributions += [{'id': row['claim_id'], 'text': row['claim'], 'strength': row['strength']}
+                      for row in (ctx['artifacts'].get('evidence') or {}).get('rows') or []
+                      if row.get('source') == 'draft']
     digest = [{'cid': c['cid'], 'title': c.get('title'), 'year': c['year'],
                'venue': c.get('venue') or '', 'abstract': c.get('abstract') or ''}
               for c in candidates]
@@ -615,12 +758,12 @@ def _writer_context(ctx: dict) -> str:
             row['evidence_strength'] = strengths[fact['id']]
         facts.append(row)
     rules = rules_for(doc_type.name)
-    directives = _art(ctx, 'intake')['owner_directives']['items']
+    directives = ((ctx['artifacts'].get('intake') or {}).get('owner_directives') or {}).get('items') or []
     novelty = ctx['artifacts'].get('novelty') or {}
     parts = [
         f'Document type: {doc_type.name}. Title: {brief["title"]}.',
         f'Audience: {brief["audience"]}. Goal: {brief["goal"]}. Voice: {brief["voice"]}. '
-        f'Language: {brief["lang"]}. Page limit: {brief["page_limit"]}.',
+        f'Language: {brief["lang"]}. Page limit: {_page_limit(ctx)} body pages.',
         'Rules (all mandatory):\n' + '\n'.join(f'- [{rule.id}] {rule.text}' for rule in rules),
         'Write only claims whose evidence_strength is strong or moderate as results; '
         'never state a weak or unsupported claim.',
@@ -628,7 +771,8 @@ def _writer_context(ctx: dict) -> str:
         'fact ids, sources, the project lead or requested experiments, and add no '
         'LaTeX comments. Gaps belong in Limitations as scientific limitations.',
         'Facts (the only facts you may use; every decimal or percentage you write '
-        'must come from here):\n' + json.dumps(facts, ensure_ascii=False),
+        'must come from here' + (' or from the existing draft' if _draft_mode(ctx) else '')
+        + '):\n' + json.dumps(facts, ensure_ascii=False),
     ]
     if directives:
         parts.append('Owner directives:\n' + '\n'.join(f'- {line}' for line in directives))
@@ -639,7 +783,9 @@ def _writer_context(ctx: dict) -> str:
                          [{k: f.get(k) for k in ('label', 'caption', 'supports')}
                           for f in figures], ensure_ascii=False))
     if novelty.get('rows'):
-        parts.append('Positioning against closest work (cite with \\citep{bib_key}):\n'
+        parts.append('Positioning against closest work'
+                     + (' (context only; add no new citation)' if _draft_mode(ctx)
+                        else ' (cite with \\citep{bib_key})') + ':\n'
                      + json.dumps([{k: row.get(k) for k in (
                          'bib_key', 'title', 'year', 'what_they_do', 'what_we_add')}
                          for row in novelty['rows']], ensure_ascii=False))
@@ -650,12 +796,38 @@ def _writer_context(ctx: dict) -> str:
 
 
 def _bib_keys(ctx: dict) -> list[str]:
+    if _draft_mode(ctx):
+        # Edits to an existing draft cite only what its own bibliography holds.
+        return sorted(set(_art(ctx, 'dossier')['bib_keys']))
     novelty = ctx['artifacts'].get('novelty') or {}
     return sorted(set(_art(ctx, 'dossier')['bib_keys'])
                   | {row['bib_key'] for row in novelty.get('rows') or []})
 
 
+def _run_outline_existing(ctx: dict) -> dict:
+    """An existing draft's outline is its own sections; only takeaways are new."""
+    from . import existing_draft as ed
+    rows = ed.sections(_draft_text(ctx))
+    prompt = ('You read an existing paper draft. For each section, state the ONE takeaway '
+              'a reader must leave with, in one sentence. Reply ONLY JSON: '
+              '{"sections":[{"id":"...","takeaway":"..."}]}. Section ids: '
+              + ', '.join(row['id'] for row in rows) + '\n\nDraft:\n' + _draft_text(ctx)
+              + _feedback(ctx, 'outline'))
+    reply = _json_reply(_chat(ctx, 'writer', [{'role': 'user', 'content': prompt}], 'outline'))
+    takeaways = {row.get('id'): row.get('takeaway') for row in reply.get('sections') or []}
+    sections = [{'id': row['id'], 'title': row['title'],
+                 'takeaway': str(takeaways.get(row['id']) or ''), 'facts': [], 'figures': []}
+                for row in rows]
+    md = ['# Outline of the existing draft', ''] + [
+        f'## {row["title"]} (`{row["id"]}`)\n\n**Takeaway:** {row["takeaway"]}\n'
+        for row in sections]
+    return _persist(ctx, 'outline', {'sections': sections, 'existing': True},
+                    markdown='\n'.join(md))
+
+
 def _run_outline(ctx: dict) -> dict:
+    if _draft_mode(ctx):
+        return _run_outline_existing(ctx)
     doc_type = ctx['doc_type']
     sections = ', '.join(f'{sid} ("{title}")' for sid, title in doc_type.sections)
     prompt = (_writer_context(ctx) + '\n\nPlan the document. Use exactly these '
@@ -678,6 +850,13 @@ def _run_outline(ctx: dict) -> dict:
 def _gate_outline(ctx: dict, art: dict) -> list:
     doc_type = ctx['doc_type']
     errors = []
+    if art.get('existing'):
+        if not art['sections']:
+            errors.append('the existing draft has no \\section{...} before its bibliography')
+        missing = [row['id'] for row in art['sections'] if not row['takeaway'].strip()]
+        if missing:
+            errors.append(f'sections without a reader takeaway: {missing}')
+        return _record_feedback(ctx, 'outline', errors)
     ids = [row.get('id') for row in art['sections']]
     expected = [sid for sid, _title in doc_type.sections]
     if ids != expected:
@@ -734,6 +913,9 @@ def _section_check(ctx: dict, section_id: str, text: str) -> list[str]:
     allowed = set()
     for fact in _usable_facts(ctx):
         allowed |= numbers_in(fact.get('text', ''))
+    if _draft_mode(ctx):
+        # The owner's draft is evidence for its own results; nothing beyond it.
+        allowed |= numbers_in(_draft_text(ctx))
     invented = sorted(reported_numbers(text) - allowed)
     if invented:
         errors.append(f'draft.no-invented-numbers: section {section_id!r} reports '
@@ -762,6 +944,8 @@ def _section_check(ctx: dict, section_id: str, text: str) -> list[str]:
 def _reference_check(ctx: dict, sections: dict) -> list[str]:
     defined = {f'sec:{sid}' for sid in sections}
     defined |= {figure['label'] for figure in _art(ctx, 'dossier')['figures']}
+    if _draft_mode(ctx):
+        defined |= set(re.findall(r'\\label\{([^}]*)\}', _draft_text(ctx)))
     for text in sections.values():
         defined |= set(re.findall(r'\\label\{([^}]*)\}', text))
     errors = []
@@ -773,7 +957,15 @@ def _reference_check(ctx: dict, sections: dict) -> list[str]:
 
 
 def _packages(ctx: dict) -> str:
-    preamble = _art(ctx, 'intake')['kit'].get('preamble') or ''
+    """The packages the document loads (the venue frame, or the existing draft)."""
+    if _draft_mode(ctx):
+        preamble = _draft_text(ctx).split('\\begin{document}', 1)[0]
+    elif ctx['doc_type'].needs_venue:
+        from .venues import frame_main_tex
+        preamble = frame_main_tex(ctx['brief']['venue'], _art(ctx, 'intake')['kit'],
+                                  title='', authors='', abstract='', body='', bibfile='')
+    else:
+        preamble = ''
     return ', '.join(re.findall(r'\\usepackage(?:\[[^\]]*\])?\{([^}]*)\}', preamble)) \
         or 'those of the document template'
 
@@ -784,14 +976,32 @@ def _draft_prompt(ctx: dict, prefix: str, row: dict) -> str:
             + f'\n\nWrite ONLY the body of section "{row["id"]}" ({row["title"]}); '
             f'its takeaway: {row["takeaway"]}. The pipeline adds the \\section '
             f'heading and figure floats. Available LaTeX packages (use nothing else): '
-            f'{_packages(ctx)}. The body must fit {ctx["brief"]["page_limit"]} pages '
+            f'{_packages(ctx)}. The body must fit {_page_limit(ctx)} pages '
             'in total, so write tightly. Use LaTeX (\\subsection, booktabs tables, '
             'math), non-breaking spaces before \\citep/\\ref (~), and refer to '
             'other sections with \\ref{sec:<id>}. Reply with the body inside '
             '<latex>...</latex>.')
 
 
+def _run_draft_existing(ctx: dict) -> dict:
+    """Import the owner's draft as the draft; its rule findings feed revision."""
+    from . import existing_draft as ed
+    sections = {row['id']: row['text'] for row in ed.sections(_draft_text(ctx))}
+    rules = rules_for(ctx['doc_type'].name)
+    lint = {sid: lint_text(rules, sid, text) for sid, text in sections.items()}
+    artifact = {'existing': True, 'sections': sections,
+                'files': ed.tex_files(Path(ctx['workdir']) / 'source'),
+                'lint': {sid: rows for sid, rows in lint.items() if rows}}
+    md = ['# Existing draft imported', '', f'Sections: {list(sections)}', '',
+          '## Rule findings in the existing text (revision targets)', '']
+    md += [f'- [{sid}] {item}' for sid, rows in artifact['lint'].items() for item in rows] \
+        or ['- none']
+    return _persist(ctx, 'draft', artifact, markdown='\n'.join(md) + '\n')
+
+
 def _run_draft(ctx: dict) -> dict:
+    if _draft_mode(ctx):
+        return _run_draft_existing(ctx)
     prefix = _writer_context(ctx)
     feedback = (ctx.get('_feedback') or {}).get('draft') or []
     previous = (ctx.get('_draft_attempt') or {})
@@ -825,6 +1035,8 @@ def _sections_errors(ctx: dict, sections: dict) -> list[str]:
 
 
 def _gate_draft(ctx: dict, art: dict) -> list:
+    if art.get('existing'):
+        return [] if art['sections'] and art['files'] else ['the existing draft imported empty']
     return _record_feedback(ctx, 'draft', _sections_errors(ctx, art['sections']))
 
 
@@ -905,7 +1117,112 @@ def _judge_pair(ctx: dict, label: str):
     return judge
 
 
+def _edit_prompt(ctx: dict, sid: str, text: str, problems: list[str]) -> str:
+    return (_writer_context(ctx) + '\n\nYou revise an EXISTING paper by targeted edits; never '
+            'rewrite it from scratch, never add a result, number or citation the draft does '
+            'not already contain, never delete a result the evidence supports, and never '
+            'touch figures. Section "' + sid + '":\n<latex>\n'
+            + text + '\n</latex>\n\nProblems to fix:\n'
+            + '\n'.join(f'- {item}' for item in problems)
+            + '\n\nReply ONLY JSON: [{"old":"exact text copied from the section",'
+            '"new":"replacement","fixes":"which problem"}]. Each "old" must be copied '
+            'verbatim (a sentence or clause, unique in the paper); keep edits minimal.')
+
+
+def _supported_numbers(ctx: dict) -> set[str]:
+    """Numbers stated by claims the evidence audit rated strong or moderate."""
+    rows = (ctx['artifacts'].get('evidence') or {}).get('rows') or []
+    return {number for row in rows if row.get('strength') in _SUPPORTED
+            for number in stated_numbers(strip_latex_arguments(row.get('claim') or ''))}
+
+
+def _apply_checked_edits(ctx: dict, files: dict, proposals: list[tuple[str, dict]]):
+    """Apply edits whose new text passes the draft gate; return (files, applied, rejected)."""
+    from . import existing_draft as ed
+    accepted, rejected = [], []
+    kept = _supported_numbers(ctx)
+    for sid, edit in proposals:
+        problems = _section_check(ctx, sid, str(edit.get('new') or ''))
+        dropped = sorted((stated_numbers(strip_latex_arguments(str(edit.get('old') or ''))) & kept)
+                         - stated_numbers(strip_latex_arguments(str(edit.get('new') or ''))))
+        if dropped:
+            problems.append(f'draft.keep-supported-results: the edit drops supported result '
+                            f'numbers {dropped}; rephrase around them instead')
+        if problems:
+            rejected.append({**edit, 'section': sid, 'reason': '; '.join(problems)})
+        else:
+            accepted.append({**edit, 'section': sid})
+    files, applied, refused = ed.apply_edits(files, accepted)
+    return files, applied, rejected + refused
+
+
+def _expanded_sections(ctx: dict, files: dict) -> dict:
+    """Sections of the draft as it reads with ``files`` applied."""
+    from . import existing_draft as ed
+    root = Path(ctx['workdir']) / 'revised'
+    if root.exists():
+        shutil.rmtree(root)
+    shutil.copytree(Path(ctx['workdir']) / 'source', root)
+    for rel, text in files.items():
+        (root / rel).write_text(text, encoding='utf-8')
+    main = _art(ctx, 'intake')['draft']['main']
+    return {row['id']: row['text'] for row in ed.sections(ed.expand(root, main))}
+
+
+def _run_revise_existing(ctx: dict) -> dict:
+    from lib.production.critic import blind_pairwise
+    from . import existing_draft as ed
+    draft = _art(ctx, 'draft')
+    review = _art(ctx, 'critique')['review']
+    problems: dict[str, list[str]] = {}
+    for row in review.get('findings') or []:
+        problems.setdefault(row.get('section'), []).append(
+            f'{row.get("issue")} → fix: {row.get("fix")}')
+    for sid, rows in (draft.get('lint') or {}).items():
+        problems.setdefault(sid, []).extend(rows)
+    proposals = []
+    for sid, items in problems.items():
+        if sid not in draft['sections']:
+            continue
+        reply = _json_reply(_chat(ctx, 'writer', [{'role': 'user', 'content': _edit_prompt(
+            ctx, sid, draft['sections'][sid], items)}], f'revise:{sid}'))
+        proposals += [(sid, edit) for edit in (reply if isinstance(reply, list) else [])
+                      if isinstance(edit, dict)]
+    files, applied, rejected = _apply_checked_edits(ctx, draft['files'], proposals)
+    sections = _expanded_sections(ctx, files) if applied else dict(draft['sections'])
+    comparison, adopted = None, False
+    if applied and not _reference_check(ctx, sections):
+        comparison = blind_pairwise(
+            _judge_pair(ctx, 'revise-ab'), {'text': _submission_text(ctx, sections)},
+            {'text': _submission_text(ctx, draft['sections'])}, seed=_digest(sections))
+        adopted = comparison['preferred']
+    final_files = files if adopted else draft['files']
+    rules = rules_for(ctx['doc_type'].name)
+    final_sections = sections if adopted else draft['sections']
+    remaining = {sid: found for sid, text in final_sections.items()
+                 for found in [lint_text(rules, sid, text)] if found}
+    artifact = {'existing': True, 'applied_edits': applied, 'rejected_edits': rejected,
+                'comparison': comparison, 'adopted': adopted,
+                'changed_sections': sorted({edit['section'] for edit in applied}),
+                'sections': final_sections,
+                'files': {rel: text for rel, text in final_files.items()
+                          if text != draft['files'].get(rel)},
+                'patch': ed.unified_patch(draft['files'], final_files),
+                'remaining_lint': remaining}
+    md = ['# Targeted revision of the existing draft', '',
+          f'Edits applied: {len(applied)}; refused: {len(rejected)}',
+          f'Blind adoption check: {comparison["verdict"] if comparison else "not needed"}'
+          f' → {"revision adopted" if adopted else "draft kept"}', '',
+          f'Remaining rule findings: {remaining or "none"}', '', '## Refused edits', '']
+    md += [f'- [{row.get("section")}] {row.get("reason")}: {str(row.get("old"))[:120]!r}'
+           for row in rejected] or ['- none']
+    md += ['', '## Patch', '', '```diff', artifact['patch'], '```']
+    return _persist(ctx, 'revise', artifact, markdown='\n'.join(md) + '\n')
+
+
 def _run_revise(ctx: dict) -> dict:
+    if _draft_mode(ctx):
+        return _run_revise_existing(ctx)
     from lib.production.critic import blind_pairwise
     draft = dict(_art(ctx, 'draft')['sections'])
     review = _art(ctx, 'critique')['review']
@@ -955,6 +1272,12 @@ def _run_revise(ctx: dict) -> dict:
 
 
 def _gate_revise(ctx: dict, art: dict) -> list:
+    if art.get('existing'):
+        # Every applied edit already passed the draft gate one by one.
+        errors = []
+        if art['adopted'] and art['comparison'] is None:
+            errors.append('edits were adopted without the blind comparison')
+        return errors
     errors = _sections_errors(ctx, art['sections'])
     if art['changed_sections'] and art['comparison'] is None and art['adopted']:
         errors.append('a revision was adopted without the blind comparison')
@@ -978,9 +1301,9 @@ def _render_measure(report: dict) -> tuple:
             len(report.get('failures') or []))
 
 
-def _located_failures(build: Path, report: dict) -> list[str]:
+def _located_failures(build: Path, report: dict, main_name: str = 'main.tex') -> list[str]:
     """Render failures with the section and source lines they point at."""
-    main = (build / 'main.tex').read_text(encoding='utf-8').split('\n')
+    main = (build / main_name).read_text(encoding='utf-8').split('\n')
     starts = [(index + 1, match.group(1)) for index, line in enumerate(main)
               for match in [re.match(r'\\label\{sec:([^}]+)\}', line)] if match]
 
@@ -1009,7 +1332,7 @@ def _located_failures(build: Path, report: dict) -> list[str]:
 def _repair_sections(ctx: dict, sections: dict, failures: list[str], packages: str) -> list[str]:
     prompt = (_writer_context(ctx) + '\n\nThe compiled document failed render QA:\n'
               + '\n'.join(f'- {item}' for item in failures)
-              + f'\nPage limit for the body: {ctx["brief"]["page_limit"]}. Available LaTeX '
+              + f'\nPage limit for the body: {_page_limit(ctx)}. Available LaTeX '
               f'packages (do not use anything else): {packages}.\n\nSections:\n'
               + '\n'.join(f'<latex id="{sid}">\n{text}\n</latex>' for sid, text in sections.items())
               + '\n\nFix every failure with the smallest edits (tighten prose to fit the '
@@ -1025,49 +1348,133 @@ def _repair_sections(ctx: dict, sections: dict, failures: list[str], packages: s
     return repaired
 
 
+def _materialize_existing(ctx: dict, build: Path, files: dict) -> str:
+    """Build tree of the revised existing draft on the newest official kit."""
+    from . import existing_draft as ed
+    from .render import BODY_END_LABEL
+    intake = _art(ctx, 'intake')
+    kit, kit_dir, draft = intake['kit'], Path(ctx['workdir']) / 'kit', intake['draft']
+    if build.exists():
+        shutil.rmtree(build)
+    shutil.copytree(Path(ctx['workdir']) / 'source', build)
+    for rel, text in files.items():
+        (build / rel).write_text(text, encoding='utf-8')
+    for rel in draft['stale_template_files']:
+        shutil.copy2(kit_dir / Path(rel).name, build / rel)
+    for leaf in kit.get('files') or {}:
+        shutil.copy2(kit_dir / leaf, build / leaf)
+    main = build / draft['main']
+    main.write_text(ed.mark_body_end(main.read_text(encoding='utf-8'), BODY_END_LABEL,
+                                     tuple(kit.get('unlimited_sections') or ())),
+                    encoding='utf-8')
+    return draft['main']
+
+
+def _repair_edits(ctx: dict, files: dict, failures: list[str], packages: str):
+    """Render repair for an existing draft: targeted edits, each gate-checked."""
+    sections = _expanded_sections(ctx, files)
+    prompt = (_writer_context(ctx) + '\n\nThe compiled paper failed render QA:\n'
+              + '\n'.join(f'- {item}' for item in failures)
+              + f'\nBody page limit: {_page_limit(ctx)}. Packages loaded: {packages}.\n\n'
+              'Paper (expanded):\n' + '\n\n'.join(
+                  f'### [{sid}]\n{text}' for sid, text in sections.items())
+              + '\n\nFix every failure with minimal targeted edits (tighten prose, break long '
+              'tokens, resize tables); never remove a result or a figure. Reply ONLY JSON: '
+              '[{"section":"<id>","old":"exact text","new":"replacement"}].')
+    reply = _json_reply(_chat(ctx, 'writer', [{'role': 'user', 'content': prompt}],
+                              'render-repair'))
+    proposals = [(str(edit.get('section') or 'render-repair'), edit)
+                 for edit in (reply if isinstance(reply, list) else []) if isinstance(edit, dict)]
+    return _apply_checked_edits(ctx, files, proposals)
+
+
+def _baseline_pdf(ctx: dict) -> str:
+    """The previous version: the brief's PDF, else the unmodified draft compiled."""
+    draft = _art(ctx, 'intake').get('draft')
+    if not draft:
+        return str(Path(ctx['paper_dir']) / ctx['brief']['previous_pdf'])
+    if draft['pdf']:
+        return str(Path(ctx['paper_dir']) / draft['pdf'])
+    from lib.paper.latex_layout import compile_project
+    build = Path(ctx['workdir']) / 'baseline-build'
+    if build.exists():
+        shutil.rmtree(build)
+    shutil.copytree(Path(ctx['workdir']) / 'source', build)
+    result = compile_project(build, engine=_art(ctx, 'intake')['kit'].get('engine') or 'pdflatex',
+                             main=_art(ctx, 'intake')['draft']['main'])
+    return result.get('pdf') or ''
+
+
 def _run_render(ctx: dict) -> dict:
     """Compile, then repair and recompile while each repair strictly reduces the
     render's badness (``_render_measure``); the first non-improving repair is
     discarded and the best render is kept. No round count: the lexicographic
-    measure over natural numbers cannot fall forever."""
+    measure over natural numbers cannot fall forever.
+
+    A fresh paper is assembled in the venue frame and repaired section by
+    section; an existing draft is rebuilt on the newest official kit and
+    repaired by targeted edits."""
     from .render import assemble, compile_and_check
     kit, kit_dir, bib = _render_inputs(ctx)
     packages = _packages(ctx)
     build = Path(ctx['workdir']) / 'build'
-    sections = dict(_art(ctx, 'revise')['sections'])
-    best = None
-    repaired_total = []
-    while True:
+    existing = _draft_mode(ctx)
+    original = _art(ctx, 'draft').get('files') or {}
+    doc = ({**original, **_art(ctx, 'revise')['files']} if existing
+           else dict(_art(ctx, 'revise')['sections']))
+
+    def materialize(state) -> str:
+        if existing:
+            return _materialize_existing(ctx, build, state)
         assemble(build, doc_type=ctx['doc_type'], brief=ctx['brief'], kit=kit,
-                 kit_dir=kit_dir, paper_dir=Path(ctx['paper_dir']), sections=sections,
+                 kit_dir=kit_dir, paper_dir=Path(ctx['paper_dir']), sections=state,
                  outline=_art(ctx, 'outline'), figures=_art(ctx, 'dossier')['figures'],
                  bib_text=bib)
+        return 'main.tex'
+
+    def check(main_name: str) -> dict:
         report = compile_and_check(build, engine=kit.get('engine') or 'pdflatex',
-                                   page_limit=ctx['brief']['page_limit'], kit=kit)
+                                   page_limit=_page_limit(ctx), kit=kit, main=main_name,
+                                   forbidden_packages=tuple(kit.get('forbidden_packages') or ()))
         report.pop('quality_rows', None)
+        return report
+
+    best, repaired_total, repair_log = None, [], []
+    while True:
+        main_name = materialize(doc)
+        report = check(main_name)
         if best is not None and _render_measure(report) >= _render_measure(best['report']):
-            sections = best['sections']
-            assemble(build, doc_type=ctx['doc_type'], brief=ctx['brief'], kit=kit,
-                     kit_dir=kit_dir, paper_dir=Path(ctx['paper_dir']), sections=sections,
-                     outline=_art(ctx, 'outline'), figures=_art(ctx, 'dossier')['figures'],
-                     bib_text=bib)
-            report = compile_and_check(build, engine=kit.get('engine') or 'pdflatex',
-                                       page_limit=ctx['brief']['page_limit'], kit=kit)
-            report.pop('quality_rows', None)
+            doc = best['doc']
+            report = check(materialize(doc))
             break
-        best = {'report': report, 'sections': dict(sections)}
+        best = {'report': report, 'doc': dict(doc)}
         if not report.get('failures'):
             break
-        repaired = _repair_sections(ctx, sections, _located_failures(build, report), packages)
+        located = _located_failures(build, report, main_name)
+        if existing:
+            doc, applied, refused = _repair_edits(ctx, dict(doc), located, packages)
+            repair_log.append({'applied': applied, 'refused': refused})
+            repaired = sorted({edit['section'] for edit in applied})
+        else:
+            doc = dict(doc)
+            repaired = _repair_sections(ctx, doc, located, packages)
         if not repaired:
             break
         repaired_total += [sid for sid in repaired if sid not in repaired_total]
     repaired = repaired_total
-    artifact = {**report, 'sections': sections, 'repaired_sections': repaired,
-                'build': str(build)}
+    artifact = {**report, 'repaired_sections': repaired, 'build': str(build),
+                'main': main_name, 'baseline_pdf': _baseline_pdf(ctx)}
+    if existing:
+        artifact.update({'files': {rel: text for rel, text in doc.items()
+                                   if text != original.get(rel)},
+                         'repair_edits': repair_log,
+                         'replaced_template_files':
+                             _art(ctx, 'intake')['draft']['stale_template_files']})
+    else:
+        artifact['sections'] = doc
     md = ['# Render QA', '', f'- compile: {report.get("compile_status")}',
           f'- pages: {report.get("pages")} (body {report.get("body_pages")} / limit '
-          f'{ctx["brief"]["page_limit"]})', f'- overfull boxes: {len(report.get("overfull") or [])}',
+          f'{_page_limit(ctx)})', f'- overfull boxes: {len(report.get("overfull") or [])}',
           f'- undefined refs/cites: {report.get("undefined") or "none"}',
           f'- repaired sections: {repaired or "none"}', '', '## Failures', '']
     md += [f'- {item}' for item in report.get('failures') or []] or ['- none']
@@ -1089,7 +1496,9 @@ def _run_blind(ctx: dict) -> dict:
     from lib.production.critic import blind_pairwise
     from .render import pdf_pages, pdf_text
     candidate_pdf = Path(_art(ctx, 'render')['pdf'])
-    baseline_pdf = Path(ctx['paper_dir']) / ctx['brief']['previous_pdf']
+    baseline_pdf = Path(_art(ctx, 'render')['baseline_pdf'] or '')
+    if not baseline_pdf.is_file():
+        raise RuntimeError(f'previous version PDF {str(baseline_pdf)!r} is unavailable')
     candidate = {'pages': pdf_pages(candidate_pdf), 'text': _body_text(pdf_text(candidate_pdf))}
     baseline = {'pages': pdf_pages(baseline_pdf), 'text': _body_text(pdf_text(baseline_pdf))}
     result = blind_pairwise(_judge_pair(ctx, 'blind-ab'), candidate, baseline,
@@ -1132,9 +1541,21 @@ def _run_deliver(ctx: dict) -> dict:
         shutil.rmtree(source)
     shutil.copytree(render['build'], source, ignore=shutil.ignore_patterns(
         '*.aux', '*.log', '*.fls', '*.fdb_latexmk', '*.synctex.gz', '*.blg', '*.out'))
+    draft = _art(ctx, 'intake').get('draft')
+    if draft:
+        # The delivered tree is the owner's draft with the accepted edits and
+        # the newest official kit; the build-only page label is not part of it.
+        from . import existing_draft as ed
+        original = _art(ctx, 'draft')['files']
+        final = {**original, **(render.get('files') or {})}
+        for rel, text in final.items():
+            (source / rel).write_text(text, encoding='utf-8')
+        (out / 'revision.patch').write_text(ed.unified_patch(original, final),
+                                            encoding='utf-8')
     artifacts_dir = Path(ctx['workdir']) / 'artifacts'
     for name in ('03-evidence.md', 'experiment_requests.json', '04-novelty.md',
-                 '07-critique.md', '10-blind.md', '09-render.md'):
+                 '07-critique.md', '08-revise.md', '10-blind.md', '09-render.md',
+                 'models.json'):
         if (artifacts_dir / name).is_file():
             shutil.copy2(artifacts_dir / name, out / name)
     critique = _art(ctx, 'critique')
@@ -1143,7 +1564,14 @@ def _run_deliver(ctx: dict) -> dict:
         'pdf': pdf_target.name,
         'pdf_sha256': hashlib.sha256(pdf_target.read_bytes()).hexdigest(),
         'template': {key: _art(ctx, 'intake')['kit'].get(key)
-                     for key in ('source_url', 'upstream_commit', 'archive_sha256', 'kit')},
+                     for key in ('landing_page', 'source_url', 'upstream_commit',
+                                 'archive_sha256', 'kit', 'year', 'page_limit',
+                                 'page_limit_source', 'anonymity')},
+        'mode': 'revised existing draft' if draft else 'written from the dossier',
+        'replaced_template_files': (draft or {}).get('stale_template_files', []),
+        'models_by_call': json.loads((Path(ctx['workdir']) / 'artifacts' / 'models.json')
+                                     .read_text(encoding='utf-8'))
+        if (Path(ctx['workdir']) / 'artifacts' / 'models.json').is_file() else [],
         'review': {'scores': critique['review'].get('scores'),
                    'overall': critique['review'].get('overall'),
                    'verdict': critique['verdict']},
@@ -1216,7 +1644,8 @@ def _input_version(ctx: dict) -> str:
 
 
 def run_document_pipeline(paper_dir: str, workdir: str, *, owner_user_id=None,
-                          emit=None, abort_event=None) -> dict:
+                          emit=None, abort_event=None,
+                          brief_overrides: dict | None = None) -> dict:
     """Run every stage for the document in ``paper_dir``; return all artifacts.
 
     Raises ``StageFailed`` naming the stage whose gate refused; every artifact
@@ -1227,7 +1656,7 @@ def run_document_pipeline(paper_dir: str, workdir: str, *, owner_user_id=None,
     abort_check = (lambda: bool(abort_event is not None and abort_event.is_set()))
     ctx = {'paper_dir': str(Path(paper_dir).resolve()), 'workdir': str(work.resolve()),
            'owner_user_id': owner_user_id, 'run_started': time.time(),
-           'abort_check': abort_check}
+           'abort_check': abort_check, 'brief_overrides': dict(brief_overrides or {})}
     run_workflow(_workflow('intake', ('intake',), {}), ctx,
                  state_path=str(work / 'state' / 'intake.json'),
                  emit=emit, abort_check=abort_check)

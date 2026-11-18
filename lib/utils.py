@@ -450,3 +450,10 @@ def sha256_holding_gil(data: bytes = b''):
     hasher = hashlib.sha256()
     update_holding_gil(hasher, data)
     return hasher
+
+
+def md5_holding_gil(data: bytes = b''):
+    """Equivalent to ``hashlib.md5(data)``; never releases the GIL."""
+    hasher = hashlib.md5()
+    update_holding_gil(hasher, data)
+    return hasher

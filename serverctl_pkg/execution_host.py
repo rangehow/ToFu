@@ -194,6 +194,45 @@ async def _run_application(args, record, stopped, shutdown_requested, applicatio
             await asyncio.to_thread(gate.join)
 
 
+class SignalStop:
+    """Runs ``request_stop`` for SIGTERM/SIGINT on a watcher thread, never in the handler.
+
+    A Python signal handler runs on the main thread between bytecodes, also
+    while that thread holds a lock. One that sets a ``threading.Event`` can
+    re-enter ``Event.set`` (or interrupt the main thread's own ``wait``) with
+    the Event's condition lock already held, and the process deadlocks on
+    itself. A stopping shard gets several SIGTERMs in a row
+    (``ShardPool.join`` signals twice, then ``ResidentService.stop`` once
+    more); one hung that way for good on 2026-11-18, three nested handler
+    frames deep in ``Condition.__enter__``, and its primary's drain waited for
+    it. The handler only writes a byte to a pipe.
+    """
+
+    def __init__(self, request_stop):
+        self._request_stop = request_stop
+        self._read, self._write = os.pipe()
+        os.set_blocking(self._write, False)
+        self._thread = threading.Thread(target=self._watch, name='execution-host-signal-stop',
+                                        daemon=True)
+        self._thread.start()
+
+    def handler(self, *_args):
+        try:
+            os.write(self._write, b'\0')
+        except BlockingIOError:
+            pass  # A full pipe already holds an unread stop request.
+
+    def _watch(self):
+        while os.read(self._read, 4096):
+            self._request_stop()
+
+    def close(self):
+        """Call after the handlers are restored: EOF ends the watcher."""
+        os.close(self._write)
+        self._thread.join()
+        os.close(self._read)
+
+
 def serve(args, *, application_factory=create_application):
     args.report_fd = getattr(args, 'report_fd', None)
     if getattr(args, 'launch_environment', None) is None:
@@ -201,25 +240,29 @@ def serve(args, *, application_factory=create_application):
     shutdown_requested = threading.Event()
     stopped = asyncio.Event()
     event_loop = None
+    loop_lock = threading.Lock()
 
-    def request_stop(*_args):
+    def request_stop():
         shutdown_requested.set()
-        if event_loop is None:
-            stopped.set()
-        else:
-            # A raw Python signal handler does not wake an asyncio selector.
-            # Enqueue through the loop's self-pipe even on the main thread.
-            event_loop.call_soon_threadsafe(stopped.set)
+        with loop_lock:
+            if event_loop is None:
+                stopped.set()
+            else:
+                event_loop.call_soon_threadsafe(stopped.set)
 
     async def run():
         nonlocal event_loop
-        event_loop = asyncio.get_running_loop()
+        with loop_lock:
+            event_loop = asyncio.get_running_loop()
         try:
             await _run_application(args, record, stopped, shutdown_requested, application_factory)
         finally:
-            event_loop = None
+            with loop_lock:
+                event_loop = None
 
-    previous = {sig: signal.signal(sig, request_stop) for sig in (signal.SIGTERM, signal.SIGINT)}
+    signal_stop = SignalStop(request_stop)
+    previous = {sig: signal.signal(sig, signal_stop.handler)
+                for sig in (signal.SIGTERM, signal.SIGINT)}
     record = {}
     try:
         os.fstat(args.lease_fd)
@@ -251,6 +294,7 @@ def serve(args, *, application_factory=create_application):
     finally:
         for sig, handler in previous.items():
             signal.signal(sig, handler)
+        signal_stop.close()
         os.close(args.lease_fd)
         os.close(args.manager_fd)
         if args.report_fd is not None:

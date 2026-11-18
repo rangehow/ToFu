@@ -16,6 +16,9 @@ bridge):
     credential, before a call to a server known to be expired, and before
     reconnecting a server whose last connect failed; a read-only call is
     repeated once, any other gets guidance instead of a cookie request;
+  * an env value that is a ``vault:<entry>`` reference is compared and renewed
+    through that vault entry; the reference stays and no plaintext is written
+    back to the config;
   * no value reaches a log line, an audit record or the browser bridge.
 
 Run:  PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests/mcp_protocol/test_mcp_browser_credentials.py -m unit
@@ -35,6 +38,7 @@ import pytest
 import lib.browser.access as browser_access
 import lib.browser.queue as browser_queue
 import lib.mcp.browser_credentials as browser_credentials
+import lib.credentials_vault as credentials_vault
 import lib.mcp.config as mcp_config
 from lib.browser.dispatch import _clear_sticky_clients, select_owner_client
 from lib.mcp.browser_credentials import (
@@ -42,6 +46,7 @@ from lib.mcp.browser_credentials import (
 from lib.mcp.client import _bridge as bridge_module
 from lib.mcp.registry import get_catalog_entry
 from lib.mcp.result_content import MCPToolResult
+from lib.mcp.stdio_environment import resolve_vault_env_references
 
 pytestmark = pytest.mark.unit
 
@@ -169,6 +174,21 @@ def audits(monkeypatch):
     return events
 
 
+@pytest.fixture
+def vault(monkeypatch):
+    """An in-memory credential vault; the real one is never touched."""
+    entries, writes = {}, []
+
+    def _set_entry(name, value, *, note=None):
+        writes.append(name)
+        entries[name] = value
+        return {'name': name}
+
+    monkeypatch.setattr(credentials_vault, 'get_entry', entries.get)
+    monkeypatch.setattr(credentials_vault, 'set_entry', _set_entry)
+    return entries, writes
+
+
 def _row(name):
     return mcp_config.load_mcp_config(user_id=OWNER)[name]
 
@@ -207,6 +227,62 @@ def test_renewal_reads_exactly_the_declared_cookie(store, browser, audits, caplo
         'source': 'browser_cookie'})]
     assert 'Saved OVERLEAF_SESSION for overleaf' in caplog.text
     _assert_no_secret(browser, audits, caplog)
+
+
+def test_renewal_through_a_vault_reference_updates_the_vault_and_keeps_the_reference(
+        store, browser, audits, vault, caplog):
+    caplog.set_level(logging.DEBUG)
+    entries, writes = vault
+    entries['overleaf_session'] = STALE
+    mcp_config.upsert_server(
+        'overleaf', _overleaf_row('vault:overleaf_session'), user_id=OWNER)
+    before = _row('overleaf')
+
+    outcome = refresh_from_browser('overleaf', owner_user_id=OWNER)
+
+    assert (outcome.reason, outcome.changed) == ('renewed', ('OVERLEAF_SESSION',))
+    assert entries['overleaf_session'] == FRESH and writes == ['overleaf_session']
+    after = _row('overleaf')
+    assert after['env'] == before['env'] == {
+        'OVERLEAF_SESSION': 'vault:overleaf_session', 'OVERLEAF_GIT_TOKEN': GIT_TOKEN}
+    config_text = (store / 'mcp_servers' / f'{OWNER}.json').read_text()
+    assert FRESH not in config_text and STALE not in config_text
+    assert audits == [('mcp_credential_refreshed', {
+        'server': 'overleaf', 'env_keys': ['OVERLEAF_SESSION'],
+        'source': 'browser_cookie'})]
+    _assert_no_secret(browser, audits, caplog)
+
+    # The resolved value is compared: a vault already holding the browser's
+    # session is current and nothing is written.
+    assert refresh_from_browser('overleaf', owner_user_id=OWNER).reason == 'current'
+    assert writes == ['overleaf_session']
+
+
+def test_plaintext_renewal_never_writes_the_vault(store, browser, vault):
+    entries, writes = vault
+
+    assert refresh_from_browser('overleaf', owner_user_id=OWNER).reason == 'renewed'
+
+    assert _row('overleaf')['env']['OVERLEAF_SESSION'] == FRESH
+    assert entries == {} and writes == []
+
+
+def test_a_learned_binding_follows_the_vault_value(store, browser, vault):
+    entries, writes = vault
+    entries['notes_session'] = NOTES
+    mcp_config.upsert_server(
+        'notes', _custom_row(NOTES_SESSION='vault:notes_session'), user_id=OWNER)
+    browser.jar = [_cookie('sid', NOTES, '.notes.example')]
+
+    learn_bindings('notes', owner_user_id=OWNER)
+    assert 'NOTES_SESSION' in credential_bindings('notes', _row('notes'))
+    assert 'vault:' not in repr(browser.of('match_cookies'))
+
+    browser.jar[0]['value'] = NOTES_ROTATED
+    assert refresh_from_browser('notes', owner_user_id=OWNER).changed == ('NOTES_SESSION',)
+    assert entries['notes_session'] == NOTES_ROTATED
+    assert _row('notes')['env'] == {'NOTES_SESSION': 'vault:notes_session'}
+    assert 'NOTES_SESSION' in credential_bindings('notes', _row('notes'))
 
 
 def test_a_self_hosted_base_url_is_asked_for_its_own_cookie(store, browser):
@@ -384,6 +460,8 @@ def _bridge(live_session, *, owner=OWNER, parked=False, verdict=None,
     config = _overleaf_row(live_session)
     handle = bridge_module._MCPServerHandle('overleaf', copy.deepcopy(config))
     handle.session = None if parked else object()
+    # The session a live child holds is the one resolved when it started.
+    live = {'session': resolve_vault_env_references(config['env'])['OVERLEAF_SESSION']}
     bridge._servers['overleaf'] = handle
     bridge._configs['overleaf'] = copy.deepcopy(config)
     bridge._started = True
@@ -406,6 +484,8 @@ def _bridge(live_session, *, owner=OWNER, parked=False, verdict=None,
         connects.append(copy.deepcopy(srv_cfg))
         fresh = bridge_module._MCPServerHandle(name, copy.deepcopy(srv_cfg))
         fresh.session = object()
+        live['session'] = resolve_vault_env_references(
+            srv_cfg['env'])['OVERLEAF_SESSION']
         with bridge._lock:
             if name not in bridge._parked:
                 bridge._cred_health.pop(name, None)
@@ -416,7 +496,7 @@ def _bridge(live_session, *, owner=OWNER, parked=False, verdict=None,
 
     def _run_async(coro, timeout=None, **_kwargs):
         coro.close()
-        session = bridge._servers['overleaf'].config['env'].get('OVERLEAF_SESSION')
+        session = live['session']
         calls.append(session)
         if session == FRESH:
             return OK_TEXT
@@ -444,6 +524,37 @@ def test_expired_probe_copies_the_browser_cookie_and_reconnects(
     assert [event for event, _ in audits] == [
         'mcp_credential_expired', 'mcp_credential_refreshed', 'mcp_reconnect']
     _assert_no_secret(browser, audits, caplog)
+
+
+@pytest.mark.parametrize('parked', [False, True])
+def test_an_expired_vault_held_session_renews_and_reconnects(
+        store, browser, audits, vault, caplog, parked):
+    caplog.set_level(logging.DEBUG)
+    entries, _ = vault
+    entries['overleaf_session'] = STALE
+    reference = 'vault:overleaf_session'
+    mcp_config.upsert_server('overleaf', _overleaf_row(reference), user_id=OWNER)
+    bridge, connects, calls = _bridge(reference, parked=parked, verdict='expired')
+
+    assert bridge.call_tool(READ_TOOL, {}) == OK_TEXT
+
+    assert calls == [FRESH] and entries['overleaf_session'] == FRESH
+    assert [row['env']['OVERLEAF_SESSION'] for row in connects] == [reference]
+    assert _row('overleaf')['env']['OVERLEAF_SESSION'] == reference
+    assert bridge.get_cred_health('overleaf') is None
+    _assert_no_secret(browser, audits, caplog)
+
+
+def test_an_expired_vault_held_session_renews_after_a_probe(
+        store, browser, audits, vault):
+    entries, _ = vault
+    entries['overleaf_session'] = STALE
+    reference = 'vault:overleaf_session'
+    mcp_config.upsert_server('overleaf', _overleaf_row(reference), user_id=OWNER)
+    bridge, connects, _ = _bridge(reference)
+
+    assert bridge._run_cred_probe('overleaf')['status'] == 'ok'
+    assert len(connects) == 1 and entries['overleaf_session'] == FRESH
 
 
 def test_expired_probe_without_a_newer_credential_changes_nothing(store, browser, audits):

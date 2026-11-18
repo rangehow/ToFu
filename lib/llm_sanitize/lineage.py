@@ -6,10 +6,10 @@ named stage; equality or substring searches never invent occurrence identity.
 No registry policy, provider I/O, persistence, cache verdict or global state.
 """
 from copy import deepcopy
-import hashlib
 
 from lib.conversation_sync.settled_rows import is_settled, memo_get, memo_put
 from lib.llm_sanitize.context_sections import context_sections, memoized_text
+from lib.utils import sha256_holding_gil
 
 SPAN_FIELD = '_contextLineageSpans'
 BODY_FIELD = '_context_lineage'
@@ -30,7 +30,20 @@ def text_parts(content):
 
 
 def span_hash(text):
-    return hashlib.sha256(text.encode('utf-8')).hexdigest()
+    # Carriers are whole prompt sections: hashlib would hand the GIL away for
+    # each one (lib/utils.py).
+    return sha256_holding_gil(text.encode('utf-8')).hexdigest()
+
+
+def range_hash(text, start, end):
+    """``span_hash(text[start:end])``, memoized per text in the Turn's text memo.
+
+    The canonical builder (``MessageLineage``), the protocol emitters and
+    request sealing see the same immutable prompt strings each round, so a
+    range one stage hashed is a lookup for the next.
+    """
+    return memoized_text(('span-sha256', text, start, end),
+                         lambda: span_hash(text[start:end]))
 
 
 def _location(message, part, start, end, *, region='messages'):
@@ -40,6 +53,15 @@ def _location(message, part, start, end, *, region='messages'):
 
 def observed_span(document, location):
     """Resolve one explicit source range; malformed or absent ranges are unknown."""
+    observed = _observed_range(document, location)
+    if observed is None:
+        return None
+    text, start, end = observed
+    return text[start:end]
+
+
+def _observed_range(document, location):
+    """``(text, start, end)`` of a well-formed source range, else None."""
     if not isinstance(location, dict):
         return None
     region = location.get('region')
@@ -58,7 +80,7 @@ def observed_span(document, location):
         return None
     parts = content if isinstance(content, list) else [content]
     text = _part_text(parts[part]) if 0 <= part < len(parts) else None
-    return text[start:end] if isinstance(text, str) and end <= len(text) else None
+    return (text, start, end) if isinstance(text, str) and end <= len(text) else None
 
 
 def observed_span_hash(document, location):
@@ -71,8 +93,8 @@ def observed_span_hash(document, location):
     """
     carrier, key = _settled_carrier(document, location)
     if carrier is None:
-        text = observed_span(document, location)
-        return None if text is None else span_hash(text)
+        observed = _observed_range(document, location)
+        return None if observed is None else range_hash(*observed)
     held = memo_get(carrier, key)
     if held is None:
         text = observed_span(document, location)
@@ -185,8 +207,7 @@ class MessageLineage:
         _, ranges = self._hashes.setdefault(id(text), (text, {}))
         key = (start, end)
         if key not in ranges:
-            ranges[key] = memoized_text(('span-sha256', text, start, end),
-                                        lambda: span_hash(text[start:end]))
+            ranges[key] = range_hash(text, start, end)
         return ranges[key]
 
     def observe(self, stage, messages):
@@ -303,7 +324,7 @@ class ProjectionLineage:
             part, offset = mapped
             text = new_text[part]
             start, end = old['start'] + offset, old['end'] + offset
-            if span_hash(text[start:end]) != source['spanHash']:
+            if range_hash(text, start, end) != source['spanHash']:
                 continue
             source['output'] = _location(message, part + part_offset, start, end, region=region)
             self.mapped.add(ordinal)

@@ -7,6 +7,7 @@ import pytest
 
 from lib.utils import (
     HASHLIB_GIL_RELEASE_BYTES,
+    md5_holding_gil,
     sha256_holding_gil,
     update_holding_gil,
 )
@@ -22,6 +23,7 @@ SIZES = (0, 1, HASHLIB_GIL_RELEASE_BYTES - 2, HASHLIB_GIL_RELEASE_BYTES - 1,
 def test_digest_is_byte_identical_to_one_hashlib_call(size):
     data = (('é上下文-' * (size // 8 + 1)).encode('utf-8'))[:size]
     assert sha256_holding_gil(data).digest() == hashlib.sha256(data).digest()
+    assert md5_holding_gil(data).digest() == hashlib.md5(data).digest()
 
     prefix = hashlib.sha256(b'[')
     expected = prefix.copy()

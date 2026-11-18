@@ -120,34 +120,50 @@ def record_refused_history(task, messages):
         list(messages or ())[:task['_refused_history_length']])
 
 
-def refused_history_changed(task, messages):
-    """True when the refused prefix changed (or is unknown) → retry the primary.
+def _appended_rows_are_tool_rounds(rows):
+    """True for the rows ONE attempt's tool loop appends between its requests.
 
-    Appended fallback rounds leave the prefix byte-identical, so they never
-    retry. Compaction/clearing rewrites it, and a shorter list is a change too.
+    The served assistant tool-call row and its tool results. A new request
+    (the next user Turn) or any other injection ends the refusal's exemption.
+    """
+    return bool(rows) and all(
+        row.get('role') == 'tool'
+        or (row.get('role') == 'assistant' and row.get('tool_calls'))
+        for row in rows)
+
+
+def retry_primary_for_messages(task, messages):
+    """True when this request must go back to the primary after a refusal.
+
+    A content_filter refusal is a verdict on ONE request, never a demotion of
+    the conversation's primary model: the NEXT request returns to it
+    (docs/contracts/TURN_SETTLEMENT.md). Only a request that is exactly the
+    refused history plus the same attempt's own appended tool rows stays on
+    the fallback, so a refused history does not bill a probe on every tool
+    round of one attempt. Everything else retries the primary: the
+    conversation's next request, a compaction/clearing that rewrites the
+    refused prefix, a shorter or replaced history, any other appended
+    injection, or a legacy stamp with no refused prefix.
     """
     length = task.get('_refused_history_length')
     refused = task.get('_refused_history_digest') or ''
-    if type(length) is not int or length < 0 or not refused:
-        # Legacy stamp without a prefix: keep the conservative retry.
-        return True
-    current = list(messages or ())[:length]
-    if len(messages or ()) < length:
-        return True
-    return _history_digest(current) != refused
+    current = list(messages or ())
+    if (type(length) is int and 0 <= length < len(current) and refused
+            and _history_digest(current[:length]) == refused
+            and _appended_rows_are_tool_rounds(current[length:])):
+        return False
+    return True
 
 
 def stamp_switch_back(task, round_num, messages=None):
-    """Probe the primary again only when the refused history actually changed.
+    """Return the next request after a content_filter fallback to the primary.
 
-    A content_filter refusal is tied to the conversation history, and refusals
-    come in runs that persist until old tool results are cleared or the
-    history is compacted. Retrying the primary on an unchanged history would
-    add a refused request (and its billed prompt) to every round of exactly
-    the lanes that refuse most, for no benefit. So the primary is retried
-    only when the history differs from the one that was refused — a
-    compaction, cleared tool results, new attachments/inbox, any real change.
-    Otherwise the attempt stays on the fallback. No knobs or counters.
+    The round that refused is served on the fallback; the following request
+    goes back to the primary and a repeated refusal falls back again for
+    that request only. Only the refused attempt's own appended tool rounds
+    skip the return probe (see :func:`retry_primary_for_messages`), and the
+    return emits the same ``MODEL_FALLBACK`` event / lead-audit
+    ``model_switch`` row (direction ``primary``) as the fallback.
     """
     if task.get('_fallback_kind') != 'content_filter':
         return False
@@ -158,14 +174,12 @@ def stamp_switch_back(task, round_num, messages=None):
     # carries no model to return from.
     if not destination or not source or destination == source:
         return False
-    # History-change gate on the REFUSED PREFIX only: appending this
-    # attempt's own fallback rounds must not count as a history change.
-    if not refused_history_changed(task, messages):
+    if not retry_primary_for_messages(task, messages):
         return False
     stamp_model_switch(
         task, source=source, destination=destination,
         kind='primary_retry', direction='primary',
-        reason=f'The history changed since the refusal (compaction/cleared results); retrying the primary on round {round_num + 1}.',
+        reason=f'The refusal applies to one request; round {round_num + 1} returns to the primary model.',
         detail_key='stream.phase.refusalSwitchback', round_num=round_num,
     )
     return True
@@ -182,4 +196,5 @@ def clear_switch_stamps(task):
 
 
 __all__ = ['stamp_model_switch', 'stamp_switch_back', 'clear_switch_stamps',
-           'record_refused_history', 'refused_history_changed', '_history_digest']
+           'record_refused_history', 'retry_primary_for_messages',
+           '_history_digest']

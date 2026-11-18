@@ -31,7 +31,9 @@ Storage
     path, so a write finds the records naming its paths without reading every
     writer's record. A writer marks the paths it writes, and all its recorded
     paths at a task's first write in that checkout; a marker whose record no
-    longer names its path is removed when found. The data is advice, never
+    longer names its path is removed when found, and a retired record takes
+    its markers with it. An unreadable record keeps its markers: on the FUSE
+    volume an open racing the record's ``os.replace`` can see ENOENT. The data is advice, never
     authority: losing a file loses advice, not work. A record leaves with its
     checkout, and a path stops counting once that checkout's copy no longer
     differs from its merge base with trunk (landed or reverted).
@@ -427,6 +429,10 @@ def _records_naming(common_dir: Path, paths: Iterable[str]) -> list[WriterRecord
             if record is not None and relative in record.paths:
                 named = True
                 continue
+            if record is None and name.endswith('.json'):
+                # Unreadable is not retired: a FUSE open racing the record's
+                # os.replace sees ENOENT. _retire removes a record's markers.
+                continue
             try:
                 marker.unlink()
             except OSError:
@@ -445,6 +451,12 @@ def _retire(record: WriterRecord) -> None:
         record.file.unlink()
     except FileNotFoundError:
         pass
+    common_dir = record.file.parents[2]
+    for relative in record.paths:
+        try:
+            (_path_marker_dir(common_dir, relative) / record.file.name).unlink()
+        except OSError:
+            pass
     with _base_cache_lock:
         _base_cache.pop(str(record.checkout), None)
 
@@ -686,12 +698,15 @@ def take_notices(task: dict, project_path: str) -> list[str]:
     writer, _title = _writer_of(task)
     if not writer:
         return []
-    roots = list(task.get('_radarCommonDirs') or ())
-    if not roots and project_path:
+    known = task.get('_radarCommonDirs')
+    if known is None and project_path:
+        # Looked up once per Turn, a miss included: a project that is not a
+        # checkout would otherwise walk its parents for `.git` every round.
+        # A checkout the Turn writes in joins through note_writes.
         checkout = find_checkout(project_path)
-        if checkout is not None:
-            roots.append(str(checkout.common_dir))
-            task['_radarCommonDirs'] = list(roots)
+        known = task['_radarCommonDirs'] = (
+            [] if checkout is None else [str(checkout.common_dir)])
+    roots = list(known or ())
     notices = []
     for common_dir in roots:
         path = _radar(Path(common_dir), 'notices', f'{_safe(writer)}.jsonl')

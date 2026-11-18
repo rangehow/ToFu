@@ -112,11 +112,34 @@ Alternatives rejected: retrying on ENOENT (a retry count or interval is a
 knob and a truly absent store is real); locking every read (a flock per read
 on hot paths, and readers inside a mutator of the same path would deadlock);
 per-call-site locked reads only (each new reader would reintroduce the race).
-Residual: stdlib-only `server_manager` state read by `oob_alert`, and
-project-directory stores outside the data root (`file_history/tracked.json`,
-`integration_radar` records) still publish without the store's lock.
+The same rule covers stores that are not read through `read_json`:
+- `server_manager` and `oob_alert` are standard-library only. They flock
+  `<path>.lock` themselves (`server_manager._store_lock`): the manager publishes
+  its state exclusively under it, and a reader that sees ENOENT re-reads under
+  a shared lock. `oob_alert` takes the mtime from the opened file, so a
+  missing state file no longer raises a false outage.
+- Project-directory stores on the same mount: `file_history/tracked.json`
+  (blob GC pins each path's current version from it). Each read-modify-write
+  holds `tracked_index_lock`, and `stage_backup` takes it itself. The managed
+  repository manifest (`.git/tofu-managed.json`): worker links and the staging
+  withhold set come from it.
+- Backup job manifests (`<temporary>.job.json`): the reclaimer deletes a stale
+  temporary only once its manifest is absent under the manifest's lock. A
+  finished job removes the manifest and then `json_store.lock_file_path`, so
+  retired jobs leave no lock files.
+- `integration_radar` is the exception. Its files are advice that nothing
+  waits for ("Integration radar" in `docs/modules/conversations_project_brain.md`),
+  so it takes no lock. Instead, a lookup removes a path marker only when it read
+  the record and the record no longer names the path, and `_retire` removes a
+  retired record's markers. An unreadable record costs one lookup's advice,
+  never the index entry.
 Specs: `tests/json_store/test_replace_window_reads.py` (the window is
-reproduced by `tests/support/replace_window.py`),
+reproduced by `tests/support/replace_window.py`, which also observes stdlib
+flock readers), `tests/server/test_manager_state_replace_window.py`,
+`tests/file_history/test_tracked_index_replace_window.py`, the replace-window
+cases in `tests/project_mod/test_integration_radar.py`,
+`tests/project_mod/test_managed_repository.py` and
+`tests/storage/test_storage_sidecar_backup_policy.py`,
 `tests/lifecycle_approval/test_lifecycle_persistence.py::test_restart_cooldown_holds_while_its_stamp_is_being_replaced`,
 `tests/key_stats/test_key_stats_persistence.py::test_store_missing_mid_replace_keeps_the_loaded_decisions`.
 
@@ -1113,6 +1136,28 @@ and real stdio cancel/checkpoint/model-control boundaries. Persistent worker
 reuse must use this barrier before advertising readiness; no reuse is currently
 selected by this change. Evidence and the 8-byte per-reader size change live in
 [resource control](RESOURCE_CONTROL.md#native-reader-join-fence).
+
+## Signal handlers take no lock
+
+Problem: a Python signal handler runs on the main thread between bytecodes,
+also while that thread holds a lock. A handler that sets a `threading.Event`
+(or takes any other lock) re-enters it when a second signal lands inside the
+first handler's `Event.set`, or interrupts the main thread's own `wait`, and
+the process deadlocks on itself. A stopping execution shard receives several
+SIGTERMs in a row (`ShardPool.join` signals twice, `ResidentService.stop` once
+more); on 2026-11-18 one hung for good, three nested `request_stop` frames deep
+in `Condition.__enter__`, orphaned after its primary exited.
+
+Decision: the resident host's handler (`serverctl_pkg/execution_host.py`,
+`SignalStop`) only writes a byte to a non-blocking pipe; a watcher thread runs
+the stop request, which may then take locks freely. Spec:
+`tests/server/test_execution_host_signal_stop.py` (the handler returns while
+the request's lock is held; a burst of 500 real SIGTERMs stops once).
+
+Alternatives considered: an `is_set()` guard before `set()` still leaves the
+window inside `set()` before the flag flips; `loop.add_signal_handler` has no
+loop before the host's record is published, where the handler is already
+needed.
 
 ## Fault contracts of the chaos suite
 

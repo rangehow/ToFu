@@ -42,40 +42,41 @@ separate lane from a genuine empty/truncated stop (`abnormal_stop` recovery)
 and from 402 credit exhaustion / 429 rate limits (routing and quota), which
 never stamp a content-filter settlement.
 
-A `content_filter` refusal tracks the conversation history, not a single
-request: research objectives/memories in the history trip it, and refusals
-come in runs that persist until old tool results are cleared or the history
-is compacted (measured 2026-11-18, assignment 37c646e4: research-content
-segments refused 18/18; a refused round-1 payload answered once its history
-was replayed unchanged after the prefix changed). So the primary is retried
-only when the refused history actually changed. `_switch` stamps the refused
-PREFIX — its length and that prefix's digest — at the fallback; the next round
-retries the primary only when the digest of the current list's first `n`
-messages differs, or the list is shorter than `n` (compaction, cleared tool
-results), else stays on the fallback for the rest of the attempt. Comparing
-the whole list would always differ, because each served fallback round
-appends its own assistant message and tool results; appended rounds leave the
-refused prefix byte-identical and never retry. New attachments/inbox that
-land inside the prefix still count as a change. Each switch — fallback and return-to-primary — emits a
-`MODEL_FALLBACK` event (kind `content_filter` out, `primary_retry` back), and
-for a project Worker a lead-audit `model_switch` row (docs/LOGGING.md), so a
-lead follows the switches without opening the transcript. The return probe is
-gated in the dispatch path (`_root_agent_loop._dispatch_open_round`) so the
-body is built for the primary, and in `_call._llm_call_with_fallback` for
-direct callers. The review receipt (`project_dispatch`
-`execution.result.modelFallback`, from the Turn's paid `apiRounds`) names the
-rounds that ran on the fallback.
+A `content_filter` refusal is a verdict on ONE request, never a demotion of
+the conversation's primary model: **the next request returns to the primary**.
+The refused round is served on the configured fallback; the following request
+(the conversation's next Turn, or a round whose history was compacted,
+cleared or otherwise changed) goes back to the primary, and a repeated
+refusal there falls back again for that request only. Each switch — fallback
+and return-to-primary — emits a `MODEL_FALLBACK` event (kind `content_filter`
+out, `primary_retry` back) and, for a project Worker, a lead-audit
+`model_switch` row with `direction` `fallback`/`primary` (docs/LOGGING.md),
+so a lead follows the switches without opening the transcript.
+
+The one exemption is the refused attempt's OWN tool loop. `_switch` stamps
+the refused history (its length and digest) at the fallback;
+`retry_primary_for_messages` keeps a request on the fallback only when its
+history is exactly that refused history plus the rows the tool loop appends
+between two provider requests (the served assistant tool-call row and its
+tool results). Those rounds answer the same refused payload, so re-probing
+the primary would add one refused, billed request per round of exactly the
+lanes that refuse most. Anything else — a new user message, any other
+injection, a rewritten/shorter prefix, an unknown stamp — returns to the
+primary. The return probe is gated in the dispatch path
+(`_root_agent_loop._dispatch_open_round`) so the body is built for the
+primary, and in `_call._llm_call_with_fallback` for direct callers. The
+review receipt (`project_dispatch` `execution.result.modelFallback`, from
+the Turn's paid `apiRounds`) names the rounds that ran on the fallback.
 
 Measured cost: a refused primary attempt returns in about 3 s (median; up to
-38 s under load) and bills its full prompt. Retrying the primary on EVERY
-round (the first design) would add one refused, billed request per round to
-exactly the lanes that refuse most, with no benefit while the history is
-unchanged; the history-change gate avoids that, and a resume still returns to
-the accepted model. Alternatives rejected: retrying on every round (doubles
-requests for refusing lanes); latching the fallback for the rest of the turn
-with no history-change probe (a Worker whose history is later compacted never
-returns to the primary); a cooldown or retry counter (a knob that does not
-track the actual verdict trigger).
+38 s under load) and bills its full prompt, so the exemption above is limited
+to one attempt's own tool rounds. Alternatives rejected: latching the
+fallback until the refused history changes (the 2026-11-18 incident — a lead
+whose tool loop only appended rounds never changed the refused prefix, so it
+ran 32+ rounds on the fallback with zero `direction=primary` rows); probing
+the primary on every tool round of the refused attempt (bills a refused
+request per round); a cooldown or retry counter (a knob that does not track
+the actual verdict trigger). A resume still returns to the accepted model.
 
 Without a distinct fallback (none configured, `disableModelFallback`, or
 already on it), or when the fallback refuses too, it settles without a

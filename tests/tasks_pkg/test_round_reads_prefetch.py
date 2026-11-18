@@ -144,3 +144,33 @@ def test_a_failed_exchange_falls_back_to_live_reads():
     reads = PrefetchedReads(client, list(REQUESTS))
     assert reads.query(*REQUESTS[0]) == {'answer': 'turn.get', 'live': True}
     assert client.lone == ['turn.get']
+
+
+def test_the_inbox_conversation_scope_is_one_of_the_round_reads(monkeypatch, tmp_path):
+    """``project_messages.identity`` reads its conversation from the round's
+    exchange: the request is listed, and the scope read takes that answer
+    instead of a synchronous ``conversation.get``."""
+    from lib.conversations import project_messages
+    from lib.conversations.repository import conversation_read_request
+    from lib.storage.port import PrefetchedReads
+
+    task = {'id': 'task-7', 'convId': 'conv-1', '_userId': 7}
+    listed = round_reads._requests(task)
+    request = conversation_read_request('conv-1', user_id=7, include_messages=False)
+    assert request in listed
+    # A child invocation never injects project messages, so nothing is listed.
+    assert request not in round_reads._requests({**task, '_parentTaskId': 'parent'})
+
+    project = str(tmp_path)
+
+    class Conversations(Client):
+        def _answer(self, requests):
+            self.exchanges.append([op for op, _ in requests])
+            return [{'metadata': {'settings': {'projectPath': project}}, 'messages': []}
+                    for _ in requests]
+
+    client = Conversations()
+    reads = PrefetchedReads(client, [request, ('record.get', {'id': 'r1'})])
+    reads.send_now()
+    assert project_messages.scope(7, 'conv-1', reads=reads) == project_messages.normalize_project_path(project)
+    assert client.lone == [] and client.exchanges == [['conversation.get', 'record.get']]

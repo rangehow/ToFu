@@ -1159,7 +1159,14 @@ point. Scope:
     project_path)`) and `lib.channels.tools._require_owner_chat` admits only a
     thread that is the owner's command chat (`owner_chat_only` otherwise; the
     Global Router keeps every thread and its reply policies). Every Project Router
-    send, refusals included, is a `lead_channel_send` audit record.
+    send, refusals included, is a `lead_channel_send` audit record. A lead is
+    recognised by `lead_attachments.lead_scope`, which is `coordinator_scope`
+    minus the Watchdog: a lead's continuation Turn (a wake running under its own
+    project-dispatch grant) is the same lead, and a Worker's grant names no
+    Coordinator scope, so a Worker stays refused (`forbidden`, "ask your lead").
+    An earlier `lead_scope` refused every dispatch-grant task, so woken leads
+    could not send (refused live 2026-11-18 10:31; specification
+    `tests/channels/test_lead_owner_chat.py::test_a_coordinator_continuation_turn_is_still_the_lead`).
   - Attachments: a lead (`lead_attachments.lead_scope`) attaches files of every
     registered project root (`registered_projects.registered_project_roots`) and
     of its own Workers' registered checkouts: `worker:<assignment_id>/<path>` on

@@ -44,7 +44,7 @@ def assemble(build: Path, *, doc_type, brief: dict, kit: dict, kit_dir: Path,
              paper_dir: Path, sections: dict, outline: dict, figures: list,
              bib_text: str) -> Path:
     """Write ``build/main.tex`` and its inputs; return the build directory."""
-    from lib.longform.documents.venues import main_tex
+    from lib.longform.documents.venues import frame_main_tex
     if build.exists():
         shutil.rmtree(build)
     build.mkdir(parents=True)
@@ -71,10 +71,9 @@ def assemble(build: Path, *, doc_type, brief: dict, kit: dict, kit_dir: Path,
             parts.append(f'\\label{{{BODY_END_LABEL}}}\n')
     body = '\n'.join(parts)
     if doc_type.needs_venue:
-        tex = main_tex(preamble=kit['preamble'], title=brief['title'],
-                       authors=brief.get('authors') or 'Anonymous',
-                       abstract=sections['abstract'], body=body,
-                       bibstyle=kit['bibstyle'], bibfile='references')
+        tex = frame_main_tex(brief['venue'], kit, title=brief['title'],
+                             authors=brief.get('authors') or 'Anonymous',
+                             abstract=sections['abstract'], body=body, bibfile='references')
     else:
         template = (paper_dir / brief['main_template']).read_text(encoding='utf-8')
         tex = template.replace('%%BODY%%', body)
@@ -102,12 +101,25 @@ def pdf_pages(pdf: Path) -> int:
     return len(PdfReader(str(pdf)).pages)
 
 
+_USEPACKAGE_RE = re.compile(r'\\usepackage(?:\[[^\]]*\])?\{([^}]*)\}')
+
+
+def forbidden_package_uses(build: Path, main: str, forbidden: tuple[str, ...]) -> list[str]:
+    """Venue-forbidden packages the document's own sources load."""
+    from lib.longform.documents.existing_draft import expand
+    text = expand(build, main)
+    used = {name.strip() for group in _USEPACKAGE_RE.findall(text) for name in group.split(',')}
+    return sorted(used & set(forbidden))
+
+
 def compile_and_check(build: Path, *, engine: str, page_limit: int,
-                      kit: dict) -> dict:
+                      kit: dict, main: str = 'main.tex',
+                      forbidden_packages: tuple[str, ...] = ()) -> dict:
     """Compile and return the QA report; ``failures`` empty means clean."""
     from lib.paper.checks import run_pdf_file_checks, run_source_checks
     from lib.paper.latex_layout import compile_project
-    result = compile_project(build, engine=engine)
+    stem = Path(main).with_suffix('')
+    result = compile_project(build, engine=engine, main=main)
     failures: list[str] = []
     report = {'compile_status': result.get('status'), 'engine': engine,
               'errors': result.get('errors') or []}
@@ -123,7 +135,7 @@ def compile_and_check(build: Path, *, engine: str, page_limit: int,
                 _OVERFULL_RE.findall(log)]
     undefined = sorted(set(_UNDEFINED_RE.findall(log))
                        | set(_NATBIB_UNDEFINED_RE.findall(log)))
-    blg = build / 'main.blg'
+    blg = build / stem.with_suffix('.blg')
     if blg.is_file():
         bib_errors = re.findall(r'^(.*)---line \d+ of file', blg.read_text(
             encoding='utf-8', errors='replace'), re.MULTILINE)
@@ -133,8 +145,8 @@ def compile_and_check(build: Path, *, engine: str, page_limit: int,
         failures.append(f'{len(overfull)} overfull box(es): {overfull}')
     if undefined:
         failures.append(f'undefined references/citations: {undefined}')
-    aux = (build / 'main.aux').read_text(encoding='utf-8', errors='replace') \
-        if (build / 'main.aux').is_file() else ''
+    aux_path = build / stem.with_suffix('.aux')
+    aux = aux_path.read_text(encoding='utf-8', errors='replace') if aux_path.is_file() else ''
     match = _BODY_END_RE.search(aux)
     pdf = Path(result['pdf'])
     pages = pdf_pages(pdf)
@@ -146,7 +158,16 @@ def compile_and_check(build: Path, *, engine: str, page_limit: int,
                    if not (build / leaf).is_file() or _sha(build / leaf) != digest)
     if drift:
         failures.append(f'template files differ from the fetched official kit: {drift}')
-    source_rows = run_source_checks(build, 'main.tex')
+    banned = forbidden_package_uses(build, main, forbidden_packages)
+    if banned:
+        failures.append(f'the venue forbids packages {banned}')
+    from lib.longform.documents.existing_draft import reachable_tex
+    compiled = reachable_tex(build, main)
+    # The tree may carry files the document never inputs (a vendored template
+    # sample, old drafts); only the compiled sources are this paper's defects.
+    source_rows = [row for row in run_source_checks(build, main)
+                   if not row.get('file') or not row['file'].endswith(('.tex', '.ltx'))
+                   or row['file'] in compiled]
     pdf_rows = run_pdf_file_checks(pdf)
     for row in source_rows + pdf_rows:
         if row['severity'] in ('error', 'warning'):

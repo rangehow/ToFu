@@ -48,6 +48,34 @@ def test_background_stop_timeout_names_the_owner_still_stopping(monkeypatch):
     assert isinstance(late.value.__cause__, TimeoutError)
 
 
+@pytest.mark.parametrize('relay', ['browser', 'desktop', 'MCP'])
+def test_each_bridge_relay_stop_is_named_while_it_runs(monkeypatch, relay):
+    """A relay that outlives the stop budget is reported as itself, never as
+    the plugin shutdown hooks that ran before it."""
+    from lib.browser import bridge_relay as browser
+    from lib.desktop import bridge_relay as desktop
+    from lib.mcp import bridge_relay as mcp
+    from lib.server import server_background_services as services
+
+    app = SimpleNamespace(extensions={'tofu_registered_background_services': True,
+                                      'tofu_registered_background_services_role': 'all'})
+    seen = {}
+
+    def stopper(label):
+        def stop(timeout=2.0):
+            seen[label] = app.extensions.get(services.STOPPING_OWNER_KEY)
+            return True
+        return stop
+
+    monkeypatch.setattr('lib.app.plugin_registry.run_shutdown_hooks', lambda app: 0)
+    monkeypatch.setattr(browser, 'stop_bridge_owner', stopper('browser'))
+    monkeypatch.setattr(desktop, 'stop_bridge_owner', stopper('desktop'))
+    monkeypatch.setattr(mcp, 'stop_mcp_owner', stopper('MCP'))
+    monkeypatch.setattr(services, '_process_background_owners', lambda: ())
+    services.stop_registered_background_services(app, timeout=0.1)
+    assert seen[relay] == f'{relay} bridge relay'
+
+
 class FailedCloseService(ExecutionService):
     host_module = 'tests.support.execution_host_failed_close_probe'
 

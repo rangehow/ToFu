@@ -33,6 +33,7 @@ _LABEL = re.compile(r'\\label\s*\{([^}]{1,512})\}')
 _LOG_CITATION = re.compile(r"Citation `([^']+)'")
 _LOG_REFERENCE = re.compile(r"Reference `([^']+)'")
 _STRIP_COMMENTS = re.compile(r'(?<!\\)%[^\n]*')
+_MACRO_PARAMETER = re.compile(r'#+[1-9]')
 
 
 def _keys(raw: str) -> list[str]:
@@ -86,6 +87,8 @@ def audit_citations(snapshot_root: Path, files: tuple[dict, ...] | list[dict],
                 cites.setdefault(key, (path, text.count('\n', 0, match.start()) + 1))
         for match in _REF.finditer(text):
             for key in _keys(match.group(1)):
+                if _MACRO_PARAMETER.fullmatch(key):
+                    continue  # \ref{#1} inside a \newcommand body is not a key
                 refs.setdefault(key, (path, text.count('\n', 0, match.start()) + 1))
         labels.update(_LABEL.findall(text))
 

@@ -37,6 +37,7 @@ from lib.file_history.store import (
     read_blob,
     save_tracked,
     stage_backup,
+    tracked_index_lock,
     with_project_lock,
 )
 
@@ -106,14 +107,8 @@ def track_edit(base_path: str, rel_path: str, *,
         return None
     try:
         ensure_store(base_path)
-        from lib.json_store import locked_path
-        from lib.file_history.store import tracked_path
-        # Journal writers of different files no longer share a project-wide
-        # lock, so two processes can stage backups at once: the tracked index
-        # is one read-modify-write per project and needs its own file lock.
-        with locked_path(tracked_path(base_path)):
-            v = stage_backup(base_path, rel, explicit_content=pre_content,
-                             task_id=task_id or message_id)
+        v = stage_backup(base_path, rel, explicit_content=pre_content,
+                         task_id=task_id or message_id)
         if v is not None:
             logger.debug('[FileHistory] track_edit %s → v%d (msg=%s task=%s explicit=%s)',
                          rel, v, (message_id or '-')[:8],
@@ -461,37 +456,38 @@ def restore_from(base_path: str, snapshot_id: str) -> dict:
 
         # Only successful mutations can advance tracked state. Metadata is
         # anchored too: a substituted parent must not become restore evidence.
-        tracked = load_tracked(base_path)
-        confirmed: list[dict] = []
-        for item in applied:
-            rel = item['path']
-            v = target_files[rel]
-            v_int = int(v or 0)
-            entry = tracked.get(rel) or {}
-            entry = {**entry, 'highest_version': highest_version(entry)}
-            if v_int == 0:
-                tracked[rel] = {**entry, 'latest_version': v_int,
-                                'deleted': True, 'mtime': 0, 'size': 0}
-            else:
-                try:
-                    st = undo_filesystem.stat_file(base_path, _restore_target(base_path, rel))
-                    if st is None:
-                        raise ValueError('Restored file disappeared')
+        with tracked_index_lock(base_path):
+            tracked = load_tracked(base_path)
+            confirmed: list[dict] = []
+            for item in applied:
+                rel = item['path']
+                v = target_files[rel]
+                v_int = int(v or 0)
+                entry = tracked.get(rel) or {}
+                entry = {**entry, 'highest_version': highest_version(entry)}
+                if v_int == 0:
                     tracked[rel] = {**entry, 'latest_version': v_int,
-                                    'deleted': False,
-                                    'mtime': st.st_mtime, 'size': st.st_size}
-                except ValueError as error:
-                    failed.append({'path': rel, 'reason': str(error), 'refused': True})
-                    continue
-                except (OSError, NotImplementedError) as error:
-                    failed.append(_fault_row(rel, error))
-                    logger.warning('[FileHistory] restored %s cannot be confirmed: %s',
-                                   rel, error, exc_info=True)
-                    continue
-            confirmed.append(item)
-        applied = confirmed
-        if applied:
-            save_tracked(base_path, tracked)
+                                    'deleted': True, 'mtime': 0, 'size': 0}
+                else:
+                    try:
+                        st = undo_filesystem.stat_file(base_path, _restore_target(base_path, rel))
+                        if st is None:
+                            raise ValueError('Restored file disappeared')
+                        tracked[rel] = {**entry, 'latest_version': v_int,
+                                        'deleted': False,
+                                        'mtime': st.st_mtime, 'size': st.st_size}
+                    except ValueError as error:
+                        failed.append({'path': rel, 'reason': str(error), 'refused': True})
+                        continue
+                    except (OSError, NotImplementedError) as error:
+                        failed.append(_fault_row(rel, error))
+                        logger.warning('[FileHistory] restored %s cannot be confirmed: %s',
+                                       rel, error, exc_info=True)
+                        continue
+                confirmed.append(item)
+            applied = confirmed
+            if applied:
+                save_tracked(base_path, tracked)
         result['files'] = applied
         result['failed'] = failed
         if failed:
@@ -701,19 +697,21 @@ def detect_external_edits(base_path: str, *,
         # only mtime/size and leaving version + last_writer_task_id intact.
         if reconcile:
             try:
-                fresh = load_tracked(base_path)
-                changed = False
-                for rel, (size, mtime) in reconcile.items():
-                    e = fresh.get(rel)
-                    if not e or e.get('deleted'):
-                        continue
-                    if (e.get('size') != size
-                            or abs(float(e.get('mtime') or 0) - mtime) > 1e-3):
-                        e['size'] = size
-                        e['mtime'] = mtime
-                        changed = True
+                with tracked_index_lock(base_path):
+                    fresh = load_tracked(base_path)
+                    changed = False
+                    for rel, (size, mtime) in reconcile.items():
+                        e = fresh.get(rel)
+                        if not e or e.get('deleted'):
+                            continue
+                        if (e.get('size') != size
+                                or abs(float(e.get('mtime') or 0) - mtime) > 1e-3):
+                            e['size'] = size
+                            e['mtime'] = mtime
+                            changed = True
+                    if changed:
+                        save_tracked(base_path, fresh)
                 if changed:
-                    save_tracked(base_path, fresh)
                     logger.debug('[FileHistory] reconciled stat for %d '
                                  'byte-identical file(s) (no drift)', len(reconcile))
             except Exception as _e:

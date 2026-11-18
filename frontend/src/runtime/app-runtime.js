@@ -19432,10 +19432,6 @@ function selectTheme(theme) {
   applyTheme(theme);
 }
 
-function _syncRangeOutput(input, outputId, suffix) {
-  const output = document.getElementById(outputId);
-  if (output) output.textContent = String(input && input.value || '') + String(suffix || '');
-}
 
 /* Cost dashboard aliases — moved to myday.js */
 
@@ -25608,7 +25604,6 @@ const runtimeActions = Object.freeze({
   _safeClipboardWrite,
   _swarmCopyAgentId,
   _swarmToggleClass,
-  _syncRangeOutput,
   _timerInstructionToggle,
   _timerPollToggle,
   _timerWatcherToggle,

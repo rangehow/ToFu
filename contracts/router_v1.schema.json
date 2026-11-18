@@ -8,6 +8,7 @@
     "applications": "router.instruction.application.v1",
     "watchdogSignals": "router.watchdog.signal.v1",
     "watchdogOpenSignals": "router.watchdog.open.v1",
+    "watchdogQuotaLanes": "router.watchdog.quota_lane.v1",
     "portfolio": "router.portfolio.opportunity.v1"
   },
   "$defs": {
@@ -473,6 +474,29 @@
       "description": "Channel account states (channels_v1 AccountState) that open a Watchdog channel signal.",
       "enum": ["disconnected", "needs_login", "runtime_unavailable", "kicked", "error"]
     },
+    "watchdogQuotaLane": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One owner's quota alert for one (AppId, wire model) lane, merged across every process whose quota watch reports on it (docs/ROUTER.md R7, quota). It is open while at least one reporter (a process's quota watch, by its process identity) holds an open episode. Only the closed-to-open transition records a signal and wakes the Watchdog; an open while it is open joins the holders, and it closes when its last holder closes or is proved dead. Never shown to a model.",
+      "required": ["version", "owner", "lane", "providerId", "credential", "keyTail", "model", "state",
+                   "holders", "identity"],
+      "properties": {
+        "version": {"const": 1},
+        "owner": {"type": "integer", "minimum": 1},
+        "lane": {"type": "string", "pattern": "^[0-9a-f]{16}$",
+                 "description": "Digest of (provider, credential, wire model): the quota watch's lane, equal in every process."},
+        "providerId": {"type": "string", "minLength": 1, "maxLength": 256},
+        "credential": {"type": "string", "minLength": 1, "maxLength": 256,
+                       "description": "The dispatcher's credential identity of the AppId (never the key), so a Watchdog dispatch can step off it."},
+        "keyTail": {"type": "string", "minLength": 1, "maxLength": 4},
+        "model": {"type": "string", "minLength": 1, "maxLength": 160},
+        "state": {"enum": ["open", "closed"]},
+        "holders": {"type": "array", "uniqueItems": true,
+                    "items": {"type": "string", "minLength": 1, "maxLength": 256}},
+        "identity": {"type": ["array", "null"],
+                     "description": "The watchdogSignal identity of the current, or last, open alert."}
+      }
+    },
     "watchdogSignal": {
       "type": "object",
       "additionalProperties": false,
@@ -554,7 +578,7 @@
       }
     },
     "ownerDelegationAuthority": {
-      "description": "Act under the owner's delegation (docs/ROUTER.md R9). Name exactly one trigger: source_turn_id (the owner's own message of your current request), source_steer_id (an owner message sent while you were replying) or instruction_id with exactly one of event_id or source_turn_id (an active standing instruction and what triggered it), or under_delegation=true alone (no owner message asks for it: you act on your own judgment under the owner's full delegation, recorded with your reason). Any other combination is refused before anything runs (ownerDelegationTrigger).",
+      "description": "Act under the owner's delegation (docs/ROUTER.md R9): give reason and exactly one owner trigger; each trigger field says when it applies, and any other combination is refused before anything runs (ownerDelegationTrigger).",
       "type": "object",
       "additionalProperties": false,
       "required": ["reason"],

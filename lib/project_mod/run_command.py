@@ -559,6 +559,9 @@ def _get_cmd_env(cwd=None, credential_env=None, strip_credential_vars=None,
         cache_root = os.path.join(root, '.tofu', 'tool-cache') if root else None
     else:
         cache_root = tool_cache_root()
+    if cache_root:
+        from lib.tools.tool_cache_retention import command_uv_cache
+        env.setdefault('UV_CACHE_DIR', command_uv_cache(cache_root))
     apply_tool_paths(env, cache_root=cache_root)
     if root:
         from lib.project_mod.task_spares import checkout_scratch
@@ -1421,6 +1424,14 @@ def tool_run_command(base, command, timeout=None, stdin_callback=None, task=None
         # assembly (the next turn) re-probes; this turn's tools never change.
         from lib.tools.environment_capabilities import mark_environment_stale
         mark_environment_stale('run_command')
+        # The shared tool cache's retention event; restricted principals use a
+        # per-checkout cache that retires with its checkout.
+        from lib.tools.tool_cache_retention import invokes_package_installer, schedule_prune
+        if invokes_package_installer(command):
+            from lib.project_mod.abs_path_guard import is_restricted
+            if not is_restricted():
+                from lib.tools.process_environment import tool_cache_root
+                schedule_prune(tool_cache_root())
     return redaction.text(result)
 
 

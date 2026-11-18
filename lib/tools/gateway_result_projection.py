@@ -1,6 +1,7 @@
 """Model-only execute_tools receipt projection; canonical/frontend stay untouched.
 
-Entry point: project_gateway_result. Depends only on the standard library.
+Entry points: project_gateway_result, gateway_result_children. Depends only on
+the standard library and the shared projection JSON/text helpers.
 Problem: receipt transport fields and escaped multiline outputs waste model budget.
 Decision: recognize the producer batch, strip only declared child controls, and
 render text outputs as length-labelled sections. Application JSON text is never
@@ -13,6 +14,8 @@ from __future__ import annotations
 from lib.tools.result_projection_json import (
     dump_projection_json as _json, load_projection_json,
 )
+import re
+
 from lib.tools.result_projection_text import text_section
 
 
@@ -94,4 +97,65 @@ def project_gateway_result(tool_name: str, text: str) -> str | None:
         return None
 
 
-__all__ = ['project_gateway_result']
+_CHILD_HEADING = '\n## results[{}]\n'
+_BODY_LABEL = re.compile(r'(output|error) \(text; ([0-9]+) chars\):')
+
+
+def gateway_result_children(text):
+    """Child entries an execute_tools receipt shows the model, or None.
+
+    Reads both the canonical JSON receipt and the exact model projection
+    above (where ``resultId`` is a stripped control unless the output was
+    truncated). Body sections are consumed by their length labels, so body
+    text can never be mistaken for a heading. Any other or clipped shape
+    returns None: it proves nothing about which children the model saw.
+    """
+    if not isinstance(text, str):
+        return None
+    try:
+        value = load_projection_json(text)
+    except (ValueError, TypeError, RecursionError, OverflowError):
+        value = None
+    if value is not None:
+        results = value.get('results') if isinstance(value, dict) else None
+        if not isinstance(results, list) or not all(isinstance(child, dict) for child in results):
+            return None
+        return results
+    head, separator, rest = text.partition('\n')
+    try:
+        top = load_projection_json(head)
+    except (ValueError, TypeError, RecursionError, OverflowError):
+        return None
+    if not separator or not isinstance(top, dict) or 'results' in top:
+        return None
+    if rest == 'results: []':
+        return []
+    children = []
+    while rest:
+        heading = _CHILD_HEADING.format(len(children))
+        if not rest.startswith(heading):
+            return None
+        line, newline, rest = rest[len(heading):].partition('\n')
+        try:
+            child = load_projection_json(line)
+        except (ValueError, TypeError, RecursionError, OverflowError):
+            return None
+        if not isinstance(child, dict):
+            return None
+        while newline and rest and not rest.startswith('\n## results['):
+            label, newline, tail = rest.partition('\n')
+            match = _BODY_LABEL.fullmatch(label)
+            if match is None or not newline or len(tail) < int(match.group(2)):
+                return None
+            size = int(match.group(2))
+            child[match.group(1)] = tail[:size]
+            rest = tail[size:]
+            if rest.startswith('\n') and not rest.startswith('\n## results['):
+                rest = rest[1:]
+            elif rest and not rest.startswith('\n## results['):
+                return None
+        children.append(child)
+    return children
+
+
+__all__ = ['gateway_result_children', 'project_gateway_result']

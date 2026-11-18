@@ -1,0 +1,26 @@
+[package]
+name = "tofu-core-rs"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Evidence-only Rust prototype of Tofu's agent round (not wired into the product)"
+publish = false
+
+# Standalone: the prototype keeps its own lock and build like packages/tofu-db.
+[workspace]
+
+[dependencies]
+# Storage client protocol types come from the engine crate itself; the
+# checkpoint runtime feature is not needed for framing.
+tofu-db = { path = "../tofu-db", default-features = false }
+serde_json = { version = "=1.0.151", features = ["preserve_order", "float_roundtrip"] }
+sha2 = "0.10"
+sha1_smol = "1"
+flate2 = "1"
+base64 = "0.22"
+libc = "0.2"
+
+[profile.release]
+lto = false
+codegen-units = 1
+debug = 1

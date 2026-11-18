@@ -129,12 +129,13 @@ function startSubscriptionResetNotice(): void {
         void resetNoticeController?.checkIfDue();
       }
     });
-    window.addEventListener('beforeunload', () => {
+    window.addEventListener('pagehide', (event) => {
+      if (event.persisted) return;
       resetNoticeController?.destroy();
       resetNoticeController = null;
       myDayBackgroundController?.destroy();
       myDayBackgroundController = null;
-    }, { once: true });
+    });
   }
 }
 

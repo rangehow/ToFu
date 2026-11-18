@@ -290,3 +290,14 @@ def test_a_report_link_attaches_an_earlier_report_to_one_or_more_tasks():
     assert {entry['key']: entry['count'] for entry in page['tasks']} == {KEY_A: 2, KEY_B: 1}
     assert [item['id'] for item in _page(turns, links=links).read(project_path='/repo', task=KEY_B)['items']] == [
         'report:r1']
+
+
+def test_earlier_task_titles_and_work_reports_carry_the_task_translation():
+    translation = {'target': 'Chinese', 'texts': [{'source': 'Resume', 'text': '简历'},
+                                                  {'source': 'Final in out/resume.pdf.', 'text': '终稿在 out/resume.pdf。'}]}
+    tasks = [{**_history(KEY_A, 'Resume', 'completed', completed_at=30, progress='Final in out/resume.pdf.'),
+              'onBoard': False, 'translation': translation}]
+    page = _page(board_tasks=tasks).read(project_path='/repo')
+    assert page['tasks'] == [{'key': KEY_A, 'title': 'Resume', 'count': 1, 'latestAt': 30,
+                              'translation': {'title': '简历'}}]
+    assert page['items'][0]['translation'] == {'title': '终稿在 out/resume.pdf。', 'summary': '终稿在 out/resume.pdf。'}

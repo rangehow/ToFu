@@ -764,6 +764,12 @@ def _collect_infra_metrics(out: list) -> None:
             _emit_counter(out, f'tofu_task_event_delivery_{name}_total',
                           f'Task event delivery {name.replace("_", " ")}',
                           [({}, delivery.get(name, 0))])
+        # invalid_request is always sampled: the standing expectation is an
+        # explicit 0, not an absent series (docs/STORAGE.md).
+        storage_failures = {'invalid_request': 0, **(delivery.get('storage_failures') or {})}
+        _emit_counter(out, 'tofu_task_event_delivery_storage_failures_total',
+                      'Task event persist failures by storage error code',
+                      [({'code': code}, count) for code, count in sorted(storage_failures.items())])
         for name in ('pending_events', 'pending_bytes', 'workers', 'active_workers', 'worker_capacity',
                      'event_capacity', 'byte_capacity', 'failed_lanes', 'max_lag_ms',
                      'peak_events', 'peak_bytes', 'peak_workers', 'pending_batches', 'peak_batches',

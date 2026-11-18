@@ -139,6 +139,36 @@ def test_todo_identifiers_can_raise_confidence(monkeypatch):
     assert selected[0]['_prefetch_reason'].startswith('exact_identifier:')
 
 
+def test_done_event_declares_every_field_it_carries(monkeypatch):
+    """S2-11: the done frame carries rejectedRoleFit; the EventSpec must declare it.
+
+    Under pytest the wire contract is strict, so an undeclared field raises at
+    build_event; the emitter must not swallow that into a missing frame.
+    """
+    from lib.agent_core.events import check_event
+    from lib.memory.prefetch import _run
+
+    memories = _memories() + [{
+        'name': 'parser-edit-trap',
+        'description': 'ParserState edit_file trap in lib/parser/state.py',
+        'tags': ['parser'], 'body': 'Re-read first.', 'scope': 'project',
+        'filepath': '/p/.tofu/memories/edit.md',
+    }]
+    monkeypatch.setattr(
+        'lib.memory.storage.resident_eligible_memories', lambda *a, **k: memories)
+    monkeypatch.setattr(_run, '_fits_role',
+                        lambda memory, held: 'edit_file' not in memory['description'])
+    frames = []
+    _run.run_memory_prefetch(
+        _messages(), '/p', task={'id': 'role-fit', 'convId': 'conv-role-fit'},
+        emit_event=frames.append, active_tools=['read_files'])
+
+    done = [frame for frame in frames if frame.get('phase') == 'done']
+    assert len(done) == 1
+    assert done[0]['rejectedRoleFit'] == 1
+    check_event(done[0])
+
+
 def test_orchestrator_runs_inline_and_does_not_mutate_messages(monkeypatch):
     import lib.memory.prefetch as prefetch
     import lib.tasks_pkg.orchestrator._memory_prefetch as seam

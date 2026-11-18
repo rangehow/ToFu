@@ -11,6 +11,9 @@ pure projection steps memoize per row identity in the row's own memo slot
 A pure fold over a list's leading run of settled rows memoizes in the run's
 first row (``run_memo_get`` / ``run_memo_put``) and answers only while a list
 starts with the identical rows, so a growing list folds only its new rows.
+A fold that keeps its state after every row (``store_settled_prefix``)
+resumes at the first row that differs from the held run (``settled_prefix``),
+so an edit, a compaction or a moved marker recomputes only from that row on.
 
 Copy semantics stay those of plain containers: ``dict(row)`` / ``copy.copy``
 give a mutable shallow copy whose nested values remain settled;
@@ -29,7 +32,8 @@ enqueued.
 Entry points: ``settle``, ``is_settled``, ``settled_retained_bytes``,
 ``detach_sharing_settled``, ``detach_frame_sharing_settled``, ``derive_rows``,
 ``is_exact_json``,
-``memo_get`` / ``memo_put``, ``run_memo_get`` / ``run_memo_put``, ``rows_memo``.
+``memo_get`` / ``memo_put``, ``run_memo_get`` / ``run_memo_put``, ``rows_memo``,
+``settled_prefix`` / ``store_settled_prefix``, ``settled_run_length``.
 
 Dependencies: standard library only. This is a sidecar-shared contract module
 (``scripts/check_architecture.py``): the storage sidecar imports projection
@@ -53,7 +57,8 @@ __all__ = [
     'detach_frame_sharing_settled', 'detach_sharing_settled', 'interchangeable',
     'is_settled', 'json_array_text', 'memo_get',
     'memo_put', 'rows_memo', 'run_memo_get', 'run_memo_put', 'settle', 'settle_items',
-    'settle_or_none', 'settle_unless_same', 'settled_retained_bytes',
+    'settle_or_none', 'settle_unless_same', 'settled_prefix', 'settled_retained_bytes',
+    'settled_run_length', 'SettledPrefix', 'store_settled_prefix',
 ]
 
 # Exactly the atomic types ``lib.utils.fast_deepcopy`` shares without copying.
@@ -358,6 +363,75 @@ def run_memo_put(rows: Any, length: int, key: Any, value: Any) -> Any:
     if length > 1:
         memo_put(rows[0], key, _RunMemo(tuple(islice(rows, 1, length)), value))
     return value
+
+
+class SettledPrefix:
+    """A fold's per-position states over a list's leading run of settled rows.
+
+    ``rest`` holds the run's rows after the first (the first row's memo holds
+    this object), ``states[i]`` the fold state after row ``i``, ``settings``
+    every other input of the fold, and ``payload`` the fold's own outputs.
+    """
+
+    __slots__ = ('rest', 'states', 'settings', 'payload')
+
+    def __init__(self, rest, states, settings=None, payload=None):
+        self.rest = rest
+        self.states = states
+        self.settings = settings
+        self.payload = payload
+
+    def __reduce_ex__(self, _protocol):
+        # Identities do not survive copying or pickling; neither does the memo.
+        return type(None), ()
+
+
+def settled_prefix(rows: Any, key: Any) -> tuple[SettledPrefix | None, int]:
+    """Return ``(held, length)`` for the last ``SettledPrefix`` stored under ``key``.
+
+    ``length`` counts the leading rows of ``rows`` that are exactly the held
+    run's rows, found by one C-level identity scan; the fold states up to
+    that position still describe ``rows``. A replaced row (an edit, a moved
+    cache marker, compaction) ends the match: settled rows are immutable, so
+    identity is content and no digest is needed. ``(None, 0)`` when nothing
+    is held for this list's first row.
+    """
+    if type(rows) not in _LIST_KINDS and type(rows) is not tuple or not rows:
+        return None, 0
+    first = rows[0]
+    if type(first) is not SettledDict and type(first) is not SettledList:
+        return None, 0
+    held = memo_get(first, key)
+    if held is None:
+        return None, 0
+    rest = held.rest
+    width = min(len(rows) - 1, len(rest))
+    same = list(map(operator.is_, islice(rows, 1, width + 1), rest))
+    try:
+        return held, same.index(False) + 1
+    except ValueError:
+        return held, width + 1
+
+
+def settled_run_length(rows: Any, start: int = 0) -> int:
+    """End of the run of settled rows that ``rows[start:]`` begins with."""
+    for index in range(start, len(rows)):
+        kind = type(rows[index])
+        if kind is not SettledDict and kind is not SettledList:
+            return index
+    return len(rows)
+
+
+def store_settled_prefix(rows: Any, key: Any, states: tuple, *,
+                         settings: Any = None, payload: Any = None) -> None:
+    """Hold ``states`` (one per row of the settled run ``rows[:len(states)]``).
+
+    Replaces the first row's previous fold under ``key``; nothing is held for
+    an empty run. Every one of those rows must be settled.
+    """
+    if states:
+        memo_put(rows[0], key, SettledPrefix(
+            tuple(islice(rows, 1, len(states))), states, settings, payload))
 
 
 def rows_memo(rows: Any, key: Any, compute: Any) -> Any:

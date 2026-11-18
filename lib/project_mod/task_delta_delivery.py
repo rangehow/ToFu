@@ -385,13 +385,14 @@ def _merge_workspace_delta(root, source, patch_path, task_id, index_path, baseli
         conflicts = ic._git(root, ['ls-files', '-u', '-z'], env=environment, check=True,
                             stall_seconds=GIT_STALL_SECONDS).stdout
         paths = conflicted_paths(conflicts)
+        causes = {}
         if paths:
-            # The canonical tip holds the earlier landings: an insertion made at
-            # the same place keeps both, the tip's first (insertion_conflicts).
+            # The canonical tip holds the earlier landings: appends, insertions at
+            # one place and disjoint edits keep both, the tip's first (insertion_conflicts).
             from lib.project_mod.insertion_conflicts import resolve_insertion_conflicts
             paths = resolve_insertion_conflicts(paths, lambda args: ic._git(
                 root, ['--literal-pathspecs', *args], env=environment, binary=True,
-                stall_seconds=GIT_STALL_SECONDS))
+                stall_seconds=GIT_STALL_SECONDS), causes)
             if not paths:
                 tree = ic._git(root, ['write-tree'], env=environment, check=True,
                                stall_seconds=GIT_STALL_SECONDS).stdout.strip()
@@ -422,7 +423,9 @@ def _merge_workspace_delta(root, source, patch_path, task_id, index_path, baseli
                 # reason names the source paths that actually hold the delivery.
                 sources = [path for path in paths if not conflict_output_family(path)] or paths
                 regenerable = len(paths) - len(sources)
-                return '', ('three-way merge conflicts at: ' + ', '.join(sources[:20])
+                named = [f'{path} ({causes[path]})' if causes.get(path) else path
+                         for path in sources[:20]]
+                return '', ('three-way merge conflicts at: ' + ', '.join(named)
                             + (f' (+{len(sources) - 20} more)' if len(sources) > 20 else '')
                             + (f'; {regenerable} generated outputs rebuild from the merged '
                                'sources once these resolve' if regenerable and sources else '')), paths

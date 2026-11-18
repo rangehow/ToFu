@@ -451,6 +451,48 @@ def test_transient_failed_head_keeps_accepting_memory_events_until_durable_repai
     assert coordinator.snapshot()['pending_bytes'] == 0
 
 
+def test_persist_failures_are_counted_and_exported_by_storage_code(coordinator, monkeypatch):
+    """S2-6 standing check: invalid_request event-delivery failures are a series that stays 0.
+
+    2026-11-18 10:39 a Worker died when the engine refused its streamed event
+    record as invalid_request (fixed by engine a3828251c8, regression
+    server::tests::a_streamed_commit_that_defers_its_spill_replays_as_the_streamed_request_it_is).
+    """
+    from lib.tasks_pkg import event_delivery
+    from routes.metrics import _collect_infra_metrics
+    lane = DeliveryLane({'id': 'invalid-request'})
+    recovered = False
+
+    from types import SimpleNamespace
+    from lib.storage.v2_client import StorageV2Client
+    refusal = StorageV2Client._to_storage_error(SimpleNamespace(
+        error_code='invalid_request', error_message='payload exceeds the single-frame bound',
+        retryable=False), 'turn.event.record')
+    assert refusal.code == 'database_internal'  # classification is unchanged
+
+    def persist():
+        if not recovered:
+            raise refusal
+
+    coordinator.submit(lane, 1, 128, persist, lambda: None)
+    with coordinator.condition:
+        assert coordinator.condition.wait_for(lambda: lane.error is not None, timeout=2)
+    recovered = True
+    coordinator.flush(lane)
+    snapshot = coordinator.snapshot()
+    assert snapshot['storage_failures'] == {'invalid_request': 1}
+
+    lines = []
+    monkeypatch.setattr(event_delivery, 'event_delivery_metrics', lambda: snapshot)
+    _collect_infra_metrics(lines)
+    assert 'tofu_task_event_delivery_storage_failures_total{code="invalid_request"} 1' in lines
+
+    lines = []
+    monkeypatch.setattr(event_delivery, 'event_delivery_metrics', lambda: {})
+    _collect_infra_metrics(lines)
+    assert 'tofu_task_event_delivery_storage_failures_total{code="invalid_request"} 0' in lines
+
+
 @pytest.mark.parametrize('failure', [StorageError('database_integrity', 'bad checksum'),
                                    RuntimeError('worker failure')])
 def test_permanent_failed_head_still_refuses_new_events(coordinator, failure):

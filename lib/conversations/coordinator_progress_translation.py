@@ -2,7 +2,8 @@
 
 Responsibility: while the human reads a Coordinator conversation translated
 (its auto-translate setting), show the task board pinned above it in that
-language too, just like the replies. The Coordinator keeps writing the board
+language too, just like the replies, and the tasks that left the board as
+well (their task history records). The Coordinator keeps writing the board
 in its working language; translations are reconstructible display data
 attached to the same head by ``CoordinatorTaskProgress``, never evidence.
 
@@ -85,15 +86,22 @@ def schedule_progress_translation(owner, project, scope, target):
 def _translate_board(owner, project, scope, target):
     try:
         from lib.conversations.coordinator_progress import CoordinatorTaskProgress
+        from lib.conversations.coordinator_task_history import (
+            attach_history_translation, untranslated_history_texts)
         from lib.translate.display_texts import translate_display_texts
 
         progress = CoordinatorTaskProgress(owner, project)
-        missing = progress.untranslated_texts(scope, target)
+        board = progress.untranslated_texts(scope, target)
+        history = untranslated_history_texts(scope, target, client=progress.client)
+        missing = list(dict.fromkeys([*board, *history]))
         if not missing:
             return
         translated = translate_display_texts(
             missing, target, log_tag='coordinator-progress:' + scope['coordinatorId'][:8])
-        progress.attach_translation(scope, target, translated)
+        if board:
+            progress.attach_translation(scope, target, translated)
+        if history:
+            attach_history_translation(scope, target, translated, client=progress.client)
     except Exception:
         logger.warning('Coordinator task board translation failed owner=%s project=%s coordinator=%s target=%s',
                        owner, project, scope['coordinatorId'], target, exc_info=True)

@@ -51,7 +51,10 @@ and its `history` section the durable segment layout (verify both
 `test_project_message_history.py` suites, unit and three-authority).
 Neither module dispatches work or extends ProjectWorkItem lifecycle; `wake_idle_lead`
 only starts an idle lead's ordinary Turn ("Messages wake an idle lead" in
-`docs/PROJECT_COORDINATION.md`). Optional
+`docs/PROJECT_COORDINATION.md`). A send also starts while its response
+streams (`start_streamed_send`; its dispatch adopts it and
+`settle_streamed_sends` retracts unadopted ones; verify
+`test_project_message_stream_start.py`). Optional
 input budget and exact physical-request witnesses live in
 `lib/tasks_pkg/message_input_{budget,receipts}.py`; do not copy those policies
 into queue, HTTP, UI or message handlers. Regenerate coordination TypeScript

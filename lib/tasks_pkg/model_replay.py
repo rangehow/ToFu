@@ -308,6 +308,71 @@ def _remember_context_activity(rows, config, *, cached=None, conversation_id='',
         config['_contextLastModelActivityAtMs'] = activity
 
 
+def _history_header(row):
+    """The fields a history proof digests for one Turn (storage ``_header_bytes``)."""
+    return [row.get('turnId'), row.get('parentTurnId'), row.get('status'),
+            row.get('currentAttemptId'), model_context_revision(row)]
+
+
+def _remember_history_headers(rows, config, validated_context, cached):
+    """Keep the headers this attempt's proof covers, for a later refusal's diagnosis.
+
+    A proof is one digest, so a refusal could never say which Turn changed
+    (2026-11-18: the tofu lead's checkpoint refused ``history_changed`` and
+    rebuilt 3.66 M tokens with no trace of the cause). With nothing covered
+    the rows are the whole lane; otherwise the covered prefix comes from the
+    checkpoint (its headers and its publisher, then this suffix). Any gap
+    leaves the record out rather than storing a wrong one.
+    """
+    covered = validated_context.get('covered') or 0
+    if covered == 0:
+        headers = [_history_header(row) for row in rows[:-1]]
+    elif (isinstance(cached, dict) and isinstance(cached.get('historyHeaders'), list)
+            and isinstance(cached.get('publisherHeader'), list)):
+        headers = [*cached['historyHeaders'], cached['publisherHeader'],
+                   *(_history_header(row) for row in rows[:-1])]
+    else:
+        return
+    if len(headers) == (validated_context.get('historyProof') or {}).get('count'):
+        config['_modelReplayHistoryHeaders'] = headers
+
+
+def _first_changed_header(recorded, current):
+    """``(index, recorded, current)`` of the first differing header; None fields are unrecorded."""
+    for index, old in enumerate(recorded):
+        new = current[index] if index < len(current) else None
+        if new is None or any(field is not None and field != new[position]
+                              for position, field in enumerate(old)):
+            return index, old, new
+    if len(current) != len(recorded):
+        return len(recorded), None, current[len(recorded)] if len(current) > len(recorded) else None
+    return None
+
+
+def _log_history_change(rows, *, conversation_id, user_id, lane_id):
+    """Name the first Turn whose header no longer matches the refused checkpoint."""
+    try:
+        cached = ModelContinuationStore().get(
+            user_id=user_id, conversation_id=conversation_id, lane_id=lane_id)
+        recorded = cached.get('historyHeaders') if isinstance(cached, dict) else None
+        if not isinstance(recorded, list):
+            logger.warning('[ModelReplay] conv=%s restore=history_changed first_changed=unrecorded '
+                           '(the checkpoint predates header records)', str(conversation_id))
+            return
+        change = _first_changed_header(recorded, [_history_header(row) for row in rows[:-1]])
+        if change is None:
+            logger.warning('[ModelReplay] conv=%s restore=history_changed first_changed=none '
+                           '(recorded headers match; only an unrecorded publisher revision differs)',
+                           str(conversation_id))
+            return
+        index, old, new = change
+        logger.warning('[ModelReplay] conv=%s restore=history_changed first_changed_index=%d '
+                       'turn=%s checkpoint=%s current=%s', str(conversation_id), index,
+                       (new or old or [None])[0], old, new)
+    except Exception as exc:
+        logger.warning('[ModelReplay] history change diagnosis unavailable: %s', type(exc).__name__)
+
+
 def restore_prefix(rows, config, *, conversation_id, user_id, validated_context=None):
     """Return (retained model messages, number of covered Turn rows)."""
     config.pop('_goalWorkerState', None)
@@ -318,6 +383,7 @@ def restore_prefix(rows, config, *, conversation_id, user_id, validated_context=
     config.pop('_modelReplayToolLatch', None)
     config.pop('_modelReplayPolicyFields', None)
     config.pop('_modelReplayPolicyDrift', None)
+    config.pop('_modelReplayHistoryHeaders', None)
     config.pop('_contextLastModelActivityAtMs', None)
     config['_modelReplayStatus'] = 'cold'
     if not rows:
@@ -360,8 +426,13 @@ def restore_prefix(rows, config, *, conversation_id, user_id, validated_context=
         cached = (validated_context.get('continuation') if validated_context is not None
                   else ModelContinuationStore().get(user_id=user_id, conversation_id=conversation_id,
                                                    lane_id=target.get('laneId') or 'main'))
+        if validated_context is not None:
+            _remember_history_headers(rows, config, validated_context, cached)
         if not isinstance(cached, dict):
             reason = (validated_context or {}).get('continuationStatus')
+            if reason == 'history_changed':
+                _log_history_change(rows, conversation_id=conversation_id, user_id=user_id,
+                                    lane_id=target.get('laneId') or 'main')
             config['_modelReplayStatus'] = (reason if reason in {
                 'history_changed', 'terminal_changed', 'legacy_proof',
                 'checkpoint_not_before_target', 'replay_disabled',
@@ -663,6 +734,12 @@ def prepare_completed_task(task):
             if config.get('_modelReplayProofEligible') and not any(
                     has_model_media(message) for message in messages):
                 candidate['historyProof'] = history_proof
+                headers = config.get('_modelReplayHistoryHeaders')
+                if isinstance(headers, list):
+                    # Settlement mints this Turn's own revision after publication.
+                    candidate['historyHeaders'] = headers
+                    candidate['publisherHeader'] = [
+                        turn_id, None, 'completed', task.get('_attemptId'), None]
             else:
                 # Media keeps its existing durable replay capability. Obtain
                 # full content witnesses once at publication, not on every
@@ -679,6 +756,11 @@ def prepare_completed_task(task):
         record_model_activity(task)
         candidate['lastModelActivityAtMs'] = task['_lastModelActivityAtMs']
         encoded = encode_projection(candidate)
+        if encoded is None and 'historyHeaders' in candidate:
+            # The header record is diagnostic; it never costs the checkpoint.
+            candidate.pop('historyHeaders')
+            candidate.pop('publisherHeader')
+            encoded = encode_projection(candidate)
         if encoded is None:
             _publication_status(task, 'invalid_or_over_budget')
             return

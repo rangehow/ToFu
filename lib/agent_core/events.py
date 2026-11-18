@@ -1747,6 +1747,9 @@ _SPECS: tuple[EventSpec, ...] = (
                       'candidates': '(done) candidate count considered',
                       'rejectedLowConfidence': '(done) candidates dropped by '
                                                'the confidence floor',
+                      'rejectedRoleFit': '(done) confident candidates dropped '
+                                         'because they name only tools this '
+                                         'request does not hold',
                       'total_ms': '(done) pipeline wall time',
                       'auxiliaryLlmCalls': '(done) extra LLM calls spent',
                       'memories': '(done) selected {id, name, scope, description, reason}'},
@@ -1759,6 +1762,7 @@ _SPECS: tuple[EventSpec, ...] = (
                   FieldSpec('selected', 'int'),
                   FieldSpec('candidates', 'int'),
                   FieldSpec('rejectedLowConfidence', 'int'),
+                  FieldSpec('rejectedRoleFit', 'int'),
                   FieldSpec('total_ms', 'int'),
                   FieldSpec('auxiliaryLlmCalls', 'int'),
                   FieldSpec('memories', 'list'),

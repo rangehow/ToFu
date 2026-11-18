@@ -371,10 +371,11 @@ def test_provider_bodies_replace_our_page_fetch(pipeline):
 
 def test_provider_bodies_meeting_target_end_the_fetch_wait(pipeline, monkeypatch):
     state, calls, run = pipeline
-    release = threading.Event()
+    release, entered = threading.Event(), threading.Event()
 
     def slow_fetch(url, **kwargs):
         calls['fetch'].append(url)
+        entered.set()
         release.wait(10)
         return f'{QUERY} late body ' + 'detail ' * 40
 
@@ -390,6 +391,8 @@ def test_provider_bodies_meeting_target_end_the_fetch_wait(pipeline, monkeypatch
     finally:
         release.set()
     assert time.monotonic() - started < 5
+    # The run may return before the pool thread enters the submitted fetch.
+    assert entered.wait(5)
     assert calls['fetch'] == ['https://beta.example/0']
     assert len(out) == 3 and all('provider article' in r['full_content'] for r in out)
 

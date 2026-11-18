@@ -185,6 +185,24 @@ def stamp_switch_back(task, round_num, messages=None):
     return True
 
 
+# Stamps that name a model switch which is not a fallback: the owner's or a
+# lead's deliberate resume switch, and the return to the primary.
+_NOT_FALLBACK_KINDS = frozenset({'user_switch', 'primary_retry'})
+
+
+def serves_fallback(task, model):
+    """True when this round dispatches on the fallback the task switched to.
+
+    A configured fallback, a pool rescue or the refused attempt's own tool
+    rounds stamp ``_fallback_model``; the round that runs on that model is
+    fallback traffic for credential selection (credential_reservation.py).
+    """
+    source = str(task.get('_fallback_from') or '').strip()
+    return (task.get('_fallback_kind') not in _NOT_FALLBACK_KINDS
+            and bool(model) and task.get('_fallback_model') == model
+            and bool(source) and source != model)
+
+
 def clear_switch_stamps(task):
     """A successful primary round retires the sticky fallback reporting."""
     task.pop('_fallback_model', None)
@@ -197,4 +215,5 @@ def clear_switch_stamps(task):
 
 __all__ = ['stamp_model_switch', 'stamp_switch_back', 'clear_switch_stamps',
            'record_refused_history', 'retry_primary_for_messages',
+           'serves_fallback',
            '_history_digest']

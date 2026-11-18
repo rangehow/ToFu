@@ -25,7 +25,7 @@ the search/fetch, paper and Artifact batch suites.
 | Canonical capture, composition and result-surface inspection | `lib/tools/result_value.py`, `lib/tools/result_surfaces.py`, `contracts/tool_result_surfaces_v1.json`; inspect via `debug/inspect_conversation.py --tool-results` |
 | Canonical read/search/select and lifecycle | `contracts/tool_result_query_v1.json`, `lib/tool_results/tool_result_artifacts.py`, Sidecar artifact operations |
 | Registry construction and collision policy | `lib/tools/registry/` |
-| Per-request visibility and environment | `lib/tools/tool_env.py`; child-process profiles: `lib/tools/process_environment.py` (`inherited_child_environment`, every child's starting point; [policy](../contracts/TOOL_EXECUTION_POLICY.md#child-process-environment)), `lib/mcp/stdio_environment.py` |
+| Per-request visibility and environment | `lib/tools/tool_env.py`; child-process profiles: `lib/tools/process_environment.py` (`inherited_child_environment`, every child's starting point; [policy](../contracts/TOOL_EXECUTION_POLICY.md#child-process-environment)), `lib/mcp/stdio_environment.py`; tool-cache retention (prune after installs, commands' own uv cache): `lib/tools/tool_cache_retention.py` ([RESOURCE_CONTROL](../RESOURCE_CONTROL.md#tool-caches-are-pruned-by-their-tools-after-installs)) |
 | Environment-capability snapshot (what this kernel can run) and its refusals | `lib/tools/environment_capabilities.py`; declarations `ToolSpec.environment_requirements_by_name`; [environment capabilities](#environment-capabilities) |
 | Unified execution gateway and Moonshot MFJS wire subset | `lib/tools/gateway.py`, `lib/tools/moonshot_schema.py` |
 | MCP exposure policy (search-only) | `lib/tools/mcp_exposure.py` |

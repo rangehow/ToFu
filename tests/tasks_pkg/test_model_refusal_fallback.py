@@ -25,6 +25,7 @@ from lib.agent_core.events import EventType
 from lib.conversation_sync.validation import decode
 from lib.llm.llm_errors import ContentFilterError, RateLimitError
 from lib.llm.stream_result import ProviderStreamResult
+from lib.llm_dispatch.credential_reservation import active_reservations, reservations
 from lib.turn_lifecycle import _settlement
 from lib.turn_verdict import (
     CONTENT_FILTER_SETTLEMENT_KEY,
@@ -74,10 +75,11 @@ class _SpeculativeTools:
 @pytest.fixture
 def harness(monkeypatch):
     state = {'events': [], 'reset_events': [], 'streams': [], 'rescues': 0,
-             'script': [], 'fallback': 'kimi-k3'}
+             'script': [], 'fallback': 'kimi-k3', 'reservations': []}
 
     def fake_stream(task, body, tag='', on_tool_call_ready=None, **_kwargs):
         state['streams'].append((body.get('model'), tag))
+        state['reservations'].append(active_reservations())
         outcome = state['script'].pop(0)
         if isinstance(outcome, BaseException):
             raise outcome
@@ -140,6 +142,41 @@ def test_refusal_discards_partial_output_and_answers_on_fallback(harness):
     assert any(event.get('detailKey') == 'stream.phase.refusalFallback'
                for event in harness['events'])
     assert CONTENT_FILTER_SETTLEMENT_KEY not in task
+
+
+def test_refusal_fallback_and_its_tool_rounds_avoid_reserved_credentials(harness):
+    harness['script'] = [
+        _result('content_filter', content='Partial refused text', refusal=_REFUSAL),
+        _result('stop', content='Fallback answer.'),
+    ]
+    result = _call(_task())
+
+    # The primary attempt is unrestricted; the fallback attempt is scoped.
+    assert harness['reservations'] == [None, reservations()]
+    assert result['model'] == 'kimi-k3'
+
+    task = _task()
+    task['_fallback_model'] = 'kimi-k3'
+    task['_fallback_from'] = 'claude-opus-5.5'
+    task['_fallback_kind'] = 'content_filter'
+    refused = [{'role': 'user', 'content': 'x'}]
+    from lib.tasks_pkg.llm_fallback import _switch as switch_mod
+    switch_mod.record_refused_history(task, refused)
+    harness['script'] = [_result('tool_calls', content='')]
+    _call(task, model='kimi-k3', messages=refused + [
+        {'role': 'assistant', 'content': '', 'tool_calls': [{'id': '1'}]},
+        {'role': 'tool', 'tool_call_id': '1', 'content': 'result'}])
+    # The refused attempt's own tool round stays on the fallback, still scoped.
+    assert harness['reservations'][-1] == reservations()
+
+    task = _task()
+    task['_fallback_model'] = 'kimi-k3'
+    task['_fallback_from'] = 'claude-opus-5.5'
+    task['_fallback_kind'] = 'user_switch'
+    harness['script'] = [_result('stop', content='Deliberate switch.')]
+    _call(task, model='kimi-k3')
+    # The owner's own model choice is not fallback traffic.
+    assert harness['reservations'][-1] is None
 
 
 def test_sensitive_word_http_500_skips_retry_and_uses_configured_fallback(harness):

@@ -77,10 +77,15 @@ class StorageError(RuntimeError):
     retry_after_ms: int | None = None
     operation_id: str = ''
     request_not_dispatched: bool = False
+    # Diagnostic only, never classification: the authority's own wire code
+    # when ``code`` had to fold it (an engine ``invalid_request`` arrives as
+    # ``database_internal``), so failure counters can still name it.
+    wire_code: str = ''
 
     def __post_init__(self) -> None:
         RuntimeError.__init__(self, self.message)
         if self.code not in ERROR_CODES:
+            self.wire_code = self.wire_code or self.code
             self.code = 'database_internal'
         if self.retry_after_ms is not None:
             self.retry_after_ms = max(0, int(self.retry_after_ms))

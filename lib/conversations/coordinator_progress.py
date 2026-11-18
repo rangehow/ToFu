@@ -21,6 +21,8 @@ texts (``board_texts``) into the language the human reads the Coordinator in.
 They are reconstructible display data, derived by
 ``coordinator_progress_translation`` and merged here by ``untranslated_texts``
 and ``attach_translation``; a stored translation always has at least one entry.
+A task leaving the board carries its texts' translations into its history
+record (``coordinator_task_history``), which the same job completes.
 
 Task history: a board write replaces the board, so this head alone would lose
 every task a later board omits. ``coordinator_task_history.record_board`` runs
@@ -298,7 +300,9 @@ class CoordinatorTaskProgress:
             try:
                 # Every task the board ever showed outlives this replacement (Task history).
                 keys = record_board(scope, previous, original.get('taskKeys') if previous else None, board,
-                                    client=self.client, read_transcript=read_transcript)
+                                    client=self.client, read_transcript=read_transcript,
+                                    translation=original.get('translation') if previous else None,
+                                    translation_target=translation_target)
                 if keys is not None:
                     head['taskKeys'] = keys
                 head = validate_progress(head, 'progressHead')

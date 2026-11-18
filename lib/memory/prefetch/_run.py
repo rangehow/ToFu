@@ -115,9 +115,11 @@ def run_memory_prefetch(messages: list, project_path: str | None,
         if task is not None:
             task['_memoryPrefetch'] = dict(data)
         if emit_event:
+            from lib.agent_core.events import EventContractError, EventType, build_event
             try:
-                from lib.agent_core.events import EventType, build_event
                 emit_event(build_event(EventType.MEMORY_PREFETCH, **data))
+            except EventContractError:
+                raise  # raised only in strict (test) mode; production warns instead
             except Exception as exc:
                 logger.debug('[MemPrefetch] event emit failed: %s', exc)
 

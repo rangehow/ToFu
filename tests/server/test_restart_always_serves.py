@@ -9,6 +9,7 @@ worker and a real resident storage host whose stop outcome is injected.
 """
 from __future__ import annotations
 
+import errno
 import logging
 from pathlib import Path
 import sys
@@ -226,6 +227,69 @@ def test_a_resident_host_owned_elsewhere_refuses_before_the_old_server_stops(har
     assert current['pid'] == first['pid']
     # Restore so teardown's full stop owns the host again.
     resident.write_record(storage.state_path, record)
+
+
+def _state_writes_fail_while(manager, monkeypatch, quota_full):
+    """EDQUOT on the manager's own state file whenever ``quota_full()`` holds."""
+    real_atomic_json = sm._atomic_json
+
+    def atomic_json(path, value):
+        if quota_full() and Path(path) == manager.state_path:
+            raise OSError(errno.EDQUOT, 'Disk quota exceeded', f'{path}.lock')
+        return real_atomic_json(path, value)
+
+    monkeypatch.setattr(sm, '_atomic_json', atomic_json)
+
+
+def test_an_unwritable_state_file_refuses_before_the_old_server_stops(harness, monkeypatch):
+    """2026-11-18 11:15: the account quota refused every create on the data volume."""
+    manager, project, storage = harness
+    first = start_serving(manager)
+    quota = {'full': True}
+    _state_writes_fail_while(manager, monkeypatch, lambda: quota['full'])
+
+    result = manager.restart(source='spec')
+
+    assert result['ok'] is False
+    assert 'Disk quota exceeded' in result['message']
+    assert str(manager.state_path) in result['message']
+    quota['full'] = False
+    current = serving(manager)
+    assert current['pid'] == first['pid']
+    assert current['desired'] == 'running'
+    assert current['lastRestart']['outcome'] == 'refused'
+
+
+def test_a_quota_hit_after_stop_is_retried_instead_of_aborting_the_restart(harness, monkeypatch, caplog):
+    """The incident order: stop succeeded, then the lock create and the state write both failed."""
+    manager, project, storage = harness
+    first = start_serving(manager)
+    quota = {'full': False, 'armed': True}
+    real_stop, real_ensure = manager.stop, storage.ensure
+
+    def stop_then_quota_fills(**options):
+        stopped = real_stop(**options)
+        quota['full'], quota['armed'] = quota['armed'], False
+        return stopped
+
+    def ensure(plan, environment):
+        if quota['full']:
+            raise OSError(errno.EDQUOT, 'Disk quota exceeded', str(storage.lock_path))
+        return real_ensure(plan, environment)
+
+    monkeypatch.setattr(manager, 'stop', stop_then_quota_fills)
+    monkeypatch.setattr(storage, 'ensure', ensure)
+    _state_writes_fail_while(manager, monkeypatch, lambda: quota['full'])
+
+    result = manager.restart(source='spec')
+
+    assert result['ok'] is True, result
+    assert result.get('retrying') is True
+    assert 'Disk quota exceeded' in caplog.text
+    quota['full'] = False
+    current = serving(manager, other_than=first['pid'])
+    assert current['lastRestart']['outcome'] == 'spawned'
+    assert current['recentFailureCount'] == 1
 
 
 def test_harness_finds_a_worker_that_outlived_its_owner(tmp_path):

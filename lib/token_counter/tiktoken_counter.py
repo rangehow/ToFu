@@ -18,6 +18,7 @@ import json
 import re
 import threading
 from collections import OrderedDict
+from itertools import islice
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -25,7 +26,9 @@ from typing import Any, Optional
 
 from runtime_guards import resolve_resource_budget
 
-from lib.conversation_sync.settled_rows import SettledDict, memo_get, memo_put
+from lib.conversation_sync.settled_rows import (
+    SettledDict, memo_get, memo_put, settled_prefix, settled_run_length, store_settled_prefix,
+)
 from lib.log import get_logger
 from lib.utils import sha256_holding_gil, update_holding_gil
 
@@ -886,19 +889,34 @@ def _count_request_with_view(
     encoder: Any,
     selected_text_token_counts: dict[int, int | None] | None,
     view: RequestTextCountView,
-) -> int:
-    """Text tokens of one request: settled rows from their slots, the rest
-    from the owner memo, new texts in one tokenizer call.
+) -> tuple[int, int]:
+    """``(text tokens, images)`` of one request: settled rows from their
+    slots, the rest from the owner memo, new texts in one tokenizer call.
 
     Every text is encoded on its own (``_encode_batch_counts`` equals one
     ``encode`` per text), so the request's text tokens are the sum of its
     texts' tokens: memoized texts plus the new tail plus system/tool parts.
+
+    Both sums are additive per message, so the running sums after each row
+    of the leading settled run are held (``settled_prefix``): a later count
+    of a list that starts with the same rows resumes after them and visits
+    only new or replaced rows. Call-local identity receipts
+    (``selected_text_token_counts``) need every row, so they skip the resume.
     """
+    messages = messages or ()
     texts = view.head_texts(system, tools)
-    settled_tokens = 0
+    prefix_key = (_COUNT_PREFIX_KEY, encoding)
+    start = 0
+    held = None
+    settled_tokens = images = 0
+    if selected_text_token_counts is None:
+        held, start = settled_prefix(messages, prefix_key)
+        if start:
+            settled_tokens, images = held.states[start - 1]
     unslotted: list[tuple[SettledDict, list[str]]] = []
     slot_key = (_SETTLED_TEXT_TOKENS_KEY, encoding)
-    for message in messages or ():
+    for message in islice(messages, start, None):
+        images += count_images((message,))
         if type(message) is SettledDict:
             slotted = memo_get(message, slot_key)
             if slotted is not None:
@@ -914,15 +932,34 @@ def _count_request_with_view(
         else:
             message_texts = list(iter_message_texts((message,)))
         texts.extend(message_texts)
-    if not texts:
-        return settled_tokens
-    total, counts = _count_texts_with_view(
-        texts, encoding=encoding, encoder=encoder,
-        selected_text_token_counts=selected_text_token_counts, view=view)
+    total, counts = 0, {}
+    if texts:
+        total, counts = _count_texts_with_view(
+            texts, encoding=encoding, encoder=encoder,
+            selected_text_token_counts=selected_text_token_counts, view=view)
     for message, message_texts in unslotted:
         memo_put(message, slot_key, tuple(
             counts[view.text_digest(text)][0] for text in message_texts))
-    return settled_tokens + total
+    if selected_text_token_counts is None:
+        _hold_count_prefix(messages, start, held, prefix_key, slot_key)
+    return settled_tokens + total, images
+
+
+_COUNT_PREFIX_KEY = 'token-counter.count-prefix'
+
+
+def _hold_count_prefix(messages, start, held, prefix_key, slot_key) -> None:
+    """Extend the held running sums over the settled run from ``start`` on."""
+    end = settled_run_length(messages, start)
+    if not end or (start and start == end):
+        return
+    states = list(held.states[:start]) if start else []
+    tokens, images = states[-1] if states else (0, 0)
+    for message in islice(messages, start, end):
+        tokens += sum(memo_get(message, slot_key))
+        images += count_images((message,))
+        states.append((tokens, images))
+    store_settled_prefix(messages, prefix_key, tuple(states))
 
 
 def _count_new_request_texts(
@@ -1123,22 +1160,25 @@ class TiktokenCounter(TokenCounter):
                         break
                     selected_text_token_counts[id(content)] = None
             if view is not None:
-                total += _count_request_with_view(
+                text_tokens, images = _count_request_with_view(
                     messages, system, tools,
                     encoding=encoding,
                     encoder=enc,
                     selected_text_token_counts=selected_text_token_counts,
                     view=view,
                 )
-            elif texts:
-                total += _count_request_texts_with_cache(
-                    texts,
-                    model=model,
-                    encoder=enc,
-                    selected_text_token_counts=selected_text_token_counts,
-                )
+                total += text_tokens
+            else:
+                if texts:
+                    total += _count_request_texts_with_cache(
+                        texts,
+                        model=model,
+                        encoder=enc,
+                        selected_text_token_counts=selected_text_token_counts,
+                    )
+                images = count_images(messages)
             total += PER_MESSAGE_TOKENS * (len(messages) if messages else 0)
-            total += count_images(messages) * _IMAGE_TOKENS_DEFAULT
+            total += images * _IMAGE_TOKENS_DEFAULT
             total += _STRUCTURAL_OVERHEAD_TOKENS
             if (selected_text_token_counts is not None
                     and all(count is not None

@@ -181,6 +181,27 @@ loop's own message dicts (they are mutable and edited in place, so identity
 proves nothing without the comparison done here); a process-wide row cache
 shared across Turns (it needs a retention bound with no owner-defined value).
 
+**Prefix resumption — Problem:** per-row memos made each row's work O(1),
+but every request still visited every row to look its memo up: Anthropic
+translation, validation, the conversion report, the recount projection and
+both local token counts each walked the whole history (about 10 µs per
+message per request at 1,000 rows). **Decision:** those folds keep their state
+after every row of the leading settled run in the first row's memo
+(`settled_rows.store_settled_prefix`, with the fold's other inputs as its
+settings), and the next request resumes at the first row that is not the held
+row (`settled_prefix`, one C-level identity scan). Translation resumes only
+under the same replay policy and tool-call ID contract, and never past a held
+row holding an ID the contract rejects (a respelling depends on every other
+ID); the counts hold running sums of text tokens and images. A replaced row
+ends the match, so an edit, compaction, injection or moved cache marker is
+recomputed from that row on, exactly as above
+(`tests/llm/test_request_prep_scales_with_new_rows.py`: per-round visits are
+equal at 1, 10 and 100 rows and every round equals a fresh preparation).
+**Alternatives rejected:** a fold memo keyed by row digests (hashing every row
+each round is the walk being removed); keeping the previous request's
+translated list on the task (identity of the leading rows is still the only
+proof it applies, and the row memo lives exactly as long as that proof).
+
 For a conversation ID, start with `debug/inspect_conversation.py <id>`.
 For already-exported requests, use the read-only JSON investigation entry point:
 

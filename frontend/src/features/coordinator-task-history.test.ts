@@ -230,3 +230,21 @@ it('shows tasks on the board in the board\'s display translation, with the origi
   expect(rows[0].title).toBe('订机票\nBook flights\n比较票价');
   view.destroy();
 });
+
+it('shows a task that left the board in its own display translation', async () => {
+  const tasks = [task(1, { status: 'completed', title: 'Fix restart', progress: 'Restart fixed', departedAt: NOW - 1,
+    translation: { target: 'Chinese', texts: [{ source: 'Fix restart', text: '修复重启' }, { source: 'Restart fixed', text: '重启已修复' }] } })];
+  const read = vi.fn(async (): Promise<CoordinatorProgressHistoryPage> => ({
+    projectPath: '/project', conversationId: 'leader', bindingRevision: 1, recorded: true, counts: countsOf(tasks), tasks,
+    nextCursor: null, coverage: 'complete' }));
+  const view = createCoordinatorTaskHistory({ read, now: () => NOW, subscribe: () => () => {} });
+  document.body.append(view.el);
+  const viewport = view.el.querySelector<HTMLElement>('.coordinator-history-viewport')!;
+  Object.defineProperty(viewport, 'clientHeight', { configurable: true, get: () => 600 });
+  await vi.waitFor(() => expect(view.el.querySelectorAll('.coordinator-history-task')).toHaveLength(1));
+  const row = view.el.querySelector<HTMLElement>('.coordinator-history-task')!;
+  expect(row.querySelector('.coordinator-history-task-title')!.textContent).toBe('修复重启');
+  expect(row.querySelector('.coordinator-history-task-note')!.textContent).toBe('重启已修复');
+  expect(row.title).toBe('修复重启\nFix restart\n重启已修复');
+  view.destroy();
+});

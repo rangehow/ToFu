@@ -280,8 +280,10 @@ def _closed_working_view(messages, rounds, *, compacted=False):
     compaction may have folded earlier rounds into its handoff.
     """
     from lib.tasks_pkg.compaction._handoff import has_open_tool_batch
-    from lib.tool_results.tool_round_replay import scan_replayable_tool_round_prefix
-    gap = scan_replayable_tool_round_prefix(rounds).blocked_position
+    from lib.tool_results.tool_round_replay import (
+        is_delegated_execution_receipt, scan_replayable_tool_round_prefix)
+    prefix = scan_replayable_tool_round_prefix(rounds)
+    gap = prefix.blocked_position
     count = len(rounds) if gap is None else gap
     view = list(messages)
     if has_open_tool_batch(view):
@@ -303,8 +305,12 @@ def _closed_working_view(messages, rounds, *, compacted=False):
     # already hold one, or Continue would deliver it twice.
     if any(row.get('toolCallId') in held for row in rounds[count:] if row.get('toolCallId')):
         return None
+    # Only model actions must be held: a gateway child's receipt (execute_tools)
+    # never had a call of its own, even when its container cannot prove
+    # coverage (a truncated artifact summary) and replay keeps the receipt.
     if not compacted and any(row.get('toolCallId') not in held
-                             for row in rounds[:count] if row.get('toolCallId')):
+                             for position, row in zip(prefix.positions, prefix.rounds)
+                             if position < count and not is_delegated_execution_receipt(row)):
         return None
     return view, count
 
@@ -384,6 +390,7 @@ def preserve_suspended_working_view(task, *, turn_text=None, restart_settled=Non
             return
     elif not task.get('_messages_include_current_run'):
         # Without the loop's write-back these are the Turn's input messages.
+        _not_saved(task, 'input_messages_only')
         return
     from lib.tasks_pkg.manager._persist import _merge_tool_rounds
     from lib.agent_core.model_context_limits import MAX_ENTRY_BYTES, MAX_MESSAGES
@@ -394,23 +401,28 @@ def preserve_suspended_working_view(task, *, turn_text=None, restart_settled=Non
     trimmed = _without_repeatable_cut_batch(task, messages, _merge_tool_rounds(task),
                                             restart_settled=restart_settled)
     if trimmed is None:
+        _not_saved(task, 'restart_cut_batch_not_last')
         return
     messages, rounds = trimmed
     boundary = _closed_working_view(messages, rounds, compacted=compacted)
     if boundary is None:
+        _not_saved(task, 'no_protocol_boundary')
         return
     view, count = boundary
     if not view or len(view) > MAX_MESSAGES:
+        _not_saved(task, 'message_count_out_of_bounds')
         return
     size = sum(len(part.encode('utf-8')) for part in json.JSONEncoder(
         ensure_ascii=False).iterencode(view))
     if size > MAX_ENTRY_BYTES:
+        _not_saved(task, 'over_continuation_bytes')
         return
     # Suspension is the caller's completed boundary; it does not authorize
     # model dispatch, tool replay or mutation of the retained abort signal.
     witnessed_task = {**task, 'aborted': False}
     witness = compaction_resume_witness(witnessed_task, rounds=rounds, round_count=count)
     if witness is None:
+        _not_saved(task, 'no_resume_witness')
         return
     from lib.agent_core.store import get_conversation_store
     owner = task_user_id(task)
@@ -445,6 +457,11 @@ def preserve_suspended_working_view(task, *, turn_text=None, restart_settled=Non
     keep = archive_retention()
     if keep:
         store.prune_archives(task['convId'], keep, user_id=owner)
+
+
+def _not_saved(task, reason):
+    logger.info('[CompactionResume] conv=%s turn=%s checkpoint not saved: %s',
+                task.get('convId'), task.get('_turnId'), reason)
 
 
 def _checkpoint_receipt(status):

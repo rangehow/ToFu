@@ -54,8 +54,7 @@ COORDINATOR_TOOLS = [
           'and checkout; a reviewed or delivered one continues as a new assignment in the same conversation '
           '(the result names assignment_id). An accepted result whose delivery a conflict holds, or whose accept a '
           'rework superseded, also continues as a new assignment that first merges its checkpoint, and the '
-          'successor of a rework links to it (rework_of). attachments sends files of any type with the instruction, '
-          'as a human attaches files to a message. Prefer follow_up to a new Worker for the same goal, and to '
+          'successor of a rework links to it (rework_of). Prefer follow_up to a new Worker for the same goal, and to '
           'review decision=rework when the same Worker should fix its own result; then poll its assignment_id. '
           'Never send a synthetic human message or approve '
           'a human question. Project Coordinators control their project; the Global Router can control any owned '
@@ -63,9 +62,8 @@ COORDINATOR_TOOLS = [
           'its binding dispatched in any request. '
           'Any lead (the Global Router, or a Project Coordinator under the owner\'s full grant): when your current '
           'request has no owner message of its own (a standing instruction, a nonhuman notice, a wake), or the '
-          'session belongs to another project you were asked to help, pass owner_delegation with the reason and '
-          'the owner trigger (or under_delegation=true) to act under the delegation the owner granted ("Act for '
-          'me"); it allows continue, checkpoint_resume, stop, hold, resume and set_model, never regenerate, is '
+          'session belongs to another project you were asked to help, pass owner_delegation to act under the '
+          'delegation the owner granted ("Act for me"); it allows continue, checkpoint_resume, stop, hold, resume and set_model, never regenerate, is '
           'recorded in the '
           'owner\'s audit log, and a session of another project tells that project\'s lead (target_lead_notified). '
           'set_model changes the model of an existing Session without replacing it: the conversation, context, '
@@ -91,7 +89,7 @@ COORDINATOR_TOOLS = [
            'instruction': {**_dispatch_schema('request')['properties']['brief'],
                            'description': 'follow_up only: the Worker\'s next instruction.'},
            'attachments': {**_dispatch_schema('leadAttachmentReferences'),
-                           'description': 'follow_up only: files to send with the instruction. '
+                           'description': 'follow_up only. '
                                           + _dispatch_schema('leadAttachmentReferences')['description']},
            'owner_delegation': _router_schema('ownerDelegationAuthority'),
            'idempotency_key': {'type': 'string', 'minLength': 1, 'maxLength': 200}},
@@ -298,10 +296,9 @@ ROUTER_TOOL_SCHEMAS = []
 # decision 2026-11-18); the gate refuses without the grant.
 COORDINATOR_TOOLS.append(_tool('restart_server', (
     'Restart the Tofu server under the delegation the owner granted in Tofu ("Act for me"), which reaches '
-    'every lead. Name what asks for it: the owner\'s message (source_turn_id, or source_steer_id for one sent '
-    'while you reply), an active standing instruction (instruction_id with exactly one of event_id or '
-    'source_turn_id for what triggered it), or under_delegation=true alone when no owner message asks and you '
-    'judge a restart necessary (for example merged fixes that are live only after a restart); give the reason. '
+    'every lead. Give the reason and the one owner trigger that asks for it (each trigger field says when it '
+    'applies); with no owner message, under_delegation fits a restart you judge necessary, such as merged '
+    'fixes that are live only after a restart. '
     'It takes the Settings restart path, detached from your turn: the frontend is built first and the old '
     'server stops only if that succeeds. It waits for a protected step (a git_land landing or an export) and '
     'refuses while other conversations run unless the restart should interrupt them '
@@ -370,8 +367,8 @@ for _name, _definition, _description in (
     ('owner_settings', 'ownerSettings',
      'Read or change a reversible owner setting through the Settings page\'s own Save, under the owner\'s '
      'delegation (R9, R11). action=list shows the reversible keys and current values; get reads one key; set writes '
-     'one key with the Settings backend\'s own validation and hot-reload (needs reason, the owner\'s trigger '
-     'source_turn_id/source_steer_id/instruction_id, and idempotency_key so one change applies once). channel '
+     'one key with the Settings backend\'s own validation and hot-reload (needs reason, one owner trigger and '
+     'idempotency_key so one change applies once). channel '
      'reads (enabled omitted) or toggles a messaging channel, reporting preconditions first: the SSO login '
      'state, whether a relaunch would push a 大象 login card (never triggered automatically — that returns '
      'needs_owner_action), and connector_owned; a kicked 大象 account reconnects only on the owner\'s own '
@@ -384,8 +381,7 @@ for _name, _definition, _description in (
      'newest work Turn failed (a Stop does not count). Resume a transient provider failure with '
      'control_conversation first; use this when the failure needs a fix in the project, which no Project Router '
      'can make while it is down. The conversation lives in the project\'s folder and root and works like the '
-     'owner\'s own conversation there. Name the owner\'s authority: source_turn_id, source_steer_id, or '
-     'instruction_id with exactly one of event_id or source_turn_id; those owner words become its request. Put '
+     'owner\'s own conversation there. Name one owner trigger; the owner words it names become its request. Put '
      'the failure, its evidence, the fix and how to verify it in note, which travels with them as labelled '
      'nonhuman evidence. Give reason and idempotency_key: a retry with the same key never opens a second '
      'conversation. When its Turn ends you receive one nonhuman repair-outcome notice. Every call is in the '
@@ -401,8 +397,8 @@ for _name, _definition, _description in (
      'Create a project (a new folder), register an existing folder, read a project or its Project Router, change '
      'the project defaults (update_defaults) and configure the Project Router (configure_router). Every create '
      'or register binds exactly one Project Router through the same backend operation the UI uses, so a project '
-     'never needs a second one. Writes act under the owner\'s delegation: give reason and the owner trigger '
-     '(source_turn_id, source_steer_id or instruction_id), they require the owner\'s "Act for me" grant, and each '
+     'never needs a second one. Writes act under the owner\'s delegation: give reason and one owner trigger, '
+     'they require the owner\'s "Act for me" grant, and each '
      'one is recorded in the owner\'s audit log. list and get need no grant. create writes only the new folder; '
      'register changes nothing in the existing one. update_defaults writes the project settings dialog\'s fields '
      '(name, color, projectPaths, readOnlyPaths, collapsed, order) and ensures the primary root\'s Router. '

@@ -352,6 +352,27 @@ def _build_project_integration(ctx: ToolContext) -> list[dict]:
     return []
 
 
+def _start_project_message(task, name, arguments):
+    from lib.conversations.project_messages import start_streamed_send
+    start_streamed_send(task, name, arguments)
+
+
+def _settle_project_messages(task):
+    from lib.conversations.project_messages import settle_streamed_sends
+    settle_streamed_sends(task)
+
+
+# A message to another conversation commits when its arguments are complete;
+# its withdrawal is an explicit retraction from the same sender
+# (docs/PROJECT_COORDINATION.md, "A project message starts when its arguments
+# are complete"). The message is idempotent by its key (one original per sender
+# and key) but keeps write reconciliation, so a dispatched Worker's unconfirmed
+# send stays fenced. consider_project_message decides on a delivered revision
+# and waits for its final response.
+_PROJECT_MESSAGE_STREAM_START = StreamStartPort(
+    start=_start_project_message, settle=_settle_project_messages, key_argument='idempotency_key')
+
+
 def _project_integration_tool_spec() -> ToolSpec:
     """Project Brain contributes zero schemas.  These two tools belong to
     the isolated execution pipeline and are bound to the automatic work
@@ -369,6 +390,7 @@ def _project_integration_tool_spec() -> ToolSpec:
                     # never served from an earlier result.
                     idempotent_tools=frozenset({'integration_checkpoint', 'integration_submit'}),
                     cacheable_tools=frozenset(),
+                    stream_start_by_name={'send_project_message': _PROJECT_MESSAGE_STREAM_START},
                     # Workspace checkpoints are Git refs of the isolated worktree.
                     environment_requirements_by_name={
                         'integration_checkpoint': frozenset({GIT}),

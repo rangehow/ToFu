@@ -2388,6 +2388,26 @@ that did not happen. Verify
 `failures_a_retry_can_outlive_stay_retryable_database_unavailable` and
 `server::tests::an_unclassified_engine_error_answers_a_non_retryable_internal_error_naming_its_cause`.
 
+**An engine code the taxonomy folds stays countable (2026-11-18).** Problem:
+the native engine's `invalid_request` (a request it refuses to admit, e.g. a
+reassembled streamed request re-admitted through the single-frame bound) is
+not a core code, so `StorageError` folded it into `database_internal` and the
+only trace was message text: on 2026-11-18 a Worker's task-event delivery died
+on it twice (10:39, 10:40), 250 log lines before engine `a3828251c8` went live
+at 11:16:44. Decision: the fold keeps classification unchanged and records the
+authority's own code in the diagnostic field `StorageError.wire_code`. The
+task-event delivery pump counts persist failures by that code (its wire code
+when folded, otherwise `code`), logs it as `code=`, and `/metrics` exports
+`tofu_task_event_delivery_storage_failures_total{code}` with an explicit
+`code="invalid_request"` sample. Standing expectation: that sample stays 0; any
+increase is a contract defect between client and engine, never load. Verify
+`tests/tasks_pkg/test_task_event_delivery.py::test_persist_failures_are_counted_and_exported_by_storage_code`
+and the engine regression
+`server::tests::a_streamed_commit_that_defers_its_spill_replays_as_the_streamed_request_it_is`.
+Alternatives rejected: mapping `invalid_request` to `database_protocol_error`
+changes how startup recovery, background delivery and the HTTP boundary treat
+the failure; a log-text patrol breaks when wording changes.
+
 **Search input classification (decision 2026-11-01).** Problem: both
 authorities answered a rejected `conversation.search` cursor with
 `database_protocol_error`, which the HTTP boundary answers as a server fault

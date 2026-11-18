@@ -208,3 +208,39 @@ class TestArgvTranslation:
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
+
+
+# ═════════════════════════════════════════════════════════════════════
+#  rg binary resolution survives a pruned PATH entry
+# ═════════════════════════════════════════════════════════════════════
+
+def _fake_rg(directory):
+    directory.mkdir()
+    binary = directory / 'rg'
+    binary.write_text('#!/bin/sh\n')
+    binary.chmod(0o755)
+    return binary
+
+
+class TestRgResolution:
+    def test_vanished_binary_is_re_resolved(self, tmp_path, monkeypatch):
+        monkeypatch.delenv('TOFU_RG_EXECUTABLE', raising=False)
+        monkeypatch.setattr(tr, '_RG_BIN_CACHE', {})
+        old = _fake_rg(tmp_path / 'release-old')
+        new = _fake_rg(tmp_path / 'release-new')
+        monkeypatch.setenv('PATH', f'{old.parent}:{new.parent}')
+        assert tr.rg_executable() == str(old)
+        old.unlink()                       # the self-updater prunes it
+        assert tr.rg_executable() == str(new)
+
+    def test_no_binary_left_falls_back_to_gnu(self, tmp_path, monkeypatch):
+        monkeypatch.delenv('TOFU_RG_EXECUTABLE', raising=False)
+        monkeypatch.delenv('TOFU_GREP_EXECUTABLE', raising=False)
+        monkeypatch.delenv('TOFU_GREP_FORCE_GNU', raising=False)
+        monkeypatch.setattr(tr, '_RG_BIN_CACHE', {})
+        only = _fake_rg(tmp_path / 'release')
+        monkeypatch.setenv('PATH', str(only.parent))
+        assert tr.rg_executable() == str(only)
+        only.unlink()
+        assert tr.rg_executable() is None
+        assert _argv('grep', ['-rn', 'beta', 'sub'], {'sub': 'dir'}) is None

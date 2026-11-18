@@ -3,6 +3,7 @@
 Errors contain fixed codes only. Reports count optional portable reasoning losses.
 """
 import hashlib
+from itertools import islice
 import json
 import math
 
@@ -120,8 +121,13 @@ RESPONSES_NATIVE_TOOLS = frozenset({
 })
 
 
-def validate_request(body, protocol):
-    """Reject unrepresentable canonical data before translators can drop it."""
+def validate_request(body, protocol, *, validated_messages=0):
+    """Reject unrepresentable canonical data before translators can drop it.
+
+    ``validated_messages`` leading messages are settled rows the caller
+    already validated for ``protocol`` (validation is a pure function of the
+    immutable row and protocol); only the messages after them are checked.
+    """
     if not isinstance(body, dict):
         raise ProtocolConversionError('request_object_required')
     tools = body.get('tools')
@@ -173,7 +179,7 @@ def validate_request(body, protocol):
             raise ProtocolConversionError('unsupported_tool_choice')
     if 'output_config' in body and not isinstance(body['output_config'], dict):
         raise ProtocolConversionError('output_config_object_required')
-    for msg in messages:
+    for msg in islice(messages, validated_messages, None):
         if is_settled(msg):
             # Validation is a pure function of the immutable row and protocol.
             key = (_VALID_MESSAGE_KEY, protocol)
@@ -286,108 +292,127 @@ def validate_native_blocks(blocks):
             raise ProtocolConversionError('native_signature_required')
 
 
+REPORT_COUNT_LIMIT = 2147483647
+
+
 def conversion_report(body, protocol, *, replay_reasoning=False, replay_types=frozenset(),
                       replay_unsigned_reasoning=False):
+    messages = body.get('messages', [])
     count = 0
-    for msg in body.get('messages', []):
-        if msg.get('role') != 'assistant' or not msg.get('reasoning_content'):
-            continue
-        if protocol == 'openai':
-            continue  # Chat preserves its public vendor reasoning extensions.
-        if protocol == 'anthropic' and (replay_unsigned_reasoning
-                or msg.get('thinking_signature') or msg.get('_anthropic_content_blocks')):
-            continue
-        if protocol == 'responses' and replay_reasoning and any(
-                isinstance(item, dict) and item.get('type') == 'reasoning'
-                for item in msg.get('_responses_items') or []):
-            continue
-        count = min(count + 1, 2147483647)
+    for msg in messages:
+        if reasoning_omitted(msg, protocol, replay_reasoning=replay_reasoning,
+                             replay_unsigned_reasoning=replay_unsigned_reasoning):
+            count = min(count + 1, REPORT_COUNT_LIMIT)
     report = {'optional_reasoning_omitted': count} if count else {}
-
-    def loss(code):
-        report[code] = min(report.get(code, 0) + 1, 2147483647)
-
-    for msg in body.get('messages', []):
-        items = msg.get('_responses_items') or []
-        if not isinstance(items, list):
-            raise ProtocolConversionError('native_content_list_required')
-        for item in items:
-            if not isinstance(item, dict) or not isinstance(item.get('type'), str):
-                raise ProtocolConversionError('native_content_object_required')
-            kind = item['type']
-            if kind in (REPLAY_ORDER_TYPE, STATE_ORIGIN_TYPE):
-                # Derived private order proof or state provenance, never
-                # executable provider input.
-                continue
-            correlation = item.get('call_id') if 'call_id' in item else item.get('id')
-            if kind in {'program', 'program_output'} and not str(correlation or '').strip():
-                loss('orphan_opaque_item_omitted')
-                continue
-            if protocol == 'responses' and replay_reasoning and kind in replay_types:
-                continue
-
-            if protocol in {'anthropic', 'openai'} and kind == 'reasoning':
-                encrypted = item.get('encrypted_content')
-                if encrypted is not None and not isinstance(encrypted, str):
-                    raise ProtocolConversionError('native_content_invalid')
-                if encrypted:
-                    # Foreign ciphertext is not executable Messages/Chat history.
-                    # Project canonical text, function calls and results without
-                    # fabricating signed thinking; retain caller replay state.
-                    loss('cross_protocol_reasoning_omitted')
-                    continue
-            if (kind == 'compaction' or kind in {'program', 'program_output'}
-                    or kind.endswith('_call') or kind.endswith('_call_output')
-                    or kind in {'tool_search_output', 'function_call_output'}
-                    or (kind == 'reasoning' and item.get('encrypted_content'))):
-                raise ProtocolConversionError('mandatory_continuity_unrepresentable')
-            loss('native_metadata_omitted')
-        if protocol != 'anthropic':
-            if protocol != 'openai' and msg.get('thinking_signature'):
-                if msg.get('_reasoning_continuity') != 'completed_turn':
-                    raise ProtocolConversionError('mandatory_continuity_unrepresentable')
-                loss('historical_thinking_signature_omitted')
-            native = msg.get('_anthropic_content_blocks') or []
-            validate_native_blocks(native)
-            thinking_blocks = [block for block in native
-                               if block['type'] in {'thinking', 'redacted_thinking'}]
-            # OpenAI-compatible Claude gateways accept the existing public
-            # signed representation. It must account for the WHOLE native
-            # sequence: matching each block independently would lose duplicate
-            # occurrences or join distinct signatures into one flat trace.
-            chat_replays_thinking = protocol == 'openai' and thinking_blocks and (
-                msg.get('reasoning_details') == thinking_blocks
-                or thinking_blocks == [{
-                    'type': 'thinking', 'thinking': msg.get('reasoning_content'),
-                    'signature': msg.get('thinking_signature')}])
-            for block in native:
-                kind = block['type']
-                if kind in {'thinking', 'redacted_thinking'} and chat_replays_thinking:
-                    continue
-                if (protocol == 'openai' and kind in {'thinking', 'redacted_thinking'}
-                        and (msg.get('thinking_signature') or msg.get('reasoning_details'))):
-                    raise ProtocolConversionError('mandatory_continuity_unrepresentable')
-                if (kind in {'thinking', 'redacted_thinking'}
-                        and msg.get('_reasoning_continuity') == 'completed_turn'):
-                    validate_native_blocks([block])
-                    loss('historical_thinking_block_omitted')
-                    continue
-                if kind in {'thinking', 'redacted_thinking'}:
-                    # Active signed reasoning stays mandatory, exactly as the
-                    # flat thinking_signature projection above.
-                    raise ProtocolConversionError('mandatory_continuity_unrepresentable')
-                # Native text and client tool_use are already represented by
-                # the canonical content/tool_calls projection, which the
-                # Responses adapter converts. Every other native block needs a
-                # cross-protocol binding; unknown content is not permission to
-                # erase visible work.
-                if kind not in {'text', 'tool_use'}:
-                    raise ProtocolConversionError('mandatory_continuity_unrepresentable')
-                if kind == 'tool_use' and block.get('id') not in {
-                        call.get('id') for call in msg.get('tool_calls') or []
-                        if isinstance(call, dict)}:
-                    raise ProtocolConversionError('mandatory_continuity_unrepresentable')
+    for msg in messages:
+        for code in message_losses(msg, protocol, replay_reasoning=replay_reasoning,
+                                   replay_types=replay_types):
+            report[code] = min(report.get(code, 0) + 1, REPORT_COUNT_LIMIT)
     return report
+
+
+def reasoning_omitted(msg, protocol, *, replay_reasoning=False,
+                      replay_unsigned_reasoning=False):
+    """Whether ``msg``'s reasoning text is optional and left off ``protocol``."""
+    if msg.get('role') != 'assistant' or not msg.get('reasoning_content'):
+        return False
+    if protocol == 'openai':
+        return False  # Chat preserves its public vendor reasoning extensions.
+    if protocol == 'anthropic' and (replay_unsigned_reasoning
+            or msg.get('thinking_signature') or msg.get('_anthropic_content_blocks')):
+        return False
+    if protocol == 'responses' and replay_reasoning and any(
+            isinstance(item, dict) and item.get('type') == 'reasoning'
+            for item in msg.get('_responses_items') or []):
+        return False
+    return True
+
+
+def message_losses(msg, protocol, *, replay_reasoning=False, replay_types=frozenset()):
+    """The report codes ``msg`` adds on ``protocol``, in order; raises when
+    its native state cannot be represented there."""
+    losses = []
+    loss = losses.append
+    items = msg.get('_responses_items') or []
+    if not isinstance(items, list):
+        raise ProtocolConversionError('native_content_list_required')
+    for item in items:
+        if not isinstance(item, dict) or not isinstance(item.get('type'), str):
+            raise ProtocolConversionError('native_content_object_required')
+        kind = item['type']
+        if kind in (REPLAY_ORDER_TYPE, STATE_ORIGIN_TYPE):
+            # Derived private order proof or state provenance, never
+            # executable provider input.
+            continue
+        correlation = item.get('call_id') if 'call_id' in item else item.get('id')
+        if kind in {'program', 'program_output'} and not str(correlation or '').strip():
+            loss('orphan_opaque_item_omitted')
+            continue
+        if protocol == 'responses' and replay_reasoning and kind in replay_types:
+            continue
+
+        if protocol in {'anthropic', 'openai'} and kind == 'reasoning':
+            encrypted = item.get('encrypted_content')
+            if encrypted is not None and not isinstance(encrypted, str):
+                raise ProtocolConversionError('native_content_invalid')
+            if encrypted:
+                # Foreign ciphertext is not executable Messages/Chat history.
+                # Project canonical text, function calls and results without
+                # fabricating signed thinking; retain caller replay state.
+                loss('cross_protocol_reasoning_omitted')
+                continue
+        if (kind == 'compaction' or kind in {'program', 'program_output'}
+                or kind.endswith('_call') or kind.endswith('_call_output')
+                or kind in {'tool_search_output', 'function_call_output'}
+                or (kind == 'reasoning' and item.get('encrypted_content'))):
+            raise ProtocolConversionError('mandatory_continuity_unrepresentable')
+        loss('native_metadata_omitted')
+    if protocol != 'anthropic':
+        if protocol != 'openai' and msg.get('thinking_signature'):
+            if msg.get('_reasoning_continuity') != 'completed_turn':
+                raise ProtocolConversionError('mandatory_continuity_unrepresentable')
+            loss('historical_thinking_signature_omitted')
+        native = msg.get('_anthropic_content_blocks') or []
+        validate_native_blocks(native)
+        thinking_blocks = [block for block in native
+                           if block['type'] in {'thinking', 'redacted_thinking'}]
+        # OpenAI-compatible Claude gateways accept the existing public
+        # signed representation. It must account for the WHOLE native
+        # sequence: matching each block independently would lose duplicate
+        # occurrences or join distinct signatures into one flat trace.
+        chat_replays_thinking = protocol == 'openai' and thinking_blocks and (
+            msg.get('reasoning_details') == thinking_blocks
+            or thinking_blocks == [{
+                'type': 'thinking', 'thinking': msg.get('reasoning_content'),
+                'signature': msg.get('thinking_signature')}])
+        for block in native:
+            kind = block['type']
+            if kind in {'thinking', 'redacted_thinking'} and chat_replays_thinking:
+                continue
+            if (protocol == 'openai' and kind in {'thinking', 'redacted_thinking'}
+                    and (msg.get('thinking_signature') or msg.get('reasoning_details'))):
+                raise ProtocolConversionError('mandatory_continuity_unrepresentable')
+            if (kind in {'thinking', 'redacted_thinking'}
+                    and msg.get('_reasoning_continuity') == 'completed_turn'):
+                validate_native_blocks([block])
+                loss('historical_thinking_block_omitted')
+                continue
+            if kind in {'thinking', 'redacted_thinking'}:
+                # Active signed reasoning stays mandatory, exactly as the
+                # flat thinking_signature projection above.
+                raise ProtocolConversionError('mandatory_continuity_unrepresentable')
+            # Native text and client tool_use are already represented by
+            # the canonical content/tool_calls projection, which the
+            # Responses adapter converts. Every other native block needs a
+            # cross-protocol binding; unknown content is not permission to
+            # erase visible work.
+            if kind not in {'text', 'tool_use'}:
+                raise ProtocolConversionError('mandatory_continuity_unrepresentable')
+            if kind == 'tool_use' and block.get('id') not in {
+                    call.get('id') for call in msg.get('tool_calls') or []
+                    if isinstance(call, dict)}:
+                raise ProtocolConversionError('mandatory_continuity_unrepresentable')
+    return losses
 
 
 def tool_name_reverse(body):

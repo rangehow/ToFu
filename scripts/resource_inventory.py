@@ -12,7 +12,9 @@ explains.
 
 Bytes are allocated blocks with hard links counted once. Copy-on-write
 clones (seeded Cargo targets) share extents the filesystem does not report,
-so their bytes are an upper bound.
+so their bytes are an upper bound. ``data/tofudb-authority`` and
+``.eval-runs`` are sized by ``measure_stat`` instead: apparent bytes of the
+entries to ``STAT_DEPTH``, never a recursive walk (their rows say so).
 """
 from __future__ import annotations
 
@@ -59,6 +61,49 @@ def measure(paths: list[str]) -> dict:
                 except OSError:
                     continue
     return {'bytes': total, 'entries': entries, 'paths': len(paths)}
+
+
+# The DolphinFS stores below hold millions of files; a recursive walk of them
+# did not finish in 600 s. They are sized by stat of the entries that hold
+# their bytes: the TofuDB authority's WALs and payload segments sit at depth
+# <= 2, as do each evaluation run's manifests and session directories.
+STAT_DEPTH = 2
+
+
+def measure_stat(paths: list[str]) -> dict:
+    """Apparent bytes and entries of PATHS and their entries to STAT_DEPTH, no deeper."""
+    total = entries = 0
+    newest = 0.0
+    for top in paths:
+        stack = [(top, 0)]
+        while stack:
+            path, depth = stack.pop()
+            try:
+                status = os.lstat(path)
+            except OSError:
+                continue
+            entries += 1
+            newest = max(newest, status.st_mtime)
+            if os.path.isdir(path) and not os.path.islink(path):
+                if depth < STAT_DEPTH:
+                    try:
+                        stack.extend((entry.path, depth + 1) for entry in os.scandir(path))
+                    except OSError:
+                        continue
+            else:
+                total += status.st_size
+    return {'bytes': total, 'entries': entries, 'paths': len(paths),
+            'walk': f'stat to depth {STAT_DEPTH}', 'newest_mtime': newest}
+
+
+def stat_artifacts(project: Path) -> list[tuple[str, str, list[str]]]:
+    """(name, lifecycle owner, paths) of the artifacts sized by measure_stat."""
+    return [
+        ('data/tofudb-authority', 'durable storage authority (kept); TofuDB online GC',
+         [str(project / 'data' / 'tofudb-authority')]),
+        ('.eval-runs', 'scripts/eval_runs_retention.py (tmp/cache of finished runs)',
+         [str(project / '.eval-runs')]),
+    ]
 
 
 def _placed(purpose: str) -> list[str]:
@@ -199,6 +244,8 @@ def main(argv: list[str] | None = None) -> int:
               'host': os.uname().nodename, 'artifacts': {}, 'git': git_counts(project)}
     for name, owner, paths in artifacts(project):
         report['artifacts'][name] = {'owner': owner, **measure(paths)}
+    for name, owner, paths in stat_artifacts(project):
+        report['artifacts'][name] = {'owner': owner, **measure_stat(paths)}
     previous = _previous(project / HISTORY)
     if arguments.record:
         with open(project / HISTORY, 'a', encoding='utf-8') as stream:
@@ -211,7 +258,8 @@ def main(argv: list[str] | None = None) -> int:
     for name, item in report['artifacts'].items():
         before = ((previous or {}).get('artifacts') or {}).get(name)
         growth = _size(item['bytes'] - before['bytes']) if before else '-'
-        print(f'{name:48} {_size(item["bytes"]):>11} {item["entries"]:>9} {growth:>11}  {item["owner"]}')
+        walk = f' [{item["walk"]}]' if 'walk' in item else ''
+        print(f'{name:48} {_size(item["bytes"]):>11} {item["entries"]:>9} {growth:>11}  {item["owner"]}{walk}')
     objects = report['git']['objects']
     print(f"git: {sum(report['git']['refs'].values())} refs {report['git']['refs']}; "
           f"loose {objects.get('count', 0)} ({_size(objects.get('size', 0) * 1024)}), "

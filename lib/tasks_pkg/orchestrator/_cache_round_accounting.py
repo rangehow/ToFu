@@ -62,6 +62,31 @@ from lib.task_replay.task_result_checkpoint_contract import (
 logger = get_logger(__name__)
 
 
+def bind_round_prompt_admission(task: dict[str, Any], api_round: dict[str, Any], *,
+                                round_num: int) -> None:
+    """Attach this round's admission, restated for the tools actually sent.
+
+    Admission ran before the route was chosen; the request's wire projection
+    (``record_sent_tool_schema``) counted the provider tools left after the
+    route's tool-name budget. The round's context snapshot gets the same count.
+    """
+    admission = task.get('_lastPromptAdmission')
+    if not (isinstance(admission, dict) and admission.get('round') == round_num + 1):
+        return
+    sent = task.get('_sentToolSchemaLocalTokens')
+    if type(sent) is not int:
+        api_round['promptAdmission'] = dict(admission)
+        return
+    from lib.tasks_pkg.compaction._prompt_admission import sent_prompt_admission
+    api_round['promptAdmission'] = sent_prompt_admission(
+        admission, admitted_local_schema=task.get('_lastPromptAdmissionLocalSchemaTokens'),
+        sent_local_schema=sent)
+    snapshots = task.get('_contextTelemetryRounds')
+    if (isinstance(snapshots, list) and snapshots and isinstance(snapshots[-1], dict)
+            and snapshots[-1].get('round') == round_num + 1):
+        snapshots[-1]['toolSchemaTokens'] = sent
+
+
 def stamp_round_cache_accounting(
         task: dict[str, Any], *,
         round_num: int,
@@ -198,10 +223,7 @@ def stamp_round_cache_accounting(
         # while the api-round row only exists after the provider returns. Bind
         # the matching content-free measurement here so a persisted cost row
         # can explain a large first request without retaining prompt content.
-        _admission = task.get('_lastPromptAdmission')
-        if (isinstance(_admission, dict)
-                and _admission.get('round') == round_num + 1):
-            api_rounds[-1]['promptAdmission'] = dict(_admission)
+        bind_round_prompt_admission(task, api_rounds[-1], round_num=round_num)
         try:
             _tcs = (assistant_msg or {}).get('tool_calls') or []
             _names = [

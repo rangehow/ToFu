@@ -21,6 +21,7 @@ from .conv_affinity import (
     record_conv_key,
     sticky_routing_enabled,
 )
+from .credential_reservation import active_reservations, reserved_slot
 from .measured_speed import measured_speed_evidence
 from .quota_watch import WINDOW_S
 from .slot import Slot
@@ -226,8 +227,14 @@ class LLMDispatcher:
 
         A pinned context sees only its own provider/route group; an unpinned
         one sees only configured slots, never another request's group.
+        Fallback dispatch additionally never sees an experiment-reserved
+        credential (credential_reservation.py, docs/NETWORK.md).
         """
-        return self._pool.scope(pinned_provider)
+        scope = self._pool.scope(pinned_provider)
+        reserved = active_reservations()
+        if not reserved:
+            return scope
+        return [slot for slot in scope if not reserved_slot(slot, reserved)]
 
     def resource_snapshot(self) -> dict:
         """Observe native slot reservations without initializing providers."""
@@ -837,6 +844,10 @@ class LLMDispatcher:
         # concurrent picks interleaving one acquisition per slot convoyed on
         # it under GIL pressure (docs/modules/llm_io.md, "Slot pool scopes").
         probes = self._billing_probe_registry() if reserve else None
+        # A Watchdog Turn steps off throttled AppIds (quota_watch); read
+        # before the lock, since the open alerts are durable records.
+        from lib.llm_dispatch.quota_watch import throttled_appids
+        avoided_appids = throttled_appids()
         with _KeyAdmission(credentials=self._credential_index,
                            probes=probes) as key_health:
             with self._lock:
@@ -846,12 +857,14 @@ class LLMDispatcher:
                     prefer_model=prefer_model, reserve=reserve,
                     strict_model=strict_model,
                     pinned_provider=pinned_provider,
-                    speed_index=speed_index, rotate_models=rotate_models)
+                    speed_index=speed_index, rotate_models=rotate_models,
+                    avoided_appids=avoided_appids)
 
     def _select_locked(self, scope, selectable, key_health, *, capability,
                        prefer_model, reserve, strict_model,
                        pinned_provider, speed_index=None,
-                       rotate_models=None) -> Slot | None:
+                       rotate_models=None,
+                       avoided_appids=None) -> Slot | None:
         """Choose among *scope* while holding ``self._lock``."""
         candidates = [slot for slot in scope
                       if selectable(slot, capability) and key_health.admits(slot)]
@@ -909,6 +922,9 @@ class LLMDispatcher:
             """Pick the best slot in *pool*, honoring the sticky key when eligible."""
             selection_now = time.monotonic()
             self._expire_shared_contention_locked(selection_now)
+            if avoided_appids is not None:
+                pool = self._off_credentials(
+                    pool, avoided_appids | self._rejecting_credentials_locked())
             warm = _sticky_in(pool)
             # A paced gate is no reason to leave the warm key, whose prompt
             # cache a switch would re-bill; only a gate that has rejected for
@@ -1075,14 +1091,22 @@ class LLMDispatcher:
         both). Only a per-credential lane gate is evidence about an AppId; a
         provider/model project limit is not. Never empties the pool.
         """
-        rejecting = {(provider, credential)
-                     for (provider, credential, _model), state
-                     in self._contention_strikes.items()
-                     if credential and state.rejecting_since is not None}
-        if not rejecting:
+        return self._off_credentials(pool, self._rejecting_credentials_locked())
+
+    def _rejecting_credentials_locked(self) -> set:
+        """``(provider, credential)`` of every per-credential lane gate in a rejection run."""
+        return {(provider, credential)
+                for (provider, credential, _model), state
+                in self._contention_strikes.items()
+                if credential and state.rejecting_since is not None}
+
+    @staticmethod
+    def _off_credentials(pool, credentials) -> list[Slot]:
+        """*pool*'s slots on other credentials than *credentials*; never empties the pool."""
+        if not credentials:
             return pool
         return [slot for slot in pool
-                if slot.quota_lane()[:2] not in rejecting] or pool
+                if slot.quota_lane()[:2] not in credentials] or pool
 
     def _rejecting_locked(self, slot) -> bool:
         """Whether a gate of *slot* is inside an unbroken rejection run."""

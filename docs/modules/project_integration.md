@@ -673,6 +673,52 @@ the worktree belongs to the delivered bytes); holding and asking the lead (the 2
 above). Verify `tests/project_mod/test_delivery_landing_queue.py` and
 `test_a_section_added_where_the_branch_added_one_lands_after_it` in `test_git_land_script.py`.
 
+**Append-only files and agreeing edits land (2026-11-18).** Problem (Global Router stage-2
+audit, recommendation #14): publication holds on journals and shared scripts kept needing repair
+Workers. Inventory from the leads' poll records (TL/KL/PL/GR transcripts) and the pinned
+`refs/tofu/delivery-inputs` heads, 11-17 00:00 to 11-18 12:30: 231 distinct holds, of which 166
+were `project_publication_authority_missing` (accepted, awaiting review/publication; all 14 TL
+holds of generation 7d3ec336 are this kind, not merge conflicts), 43 incomplete tasks preserved,
+3 publication-result/checkpoint changes, 2 `task_delta_entangled` and 17 merge conflicts on 15
+deliveries: 9 add/add (`task and canonical both created different content`, 39 paths: research
+reports, `.hope` job files, `infra/hope/*.sh` scripts and results that two Workers or the
+delegation-time folder capture created with different bytes) and 8 three-way (`JOURNAL.md` 3,
+shared scripts and tests 5: `infra/hope/test_router_defaults.py`, `hifl/scripts/run_slime.sh`,
+`infra/npu/submit_gate_910cexp.sh`, `tests/server/test_supervisor.py`,
+`packages/tofu-db/src/engine_rotation_publication_tests.rs`; `frontend/src/features/world.ts`
+twice), generated outputs riding along in 2. The insertion rule above already lands every
+`JOURNAL.md` hold of that window. Two defects remained in the shared resolver: (1) its
+line-level keep-both duplicates an appended entry the branch already holds (a re-landing) and
+holds an append to a file written without a final newline; (2) in the real
+`submit_gate_910cexp.sh` conflict the branch had made the task's exact change plus a comment
+line, and had inserted ten lines containing the task's one inserted line: Git conflicts, and
+keep-both would duplicate that line. Decision (`insertion_conflicts.py`, shared by reviewed
+deliveries and `git_land`): append-only files, the project `JOURNAL.md` by default or any path
+whose `tofu-append-only` Git attribute is set in the merged `.gitattributes`
+(`check-attr --cached`; `-tofu-append-only` opts out), merge by bytes when both sides only
+appended: the branch's file, then the bytes the landing appended, once (bytes the branch already
+holds are not appended again; a newline that only ended the base's last line is not repeated);
+any other edit of such a file uses the line rules. Inside every other conflict hunk the sides'
+edits are refined line by line: identical edits, a rewrite of the same lines that contains the
+other side's rewrite, and an insertion the other side's insertion already holds verbatim land
+once. Edits that touch stay a conflict, exactly as in Git: an edit beside lines the other side
+changed may depend on them (`test_delta_entangled_with_borrowed_bytes_keeps_the_branch_and_checkout`
+relies on this for other writers' uncommitted bytes). A path still held names its cause in the
+reason: `three-way merge conflicts at: <path> (both sides changed lines <base lines>)`, or the
+stage cause (`both sides created the file`, a delete, binary content, a mode clash).
+Replay with the publisher onto the branch tip at each hold's first observation (last 24 h, 13
+conflict holds): 3 land with or without this change (2 `JOURNAL.md`, `test_supervisor.py`), 0
+more land, `submit_gate_910cexp.sh` now resolves but its delivery stays held by a genuine
+overlap in `run_slime.sh` line 240; the 9 add/add holds and `test_router_defaults.py` are genuine
+two-version conflicts and stay held. Alternatives rejected: Git's `union` driver (also
+concatenates rewrites of the same lines, see above); merging adjacent edits (lands a change
+that depends on the other side's bytes); concatenating add/add files (two full versions of one
+script or report are not an append); similarity-based deduplication (only verbatim containment
+is evidence the change already landed). Not covered: an append-only file both sides created
+(`git_land` merges it by the append rule; a reviewed delivery still holds it as add/add, since
+`_pending_task_paths` names created conflicts before the three-way apply). Verify
+`tests/project_mod/test_delivery_append_and_script_merges.py`.
+
 **A Worker that merged the branch delivers from the merge base.** Problem: Workers merge the
 shared branch into their worktree before saving (AGENTS.md), but the delta was always diffed
 from the registered baseline. The merged branch commits then read as the task's own content:

@@ -1,0 +1,1530 @@
+{
+ "description": "Production replay of Tofu generation 7d3ec336 (2026-11-18 08:33:14.119 to 10:34:08.713 CST; times are CST except signalOpenedUtc). quotaEvents: every \"[QuotaWatch] opened/closed production quota episode\" line of logs/app.log* in the window, in log order, with the task (rid) that dispatched the observed round; all owner=1, all logged by execution shard threads (tofu-durable_0). watchdogTurns: every Turn of the Watchdog coordinator-8301fd7864c3c10ce93ac96346bef684 in the window, from data/router/1/audit_data/snapshots/post-golive-20261118T1200 transcripts (cost and rounds) and the Watchdog transcript (the signal each fault wake named). Source: LEAD_METRICS_STAGE2_20261118.md S2-2.",
+ "quotaEvents": [
+  {
+   "at": "08:34:37",
+   "rid": "dd9f942b",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:34:43",
+   "rid": "518b92e3",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:35:21",
+   "rid": "518b92e3",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:36:10",
+   "rid": "99431d3e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:36:22",
+   "rid": "17ff5c55",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:36:38",
+   "rid": "518b92e3",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:36:42",
+   "rid": "dd9f942b",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:36:50",
+   "rid": "518b92e3",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:36:50",
+   "rid": "518b92e3",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:37:54",
+   "rid": "99431d3e",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:37:55",
+   "rid": "a753a7d2",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:38:32",
+   "rid": "dd53a7ab",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:41:33",
+   "rid": "17ff5c55",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:41:43",
+   "rid": "518b92e3",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:41:43",
+   "rid": "518b92e3",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:41:51",
+   "rid": "99431d3e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:43:56",
+   "rid": "518b92e3",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:43:57",
+   "rid": "518b92e3",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:44:14",
+   "rid": "99431d3e",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:45:28",
+   "rid": "99431d3e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:45:58",
+   "rid": "518b92e3",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:45:59",
+   "rid": "518b92e3",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:47:04",
+   "rid": "518b92e3",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:47:21",
+   "rid": "99431d3e",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:47:54",
+   "rid": "518b92e3",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:48:21",
+   "rid": "99431d3e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:50:01",
+   "rid": "518b92e3",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:50:38",
+   "rid": "99431d3e",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:50:56",
+   "rid": "99431d3e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:52:07",
+   "rid": "8dd1fac6",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:52:10",
+   "rid": "518b92e3",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:53:07",
+   "rid": "99431d3e",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:53:28",
+   "rid": "8dd1fac6",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:53:34",
+   "rid": "99431d3e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:53:35",
+   "rid": "17ff5c55",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:53:38",
+   "rid": "28e67548",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:53:40",
+   "rid": "28e67548",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "gemini-3.8-flash",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:54:08",
+   "rid": "15490d67",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:54:29",
+   "rid": "36e8082e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:54:29",
+   "rid": "8dd1fac6",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:54:32",
+   "rid": "15490d67",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:54:33",
+   "rid": "15490d67",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:55:43",
+   "rid": "518b92e3",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:55:45",
+   "rid": "518b92e3",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:55:47",
+   "rid": "8dd1fac6",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:55:48",
+   "rid": "8dd1fac6",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:56:00",
+   "rid": "15490d67",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:56:05",
+   "rid": "36e8082e",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:56:14",
+   "rid": "17ff5c55",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:56:26",
+   "rid": "c8a3507c",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:56:27",
+   "rid": "36e8082e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:56:29",
+   "rid": "17ff5c55",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:57:27",
+   "rid": "36e8082e",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:57:32",
+   "rid": "36e8082e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:57:38",
+   "rid": "518b92e3",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:57:39",
+   "rid": "518b92e3",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:57:41",
+   "rid": "17ff5c55",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:57:56",
+   "rid": "99431d3e",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:57:58",
+   "rid": "99431d3e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:58:32",
+   "rid": "36e8082e",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:58:43",
+   "rid": "36e8082e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:59:31",
+   "rid": "07b8349e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "08:59:38",
+   "rid": "dd9f942b",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:00:40",
+   "rid": "36e8082e",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:00:41",
+   "rid": "36e8082e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:01:31",
+   "rid": "99431d3e",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:01:38",
+   "rid": "99431d3e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:01:41",
+   "rid": "36e8082e",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:01:46",
+   "rid": "36e8082e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:02:47",
+   "rid": "518b92e3",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:03:14",
+   "rid": "dd9f942b",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:03:52",
+   "rid": "07b8349e",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:03:56",
+   "rid": "99431d3e",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:04:54",
+   "rid": "99431d3e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:05:31",
+   "rid": "36e8082e",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:05:49",
+   "rid": "99431d3e",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:06:12",
+   "rid": "8dd1fac6",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:06:54",
+   "rid": "518b92e3",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:07:10",
+   "rid": "8dd1fac6",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:07:57",
+   "rid": "518b92e3",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:07:58",
+   "rid": "518b92e3",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:08:20",
+   "rid": "99431d3e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:08:46",
+   "rid": "99431d3e",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:08:47",
+   "rid": "99431d3e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:09:49",
+   "rid": "8dd1fac6",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:09:57",
+   "rid": "8dd1fac6",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:09:59",
+   "rid": "518b92e3",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:10:41",
+   "rid": "518b92e3",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:11:07",
+   "rid": "36e8082e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:11:45",
+   "rid": "36e8082e",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:11:47",
+   "rid": "36e8082e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:11:51",
+   "rid": "8dd1fac6",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:11:52",
+   "rid": "8dd1fac6",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:12:01",
+   "rid": "518b92e3",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:12:49",
+   "rid": "99431d3e",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:12:51",
+   "rid": "99431d3e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:13:24",
+   "rid": "8dd1fac6",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:13:52",
+   "rid": "36e8082e",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:13:54",
+   "rid": "36e8082e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:13:57",
+   "rid": "99431d3e",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:13:58",
+   "rid": "99431d3e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:14:30",
+   "rid": "8dd1fac6",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:14:55",
+   "rid": "8dd1fac6",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:14:57",
+   "rid": "8dd1fac6",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:15:38",
+   "rid": "518b92e3",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:16:09",
+   "rid": "518b92e3",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:17:03",
+   "rid": "8dd1fac6",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:17:11",
+   "rid": "99431d3e",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:17:48",
+   "rid": "8dd1fac6",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:17:49",
+   "rid": "99431d3e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:19:09",
+   "rid": "8dd1fac6",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:19:35",
+   "rid": "99431d3e",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:19:48",
+   "rid": "36e8082e",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:19:55",
+   "rid": "99431d3e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:20:16",
+   "rid": "518b92e3",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:20:20",
+   "rid": "8dd1fac6",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:21:00",
+   "rid": "99431d3e",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:21:25",
+   "rid": "36e8082e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:21:33",
+   "rid": "37180be4",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:21:42",
+   "rid": "814e7666",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:21:44",
+   "rid": "814e7666",
+   "kind": "open",
+   "keyTail": "4861",
+   "model": "tokrouter.gemini-3.8-flash-m17",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:21:57",
+   "rid": "99431d3e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:22:17",
+   "rid": "dd9f942b",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:22:24",
+   "rid": "f9e2eefb",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:22:51",
+   "rid": "9f90ec09",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:22:54",
+   "rid": "8dd1fac6",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:22:55",
+   "rid": "8dd1fac6",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:23:09",
+   "rid": "99431d3e",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:23:23",
+   "rid": "f9e2eefb",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:23:27",
+   "rid": "99431d3e",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:24:35",
+   "rid": "dd9f942b",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:24:38",
+   "rid": "dd9f942b",
+   "kind": "open",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  },
+  {
+   "at": "09:24:39",
+   "rid": "cb5e0426",
+   "kind": "close",
+   "keyTail": "5409",
+   "model": "kimi-k3.1-pro",
+   "providerId": "example-corp"
+  }
+ ],
+ "watchdogTurns": [
+  {
+   "startedAt": "08:34:37",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "00:34:37",
+   "signalSource": "quota",
+   "costUsd": 2.15,
+   "rounds": 4,
+   "roundsOffPrimary": 3
+  },
+  {
+   "startedAt": "08:36:10",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "00:36:10",
+   "signalSource": "quota",
+   "costUsd": 2.1567,
+   "rounds": 3,
+   "roundsOffPrimary": 2
+  },
+  {
+   "startedAt": "08:36:40",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "00:36:38",
+   "signalSource": "quota",
+   "costUsd": 2.1858,
+   "rounds": 3,
+   "roundsOffPrimary": 2
+  },
+  {
+   "startedAt": "08:37:55",
+   "trigger": "watchdog_review",
+   "signalOpenedUtc": null,
+   "signalSource": null,
+   "costUsd": 1.2623,
+   "rounds": 3,
+   "roundsOffPrimary": 2
+  },
+  {
+   "startedAt": "08:37:55",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "00:37:55",
+   "signalSource": "quota",
+   "costUsd": 2.2227,
+   "rounds": 3,
+   "roundsOffPrimary": 2
+  },
+  {
+   "startedAt": "08:41:43",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "00:41:43",
+   "signalSource": "quota",
+   "costUsd": 1.0351,
+   "rounds": 3,
+   "roundsOffPrimary": 2
+  },
+  {
+   "startedAt": "08:43:57",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "00:43:57",
+   "signalSource": "quota",
+   "costUsd": 1.2097,
+   "rounds": 3,
+   "roundsOffPrimary": 2
+  },
+  {
+   "startedAt": "08:45:28",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "00:45:28",
+   "signalSource": "quota",
+   "costUsd": 1.0214,
+   "rounds": 3,
+   "roundsOffPrimary": 2
+  },
+  {
+   "startedAt": "08:45:59",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "00:45:59",
+   "signalSource": "quota",
+   "costUsd": 1.0533,
+   "rounds": 3,
+   "roundsOffPrimary": 2
+  },
+  {
+   "startedAt": "08:47:54",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "00:47:54",
+   "signalSource": "quota",
+   "costUsd": 1.0802,
+   "rounds": 3,
+   "roundsOffPrimary": 2
+  },
+  {
+   "startedAt": "08:48:21",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "00:48:21",
+   "signalSource": "quota",
+   "costUsd": 1.1072,
+   "rounds": 3,
+   "roundsOffPrimary": 2
+  },
+  {
+   "startedAt": "08:49:17",
+   "trigger": "watchdog_recheck",
+   "signalOpenedUtc": null,
+   "signalSource": null,
+   "costUsd": 1.1804,
+   "rounds": 4,
+   "roundsOffPrimary": 3
+  },
+  {
+   "startedAt": "08:50:57",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "00:50:56",
+   "signalSource": "quota",
+   "costUsd": 1.1807,
+   "rounds": 3,
+   "roundsOffPrimary": 2
+  },
+  {
+   "startedAt": "08:52:07",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "00:52:07",
+   "signalSource": "quota",
+   "costUsd": 1.2627,
+   "rounds": 3,
+   "roundsOffPrimary": 2
+  },
+  {
+   "startedAt": "08:53:34",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "00:53:34",
+   "signalSource": "quota",
+   "costUsd": 1.1538,
+   "rounds": 1,
+   "roundsOffPrimary": 0
+  },
+  {
+   "startedAt": "08:53:41",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "00:53:35",
+   "signalSource": "quota",
+   "costUsd": 0.9627,
+   "rounds": 1,
+   "roundsOffPrimary": 0
+  },
+  {
+   "startedAt": "08:54:01",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "00:53:38",
+   "signalSource": "quota",
+   "costUsd": 1.3458,
+   "rounds": 5,
+   "roundsOffPrimary": 4
+  },
+  {
+   "startedAt": "08:55:22",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "00:53:40",
+   "signalSource": "quota",
+   "costUsd": 1.4083,
+   "rounds": 3,
+   "roundsOffPrimary": 2
+  },
+  {
+   "startedAt": "08:57:18",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "00:55:45",
+   "signalSource": "quota",
+   "costUsd": 1.2984,
+   "rounds": 3,
+   "roundsOffPrimary": 2
+  },
+  {
+   "startedAt": "08:57:18",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "00:55:48",
+   "signalSource": "quota",
+   "costUsd": 1.3625,
+   "rounds": 8,
+   "roundsOffPrimary": 7
+  },
+  {
+   "startedAt": "08:57:18",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "00:56:27",
+   "signalSource": "quota",
+   "costUsd": 1.1627,
+   "rounds": 2,
+   "roundsOffPrimary": 0
+  },
+  {
+   "startedAt": "08:57:18",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "00:56:29",
+   "signalSource": "quota",
+   "costUsd": 1.1214,
+   "rounds": 2,
+   "roundsOffPrimary": 0
+  },
+  {
+   "startedAt": "08:57:18",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "00:56:26",
+   "signalSource": "quota",
+   "costUsd": 1.3471,
+   "rounds": 3,
+   "roundsOffPrimary": 2
+  },
+  {
+   "startedAt": "08:57:45",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "00:57:39",
+   "signalSource": "quota",
+   "costUsd": 1.125,
+   "rounds": 2,
+   "roundsOffPrimary": 0
+  },
+  {
+   "startedAt": "09:04:54",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "01:04:54",
+   "signalSource": "quota",
+   "costUsd": 0.2373,
+   "rounds": 2,
+   "roundsOffPrimary": 0
+  },
+  {
+   "startedAt": "09:06:54",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "01:06:54",
+   "signalSource": "quota",
+   "costUsd": 1.1356,
+   "rounds": 2,
+   "roundsOffPrimary": 0
+  },
+  {
+   "startedAt": "09:07:10",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "01:07:10",
+   "signalSource": "quota",
+   "costUsd": 0.2327,
+   "rounds": 2,
+   "roundsOffPrimary": 0
+  },
+  {
+   "startedAt": "09:07:20",
+   "trigger": "watchdog_review",
+   "signalOpenedUtc": null,
+   "signalSource": null,
+   "costUsd": 0.2355,
+   "rounds": 2,
+   "roundsOffPrimary": 0
+  },
+  {
+   "startedAt": "09:07:58",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "01:07:58",
+   "signalSource": "quota",
+   "costUsd": 0.2478,
+   "rounds": 2,
+   "roundsOffPrimary": 0
+  },
+  {
+   "startedAt": "09:08:21",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "01:08:20",
+   "signalSource": "quota",
+   "costUsd": 0.2444,
+   "rounds": 2,
+   "roundsOffPrimary": 0
+  },
+  {
+   "startedAt": "09:08:47",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "01:08:47",
+   "signalSource": "quota",
+   "costUsd": 1.2185,
+   "rounds": 2,
+   "roundsOffPrimary": 0
+  },
+  {
+   "startedAt": "09:09:57",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "01:09:57",
+   "signalSource": "quota",
+   "costUsd": 0.2316,
+   "rounds": 2,
+   "roundsOffPrimary": 0
+  },
+  {
+   "startedAt": "09:10:41",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "01:10:41",
+   "signalSource": "quota",
+   "costUsd": 0.2401,
+   "rounds": 2,
+   "roundsOffPrimary": 0
+  },
+  {
+   "startedAt": "09:11:07",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "01:11:07",
+   "signalSource": "quota",
+   "costUsd": 0.2502,
+   "rounds": 2,
+   "roundsOffPrimary": 0
+  },
+  {
+   "startedAt": "09:11:47",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "01:11:47",
+   "signalSource": "quota",
+   "costUsd": 0.2611,
+   "rounds": 2,
+   "roundsOffPrimary": 0
+  },
+  {
+   "startedAt": "09:12:51",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "01:12:51",
+   "signalSource": "quota",
+   "costUsd": 0.263,
+   "rounds": 2,
+   "roundsOffPrimary": 0
+  },
+  {
+   "startedAt": "09:13:54",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "01:13:54",
+   "signalSource": "quota",
+   "costUsd": 0.2691,
+   "rounds": 2,
+   "roundsOffPrimary": 0
+  },
+  {
+   "startedAt": "09:14:30",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "01:14:30",
+   "signalSource": "quota",
+   "costUsd": 0.2746,
+   "rounds": 2,
+   "roundsOffPrimary": 0
+  },
+  {
+   "startedAt": "09:14:57",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "01:14:57",
+   "signalSource": "quota",
+   "costUsd": 0.2808,
+   "rounds": 2,
+   "roundsOffPrimary": 0
+  },
+  {
+   "startedAt": "09:15:38",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "01:15:38",
+   "signalSource": "quota",
+   "costUsd": 1.6189,
+   "rounds": 2,
+   "roundsOffPrimary": 0
+  },
+  {
+   "startedAt": "09:17:48",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "01:17:48",
+   "signalSource": "quota",
+   "costUsd": 0.2987,
+   "rounds": 2,
+   "roundsOffPrimary": 0
+  },
+  {
+   "startedAt": "09:19:21",
+   "trigger": "watchdog_recheck",
+   "signalOpenedUtc": null,
+   "signalSource": null,
+   "costUsd": 2.8542,
+   "rounds": 4,
+   "roundsOffPrimary": 1
+  },
+  {
+   "startedAt": "09:20:12",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "01:19:55",
+   "signalSource": "quota",
+   "costUsd": 1.4688,
+   "rounds": 3,
+   "roundsOffPrimary": 2
+  },
+  {
+   "startedAt": "09:21:33",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "01:21:25",
+   "signalSource": "quota",
+   "costUsd": 1.1532,
+   "rounds": 1,
+   "roundsOffPrimary": 0
+  },
+  {
+   "startedAt": "09:22:04",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "01:21:42",
+   "signalSource": "quota",
+   "costUsd": 1.3028,
+   "rounds": 4,
+   "roundsOffPrimary": 3
+  },
+  {
+   "startedAt": "09:23:23",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "01:22:51",
+   "signalSource": "quota",
+   "costUsd": 1.3493,
+   "rounds": 3,
+   "roundsOffPrimary": 2
+  },
+  {
+   "startedAt": "09:23:23",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "01:22:55",
+   "signalSource": "quota",
+   "costUsd": 1.3442,
+   "rounds": 3,
+   "roundsOffPrimary": 2
+  },
+  {
+   "startedAt": "09:23:23",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "01:21:44",
+   "signalSource": "quota",
+   "costUsd": 1.1884,
+   "rounds": 1,
+   "roundsOffPrimary": 0
+  },
+  {
+   "startedAt": "09:23:41",
+   "trigger": "watchdog_fault",
+   "signalOpenedUtc": "01:23:27",
+   "signalSource": "quota",
+   "costUsd": 1.4075,
+   "rounds": 3,
+   "roundsOffPrimary": 2
+  },
+  {
+   "startedAt": "09:37:26",
+   "trigger": "watchdog_review",
+   "signalOpenedUtc": null,
+   "signalSource": null,
+   "costUsd": 1.8508,
+   "rounds": 3,
+   "roundsOffPrimary": 2
+  },
+  {
+   "startedAt": "10:07:33",
+   "trigger": "watchdog_review",
+   "signalOpenedUtc": null,
+   "signalSource": null,
+   "costUsd": 1.9203,
+   "rounds": 3,
+   "roundsOffPrimary": 2
+  }
+ ]
+}

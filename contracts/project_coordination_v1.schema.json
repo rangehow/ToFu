@@ -114,7 +114,14 @@
         "key": {"$ref": "#/$defs/progressHistoryKey"},
         "title": {"$ref": "#/$defs/progressTask/properties/title"},
         "count": {"type": "integer", "minimum": 1},
-        "latestAt": {"type": "integer", "minimum": 0}
+        "latestAt": {"type": "integer", "minimum": 0},
+        "translation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["title"],
+          "description": "The title's display translation from the task's history (progressHistoryTask.translation), when it translates exactly this title.",
+          "properties": {"title": {"$ref": "#/$defs/progressTranslation/properties/texts/items/properties/text"}}
+        }
       }
     },
     "deliverableItem": {
@@ -584,6 +591,16 @@
         }
       }
     },
+    "progressTaskTranslation": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Display translation of one history task's own texts (its title and progress note) into the owner's reading language, so a task that left the board still reads in that language. Carried from the board's progressTranslation when the task leaves the board and derived by the same translation job for tasks that left untranslated. Entries pair an exact current text with its translation; a text the task no longer carries loses its entry. Reconstructible display data, never evidence.",
+      "required": ["target", "texts"],
+      "properties": {
+        "target": {"$ref": "#/$defs/progressTranslation/properties/target"},
+        "texts": {"type": "array", "minItems": 1, "maxItems": 2, "items": {"$ref": "#/$defs/progressTranslation/properties/texts/items"}}
+      }
+    },
     "progressHead": {
       "type": "object",
       "additionalProperties": false,
@@ -623,13 +640,14 @@
         "changedRevision": {"type": "integer", "minimum": 1},
         "departedAt": {"type": "integer", "minimum": 0},
         "departedRevision": {"type": "integer", "minimum": 1},
-        "completedAt": {"type": "integer", "minimum": 0}
+        "completedAt": {"type": "integer", "minimum": 0},
+        "translation": {"$ref": "#/$defs/progressTaskTranslation"}
       }
     },
     "progressHistoryTask": {
       "type": "object",
       "additionalProperties": false,
-      "description": "One task of the history as shown. A task on the current board shows that board's text; lastSeenAt is then the board's update time. dropped: the task left the board while pending or in progress. dueOutcome: met = completed by its due; missed = completed after it, or still not completed once it passed; open = not completed and not yet due; withdrawn = cancelled.",
+      "description": "One task of the history as shown. A task on the current board shows that board's text; lastSeenAt is then the board's update time. dropped: the task left the board while pending or in progress. translation (off the board only) is its own display translation; a task on the board is covered by the board's. dueOutcome: met = completed by its due; missed = completed after it, or still not completed once it passed; open = not completed and not yet due; withdrawn = cancelled.",
       "required": ["key", "title", "status", "onBoard", "dropped", "firstSeenAt", "lastSeenAt", "changedAt"],
       "properties": {
         "key": {"$ref": "#/$defs/progressHistoryKey"},
@@ -646,7 +664,8 @@
         "lastSeenAt": {"type": "integer", "minimum": 0},
         "changedAt": {"type": "integer", "minimum": 0},
         "departedAt": {"type": "integer", "minimum": 0},
-        "completedAt": {"type": "integer", "minimum": 0}
+        "completedAt": {"type": "integer", "minimum": 0},
+        "translation": {"$ref": "#/$defs/progressTaskTranslation"}
       }
     },
     "progressHistoryGroup": {
@@ -656,7 +675,7 @@
     "progressHistoryPage": {
       "type": "object",
       "additionalProperties": false,
-      "description": "One page of every task the current binding's board ever showed, ordered by group (progressHistoryGroup order), then newest activity first. counts cover every task matching the query, per group. Pages hold at most 64 tasks, the coordination API's page bound (conversationPage). recorded is false while the board predates task history and the Coordinator has not changed it since: the page then holds only the current board. translation is the current board's display translation (progressState.translation): it covers the texts of tasks on the board, whose rows show that board's text.",
+      "description": "One page of every task the current binding's board ever showed, ordered by group (progressHistoryGroup order), then newest activity first. counts cover every task matching the query, per group. Pages hold at most 64 tasks, the coordination API's page bound (conversationPage). recorded is false while the board predates task history and the Coordinator has not changed it since: the page then holds only the current board. translation is the current board's display translation (progressState.translation): it covers the texts of tasks on the board, whose rows show that board's text; a task off the board carries its own (progressHistoryTask.translation).",
       "required": ["projectPath", "conversationId", "bindingRevision", "recorded", "counts", "tasks", "nextCursor", "coverage"],
       "properties": {
         "projectPath": {"type": "string", "minLength": 1, "maxLength": 4096},

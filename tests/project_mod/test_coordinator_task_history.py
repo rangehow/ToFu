@@ -372,3 +372,67 @@ def test_the_page_carries_the_board_translation_and_search_matches_it(board):
         'Book flights': '订机票', 'Comparing fares': '比较票价'}
     assert [entry['title'] for entry in b.read(query='票价')['tasks']] == ['Book flights']
     assert b.read(query='订机票')['counts']['in_progress'] == 1
+
+
+def test_a_task_leaving_the_board_keeps_its_translation(board):
+    """A task off the board reads in the owner's language too, not only the tasks still on it."""
+    b = board
+    progress = CoordinatorTaskProgress(7, '/project', client=b.store, bindings=b.bindings,
+                                       notify=lambda: None, clock=b.clock)
+    progress.publish(b.scope, {'summary': 'Plan.', 'tasks': [
+        task('Book flights', 'completed', progress='Booked'), task('Pack')]}, translation_target='Chinese')
+    progress.attach_translation(b.scope, 'Chinese', {'Book flights': '订机票', 'Booked': '已订', 'Pack': '收拾行李'})
+    progress.publish(b.scope, {'summary': 'Plan.', 'tasks': [task('Pack')]}, translation_target='Chinese')
+    tasks = b.by_title(b.read())
+    assert tasks['Book flights']['translation'] == {'target': 'Chinese', 'texts': [
+        {'source': 'Book flights', 'text': '订机票'}, {'source': 'Booked', 'text': '已订'}]}
+    # On the board the board's own translation covers the task.
+    assert 'translation' not in tasks['Pack']
+    assert [entry['title'] for entry in b.read(query='订机票')['tasks']] == ['Book flights']
+
+
+def test_tasks_that_left_untranslated_are_translated_by_the_board_job(board, monkeypatch):
+    from lib.conversations import coordinator_progress, coordinator_progress_translation
+    from lib.translate import display_texts
+    b = board
+    # Left the board before any translation existed (the earlier tasks of a long-running lead).
+    b.publish(task('Fix restart', 'completed', progress='Restart fixed'), task('Polish resume'))
+    b.publish(task('Polish resume'))
+    calls = []
+
+    def translate(texts, target, **kwargs):
+        calls.append(list(texts))
+        return {text: '译:' + text for text in texts}
+
+    monkeypatch.setattr(display_texts, 'translate_display_texts', translate)
+    monkeypatch.setattr(coordinator_progress, 'CoordinatorTaskProgress',
+                        lambda owner, project: CoordinatorTaskProgress(
+                            owner, project, client=b.store, bindings=b.bindings, notify=lambda: None, clock=b.clock))
+    coordinator_progress_translation._translate_board(7, '/project', b.scope, 'Chinese')
+    assert calls == [['Where things stand.', 'Polish resume', 'Fix restart', 'Restart fixed']]
+    tasks = b.by_title(b.read())
+    assert {entry['source']: entry['text'] for entry in tasks['Fix restart']['translation']['texts']} == {
+        'Fix restart': '译:Fix restart', 'Restart fixed': '译:Restart fixed'}
+    # Everything is translated now: the next job sends nothing.
+    coordinator_progress_translation._translate_board(7, '/project', b.scope, 'Chinese')
+    assert len(calls) == 1
+
+
+def test_a_task_translation_follows_its_texts_and_language(board):
+    from lib.conversations.coordinator_task_history import attach_history_translation, untranslated_history_texts
+    b = board
+    b.publish(task('Fix restart', progress='Diagnosing'), task('Pack'))
+    b.publish(task('Pack'))
+    assert untranslated_history_texts(b.scope, 'Chinese', client=b.store) == ['Fix restart', 'Diagnosing']
+    assert attach_history_translation(b.scope, 'Chinese', {'Fix restart': ' 修复\n重启 ', 'Diagnosing': ''},
+                                      client=b.store) == 1
+    assert b.by_title(b.read())['Fix restart']['translation'] == {
+        'target': 'Chinese', 'texts': [{'source': 'Fix restart', 'text': '修复 重启'}]}
+    assert untranslated_history_texts(b.scope, 'Chinese', client=b.store) == ['Diagnosing']
+    # Another language replaces the stored one; an unchanged merge writes nothing.
+    assert attach_history_translation(b.scope, 'Japanese', {'Fix restart': '再起動'}, client=b.store) == 1
+    assert attach_history_translation(b.scope, 'Japanese', {'Fix restart': '再起動'}, client=b.store) == 0
+    # A task returning with a new note keeps only the translation of the text it still carries.
+    b.publish(task('Pack'), task('Fix restart', progress='Fixed'))
+    b.publish(task('Pack'))
+    assert b.by_title(b.read())['Fix restart']['translation']['texts'] == [{'source': 'Fix restart', 'text': '再起動'}]

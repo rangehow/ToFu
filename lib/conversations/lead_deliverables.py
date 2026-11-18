@@ -220,6 +220,10 @@ def completion_item(task, *, project_path):
             'source': None, 'tasks': [{'key': task['key'], 'title': task['title']}]}
     if task.get('progress'):
         item['summary'] = _clip_body(task['progress'])
+    shown = {entry['source']: entry['text'] for entry in (task.get('translation') or {}).get('texts', ())}
+    if shown.get(task.get('progress') or task['title']):
+        item['translation'] = {'title': _clip(shown[task.get('progress') or task['title']], _TITLE_MAX),
+                               'summary': _clip_body(shown.get(task.get('progress'), ''))}
     return item
 
 
@@ -292,7 +296,7 @@ class DeliverablesPage:
                                       tasks=reference['tasks'])
 
     def project(self, project_path=''):
-        """Every deliverable of the conversation, newest first."""
+        """Every deliverable of the conversation, newest first, and the lead's board tasks."""
         owned, turns, artifacts, get_turn = self._ports()
         owned(self.conversation_id, self.owner)
         items, turn_of_artifact, reports, receipts = [], {}, set(), {}
@@ -341,7 +345,7 @@ class DeliverablesPage:
             if item is not None:
                 items.append(item)
         items.sort(key=lambda item: (-item['createdAt'], _digest(item['id'])))
-        return items
+        return items, board_tasks
 
     def read(self, cursor=None, *, project_path='', task=None):
         """One page newest first; ``task`` filters to one task key or ``OTHER_TASKS``.
@@ -358,7 +362,9 @@ class DeliverablesPage:
             if match is None:
                 raise ValueError('Invalid deliverables cursor')
             after = (-int(match.group(1)), match.group(2))
-        items = self.project(project_path)
+        items, board_tasks = self.project(project_path)
+        titles = {task['key']: {entry['source']: entry['text'] for entry in task['translation']['texts']}
+                  for task in board_tasks if task.get('translation')}
         summary, other = {}, 0
         for item in items:
             keys = own_task_keys(item, project_path)
@@ -370,6 +376,9 @@ class DeliverablesPage:
                     # Newest first: the first item names the task's latest title and time.
                     summary[ref['key']] = {'key': ref['key'], 'title': ref['title'], 'count': 1,
                                            'latestAt': item['createdAt']}
+                    shown = titles.get(ref['key'], {}).get(ref['title'])
+                    if shown:
+                        summary[ref['key']]['translation'] = {'title': shown}
                 else:
                     entry['count'] += 1
         if task is not None:

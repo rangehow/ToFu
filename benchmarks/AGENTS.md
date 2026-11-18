@@ -478,6 +478,24 @@ boots the same deployment and runs `noop`/`true` Turns; with py-spy (idle
 threads, shards included) it charges the Turn thread's samples to named round
 components, and with `--no-spy` it is one unperturbed ABAB arm. Shares come
 from profiled runs, milliseconds from unprofiled ones.
+`harness_perf/rust_prototype.py rust` runs the evidence-only Rust round
+(`packages/tofu-core-rs`) against the same pinned engine and stub and reports
+with `run.summarize`, so it is the Rust ABAB arm beside `round_profile.py
+--no-spy`; `--events parity|lean` separates the amount of durable work from the
+language, `python-concurrency` measures Python HEAD on the same concurrent
+shape. `byte_identity.py OUT --rust BIN` compares the Rust wire bytes with
+Python's on every recorded request. Verify
+`tests/meta/test_rust_prototype_measure.py`; results live in
+`docs/RUST_REWRITE_EVIDENCE.md`, "Core loop prototype".
+
+`rust_rewrite_time_breakdown.py` reads the running application through
+loopback GETs only (`collect`: durable attempt traces, Turn tool rounds,
+swarm Request Inspector rows and state snapshots), folds them into per-kind
+wall-time shares and rewrite upper bounds (`analyze`, `render`), itemizes
+retained `app.log*` timing lines (`logs`) and samples the manager's process
+tree from procfs (`resources`). It writes nothing to the application. Verify
+`tests/meta/test_rust_rewrite_time_breakdown.py`; results live in
+`docs/RUST_REWRITE_EVIDENCE.md`, "Where time goes".
 
 `startup_idle_dispatch.py` measures the manager-composed instance
 (`serverctl.py start`: lifecycle manager, API host, execution host) of the

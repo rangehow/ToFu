@@ -152,7 +152,10 @@ def _contended(offset, start, end, *, wait_ms=2400.0):
 
 
 def _public(transition):
-    return {key: value for key, value in transition.items() if key != 'delivery'}
+    # The credential identity and reporter only key the producer's internal
+    # alert record (lib/router/watchdog/quota.py); the signal never carries them.
+    return {key: value for key, value in transition.items()
+            if key not in ('delivery', 'credential', 'reporter')}
 
 
 def _ms(second):
@@ -391,3 +394,14 @@ def test_conversation_rounds_dispatch_inside_the_production_scope(monkeypatch):
     assert message['content'] == 'ok'
     assert seen == [(OWNER, OWNER)]
     assert quota_watch.production_owner() is None
+
+
+def test_each_process_reports_as_itself_and_a_forked_shard_takes_its_own_identity():
+    """Execution shards fork from one image; a reporter identity made before the fork is not theirs."""
+    import os
+    from lib.llm_dispatch.quota_watch import QuotaWatch
+    watch = QuotaWatch()
+    first = watch.reporter
+    assert watch.reporter == first
+    watch._reporter_pid = os.getpid() + 1   # what a forked child sees
+    assert watch.reporter not in (first, '')

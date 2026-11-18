@@ -40,19 +40,32 @@ import getopt
 import os
 import shutil
 
-# ── rg binary resolution (cached; PATH changes within a process are not a
-#    supported runtime mutation) ─────────────────────────────────────────
-_RG_BIN_CACHE: dict[str, object] = {}
+# ── rg binary resolution ────────────────────────────────────────────────
+# A resolved path is reused only while it is still an executable file. The
+# long-lived execution host can inherit PATH entries inside self-updating
+# trees (a Codex release's codex-path/ is pruned on upgrade); splicing a
+# vanished binary made every translated grep fail with "No such file".
+_RG_BIN_CACHE: dict[str, str] = {}
+
+
+def _is_executable_file(path: str) -> bool:
+    return os.path.isfile(path) and os.access(path, os.X_OK)
 
 
 def rg_executable():
-    """Absolute rg path, or None. Cached per process; honours test overrides."""
+    """Absolute rg path, or None; honours the test override."""
     override = os.environ.get('TOFU_RG_EXECUTABLE', '').strip()
     if override:
-        return override if os.path.isfile(override) else None
-    if 'bin' not in _RG_BIN_CACHE:
-        _RG_BIN_CACHE['bin'] = shutil.which('rg')
-    return _RG_BIN_CACHE['bin']
+        return override if _is_executable_file(override) else None
+    cached = _RG_BIN_CACHE.get('bin')
+    if cached and _is_executable_file(cached):
+        return cached
+    resolved = shutil.which('rg')
+    if resolved:
+        _RG_BIN_CACHE['bin'] = resolved
+    else:
+        _RG_BIN_CACHE.pop('bin', None)
+    return resolved
 
 
 # ── Pattern translation ────────────────────────────────────────────────

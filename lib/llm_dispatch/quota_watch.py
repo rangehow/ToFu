@@ -25,11 +25,21 @@ Rules; every count is over the provider's own limit window, ``WINDOW_S``
 Transitions leave the dispatch thread before any storage read or wake, and one
 lane's deliveries run in order (``_deliver_to_watchdog``). A failing watch is
 logged and never reaches the dispatch. State is in memory and per process,
-bounded by one window of events per lane in use.
+bounded by one window of events per lane in use. Each process reports as
+itself (its process identity, taken after a fork), and the Watchdog producer
+merges every process's episodes of one lane into one alert that wakes only on
+its own state change (lib/router/watchdog/quota.py).
+
+A Watchdog Turn dispatches inside ``avoid_throttled_appids``: its picks step
+off AppIds with an open alert of its owner or with an episode open in this
+process (``throttled_appids``, read by the dispatcher), so the Watchdog does
+not add its own rounds to the limit it is reporting on.
 
 Entry points: production_dispatch, production_owner, observe_rejection,
-observe_settlement, minute_limit, QuotaWatch, WINDOW_S.
-Dependencies: lib.router.watchdog.quota, imported on the delivery thread.
+observe_settlement, minute_limit, avoid_throttled_appids, throttled_appids,
+QuotaWatch, WINDOW_S.
+Dependencies: lib.router.watchdog.quota, imported on the delivery thread and
+by throttled_appids; lib.storage.worker_process for the reporter identity.
 """
 from __future__ import annotations
 
@@ -40,10 +50,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 import re
 import statistics
 import threading
 import time
+import uuid
 
 from lib.log import get_logger
 
@@ -59,6 +71,7 @@ WINDOW_S = 60.0
 _MINUTE_LIMIT = re.compile(r'App:\*+([0-9A-Za-z]+)在模型:\S+?(每分钟请求次数超过限制|的tpm超过限制)')
 
 _PRODUCTION_OWNER: ContextVar[int | None] = ContextVar('quota_watch_production_owner', default=None)
+_AVOIDING_OWNER: ContextVar[int | None] = ContextVar('quota_watch_avoiding_owner', default=None)
 
 
 def minute_limit(message: str) -> str | None:
@@ -90,10 +103,46 @@ def production_owner() -> int | None:
     return _PRODUCTION_OWNER.get()
 
 
+@contextmanager
+def avoid_throttled_appids(owner_user_id: int | None):
+    """Dispatches inside prefer AppIds without an open quota alert of ``owner_user_id``.
+
+    Without an owner nothing changes.
+    """
+    if not isinstance(owner_user_id, int) or isinstance(owner_user_id, bool):
+        yield
+        return
+    token = _AVOIDING_OWNER.set(owner_user_id)
+    try:
+        yield
+    finally:
+        _AVOIDING_OWNER.reset(token)
+
+
+def throttled_appids() -> frozenset | None:
+    """``(provider, credential)`` AppIds this dispatch should step off, or None outside the scope.
+
+    The union of the owner's open quota alerts (every process) and the lanes
+    with an episode open in this process, which the alert may not show yet
+    while its delivery is in flight.
+    """
+    owner = _AVOIDING_OWNER.get()
+    if owner is None:
+        return None
+    appids = set(_WATCH.open_appids())
+    try:
+        from lib.router.watchdog.quota import open_quota_appids
+        appids |= open_quota_appids(owner)
+    except Exception:
+        logger.warning('[QuotaWatch] open quota alerts unreadable owner=%s', owner, exc_info=True)
+    return frozenset(appids)
+
+
 @dataclass(frozen=True)
 class _LaneRef:
     identity: tuple
     provider_id: str
+    credential: str
     key_tail: str
     model: str
 
@@ -164,6 +213,7 @@ class _Episode:
 @dataclass
 class _Lane:
     provider_id: str
+    credential: str
     key_tail: str
     model: str
     digest: str
@@ -193,11 +243,27 @@ def _hold(ms: float) -> str:
 class QuotaWatch:
     """Per-process episodes of every quota lane in use; ``observe`` is the only writer."""
 
-    def __init__(self, *, clock=time.time, deliver=None):
+    def __init__(self, *, clock=time.time, deliver=None, reporter=None):
         self._clock = clock
         self._deliver = deliver
         self._lock = threading.Lock()
         self._lanes: dict[tuple, _Lane] = {}
+        self._reporter = reporter
+        self._reporter_pid = None
+
+    @property
+    def reporter(self) -> str:
+        """This process's identity as a reporter; recomputed after a fork (shards fork from one image)."""
+        if self._reporter is None or (self._reporter_pid is not None and self._reporter_pid != os.getpid()):
+            from lib.storage.worker_process import worker_process_id
+            self._reporter = worker_process_id(uuid.uuid4().hex, legacy_prefix='quota-watch')
+            self._reporter_pid = os.getpid()
+        return self._reporter
+
+    def open_appids(self) -> set:
+        """``(provider, credential)`` of every lane with an episode open in this process."""
+        with self._lock:
+            return {(lane.provider_id, lane.credential) for lane in self._lanes.values() if lane.episode}
 
     def observe(self, ref: _LaneRef, *, owner: int | None, limit: str | None, queue_wait_ms: float,
                 ttft_ms: float | None) -> None:
@@ -216,7 +282,8 @@ class QuotaWatch:
         lane = self._lanes.get(ref.identity)
         if lane is None:
             digest = hashlib.sha256(json.dumps(ref.identity, ensure_ascii=False).encode()).hexdigest()[:16]
-            lane = self._lanes[ref.identity] = _Lane(ref.provider_id, ref.key_tail, ref.model, digest)
+            lane = self._lanes[ref.identity] = _Lane(ref.provider_id, ref.credential, ref.key_tail, ref.model,
+                                                     digest)
         lane.events.append(event)
         if event.limit:
             if event.owner is None:
@@ -277,9 +344,9 @@ class QuotaWatch:
             'otherAppIds': sorted(others, key=lambda entry: entry['keyTail']),
         }
 
-    @staticmethod
-    def _transition(kind: str, lane: _Lane, episode: _Episode, owner: int) -> dict:
+    def _transition(self, kind: str, lane: _Lane, episode: _Episode, owner: int) -> dict:
         return {'kind': kind, 'owner': owner, 'providerId': lane.provider_id, 'lane': lane.digest,
+                'credential': lane.credential, 'reporter': self.reporter,
                 'keyTail': lane.key_tail, 'model': lane.model, 'openedAtMs': _ms(episode.opened_at),
                 'delivery': episode.deliveries.setdefault(owner, {'signalId': None})}
 
@@ -344,7 +411,8 @@ def _lane_ref(slot, message: str = '') -> _LaneRef:
     # The key's last four characters, as the provider's own 429 masks the AppId.
     key_tail = (getattr(slot, 'api_key', '') or '')[-4:] or (match.group(1)[-4:] if match else '')
     identity = slot.quota_lane()
-    return _LaneRef(identity=identity, provider_id=identity[0], key_tail=key_tail, model=slot.model)
+    return _LaneRef(identity=identity, provider_id=identity[0], credential=identity[1], key_tail=key_tail,
+                    model=slot.model)
 
 
 def observe_rejection(slot, error, *, queue_wait_ms: float) -> None:
@@ -393,11 +461,13 @@ def _deliver(previous: threading.Thread | None, transition: dict) -> None:
         if transition['kind'] == 'open':
             signal = quota.report_quota_episode(
                 transition['owner'], provider_id=transition['providerId'], lane=transition['lane'],
-                key_tail=transition['keyTail'], model=transition['model'],
-                opened_at_ms=transition['openedAtMs'], detail=transition['detail'])
+                credential=transition['credential'], key_tail=transition['keyTail'], model=transition['model'],
+                opened_at_ms=transition['openedAtMs'], detail=transition['detail'],
+                reporter=transition['reporter'])
             record['signalId'] = (signal or {}).get('signalId')
         elif record.get('signalId'):
-            quota.resolve_quota_episode(transition['owner'], record['signalId'], transition['resolution'])
+            quota.resolve_quota_episode(transition['owner'], lane=transition['lane'],
+                                        reporter=transition['reporter'], resolution=transition['resolution'])
     except Exception:
         logger.warning('[QuotaWatch] %s delivery failed owner=%s', transition.get('kind'),
                        transition.get('owner'), exc_info=True)
@@ -406,5 +476,5 @@ def _deliver(previous: threading.Thread | None, transition: dict) -> None:
 _WATCH = QuotaWatch()
 
 
-__all__ = ['QuotaWatch', 'WINDOW_S', 'minute_limit', 'observe_rejection', 'observe_settlement',
-           'production_dispatch', 'production_owner']
+__all__ = ['QuotaWatch', 'WINDOW_S', 'avoid_throttled_appids', 'minute_limit', 'observe_rejection',
+           'observe_settlement', 'production_dispatch', 'production_owner', 'throttled_appids']

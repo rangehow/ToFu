@@ -1,0 +1,219 @@
+{
+ "generator": "packages/tofu-core-rs/scripts/gen_wire_golden.py",
+ "model": "golden-model",
+ "max_tokens": 4096,
+ "temperature": 1.0,
+ "base_url": "http://127.0.0.1:9/v1",
+ "api_key": "sk-golden",
+ "messages": [
+  {
+   "role": "system",
+   "content": "You are a test harness."
+  },
+  {
+   "role": "system",
+   "content": "Managed section.",
+   "_isMeta": true
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "type": "text",
+     "text": "Run it "
+    },
+    {
+     "type": "text",
+     "text": "   "
+    },
+    {
+     "type": "text",
+     "text": "please ☃"
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": "<system-reminder>ambient</system-reminder>",
+   "_isMeta": true
+  },
+  {
+   "role": "assistant",
+   "content": "Running.",
+   "tool_calls": [
+    {
+     "id": "call_a",
+     "type": "function",
+     "function": {
+      "name": "run_command",
+      "arguments": "{\"command\": \"true\"}"
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "call_a",
+   "content": "$ true\n\n[exit code: 0]"
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "call_zzz",
+   "content": "orphan"
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "tool_calls": [
+    {
+     "id": "call_b",
+     "type": "function",
+     "function": {
+      "name": "read_files",
+      "arguments": "{\"path\": \"f0.txt\"}"
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "call_b",
+   "content": "File: f0.txt (1 lines)\n   1\tnoop 0\n"
+  },
+  {
+   "role": "user",
+   "content": "A private progress event.",
+   "_isMeta": true
+  }
+ ],
+ "tools": [
+  {
+   "type": "function",
+   "function": {
+    "name": "run_command",
+    "description": "Run a shell command — bounded.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "command": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "command"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "send",
+    "description": "Send to one target.",
+    "parameters": {
+     "additionalProperties": false,
+     "oneOf": [
+      {
+       "required": [
+        "a"
+       ]
+      },
+      {
+       "required": [
+        "b"
+       ]
+      }
+     ],
+     "properties": {
+      "a": {
+       "type": "string"
+      },
+      "b": {
+       "type": "integer"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  {
+   "type": "function",
+   "decoded_result_schema": {
+    "type": "object",
+    "properties": {
+     "ok": {
+      "type": "boolean"
+     }
+    },
+    "description": "résultat"
+   },
+   "function": {
+    "name": "read_files",
+    "description": "Read files.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "path": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  }
+ ],
+ "cases": [
+  {
+   "protocol": "openai",
+   "url": "http://127.0.0.1:9/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImdvbGRlbi1tb2RlbCIsIm1lc3NhZ2VzIjpbeyJyb2xlIjoic3lzdGVtIiwiY29udGVudCI6IllvdSBhcmUgYSB0ZXN0IGhhcm5lc3MuIn0seyJyb2xlIjoic3lzdGVtIiwiY29udGVudCI6Ik1hbmFnZWQgc2VjdGlvbi4ifSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6IlJ1biBpdCAgICBwbGVhc2Ug4piDPHN5c3RlbS1yZW1pbmRlcj5hbWJpZW50PC9zeXN0ZW0tcmVtaW5kZXI+In0seyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6IlJ1bm5pbmcuIiwidG9vbF9jYWxscyI6W3siaWQiOiJjYWxsX2EiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJhcmd1bWVudHMiOiJ7XCJjb21tYW5kXCI6IFwidHJ1ZVwifSJ9fV19LHsicm9sZSI6InRvb2wiLCJjb250ZW50IjoiJCB0cnVlXG5cbltleGl0IGNvZGU6IDBdIiwidG9vbF9jYWxsX2lkIjoiY2FsbF9hIn0seyJyb2xlIjoiYXNzaXN0YW50IiwidG9vbF9jYWxscyI6W3siaWQiOiJjYWxsX2IiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImFyZ3VtZW50cyI6IntcInBhdGhcIjogXCJmMC50eHRcIn0ifX1dfSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6IkZpbGU6IGYwLnR4dCAoMSBsaW5lcylcbiAgIDFcdG5vb3AgMFxuIiwidG9vbF9jYWxsX2lkIjoiY2FsbF9iIn0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOiJBIHByaXZhdGUgcHJvZ3Jlc3MgZXZlbnQuIn1dLCJtYXhfdG9rZW5zIjo0MDk2LCJzdHJlYW0iOnRydWUsInRvb2xzIjpbeyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJkZXNjcmlwdGlvbiI6IlJ1biBhIHNoZWxsIGNvbW1hbmQg4oCUIGJvdW5kZWQuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJjb21tYW5kIjp7InR5cGUiOiJzdHJpbmcifX0sInJlcXVpcmVkIjpbImNvbW1hbmQiXX19fSx7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJzZW5kIiwiZGVzY3JpcHRpb24iOiJTZW5kIHRvIG9uZSB0YXJnZXQuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImEiOnsidHlwZSI6InN0cmluZyJ9LCJiIjp7InR5cGUiOiJpbnRlZ2VyIn19fX19LHsidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJlYWRfZmlsZXMiLCJkZXNjcmlwdGlvbiI6IlJlYWQgZmlsZXMuXG5TdWNjZXNzZnVsIGRlY29kZWQgSlNPTiB2YWx1ZSAocHJvZHVjZXIgZGVjbGFyYXRpb247IGNvdmVyYWdlL2ZyZXNobmVzcyB1bmtub3duKToge1wiZGVzY3JpcHRpb25cIjpcInJcXHUwMGU5c3VsdGF0XCIsXCJwcm9wZXJ0aWVzXCI6e1wib2tcIjp7XCJ0eXBlXCI6XCJib29sZWFuXCJ9fSxcInR5cGVcIjpcIm9iamVjdFwifSIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsicGF0aCI6eyJ0eXBlIjoic3RyaW5nIn19fX19XSwidGVtcGVyYXR1cmUiOjEuMH0="
+  },
+  {
+   "protocol": "anthropic",
+   "url": "http://127.0.0.1:9/v1/messages",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "anthropic-version",
+     "2023-06-01"
+    ],
+    [
+     "x-api-key",
+     "sk-golden"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImdvbGRlbi1tb2RlbCIsIm1heF90b2tlbnMiOjQwOTYsInN0cmVhbSI6dHJ1ZSwidGVtcGVyYXR1cmUiOjEuMCwidG9vbHMiOlt7Im5hbWUiOiJydW5fY29tbWFuZCIsImRlc2NyaXB0aW9uIjoiUnVuIGEgc2hlbGwgY29tbWFuZCDigJQgYm91bmRlZC4iLCJpbnB1dF9zY2hlbWEiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsiY29tbWFuZCI6eyJ0eXBlIjoic3RyaW5nIn19LCJyZXF1aXJlZCI6WyJjb21tYW5kIl19fSx7Im5hbWUiOiJzZW5kIiwiZGVzY3JpcHRpb24iOiJTZW5kIHRvIG9uZSB0YXJnZXQuIiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInByb3BlcnRpZXMiOnsiYSI6eyJ0eXBlIjoic3RyaW5nIn0sImIiOnsidHlwZSI6ImludGVnZXIifX19fSx7Im5hbWUiOiJyZWFkX2ZpbGVzIiwiZGVzY3JpcHRpb24iOiJSZWFkIGZpbGVzLlxuU3VjY2Vzc2Z1bCBkZWNvZGVkIEpTT04gdmFsdWUgKHByb2R1Y2VyIGRlY2xhcmF0aW9uOyBjb3ZlcmFnZS9mcmVzaG5lc3MgdW5rbm93bik6IHtcImRlc2NyaXB0aW9uXCI6XCJyXFx1MDBlOXN1bHRhdFwiLFwicHJvcGVydGllc1wiOntcIm9rXCI6e1widHlwZVwiOlwiYm9vbGVhblwifX0sXCJ0eXBlXCI6XCJvYmplY3RcIn0iLCJpbnB1dF9zY2hlbWEiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsicGF0aCI6eyJ0eXBlIjoic3RyaW5nIn19fX1dLCJzeXN0ZW0iOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IllvdSBhcmUgYSB0ZXN0IGhhcm5lc3MuIn0seyJ0eXBlIjoidGV4dCIsInRleHQiOiJNYW5hZ2VkIHNlY3Rpb24uIn1dLCJtZXNzYWdlcyI6W3sicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJSdW4gaXQgICAgIn0seyJ0eXBlIjoidGV4dCIsInRleHQiOiJwbGVhc2Ug4piDIn0seyJ0eXBlIjoidGV4dCIsInRleHQiOiI8c3lzdGVtLXJlbWluZGVyPmFtYmllbnQ8L3N5c3RlbS1yZW1pbmRlcj4ifV19LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IlJ1bm5pbmcuIn0seyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6ImNhbGxfYSIsIm5hbWUiOiJydW5fY29tbWFuZCIsImlucHV0Ijp7ImNvbW1hbmQiOiJ0cnVlIn19XX0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0b29sX3Jlc3VsdCIsInRvb2xfdXNlX2lkIjoiY2FsbF9hIiwiY29udGVudCI6IiQgdHJ1ZVxuXG5bZXhpdCBjb2RlOiAwXSJ9XX0seyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfdXNlIiwiaWQiOiJjYWxsX2IiLCJuYW1lIjoicmVhZF9maWxlcyIsImlucHV0Ijp7InBhdGgiOiJmMC50eHQifX1dfSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfcmVzdWx0IiwidG9vbF91c2VfaWQiOiJjYWxsX2IiLCJjb250ZW50IjoiRmlsZTogZjAudHh0ICgxIGxpbmVzKVxuICAgMVx0bm9vcCAwXG4ifV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJBIHByaXZhdGUgcHJvZ3Jlc3MgZXZlbnQuIn1dfV19"
+  },
+  {
+   "protocol": "responses",
+   "url": "http://127.0.0.1:9/v1/responses",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImdvbGRlbi1tb2RlbCIsInN0b3JlIjpmYWxzZSwic3RyZWFtIjp0cnVlLCJwYXJhbGxlbF90b29sX2NhbGxzIjp0cnVlLCJ0ZW1wZXJhdHVyZSI6MS4wLCJtYXhfb3V0cHV0X3Rva2VucyI6NDA5NiwiaW5wdXQiOlt7InR5cGUiOiJtZXNzYWdlIiwicm9sZSI6ImRldmVsb3BlciIsImNvbnRlbnQiOlt7InR5cGUiOiJpbnB1dF90ZXh0IiwidGV4dCI6IllvdSBhcmUgYSB0ZXN0IGhhcm5lc3MuIn1dfSx7InR5cGUiOiJtZXNzYWdlIiwicm9sZSI6ImRldmVsb3BlciIsImNvbnRlbnQiOlt7InR5cGUiOiJpbnB1dF90ZXh0IiwidGV4dCI6Ik1hbmFnZWQgc2VjdGlvbi4ifV19LHsidHlwZSI6Im1lc3NhZ2UiLCJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJpbnB1dF90ZXh0IiwidGV4dCI6IlJ1biBpdCAgICAifSx7InR5cGUiOiJpbnB1dF90ZXh0IiwidGV4dCI6InBsZWFzZSDimIMifSx7InR5cGUiOiJpbnB1dF90ZXh0IiwidGV4dCI6IjxzeXN0ZW0tcmVtaW5kZXI+YW1iaWVudDwvc3lzdGVtLXJlbWluZGVyPiJ9XX0seyJ0eXBlIjoibWVzc2FnZSIsInJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoib3V0cHV0X3RleHQiLCJ0ZXh0IjoiUnVubmluZy4ifV19LHsidHlwZSI6ImZ1bmN0aW9uX2NhbGwiLCJjYWxsX2lkIjoiY2FsbF9hIiwibmFtZSI6InJ1bl9jb21tYW5kIiwiYXJndW1lbnRzIjoie1wiY29tbWFuZFwiOiBcInRydWVcIn0ifSx7InR5cGUiOiJmdW5jdGlvbl9jYWxsX291dHB1dCIsImNhbGxfaWQiOiJjYWxsX2EiLCJvdXRwdXQiOiIkIHRydWVcblxuW2V4aXQgY29kZTogMF0ifSx7InR5cGUiOiJmdW5jdGlvbl9jYWxsIiwiY2FsbF9pZCI6ImNhbGxfYiIsIm5hbWUiOiJyZWFkX2ZpbGVzIiwiYXJndW1lbnRzIjoie1wicGF0aFwiOiBcImYwLnR4dFwifSJ9LHsidHlwZSI6ImZ1bmN0aW9uX2NhbGxfb3V0cHV0IiwiY2FsbF9pZCI6ImNhbGxfYiIsIm91dHB1dCI6IkZpbGU6IGYwLnR4dCAoMSBsaW5lcylcbiAgIDFcdG5vb3AgMFxuIn0seyJ0eXBlIjoibWVzc2FnZSIsInJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6ImlucHV0X3RleHQiLCJ0ZXh0IjoiQSBwcml2YXRlIHByb2dyZXNzIGV2ZW50LiJ9XX1dLCJ0b29scyI6W3sidHlwZSI6ImZ1bmN0aW9uIiwibmFtZSI6InJ1bl9jb21tYW5kIiwiZGVzY3JpcHRpb24iOiJSdW4gYSBzaGVsbCBjb21tYW5kIOKAlCBib3VuZGVkLiIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsiY29tbWFuZCI6eyJ0eXBlIjoic3RyaW5nIn19LCJyZXF1aXJlZCI6WyJjb21tYW5kIl19LCJzdHJpY3QiOmZhbHNlfSx7InR5cGUiOiJmdW5jdGlvbiIsIm5hbWUiOiJzZW5kIiwiZGVzY3JpcHRpb24iOiJTZW5kIHRvIG9uZSB0YXJnZXQuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImEiOnsidHlwZSI6InN0cmluZyJ9LCJiIjp7InR5cGUiOiJpbnRlZ2VyIn19fSwic3RyaWN0IjpmYWxzZX0seyJ0eXBlIjoiZnVuY3Rpb24iLCJuYW1lIjoicmVhZF9maWxlcyIsImRlc2NyaXB0aW9uIjoiUmVhZCBmaWxlcy5cblN1Y2Nlc3NmdWwgZGVjb2RlZCBKU09OIHZhbHVlIChwcm9kdWNlciBkZWNsYXJhdGlvbjsgY292ZXJhZ2UvZnJlc2huZXNzIHVua25vd24pOiB7XCJkZXNjcmlwdGlvblwiOlwiclxcdTAwZTlzdWx0YXRcIixcInByb3BlcnRpZXNcIjp7XCJva1wiOntcInR5cGVcIjpcImJvb2xlYW5cIn19LFwidHlwZVwiOlwib2JqZWN0XCJ9IiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifX19LCJzdHJpY3QiOmZhbHNlfV19"
+  }
+ ]
+}

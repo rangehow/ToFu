@@ -2256,6 +2256,20 @@ class LifecycleManager:
         self._state['updatedAt'] = _now()
         _atomic_json(self.state_path, self._state)
 
+    def _save_failure_record(self, record: str) -> None:
+        """Persist a failure outcome; the in-memory state still drives recovery if it cannot.
+
+        The failure being recorded is often the full volume itself
+        (2026-11-18: EDQUOT on the service lock, then on this state file).
+        Raising here aborted a planned restart after its old worker stopped;
+        reconciliation persists the state once the volume accepts writes.
+        """
+        try:
+            self._save()
+        except OSError as exc:
+            logger.error('could not persist the %s to %s: %s; recovery continues '
+                         'from memory', record, self.state_path, exc)
+
     def _release_worker_leases(self) -> None:
         """Drop the bytecode-cache and runtime-replica leases of a gone worker."""
         descriptors = [self._worker_bytecode_cache_lock_fd, *self._worker_runtime_lock_fds]
@@ -3168,7 +3182,7 @@ class LifecycleManager:
         """A refusal decided while the old worker still serves; it keeps serving."""
         with self._lock:
             self._settle_restart('refused', message, stage=stage)
-            self._save()
+            self._save_failure_record('restart refusal')
         logger.error(
             'worker restart refused at %s stage%s; the serving worker is '
             'retained: %s', stage, self._trace_total_suffix(), message)
@@ -3196,7 +3210,7 @@ class LifecycleManager:
                       f'{self.failure_window:.0f}s; recovery paused')
             self._set_observed('crashloop', paused)
             self._settle_restart('paused', paused)
-            self._save()
+            self._save_failure_record('paused recovery')
             logger.error(
                 'worker recovery paused after %d failures in %.0fs; explicit '
                 'start/restart is required to reset the crash-loop budget: %s',
@@ -3211,7 +3225,7 @@ class LifecycleManager:
         retrying = f'{message}; retrying in {delay:.0f}s'
         self._set_observed('starting', retrying)
         self._settle_restart('retrying', retrying, nextRetryAt=now + delay)
-        self._save()
+        self._save_failure_record('replacement retry')
         logger.error(
             'worker replacement failed to start (failure %d/%d in %.0fs window, '
             'source=%s): %s; retrying in %.0fs', recent, self.max_failures,
@@ -3833,6 +3847,15 @@ class LifecycleManager:
                        or self._resident_replacement_refusal(storage_plan, execution_plan))
             if refusal:
                 return self._refuse_restart('admission', refusal)
+            try:
+                # Stop and replacement must persist this state file; a volume
+                # refusing its write (EDQUOT/ENOSPC) refuses here, while the
+                # old worker still serves, instead of failing after stop.
+                self._save()
+            except OSError as exc:
+                return self._refuse_restart('state persistence', (
+                    f'the server manager cannot write its state file {self.state_path}: '
+                    f'{exc}; free space on that volume and retry'))
             if server_args is not None:
                 self._state['serverArgs'] = [str(arg) for arg in server_args]
             self._state['storageRetention'] = {} if not retention_reason else {

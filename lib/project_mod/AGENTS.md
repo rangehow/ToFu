@@ -281,12 +281,17 @@ the branch), never from the registered baseline alone ("A Worker that merged
 the branch delivers from the merge base" in `docs/modules/project_integration.md`;
 verify `test_delivery_merged_branch.py`).
 After that merge, `insertion_conflicts.py` (shared with `scripts/git_land.py`) stages both sides
-of every hunk in which both landings only inserted lines at one place, the branch's first; a
-hunk that changed the same base lines stays held and reaches the lead as `delivery.conflict`. A
+of every hunk in which both landings only inserted lines at one place, the branch's first; an
+append-only file (`JOURNAL.md`, or the `tofu-append-only` Git attribute) merges by bytes when
+both sides only appended; identical edits and changes the other side already holds verbatim land
+once. A hunk that changed the same or adjacent base lines differently stays held, its reason
+naming the lines, and reaches the lead as `delivery.conflict`. A
 landed delivery records its checkpoint as a second parent (`_lineage_parent`), and a checkpoint
 the branch contains settles without publication authority (`checkpoint_contained`). Never widen
-the rule to rewrites (Git's `union` driver) or to similarity. Decision "Landings in sequence keep
-both insertions" in `docs/modules/project_integration.md`; verify `test_delivery_landing_queue.py`.
+the rule to rewrites (Git's `union` driver), to adjacent edits or to similarity. Decisions
+"Landings in sequence keep both insertions" and "Append-only files and agreeing edits land" in
+`docs/modules/project_integration.md`; verify `test_delivery_landing_queue.py` and
+`test_delivery_append_and_script_merges.py`.
 The resume pass reads only `integration.workspace.delivery_action_page` rows (complete rows
 whose receipt asks for action) and runs only when due: start/error recovery, a committed
 `DELIVERY_STATE_OPERATIONS` hint, or rows left by the last pass. Never reintroduce a

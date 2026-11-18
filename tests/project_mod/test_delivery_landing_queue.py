@@ -113,7 +113,8 @@ def test_a_real_overlap_is_held_naming_the_exact_files(repo, monkeypatch, shared
 
     assert landed['state'] == 'delivered', landed
     assert held['state'] == 'blocked' and held['phase'] == 'commit_adoption', held
-    assert held['reason'] == 'task_delta_conflict: three-way merge conflicts at: shared.txt'
+    assert held['reason'] == ('task_delta_conflict: three-way merge conflicts at: shared.txt '
+                              '(both sides changed line 7)')
     assert held['retry']['conflictPaths'] == ['shared.txt']
     assert git(root, 'rev-parse', 'HEAD') == head == landed['targetSha']
 

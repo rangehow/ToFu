@@ -200,6 +200,9 @@ _KEEPER_PREFIXES = (
     # OPENSOURCE_EXTRA_EXCLUDE_DIRS.
     'bundles/',
     'static/icons/_gen/tofu-pet/_candidates/',
+    # Rust-rewrite time-breakdown evidence (01f61406be): live measurements of
+    # this host (its paths and accounts), private like benchmarks/.
+    'output/rust_rewrite/',
     # The off-host Hope liveness patrol (docs/COMPUTE_PATROL.md, HOPE-PATROL-1
     # bb79b6f430): it runs as a job on the owner's own Hope account with his
     # queue and owner maps, so the whole package stays private and is never

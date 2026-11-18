@@ -1583,8 +1583,19 @@ sessions and tells the human what matters.
   with the shared "Original" toggle back to the board as written. The task
   history page carries the same translation, so a task still on the board
   reads as on the card (its original text stays in the row's tooltip) and
-  history search also matches it; a task that left the board shows its text
-  as written, because the head keeps only the texts its board still shows.
+  history search also matches it. A task that left the board reads translated
+  too (owner report 2026-11-18: the board's "earlier tasks" stayed in the
+  working language). The head keeps only the texts its board still shows, so a
+  task leaving the board carries its title and note translations into its
+  history record (`progressTaskTranslation`, written in the same board write),
+  and the same job also translates the texts of tasks that left untranslated
+  (tasks that departed before this, or while a job was dropped) into their
+  records under per-record CAS. The history row, the card's earlier-task row
+  (the deliverables summary's `translation.title`) and its automatic work
+  report show that translation; the "Original" toggle covers them. Rejected:
+  keeping every task's translations on the head (it is bounded by the board
+  and would grow with the history) and translating history on read (reads
+  start no work).
   Alternatives
   rejected: having the Coordinator write in the reading language (the board
   would leave its working language and turning translation off could not
@@ -5199,10 +5210,15 @@ Decision:
   `lib/tools/registry/_spec.py`). Declaring one asserts that the tool is
   idempotent by a key in its arguments and that its effect is owned by the
   issuing attempt. Registration refuses a port on a plugin or on a tool not
-  declared both a write and idempotent. Only `delegate_project_work` declares
-  one: `report_to_user`, `create_conversation` and `control_conversation`
-  carry keys too, but a human-visible report, a sidebar shell or a Session
-  command has no withdrawal.
+  declared a write that is idempotent (`idempotent_tools`) or names its key
+  (`StreamStartPort.key_argument`, for a keyed write that keeps write
+  reconciliation, so a dispatched Worker's unconfirmed call stays fenced).
+  `delegate_project_work` and
+  `send_project_message` (next section) declare one: `report_to_user`,
+  `create_conversation`, `control_conversation`, `route_to_project` and
+  `channel_send` carry keys too, but a human-visible report or channel
+  message, a sidebar shell, a Session command or a forwarded owner Turn has
+  no withdrawal.
 - `StreamingToolAccumulator.on_tool_call_ready` starts such a call the moment
   its arguments are complete (the row is announced running, not `queued`),
   when the ordinary dispatch would run it without a human gate: the call is
@@ -5272,6 +5288,79 @@ call 2's arguments finish; discarded, Stop, stopped-before-start and
 changed-reissue withdrawal; regenerate without a duplicate; tools without a
 port and Manual approval held; the registration rule; settlement after every
 tool batch).
+
+### A project message starts when its arguments are complete
+
+Problem (lead audit stage 2, S2-13, 2026-11-18): Global Router coordination
+calls appeared to block for about a minute (`send_project_message` median
+17.8 s, max 74.7 s in generation 97cc7708; `route_to_project` 58.7-63.2 s;
+`channel_send` 76.1 s). The handlers did not wait: in every slow call
+`logs/app.log` shows the early `tool_start` while the model streamed, then the
+handler entered only at `stream_llm_response complete` and finished in 0.0-0.1 s,
+the recipient's busy lane answering `[ProjectMessageWake] Conversation lane
+busy; dispatch deferred` without waiting (Turn 8b2f60a3: early start 11:12:46,
+handler 11:14:01, `completed in 0.0s`; Turn fc6d1295: 10:38:37 / 10:39:53;
+Turn 7a5d8580: 08:41:18 / 08:42:21). The minute was the rest of the model's
+response (more long messages, delegation briefs, board updates) during which
+`StreamingToolAccumulator.on_tool_call_ready` held every side-effecting call
+without a stream-start port (`lib/tasks_pkg/streaming_tool_executor.py`,
+`_stream_start_port` returning None). The audit measured from the early
+`tool_start`, so it counted that hold as call time.
+
+Decision: `send_project_message` declares a stream-start port
+(`_PROJECT_MESSAGE_STREAM_START` in `lib/tools/registry/_build.py`, keyed by
+`idempotency_key`: one original per sender and key). It stays out of
+`idempotent_tools`, so its effect class remains `reconcile` and a dispatched
+Worker's unconfirmed send keeps its fence; a dispatched Worker never stream-starts.
+- Start (`project_messages.start_streamed_send`): the ordinary send (admission,
+  mailbox submit, `wake_idle_lead`) runs on its own thread the moment the
+  call's arguments are complete, so a busy recipient lead takes the message at
+  its next round and an idle one is woken, instead of after the sender's whole
+  response. The same gates as a delegation apply (`_stream_start_port`).
+- Adoption: the ordinary dispatch of a call with the same key joins that start
+  and submits again, which returns the same original; a changed body is
+  refused (`Idempotency key reused with changed message`).
+- Withdrawal (`settle_streamed_sends`, on the same settlement points as
+  delegations): a delivered message cannot be unsent, so a streamed message no
+  dispatch adopted (its response was discarded, its body changed, Stop or an
+  error ended the loop, or the final call was refused before its handler) is
+  retracted by one `steer` message from the same sender naming the message ID
+  (idempotency key `withdrawn:<sha256(key)>`, sent once).
+- `route_to_project` (a forwarded owner Turn or steer) and `channel_send` (a
+  message in the owner's chat) keep waiting for their final response: neither
+  has a withdrawal, and a retraction in the owner's chat would be noise the
+  owner sees. `consider_project_message` decides against a delivered revision
+  and also waits.
+
+Trade-off accepted: when a response is discarded after a message started, the
+recipient lead may already have read it before the retraction arrives; it is
+nonhuman context that carries no authority, and the retraction says so
+explicitly. A replacement response that re-issues the same key and body
+adopts the message (no retraction, no duplicate).
+
+Alternatives rejected: committing early but hiding the message until adoption
+(the recipient would see it no sooner, so nothing is gained); a new withdrawn
+mailbox state (a contract and history-layout change for a correction an
+ordinary message already expresses); starting `route_to_project` and
+`channel_send` early (no withdrawal, see above); a delay or debounce (a tuning
+knob, AGENTS.md principle 5).
+
+Measurement, time from a send's argument completion to its durable mailbox
+commit, with the recipient lead's lane busy (every wake answers `busy`). A
+reproduction replays Turn 8b2f60a3's response through the real
+`SSEAccumulator` and `StreamingToolAccumulator`: three sends whose arguments
+completed at 11:12:46, :50 and :52, then its `update_task_progress` call, and
+the response end at 11:14:01, with gaps scaled by 1/10, over the mailbox's
+locked record client; the ordinary dispatch runs each call after the stream
+ends. 10 runs, 30 sends each way: before the change (port disabled) median
+7.10 s, p95 7.50 s, max 7.56 s (75 s at production scale, matching the
+audit's 74.7 s); after it median 0.3 ms, p95 2.2 ms, max 12.5 ms. The fix is
+live only after the execution host restarts.
+
+Specifications: `tests/project_mod/test_project_message_stream_start.py` (the
+first message is durable for a busy recipient while the next call still
+streams; dispatch adoption without a duplicate; discarded and changed-reissue
+retraction, sent once; the calls without a withdrawal stay held).
 
 ### Coordinator write tools read through dispatch contention
 

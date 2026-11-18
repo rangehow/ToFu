@@ -57,10 +57,15 @@ class StreamStartPort:
     withdraws, through the tool's own cancel path, every started effect that
     no dispatched call adopted; it runs after each tool batch and when the
     attempt's model loop ends on any path.
+
+    ``key_argument`` names that key for a write that keeps write reconciliation
+    (not in ``idempotent_tools``, so a dispatched Worker's unconfirmed call
+    stays fenced) yet is idempotent by the key, as ``send_project_message``.
     """
 
     start: Callable[[dict, str, dict], None]
     settle: Callable[[dict], None]
+    key_argument: str = ''
 
 
 # ══════════════════════════════════════════════════════════
@@ -618,12 +623,14 @@ def _register_tool_spec_unlocked(spec: ToolSpec, *, replace: bool) -> None:
             f'{unknown_capabilities}')
     stream_start = set(spec.stream_start_by_name)
     if stream_start and (spec.source != 'builtin' or not stream_start <= (
-            set(spec.provides) & set(spec.write_tools) & set(spec.idempotent_tools))
+            set(spec.provides) & set(spec.write_tools))
             or not all(isinstance(port, StreamStartPort)
-                       for port in spec.stream_start_by_name.values())):
+                       and (name in spec.idempotent_tools or port.key_argument)
+                       for name, port in spec.stream_start_by_name.items())):
         raise ValueError(
-            f'ToolSpec {spec.key!r} stream_start_by_name must map built-in, declared, '
-            f'idempotent writes to StreamStartPort: {sorted(stream_start)}')
+            f'ToolSpec {spec.key!r} stream_start_by_name must map built-in, declared '
+            f'writes, idempotent or keyed by the port\'s key_argument, to StreamStartPort: '
+            f'{sorted(stream_start)}')
     undeclared_timeout = set(spec.timeout_ms_by_name) - set(spec.provides)
     if undeclared_timeout:
         raise ValueError(

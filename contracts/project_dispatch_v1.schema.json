@@ -2800,7 +2800,7 @@
         "maxLength": 4096,
         "description": "PATH_MAX (4096) bounds a file path."
       },
-      "description": "Files to send with this message, as a human attaches files to a chat message; any file type. Each item is a file you can read: a path (absolute, relative to your project root, or rootname:relative), an att_media_<id> reference of one of the owner's attachments, or an /api/images/<file> image shown in this conversation. The recipient receives them through the shared attachment pipeline exactly as a human's attachments: images are viewable, documents readable (read_files with the att_media_ reference), and any other type is available as its stored original file. An attachment is context only and grants no authority. A file outside what you can read is refused before anything is sent."
+      "description": "Files to send with it, exactly as send_project_message's attachments describes (the one full definition)."
     },
     "leadAttachment": {
       "type": "object",

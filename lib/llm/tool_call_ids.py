@@ -28,7 +28,7 @@ import hashlib
 import re
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, replace
-from itertools import repeat
+from itertools import islice, repeat
 from typing import Any
 
 from lib.conversation_sync.settled_rows import is_settled, memo_get, memo_put
@@ -184,7 +184,8 @@ def _opaque_ids(message: Mapping[str, Any]) -> Iterator[str]:
 
 
 def wire_tool_call_ids(messages: Iterable[Any],
-                       contract: ToolCallIdContract) -> dict[str, str]:
+                       contract: ToolCallIdContract, *,
+                       accepted_prefix: int = 0) -> dict[str, str]:
     """Map every ID the contract rejects to its wire spelling.
 
     IDs the contract accepts are absent (emit them unchanged); so is ``''``,
@@ -193,11 +194,16 @@ def wire_tool_call_ids(messages: Iterable[Any],
 
     A settled message keeps whether it holds an ID the contract rejects in its
     memo slot, so a request whose IDs are all accepted (the usual case) reads
-    one flag per unchanged message.
+    one flag per unchanged message. ``accepted_prefix`` leading messages are
+    known to hold no rejected ID (``rejects_an_id`` was false for each), so
+    only the messages after them are checked before the usual empty answer.
     """
-    messages = [message for message in messages if isinstance(message, Mapping)]
-    if not any(map(_rejects_an_id, messages, repeat(contract))):
+    messages = list(messages)
+    if not any(map(rejects_an_id, (
+            message for message in islice(messages, accepted_prefix, None)
+            if isinstance(message, Mapping)), repeat(contract))):
         return {}
+    messages = [message for message in messages if isinstance(message, Mapping)]
     originals: dict[str, None] = {}
     taken: set[str] = set()
     for message in messages:
@@ -221,7 +227,8 @@ def wire_tool_call_ids(messages: Iterable[Any],
     return spelled
 
 
-def _rejects_an_id(message: Mapping[str, Any], contract: ToolCallIdContract) -> bool:
+def rejects_an_id(message: Mapping[str, Any], contract: ToolCallIdContract) -> bool:
+    """Whether ``message`` holds a correlation ID ``contract`` rejects."""
     if not is_settled(message):
         return any(value and not contract.accepts(value)
                    for value in correlation_ids(message))
@@ -267,6 +274,7 @@ __all__ = [
     'PORTABLE',
     'ToolCallIdContract',
     'portable_tool_call_id',
+    'rejects_an_id',
     'respell_chat_message',
     'tool_call_id_contract',
     'wire_tool_call_ids',

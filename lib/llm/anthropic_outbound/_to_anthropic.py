@@ -6,13 +6,19 @@ Contains the block/tool/message converters and the top-level
 model replay requirements and image sniffing; no dependency on the inbound module.
 """
 
+from itertools import islice
+from typing import NamedTuple
+
 from lib.llm.conversion import (
-    checked_conversion, conversion_report, object_arguments, stop_sequences, validate_request,
+    REPORT_COUNT_LIMIT, checked_conversion, message_losses, object_arguments,
+    reasoning_omitted, stop_sequences, validate_request,
 )
 from lib.llm.conversion import ProtocolConversionError
-from lib.conversation_sync.settled_rows import is_settled
+from lib.conversation_sync.settled_rows import (
+    is_settled, settled_prefix, settled_run_length, store_settled_prefix,
+)
 from lib.llm.route_features import body_route_profile
-from lib.llm.tool_call_ids import tool_call_id_contract, wire_tool_call_ids
+from lib.llm.tool_call_ids import rejects_an_id, tool_call_id_contract, wire_tool_call_ids
 from lib.llm_sanitize.text_blocks import normalize_text_blocks
 from lib.log import get_logger
 from lib.model_info import model_requires_reasoning_content_replay
@@ -406,6 +412,73 @@ def _user_message(msg):
     return {'role': 'user', 'content': blocks}
 
 
+_ANTHROPIC_PREFIX_KEY = ('anthropic-outbound', 'prefix')
+
+
+class _PrefixState(NamedTuple):
+    """The translation after one held row (``settled_rows.SettledPrefix``).
+
+    ``system_length`` system blocks and ``message_length`` finished messages
+    of the held payload were emitted by then; ``open_batch`` holds the
+    tool_result blocks of a user turn the next row may still extend.
+    ``emitted`` locates the row's own output for lineage (``None`` for a tool
+    result), ``omitted``/``losses`` are the conversion report so far, and
+    ``rejects`` whether any row so far holds an ID the contract rejects.
+    """
+
+    system_length: int
+    message_length: int
+    open_batch: tuple | None
+    emitted: tuple | None
+    omitted: int
+    losses: tuple
+    rejects: bool
+
+
+def _emit_held_row(lineage, index, msg, state, system_blocks, messages):
+    """Map a held row's lineage sources onto its already emitted output."""
+    emitted = state.emitted
+    if emitted is None:
+        return
+    if emitted[0] == 'system':
+        _kind, offset, length = emitted
+        lineage.emit(index, msg.get('content'), system_blocks[offset:offset + length],
+                     region='system', part_offset=offset)
+    else:
+        lineage.emit(index, msg.get('content'), messages[emitted[1]]['content'],
+                     message=emitted[1])
+
+
+def _resumed_report(source_messages, start, resumed, replay_unsigned_reasoning):
+    """``conversion_report`` continued from a held row's running report.
+
+    Returns the report and, per row from ``start`` on, the running omitted
+    count and losses after it (the held states of those rows). Rows are
+    visited in ``conversion_report``'s two passes, so a failing row raises
+    the same code it raises there.
+    """
+    omitted = resumed.omitted if resumed else 0
+    losses = dict(resumed.losses) if resumed else {}
+    omitted_by_row = []
+    for msg in islice(source_messages, start, None):
+        if reasoning_omitted(msg, 'anthropic',
+                             replay_unsigned_reasoning=replay_unsigned_reasoning):
+            omitted = min(omitted + 1, REPORT_COUNT_LIMIT)
+        omitted_by_row.append(omitted)
+    losses_by_row = []
+    held_losses = tuple(losses.items())
+    for msg in islice(source_messages, start, None):
+        codes = message_losses(msg, 'anthropic')
+        for code in codes:
+            losses[code] = min(losses.get(code, 0) + 1, REPORT_COUNT_LIMIT)
+        if codes:
+            held_losses = tuple(losses.items())
+        losses_by_row.append(held_losses)
+    report = {'optional_reasoning_omitted': omitted} if omitted else {}
+    report.update(losses)
+    return report, omitted_by_row, losses_by_row
+
+
 def openai_body_to_anthropic_checked(body: dict):
     return checked_conversion(_convert_body_to_anthropic, body)
 
@@ -423,7 +496,8 @@ def _convert_body_to_anthropic(body: dict) -> dict:
     system envelope in source order and merges consecutive
     tool-result messages into a single Anthropic user turn.
     """
-    validate_request(body, 'anthropic')
+    prefix, start = settled_prefix(body.get('messages'), _ANTHROPIC_PREFIX_KEY)
+    validate_request(body, 'anthropic', validated_messages=start)
     replay_unsigned_reasoning = model_requires_reasoning_content_replay(
         body.get('_admission_logical_model') or body.get('model') or '',
         inference_profile=body_route_profile(body))
@@ -493,29 +567,55 @@ def _convert_body_to_anthropic(body: dict) -> dict:
     if tools:
         out['tools'] = tools
 
-    wire_ids = wire_tool_call_ids(
-        body.get('messages', []),
-        tool_call_id_contract('anthropic', body.get('_admission_logical_model')
-                              or body.get('model') or ''))
+    contract = tool_call_id_contract(
+        'anthropic', body.get('_admission_logical_model') or body.get('model') or '')
+    source_messages = body.get('messages', [])
+    settings = (replay_unsigned_reasoning, contract)
+    if prefix is not None and (prefix.settings != settings
+                               or prefix.states[start - 1].rejects):
+        start = 0
+    # The held rows carry no ID the contract rejects, so their translations
+    # do not depend on the map; it is built over the whole request only when a
+    # later row needs a respelling (which must avoid every other ID).
+    wire_ids = wire_tool_call_ids(source_messages, contract, accepted_prefix=start)
     from lib.llm.anthropic_outbound._tool_inputs import tool_inputs_for_body
     tool_inputs = tool_inputs_for_body(body)
-    system_blocks = []
-    messages = []
     from lib.llm_sanitize.lineage import ProjectionLineage
     lineage = ProjectionLineage(body, 'anthropic_projection')
+    if start:
+        resumed = prefix.states[start - 1]
+        held_system, held_messages = prefix.payload
+        system_blocks = list(held_system[:resumed.system_length])
+        messages = list(held_messages[:resumed.message_length])
+        if resumed.open_batch is not None:
+            messages.append(_ToolBatch(resumed.open_batch))
+        for index in [index for index in lineage.by_message if index < start]:
+            _emit_held_row(lineage, index, source_messages[index],
+                           prefix.states[index], system_blocks, messages)
+    else:
+        system_blocks = []
+        messages = []
+    final_from = len(messages) - (start and prefix.states[start - 1].open_batch is not None)
+    run = settled_run_length(source_messages, start)
+    row_states = []
     # A settled canonical message (lib/llm/request.py ``detach_input``)
     # translates once: its settled Anthropic twin is memoized on the row under
     # a key naming every other input of its translation, so it keeps one
     # identity across requests and per-row memos after translation (sealed
-    # encode, content digest, recount, lineage spans) reuse it.
-    for index, msg in enumerate(body.get('messages', [])):
+    # encode, content digest, recount, lineage spans) reuse it. The rows a
+    # previous request already translated with the same settings are not
+    # visited at all (``_ANTHROPIC_PREFIX_KEY``).
+    for index in range(start, len(source_messages)):
+        msg = source_messages[index]
         role = msg.get('role')
         settled = is_settled(msg)
+        emitted = None
         if role in ('system', 'developer'):
             blocks = (_memoized(msg, (_SYSTEM_BLOCKS_KEY,), _content_blocks)
                       if settled else _content_blocks(msg))
             lineage.emit(index, msg.get('content'), blocks,
                          region='system', part_offset=len(system_blocks))
+            emitted = ('system', len(system_blocks), len(blocks))
             system_blocks.extend(blocks)
         elif role == 'tool':
             wire_id = wire_ids.get(msg.get('tool_call_id', ''),
@@ -542,14 +642,23 @@ def _convert_body_to_anthropic(body: dict) -> dict:
             messages.append(message)
             lineage.emit(index, msg.get('content'), message['content'],
                          message=len(messages) - 1)
+            emitted = ('message', len(messages) - 1)
         elif role == 'user':
             message = (_memoized(msg, (_USER_KEY,), _user_message)
                        if settled else _user_message(msg))
             messages.append(message)
             lineage.emit(index, msg.get('content'), message['content'],
                          message=len(messages) - 1)
-    messages = [_tool_batch_message(entry) if type(entry) is _ToolBatch else entry
-                for entry in messages]
+            emitted = ('message', len(messages) - 1)
+        if index < run:
+            open_batch = (tuple(messages[-1]) if messages
+                          and type(messages[-1]) is _ToolBatch else None)
+            row_states.append((len(system_blocks),
+                               len(messages) - (open_batch is not None),
+                               open_batch, emitted))
+    messages[final_from:] = [
+        _tool_batch_message(entry) if type(entry) is _ToolBatch else entry
+        for entry in messages[final_from:]]
 
     if system_blocks:
         # A single plain-text system block can stay a string; keep the block
@@ -558,10 +667,22 @@ def _convert_body_to_anthropic(body: dict) -> dict:
             out['system'] = system_blocks[0].get('text', '')
         else:
             out['system'] = system_blocks
-    report = conversion_report(
-        body, 'anthropic', replay_unsigned_reasoning=replay_unsigned_reasoning)
+    resumed = prefix.states[start - 1] if start else None
+    report, omitted_by_row, losses_by_row = _resumed_report(
+        source_messages, start, resumed, replay_unsigned_reasoning)
     if report:
         out['_conversion_report'] = report
+    if run > start:
+        rejects = resumed.rejects if resumed else False
+        states = list(prefix.states[:start]) if start else []
+        for offset, (system_length, message_length, open_batch, emitted) in enumerate(row_states):
+            index = start + offset
+            rejects = rejects or rejects_an_id(source_messages[index], contract)
+            states.append(_PrefixState(system_length, message_length, open_batch, emitted,
+                                       omitted_by_row[offset], losses_by_row[offset], rejects))
+        store_settled_prefix(source_messages, _ANTHROPIC_PREFIX_KEY, tuple(states),
+                             settings=settings,
+                             payload=(tuple(system_blocks), tuple(messages)))
     out['messages'] = messages
     lineage.finish(out)
     if tool_inputs is not None:

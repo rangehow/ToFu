@@ -1922,6 +1922,8 @@ export interface MemoryPrefetchEvent {
   candidates?: number;
   /** (done) candidates dropped by the confidence floor */
   rejectedLowConfidence?: number;
+  /** (done) confident candidates dropped because they name only tools this request does not hold */
+  rejectedRoleFit?: number;
   /** (done) pipeline wall time */
   total_ms?: number;
   /** (done) extra LLM calls spent */

@@ -721,12 +721,14 @@ const buildWatchController = createBuildWatchController({
   ),
 });
 retainedCompositionLifecycle.add(() => buildWatchController.destroy());
-retainedCompositionLifecycle.listen(
-  window,
-  'beforeunload',
-  () => retainedCompositionLifecycle.destroy(),
-  { once: true },
-);
+/* Page teardown waits for a non-persisted pagehide. beforeunload also fires
+ * for navigations that never unload (a cancelled leave prompt, a link that
+ * answers with a download); destroying there left a live page whose dialogs
+ * resolved as dismissed and whose sidebar/composer listeners were gone. A
+ * persisted pagehide enters the back/forward cache and may be shown again. */
+retainedCompositionLifecycle.listen(window, 'pagehide', (event) => {
+  if (!event.persisted) retainedCompositionLifecycle.destroy();
+});
 
 const appDialogController = createDialogServices({
   document,
@@ -1041,12 +1043,9 @@ const refreshConversationRuntime = createConversationRefresh({
 // Push state is initialized by a later retained section. Defer subscription
 // until this ESM module has finished evaluating, then tie it to page lifetime.
 const cookieCaptureConsentLifecycle = createLifecycleScope();
-cookieCaptureConsentLifecycle.listen(
-  window,
-  'beforeunload',
-  () => cookieCaptureConsentLifecycle.destroy(),
-  { once: true },
-);
+cookieCaptureConsentLifecycle.listen(window, 'pagehide', (event) => {
+  if (!event.persisted) cookieCaptureConsentLifecycle.destroy();
+});
 queueMicrotask(() => {
   if (cookieCaptureConsentLifecycle.signal.aborted) return;
   const controller = createCookieCaptureConsentController({
@@ -1204,11 +1203,9 @@ const swarmPushRuntime = createSwarmPushRuntime({
   unsubscribe: (handler) => { pushUnsubscribe('swarm', '*', handler); },
 });
 runtimeScope.ConversationSwarmPresentation = swarmPushRuntime.presentation;
-window.addEventListener(
-  'beforeunload',
-  swarmPushRuntime.destroy,
-  { once: true },
-);
+window.addEventListener('pagehide', (event) => {
+  if (!event.persisted) swarmPushRuntime.destroy();
+});
 queueMicrotask(swarmPushRuntime.start);
 const conversationStartup = createConversationStartup({
   loadConversationCatalog,
@@ -2573,8 +2570,8 @@ const _sendPendingPageCrashes = () => {
     })));
 };
 window.addEventListener('tofu:boot-ready', _sendPendingPageCrashes);
-// The composition is destroyed at beforeunload, before the document's final
-// pagehide; the journal itself stays installed so that pagehide still clears
+// The composition is destroyed by an earlier-registered final-pagehide
+// listener; the journal itself stays installed so that pagehide still clears
 // the alive marker (otherwise every clean reload would read as a crash).
 retainedCompositionLifecycle.add(() => {
   window.removeEventListener('tofu:boot-ready', _sendPendingPageCrashes);
@@ -19435,6 +19432,10 @@ function selectTheme(theme) {
   applyTheme(theme);
 }
 
+function _syncRangeOutput(input, outputId, suffix) {
+  const output = document.getElementById(outputId);
+  if (output) output.textContent = String(input && input.value || '') + String(suffix || '');
+}
 
 /* Cost dashboard aliases — moved to myday.js */
 
@@ -25607,6 +25608,7 @@ const runtimeActions = Object.freeze({
   _safeClipboardWrite,
   _swarmCopyAgentId,
   _swarmToggleClass,
+  _syncRangeOutput,
   _timerInstructionToggle,
   _timerPollToggle,
   _timerWatcherToggle,

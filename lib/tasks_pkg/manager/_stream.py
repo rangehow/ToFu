@@ -55,6 +55,37 @@ def dispatch_stream(*args, **kwargs):
         return ensure_provider_stream_result(_dispatch_stream(*args, **kwargs))
 
 
+def _watchdog_owner(task) -> int | None:
+    """The owner when ``task`` is a Turn of the owner's Router Watchdog (docs/ROUTER.md R7).
+
+    Its dispatches step off AppIds with an open quota alert
+    (lib/llm_dispatch/quota_watch.py, ``avoid_throttled_appids``).
+    """
+    try:
+        from lib.router.watchdog.binding import is_watchdog_location, is_watchdog_scope
+        scope = task.get('_coordinatorDispatchScope')
+        if scope:
+            return int(scope['user_id']) if is_watchdog_scope(scope) else None
+        config = task.get('config') or {}
+        path = config.get('canonicalProjectPath') or config.get('projectPath')
+        if not path:
+            return None
+        owner = int(task_user_id(task))
+        return owner if is_watchdog_location(owner, path) else None
+    except Exception:
+        logger.warning('Watchdog role of task %s unreadable; dispatching without AppId avoidance',
+                       task.get('id'), exc_info=True)
+        return None
+
+
+def _watchdog_aware_dispatch_stream(task, *args, **kwargs):
+    """``dispatch_stream`` for ``task``; a Watchdog Turn's picks step off throttled AppIds."""
+    from lib.llm_dispatch.quota_watch import avoid_throttled_appids
+
+    with avoid_throttled_appids(_watchdog_owner(task)):
+        return dispatch_stream(*args, **kwargs)
+
+
 def _opaque_reasoning_replay_tokens(
     assistant_message,
     normalized_usage,
@@ -469,6 +500,27 @@ def _learn_expanded_context_limit(task, *, model, prefix,
                      exc_info=True)
 
 
+def record_sent_tool_schema(task, diagnostic):
+    """Keep the schema tokens of the tools this request actually sent.
+
+    A ``wire_projection`` diagnostic counts the final provider tools, after a
+    route's tool-name budget hid some (admission ran before the route was
+    chosen). Any other value starts a new request with no count, so a failed
+    attempt never lends its count to the one that produced the round.
+    """
+    if isinstance(diagnostic, dict) and diagnostic.get('kind') == 'wire_projection':
+        task['_sentToolSchemaLocalTokens'] = max(0, int(diagnostic.get('schemaTokens') or 0))
+    else:
+        task.pop('_sentToolSchemaLocalTokens', None)
+
+
+def _publish_wire_projection(task, diagnostic, **identity):
+    """Record the sent schema count and append the request's tool-wire projection event."""
+    record_sent_tool_schema(task, diagnostic)
+    fields = _tool_wire_projection_fields(diagnostic, **identity)
+    append_event(task, build_event(EventType.TOOL_WIRE_PROJECTION, **fields))
+
+
 def _tool_wire_projection_fields(diagnostic, *, model, parent_span_id,
                                  dispatch_seq, turn, round_num):
     """Bounded ``tool_wire_projection`` event fields from one wire diagnostic."""
@@ -609,6 +661,7 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None,
     pfx = f'[Task {task_log_tag(task["id"])}][{tag}]'
     # Ready receipts precede every paid request of this task.
     settle_deferred_ready_events(task)
+    record_sent_tool_schema(task, None)
     policy = task.get('_invocationPolicy')
     allowance = getattr(policy, 'max_429_attempts', None)
     if allowance is not None:
@@ -703,14 +756,9 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None,
         if not isinstance(diagnostic, dict):
             return
         if diagnostic.get('kind') == 'wire_projection':
-            fields = _tool_wire_projection_fields(
-                diagnostic, model=model, parent_span_id=_model_request_span,
-                dispatch_seq=_provider_dispatch_ordinal, turn=_activity_turn,
-                round_num=_activity_round_num)
-            append_event(
-                task,
-                build_event(EventType.TOOL_WIRE_PROJECTION, **fields),
-            )
+            _publish_wire_projection(task, diagnostic, model=model, parent_span_id=_model_request_span,
+                                     dispatch_seq=_provider_dispatch_ordinal, turn=_activity_turn,
+                                     round_num=_activity_round_num)
             return
         fields = {
             'toolName': str(diagnostic.get('toolName') or 'unknown tool')[:160],
@@ -1074,7 +1122,7 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None,
         )
         try:
             result = ensure_provider_stream_result(
-                dispatch_stream(*args, **kwargs))
+                _watchdog_aware_dispatch_stream(task, *args, **kwargs))
             if isinstance(result.usage, dict):
                 result.usage['request_span_id'] = _model_request_span
                 result.usage['request_dispatch_seq'] = _provider_dispatch_ordinal

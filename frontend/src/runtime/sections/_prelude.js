@@ -721,12 +721,14 @@ const buildWatchController = createBuildWatchController({
   ),
 });
 retainedCompositionLifecycle.add(() => buildWatchController.destroy());
-retainedCompositionLifecycle.listen(
-  window,
-  'beforeunload',
-  () => retainedCompositionLifecycle.destroy(),
-  { once: true },
-);
+/* Page teardown waits for a non-persisted pagehide. beforeunload also fires
+ * for navigations that never unload (a cancelled leave prompt, a link that
+ * answers with a download); destroying there left a live page whose dialogs
+ * resolved as dismissed and whose sidebar/composer listeners were gone. A
+ * persisted pagehide enters the back/forward cache and may be shown again. */
+retainedCompositionLifecycle.listen(window, 'pagehide', (event) => {
+  if (!event.persisted) retainedCompositionLifecycle.destroy();
+});
 
 const appDialogController = createDialogServices({
   document,
@@ -1041,12 +1043,9 @@ const refreshConversationRuntime = createConversationRefresh({
 // Push state is initialized by a later retained section. Defer subscription
 // until this ESM module has finished evaluating, then tie it to page lifetime.
 const cookieCaptureConsentLifecycle = createLifecycleScope();
-cookieCaptureConsentLifecycle.listen(
-  window,
-  'beforeunload',
-  () => cookieCaptureConsentLifecycle.destroy(),
-  { once: true },
-);
+cookieCaptureConsentLifecycle.listen(window, 'pagehide', (event) => {
+  if (!event.persisted) cookieCaptureConsentLifecycle.destroy();
+});
 queueMicrotask(() => {
   if (cookieCaptureConsentLifecycle.signal.aborted) return;
   const controller = createCookieCaptureConsentController({
@@ -1204,11 +1203,9 @@ const swarmPushRuntime = createSwarmPushRuntime({
   unsubscribe: (handler) => { pushUnsubscribe('swarm', '*', handler); },
 });
 runtimeScope.ConversationSwarmPresentation = swarmPushRuntime.presentation;
-window.addEventListener(
-  'beforeunload',
-  swarmPushRuntime.destroy,
-  { once: true },
-);
+window.addEventListener('pagehide', (event) => {
+  if (!event.persisted) swarmPushRuntime.destroy();
+});
 queueMicrotask(swarmPushRuntime.start);
 const conversationStartup = createConversationStartup({
   loadConversationCatalog,

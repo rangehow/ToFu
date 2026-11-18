@@ -62,8 +62,10 @@ def test_command_and_mcp_reuse_same_persistent_tool_and_caches(tmp_path, isolate
     for environment in (_get_cmd_env(str(tmp_path)), build_stdio_environment({})):
         assert resolve_executable('installed-cli', environment) == str(cli)
         assert environment['UV_TOOL_DIR'] == str(cache / 'share/uv/tools')
-        assert environment['UV_CACHE_DIR'] == command_env['UV_CACHE_DIR']
         assert environment['npm_config_cache'] == command_env['npm_config_cache']
+    # Long-lived `uv run` launchers pin their uv cache; commands prune their own.
+    assert command_env['UV_CACHE_DIR'] == str(cache / 'uv-commands')
+    assert build_stdio_environment({})['UV_CACHE_DIR'] == str(cache / 'uv')
 
 
 def test_mcp_configuration_path_wins_over_parent_and_runtime(tmp_path, isolated_environment, monkeypatch):

@@ -130,6 +130,28 @@ def _measure(
     return measurement
 
 
+def sent_prompt_admission(admission: dict[str, Any], *, admitted_local_schema: Any,
+                          sent_local_schema: int) -> dict[str, Any]:
+    """The admission record restated for the tool schemas actually sent.
+
+    Admission measures the candidate surface before a route is chosen and
+    stays that upper bound; a route's tool-name budget can then hide tools.
+    The schema share is converted to serving units at the admission's own
+    serving/local ratio, the total stays messages plus schemas, and the
+    measured pre-route values remain as ``admitted*``.
+    """
+    serving_schema = int(admission.get('toolSchemaTokens') or 0)
+    local_schema = admitted_local_schema if type(admitted_local_schema) is int else 0
+    sent_serving = (-(-sent_local_schema * serving_schema // local_schema)
+                    if local_schema > 0 else sent_local_schema)
+    restated = dict(admission)
+    restated['admittedToolSchemaTokens'] = serving_schema
+    restated['admittedTotalTokens'] = int(admission.get('totalTokens') or 0)
+    restated['toolSchemaTokens'] = sent_serving
+    restated['totalTokens'] = int(admission.get('messageTokens') or 0) + sent_serving
+    return restated
+
+
 def _record(
     task: dict[str, Any],
     *,
@@ -163,6 +185,9 @@ def _record(
         if len(history) > 8:
             del history[:-8]
     task['_lastPromptAdmission'] = evidence
+    # The local count behind the serving-unit schema share; the round record
+    # converts the sent schema count with this same ratio.
+    task['_lastPromptAdmissionLocalSchemaTokens'] = measurement.get('_toolSchemaLocalTokens')
     try:
         audit_log(
             'provider_prompt_admission',

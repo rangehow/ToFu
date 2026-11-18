@@ -1422,7 +1422,8 @@ pipeline 7.6 %, the post-tool snapshot 6 %, and the dispatcher's
 freshness contract of `lib/key_stats`, not a repeated pass). None of the
 remaining items is a repeated pass over unchanged input of the kind removed
 here; the next step is a cheaper per-round representation (translation and
-recount over settled rows only), not another memo.
+recount over settled rows only), not another memo. "Round floor V" below
+takes up translation and recount and records the current floor.
 
 ### Alternatives considered
 
@@ -1434,6 +1435,123 @@ recount over settled rows only), not another memo.
   extra round trip.
 - **Re-checking the checkout every N rounds**: a tuned interval (Design
   principle 5); writes already register new checkouts.
+
+## Round floor V: translation and recount resume after unchanged rows (2026-11-18)
+
+Owners: `lib/conversation_sync/settled_rows.py` (`settled_prefix`,
+`store_settled_prefix`, `settled_run_length`),
+`lib/llm/anthropic_outbound/_to_anthropic.py` (`_PrefixState`,
+`_resumed_report`), `lib/llm/conversion.py` (`validate_request(
+validated_messages=)`, `reasoning_omitted`, `message_losses`),
+`lib/llm/tool_call_ids.py` (`wire_tool_call_ids(accepted_prefix=)`,
+`rejects_an_id`), `lib/llm/request.py` (`recount_anthropic_input`),
+`lib/token_counter/tiktoken_counter.py` (`_count_request_with_view`,
+`_hold_count_prefix`). Contract: `docs/CONTEXT_INJECTIONS.md`, "Prefix
+resumption". Artifacts: `output/harness_perf/round-floor-v-20261118/`.
+
+### Problem
+
+Per-row memos ("Incremental request building") made each history row's
+translation and count O(1), but every request still visited every row to look
+those memos up: Anthropic translation, its validation and conversion report,
+the recount projection, and both local counts (canonical admission, Anthropic
+recount). `prepare_request` on the Anthropic face cost 2.7 / 5.0 / 23.7 ms at
+10 / 100 / 1,000 history rows (median of steady rounds, task-owned memos as in
+`build_round_request`), about 21 us per row per request.
+
+### Change (exact caching, explicit invalidation, no knob)
+
+Each of those folds keeps its state after every row of the list's leading
+settled run in the first row's memo, with the fold's other inputs as its
+settings; the next request resumes at the first row that is not the held row
+(one C-level identity scan). Translation holds the emitted system blocks and
+messages (and an open tool-result batch), each row's lineage location, the
+running conversion report and whether any row so far holds a tool-call ID the
+contract rejects; it resumes only under the same unsigned-reasoning replay
+policy and ID contract and never past a rejecting row. The recount holds its
+projected rows, and the counter running sums of text tokens and images.
+Settled rows are immutable, so identity is content: an edit, compaction,
+injection or moved cache marker is a new row and ends the match.
+
+Per-round work now depends only on new or replaced rows
+(`tests/llm/test_request_prep_scales_with_new_rows.py`, which fails on the
+previous tree): with two rows appended per round, a round visits 3 rows in
+translation, 3 in the recount projection and 12 row-steps in the two counts
+at 1, 10 and 100 history rows alike (previously 5 / 14 / 112 translated at
+1 / 10 / 100). `prepare_request` now costs 2.4 / 3.5 / 13.4 ms at 10 / 100 /
+1,000 rows. The rest of that 13.4 ms is other whole-history passes outside
+this change: cache-marker placement, `marker_signature` and wire evidence,
+the sealed item encode, ingress settling and the semantic digest chain. The
+first request of a Turn (fresh rows) records the states: about 3.5 us per row
+more (72.4 vs 75.9 ms at 1,000 rows), repaid from the second round on.
+
+### Byte identity
+
+`benchmarks/harness_perf/byte_identity.py` now also takes the task-owned memo
+path (settled canonical rows, the text-count view, the tool-input memo), so the
+resumed counts are on its lines. All 75 lines are identical between the
+f8b942a2 tree (`335cfcd534`) and this tree, with both the previous and the
+extended script (`byte-identity/`).
+
+### ABAB (`round_profile.py --no-spy`, fresh roots, pinned engine)
+
+Arm A `335cfcd534` (f8b942a2 delivered), arm B `0ebe5af68e`; both used one
+copy of the certified engine (`tofu-db`, sha256 `f9cddf197fbda95a...`). 19
+pairs; a host burst (load 45-128) hit pairs 5-9, the other 14 pairs ran at
+load 4-25. Median / p95 (n), ms:
+
+| metric | A | B | codex |
+|---|---|---|---|
+| `noop`, 14 quiet pairs | 45.5 / 55.0 (798) | 45.4 / 56.1 (798) | 38.3 |
+| `true`, 14 quiet pairs | 55.8 / 85.4 (168) | 56.7 / 88.2 (168) | 187.9 |
+| `noop`, all 19 pairs | 45.7 / 64.3 (1083) | 45.7 / 120.8 (1083) | |
+| `true`, all 19 pairs | 56.0 / 85.7 (228) | 56.7 / 109.4 (228) | |
+
+Median paired difference on the quiet pairs: `noop` -0.46 ms (B faster in
+9/14), `true` +0.85 ms (6/14). At the benchmark's history length (a Turn of
+20 `noop` rounds, or one `run_command true` round whose first request builds
+from fresh rows) the removed walk is a few hundred microseconds, inside this
+host's ~1 ms day-to-day spread: no change is resolved. A 120-round `noop`
+variant (6 pairs, history up to ~240 rows) gave 66.7 -> 66.2 ms (B faster in
+4/6), also within noise. The gain is per history row; it shows in
+`prepare_request` above, not yet in the benchmark round.
+
+### Post-tool snapshot and key-stats freshness
+
+- **Post-tool state snapshot** (6 %): its cost is `apply_wire_sanitize` over
+  the live loop messages (tool-call repair, adjacent-run repair, field
+  stripping, same-role merge), whole-list passes over mutable dicts that are
+  legally edited in place, so identity proves nothing there. Settling the
+  sanitized rows against the previous state wire (so unchanged rows skip the
+  snapshot projection) was measured and removed: 6.62 vs 6.63 ms at 1,000
+  rows, because the comparison costs what the projection did. An exact
+  incremental snapshot needs the loop's own history to be settled rows with
+  copy-on-write writers, an owner change beyond this step.
+- **Dispatcher `key_stats` freshness** (2.3 %): already one fingerprint per
+  admission batch (`_observe_store`, two `stat` calls: the decision and
+  telemetry documents) taken before the lock. A single directory `stat`
+  would miss two atomic replacements within one directory-mtime tick, so it
+  is not exact; the remaining cost is the cross-process freshness contract.
+
+### What remains (floor)
+
+`noop` is 45.4-45.7 ms on this host state, 7.1-7.4 ms above codex. The
+remaining whole-history passes per request are cache-marker placement,
+`marker_signature`/wire evidence, the sealed item encode, ingress settling
+(`interchangeable` per row) and the semantic digest chain; the prefix fold
+above is the structure to remove each of them next.
+
+### Alternatives considered
+
+- **Fold memos keyed by row digests**: hashing every row each round is the
+  walk being removed; settled rows are immutable, so identity already is the
+  content key (`docs/CONTEXT_INJECTIONS.md`, "Incremental request sealing").
+- **Keeping the previous translated list on the task**: still needs the same
+  identity proof that it applies, and the first row's memo lives exactly as
+  long as that proof.
+- **Resuming translation past rows with rejected tool-call IDs**: a respelling
+  avoids every other ID in the request, so a later row can change an earlier
+  row's spelling; such prefixes recompute.
 
 ## Alternatives considered
 

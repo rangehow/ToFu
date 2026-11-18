@@ -236,7 +236,7 @@ function historyGlyph(): HTMLSpanElement {
   return mark;
 }
 
-function plainRow(title: string, key: string, deliverables: TaskDeliverables): HTMLLIElement {
+function plainRow(title: string, key: string, deliverables: TaskDeliverables, written = title): HTMLLIElement {
   const row = document.createElement('li');
   row.className = 'coordinator-progress-task';
   row.dataset.status = 'history';
@@ -245,13 +245,14 @@ function plainRow(title: string, key: string, deliverables: TaskDeliverables): H
   const name = document.createElement('span');
   name.className = 'coordinator-progress-task-title';
   name.textContent = title;
+  if (written !== title) name.title = written;
   text.append(name);
   expandable(row, [historyGlyph(), text], key, title, deliverables);
   return row;
 }
 
 export function createCoordinatorProgress(ports: CoordinatorProgressPorts): CoordinatorProgressCard {
-  let finishedOpen = ports.finishedOpen, original = false, earlierOpen = false;
+  let finishedOpen = ports.finishedOpen, original = false, earlierOpen = false, earlierTranslated = false;
   let last: [CoordinatorProgressView, CoordinatorProgressActions] | null = null;
   let deliverables: TaskDeliverables | null = null;
 
@@ -288,9 +289,11 @@ export function createCoordinatorProgress(ports: CoordinatorProgressPorts): Coor
     const helper = deliverables;
     const nodes: Node[] = [];
     const earlier = helper.tasks().filter(task => !onBoard.has(task.key));
+    earlierTranslated = earlier.some(task => task.translation && task.translation.title !== task.title);
     if (earlier.length) {
       nodes.push(deliverableGroup('coordinator-progress-earlier', t('coordinatorProgress.earlier', { count: earlier.length }),
-        earlier.map(task => plainRow(task.title, task.key, helper)), earlierOpen, open => { earlierOpen = open; }));
+        earlier.map(task => plainRow(original ? task.title : task.translation?.title ?? task.title, task.key, helper, task.title)),
+        earlierOpen, open => { earlierOpen = open; }));
     }
     // One expandable row, not a fold around a row of the same name.
     if (helper.count(OTHER_TASKS)) {
@@ -305,6 +308,7 @@ export function createCoordinatorProgress(ports: CoordinatorProgressPorts): Coor
   function render(view: CoordinatorProgressView, actionPorts: CoordinatorProgressActions) {
     last = [view, actionPorts];
     card.dataset.state = view.kind;
+    earlierTranslated = false;
     const title = document.createElement('span');
     title.className = 'coordinator-progress-title';
     title.textContent = t('coordinatorProgress.title');
@@ -366,6 +370,7 @@ export function createCoordinatorProgress(ports: CoordinatorProgressPorts): Coor
     if (view.kind === 'empty') contentNodes.push(...deliverableGroups(new Set()));
     commandNodes.push(createButton({ label: t('coordinatorProgress.history'), size: 'sm', variant: 'ghost', onClick: actionPorts.history }));
     originalToggle.textContent = t('chat.bilingualOriginal');
+    translated ||= earlierTranslated;
     originalToggle.hidden = !translated;
     originalToggle.setAttribute('aria-pressed', String(translated && original));
     // A task toggle is rebuilt by every paint; keep keyboard focus on the same task's toggle.

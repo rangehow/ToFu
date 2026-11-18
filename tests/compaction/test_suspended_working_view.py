@@ -178,6 +178,58 @@ def test_continue_restores_the_checkpoint_plus_rounds_settled_after_it(archives)
     assert resumed['_resumedCheckpointArchiveId'] == 'archive-1'
 
 
+@pytest.mark.parametrize('envelope', [None, 'truncated'])
+def test_turn_that_restarted_the_server_through_execute_tools_resumes_its_view(archives, envelope):
+    """A lead drains its own Turn by calling restart_server inside execute_tools.
+
+    The live view holds only the container call; the Turn rows also hold the
+    gateway's delegated child receipt. That receipt is not a model action, so
+    it must neither block the checkpoint (the whole history was rebuilt and
+    force-compacted from 3.66 M tokens on 2026-11-18) nor reappear on resume.
+    """
+    from lib.tasks_pkg.compaction._resume_projection import (
+        preserve_suspended_working_view, restore_compacted_resume, resume_background_digest,
+        resume_execution_digest)
+    from tests.tasks_pkg.test_delegated_receipt_replay import _model_projected_rounds
+    container, child = _model_projected_rounds(envelope=envelope)
+    before = {**_round(0), 'attemptId': 'attempt-one', 'taskId': 'task-one'}
+    after = {**_round(1), 'attemptId': 'attempt-one', 'taskId': 'task-one', 'llmRound': 42}
+    rounds = [before, container, child, after]
+    live = [{'role': 'user', 'content': 'work'}, _carrier('memories')]
+    for row in (before, container, after):
+        live += [{'role': 'assistant', 'tool_calls': [{
+                     'id': row['toolCallId'], 'type': 'function',
+                     'function': {'name': row['toolName'], 'arguments': '{}'}}]},
+                 {'role': 'tool', 'tool_call_id': row['toolCallId'],
+                  'content': row['toolContent']}]
+    task = _interrupted(_task(), rounds, deepcopy(live))
+    task['_abort_reason'] = 'server_shutdown'
+    preserve_suspended_working_view(task)
+    assert archives.rows['archive-1']['post'] == live
+    assert archives.rows['archive-1']['receipt']['resumeWitness']['toolRoundCount'] == 4
+    config = deepcopy(task['config'])
+    config['_resumeBackgroundDigest'] = resume_background_digest([])
+    config['_resumeExecutionDigest'] = resume_execution_digest('', '')
+    resumed = _task()
+    resumed['_attemptId'] = 'continue-attempt'
+    restored = restore_compacted_resume(resumed, config, rounds, fresh_messages=[])
+    assert restored == live
+    assert resumed['_compactionResumeOutcome']['reason'] == 'restored'
+    assert not any(call['id'] == 'gw_restart' for message in restored
+                   for call in message.get('tool_calls') or [])
+
+
+def test_refused_checkpoint_names_its_reason(archives, caplog):
+    """A silent refusal hid the 2026-11-18 loss; every refusal is now logged."""
+    from lib.tasks_pkg.compaction._resume_projection import preserve_suspended_working_view
+    task = _interrupted(_task(), [_round(0), _round(1)],
+                        [{'role': 'user', 'content': 'work'}])
+    with caplog.at_level('INFO'):
+        preserve_suspended_working_view(task)
+    assert not archives.creates
+    assert 'checkpoint not saved' in caplog.text and 'no_protocol_boundary' in caplog.text
+
+
 def _live_checkpoint(archives, turn):
     archive = f'archive-{len(archives.rows) + 1}'
     archives.rows[archive] = {'receipt': {

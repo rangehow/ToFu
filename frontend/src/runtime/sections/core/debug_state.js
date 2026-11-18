@@ -77,8 +77,8 @@ const _sendPendingPageCrashes = () => {
     })));
 };
 window.addEventListener('tofu:boot-ready', _sendPendingPageCrashes);
-// The composition is destroyed at beforeunload, before the document's final
-// pagehide; the journal itself stays installed so that pagehide still clears
+// The composition is destroyed by an earlier-registered final-pagehide
+// listener; the journal itself stays installed so that pagehide still clears
 // the alive marker (otherwise every clean reload would read as a crash).
 retainedCompositionLifecycle.add(() => {
   window.removeEventListener('tofu:boot-ready', _sendPendingPageCrashes);

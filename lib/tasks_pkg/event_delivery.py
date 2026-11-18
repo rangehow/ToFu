@@ -247,6 +247,10 @@ class EventDeliveryCoordinator:
                             peak_events=0, peak_bytes=0, peak_workers=0,
                             admission_waits=0, revoked_events=0, max_lag_ms=0.0,
                             merged_progress=0, peak_batches=0)
+        # Persist failures by the storage taxonomy's closed code set. A
+        # non-transient code (invalid_request since 2026-11-18 10:39) is a
+        # contract defect that must stay at zero (docs/STORAGE.md).
+        self.storage_failures: dict[str, int] = {}
 
     def _ready(self, lane):
         """Queue a lane whose unstarted head may run; True when newly queued."""
@@ -796,6 +800,10 @@ class EventDeliveryCoordinator:
                         lane.running = False
                         self.active -= 1
                         self.metrics['failures'] += 1
+                        storage_code = _storage_error_code(exc)
+                        if storage_code:
+                            self.storage_failures[storage_code] = (
+                                self.storage_failures.get(storage_code, 0) + 1)
                         revoked = lane.revoke_requested or _ends_publication_authority(exc)
                         if revoked:
                             # Its owner revoked publication during this run, or
@@ -808,10 +816,10 @@ class EventDeliveryCoordinator:
                             lane.task['_eventDeliveryError'] = type(exc).__name__
                             self._notify_lane(lane)
                             self.condition.notify_all()
-                    logger.warning('[TaskEvents] %s failed delivery task=%s seq=%s run=%d error=%s',
+                    logger.warning('[TaskEvents] %s failed delivery task=%s seq=%s run=%d error=%s code=%s',
                                    'released' if revoked else 'retained',
                                    str(lane.task.get('id') or '?'), run[0].sequence, len(run),
-                                   type(exc).__name__)
+                                   type(exc).__name__, storage_code or '-')
                     # A parked pump must not keep the failed lane's task alive.
                     del item, run, lane
                     continue
@@ -891,7 +899,8 @@ class EventDeliveryCoordinator:
     def snapshot(self):
         with self.condition:
             self._settle_abandoned_projections()
-            result = {**self.metrics, 'pending_events': self.pending_frames,
+            result = {**self.metrics, 'storage_failures': dict(self.storage_failures),
+                    'pending_events': self.pending_frames,
                     'pending_batches': self.count,
                     'pending_bytes': self.bytes, 'workers': len(self.workers),
                     'active_workers': self.active,
@@ -1072,6 +1081,15 @@ def task_event_backlog(task) -> EventBacklog:
     if lane is None:
         return EventBacklog(0, False)
     return coordinator().backlog(lane)
+
+
+def _storage_error_code(error: BaseException) -> str:
+    """The authority's code for a persist failure (its wire code when the
+    taxonomy folded it), or '' for any other error."""
+    from lib.agent_core.storage_errors import StorageError
+    if not isinstance(error, StorageError):
+        return ''
+    return error.wire_code or error.code
 
 
 def event_delivery_metrics():

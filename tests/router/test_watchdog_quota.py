@@ -1,14 +1,22 @@
 """Quota-watch fault signals over a real storage authority (docs/ROUTER.md R7).
 
-One production quota-watch episode of one (AppId, model) lane is one Watchdog
-fault signal of source ``quota``: recorded once, waking the Watchdog once,
-closed by the producer when the watch observes recovery. The signal and the
+Every process that runs conversation rounds keeps its own quota watch, so one
+throttled (AppId, model) lane opens and closes episodes in each of them. The
+Watchdog producer merges them into one alert per lane: its closed-to-open
+transition is one fault signal of source ``quota`` and one wake; an open while
+it is open (another process, or a replay) joins it and wakes nothing; it
+closes, and its signal resolves, with its last live holder. The signal and the
 wake carry the AppId only by the last four characters the provider itself
-shows; never the key, its hint or the credential identity.
+shows; never the key, its hint or the credential identity. A Watchdog Turn's
+own dispatches step off an AppId with an open alert.
 """
 from __future__ import annotations
 
+from collections import defaultdict
+from datetime import datetime, timedelta
+import hashlib
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -22,6 +30,7 @@ pytestmark = [pytest.mark.unit,
 T0 = 1_794_200_000.0
 API_KEY = 'APPSECRET-9f3c2e71b4d8-0733'
 CREDENTIAL = 'credential-1792419920936-26sj7f'
+REPLAY = Path(__file__).resolve().parents[1] / 'fixtures' / 'router' / 'quota_watch_7d3ec336.json'
 
 
 @pytest.fixture
@@ -43,7 +52,7 @@ def world(semantic_authority, monkeypatch, tmp_path):
     return SimpleNamespace(owner=owner, watchdog=watchdog, woken=woken, dispatch=dispatch)
 
 
-def _episode(owner):
+def _episode(owner, reporter='shard-a'):
     """One open and one close transition from the real watch for (…0733, claude-opus-5.5)."""
     from lib.llm.llm_errors import RateLimitError
     from lib.llm_dispatch.quota_watch import QuotaWatch, production_dispatch
@@ -51,7 +60,7 @@ def _episode(owner):
     from lib.llm_dispatch.slot import Slot
     clock = [T0]
     delivered = []
-    watch = QuotaWatch(clock=lambda: clock[0], deliver=delivered.append)
+    watch = QuotaWatch(clock=lambda: clock[0], deliver=delivered.append, reporter=reporter)
     slot = Slot(key_name=f'{CREDENTIAL}:deployment-claude', api_key=API_KEY, model='claude-opus-5.5',
                 capabilities={'text'}, provider_id='example-corp', route_credential_id=CREDENTIAL)
     rejection = RateLimitError('API HTTP 429: {"status":429,"message":"App:**0733在模型:claude-opus-5.5'
@@ -72,13 +81,19 @@ def _episode(owner):
 def _report(world, transition):
     from lib.router.watchdog.quota import report_quota_episode
     return report_quota_episode(transition['owner'], provider_id=transition['providerId'],
-                                lane=transition['lane'], key_tail=transition['keyTail'],
-                                model=transition['model'], opened_at_ms=transition['openedAtMs'],
-                                detail=transition['detail'], dispatch=world.dispatch)
+                                lane=transition['lane'], credential=transition['credential'],
+                                key_tail=transition['keyTail'], model=transition['model'],
+                                opened_at_ms=transition['openedAtMs'], detail=transition['detail'],
+                                reporter=transition['reporter'], dispatch=world.dispatch)
+
+
+def _close(world, transition):
+    from lib.router.watchdog.quota import resolve_quota_episode
+    return resolve_quota_episode(transition['owner'], lane=transition['lane'],
+                                 reporter=transition['reporter'], resolution=transition['resolution'])
 
 
 def test_a_quota_episode_is_one_signal_one_wake_and_its_producer_closes_it(world):
-    from lib.router.watchdog.quota import resolve_quota_episode
     from lib.router.watchdog.signals import FaultSignals
     from lib.secret_envelope import secret_hint
     opened, closed = _episode(world.owner)
@@ -98,20 +113,63 @@ def test_a_quota_episode_is_one_signal_one_wake_and_its_producer_closes_it(world
     rendered = json.dumps([signal, message], ensure_ascii=False)
     for secret in (API_KEY, API_KEY[:-4], secret_hint(API_KEY), CREDENTIAL):
         assert secret not in rendered
-    assert resolve_quota_episode(world.owner, signal['signalId'], closed['resolution']) is True
+    assert _close(world, closed) is True
     resolved = FaultSignals(world.owner).get(signal['signalId'])
     assert resolved['state'] == 'resolved' and resolved['resolution'].startswith('Recovered')
     assert FaultSignals(world.owner).open_page()['signals'] == []
     assert len(world.woken) == 1
 
 
+def test_episodes_of_one_lane_in_several_processes_are_one_alert_until_the_last_closes(world):
+    from lib.router.watchdog.signals import FaultSignals
+    first_open, first_close = _episode(world.owner, reporter='shard-a')
+    second_open, second_close = _episode(world.owner, reporter='shard-b')
+    assert first_open['lane'] == second_open['lane']
+    signal = _report(world, first_open)
+    # Same alert, lane and state: the second process joins it and wakes nothing.
+    assert _report(world, {**second_open, 'openedAtMs': second_open['openedAtMs'] + 5000}) == signal
+    assert len(world.woken) == 1
+    assert _close(world, first_close) is False
+    assert FaultSignals(world.owner).get(signal['signalId'])['state'] == 'open'
+    assert _close(world, second_close) is True
+    assert FaultSignals(world.owner).get(signal['signalId'])['state'] == 'resolved'
+    # A later open is a real state change: a new signal and one more wake.
+    reopened = _report(world, {**first_open, 'openedAtMs': first_open['openedAtMs'] + 120_000})
+    assert reopened['signalId'] != signal['signalId'] and reopened['state'] == 'open'
+    assert len(world.woken) == 2
+
+
+def test_a_holder_proved_dead_no_longer_holds_the_alert_open(world):
+    from lib.process_owner import process_owner
+    from lib.router.watchdog.signals import FaultSignals
+    from lib.storage.generated_worker_job_contract import WORKER_PROCESS_OWNER_PREFIX
+    from lib.storage.worker_process import parse_worker_process
+    process = process_owner()
+    if process is None:
+        pytest.skip('no process identity on this host')
+    # This pid with another start time: the kernel proves that process is gone.
+    dead = (WORKER_PROCESS_OWNER_PREFIX + ':'.join(str(process[field]) for field in
+                                                   ('boot', 'pid_namespace', 'pid'))
+            + f':{int(process["started"]) + 1}:' + 'f' * 32)
+    assert parse_worker_process(dead) is not None
+    opened, _closed = _episode(world.owner, reporter=dead)
+    stale = _report(world, opened)
+    live_open, live_close = _episode(world.owner, reporter='shard-live')
+    fresh = _report(world, {**live_open, 'openedAtMs': live_open['openedAtMs'] + 1000})
+    assert fresh['signalId'] != stale['signalId'] and len(world.woken) == 2
+    assert FaultSignals(world.owner).get(stale['signalId'])['state'] == 'resolved'
+    assert _close(world, live_close) is True
+    assert FaultSignals(world.owner).get(fresh['signalId'])['state'] == 'resolved'
+
+
 def test_quota_reports_never_raise_into_the_watch(world):
     from lib.router.watchdog.quota import report_quota_episode, resolve_quota_episode
     opened, _closed = _episode(world.owner)
-    # An owner without a Watchdog records nothing; an unknown signal is not resolved.
-    assert report_quota_episode(world.owner + 1, provider_id='example-corp', lane=opened['lane'], key_tail='0733',
-                                model='claude-opus-5.5', opened_at_ms=1, detail='x', dispatch=world.dispatch) is None
-    assert resolve_quota_episode(world.owner, 'unknown-signal', 'Recovered.') is False
+    # An owner without a Watchdog records nothing; an unknown lane closes nothing.
+    assert report_quota_episode(world.owner + 1, provider_id='example-corp', lane=opened['lane'],
+                                credential=CREDENTIAL, key_tail='0733', model='claude-opus-5.5',
+                                opened_at_ms=1, detail='x', reporter='shard-a', dispatch=world.dispatch) is None
+    assert resolve_quota_episode(world.owner, lane='0' * 16, reporter='shard-a', resolution='Recovered.') is False
     assert world.woken == []
 
 
@@ -139,3 +197,141 @@ def test_the_watch_delivers_open_then_close_off_the_dispatch_thread(world, monke
     signal_id = opened['delivery']['signalId']
     assert FaultSignals(world.owner).get(signal_id)['state'] == 'resolved'
     assert len(world.woken) == 1
+
+
+def test_a_watchdog_dispatch_skips_an_appid_with_an_open_quota_alert(world, monkeypatch):
+    from lib.llm_dispatch.dispatcher import LLMDispatcher
+    from lib.llm_dispatch.quota_watch import avoid_throttled_appids
+    from lib.llm_dispatch.slot import Slot
+    monkeypatch.setattr('lib.key_stats.is_key_enabled', lambda *_a, **_kw: True)
+
+    def slot(credential, deployment, latency):
+        return Slot(key_name=f'{credential}:{deployment}', api_key=f'sk-{credential}', model='kimi-k3.1-pro',
+                    logical_model='kimi-k3.1-pro', capabilities={'text'}, provider_id='example-corp',
+                    route_credential_id=credential, route_deployment_id=deployment, latency_ema=latency)
+    throttled, quiet = slot(CREDENTIAL, 'dep-throttled', 100.0), slot('credential-quiet', 'dep-quiet', 9000.0)
+    dispatcher = LLMDispatcher()
+    dispatcher.slots = [throttled, quiet]
+    dispatcher._initialized = True
+    opened, _closed = _episode(world.owner)
+    assert opened['credential'] == CREDENTIAL
+    _report(world, opened)
+
+    def pick():
+        return dispatcher.pick_slot(capability='text', prefer_model='kimi-k3.1-pro', strict_model=True)
+    assert pick() is throttled      # every other dispatch is unchanged
+    with avoid_throttled_appids(world.owner):
+        assert pick() is quiet
+        dispatcher.slots = [throttled]
+        assert pick() is throttled  # the only route still serves: avoidance never empties the pool
+    with avoid_throttled_appids(world.owner + 1):
+        dispatcher.slots = [throttled, quiet]
+        assert pick() is throttled  # alerts are the owner's own
+
+
+def _lane_digest(provider, key_tail, model):
+    return hashlib.sha256(json.dumps([provider, key_tail, model]).encode()).hexdigest()[:16]
+
+
+def _replay_reporters(events):
+    """Assign each logged transition to the process watch that made it.
+
+    The log names the task (rid) whose round caused a transition, not the
+    process. A shard runs one task at a time and later tasks after it, and a
+    process's transitions on one lane alternate open/close. A task's first
+    transition that is a close therefore belongs to an open process whose
+    earlier task has no later transition; which one does not change the
+    merged state.
+    """
+    last_index = {event['rid']: index for index, event in enumerate(events)}
+    process_of, task_of, state, last_seen, assigned = {}, {}, defaultdict(lambda: 'close'), {}, []
+    for index, event in enumerate(events):
+        lane = (event['providerId'], event['keyTail'], event['model'])
+        process = process_of.get(event['rid'])
+        if process is None:
+            if event['kind'] == 'open':
+                process = f'replay-shard-{len(task_of)}'
+            else:
+                process = min((p for (p, l), s in state.items()
+                               if l == lane and s == 'open' and last_index[task_of[p]] < index),
+                              key=lambda p: last_seen[p])
+            process_of[event['rid']] = process
+            task_of[process] = event['rid']
+        assert state[(process, lane)] != event['kind'], (index, event)
+        state[(process, lane)] = event['kind']
+        last_seen[process] = index
+        assigned.append(process)
+    return assigned
+
+
+def test_replay_of_the_7d3ec336_throttling_wakes_once_per_real_state_change(world):
+    """Production replay, 2026-11-18 08:33-10:34 CST (LEAD_METRICS_STAGE2 S2-2).
+
+    Before: each of the 73 episode opens (71 on …5409) was a new signal and a
+    wake; the Watchdog ran 51 Turns for $55.78, 45 of them woken by quota
+    signals. After: a wake only where the lane's merged alert went from closed
+    to open, and the Watchdog Turns those wakes started.
+    """
+    from lib.router.watchdog.signals import FaultSignals
+    replay = json.loads(REPLAY.read_text(encoding='utf-8'))
+    events = replay['quotaEvents']
+    assert len(events) == 133
+    assert sum(e['kind'] == 'open' and e['keyTail'] == '5409' for e in events) == 71
+    day = datetime(2026, 11, 18)
+
+    def at_ms(clock):
+        return int((datetime.combine(day, datetime.strptime(clock, '%H:%M:%S').time())).timestamp() * 1000)
+
+    holders, real_opens, waking_opens = defaultdict(set), [], []
+    for event, reporter in zip(events, _replay_reporters(events)):
+        lane = _lane_digest(event['providerId'], event['keyTail'], event['model'])
+        transition = {'owner': world.owner, 'providerId': event['providerId'], 'lane': lane,
+                      'credential': f'credential-{event["keyTail"]}', 'keyTail': event['keyTail'],
+                      'model': event['model'], 'reporter': reporter}
+        before = len(world.woken)
+        if event['kind'] == 'open':
+            if not holders[lane]:
+                real_opens.append(event)
+            holders[lane].add(reporter)
+            _report(world, {**transition, 'openedAtMs': at_ms(event['at']), 'detail': 'replay'})
+        else:
+            holders[lane].discard(reporter)
+            _close(world, {**transition, 'resolution': 'Recovered (replay).'})
+        if len(world.woken) > before:
+            waking_opens.append(event)
+    # At most one wake per real state change, and exactly one per closed-to-open transition.
+    assert waking_opens == real_opens
+    assert len(world.woken) == 6
+    open_signals = FaultSignals(world.owner).open_page()['signals']
+    assert len(open_signals) == 3  # …5409 kimi, …5409 gemini, …4861 flash stay held at the window end
+
+    # The Watchdog Turns of the window, before and after.
+    turns = replay['watchdogTurns']
+    assert (len(turns), round(sum(t['costUsd'] for t in turns), 2)) == (51, 55.78)
+    assert sum(t['rounds'] for t in turns) == 136 and sum(t['roundsOffPrimary'] for t in turns) == 63
+    opens_at = {e['at'] for e in events if e['kind'] == 'open'}
+    waking_at = {e['at'] for e in waking_opens}
+
+    def cst(utc):
+        return (datetime.strptime(utc, '%H:%M:%S') + timedelta(hours=8)).strftime('%H:%M:%S')
+    quota_turns = [t for t in turns if t['signalSource'] == 'quota']
+    assert len(quota_turns) == 45 and all(cst(t['signalOpenedUtc']) in opens_at for t in quota_turns)
+    kept = [t for t in turns if t['signalSource'] != 'quota' or cst(t['signalOpenedUtc']) in waking_at]
+    after = (len(kept), round(sum(t['costUsd'] for t in kept), 2))
+    print(f'Watchdog Turns 08:33-10:34: before 51 / $55.78, after {after[0]} / ${after[1]}')
+    assert after == (12, 17.35)
+
+
+def test_only_a_watchdog_turn_dispatches_inside_the_appid_avoidance(world, monkeypatch, tmp_path):
+    from lib.llm_dispatch.quota_watch import throttled_appids
+    from lib.tasks_pkg.manager import _stream
+    opened, _closed = _episode(world.owner)
+    _report(world, opened)
+    seen = []
+    monkeypatch.setattr(_stream, 'dispatch_stream', lambda *a, **kw: seen.append(throttled_appids()))
+    watchdog_turn = {'id': 't-watchdog', '_userId': world.owner,
+                     'config': {'projectPath': world.watchdog['projectPath']}}
+    worker_turn = {'id': 't-worker', '_userId': world.owner, 'config': {'projectPath': str(tmp_path)}}
+    _stream._watchdog_aware_dispatch_stream(watchdog_turn, {})
+    _stream._watchdog_aware_dispatch_stream(worker_turn, {})
+    assert seen == [frozenset({('example-corp', CREDENTIAL)}), None]

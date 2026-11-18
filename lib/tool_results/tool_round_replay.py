@@ -66,41 +66,59 @@ def _receipt_scope(row: Mapping[str, Any]) -> tuple | None:
     return attempt_id, task_id, llm_round
 
 
+def _receipt_id(value: Any) -> str | None:
+    return (value if isinstance(value, str) and 0 < len(value) <= MAX_TOOL_CALLER_ID_CHARS
+            else None)
+
+
 def _container_receipt_keys(row: Mapping[str, Any]) -> set[tuple]:
-    """Gateway containers own model replay of their canonical child results.
+    """Gateway containers own model replay of their child results.
 
     The explicit adapter marker comes from tool presentation, not argument/name
-    equality. Parse only the canonical receipt IDs; retain no result bodies.
+    equality. A key names a child call the container shows the model and, when
+    the entry still carries one, its canonical result ID. The model-only
+    projection strips ``resultId`` (``gateway_result_projection``), so a key
+    without it is proven by the call ID alone. Retain no result bodies.
     Unknown/compacted payloads prove no coverage and keep the old replay path.
     """
     scope = _receipt_scope(row)
     if scope is None or row.get('_hiddenToolAdapter') is not True:
         return set()
+    from lib.tools.gateway_result_projection import gateway_result_children
     content = row.get('toolContent')
-    if not isinstance(content, str):
-        return set()
-    try:
-        payload = json.loads(content, parse_constant=_reject_json_constant)
-    except (ValueError, TypeError, RecursionError):
-        return set()
-    results = payload.get('results') if isinstance(payload, dict) else None
-    if not isinstance(results, list):
-        return set()
-    return {(*scope, item['resultId']) for item in results
-            if isinstance(item, dict) and isinstance(item.get('resultId'), str)
-            and 0 < len(item['resultId']) <= MAX_TOOL_CALLER_ID_CHARS}
+    children = gateway_result_children(content)
+    if children is None and isinstance(content, str):
+        # A retained-artifact envelope shows the receipt as its summary; only
+        # an untruncated summary is the exact receipt.
+        from lib.tools.result_projection_text import load_text_field
+        envelope = load_text_field(content, 'summary')
+        if isinstance(envelope, dict) and envelope.get('truncated') is not True:
+            children = gateway_result_children(envelope['summary'])
+    keys = set()
+    for child in children or ():
+        call_id = _receipt_id(child.get('call_id'))
+        if call_id is None or ('resultId' in child and _receipt_id(child['resultId']) is None):
+            continue
+        keys.add((*scope, call_id, child.get('resultId')))
+    return keys
+
+
+def is_delegated_execution_receipt(row: Mapping[str, Any]) -> bool:
+    """A gateway child's audit row: executed for a container, never a model call."""
+    source = row.get('source')
+    return isinstance(source, str) and source in _DELEGATED_EXECUTION_SOURCES
 
 
 def _is_covered_delegated_receipt(row: Mapping[str, Any], covered: set[tuple]) -> bool:
-    source = row.get('source')
-    if not isinstance(source, str) or source not in _DELEGATED_EXECUTION_SOURCES:
+    if not is_delegated_execution_receipt(row):
         return False
     evidence = row.get('toolResultEvidence')
-    result_id = evidence.get('resultId') if isinstance(evidence, Mapping) else None
+    result_id = _receipt_id(evidence.get('resultId') if isinstance(evidence, Mapping) else None)
+    call_id = _receipt_id(row.get('toolCallId'))
     scope = _receipt_scope(row)
-    return (scope is not None and isinstance(result_id, str)
-            and 0 < len(result_id) <= MAX_TOOL_CALLER_ID_CHARS
-            and (*scope, result_id) in covered)
+    return (scope is not None and result_id is not None and call_id is not None
+            and ((*scope, call_id, result_id) in covered
+                 or (*scope, call_id, None) in covered))
 
 
 def model_tool_content(round_entry: Mapping[str, Any]) -> Any:

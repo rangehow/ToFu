@@ -72,3 +72,72 @@ def test_only_the_global_router_broadcasts(lead):
     with pytest.raises(PermissionError, match='Global Router'):
         execute_router_tool(lead.wake, lead.coordinator_scope, 'broadcast_project_message', {
             'targets': ['all'], 'content': 'x', 'reason': 'r', 'idempotency_key': 'k'})
+
+
+def _live_router_task(lead):
+    """The Global Router's own executing reply (a real Turn/Attempt of its conversation)."""
+    from lib.identity import PrincipalContext
+    from lib.turn_lifecycle import bind_task, get_attempt, list_turns, mark_task_started
+    turns = list_turns(lead.router['conversationId'], user_id=lead.owner)['turns']
+    reply = next(turn for turn in turns if turn.get('currentAttemptId')
+                 and get_attempt(turn['currentAttemptId'], user_id=lead.owner)['status'] in ('pending', 'running'))
+    attempt_id, task_id = reply['currentAttemptId'], 'router-live-task'
+    bind_task(attempt_id, task_id, user_id=lead.owner)
+    mark_task_started(attempt_id, task_id, user_id=lead.owner)
+    return {'id': task_id, 'convId': lead.router['conversationId'], '_userId': lead.owner,
+            '_turnId': reply['turnId'], '_attemptId': attempt_id,
+            '_principalContext': PrincipalContext.user(subject_id=f'user:{lead.owner}',
+                                                       owner_user_id=lead.owner, scopes=[]).to_payload(),
+            'config': {'projectPath': lead.router['projectPath']}}
+
+
+def test_lead_audit_4_exercise_router_controls_another_projects_worker_and_broadcasts(lead, record_property):
+    """Lead audit stage 2 #4 ("live but not exercised"), run once on a scratch authority.
+
+    A Project Router's wake starts a Worker in its own project under the owner's
+    delegation. The Global Router, from its own executing reply, broadcasts to every
+    lead and running Worker, then reads and stops that other project's Worker through
+    control_conversation(owner_delegation). Every act is audited and nothing touches a
+    real Worker or chat.
+    """
+    import json
+    from lib import lifecycle_approval as gate
+    from lib.conversations.coordinator_workers import delegate
+    from lib.conversations.session_control import execute_session_tool
+    from lib.project_dispatch.repository import ProjectDispatchRepository
+    from lib.router.tools import execute_router_tool
+    from lib.turn_lifecycle import get_attempt
+    lead.grant()
+    outcome = delegate(lead.wake, lead.coordinator_scope,
+                       {'title': 'Scratch run', 'brief': 'Keep running', 'idempotency_key': 'x4'},
+                       create=_worker_factory(lead, []))
+    assert _birth(lead.wake, outcome).failure is None
+    row = ProjectDispatchRepository(lead.owner, lead.project).read(outcome['assignment_id'])
+    worker = {'conversation_id': row['request']['recipientId'], 'turn_id': row['execution']['turnId'],
+              'attempt_id': row['execution']['attemptId']}
+    router = _live_router_task(lead)
+
+    broadcast = execute_router_tool(router, lead.scope, 'broadcast_project_message', {
+        'targets': ['all'], 'content': 'Scratch exercise: pause before the shared AppId window.',
+        'reason': 'Lead audit #4 exercise', 'idempotency_key': 'x4-broadcast'})
+    roles = sorted(item['role'] for item in broadcast['delivered'])
+    assert roles == ['lead', 'lead_report', 'worker'], broadcast
+    [to_worker] = _messages(lead.owner, lead.project, worker['conversation_id'])
+    assert to_worker['sender'] == lead.router['conversationId'] and to_worker['kind'] == 'steer'
+
+    status = json.loads(execute_session_tool(router, lead.scope, 'get_conversation_status',
+                                             {'conversation_id': worker['conversation_id']}))
+    assert worker['turn_id'] in {turn['turnId'] for turn in status['turns']}, status
+    stopped = json.loads(str(execute_session_tool(router, lead.scope, 'control_conversation', {
+        **worker, 'action': 'stop', 'idempotency_key': 'x4-stop',
+        'owner_delegation': {'reason': 'Lead audit #4 exercise', 'under_delegation': True}})))
+    assert 'error' not in stopped, stopped
+    assert get_attempt(worker['attempt_id'], user_id=lead.owner)['status'] not in ('pending', 'running')
+    action = next(record for record in gate.delegated_actions(lead.owner)
+                  if record['scope'] == 'conversation_control')
+    assert (action['requester']['kind'], action['status'], action['target']['conversationId']) == (
+        'global_router', 'completed', worker['conversation_id'])
+    record_property('lead_audit_4', json.dumps({
+        'broadcast_roles': roles, 'worker_project': lead.project,
+        'router_home': lead.router['projectPath'], 'stop_action_id': stopped['owner_delegation_action_id'],
+        'worker_attempt_status': get_attempt(worker['attempt_id'], user_id=lead.owner)['status']}))

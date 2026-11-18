@@ -107,6 +107,18 @@ cannot carry; `failed` — adapters would turn an ordinary provider refusal
 into a server error; resending to the same model — Anthropic documents that
 it usually refuses again.
 
+#### Credentials a fallback may use
+
+The configured fallback attempt, its recovery retries, the refused attempt's
+own tool rounds on the fallback model, and pool rescue dispatch inside
+`fallback_dispatch()`; `LLMDispatcher._selection_scope` then never returns a
+slot whose credential `contracts/experiment_credential_reservations_v1.json`
+reserves for an experiment. A primary attempt, a resume to the accepted
+model and an owner/lead model switch are not scoped. The reservation is
+declared data from the experiment owners' launchers, not a quota knob; see
+[NETWORK.md](../NETWORK.md) "Experiment-reserved credentials" and
+`tests/llm_dispatch/test_fallback_credential_reservation.py`.
+
 #### What the owner can see when the fallback answered
 
 The switch is not silent in a chat. `call_configured_fallback` emits

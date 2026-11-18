@@ -73,7 +73,12 @@ export function createConversationWakeRecovery<
     eventTarget = null;
     target.removeEventListener('pageshow', onWake);
     target.removeEventListener('online', onWake);
-    target.removeEventListener('beforeunload', destroy);
+    target.removeEventListener('pagehide', onPageHide);
+  };
+
+  // A persisted pagehide may be restored by pageshow, which must still wake.
+  const onPageHide = (event: Event): void => {
+    if (!(event as PageTransitionEvent).persisted) destroy();
   };
 
   const start = (target: ConversationWakeEventTarget): void => {
@@ -82,7 +87,7 @@ export function createConversationWakeRecovery<
     eventTarget = target;
     target.addEventListener('pageshow', onWake);
     target.addEventListener('online', onWake);
-    target.addEventListener('beforeunload', destroy, { once: true });
+    target.addEventListener('pagehide', onPageHide);
   };
 
   return Object.freeze({ probe, start, destroy });

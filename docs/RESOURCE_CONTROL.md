@@ -735,7 +735,9 @@ most of it the 1.0 TiB of other `/tmp` entries). Verify
 | Package caches `~/.cache/pip`, `~/.cache/uv` | 29.6 GiB, 23.2 GiB | per install | the tools' own `cache purge`/`cache prune`; Tofu never runs them |
 | Node build outputs `static/` | 38 MiB / 529 | replaced per build | Vite publication (`vite_asset_publication.mjs`) |
 | `logs/` | 91 MiB / 18 | rotating | `lib/logging_pkg/log_retention.py` |
-| `data/mcp-cache` | 460 MiB allocated (2.1 GiB apparent) / 82k: pip 229 MiB, uv 142 MiB, installed uv tools 65 MiB, npm 24 MiB | per tool install | one shared tool cache and installed MCP tools for all commands (`tool_cache_root`), so already single; installed tools are durable runtime, caches follow the tools' own prune |
+| `data/mcp-cache` | 460 MiB allocated (2.1 GiB apparent) / 82k: pip 229 MiB, uv 142 MiB, installed uv tools 65 MiB, npm 24 MiB; 2026-11-18 before the first prune: uv 6.8 GB, pip 1.0 GB, about 146k reclaimable files | per tool install | one shared tool cache and installed MCP tools for all commands (`tool_cache_root`); installed tools are durable runtime. Commands' uv cache (`uv-commands`) and pip cache: `lib/tools/tool_cache_retention.py` runs `uv cache prune` and `pip cache purge` after every command that ran an installer; the launchers' uv cache (`uv`): none (below) |
+| `data/tofudb-authority` | 417 GB / 4,411 entries to depth 2 (2026-11-18; payload segments and WALs) | per durable write | durable storage authority, kept; segments are rewritten and retired by the TofuDB online GC. Inventory sizes it by stat to depth 2, never a walk |
+| `.eval-runs` | ≥ 45 GB (2026-11-18, partial `du`); about 1.3M files copied in by the 11-17/18 takeover copy | per evaluation run | runs, trials, manifests and copied evidence are durable; `scripts/eval_runs_retention.py` reclaims only the `.runtime/{tmp,cache}` of finished runs ("Evaluation run scratch"). Inventory sizes it by stat to depth 2 |
 | `data/host-state` | 1.36 GiB / 5.6k | per `migrate_host --save` | kept: the host move's copy of local-only user state |
 | `data/export` | 517 MiB / 28k: `tofu-open` 405 MiB, `publication-audit-2026-11-15` 113 MiB | per export | kept: release state. Not deduplicated: DolphinFS has no reflinks and hard links would let an edit of one tree change the other |
 | `data/backups` | 1.05 GiB / 583k | per online backup | native online backup retention (STORAGE_OPERATIONS.md) |
@@ -853,6 +855,87 @@ Verify `TestRmTrashWrap::test_cache_tagged_directories_are_deleted_not_trashed`.
 checkout path (`CHECKOUT`); every build preparation removes the caches whose
 checkout no longer exists (`native_engine._retire_orphaned_build_caches`). A
 cache from before the record is kept until its checkout prepares once.
+
+### Tool caches are pruned by their tools after installs
+
+Problem (2026-11-18): the table said `data/mcp-cache` caches "follow the
+tools' own prune", but nothing ran it. The uv and pip caches grew to 7.8 GB and
+about 146k reclaimable files on the shared DolphinFS account, whose quota
+refused file creates during the 11:15 restart on 11-17 and 11-18. Running the
+prune by hand also showed why a shared cache cannot be pruned: uv holds a
+shared lock on its cache for the whole life of every `uv run` process, and
+`uv cache prune` needs the exclusive lock. The vendored MCP launchers are
+long-lived `uv run` processes, so a prune of their cache waits as long as Tofu
+runs.
+
+Decision: `lib/tools/tool_cache_retention.py` owns the retention of the tool
+cache. After a `run_command` command that ran uv, uvx or pip finishes
+(`invokes_package_installer`; restricted principals keep their per-checkout
+cache, which retires with the checkout), `schedule_prune` runs, on one
+coalescing background thread per cache root, the tools' own reclamation:
+`uv cache prune` on the commands' uv cache and `pip cache purge` (pip has no
+narrower prune). `UV_LOCK_TIMEOUT=0` makes uv refuse at once instead of
+waiting while another uv process uses the cache, so a prune never waits for,
+delays or blocks a command; the next install retries. Commands get their own uv
+cache, `data/mcp-cache/uv-commands` (`command_uv_cache`), which no launcher
+pins; MCP launchers keep `data/mcp-cache/uv`. That launcher cache is not
+pruned: uv's prune also deletes cached `uv run` environments, which would undo
+every launcher warm, and its growth follows vendored-source changes, not user
+installs. Installed uv tools, managed Pythons and npm data are never touched.
+Measured: with a prune after each of four repeated installs of a changed local
+wheel, the commands' cache stayed at or below its size after the first install;
+without it, every install left its archive behind
+(`tests/tools/test_tool_cache_retention.py`). No setting, threshold or timer
+was added.
+
+Alternatives rejected: one shared uv cache pruned when its lock is free (with
+a launcher running it never is); `uv cache prune --force` (deletes the live
+launchers' environments); a size or age budget for the cache (a new knob for
+what the tool already decides); pruning the launcher cache after each warm
+(deletes the environment the warm just built, so the next connect starts
+cold).
+
+### Evaluation run scratch
+
+Problem (2026-11-18): `.eval-runs` had no retention owner; runs from 11-02
+were still there and it held at least 45 GB. Most of it is durable evidence
+(trials, results, copied runs, research reports that documents cite), and
+runs are driven from several places: Tofu Workers, the benchmark matrix
+(being moved to the sandbox), relays and schedulers. Nothing can tell from a
+directory alone whether a run is finished.
+
+Decision: `scripts/eval_runs_retention.py` is the owner. Dry run by default;
+`--apply` reclaims. What is reclaimable is fixed by the contract that creates
+it: `rootless_vm.host_paths.child_storage_environment(owner_root)` gives each
+run or session `<owner_root>/.runtime/{tmp,cache,state,data,home,config}` and
+recreates any of them on next use; only `tmp` and `cache` are reconstructible
+scratch. Everything else, including `state`, `data`, `home`, `config` and the
+run's own files, is never touched. A scratch area is live while a process in
+this container holds a path under its run (cwd, root, executable, open file,
+mapping) or names the run in its command line or environment, while a
+result-store manifest (`*.json`, `*.md`, `*.sh`, `*.toml`, `*.yaml` up to two
+levels into the root) names the scratch path, and while its contents changed
+since the previous pass or no pass observed it yet
+(`.eval-runs/.retention/observations.json`). Finished means unchanged across
+two passes with none of those; `--apply` checks processes again immediately
+before it removes anything. Liveness is evidence, not age, so there is no
+retention window to tune. A run driven from another host is visible only
+through its manifests and writes.
+
+Measured on 2026-11-18: 8 `.runtime` areas; 2 finished (`.metadata/.runtime`
+and `harbor-env-20261117/rootless-qemu/.runtime`, 21,083,124 bytes, 1,079
+files, reclaimed); the rest live by open handle, process reference (a running
+Harbor launcher) or result-store reference (the three Harbor sessions). The
+large run trees (`eval-matrix-*`, `frontier-harness-*`, `perf-dispatch-*`,
+`takeover-*`) do not use the `.runtime` layout; their `code-*`, `build` and
+`runs` trees are evidence or inputs their owners still use and have no
+reconstructible scratch this owner may remove.
+
+Alternatives rejected: deleting runs by age (a knob that removes evidence and
+live matrix data); treating `code-*` exports or `build` trees as scratch (no
+contract says they are reconstructible, and the matrix migration reads them);
+a deep walk of every run to find recent writes (the trees hold millions of
+files; the reclaimable scratch is the only tree that must be walked).
 
 ## Memory prefetch corpus index retention
 

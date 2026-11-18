@@ -6,8 +6,11 @@ Replays every recorded request of the LLM replay corpus
 (``tests/fixtures/llm_replay/<scenario>/script.jsonl`` and its request store)
 through ``build_body`` and ``prepare_request`` on the OpenAI, Anthropic and
 Responses wire faces, scenario by scenario in recording order, as one Turn
-would: one text-memo scope, a persistent settled-row holder (so later rounds
-take the memoized paths), and a managed context section plus an event
+would: one text-memo scope, the task-owned memos ``build_round_request``
+attaches (settled canonical rows reused across rounds, the text-count memo's
+provider view, the Anthropic tool-input memo) and a persistent settled-row
+holder, so later rounds take the memoized and resumed paths, and a managed
+context section plus an event
 injection before the latest user message so that lineage is mapped and
 sealed. Each request writes one line: the SHA-256 of the sealed payload, the
 headers (without the per-request trace id), the off-wire lineage evidence
@@ -15,6 +18,15 @@ headers (without the per-request trace id), the off-wire lineage evidence
 Run it on two trees and compare the files byte for byte: a structural
 optimization of request preparation must leave every line unchanged.
 Method: docs/HARNESS_PERFORMANCE.md, "Round floor IV".
+
+``python3 benchmarks/harness_perf/byte_identity.py OUT.jsonl --rust BIN`` is
+the Rust arm: the same history of every request goes through Python and
+through ``BIN byte-identity`` (``packages/tofu-core-rs``), and each line
+records whether the sealed payload bytes, endpoint, headers (without the
+trace id) and offered tool names are identical, with the first differing
+byte offset when they are not. Off-wire evidence (lineage, identities,
+admitted token counts) is Python-only and not compared.
+Evidence: docs/RUST_REWRITE_EVIDENCE.md, "Core loop prototype".
 """
 from __future__ import annotations
 
@@ -79,12 +91,19 @@ def _digest(value) -> str:
 def run(out) -> int:
     from lib.llm._sse_core import prepare_request
     from lib.llm.body import build_body
+    from lib.conversation_sync.settled_rows import settle_items
+    from lib.llm.anthropic_outbound._tool_inputs import ANTHROPIC_TOOL_INPUTS_KEY, ToolInputs
     from lib.llm.request import WIRE_MESSAGE_ROWS_KEY
+    from lib.token_counter.evidence import TEXT_COUNT_VIEW_KEY
+    from lib.token_counter.tiktoken_counter import RequestTextCounts
     from lib.llm_sanitize.context_sections import next_text_memo_round, text_memo_scope
     count = 0
     for scenario, steps in recorded_requests():
         for protocol in PROTOCOLS:
             holder: dict = {}
+            canonical: dict = {}
+            text_counts = RequestTextCounts()
+            tool_inputs = ToolInputs()
             with text_memo_scope():
                 for index, request in enumerate(steps):
                     next_text_memo_round()
@@ -93,6 +112,10 @@ def run(out) -> int:
                                       tools=copy.deepcopy(request.get('tools')) or None,
                                       provider_id='byte-identity',
                                       precomputed_input_tokens=100, context_window=200000)
+                    body['messages'] = canonical['rows'] = settle_items(
+                        body['messages'], previous=canonical.get('rows'))
+                    body[TEXT_COUNT_VIEW_KEY] = text_counts.view('provider')
+                    body[ANTHROPIC_TOOL_INPUTS_KEY] = tool_inputs
                     body[WIRE_MESSAGE_ROWS_KEY] = holder
                     plan = prepare_request(body, api_key='sk-byte-identity',
                                            base_url='http://127.0.0.1:9/v1',
@@ -124,6 +147,74 @@ def _names(tools) -> list:
     return names
 
 
+def run_rust(out, binary: str) -> tuple[int, int]:
+    """Compare Python and ``binary byte-identity`` on every recorded request."""
+    import base64
+    import subprocess
+    from lib.llm._sse_core import prepare_request
+    from lib.llm.body import build_body
+    from lib.llm.request import WIRE_MESSAGE_ROWS_KEY
+    from lib.llm_sanitize.context_sections import next_text_memo_round, text_memo_scope
+    rows, inputs = [], []
+    for scenario, steps in recorded_requests():
+        for protocol in PROTOCOLS:
+            holder: dict = {}
+            with text_memo_scope():
+                for index, request in enumerate(steps):
+                    next_text_memo_round()
+                    messages = _messages(request)
+                    model = request.get('model') or 'claude-sonnet-4'
+                    tools = copy.deepcopy(request.get('tools')) or None
+                    inputs.append(json.dumps({
+                        'protocol': protocol, 'model': model, 'max_tokens': 4096, 'temperature': 1.0,
+                        'tools': tools, 'messages': messages, 'base_url': 'http://127.0.0.1:9/v1',
+                        'api_key': 'sk-byte-identity'}, ensure_ascii=False, default=repr))
+                    body = build_body(model, messages, max_tokens=4096, tools=tools,
+                                      provider_id='byte-identity',
+                                      precomputed_input_tokens=100, context_window=200000)
+                    body[WIRE_MESSAGE_ROWS_KEY] = holder
+                    plan = prepare_request(body, api_key='sk-byte-identity',
+                                           base_url='http://127.0.0.1:9/v1', api_protocol=protocol)
+                    rows.append((scenario, protocol, index, plan))
+    completed = subprocess.run([binary, 'byte-identity'], input='\n'.join(inputs) + '\n',
+                               capture_output=True, text=True, check=True)
+    answers = [json.loads(line) for line in completed.stdout.splitlines() if line.strip()]
+    if len(answers) != len(rows):
+        raise SystemExit(f'{binary} answered {len(answers)} of {len(rows)} requests')
+    matched = 0
+    for (scenario, protocol, index, plan), answer in zip(rows, answers):
+        python_payload = plan.body.payload
+        python_headers = {k: v for k, v in plan.hdrs.items() if k != 'M-TraceId'}
+        line = {'scenario': scenario, 'protocol': protocol, 'step': index,
+                'python_payload': hashlib.sha256(python_payload).hexdigest(),
+                'python_bytes': len(python_payload)}
+        if 'error' in answer:
+            line.update(match=False, cause=answer['error'])
+        else:
+            rust_payload = base64.b64decode(answer['payload_b64'])
+            checks = {
+                'payload': rust_payload == python_payload,
+                'url': answer['url'] == plan.url,
+                'headers': dict(answer['headers']) == python_headers,
+                'tools': answer['tools'] == _names(json.loads(python_payload).get('tools') or ()),
+            }
+            line.update(rust_payload=hashlib.sha256(rust_payload).hexdigest(),
+                        rust_bytes=len(rust_payload), checks=checks, match=all(checks.values()))
+            if not checks['payload']:
+                offset = next((i for i, (a, b) in enumerate(zip(python_payload, rust_payload)) if a != b),
+                              min(len(python_payload), len(rust_payload)))
+                line.update(first_diff=offset,
+                            python_context=python_payload[max(0, offset - 80):offset + 80].decode('utf-8', 'replace'),
+                            rust_context=rust_payload[max(0, offset - 80):offset + 80].decode('utf-8', 'replace'))
+        matched += bool(line['match'])
+        out.write(json.dumps(line, sort_keys=True, ensure_ascii=False) + '\n')
+    return matched, len(rows)
+
+
 if __name__ == '__main__':
     with open(sys.argv[1], 'w', encoding='utf-8') as handle:
+        if sys.argv[2:3] == ['--rust']:
+            matched, total = run_rust(handle, sys.argv[3])
+            print(f'{matched}/{total} requests byte-identical')
+            raise SystemExit(0 if matched == total else 1)
         print(run(handle), 'requests')

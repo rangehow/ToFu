@@ -326,7 +326,40 @@ both authorities, so asking it for eight (as both did until 2026-11-18) read the
 oldest eight; once a lead held more than eight archives every drain checkpoint
 was saved but never found (`no_witness`), nothing it superseded was retired, and
 the first resumed Turn force-compacted from a cold rebuild (tofu lead 1.09 M,
-knowledge lead 1.62 M tokens at 08:33). The helper lists up to the storage
+knowledge lead 1.62 M tokens at 08:33). **A Turn that restarts the server through
+`execute_tools` — Problem:** the live view holds only the gateway container
+call, but the Turn rows also hold the gateway's delegated child receipt
+(`source: execute_calls`, its own `gw_…` call id). The uncompacted boundary
+check required every settled row's call id to be held by the view, and the
+replay scanner never recognized the model-projected container as covering
+the child, so the save returned without a word. On 2026-11-18 the tofu lead
+called `restart_server` that way at 11:14; its attempt saved no checkpoint,
+the completed-prefix restore also refused (`history_changed`), and the
+resumed attempt rebuilt all 141 Turns (3,227 messages) and force-compacted
+3,662,959 tokens. **Decision:** the boundary check counts only model actions
+(a delegated execution receipt never had a call of its own), container
+coverage reads the model projection (`docs/contracts/TOOL_EXECUTION_POLICY.md`,
+"Delegated receipt replay"), and every refusal logs `[CompactionResume] …
+checkpoint not saved: <reason>`. **Rejected:** keeping receipts in the view
+(the model never saw them as calls), a separate drain-time save path for
+self-restarts (the same boundary rule must govern every interruption).
+Specs: `test_suspended_working_view.py::test_turn_that_restarted_the_server_through_execute_tools_resumes_its_view`,
+`test_refused_checkpoint_names_its_reason`, `tests/tasks_pkg/test_delegated_receipt_replay.py`.
+**Which Turn broke a history proof.** A proof is one digest, so the same
+incident's fallback restore refused `history_changed` with no way to name the
+Turn that moved. Each checkpoint now also carries `historyHeaders`: the
+`[turnId, parentTurnId, status, currentAttemptId, modelContextRevision]` its
+proof covers. A covered restore chains them from the previous checkpoint and
+its `publisherHeader`, whose own revision settlement mints after publication
+and which is recorded as null. A refusal logs `[ModelReplay] …
+restore=history_changed first_changed_index=N turn=… checkpoint=… current=…`.
+It logs `first_changed=unrecorded` for a checkpoint older than this record,
+and `first_changed=none` when only the unrecorded publisher revision can differ.
+The record is diagnostic: if it would make the checkpoint invalid or
+over-budget, the checkpoint is published without it. Spec:
+`tests/tasks_pkg/test_history_changed_diagnosis.py`. **Rejected:** a per-Turn
+proof chain in storage (a protocol change on both authorities, for a
+diagnosis). The helper lists up to the storage
 limit (1000, also prune's `keep` bound) and takes the tail; reversing the storage
 order was rejected because the archive route and diagnostics read it ascending.
 **Rejected:** a new Turn-private carrier store

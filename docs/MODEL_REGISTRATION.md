@@ -1359,6 +1359,21 @@ browser sent as `config.model`. Specifications:
 `tests/model_routing/test_model_routing_contract.py::test_unbound_pending_identity_reports_identity_pending_not_registration`
 and `tests/conversation/test_conversation_sync_v3.py::test_v3_route_start_provider_scoped_selection_names_its_request_name`.
 
+## Experiment-reserved credentials
+
+Credential admission is per (deployment, credential); load balancing treats
+every enabled, granted key as production capacity. An experiment's key is
+declared out of bounds for Tofu's own fallback traffic by
+`contracts/experiment_credential_reservations_v1.json` (gateway host + key
+tail, sourced from the experiment owners' launchers), not by a grant change,
+a disable or an RPM cap. `lib/llm_dispatch/credential_reservation.py` scopes
+that declaration to configured-fallback, its-recovery and pool-rescue
+dispatch; `LLMDispatcher._selection_scope` then omits those credentials for
+the scoped call, so the configured and ephemeral (request-group) slot paths
+obey it identically. Primary conversation traffic and deliberate model
+switches keep the full credential set. Rationale, episode replay and specs:
+[NETWORK.md](NETWORK.md) "Experiment-reserved credentials".
+
 ## Health and traceability
 
 Configured enablement and runtime health are separate. Route-missing (an

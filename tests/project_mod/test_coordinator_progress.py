@@ -36,6 +36,11 @@ class Store:
         return next(key for key in self.rows if key[0] == POLICY['namespace'])
 
     def query(self, operation, payload, **kwargs):
+        if operation == 'record.list':
+            keys = sorted(key for namespace, key in self.rows
+                          if namespace == payload['namespace'] and key.startswith(payload['prefix'])
+                          and key > payload.get('after_key', ''))[:payload['limit']]
+            return [{'key': key, **deepcopy(self.rows[(payload['namespace'], key)])} for key in keys]
         assert operation == 'record.get'
         if payload['namespace'] == POLICY['namespace']:
             self.reads += 1
@@ -412,7 +417,7 @@ def test_board_job_translates_only_missing_texts_and_hints(board, board_job):
     assert b.factory().read()['translation'] == {'target': 'Chinese', 'texts': [
         {'source': text, 'text': '译:' + text} for text in board_texts(b.request)]}
     assert b.notices == ['push', 'push'] and not j.warnings
-    # Fully translated: an unchanged re-publish costs one storage read and no provider work.
+    # Fully translated: an unchanged re-publish costs one head read and no provider work.
     reads = b.store.reads
     assert schedule_progress_translation(7, '/project', b.scope, 'Chinese')
     assert b.store.reads == reads + 1 and len(j.calls) == 1

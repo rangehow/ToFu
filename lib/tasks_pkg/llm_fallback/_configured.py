@@ -7,6 +7,7 @@ from lib import log
 from lib.llm import AbortedError
 from lib.llm.conversion import ProtocolConversionError
 from lib.llm.llm_errors import _ERR_BODY_LIMIT, ModelRefusalError
+from lib.llm_dispatch.credential_reservation import fallback_dispatch
 from lib.log import get_logger, task_log_tag
 from lib.tasks_pkg.event_delivery import EventDeliveryError, EventDeliveryRevoked
 
@@ -15,6 +16,7 @@ from . import _errors, _pool, _recovery, _refusal, _requests, _retry, _transport
 logger = get_logger(__name__)
 
 
+@fallback_dispatch()
 def call_configured_fallback(
     task,
     body,
@@ -34,7 +36,11 @@ def call_configured_fallback(
     fallback_disabled,
     on_tool_call_ready=None,
 ):
-    """Serve the admitted configured fallback or settle its actual failure."""
+    """Serve the admitted configured fallback or settle its actual failure.
+
+    Every dispatch of the attempt, its recovery and its rescue avoids
+    experiment-reserved credentials (docs/NETWORK.md).
+    """
     from lib.tasks_pkg.message_input_receipts import MessageInputScopeError
 
     try:

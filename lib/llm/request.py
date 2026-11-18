@@ -16,6 +16,7 @@ from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 import hashlib
+from itertools import islice
 import json
 import math
 import threading
@@ -24,7 +25,8 @@ from types import MappingProxyType
 
 from lib.conversation_sync.settled_rows import (
     SettledDict, SettledList, interchangeable, is_exact_json, is_settled,
-    memo_get, memo_put, rows_memo, settle,
+    memo_get, memo_put, rows_memo, settle, settled_prefix, settled_run_length,
+    store_settled_prefix,
 )
 from lib.utils import sha256_holding_gil, update_holding_gil
 
@@ -652,8 +654,12 @@ def recount_anthropic_input(body, *, model, provider_id='', text_count_view=None
     view = request_text_count_view(text_count_view)
     if view is not None:
         view = view.sibling('provider:anthropic')
-    messages = []
-    for message in body.get('messages') or ():
+    rows = body.get('messages') or ()
+    # The projected list of the leading settled run is held; a later recount
+    # over the same rows projects only the new or replaced ones.
+    held, start = settled_prefix(rows, _RECOUNT_PREFIX_KEY)
+    messages = list(held.payload[:start]) if start else []
+    for message in islice(rows, start, None):
         if is_settled(message):
             # The projection is a pure function of the settled wire row; its
             # settled twin keeps the counter's per-row token slot across rounds.
@@ -664,6 +670,10 @@ def recount_anthropic_input(body, *, model, provider_id='', text_count_view=None
         else:
             projected = _recount_projection(message, view)
         messages.append(projected)
+    run = settled_run_length(rows, start)
+    if run > start:
+        store_settled_prefix(rows, _RECOUNT_PREFIX_KEY, (None,) * run,
+                             payload=tuple(messages[:run]))
     canonical = {'messages': messages, 'system': body.get('system'),
                  'tools': body.get('tools')}
     if view is not None:
@@ -676,6 +686,7 @@ def recount_anthropic_input(body, *, model, provider_id='', text_count_view=None
 
 
 _RECOUNT_PROJECTION_KEY = ('request-json', 'anthropic-recount')
+_RECOUNT_PREFIX_KEY = ('request-json', 'anthropic-recount-prefix')
 
 
 def _recount_projection(message, view):

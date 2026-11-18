@@ -195,7 +195,15 @@ const wakeController = createConversationWakeRecovery({
   check('wake_listeners_are_idempotent',
     listeners.get('pageshow').size === 1
       && listeners.get('online').size === 1
-      && listeners.get('beforeunload').size === 1);
+      && listeners.get('pagehide').size === 1);
+  check('wake_listeners_ignore_beforeunload', !listeners.has('beforeunload'));
+  for (const listener of [...listeners.get('pagehide')]) listener({ persisted: true });
+  check('wake_listeners_survive_bfcache_pagehide',
+    listeners.get('pageshow').size === 1);
+  for (const listener of [...listeners.get('pagehide')]) listener({ persisted: false });
+  check('wake_listeners_are_disposed_on_final_pagehide',
+    [...listeners.values()].every((bucket) => bucket.size === 0));
+  wakeController.start(eventTarget);
   wakeController.destroy();
   check('wake_listeners_are_disposed',
     [...listeners.values()].every((bucket) => bucket.size === 0));
@@ -212,4 +220,4 @@ const wakeController = createConversationWakeRecovery({
     for marker, path in replacements.items():
         script = script.replace(marker, json.dumps(path))
     output = _run_node(script)
-    assert output.count('PASS') == 8, output
+    assert output.count('PASS') == 11, output

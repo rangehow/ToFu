@@ -326,6 +326,10 @@
       "guard": "tests/proof/test_deliverable_proof_contract.py"
     },
     {
+      "path": "contracts/experiment_credential_reservations_v1.json",
+      "guard": "tests/llm_dispatch/test_fallback_credential_reservation.py"
+    },
+    {
       "path": "contracts/resource_policy_v1.json",
       "guard": "tests/resource_control/test_catalog.py",
       "generator": "scripts/gen_resource_policy.py"
@@ -495,6 +499,7 @@
     "docs/COMPUTE_PATROL.md",
     "docs/METRICS.md",
     "docs/HARNESS_PERFORMANCE.md",
+    "docs/RUST_REWRITE_EVIDENCE.md",
     "docs/ROBUSTNESS_AUDIT_20261117.md",
     "docs/README.md",
     "docs/DEVELOPER_RUNTIME.md",

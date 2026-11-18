@@ -20,6 +20,11 @@ Entry points:
   board seeds the history from them, so tasks dropped before this module
   existed are recovered.
 - ``CoordinatorTaskHistory.read``: one page for the HTTP projection.
+- ``untranslated_history_texts`` / ``attach_history_translation``: the display
+  translation of tasks off the board (``progressTaskTranslation``), derived by
+  the board's translation job. A task leaving the board carries the board's
+  translation of its texts (``record_board``), so only tasks that left
+  untranslated are sent to the translator.
 
 Dependencies: ``coordinator_progress`` (contract, head, binding scope), the
 storage record namespace ``taskProgress.historyNamespace`` and the conversation
@@ -46,6 +51,8 @@ NAMESPACE = POLICY['historyNamespace']
 GROUPS = tuple(CONTRACT['$defs']['progressHistoryGroup']['enum'])
 PAGE_SIZE = CONTRACT['$defs']['progressHistoryPage']['properties']['tasks']['maxItems']
 _QUERY_MAX_CHARS = CONTRACT['$defs']['progressTask']['properties']['progress']['maxLength']
+_TRANSLATION_MAX_CHARS = (CONTRACT['$defs']['progressTranslation']['properties']['texts']
+                          ['items']['properties']['text']['maxLength'])
 # record.list's protocol maximum page.
 _RECORD_LIST_LIMIT = 1000
 _OPEN = frozenset({'pending', 'in_progress'})
@@ -142,6 +149,42 @@ def _content(record, task, at):
     if 'due' in task:
         record['due'] = task['due']
         record['dueAt'] = due_ms(task['due'])
+
+
+def _translations(translation, target):
+    """``{source: text}`` of a translation when it is in ``target``."""
+    if not translation or translation['target'] != target:
+        return {}
+    return {entry['source']: entry['text'] for entry in translation['texts']}
+
+
+def task_texts(record):
+    """A task's own translatable texts: its title, then its note."""
+    return list(dict.fromkeys([record['title'], *([record['progress']] if 'progress' in record else [])]))
+
+
+def _translate_record(record, target, known):
+    """Keep in ``record`` the ``target`` translations of its current texts that ``known`` has."""
+    texts = [{'source': text, 'text': known[text]} for text in task_texts(record) if text in known]
+    if texts:
+        record['translation'] = {'target': target, 'texts': texts}
+    else:
+        record.pop('translation', None)
+
+
+def _carry_translation(record, stored, board_translation, target):
+    """Carry the board's ``target`` translation into ``record`` beside its ``stored`` one.
+
+    Without a reading language the record keeps its stored translation, pruned to
+    the texts it still carries; another language replaces it.
+    """
+    if target is None:
+        target = stored['target'] if stored else None
+        if target is None:
+            record.pop('translation', None)
+            return
+    known = {**_translations(stored, target), **_translations(board_translation, target)}
+    _translate_record(record, target, known)
 
 
 def apply_board(records, scope, previous, previous_keys, board, keys, *, touched=None):
@@ -321,7 +364,8 @@ class _Records:
             after = rows[-1]['key']
 
 
-def record_board(scope, previous, previous_keys, board, *, client, read_transcript=transcript_boards):
+def record_board(scope, previous, previous_keys, board, *, client, read_transcript=transcript_boards,
+                 translation=None, translation_target=None):
     """Record one board write before its head CAS; returns the keys the head stores.
 
     ``previous`` is the board this write replaces in the same binding (None for
@@ -332,6 +376,11 @@ def record_board(scope, previous, previous_keys, board, *, client, read_transcri
     next changed board seeds again; nothing is lost because the transcript keeps
     every board. A conflicting record write raises ``database_conflict`` for
     the caller's CAS loop to retry.
+
+    ``translation`` is the replaced board's display translation and
+    ``translation_target`` the reading language of this write (None without
+    auto-translate): each written task keeps its texts' translations in that
+    language, so a task leaving the board still reads translated.
     """
     records = _Records(client, scope)
     if previous is not None and previous_keys is None:
@@ -344,6 +393,8 @@ def record_board(scope, previous, previous_keys, board, *, client, read_transcri
         folded, keys = fold_boards(scope, [*earlier, previous, board])
         for key, value in folded.items():
             row = records.get(key)
+            _carry_translation(value, row['value'].get('translation') if row else None,
+                               translation, translation_target)
             if row is None or row['value'] != value:
                 records.put(key, value, row['version'] if row else 0)
         logger.info('[TaskHistory] seeded %d tasks of %s from %d board revisions',
@@ -360,8 +411,59 @@ def record_board(scope, previous, previous_keys, board, *, client, read_transcri
         if row is not None:
             loaded[key], versions[key] = row['value'], row['version']
     for key in apply_board(loaded, scope, previous, previous_keys, board, keys, touched=touched):
+        _carry_translation(loaded[key], loaded[key].get('translation'), translation, translation_target)
         records.put(key, loaded[key], versions.get(key, 0))
     return keys
+
+
+def untranslated_history_texts(scope, target, *, client):
+    """Texts of ``scope``'s tasks off the board without a ``target`` translation, each once.
+
+    Tasks on the board are the board translation's (``untranslated_texts``).
+    """
+    texts = []
+    for record in _Records(client, scope).all().values():
+        if 'departedAt' in record:
+            known = _translations(record.get('translation'), target)
+            texts.extend(text for text in task_texts(record) if text not in known)
+    return list(dict.fromkeys(texts))
+
+
+def attach_history_translation(scope, target, translations, *, client):
+    """Merge ``{text: translation}`` into ``scope``'s tasks off the board; returns how many changed.
+
+    Another ``target`` replaces a task's stored translation. Whitespace runs
+    collapse to one space; empty or over-long translations are skipped. A record
+    written concurrently is re-read and merged again.
+    """
+    accepted = {}
+    for source, text in translations.items():
+        normalized = ' '.join(text.split())
+        if normalized and len(normalized) <= _TRANSLATION_MAX_CHARS:
+            accepted[source] = normalized
+    records, changed = _Records(client, scope), 0
+    for key, value in records.all().items():
+        if 'departedAt' not in value or not any(text in accepted for text in task_texts(value)):
+            continue
+        for _ in range(POLICY['casAttempts']):
+            row = records.get(key)
+            if row is None:
+                break
+            record = deepcopy(row['value'])
+            _translate_record(record, target, {**_translations(record.get('translation'), target), **accepted})
+            if record == row['value']:
+                break
+            try:
+                records.put(key, record, row['version'])
+            except StorageError as exc:
+                if exc.code != 'database_conflict' and not exc.retryable:
+                    raise
+                continue
+            changed += 1
+            break
+        else:
+            raise StorageError('database_conflict', 'Task history changed concurrently; translation not attached')
+    return changed
 
 
 def due_outcome(entry, now):
@@ -384,6 +486,8 @@ def _entry(record, *, board=None, task=None, now):
         _content(entry, task, board['updatedAt'])
         entry.pop('departedAt', None)
         entry['lastSeenAt'] = board['updatedAt']
+    elif 'translation' in record:
+        entry['translation'] = deepcopy(record['translation'])
     entry['onBoard'] = task is not None
     entry['dropped'] = task is None and entry['status'] in _OPEN
     outcome = due_outcome(entry, now)
@@ -438,7 +542,8 @@ class CoordinatorTaskHistory:
         if needle:
             def texts(entry):
                 written = (entry['title'], entry.get('progress', ''), *entry.get('formerTitles', ()))
-                return (*written, *(shown_as[text] for text in written if text in shown_as))
+                own = [item['text'] for item in entry.get('translation', {}).get('texts', ())]
+                return (*written, *own, *(shown_as[text] for text in written if text in shown_as))
             entries = [entry for entry in entries if any(needle in text.casefold() for text in texts(entry))]
         for entry in entries:
             page['counts'][_group(entry)] += 1

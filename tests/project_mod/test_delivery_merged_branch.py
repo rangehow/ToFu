@@ -121,7 +121,8 @@ def test_conflict_with_a_canonical_change_the_task_never_merged_is_held(repo, mo
     receipt = settle(repo)
 
     assert receipt['state'] == 'blocked' and receipt['phase'] == 'commit_adoption', receipt
-    assert receipt['reason'] == 'task_delta_conflict: three-way merge conflicts at: shared.txt'
+    assert receipt['reason'].startswith(
+        'task_delta_conflict: three-way merge conflicts at: shared.txt (both sides changed line')
     assert receipt['retry']['conflictPaths'] == ['shared.txt']
     assert git(root, 'rev-parse', 'HEAD') == head
     assert git(root, 'status', '--porcelain') == ''

@@ -128,7 +128,8 @@ def test_a_genuine_source_conflict_is_held_and_names_the_source(reviewed, monkey
     assert git(root, 'show', 'HEAD:shared.txt').count('line 10 (first)') == 1
 
     assert held['state'] == 'blocked' and held['phase'] == 'commit_adoption', held
-    assert held['reason'].startswith('task_delta_conflict: three-way merge conflicts at: shared.txt;')
+    assert held['reason'].startswith(
+        'task_delta_conflict: three-way merge conflicts at: shared.txt (both sides changed line 10);')
     assert 'generated outputs rebuild from the merged sources' in held['reason']
     assert 'shared.txt' in held['retry']['conflictPaths']
     assert CATALOG in held['retry']['conflictPaths']

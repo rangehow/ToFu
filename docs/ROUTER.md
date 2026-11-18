@@ -756,7 +756,7 @@ chat and the scheduler list already change it).
 | `recovery` | `project_dispatch/recovery.py` per assignment and per startup scope | project, assignment and grant revision, error class and code, startup episode; authority refusals (`PermissionError`/`ValueError`) are the pass's ordinary skips |
 | `outbox` | `channels/outbox.py` when a send settles | item and state (`failed`, `unknown`) |
 | `channel` | each channel supervisor's scheduler tick (`reconcile_channel_bridges` for 大象, `reconcile_github_sessions` for GitHub) | channel, unhealthy state and last connection time; detail text changes every restart and is not identity |
-| `quota` | the production quota watch (`lib/llm_dispatch/quota_watch.py`) through `lib/router/watchdog/quota.py`, on its own delivery thread | one episode of one (AppId, wire model) lane: conversation rounds rejected by the provider's per-AppId minute limit and held by dispatcher backpressure; the watch closes it after a full provider minute of accepted rounds without such a rejection |
+| `quota` | the production quota watch (`lib/llm_dispatch/quota_watch.py`) of every process that runs conversation rounds, through `lib/router/watchdog/quota.py`, on its own delivery thread | one closed-to-open transition of one (AppId, wire model) lane's merged alert (`watchdogQuotaLane`): conversation rounds rejected by the provider's per-AppId minute limit and held by dispatcher backpressure in any process; an open while the alert is open joins its holders and wakes nothing, and it closes when every holding process's watch saw a full provider minute of accepted rounds without such a rejection (or the holder is proved dead) |
 | `client` | browser crash capture (`lib/logging_pkg/client_crash.py`) after storing a crash record | browser page instance: the reloaded tab's unclean-exit report and Chrome's report of the same crash are one episode; typed facts only, never page content ([LOGGING.md](LOGGING.md)) |
 | `storage` | the request-services process's `StorageRuntime` when readiness returns after a fence, through `lib/router/watchdog/storage.py` on the runtime's announcement thread | one fence episode, by its start under a `fence` tag and in its own `fence` fault episode (never folded into the supervisor's `authority` storage episodes); recorded for every owner with a router home, since no storage-backed signal can be written while the fence holds. The detail carries since, until, duration, cause, last restart error and restart attempts. While the fence holds, the manager log, `serverctl status` and the browser show it ([STORAGE.md](STORAGE.md)) |
 | `patrol` | the periodic review, before its snapshot, through `lib/router/watchdog/compute_patrol.py`, from each `publication.json` under `<data>/compute_patrol/u<owner>/<patrol>/` | one published episode: (patrol, kind, job or condition, since) for a hung or stale-queued job (`compute_job_hung`, `compute_job_queued_stale`) or a degraded patrol (`compute_patrol_degraded`); one `compute_patrol_stale` per publication past its `staleAfter`. The intake closes an episode the patrol no longer publishes, and every one when the patrol was stopped on purpose; while the patrol is stale its job signals stay open. The patrol only notifies; the hint names the Global Router as the router to the owning lead ([COMPUTE_PATROL.md](COMPUTE_PATROL.md)) |
@@ -773,6 +773,43 @@ AppIds serving the model), and its hint tells the Watchdog that the Global
 Router decides whether to pause the other workload. The watch resolves the
 signal on recovery, so it never depends on the model to close it. Rules and
 alternatives: [llm_io.md](modules/llm_io.md), "Production quota watch".
+
+**Quota alerts wake on state changes (2026-11-18).** Problem: during the
+…5409 throttling of 2026-11-18 (08:33-09:25 CST) the Watchdog ran 51 Turns in
+2.02 h for $55.78, 4.7 times its baseline per hour, 47 of them idle: 45 were
+woken by quota signals, one per episode open. Every execution shard keeps its
+own in-memory watch and sees only its own task's rounds, so one throttled lane
+opened and closed an episode in each shard every minute or two (133
+transitions, 71 opens on …5409), and each open was a new signal identity
+(lane plus open time) and a new wake. The Watchdog's own content-filter
+fallback then ran on the throttled AppId (63 of its 136 rounds), and one
+attempt failed when that fallback was throttled too. Decision: the producer
+keeps one alert record per owner and lane (`watchdogQuotaLanes`,
+`watchdogQuotaLane` in `contracts/router_v1.schema.json`), written by
+compare-and-set. Each process's watch reports as itself (its process
+identity, taken after the shard's fork). An open adds its reporter to the
+holders; only the closed-to-open transition names a new signal (identity:
+provider, lane, open time) and wakes the Watchdog, so the same alert, lane
+and state never wakes again, whichever process reports it. A close removes
+its reporter; the last holder's close resolves the signal. A holder whose
+process the kernel proves dead (`lib/storage/worker_process.py`) is dropped
+at the next transition, so a retired shard cannot hold an alert open. The
+replay of that window (`tests/router/test_watchdog_quota.py`, fixture
+`tests/fixtures/router/quota_watch_7d3ec336.json`) wakes 6 times, once per
+closed-to-open transition, and keeps 12 Watchdog Turns ($17.35) of 51
+($55.78), counting each kept Turn at its observed cost. Separately, a
+Watchdog Turn dispatches inside `avoid_throttled_appids`: its picks prefer
+slots whose AppId has no open alert of its owner, no episode open in its
+process and no per-credential gate in a rejection run, ahead of its warm key;
+like the existing AppId avoidance it never empties the candidates, so a model
+served only by a throttled AppId still answers. Alternatives rejected: a
+debounce or minimum interval between quota wakes (a tuning knob, constraint
+5, and it still wakes per flap at any setting); one watch shared across
+processes over storage on every dispatch (a storage write on the hot path of
+every round); keying the signal by lane alone (a resolved signal never
+reopens, so a later real episode would never wake); excluding throttled
+AppIds for every conversation (the routing change belongs to the dispatcher's
+own rotation and would drop a lone route).
 
 Reporting never creates a Watchdog (owners without an available one record
 nothing) and never raises into the reporter. Open signals keep an index row
@@ -1195,7 +1232,11 @@ point. Scope:
   owner's drafts); content heuristics (`key = value` shapes) in the secret scan
   (source code is full of them; only exact proofs refuse); treating any card
   answer text as authority without its durable receipt (a relay could quote it).
-  Specifications: `tests/channels/test_lead_owner_chat.py`,
+  Specifications: `tests/channels/test_lead_owner_chat.py` (its
+  `test_lead_audit_5_exercise_continuation_turn_sends_the_owner_a_file` is the
+  lead audit's one end-to-end run, 2026-11-18: a continuation Turn's message
+  and file reach the command chat through the real outbox executor and a
+  recording test channel, settled `sent`),
   `tests/project_mod/test_lead_attachments.py`,
   `tests/project_mod/test_coordinator_workers.py::test_the_owners_answer_to_a_wakes_question_is_its_request`,
   `tests/router/test_question_relay.py`, `tests/router/test_question_answer_seam.py`.
@@ -2395,7 +2436,12 @@ projects. Nothing else changes.
   looping `send_project_message` (refuses Workers of other projects, no
   owning-lead report, one tool call per recipient); a wake per recipient (a
   broadcast must not start Turns nobody asked for). Specification:
-  `tests/router/test_router_broadcast.py` (real storage, SQLite and native).
+  `tests/router/test_router_broadcast.py` (real storage, SQLite and native);
+  its `test_lead_audit_4_exercise_router_controls_another_projects_worker_and_broadcasts`
+  is the lead audit's one end-to-end run, 2026-11-18: from its own executing
+  reply the Global Router broadcasts (lead, lead report, Worker), reads another
+  project's Worker and stops it under `owner_delegation` (audit record
+  `global_router`, `completed`; the Worker's Attempt ends `interrupted`).
 
 ### R16. Owner off-limits Hope queues (Global Router)
 

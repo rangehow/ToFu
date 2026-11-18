@@ -34,7 +34,11 @@ export interface TaskDeliverablesPorts {
   now?(): number;
 }
 
-export interface TaskDeliverableSummary { key: string; title: string; count: number; latestAt: number }
+export interface TaskDeliverableSummary {
+  key: string; title: string; count: number; latestAt: number;
+  /** The title's display translation (from the task's history), when there is one. */
+  translation?: { title: string };
+}
 
 export interface TaskDeliverables {
   /** Items of a task key (or OTHER_TASKS) from the latest summary; 0 before it loads. */

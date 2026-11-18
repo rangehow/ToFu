@@ -194,3 +194,67 @@ def test_ordinary_source_and_documents_pass_the_scan(monkeypatch):
                           ('report.pdf', b'%PDF-1.4 Authorization is discussed in section 2'),
                           ('README.md', b'Set GITHUB_TOKEN in the vault, never here.')):
         assert attachment_secrets.secret_findings(name, content) == [], name
+
+
+class _TestChannel:
+    """The outbox executor's adapter port, recording instead of reaching any platform."""
+
+    def __init__(self):
+        self.texts, self.files, self.shown = [], [], []
+
+    def send(self, thread, text, *, marker, reply_to_external_id):
+        self.texts.append((str(thread), text))
+        return {'ok': True, 'externalId': str(7200000000000000000 + len(self.texts) + len(self.files)),
+                'clientId': marker}
+
+    def send_attachment(self, thread, path, *, kind, marker):
+        from pathlib import Path
+        from tests.channels.conftest import make_event
+        self.files.append((str(thread), Path(path).read_bytes(), kind))
+        external_id = str(7200000000000000000 + len(self.texts) + len(self.files))
+        # The thread shows the file, which is what confirms it (C10).
+        self.shown.append(make_event(str(thread), external_id, sender='robot', text=''))
+        return {'ok': True, 'externalId': external_id, 'clientId': marker}
+
+    def history_since(self, thread, since_ms):
+        return []
+
+    def history_from(self, thread, external_id):
+        return [event for event in self.shown if int(event.external_id) >= int(external_id)]
+
+
+def test_lead_audit_5_exercise_continuation_turn_sends_the_owner_a_file(
+        channel, no_watchdog, audits, monkeypatch, tmp_path, record_property):
+    """Lead audit stage 2 #5 ("live but not exercised" since fd22456163), run once.
+
+    A Project Router's continuation Turn (running under its own dispatch grant, the case
+    refused 'Only a project lead sends to channels' at 10:31:47) sends the owner's command
+    chat a message with a file of its registered project. The real outbox executor then
+    delivers both to a recording test channel; no platform or real owner chat is reached.
+    """
+    import json
+    from lib.channels import outbox
+    (tmp_path / 'summary.txt').write_bytes(b'# Stage 2\nAll four items verified.\n')
+    monkeypatch.setattr('lib.router.registered_projects.registered_project',
+                        lambda owner, requested: str(tmp_path) if requested == str(tmp_path) else None)
+    scope = {'user_id': OWNER, 'project_path': PROJECT, 'conversation_id': LEAD, 'binding_revision': 1}
+    result = tools.execute('channel_send', {
+        'thread': COMMAND, 'text': 'Stage 2 summary attached', 'idempotency_key': 'x5',
+        'attachments': [{'path': 'summary.txt', 'project': str(tmp_path)}]}, _dispatch_task(scope, LEAD))
+    item = result['item']
+    assert item['state'] == 'queued' and item['origin']['conversationId'] == LEAD
+    assert [record['name'] for record in item['attachments']] == ['summary.txt']
+    [(event, fields)] = audits
+    assert event == 'lead_channel_send' and fields['outcome'] == 'accepted'
+
+    test_channel = _TestChannel()
+    outbox.execute(OWNER, test_channel, channel='dx', store=channel)
+    assert [thread for thread, _ in test_channel.texts] == [COMMAND]
+    assert 'Stage 2 summary attached' in test_channel.texts[0][1]
+    assert [(thread, content) for thread, content, _ in test_channel.files] == [
+        (COMMAND, b'# Stage 2\nAll four items verified.\n')]
+    assert channel.outbox_item(item['id'])[0].state == 'sent'
+    record_property('lead_audit_5', json.dumps({
+        'item': item['id'], 'thread': COMMAND, 'texts': len(test_channel.texts),
+        'files': [record['name'] for record in item['attachments']],
+        'state': channel.outbox_item(item['id'])[0].state}))

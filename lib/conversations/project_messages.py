@@ -19,6 +19,9 @@ import hashlib
 from itertools import chain
 import json
 from pathlib import Path
+from concurrent.futures import Future
+from contextvars import copy_context
+import threading
 import time
 import uuid
 
@@ -1016,7 +1019,90 @@ class ProjectMailbox:
         return changed[message_id]
 
 
+# Messages a lead's response started while it streamed, by idempotency key:
+# {'arguments', 'thread', 'future', 'adopted'} (docs/PROJECT_COORDINATION.md,
+# "A project message starts when its arguments are complete").
+_STREAMED_SENDS = '_streamedProjectMessages'
+_STREAMED_LOCK = threading.Lock()
+
+
+def start_streamed_send(task: dict, name: str, arguments: dict) -> None:
+    """StreamStartPort.start: commit a message the moment its arguments are complete.
+
+    The send runs on its own thread so the provider stream is never held by
+    storage; adoption and settlement join it. A key already started by this
+    task (a replacement response re-issuing it) starts nothing new.
+    """
+    key = arguments.get('idempotency_key')
+    if name != 'send_project_message' or not isinstance(key, str):
+        return
+    record = {'arguments': copy.deepcopy(arguments), 'future': Future(), 'adopted': False}
+
+    def send():
+        try:
+            record['future'].set_result(_execute(name, record['arguments'], task))
+        except BaseException as error:
+            logger.info('[ProjectMessages] streamed send not committed (task=%s): %s', task.get('id'), error)
+            record['future'].set_exception(error)
+    record['thread'] = threading.Thread(target=copy_context().run, args=(send,),
+                                        name='project-message-stream-start', daemon=True)
+    with _STREAMED_LOCK:
+        sends = task.setdefault(_STREAMED_SENDS, {})
+        if key in sends:
+            return
+        sends[key] = record
+        record['thread'].start()
+
+
+def _streamed_record(task: dict, key) -> dict | None:
+    with _STREAMED_LOCK:
+        record = (task.get(_STREAMED_SENDS) or {}).get(key)
+    if record is not None:
+        record['thread'].join()
+    return record
+
+
+def settle_streamed_sends(task: dict) -> None:
+    """StreamStartPort.settle: retract every streamed message no dispatch adopted.
+
+    A delivered message cannot be unsent, so withdrawal is an explicit
+    correction from the same sender. Runs after each tool batch and when the
+    attempt's model loop ends; a settled record is forgotten.
+    """
+    with _STREAMED_LOCK:
+        records = task.pop(_STREAMED_SENDS, None) or {}
+    for key, record in records.items():
+        record['thread'].join()
+        if record['adopted'] or record['future'].exception() is not None:
+            continue
+        sent = record['future'].result()['message']
+        retraction = {
+            'conversation_id': record['arguments']['conversation_id'], 'kind': 'steer',
+            'idempotency_key': 'withdrawn:' + hashlib.sha256(key.encode()).hexdigest()[:32],
+            'content': (f'Withdrawn by its sender: disregard project message {sent["id"]}. The response '
+                        'that sent it was discarded before it was final; if it still applies, it is sent again.')}
+        try:
+            _execute('send_project_message', retraction, task)
+        except (ProjectMessageError, StorageError) as error:
+            logger.warning('[ProjectMessages] retraction of streamed message %s failed (task=%s): %s',
+                           sent['id'], task.get('id'), error)
+
+
 def execute(name: str, args: dict, task: dict) -> dict:
+    """The ordinary dispatch of a project message call.
+
+    A send whose response streamed it already is adopted: the dispatch waits
+    for that start and submits again, which returns the same original (or
+    refuses a changed body, leaving the streamed one to be retracted).
+    """
+    record = _streamed_record(task, args.get('idempotency_key')) if name == 'send_project_message' else None
+    result = _execute(name, args, task)
+    if record is not None:
+        record['adopted'] = True
+    return result
+
+
+def _execute(name: str, args: dict, task: dict) -> dict:
     owner, sender, project = identity(task)
     from jsonschema import Draft202012Validator
     tool = next(t for t in TOOLS if t['function']['name'] == name)

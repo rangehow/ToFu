@@ -26,8 +26,8 @@ const SUMMARY = {
   otherCount: 1,
 };
 
-function pages(): Record<string, LeadDeliverablePage> {
-  const page = (items: LeadDeliverable[], nextCursor: string | null = null) => ({ conversationId: 'lead', items, nextCursor, ...SUMMARY });
+function pages(summary: Pick<LeadDeliverablePage, 'tasks' | 'otherCount'> = SUMMARY): Record<string, LeadDeliverablePage> {
+  const page = (items: LeadDeliverable[], nextCursor: string | null = null) => ({ conversationId: 'lead', items, nextCursor, ...summary });
   return {
     [KEY_A]: page([item('r2', { key: KEY_A, title: 'Resume' })], 'c1'),
     [`${KEY_A}:c1`]: page([item('r1', { key: KEY_A, title: 'Resume' })]),
@@ -36,11 +36,11 @@ function pages(): Record<string, LeadDeliverablePage> {
   };
 }
 
-function setup() {
+function setup(summary?: Pick<LeadDeliverablePage, 'tasks' | 'otherCount'>) {
   const reads: string[] = [];
   const handlers: Array<(frame: { kind?: unknown; conversationId?: unknown }) => void> = [];
   const opened: string[] = [];
-  const store = pages();
+  const store = pages(summary);
   const card = createCoordinatorProgress({ open: true, finishedOpen: false, toggle() {}, toggleFinished() {}, now: () => NOW });
   document.body.append(card.el);
   const helper = createTaskDeliverables({
@@ -162,4 +162,18 @@ it('without task keys (an older server) the board rows read as before and nothin
   expect(row.textContent).toContain('Resume');
   expect(row.querySelector('.coordinator-progress-task-toggle')).toBeNull();
   expect(document.querySelector('.coordinator-progress-earlier')!.contains(toggle(KEY_A))).toBe(true);
+});
+
+it("an earlier task reads in its display translation, with the board's Original toggle back to its title", async () => {
+  setup({ ...SUMMARY, tasks: [SUMMARY.tasks[0], { ...SUMMARY.tasks[1], translation: { title: '旧调研' } }] });
+  await flush();
+  const name = () => toggle(KEY_OLD)!.querySelector<HTMLElement>('.coordinator-progress-task-title')!;
+  expect(name().textContent).toBe('旧调研');
+  expect(name().title).toBe('Old survey');
+  const original = [...document.querySelectorAll<HTMLButtonElement>('.coordinator-progress-commands button')]
+    .find(button => button.textContent === 'chat.bilingualOriginal')!;
+  expect(original.hidden).toBe(false);
+  original.click();
+  expect(name().textContent).toBe('Old survey');
+  expect(original.getAttribute('aria-pressed')).toBe('true');
 });

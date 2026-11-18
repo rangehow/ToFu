@@ -639,9 +639,12 @@ def test_the_contract_enforces_the_trigger_rule_and_the_model_facing_schemas_sta
     tools = {tool['function']['name']: tool['function'] for tool in [*ROUTER_TOOL_SCHEMAS, *COORDINATOR_TOOLS]}
     restart = tools['restart_server']
     delegation = tools['control_conversation']['parameters']['properties']['owner_delegation']
-    for text in (restart['description'], restart['parameters']['properties']['instruction_id']['description'],
-                 delegation['description'], delegation['properties']['instruction_id']['description']):
+    # The trigger fields are the rule's one model-facing definition (the descriptions defer to them).
+    for text in (restart['parameters']['properties']['instruction_id']['description'],
+                 delegation['properties']['instruction_id']['description']):
         assert 'exactly one of event_id or source_turn_id' in text, text
+    for text in (restart['description'], delegation['description']):
+        assert 'trigger field' in text, text
     # Providers reject combinators in tool parameters: the rule stays out of the wire schema.
     for schema in (restart['parameters'], delegation):
         assert not {'allOf', 'anyOf', 'oneOf', 'if', 'not'} & set(schema), schema

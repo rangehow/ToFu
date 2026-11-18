@@ -260,6 +260,10 @@ def _deliver(notice: dict, *, dispatch=None) -> dict | None:
             conversation_id=conversation_id, command_id=notice_command_id(notice['owner'], restart_id))
         if claimed is None or claimed.get('state') != 'delivering':
             return None  # Finished meanwhile by another process.
+    if isinstance(claimed.get('outcome'), dict):
+        # Every other lead told of a delegated restart hears its outcome (idempotent per restart).
+        from lib.router.owner_delegation import report_restart_outcome
+        report_restart_outcome(claimed, claimed['outcome'])
     disposition = _dispatch(claimed, dispatch)
     if disposition in _ACCEPTED_DISPOSITIONS:
         state = 'delivered'

@@ -497,6 +497,28 @@ def test_guest_network_setup_always_enables_only_expected_interfaces():
     assert "default via 10.0.2.2" in public
 
 
+def test_guest_nic_setup_selects_the_device_backed_nic_not_docker0(host_tmp_path):
+    # Once Docker runs, docker0 sorts before eth0; taking it cut Dockerfile builds off the egress proxy.
+    from rootless_vm.image_cache import GUEST_NIC_SETUP
+
+    net = host_tmp_path / "net"
+    for name, device in (("docker0", False), ("eth0", True), ("lo", False), ("veth1", False)):
+        (net / name).mkdir(parents=True)
+        if device:
+            (net / name / "device").mkdir()
+    probe = GUEST_NIC_SETUP.replace("/sys/class/net", str(net)).split("; test -n", 1)[0]
+    selected = subprocess.run(["sh", "-c", probe + '; printf %s "$iface"'], capture_output=True, text=True,
+                              timeout=10, check=True)
+    assert selected.stdout == "eth0"
+
+
+def test_dockerfile_recipes_from_the_docker0_nic_selector_are_not_reused():
+    from rootless_vm import image_cache
+
+    assert image_cache._BUILD_CONTEXT_SCHEMA == 6
+    assert image_cache._SCHEMA == 4, "prebuilt-image (Terminal-Bench) cache identities stay unchanged"
+
+
 def test_guest_agent_maps_signal_only_status_to_shell_return_code(
     host_tmp_path, monkeypatch
 ):
@@ -589,6 +611,12 @@ def test_qemu_launcher_sanitizes_host_environment():
     assert "LD_PRELOAD" not in sanitized
     assert "PYTHONPATH" not in sanitized
     assert not any("KEY" in name or "TOKEN" in name for name in sanitized)
+
+
+def test_qemu_launcher_address_space_does_not_scale_with_host_cpus():
+    # glibc's default arena ceiling is 8 x CPUs; under the jail's RLIMIT_AS that made QEMU
+    # fail thread creation on a 180-CPU host. The jail pins one arena.
+    assert qemu_launcher._sanitized_environment()["MALLOC_ARENA_MAX"] == "1"
 
 
 def test_parent_death_wrapper_does_not_leave_orphaned_process(host_tmp_path):
@@ -923,9 +951,9 @@ def test_prepared_image_dockerfile_context_is_content_addressed(host_tmp_path):
             build_context=context,
         )
     )
-    assert first.recipe.schema == 5
+    assert first.recipe.schema == 6
     assert first.recipe.build_context_sha256
-    assert first._marker_payload("disk", {"env": [], "workdir": "/"})["schema"] == 5
+    assert first._marker_payload("disk", {"env": [], "workdir": "/"})["schema"] == 6
 
     dockerfile.write_text("FROM example/base:pinned\nRUN mkdir -p /different\n")
     changed = PreparedImageCache(

@@ -66,3 +66,75 @@ def query_many(client: Any, requests: Sequence[tuple[str, Mapping[str, Any] | No
         except StorageError as error:
             outcomes.append(error)
     return outcomes
+
+
+def _request_key(operation: str, payload: Mapping[str, Any] | None) -> str:
+    import json
+    return operation + '\0' + json.dumps(payload or {}, sort_keys=True, separators=(',', ':'),
+                                         ensure_ascii=False, default=repr)
+
+
+class PrefetchedReads:
+    """Independent reads of several owners, sent together in one ``query_many``.
+
+    The first ``query`` for any listed (operation, payload) pair sends the
+    whole exchange on its own thread (no hand-off to another thread, which
+    in a busy interpreter waits for the lock); later ones wait for it if it is
+    still in flight. Each answer serves as many reads as the request was
+    listed (two owners that read one row list it twice); any other read, a
+    read past those, and every read after a failed exchange go to
+    ``client.query``. An answered StorageError is raised as a lone ``query``
+    would raise it. Nothing is cached beyond the object.
+    """
+
+    def __init__(self, client: Any, requests: Sequence[tuple[str, Mapping[str, Any] | None]]) -> None:
+        import threading
+        self._client = client
+        unique: dict[str, tuple[str, Mapping[str, Any] | None]] = {}
+        self._remaining: dict[str, int] = {}
+        for operation, payload in requests:
+            key = _request_key(operation, payload)
+            unique.setdefault(key, (operation, payload))
+            self._remaining[key] = self._remaining.get(key, 0) + 1
+        self._requests = list(unique.values())
+        self._index = {key: index for index, key in enumerate(unique)}
+        self._lock = threading.Lock()
+        self._exchange_lock = threading.Lock()
+        self._answers: list[Any] | None = None
+
+    def _exchange(self) -> list[Any] | None:
+        with self._exchange_lock:
+            if self._answers is None:
+                from lib.storage.errors import StorageError
+                try:
+                    self._answers = query_many(self._client, self._requests)
+                except StorageError:
+                    self._answers = []
+            return self._answers
+
+    def _take(self, key: str) -> int | None:
+        with self._lock:
+            if not self._remaining.get(key):
+                return None
+            self._remaining[key] -= 1
+            return self._index[key]
+
+    def query(self, operation: str, payload: Mapping[str, Any] | None = None,
+              deadline: float | None = None, **options) -> Any:
+        index = None if options else self._take(_request_key(operation, payload))
+        answers = self._exchange() if index is not None else None
+        if answers:
+            from lib.storage.errors import StorageError
+            outcome = answers[index]
+            if isinstance(outcome, StorageError):
+                raise outcome
+            return outcome
+        return (self._client.query(operation, payload, deadline=deadline, **options)
+                if deadline is not None else self._client.query(operation, payload, **options))
+
+    def __call__(self, *, write: bool = False):
+        """A client factory: reads come from here, writes from the real client."""
+        if write:
+            from lib.storage import get_storage_client
+            return get_storage_client(write=True)
+        return self

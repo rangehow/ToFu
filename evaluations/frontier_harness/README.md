@@ -98,6 +98,16 @@ beyond the task contract are unverified, so reports disclose "Pier not used".
 - **Network.** The trial egress proxy is an allowlist (`--egress-allowlist`, FHE `providers.sh` hosts minus the provider host). Agent and verifier share it, and the run records it. Model calls reach the relay directly. The Tofu benchmark-source guard is off: `--no-source-guard`, since the allowlist is the policy. A `no-network` (DeepSWE) agent gets an empty allowlist and its verifier no network at all. The proxy binds clients that honor the proxy environment; a process that dials the VM's upstream proxy directly is not stopped, so this is not a packet-level guarantee.
 - **Context audit.** `--first-body-dir` keeps the first request of every trial. Every relay record also lists `tofu-context` block ids and date markers. Until headless context slimming lands, this is the record of exactly what each harness injected.
 
+`--protocol fhe-v11` (FrontierHarness Eval v1.1, whose study runs every model and harness at effort `max`) keeps everything above except the effort: Tofu gets `--thinking max` and Codex `model_reasoning_effort = "max"`, which FRIDAY's kimi-k3 Responses face accepts (probe 2026-11-13: HTTP 200, reasoning output, effort echoed).
+
+`--protocol fhe-v11-hold` (PREREG-2 Amendment 7) is `fhe-v11` without our provider quota in the agent budget, since FHE's reference runs have no rate limits:
+- **Held seconds.** The relay times each model request's whole hold in its gates before going upstream: key cool-down, request window, token window, and the queue on their locks. It logs the hold per call as `held_s` and serves a per-trial running total, holds in progress included, at `GET /arm/<arm>/task/<task>/held`. It rebuilds the totals from its log when it restarts.
+- **Agent deadline.** The deadline is the task budget plus the trial's held total since the agent started. `vm_trial` re-reads the total each time the deadline is reached, and once a second while a hold is in progress.
+- **One enforcer.** The runner stops both arms alike: SIGTERM to the agent's process tree, then SIGKILL. Tofu's own `--timeout-s` is set to the VM lifetime, with no finalize grace.
+- **Host backstop.** The host-side trial deadline moves by the same total.
+- **Recorded per attempt:** `extension_s`, `stopped_at_s`, `relay_held_base_s`, `relay_held_reads` and `relay_held_errors`.
+- **Earlier protocols.** The relay's `rpm_wait_s`/`tpm_wait_s` count only a request's own pauses, not its queue on the gate locks, so there they are lower bounds of the time held.
+
 ## Scoring (`export`)
 
 `export` writes one FHE run directory per arm, then runs FHE's normalizer.
@@ -120,6 +130,17 @@ environment. A rank is defensible only from a matched control. That means the
 Codex arm must run in the same native run, on the same tasks, budgets,
 allowlist, relay and key, and its per-task outcomes must be compared with the
 published Codex 0.148.0 row.
+
+## Replicate blocks (`multi_attempt`)
+
+`python -m evaluations.frontier_harness.multi_attempt --block k1=<work dir> --block k2=<work dir> ...`
+scores each replicate block per arm with FHE's unmodified normalizer (through `export`), then aggregates the
+canonical cells across blocks: task-weighted pass rates with task-clustered bootstrap CIs, the paired
+treatment - reference difference with a sign-flip permutation test, the reference arm's calibration against an
+FHE published row (Poisson-binomial test; PREREG.md's block-1 McNemar rule beside it), an FHE-anchored estimate
+withheld unless calibration holds, and spend / requests / 429s / RPM per key. Variants: `primary` (FHE's cells),
+`harness_fault_as_failure` (a no-model-call cell whose trial still got a verifier reward is a failure) and
+`unthrottled`. The decision rules are preregistered in `preregistrations/PREREG-2-20261113.md`.
 
 ## Commands
 

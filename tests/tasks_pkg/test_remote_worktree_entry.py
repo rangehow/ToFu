@@ -158,8 +158,7 @@ class TestCommandUserScope:
         _plant()
         cmds = _drain('agent-old')
         assert len(cmds) == 1
-        # home_tiers is the Home ceiling every delivery carries
-        # (contracts/desktop_bridge_v3.schema.json); no user scope leaks.
+        # The Home permission ceiling rides every command; no user_id does.
         assert set(cmds[0].keys()) == {'id', 'type', 'params', 'home_tiers'}
 
     def test_scoped_command_never_leaks_user_id_on_wire(self):
@@ -334,19 +333,18 @@ class TestUserThreading:
             box['user_id'] = user_id
             return {'ok': True}, None
 
-        # The Home places the call before sending: name alice's device.
-        _register('agent-A', user_id='u-alice')
-
         monkeypatch.setattr(lib.desktop, 'send_desktop_command', fake_send)
         # finalize 链需要完整 task dict(events_lock 等)——与路由套件同范式,
         # 断言目标只是 user_id 抵达桥,patch 掉 finalize。
         import lib.tasks_pkg.handlers._adapter as adapter
         monkeypatch.setattr(adapter, '_finalize_tool_round', lambda *a: None)
-        task = {'id': 't1', '_userId': 'u-alice'}
+        # Device routing reads the owner's device policy: a numeric owner.
+        _register('agent-A', user_id=7)
+        task = {'id': 't1', '_userId': 7}
         _agents._handle_desktop_tool(task, {}, 'desktop_list_files',
                                      'tc-1', {'path': '~', 'device': 'agent-A'}, 1,
                                      {'query': 'list my home'}, {}, '', False)
-        assert box['user_id'] == 'u-alice'
+        assert box['user_id'] == 7
 
     def test_remote_project_tool_passes_task_user(self, monkeypatch):
         import lib.desktop

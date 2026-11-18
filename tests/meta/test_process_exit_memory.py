@@ -171,7 +171,12 @@ try:
         assert time.monotonic()<deadline, 'tracee survived observer death'
         if pid:
             reaped.append(pid)
-            assert os.WIFSIGNALED(status) and os.WTERMSIG(status)==signal.SIGKILL
+            # Killed, or already past its exit stop with the probe's own exit 7:
+            # Linux >= 6.0 drops SIGKILL for a group-exited tracee there
+            # (benchmarks/process_exit_memory.py), and the tracer's death lets it
+            # finish. Either way nothing survives; that is asserted below.
+            assert ((os.WIFSIGNALED(status) and os.WTERMSIG(status)==signal.SIGKILL)
+                    or (os.WIFEXITED(status) and os.WEXITSTATUS(status)==7)), (pid, status)
         else: time.sleep(.01)
     observed = json.loads(ready.read_text())
     # EXITKILL signals the newest tracees first, so the probe root, which keeps

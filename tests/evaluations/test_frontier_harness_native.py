@@ -183,6 +183,15 @@ def test_injected_context_lists_block_ids_and_date_markers_without_text():
         {"role": "user", "content": [{"type": "input_text", "text": "Solve it."}]}]}
     assert relay.prompt_context(codex)["date_markers"] == ["<current_date>"]
     assert "2026" not in json.dumps({key: value for key, value in facts.items() if key != "context_chars"})
+    claude_code = {"system": [{"type": "text", "text": "You are Claude Code."}], "messages": [
+        {"role": "user", "content": [{"type": "text", "text": "<system-reminder>\n# currentDate\n"
+                                                               "Today's date is 2026-11-12.\n</system-reminder>"},
+                                      {"type": "text", "text": "Solve it."}]}]}
+    assert relay.prompt_context(claude_code)["date_markers"] == ["# currentDate", "Today's date"]
+    opencode = {"messages": [{"role": "system", "content": "<env>\n  Platform: linux\n  Today's date: Thu Nov 12 2026\n"
+                                                          "</env>"},
+                             {"role": "user", "content": "Solve it."}]}
+    assert relay.prompt_context(opencode)["date_markers"] == ["Today's date"]
 
 
 def test_relay_reveals_only_credentials_with_the_selected_key_suffix(monkeypatch):
@@ -213,7 +222,7 @@ def test_relay_reveals_only_credentials_with_the_selected_key_suffix(monkeypatch
             credentials = [{"credential_id": name, "provider_access_id": "a", "enabled": True, "kind": "api_key",
                             "key_hint": "sk-..." + name} for name in ("5409", "0733", "4861")]
             return Reply({"data": {"model_routing": {
-                "provider_accesses": [{"provider_access_id": "a", "provider_id": "sankuai"}],
+                "provider_accesses": [{"provider_access_id": "a", "provider_id": "example-corp"}],
                 "credentials": credentials}}})
 
         def post(self, path):
@@ -222,10 +231,10 @@ def test_relay_reveals_only_credentials_with_the_selected_key_suffix(monkeypatch
             return Reply({"data": {"secret": "secret-" + name}})
 
     monkeypatch.setattr(httpx, "Client", Client)
-    assert relay.load_keys("http://origin", "sankuai", ["0733"]) == [("0733", "secret-0733")]
+    assert relay.load_keys("http://origin", "example-corp", ["0733"]) == [("0733", "secret-0733")]
     assert revealed == ["0733"]
     with pytest.raises(SystemExit, match="1111"):
-        relay.load_keys("http://origin", "sankuai", ["1111"])
+        relay.load_keys("http://origin", "example-corp", ["1111"])
     assert revealed == ["0733"]
 
 
@@ -461,3 +470,40 @@ def test_fhe_normalizer_scores_the_export_and_keeps_smoke_out_of_canonical_cells
     export.export(native_dir=native, relay_log=log, fhe_repo=repo, out_root=tmp_path / "smoke",
                   label="smoke-20261112", run_id="smoke", provider="p")
     assert json.loads((tmp_path / "smoke" / "tofu" / "candidate.json").read_text())["completed"] == 0
+
+
+def test_v11_protocol_keeps_task_budgets_and_asks_every_arm_for_max_effort(tmp_path):
+    protocol = harness.PROTOCOLS["fhe-v11"]
+    assert protocol.agent_timeout_sec is None and protocol.task_resources and protocol.verifier_attempts == 1
+    assert protocol.reasoning_effort == "max" and not protocol.harness_defaults
+    live = make_runner(tmp_path, protocol="fhe-v11", allow_hosts=["pypi.org"])
+    task = live.tasks["regex-log"]
+    tofu = live.spec_for(task, "tofu", 1)
+    assert "--thinking max" in tofu["agent"]["program"] and tofu["agent_timeout_sec"] == 1200
+    assert tofu["cpus"] == 1 and tofu["memory"] == "2048m" and tofu["verifier_attempts"] == 1
+    codex = live.spec_for(task, "codex", 1)
+    config = tomllib.loads(codex["agent"]["log_files"]["codex-config.toml"])
+    assert config["model_reasoning_effort"] == "max" and config["web_search"] == "disabled"
+    assert config["model_providers"]["relay"]["wire_api"] == "responses"
+
+
+def test_v1_protocol_still_leaves_codex_its_own_effort(tmp_path):
+    live = make_runner(tmp_path, protocol="fhe-v1", allow_hosts=["pypi.org"])
+    codex = live.spec_for(live.tasks["regex-log"], "codex", 1)
+    assert "model_reasoning_effort" not in tomllib.loads(codex["agent"]["log_files"]["codex-config.toml"])
+
+
+def test_export_scores_an_operator_invalidated_attempt_infra_invalid(tmp_path):
+    from evaluations.frontier_harness import export
+    from evaluations.terminal_bench import runner as native_runner
+
+    native = native_run(tmp_path)
+    attempt = native / "trials" / "tofu" / "regex-log" / "attempt-1"
+    native_runner.write_json(attempt / native_runner.INVALIDATION_FILE,
+                             {"rule": "D-2: model access withdrawn mid-trial", "evidence": ["relay 401"]})
+    export.export(native_dir=native, relay_log=relay_log(tmp_path / "relay.jsonl"), fhe_repo=fhe_repo(tmp_path),
+                  out_root=tmp_path / "fhe-runs", label="smoke-test", run_id="smoke-test",
+                  provider="FRIDAY kimi-k3", run_normalizer=False)
+    trial = json.loads((tmp_path / "fhe-runs" / "tofu" / "trials" / "regex-log__a1" / "trial.json").read_text())
+    assert trial["status"] == "infra_invalid"
+    assert trial["status_reason"] == "invalidated by the operator: D-2: model access withdrawn mid-trial"

@@ -21,7 +21,6 @@ inventory ``lib.vite_assets`` validates against) and its ``serverctl.py``.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -56,7 +55,8 @@ def refresh_after_landing(checkout, paths) -> subprocess.Popen | None:
     changed = changed_authoring_inputs(checkout, paths)
     if not changed:
         return None
-    environment = dict(os.environ)
+    from lib.tools.process_environment import inherited_child_environment
+    environment = inherited_child_environment()
     # The checkout's own deployment decides whether its lifecycle builds the
     # frontend (its .env), not the role of the process that landed (an
     # execution host serves no frontend).

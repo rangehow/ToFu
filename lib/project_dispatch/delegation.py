@@ -548,10 +548,7 @@ def lead_source(repository, task, scope, turn, attempt, *, human=None):
 
 def _input_source(human):
     from lib.turn_initiation import resolve_turn_initiator
-    try:
-        return resolve_turn_initiator(human) if isinstance(human, Mapping) else None
-    except Exception:
-        return None
+    return resolve_turn_initiator(human) if isinstance(human, Mapping) else None
 
 
 @contextmanager

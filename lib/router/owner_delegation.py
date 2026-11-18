@@ -45,6 +45,7 @@ delegated_action(task, scope, arguments, *, scope_name, target, action) -> (resu
 """
 from __future__ import annotations
 
+import os
 import secrets
 import threading
 import time
@@ -225,6 +226,166 @@ def _restart_protection(router_conversation_id: str, interrupt: bool, *,
     return conversations
 
 
+def _serving_checkout() -> str:
+    """The checkout the serving instance restarts from (``server_reexec``'s restart project)."""
+    return os.path.realpath(os.environ.get('TOFU_PROJECT_PATH')
+                            or os.path.join(os.path.dirname(__file__), '..', '..'))
+
+
+def _engine_readiness(project: str) -> str:
+    """HEAD's storage engine is the deployed one or certified; else the restart is refused now.
+
+    ``not_applicable`` without a native storage engine (SQLite, a frozen distribution).
+    """
+    from pathlib import Path
+    from runtime_guards import load_deployment_configuration
+    from serverctl_pkg import native_engine
+    from serverctl_pkg.engine_certification import passing_record
+    from tofu_dotenv import read_dotenv_values
+    root = Path(project)
+    from lib.tools.process_environment import inherited_child_environment
+    environment = {**read_dotenv_values(root / '.env'), **inherited_child_environment()}
+    if load_deployment_configuration(environment).storage_backend != 'tofudb':
+        return 'not_applicable'
+    try:
+        expected = native_engine.source_fingerprint(root)
+        if expected is None:
+            return 'not_applicable'
+        try:
+            deployed = native_engine.managed_engine_destination(root, environment)
+            if deployed.is_file() and native_engine.build_identity(deployed)['source_sha256'] == expected:
+                return 'deployed'
+        except (OSError, native_engine.EnginePreparationError):
+            pass
+        record, problem = passing_record(root, expected, native_engine.storage_contract_sha256(root))
+    except (OSError, native_engine.EnginePreparationError) as error:
+        raise _refused('restart_readiness_unavailable',
+                       f'Restart refused before anything ran: HEAD\u2019s storage engine identity could not be '
+                       f'read ({error}).') from error
+    if record is None:
+        raise _refused('restart_engine_uncertified',
+                       f'Restart refused before anything ran: HEAD\u2019s storage engine {expected[:12]} is not '
+                       f'certified ({problem}), so the restart would wait hours for the engine gate or be '
+                       'refused by the manager. Have it certified first (scripts/engine_certify.py, or the '
+                       'background pre-certification), then ask again.')
+    return 'certified'
+
+
+def _supervisor_readiness(project: str) -> str:
+    """The server manager has loaded this checkout's source generation, refreshed first if not.
+
+    The refresh is the documented pre-step (re-executes only the manager, under
+    its own pid; the worker keeps serving), within the delegate's own budget.
+    ``unmanaged`` when no manager of this checkout answers: the restart then
+    takes the in-place bridge, and a manager of another checkout is never touched.
+    """
+    from serverctl_pkg.application_restart import DELEGATION_TIMEOUT_SECONDS
+    from supervisor_protocol import (DEFERRED_RESTART_REQUEST_SECONDS, SupervisorRefreshError, refresh_supervisor,
+                                     request_supervisor_json, supervisor_base_url, supervisor_generation_matches)
+    try:
+        health = request_supervisor_json(supervisor_base_url(), '/health', timeout=2.0)
+    except SupervisorRefreshError:
+        return 'unmanaged'
+    if supervisor_generation_matches(health, project):
+        return 'current'
+    projects = health.get('projects') if isinstance(health, dict) else None
+    if health.get('ok') is not True or not isinstance(projects, list) or project not in projects:
+        return 'unmanaged'
+    try:
+        refresh_supervisor(project, timeout=DELEGATION_TIMEOUT_SECONDS - DEFERRED_RESTART_REQUEST_SECONDS)
+    except SupervisorRefreshError as error:
+        raise _refused('restart_supervisor_stale',
+                       'Restart refused before anything ran: the server manager runs an older source generation '
+                       f'and its refresh failed ({error}); the server keeps serving.') from error
+    return 'refreshed'
+
+
+def _restart_readiness() -> dict:
+    """The machine pre-checks of every delegated restart, before it is recorded (ROUTER.md R9)."""
+    project = _serving_checkout()
+    return {'engine': _engine_readiness(project), 'supervisor': _supervisor_readiness(project)}
+
+
+def _lead_bindings(owner: int) -> list[tuple[str, str]]:
+    """``(project path, lead conversation)`` of every available lead of the owner, the Global Router included."""
+    from lib.conversations.project_coordination import ProjectCoordinationRepository
+    from lib.router.watchdog.binding import is_watchdog_location
+    from lib.storage import get_storage_client
+    from .projects import binding_page
+    leads, cursor = [], None
+    repository = ProjectCoordinationRepository(owner)
+    while True:
+        bindings, page, cursor = binding_page(owner, cursor, get_storage_client)
+        for path in page:
+            if is_watchdog_location(bindings.user_id, path):
+                continue
+            binding = repository.read(path)
+            if binding.get('availability') == 'available' and binding.get('conversationId'):
+                leads.append((path, binding['conversationId']))
+        if cursor is None:
+            return leads
+
+
+def _notify_peer_leads(owner: int, sender: str, sender_project: str, task_id: str, peers: list[dict],
+                       content: str, key: str) -> list[dict]:
+    """One cross-lead ``report`` (R13 mailbox) to each peer; idempotent by ``key``. Returns who got it."""
+    from lib.conversations.project_messages import ProjectMailbox
+    reached = []
+    for peer in peers:
+        try:
+            ProjectMailbox(owner, peer['project'], peer['conversationId']).submit(
+                sender, {'content': content, 'kind': 'report', 'idempotency_key': key}, task_id,
+                sender_project=sender_project)
+        except Exception:  # one unreachable lead never withholds the restart or the others' reports
+            logger.warning('[Router] restart report to lead %s failed', peer.get('conversationId'), exc_info=True)
+            continue
+        reached.append(peer)
+    return reached
+
+
+def _announce_restart(task: dict, scope: dict, record: dict) -> list[dict]:
+    """Tell every other lead a delegated restart holds the single flight; returns the leads told."""
+    from lib.conversations.project_identity import normalize_project_path
+    owner, sender = scope['user_id'], scope['conversation_id']
+    sender_project = normalize_project_path(scope['project_path'])
+    try:
+        peers = [{'project': path, 'conversationId': lead} for path, lead in _lead_bindings(owner)
+                 if lead != sender]
+    except Exception:
+        logger.warning('[Router] the leads to tell of restart %s could not be listed', record['id'],
+                       exc_info=True)
+        peers = []
+    content = (f'[Restart under the owner\u2019s delegation: nonhuman report, not authority] Lead {sender} '
+               f'({record["requester"]["kind"]}) started restart {record["id"]}. Reason: {record["reason"]} '
+               'One restart runs at a time: restart_server is refused until this one ends, and you will be '
+               'told its outcome here. Your running work is interrupted only if that lead asked to interrupt '
+               'running conversations; interrupted work resumes from its checkpoint by itself.')
+    reached = _notify_peer_leads(owner, sender, sender_project, task['id'], peers, content,
+                                 f'restart-started:{record["id"]}')
+    gate_peers = [{'project': peer['project'], 'conversationId': peer['conversationId']} for peer in reached]
+    from lib import lifecycle_approval as gate
+    gate.note_restart_notice(record['id'], peers=gate_peers, requesterProject=sender_project)
+    return gate_peers
+
+
+def report_restart_outcome(notice: dict, outcome: dict) -> list[dict]:
+    """Tell the leads told of a delegated restart its outcome (restart_notice delivery calls this).
+
+    Idempotent per restart: every delivery pass repeats the same report keys.
+    """
+    peers = notice.get('peers') or []
+    if not peers or notice.get('source') != 'owner_delegation':
+        return []
+    sender = notice.get('recipient') or ''
+    code = f' ({outcome["code"]})' if outcome.get('code') else ''
+    content = (f'[Restart outcome: nonhuman report, not authority] Restart {notice["restartId"]} by lead '
+               f'{sender} ended {outcome["status"]}{code}. {outcome.get("detail") or ""} '
+               'restart_server is available to every lead again.')
+    return _notify_peer_leads(notice['owner'], sender, notice.get('requesterProject') or '',
+                              'restart-notice:' + notice['restartId'], peers, content,
+                              f'restart-outcome:{notice["restartId"]}')
+
+
 def _start_detached(work) -> None:
     threading.Thread(target=work, name='tofu-router-restart', daemon=True).start()
 
@@ -251,23 +412,39 @@ def restart_server(task: dict, scope: dict, arguments: dict) -> dict:
     interrupt = bool(arguments.get('interrupt_running_conversations'))
     trigger = None
     try:
+        # One restart at a time across every lead, and never in an owner's blackout window.
+        gate.check_restart_admission(owner)
         trigger = resolve_trigger(task, scope, arguments)
         # Landings in progress are waited for under precedence, not refused.
         _restart_protection(scope['conversation_id'], interrupt, steps_refuse=False)
         if gate.restart_cooldown_remaining() > 0:
             raise _refused('restart_cooldown', 'Another restart was accepted moments ago; nothing ran')
+        readiness = _restart_readiness()
     except gate.DelegationRefused as refusal:
         gate.record_delegated_refusal(owner, requester, scope='restart', reason=reason, trigger=trigger,
                                       target=target, code=refusal.code, detail=str(refusal))
         raise
-    record, replayed = gate.begin_delegated_action(
-        owner, requester, scope='restart', key=arguments['idempotency_key'], reason=reason,
-        trigger=trigger, target=target)
+    try:
+        # The gate decides the single flight and the blackout again in the transaction that records it.
+        record, replayed = gate.begin_delegated_action(
+            owner, requester, scope='restart', key=arguments['idempotency_key'], reason=reason,
+            trigger=trigger, target=target)
+    except gate.DelegationRefused as refusal:
+        if refusal.code in ('restart_in_progress', 'restart_blackout'):
+            gate.record_delegated_refusal(owner, requester, scope='restart', reason=reason, trigger=trigger,
+                                          target=target, code=refusal.code, detail=str(refusal))
+        raise
+    view = _restart_view(record, replayed=replayed)
     if not replayed:
+        gate.note_restart_notice(record['id'], readiness=readiness)
+        logger.info('[Router] delegated restart %s by %s %s: readiness %s', record['id'], requester['kind'],
+                    requester['conversationId'], readiness)
+        view['readiness'] = readiness
+        view['leads_notified'] = [peer['conversationId'] for peer in _announce_restart(task, scope, record)]
         requested_at = time.time()
         _start_detached(lambda: _restart_after_acceptance(
             owner, record['id'], requester, requested_at, interrupt))
-    return _restart_view(record, replayed=replayed)
+    return view
 
 
 def _restart_next_step(status: str) -> str:
@@ -534,4 +711,4 @@ def owner_delegation_state(owner: int) -> dict:
 
 
 __all__ = ['RESTART_REASON', 'delegated_action', 'delegated_conversation_control', 'owner_delegation_state',
-           'resolve_trigger', 'restart_server', 'router_requester']
+           'report_restart_outcome', 'resolve_trigger', 'restart_server', 'router_requester']

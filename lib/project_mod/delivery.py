@@ -1124,11 +1124,17 @@ def _recover_working_registration(row: dict) -> dict:
     evidence. Absent here is not dead: an execution shard runs durable attempts
     outside this process, so a durable attempt still pending or running keeps the
     receipt working (its own settlement records the outcome), as Goal recovery
-    waits for it. Unknown execution is preservation debt, never publication consent.
+    waits for it. A completed durable attempt settles as completed: its Turn
+    settlement commits before its task result exists, so a pass in between
+    must not read that absent result as a failure. Any other terminal attempt
+    has the same window: until its task result is saved, the outcome is read
+    from its committed Turn (``_turn_outcome``), so a restart's pause stays a
+    resumable pause. Unknown execution is preservation debt, never publication consent.
     Storage failures escape so the working receipt remains retryable.
     """
     from lib.storage import get_storage_client
     from lib.tasks_pkg.manager.runtime import chat_task_runtime
+    from lib.task_replay.task_replay import TASK_REPLAY_TERMINAL_STATUSES
     from lib.tasks_pkg.workspace_delivery import RESTART_INTERRUPTED, workspace_outcome
 
     task_id = str(row['task_id'])
@@ -1146,6 +1152,7 @@ def _recover_working_registration(row: dict) -> dict:
     # a permanent publication revocation.
     if live is not None:
         return _receipt(row)
+    attempt = {}
     if executor_id.startswith('conversation-attempt:'):
         from lib.turn_lifecycle import LifecycleNotFound, get_attempt
         try:
@@ -1155,6 +1162,10 @@ def _recover_working_registration(row: dict) -> dict:
             attempt = {}
         if attempt.get('status') in {'pending', 'running'}:
             return _receipt(row)
+        if attempt.get('status') == 'completed':
+            # The attempt commits its Turn settlement before its task result and
+            # its delivery intent; that settlement is the canonical verdict.
+            return _settle_recovered(row, executor_id, 'completed')
     task = get_storage_client().query('task_results.replay_get', {
         'key': executor_id, 'user_id': int(row['user_id']),
         'include_terminal_payload': False, 'include_metadata': True,
@@ -1165,9 +1176,45 @@ def _recover_working_registration(row: dict) -> dict:
         for key in ('finishReason', 'streamState', 'aborted', '_abort_reason'):
             if key not in task and key in metadata:
                 task[key] = metadata[key]
+    if attempt.get('status') and task.get('status') not in TASK_REPLAY_TERMINAL_STATUSES:
+        outcome = _turn_outcome(attempt, user_id=int(row['user_id']))
+        if outcome:
+            return _settle_recovered(row, executor_id, outcome)
+    return _settle_recovered(row, executor_id, workspace_outcome(task))
+
+
+def _turn_outcome(attempt: dict, *, user_id: int) -> str:
+    """The workspace outcome a terminal attempt's committed Turn settlement records.
+
+    Mirrors ``workspace_outcome`` of the task result the attempt saves next: a
+    restart pauses, a person's Stop and a dispatch-authority stop cancel, and
+    every other end fails. Empty when the Turn already belongs to a later attempt.
+    """
+    from lib.turn_lifecycle import LifecycleNotFound, get_turn
+    from lib.turn_verdict import DISPATCH_AUTHORITY_ABORT_REASONS
+    from lib.tasks_pkg.workspace_delivery import RESTART_INTERRUPTED
+
+    try:
+        turn = get_turn(attempt['conversationId'], attempt['turnId'], user_id=user_id,
+                        include_projection=False)
+    except LifecycleNotFound:
+        return ''
+    if turn.get('currentAttemptId') != attempt['attemptId']:
+        return ''
+    cause = (turn.get('settlement') or {}).get('cause')
+    if attempt['status'] == 'interrupted':
+        return RESTART_INTERRUPTED if cause == 'server_restart' else 'cancelled'
+    if attempt['status'] == 'failed' and cause in DISPATCH_AUTHORITY_ABORT_REASONS:
+        return 'cancelled'
+    return 'failed'
+
+
+def _settle_recovered(row: dict, executor_id: str, outcome: str) -> dict:
+    logger.info('[WorkspaceDelivery] working recovery settles work=%s attempt=%s outcome=%s',
+                row['task_id'], executor_id, outcome)
     return settle_task_workspace(
-        row['workspace_path'], task_id, user_id=int(row['user_id']),
-        outcome=workspace_outcome(task), executor_task_id=executor_id) or _receipt(row)
+        row['workspace_path'], str(row['task_id']), user_id=int(row['user_id']),
+        outcome=outcome, executor_task_id=executor_id) or _receipt(row)
 
 
 def request_workspace_delivery_scan(*, recovery: bool = False) -> None:

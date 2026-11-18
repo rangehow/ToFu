@@ -175,9 +175,52 @@ def _required(arguments: dict, name: str, action: str):
     return value
 
 
+# The owner's restart blackout windows live in the lifecycle gate beside the grant they
+# narrow (docs/ROUTER.md R9 "Restart blackout windows"), not in the Settings document.
+RESTART_BLACKOUTS = 'restart_blackouts'
+
+
+def _blackout_view(owner: int) -> list:
+    from lib import lifecycle_approval as gate
+    return [{key: window[key] for key in ('start', 'end', 'reason')} for window in gate.restart_blackouts(owner)]
+
+
+def _set_restart_blackouts(task: dict, scope: dict, arguments: dict) -> dict:
+    """Store the windows the owner declared; only the owner's own words set or lift them."""
+    from lib import lifecycle_approval as gate
+    from .owner_delegation import delegated_action, router_requester
+    if 'value' not in arguments:
+        raise ValueError('value is required for action=set')
+    owner = scope['user_id']
+    target = {'kind': 'owner_settings', 'path': RESTART_BLACKOUTS}
+    if arguments.get('under_delegation') is True:
+        requester = router_requester(task, scope)
+        gate.check_delegation(owner, requester, SCOPE)
+        refusal = DelegationRefused(
+            'owner_delegation_trigger_invalid',
+            'Restart blackout windows are the owner’s own declaration: name the owner’s message that '
+            'states them (source_turn_id or source_steer_id) or a standing instruction; under_delegation '
+            'cannot set or lift them. Nothing changed.')
+        gate.record_delegated_refusal(owner, requester, scope=SCOPE, reason=str(arguments.get('reason') or ''),
+                                      trigger=None, target=target, code=refusal.code, detail=str(refusal))
+        raise refusal
+
+    def effect():
+        gate.set_restart_blackouts(owner, arguments['value'], declared_by={
+            'conversationId': scope['conversation_id'], 'turnId': task.get('_turnId')})
+        return {'value': _blackout_view(owner)}
+
+    result, action_id = delegated_action(task, scope, arguments, scope_name=SCOPE, target=target, action=effect)
+    if result.get('replayed'):
+        return {**result, 'path': RESTART_BLACKOUTS, 'action_id': action_id}
+    return {'path': RESTART_BLACKOUTS, **result, 'action_id': action_id, 'execution_started': True}
+
+
 def _set(task: dict, scope: dict, arguments: dict) -> dict:
     from .owner_delegation import delegated_action
     path = _required(arguments, 'path', 'set')
+    if path == RESTART_BLACKOUTS:
+        return _set_restart_blackouts(task, scope, arguments)
     refusal = _classify(path)
     if refusal is not None:
         return refusal
@@ -316,10 +359,14 @@ def call(task: dict, scope: dict, action: str, arguments: dict) -> dict:
     gate.check_delegation(scope['user_id'], router_requester(task, scope), SCOPE)
     if action == 'list':
         current = _read_server_config()
-        return {'settings': {path: _dig(current, entry[1])[0] for path, entry in sorted(WRITABLE_PATHS.items())},
+        settings = {path: _dig(current, entry[1])[0] for path, entry in sorted(WRITABLE_PATHS.items())}
+        return {'settings': {**settings, RESTART_BLACKOUTS: _blackout_view(scope['user_id'])},
                 'execution_started': False}
     if action == 'get':
         path = _required(arguments, 'path', 'get')
+        if path == RESTART_BLACKOUTS:
+            return {'path': path, 'value': _blackout_view(scope['user_id']), 'found': True,
+                    'execution_started': False}
         refusal = _classify(path)
         if refusal is not None:
             return refusal
@@ -328,4 +375,4 @@ def call(task: dict, scope: dict, action: str, arguments: dict) -> dict:
     raise ValueError(f'Unknown owner_settings action: {action!r}')
 
 
-__all__ = ['CHANNELS', 'WRITABLE_PATHS', 'call', 'channel_preconditions', 'register_settings_backend']
+__all__ = ['CHANNELS', 'RESTART_BLACKOUTS', 'WRITABLE_PATHS', 'call', 'channel_preconditions', 'register_settings_backend']

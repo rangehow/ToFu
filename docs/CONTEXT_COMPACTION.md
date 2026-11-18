@@ -372,18 +372,18 @@ name is in `COORDINATOR_TOOLS`, `ROUTER_TOOLS` or `WATCHDOG_TOOLS` and
 `prepare_coordinator_tool_surface` plus `coordinator_call_rejection` admit only
 the role ceiling — the flag cannot change what a Coordinator, Router or Watchdog
 turn does, although `build_task_config` stamps it on every scheduler-built turn.
+`desktopEnabled` is pinned to `False` the same way: `resolve_conv_config`
+resolves it to `True` on every attended owner turn while scheduled turns and
+continuations carry `False`, no desktop tool name is in any role ceiling, and
+`await_device` is offered to a Coordinator or Router beside
+`delegate_project_work` whatever the flag says.
 Without that pin, alternating scheduled and owner turns logged
 `restore=policy_changed drift=schedulerEnabled fallback=full_history` and
 rebuilt 1,505–3,784 messages per alternation (measured on the Global Router,
 2026-11-08). Dispatch continuations already carry the shared worker policy's
 `False`; an ordinary conversation keeps the flag verbatim, and it is not in
 `PORTABLE_DRIFT_FIELDS`, because an ordinary conversation can enable scheduler
-tools and must still refuse a drifted checkpoint. `desktopEnabled` is pinned
-`False` the same way: the owner's attended Turn resolves it `True`
-(`lib/conv_config/_resolve.py`) while scheduled turns and continuations keep
-`False`, but no desktop tool is in any role ceiling and `await_device` reaches
-every lead regardless; without the pin every owner/continuation alternation
-logged `drift=desktopEnabled` (`test_coordinator_replay_policy.py`). Specs:
+tools and must still refuse a drifted checkpoint. Specs:
 `test_model_continuation_policy.py` (equivalent spellings / distinguished
 values) and `test_coordinator_replay_policy.py::test_forwarded_request_continuations_keep_the_prefix_beside_direct_owner_turns`,
 `test_scheduler_built_coordinator_turn_shares_the_prefix_of_its_owner_turns`.

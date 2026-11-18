@@ -255,6 +255,13 @@ def run_workload(directory, *, split):
                 assert process.wait(timeout=10) == -signal.SIGKILL
             else:
                 turns = [wait_turn(client, path, {'completed', 'failed', 'interrupted'}) for path in paths]
+                # A Turn reads completed before its worker job's terminal write
+                # commits; a stop in that window defers the owned claim for the
+                # next boot to reconcile (tests/storage/test_durable_worker_foundation.py,
+                # revoke dispatch, await effects, then defer). This one-process
+                # host has no next boot here, so it settles before it stops.
+                eventually(lambda: storage_client(storage).query('worker_job.active.list', {
+                    'user_id': 1, 'task_kinds': ['conversation-attempt']}), lambda rows: rows == [])
         if split:
             with web(directory, environment, generation=2) as (_, client, second_health):
                 assert second_health['bootId'] != first_health['bootId']

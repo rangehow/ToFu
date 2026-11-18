@@ -732,39 +732,55 @@ def _shard_pids(chaos) -> list[int]:
     return live_shard_pids(int(chaos.instance.execution_record()['pid']))
 
 
-def _shard_running(chaos, tool_pid: int) -> int:
-    """The execution shard whose process tree runs ``tool_pid``."""
+def _shard_running(chaos, tool_pid: int) -> int | None:
+    """The execution shard whose process tree runs ``tool_pid``; None on the primary."""
     shards = set(_shard_pids(chaos))
     pid = tool_pid
     while pid > 1:
         if pid in shards:
             return pid
         pid = int(Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[1])
-    raise AssertionError(f'tool {tool_pid} runs in no execution shard {sorted(shards)}')
+    return None
 
 
 def test_execution_shard_killed_mid_tool(chaos):
-    """A Turn placed on a shard (the primary is busy) loses that shard mid-tool.
+    """A Turn running on a shard loses that shard mid-tool.
 
-    The primary and its Turn are untouched; the lost Turn settles resumably
-    with a visible error (or completes after recovery), its side effect ran
-    once, and no tool process of it survives (docs/DEFENSIVE_PATTERNS.md).
+    Two Turns run a tool at once. The primary enters at most one job, so at
+    least one runs on a shard whichever processes earlier specs left idle (a
+    busy primary is no premise: an idle shard may claim the first Turn). The
+    other Turn is untouched; the lost Turn settles resumably with a visible
+    error (or completes after recovery), each side effect ran once, and no
+    tool process survives (docs/DEFENSIVE_PATTERNS.md).
     """
-    busy, _busy_nonce, busy_text, _response, release = _held_turn(chaos, 'Primary answer.')
+    def held_tool(n):
+        # Only the kept Turn's tool is released; the lost one must be retired.
+        return chaos.effect_command(n, (
+            'python3 -c "import os, time; [time.sleep(0.1) for _ in iter(lambda: '
+            f'os.path.exists({"release-" + n!r}), True)]" {TOOL_MARKER}{n}'))
+
+    sessions, placed, lost = [], [], None
     try:
-        conversation, nonce, user_text, _ = _scripted(chaos, lambda n: [
-            fp.tool('run_command', {'command': chaos.effect_command(n, chaos.hang_command(n))}),
-            fp.text('Continued after the shard loss.')])
-        tool_pid = chaos.wait_tool_process(nonce)
-        chaos.wait_effect(nonce)
-        shard = _shard_running(chaos, tool_pid)
-        os.kill(shard, signal.SIGKILL)
+        for _ in range(2):
+            sessions.append(_scripted(chaos, lambda n: [
+                fp.tool('run_command', {'command': held_tool(n)}), fp.text('Continued after the tool.')]))
+        for conversation, nonce, user_text, _ in sessions:
+            tool_pid = chaos.wait_tool_process(nonce)
+            chaos.wait_effect(nonce)
+            placed.append((_shard_running(chaos, tool_pid), conversation, nonce, user_text))
+        lost = next((entry for entry in placed if entry[0] is not None), None)
+        assert lost is not None, f'both Turns ran on the primary: {placed}'
+        os.kill(lost[0], signal.SIGKILL)
     finally:
-        release.set()
-    chaos.assert_contract(busy, busy_text, outcomes={'completed'}, final_text='Primary answer.')
-    chaos.assert_contract(conversation, user_text, outcomes={'completed', 'interrupted', 'failed'},
-                          final_text='Continued after the shard loss.', effects={nonce: 1})
-    assert shard not in _shard_pids(chaos)
+        for _conversation, nonce, _user_text, _ in sessions:
+            if lost is None or nonce != lost[2]:
+                (chaos.workspace / f'release-{nonce}').touch()
+    kept = next(entry for entry in placed if entry is not lost)
+    chaos.assert_contract(kept[1], kept[3], outcomes={'completed'},
+                          final_text='Continued after the tool.', effects={kept[2]: 1})
+    chaos.assert_contract(lost[1], lost[3], outcomes={'completed', 'interrupted', 'failed'},
+                          final_text='Continued after the tool.', effects={lost[2]: 1})
+    assert lost[0] not in _shard_pids(chaos)
 
 
 # ── MCP across execution shards (lib/mcp/bridge_relay.py) ──────────────────

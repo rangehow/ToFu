@@ -8,7 +8,10 @@ Owns Pi's pins and launch translation for both evaluation paths:
   runtime tree (``build_runtime``), the guest ``models.json`` that routes Pi's
   own built-in model definition through the benchmark relay
   (``guest_models_config``) and the guest shell program
-  (``guest_shell_command``).
+  (``guest_shell_command``). FrontierHarness Eval v1's pi-responses installs
+  Pi inside each trial instead, as Harbor does
+  (``evaluations.terminal_bench.third_party.pi_responses_agent``), and runs
+  the same guest program.
 
 No alternate agent loop, model proxy or credential lives here; the relay holds
 the model keys. Entry point: ``python -m evaluations.pi_contract build-runtime``.
@@ -49,12 +52,45 @@ PI_CATALOG_PROVIDERS = {'glm-5.3': 'zai', 'glm-5.3-flash': 'zai',
                         # pi-ai dist/providers/data/anthropic.json chat:claude-opus-5-5:
                         # reasoning true, adaptive thinking, levels low..max, no temperature,
                         # promptCache short 300 / long 3600, supportsMidConvoEffort.
-                        'claude-opus-5.5': 'anthropic'}
+                        'claude-opus-5.5': 'anthropic',
+                        # Read from the pinned runtime's pi-ai dist/providers/data/*.json
+                        # (EVAL-MATRIX-1, 2026-11-12): moonshotai.json chat:kimi-k3
+                        # (openai-completions, thinkingFormat openai, levels low/high/max);
+                        # deepseek.json chat:deepseek-flash "DeepSeek V4.1 Flash" and
+                        # chat:deepseek-v4-pro (openai-completions, thinkingFormat deepseek);
+                        # minimax.json chat:MiniMax-M2.7 / MiniMax-M3 (anthropic-messages);
+                        # openai.json chat:gpt-6.1-sol / gpt-6-luna / gpt-6-sol (openai-responses).
+                        'kimi-k3': 'moonshotai', 'deepseek-v4-flash': 'deepseek',
+                        'deepseek-v4-pro': 'deepseek', 'MiniMax-M2.7': 'minimax', 'MiniMax-M3': 'minimax',
+                        'gpt-6.1-sol': 'openai', 'gpt-6-luna': 'openai', 'gpt-6-sol': 'openai',
+                        # zai.json chat:glm-5.2 (openai-completions, thinkingFormat zai)
+                        'glm-5.2': 'zai',
+                        # xai.json chat:grok-4.6 (openai-responses, levels low..xhigh)
+                        'grok-4.6': 'xai',
+                        # moonshotai.json chat:kimi-k2.7-code-highspeed (openai-completions, thinkingFormat deepseek)
+                        'kimi-k2.7-code-highspeed': 'moonshotai'}
 # Run model -> the id in Pi's built-in catalog. Anthropic spells it with dashes;
 # Pi therefore sends that id on the wire and the relay pins the FRIDAY wire name.
-PI_CATALOG_MODEL_IDS = {'claude-opus-5.5': 'claude-opus-5-5'}
+# FRIDAY's ``deepseek-v4-flash`` serves V4.1-Flash weights, Pi's ``deepseek-flash``.
+PI_CATALOG_MODEL_IDS = {'claude-opus-5.5': 'claude-opus-5-5', 'deepseek-v4-flash': 'deepseek-flash'}
+# Run models whose Pi catalog entry is not ``openai-completions`` (the relay's chat
+# face): Pi then calls the relay's Anthropic or Responses face.
+PI_CATALOG_FACES = {'claude-opus-5.5': 'anthropic', 'MiniMax-M2.7': 'anthropic', 'MiniMax-M3': 'anthropic',
+                    'gpt-6.1-sol': 'responses', 'gpt-6-luna': 'responses', 'gpt-6-sol': 'responses',
+                    'grok-4.6': 'responses'}
 # Inside the runtime tree; ``npm install -g`` links ``bin/pi`` to this file.
 PI_CLI = 'pi/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js'
+# Pinned releases and their ``bin.pi`` inside the runtime tree. 0.84.2 is FrontierHarness
+# Eval v1's Pi (frontier-harness-eval e837a70 metadata/harness-versions.json "pi-responses").
+PI_RELEASE_CLIS = {
+    PI_VERSION: PI_CLI,
+    '0.84.2': 'pi/lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js',
+}
+# Harbor 8c6bdac src/harbor/agents/installed/pi.py ``_CUSTOM_PROVIDER``: the provider
+# Harbor writes into models.json for an explicitly configured endpoint.
+HARBOR_CUSTOM_PROVIDER = 'harbor-endpoint'
+# Pi model API names Harbor maps ModelApiFormat to (``_build_custom_models_json``).
+PI_ENDPOINT_APIS = ('openai-completions', 'openai-responses', 'anthropic-messages')
 
 # Guest layout. Harbor keeps sessions in /logs/agent/pi/sessions; the agent
 # directory (models.json plus anything Pi writes) sits beside them as evidence.
@@ -63,6 +99,10 @@ GUEST_MODELS_FILE = 'pi-models.json'
 GUEST_HELPER_FILE = 'pi-events.mjs'
 GUEST_EVENTS_FILE = 'pi.jsonl'
 GUEST_STDERR_FILE = 'pi-stderr.txt'
+# Pi's environment in the guest: its agent directory beside the logs, and no catalog refresh,
+# version check or telemetry from inside the task container.
+GUEST_QUIET_ENV = {'PI_CODING_AGENT_DIR': f'{GUEST_LOG_DIR}/pi/agent', 'PI_OFFLINE': '1',
+                   'PI_SKIP_VERSION_CHECK': '1', 'PI_TELEMETRY': '0'}
 
 _MODEL = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_./:-]*')
 _PROXY_ENV_KEYS = frozenset({'http_proxy', 'https_proxy', 'no_proxy', 'all_proxy'})
@@ -124,10 +164,22 @@ def catalog_model_id(model: str) -> str:
     return PI_CATALOG_MODEL_IDS.get(model, model)
 
 
-def check_guest_instruction(instruction: str) -> None:
-    """Pi reads a prompt starting with ``@`` as a file argument, even after ``--``."""
+def catalog_face(model: str) -> str:
+    """Relay face Pi's catalog API maps to: chat (openai-completions), anthropic or responses."""
+    catalog_provider(model)
+    return PI_CATALOG_FACES.get(model, 'chat')
+
+
+def check_guest_instruction(instruction: str, *, end_of_options: bool = True) -> None:
+    """Pi reads a prompt starting with ``@`` as a file argument, even after ``--``.
+
+    Without the ``--`` marker (``end_of_options=False``) a prompt starting with
+    ``-`` would be read as an option, so it is refused too.
+    """
     if instruction.startswith('@'):
         raise ValueError("Pi cannot take an instruction that starts with '@' as a prompt argument")
+    if not end_of_options and instruction.startswith('-'):
+        raise ValueError("without '--' Pi would read an instruction that starts with '-' as an option")
 
 
 def guest_models_config(*, base_url: str, model: str, context_tokens: int,
@@ -147,8 +199,33 @@ def guest_models_config(*, base_url: str, model: str, context_tokens: int,
     }}}
 
 
-def guest_shell_command(*, home: str, model: str, thinking: str, log_dir: str = GUEST_LOG_DIR,
-                        extensions: tuple[str, ...] = ()) -> str:
+def pi_cli(version: str) -> str:
+    """The runtime-tree path of a pinned release's CLI; an unpinned version is refused."""
+    try:
+        return PI_RELEASE_CLIS[version]
+    except KeyError:
+        raise ValueError(f'Pi {version} is not pinned; known: {", ".join(sorted(PI_RELEASE_CLIS))}') from None
+
+
+def guest_endpoint_models_config(*, base_url: str, model: str, api: str) -> dict:
+    """``models.json`` for a configured endpoint, as Harbor's Pi adapter writes it with no agent kwargs.
+
+    One provider (``HARBOR_CUSTOM_PROVIDER``) with the endpoint, its API and a
+    bare model entry: Harbor adds ``reasoning`` (and a level map) only when a
+    reasoning effort is given, and never a context window or output limit, so
+    Pi applies its own defaults for an unlisted model.
+    """
+    if api not in PI_ENDPOINT_APIS:
+        raise ValueError('Pi endpoint api must be one of ' + ', '.join(PI_ENDPOINT_APIS))
+    return {'providers': {HARBOR_CUSTOM_PROVIDER: {
+        'baseUrl': base_url.rstrip('/'), 'apiKey': 'relay-held', 'api': api, 'models': [{'id': model}],
+    }}}
+
+
+def guest_shell_command(*, home: str, model: str, thinking: str | None, log_dir: str = GUEST_LOG_DIR,
+                        extensions: tuple[str, ...] = (), provider: str | None = None,
+                        model_id: str | None = None, cli: str = PI_CLI, node: str | None = None,
+                        end_of_options: bool = True) -> str:
     """Harbor's single Pi invocation; Pi's exit code is the program's exit code.
 
     Harbor runs ``pi --print --mode json --session-dir /logs/agent/pi/sessions
@@ -158,17 +235,26 @@ def guest_shell_command(*, home: str, model: str, thinking: str, log_dir: str = 
     unknown option, e.g. TB2.1 ``pytorch-model-recovery``), so every task is
     delivered. A run that ends at the output-token limit is scored as it ended;
     the evaluation never resumes or nudges the agent. Each of ``extensions`` is
-    loaded with ``--extension``.
+    loaded with ``--extension``. ``provider``/``model_id`` name a configured
+    endpoint (``guest_endpoint_models_config``) instead of Pi's built-in catalog
+    entry; ``thinking=None`` passes no ``--thinking`` (Pi's own default), as
+    Harbor does without a reasoning effort; ``cli`` is the release's CLI path
+    under ``home``; ``node`` is the Node binary when it is not the tree's own
+    ``node/bin/node``. ``end_of_options=False`` passes the instruction as the
+    last argument with no ``--``, exactly as Harbor does, for a release whose
+    parser has no such marker.
     """
-    if thinking not in PI_CLI_THINKING_LEVELS:
+    if thinking is not None and thinking not in PI_CLI_THINKING_LEVELS:
         raise ValueError('Pi thinking level must be one of ' + ', '.join(PI_CLI_THINKING_LEVELS))
-    node, helper = f'{home}/node/bin/node', f'{log_dir}/{GUEST_HELPER_FILE}'
+    node, helper = node or f'{home}/node/bin/node', f'{log_dir}/{GUEST_HELPER_FILE}'
     agent_dir, session_dir = f'{log_dir}/pi/agent', f'{log_dir}/pi/sessions'
-    base = [node, f'{home}/{PI_CLI}', '--print', '--mode', 'json', '--session-dir', session_dir,
-            '--provider', catalog_provider(model), '--model', catalog_model_id(model), '--thinking', thinking]
+    base = [node, f'{home}/{cli}', '--print', '--mode', 'json', '--session-dir', session_dir,
+            '--provider', provider or catalog_provider(model), '--model', model_id or catalog_model_id(model),
+            *(['--thinking', thinking] if thinking is not None else [])]
     for extension in extensions:
         base += ['--extension', extension]
-    run = shlex.join(base + ['--']) + ' "$(< ' + shlex.quote(f'{log_dir}/instruction.md') + ')"'
+    marker = ['--'] if end_of_options else []
+    run = shlex.join(base + marker) + ' "$(< ' + shlex.quote(f'{log_dir}/instruction.md') + ')"'
     events = shlex.quote(f'{log_dir}/{GUEST_EVENTS_FILE}')
     sink = (' < /dev/null 2> ' + shlex.quote(f'{log_dir}/{GUEST_STDERR_FILE}')
             + ' | ' + shlex.join([node, helper, 'filter']) + ' > ' + events)
@@ -197,15 +283,16 @@ def _installed_packages(tree: dict) -> set[str]:
     return found
 
 
-def build_runtime(work_dir: str | Path, out_dir: str | Path) -> dict:
+def build_runtime(work_dir: str | Path, out_dir: str | Path, version: str = PI_VERSION) -> dict:
     """Build the native runner's Pi tree from the pins, installed the way Harbor installs Pi.
 
     Tree (extracted at the guest home): ``node/`` (official Node
     ``PI_NODE_VERSION`` linux-x64), ``pi/`` (``npm install -g --ignore-scripts
-    PI_PACKAGE@PI_VERSION`` with that npm) and ``pi-runtime.json`` listing every
+    PI_PACKAGE@version`` with that npm) and ``pi-runtime.json`` listing every
     installed package. Modes are normalized so a non-root task user can run it.
     Returns the artifacts-manifest entry.
     """
+    cli = pi_cli(version)
     work, out = Path(work_dir).resolve(), Path(out_dir).resolve()
     work.mkdir(parents=True, exist_ok=True)
     out.mkdir(parents=True, exist_ok=True)
@@ -232,20 +319,20 @@ def build_runtime(work_dir: str | Path, out_dir: str | Path) -> dict:
            'npm_config_update_notifier': 'false', 'npm_config_fund': 'false', 'npm_config_audit': 'false'}
     env.update({key: value for key, value in os.environ.items() if key.lower() in _PROXY_ENV_KEYS})
     subprocess.run(npm + ['install', '--global', '--prefix', str(root / 'pi'), '--ignore-scripts',
-                          f'{PI_PACKAGE}@{PI_VERSION}'], env=env, check=True, timeout=1800)
+                          f'{PI_PACKAGE}@{version}'], env=env, check=True, timeout=1800)
     probe_env = dict(env, PI_OFFLINE='1', PI_SKIP_VERSION_CHECK='1', PI_TELEMETRY='0',
                      PI_CODING_AGENT_DIR=str(work / 'probe-agent-dir'))
-    reported = subprocess.run([node, str(root / PI_CLI), '--version'], env=probe_env, check=True,
+    reported = subprocess.run([node, str(root / cli), '--version'], env=probe_env, check=True,
                               capture_output=True, text=True, timeout=120).stdout.strip().splitlines()
-    if reported[-1:] != [PI_VERSION]:
-        raise SystemExit(f'pi --version reported {reported!r}, expected {PI_VERSION}')
+    if reported[-1:] != [version]:
+        raise SystemExit(f'pi --version reported {reported!r}, expected {version}')
     listing = subprocess.run(npm + ['ls', '--global', '--prefix', str(root / 'pi'), '--all', '--json'],
                              env=env, check=True, capture_output=True, text=True, timeout=300)
     packages = sorted(_installed_packages(json.loads(listing.stdout)))
     (root / 'pi-runtime.json').write_text(json.dumps(
-        {'pi': PI_VERSION, 'package': PI_PACKAGE, 'node': PI_NODE_VERSION, 'node_sha256': PI_NODE_SHA256,
+        {'pi': version, 'package': PI_PACKAGE, 'node': PI_NODE_VERSION, 'node_sha256': PI_NODE_SHA256,
          'install': 'npm install --global --ignore-scripts', 'packages': packages}, indent=2) + '\n')
-    target = out / f'tofu-pi-{PI_VERSION}-node{PI_NODE_VERSION}.tar.gz'
+    target = out / f'tofu-pi-{version}-node{PI_NODE_VERSION}.tar.gz'
     with target.open('wb') as raw, gzip.GzipFile(filename='', mode='wb', fileobj=raw, mtime=0) as packed, \
             tarfile.open(fileobj=packed, mode='w') as bundle:
         for path in sorted(root.rglob('*')):
@@ -264,7 +351,7 @@ def build_runtime(work_dir: str | Path, out_dir: str | Path) -> dict:
                 bundle.addfile(info)
     shutil.rmtree(unpacked, ignore_errors=True)
     return {'filename': target.name, 'sha256': _sha256(target),
-            'version': f'pi {PI_VERSION} ({PI_PACKAGE}, npm --ignore-scripts, {len(packages)} packages) '
+            'version': f'pi {version} ({PI_PACKAGE}, npm --ignore-scripts, {len(packages)} packages) '
                        f'+ node {PI_NODE_VERSION} linux-x64 (sha256 {PI_NODE_SHA256[:12]})'}
 
 
@@ -274,8 +361,10 @@ def main(argv: list[str] | None = None) -> int:
     build = commands.add_parser('build-runtime', help="build the native runner's Pi runtime archive")
     build.add_argument('--work-dir', type=Path, required=True)
     build.add_argument('--out-dir', type=Path, required=True)
+    build.add_argument('--version', default=PI_VERSION, choices=sorted(PI_RELEASE_CLIS),
+                       help='pinned Pi release to install')
     args = parser.parse_args(argv)
-    print(json.dumps(build_runtime(args.work_dir, args.out_dir), indent=2))
+    print(json.dumps(build_runtime(args.work_dir, args.out_dir, args.version), indent=2))
     return 0
 
 

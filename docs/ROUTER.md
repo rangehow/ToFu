@@ -1063,7 +1063,8 @@ point. Scope:
     (`route_to_project` still forwards only owner text), standing instructions,
     request accounts and the Watchdog's review changes.
   - `restart_server` is in every lead's ceiling (`COORDINATOR_TOOLS`), through
-    the same gate and Settings path. Trigger `under_delegation: true`, alone,
+    the same gate and Settings path, one restart at a time across every lead
+    ("Restart single flight, blackout windows and readiness" below). Trigger `under_delegation: true`, alone,
     is the lead's own judgment (for example merged fixes that are live only
     after a restart); the owner's message, steer or standing instruction stay
     valid triggers (`ownerDelegationTrigger`).
@@ -1282,6 +1283,77 @@ point. Scope:
   delegate error, and the in-place re-exec, which is skipped in the
   execution host because only `server.py` can replace its own image
   ([infra runtime](modules/infra_runtime.md)).
+- **Restart single flight, blackout windows and readiness (lead audit
+  2026-11-18, recommendation #3).** **Problem.** A Project Router's restart had
+  to go through the Global Router, and the owner asked that his authority go
+  to the leads entirely (「我的权限要全部下放给负责人们」, "The delegation reaches every
+  lead" above). With `restart_server` in every lead's ceiling, nothing stopped
+  two leads from restarting at once or back to back (the cooldown is 0 by
+  default), a restart could start while HEAD's storage engine was uncertified
+  (hours in the engine gate) or the server manager still ran an older source
+  generation (the reload race the 2026-11-17 readiness procedures,
+  `worker-310c400abc1280e6a3ecbe7a` and `worker-f6a043d9e414a6879d7a5ccc`, ran
+  by hand), and the owner had no way to say "not now" (a pending Hope login
+  approval is lost to a restart). **Decision.** `owner_delegation.restart_server`
+  stays the one path for every lead (`global_router` and `project_lead` alike),
+  with the same grant and trigger, and adds, in order:
+  - **Single flight.** The gate document is the lock: a delegated restart holds
+    it from acceptance to its outcome: `accepted` while the process preparing it
+    lives (`holder`: host and pid, `ownerDelegatedAction.holder`), `restarting`
+    until `observed_restart` settles it. `check_restart_admission` refuses early
+    and `begin_delegated_action` decides again in the transaction that records
+    the restart, so two leads in different processes can never both hold it. A
+    concurrent request is refused `restart_in_progress`, naming the holder (lead
+    kind and conversation, Turn, action id, since, reason), and recorded. An
+    `accepted` record whose holder on this host exited settles `failed`
+    (`restart_holder_exited`) at the next request.
+  - **Every other lead is told.** After the record, each other available lead
+    (`_lead_bindings`: every coordination binding but the Watchdog's, the Global
+    Router included) receives one R13 `report` ("started restart …", key
+    `restart-started:<id>`); the leads told are kept on the restart notice
+    (`peers`) and, when the notice is delivered, receive the outcome
+    (`restart-outcome:<id>`, `report_restart_outcome`). Both are idempotent per
+    restart; the result's `leads_notified` names them.
+  - **Owner-declared blackout windows.** `restartBlackouts` in the gate
+    document, per owner: `{start, end, reason}` with UTC offsets
+    (`set_restart_blackouts`). The owner declares them through the Global
+    Router, `owner_settings(action='set', path='restart_blackouts', value=[…])`,
+    whose trigger must be the owner's own words (an owner message, steer or
+    standing instruction; `under_delegation` is refused); `[]` lifts them. A
+    delegated restart is refused `restart_blackout` inside a window, at the
+    request and again at acceptance (`accept_delegated_restart`), so a window
+    declared during preparation still stops the old server from being touched.
+    Settings and terminal restarts are the owner's own and ignore them.
+  - **Machine pre-checks** (`_restart_readiness`, before the record): HEAD's
+    storage engine is the deployed one or certified
+    (`engine_certification.passing_record`; `restart_engine_uncertified`
+    otherwise; `not_applicable` without a native engine), and the server manager
+    of this checkout runs its source generation
+    (`supervisor_generation_matches`); a stale one gets the documented pre-step,
+    `refresh_supervisor` within the delegate's budget
+    (`DELEGATION_TIMEOUT_SECONDS - DEFERRED_RESTART_REQUEST_SECONDS`, 42 s),
+    else `restart_supervisor_stale`. A manager that does not manage this
+    checkout is never touched (`unmanaged`). The protected-step rule is the
+    Router path's, unchanged. The result and the notice carry `readiness`.
+  Every refusal above is a `refused` delegated-action record in the history and
+  an `owner_delegation_action` line in `logs/lead-audit/`.
+  **Alternatives rejected:** (b) a `request_restart` tool by which a Project
+  Router asks the Global Router to restart (the relay latency the audit
+  measured, a second restart path, and the owner asked for full delegation, not
+  a request); a process-local lock (execution shards and the API host are
+  separate processes); a longer cooldown (a tuning knob that says nothing about
+  a restart in flight, principle 5); hard-coded blackout times (only the owner
+  knows when a login approval is pending); blackouts as a Settings key (the
+  gate is the single decision point for restarts, and `owner_settings` writes
+  Settings keys under `under_delegation`, so a lead could lift them).
+  Specifications: `tests/router/test_owner_delegation.py` (single flight with
+  the holder's identity and every lead told of start and outcome, lost holder,
+  no grant and enumerated grant, blackout at request and at acceptance, the
+  owner-only declaration, both pre-checks) and, in separate OS processes,
+  `tests/chaos/test_lead_restart_processes.py`: a Project Router restarts an
+  isolated instance through its own manager protocol, a second lead's
+  concurrent request is refused with the holder named, and it hears the
+  outcome after the new generation settles the restart.
 - **Restart-complete notice.** The requester hears the outcome without being
   asked, exactly once (`lib/server/restart_notice.py`). Every restart the gate
   accepts opens one `restartNotices` record in the same transaction that
@@ -1998,7 +2070,11 @@ reversible.
   shape is checked first; `proxy_bypass_domains` is left to the Save's own
   validation. A Save that leaves the value unchanged is
   `owner_settings_not_applied`, never a success. Reads return only these keys:
-  the Settings read also carries secrets (`mt_provider.api_key`).
+  the Settings read also carries secrets (`mt_provider.api_key`). One more key,
+  `restart_blackouts`, is not a Settings key: it reads and replaces the owner's
+  restart blackout windows in the lifecycle gate, and its `set` needs the owner's
+  own words as trigger (R9, "Restart single flight, blackout windows and
+  readiness").
 - **Classes.** `_classify` (`:151`): destructive or external names →
   `owner_settings_not_delegated`; secret-bearing sections and secret-named keys
   → `needs_owner_action` naming the Settings place; anything else →

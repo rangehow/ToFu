@@ -296,6 +296,11 @@ def _execute_invocation(task: dict[str, Any], *, policy: InvocationPolicy) -> No
 
     def run_in_scope():
         _STRICT_BILLING_STOP_ADMISSION.set(False)
+        from lib.llm_sanitize.context_sections import text_memo_scope
+        with text_memo_scope():
+            return _run_in_token_scope()
+
+    def _run_in_token_scope():
         from lib.token_counter.native import native_token_scope
         native = task.get('_nativePreparedInvocation')
         if native is None:

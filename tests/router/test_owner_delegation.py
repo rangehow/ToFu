@@ -84,6 +84,22 @@ def d(standing, approvals, monkeypatch):
         raise AssertionError('owner delegation must not create, decide or consume lifecycle approvals')
     for name in ('create_request', 'decide', 'consume', 'consume_any', 'consume_restart'):
         monkeypatch.setattr(gate, name, human_gate)
+    s.readiness = {'engine': 'certified', 'supervisor': 'current'}
+
+    def readiness():
+        if isinstance(s.readiness, Exception):
+            raise s.readiness
+        return dict(s.readiness)
+    monkeypatch.setattr('lib.router.owner_delegation._restart_readiness', readiness)
+    # Other leads of the owner, and the cross-lead reports they receive.
+    s.leads, s.reports = [], []
+    monkeypatch.setattr('lib.router.owner_delegation._lead_bindings', lambda owner: list(s.leads))
+
+    def notify(owner, sender, sender_project, task_id, peers, content, key):
+        s.reports.extend({'to': peer['conversationId'], 'from': sender, 'key': key, 'content': content}
+                         for peer in peers)
+        return list(peers)
+    monkeypatch.setattr('lib.router.owner_delegation._notify_peer_leads', notify)
     s.detached = []
     monkeypatch.setattr('lib.router.owner_delegation._start_detached', s.detached.append)
 
@@ -870,3 +886,248 @@ def test_an_agent_cannot_approve_a_lifecycle_request(approvals):
     decided = gate.decide(record['id'], True, provenance=human())
     assert decided['status'] == 'approved' and decided['decided_via'] == human()
     assert decided['decided_assurance'] == 'authenticated'
+
+
+# ── one restart at a time across every lead, blackouts and machine pre-checks (ROUTER.md R9) ──
+
+LEAD_CALL = {'reason': 'Merged fixes are live only after a restart', 'under_delegation': True}
+
+
+def _lead(d, conversation='coordinator-project'):
+    return {**d.scope, 'project_path': d.project, 'conversation_id': conversation}
+
+
+def _lead_restart(d, conversation='coordinator-project', key='lead-restart-1', **extra):
+    from lib.router.owner_delegation import restart_server
+    return restart_server(d.task, _lead(d, conversation), {**LEAD_CALL, 'idempotency_key': key, **extra})
+
+
+def _iso(seconds):
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(seconds, tz=timezone.utc).isoformat()
+
+
+def test_one_restart_at_a_time_a_concurrent_lead_is_refused_with_the_holder_and_every_lead_is_told(
+        d, monkeypatch):
+    """A Project Router's restart holds the single flight from acceptance to its outcome: the
+    Global Router and a second lead are refused with the holder's identity, recorded, and every
+    other lead hears that the restart started and how it ended."""
+    from lib import boot_identity
+    from lib.router.contract import validate
+    d.grant()
+    d.leads = [('/router-home', 'router'), (d.project, 'coordinator-project'), ('/other', 'coordinator-b')]
+    accepted = _lead_restart(d)
+    assert accepted['status'] == 'accepted' and accepted['readiness'] == d.readiness
+    assert accepted['leads_notified'] == ['router', 'coordinator-b']
+    assert [(report['to'], report['key']) for report in d.reports] == [
+        ('router', f'restart-started:{accepted["action_id"]}'),
+        ('coordinator-b', f'restart-started:{accepted["action_id"]}')]
+    assert 'coordinator-project' in d.reports[0]['content'] and 'One restart runs at a time' in d.reports[0]['content']
+    [holder] = d.audit()
+    assert holder['holder']['pid'] > 1
+    validate(holder, 'ownerDelegatedAction')
+
+    for refused_call in (lambda: _lead_restart(d, 'coordinator-b', key='b-1'), lambda: d.restart()):
+        with pytest.raises(DelegationRefused) as refused:
+            refused_call()
+        assert refused.value.code == 'restart_in_progress'
+        assert 'project_lead coordinator-project' in str(refused.value)
+        assert accepted['action_id'] in str(refused.value)
+    refusals = [record for record in d.audit() if record['status'] == 'refused']
+    assert {record['requester']['conversationId'] for record in refusals} == {'coordinator-b', 'router'}
+    assert {record['code'] for record in refusals} == {'restart_in_progress'}
+    assert len(d.detached) == 1  # only the holder runs
+
+    # Handed over, the restart still holds until its outcome is observed.
+    d.run_detached()
+    assert gate.delegated_action(OWNER, accepted['action_id'])['status'] == 'restarting'
+    with pytest.raises(DelegationRefused) as refused:
+        _lead_restart(d, 'coordinator-b', key='b-2')
+    assert refused.value.code == 'restart_in_progress'
+
+    # A newer server generation settles it; every lead told of the start hears the outcome.
+    monkeypatch.setattr(boot_identity, 'BOOT_TS', gate.delegated_action(OWNER, accepted['action_id'])['acceptedAt'] + 1)
+    monkeypatch.setattr('lib.conversations.restart_resume.pass_finished', lambda: True)
+    monkeypatch.setattr('lib.server.restart_notice._conversation_lines', lambda notice, outcome: [])
+    from lib.server.restart_notice import deliver_restart_notice
+    delivered = deliver_restart_notice(accepted['action_id'],
+                                       dispatch=lambda *args, **kwargs: SimpleNamespace(disposition='started'))
+    assert delivered['state'] == 'delivered' and delivered['conversationId'] == 'coordinator-project'
+    outcome = [report for report in d.reports if report['key'].startswith('restart-outcome:')]
+    assert [report['to'] for report in outcome] == ['router', 'coordinator-b']
+    assert 'ended completed' in outcome[0]['content']
+    assert _lead_restart(d, 'coordinator-b', key='b-3')['status'] == 'accepted'
+
+
+def test_a_restart_whose_preparing_process_exited_no_longer_holds_the_single_flight(d, approvals):
+    import subprocess
+    d.grant()
+    lost = _lead_restart(d)
+    gone = subprocess.Popen(['true'])
+    gone.wait()
+    document = _approval_document(approvals)
+    [record] = [item for item in document['delegatedActions'] if item['id'] == lost['action_id']]
+    record['holder']['pid'] = gone.pid
+    (approvals / 'lifecycle_approvals.json').write_text(json.dumps(document))
+    assert _lead_restart(d, 'coordinator-b', key='b-1')['status'] == 'accepted'
+    settled = gate.delegated_action(OWNER, lost['action_id'])
+    assert (settled['status'], settled['code']) == ('failed', 'restart_holder_exited')
+
+
+def test_a_restart_is_refused_without_the_grant_or_under_a_narrower_grant(d, approvals):
+    with pytest.raises(DelegationRefused) as refused:
+        _lead_restart(d)
+    assert refused.value.code == 'owner_delegation_not_granted'
+    d.grant()
+    _store_grant(approvals, coverage='enumerated', scopes=['restart'])
+    with pytest.raises(DelegationRefused) as refused:
+        _lead_restart(d)
+    assert refused.value.code == 'owner_delegation_scope' and 'Project Routers' in str(refused.value)
+    assert d.detached == [] and d.reports == []
+
+
+def test_an_owner_blackout_window_refuses_every_leads_restart_until_it_ends(d):
+    import time as clock
+    d.grant()
+    now = clock.time()
+    gate.set_restart_blackouts(OWNER, [{'start': _iso(now - 60), 'end': _iso(now + 3600),
+                                        'reason': 'Hope login approval pending'}],
+                               declared_by={'conversationId': 'router', 'turnId': 'owner-turn'})
+    for call in (lambda: _lead_restart(d), lambda: d.restart()):
+        with pytest.raises(DelegationRefused) as refused:
+            call()
+        assert refused.value.code == 'restart_blackout' and 'Hope login approval pending' in str(refused.value)
+    assert {record['code'] for record in d.audit()} == {'restart_blackout'}
+    assert d.detached == [] and d.events == []
+    # A window that has not begun refuses nothing; lifting the windows restores restarts.
+    gate.set_restart_blackouts(OWNER, [{'start': _iso(now + 3600), 'end': _iso(now + 7200), 'reason': 'later'}],
+                               declared_by={'conversationId': 'router'})
+    assert _lead_restart(d)['status'] == 'accepted'
+
+
+def test_a_blackout_declared_during_preparation_refuses_at_acceptance(d):
+    import time as clock
+    d.grant()
+    accepted = _lead_restart(d)
+    gate.set_restart_blackouts(OWNER, [{'start': _iso(clock.time() - 1), 'end': _iso(clock.time() + 600),
+                                        'reason': 'Owner is approving a login'}],
+                               declared_by={'conversationId': 'router'})
+    d.run_detached()
+    assert 'perform' not in d.names()
+    record = gate.delegated_action(OWNER, accepted['action_id'])
+    assert (record['status'], record['code']) == ('refused', 'restart_blackout')
+
+
+@pytest.mark.parametrize('windows', [[{'start': '2026-11-17T10:00:00', 'end': '2026-11-17T11:00:00',
+                                       'reason': 'no offset'}],
+                                     [{'start': '2099-01-01T11:00:00+08:00', 'end': '2099-01-01T10:00:00+08:00',
+                                       'reason': 'ends first'}],
+                                     [{'start': '2000-01-01T10:00:00Z', 'end': '2000-01-01T11:00:00Z',
+                                       'reason': 'past'}],
+                                     [{'start': '2099-01-01T10:00:00Z', 'end': '2099-01-01T11:00:00Z'}]])
+def test_a_blackout_window_must_be_explicit_and_ahead(approvals, windows):
+    with pytest.raises(ValueError):
+        gate.set_restart_blackouts(OWNER, windows, declared_by={'conversationId': 'router'})
+    assert gate.restart_blackouts(OWNER) == []
+
+
+def test_the_owner_declares_blackouts_through_the_router_with_their_own_words(d):
+    from lib.router import owner_settings
+    d.grant()
+    window = {'start': '2099-01-01T10:00:00+08:00', 'end': '2099-01-01T11:00:00+08:00',
+              'reason': 'Hope login approval window'}
+    base = {'path': 'restart_blackouts', 'value': [window], 'reason': 'The owner asked for no restarts then'}
+    with pytest.raises(DelegationRefused) as refused:
+        owner_settings.call(d.task, d.scope, 'set', {**base, 'under_delegation': True, 'idempotency_key': 'bo-0'})
+    assert refused.value.code == 'owner_delegation_trigger_invalid'
+    assert gate.restart_blackouts(OWNER) == []
+    stored = owner_settings.call(d.task, d.scope, 'set', {**base, 'source_turn_id': 'owner-turn',
+                                                          'idempotency_key': 'bo-1'})
+    assert stored['execution_started'] is True
+    assert stored['value'] == [{'start': '2099-01-01T10:00:00+08:00', 'end': '2099-01-01T11:00:00+08:00',
+                                'reason': 'Hope login approval window'}]
+    assert owner_settings.call(d.task, d.scope, 'get', {'path': 'restart_blackouts'})['value'] == stored['value']
+    record = next(item for item in d.audit() if item['status'] == 'completed')
+    assert record['target'] == {'kind': 'owner_settings', 'path': 'restart_blackouts'}
+    assert record['trigger']['kind'] == 'owner_message'
+
+
+def test_an_uncertified_engine_refuses_before_anything_is_recorded_as_accepted(d):
+    d.grant()
+    d.readiness = DelegationRefused('restart_engine_uncertified', 'HEAD engine 6a8165f5d3d9 is not certified')
+    with pytest.raises(DelegationRefused) as refused:
+        _lead_restart(d)
+    assert refused.value.code == 'restart_engine_uncertified'
+    [record] = d.audit()
+    assert (record['status'], record['code']) == ('refused', 'restart_engine_uncertified')
+    assert d.detached == [] and d.reports == []
+
+
+class _Supervisor:
+    def __init__(self, health, *, refresh_error=None):
+        self.health, self.refresh_error, self.refreshed = health, refresh_error, []
+
+    def install(self, monkeypatch, project):
+        import supervisor_protocol
+        monkeypatch.setattr(supervisor_protocol, 'supervisor_base_url', lambda environment=None: 'http://127.0.0.1:9')
+
+        def health(base_url, path, body=None, *, timeout=5.0):
+            if self.health is None:
+                raise supervisor_protocol.SupervisorRefreshError('connection refused')
+            return dict(self.health)
+        monkeypatch.setattr(supervisor_protocol, 'request_supervisor_json', health)
+        monkeypatch.setattr(supervisor_protocol, 'supervisor_source_fingerprint', lambda path: 'current-gen')
+
+        def refresh(path, *, environment=None, timeout=12.0):
+            self.refreshed.append((path, timeout))
+            if self.refresh_error:
+                raise supervisor_protocol.SupervisorRefreshError(self.refresh_error)
+            return {'ok': True, 'reloaded': True}
+        monkeypatch.setattr(supervisor_protocol, 'refresh_supervisor', refresh)
+        return self
+
+
+def test_the_supervisor_pre_check_refreshes_a_stale_manager_of_this_checkout_only(tmp_path, monkeypatch):
+    from lib.router.owner_delegation import _supervisor_readiness
+    project = str(tmp_path)
+    managed = {'ok': True, 'projects': [project], 'sourceProjectPath': project}
+    assert _Supervisor({**managed, 'sourceFingerprint': 'current-gen'}).install(monkeypatch, project) and \
+        _supervisor_readiness(project) == 'current'
+    stale = _Supervisor({**managed, 'sourceFingerprint': 'old-gen'}).install(monkeypatch, project)
+    assert _supervisor_readiness(project) == 'refreshed'
+    # The documented pre-step's budget: the delegate deadline minus the deferred request's acknowledgement.
+    assert stale.refreshed == [(project, 42.0)]
+    failing = _Supervisor({**managed, 'sourceFingerprint': 'old-gen'}, refresh_error='409 in progress')
+    failing.install(monkeypatch, project)
+    with pytest.raises(DelegationRefused) as refused:
+        _supervisor_readiness(project)
+    assert refused.value.code == 'restart_supervisor_stale' and '409 in progress' in str(refused.value)
+    other = _Supervisor({'ok': True, 'projects': ['/another/checkout'], 'sourceFingerprint': 'x'})
+    other.install(monkeypatch, project)
+    assert _supervisor_readiness(project) == 'unmanaged' and other.refreshed == []
+    nobody = _Supervisor(None).install(monkeypatch, project)
+    assert _supervisor_readiness(project) == 'unmanaged' and nobody.refreshed == []
+
+
+def test_the_engine_pre_check_needs_heads_engine_deployed_or_certified(tmp_path, monkeypatch):
+    from serverctl_pkg import engine_certification, native_engine
+    from lib.router.owner_delegation import _engine_readiness
+    monkeypatch.setenv('TOFU_PERSONAL_STORAGE_BACKEND', 'sqlite')
+    monkeypatch.setenv('TOFU_DEPLOYMENT_MODE', 'personal')
+    assert _engine_readiness(str(tmp_path)) == 'not_applicable'
+    monkeypatch.setenv('TOFU_PERSONAL_STORAGE_BACKEND', 'tofudb')
+    monkeypatch.setattr(native_engine, 'source_fingerprint', lambda root: 'a' * 64)
+    monkeypatch.setattr(native_engine, 'storage_contract_sha256', lambda root: 'c' * 64)
+    binary = tmp_path / 'tofu-db'
+    binary.write_text('')
+    monkeypatch.setattr(native_engine, 'managed_engine_destination', lambda root, environment: binary)
+    monkeypatch.setattr(native_engine, 'build_identity', lambda path: {'source_sha256': 'a' * 64})
+    assert _engine_readiness(str(tmp_path)) == 'deployed'
+    monkeypatch.setattr(native_engine, 'build_identity', lambda path: {'source_sha256': 'b' * 64})
+    monkeypatch.setattr(engine_certification, 'passing_record', lambda root, source, contract: (object(), ''))
+    assert _engine_readiness(str(tmp_path)) == 'certified'
+    monkeypatch.setattr(engine_certification, 'passing_record',
+                        lambda root, source, contract: (None, 'no certification record exists for it'))
+    with pytest.raises(DelegationRefused) as refused:
+        _engine_readiness(str(tmp_path))
+    assert refused.value.code == 'restart_engine_uncertified' and 'aaaaaaaaaaaa' in str(refused.value)

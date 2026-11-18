@@ -74,9 +74,10 @@ class _FactView:
         return value
 
 
-def query_facts(conversation_id: str, *, principal: PrincipalContext, ids=None):
+def query_facts(conversation_id: str, *, principal: PrincipalContext, ids=None, reads=None):
+    """``reads`` answers ``repository.facts_read_request`` already issued."""
     validate({'ids': ids} if ids is not None else {}, 'WorkingFactQuery')
-    return _query_facts(conversation_id, principal, ids, missing_is_error=True)
+    return _query_facts(conversation_id, principal, ids, missing_is_error=True, reads=reads)
 
 
 def query_dependency_facts(conversation_id: str, *, principal: PrincipalContext, ids):
@@ -92,9 +93,9 @@ def query_dependency_facts(conversation_id: str, *, principal: PrincipalContext,
     return _query_facts(conversation_id, principal, selected, missing_is_error=False)
 
 
-def _query_facts(conversation_id, principal, ids, *, missing_is_error):
+def _query_facts(conversation_id, principal, ids, *, missing_is_error, reads=None):
     repository = FactRepository(conversation_id, principal)
-    document, revision = repository.read()
+    document, revision = repository.read(reads) if reads is not None else repository.read()
     view = _FactView(conversation_id, principal, document)
     selected = list(dict.fromkeys(ids)) if ids is not None else list(view.facts)
     if missing_is_error and any(identifier not in view.facts for identifier in selected):

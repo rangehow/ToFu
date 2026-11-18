@@ -438,8 +438,12 @@ class Bridge:
         record.update(facts)
         model = body.get("model") or self.args.model
         url = f"{self.relay_url}/arm/{arm}/v1/chat/completions"
+        # The client's relay key passes through to the keyed relay (relay_ingress); the bridge holds none.
+        credentials = {name: request.headers[name] for name in ("Authorization", "x-api-key")
+                       if name in request.headers}
         try:
-            upstream = await self.session.post(url, json=outgoing, headers={"Accept-Encoding": "identity"})
+            upstream = await self.session.post(url, json=outgoing,
+                                               headers={"Accept-Encoding": "identity", **credentials})
         except (asyncio.TimeoutError, OSError) as failure:
             record.update(status=502, error=f"{type(failure).__name__}: {str(failure)[:200]}")
             self.log(record)

@@ -94,7 +94,10 @@ logger = get_logger(__name__)
 
 
 def _md5(text: str) -> str:
-    return hashlib.md5(text.encode('utf-8', errors='replace')).hexdigest()[:16]
+    # The system and tool bytes repeat every request of a Turn.
+    from lib.llm_sanitize.context_sections import memoized_text
+    return memoized_text(('md5-16', text), lambda: hashlib.md5(
+        text.encode('utf-8', errors='replace')).hexdigest()[:16])
 
 
 def _canon_args(raw: Any) -> str:

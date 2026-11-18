@@ -37,18 +37,42 @@ when that is set, and the record says so.
 Keys: only credentials whose key hint ends in a ``--key-suffixes`` entry are
 ever revealed. ``--max-rpm`` bounds upstream request starts (every face,
 every retry) within any trailing minute, an owner-assigned key budget.
+``--pin-file`` holds per-face request pins every arm gets, for a model whose
+reasoning or sampling fields differ from the chat-face flags above:
+``{"chat"|"anthropic"|"responses": {"set": {path: value}, "omit": [path]}}``
+with dotted paths into the JSON body (``output_config.effort``); each record
+lists the replaced values under ``pinned``.
+``--max-tpm`` bounds the estimated input tokens of those starts the same way
+(eval-quota rule 12, FRIDAY's second per-AppId+model limit): each estimate
+comes from the request body before it is sent and errs high. A 429 naming
+tpm halves the token budget, any other 429 the request budget. With
+``--budget-file`` both budgets live in a JSON file: halvings are written
+there, so a restarted relay keeps them, and an operator (or a guard) can lower
+them without a restart. ``--assume-full-window`` starts a successor relay as
+if its draining predecessor had used both whole budgets in the last minute.
 ``--first-body-dir`` writes the first request body of each (arm, task) for
 the injected-context audit; every request record lists the
 ``tofu-context`` block ids and date markers its prompt carries.
 
+Ingress (``relay_ingress``): with ``--ingress-key-file`` every route below answers
+HTTP 401 before its handler, and before any upstream call, unless the request
+carries the run's relay key as ``Authorization: Bearer`` or ``x-api-key``; the
+runner puts that key in the agents' API-key placeholder. A relay without the
+flag listens on loopback only. A key FRIDAY reports disabled (HTTP 401
+``App ID 已被禁用``) is retired like any 401/402/403 key; once no key is left
+every request gets a typed non-retryable HTTP 403 (``relay_key_disabled``)
+instead of a retryable 502.
+
 Routes (``<arm>`` is a free label used only for accounting; ``<task>`` names
 the trial's task so every request is attributed to its trial):
-  POST /arm/<arm>/v1/chat/completions  (also without /v1, and without /arm/<arm>)
+  POST /arm/<arm>/task/<task>/v1/chat/completions
+       (also without /v1, without /task/<task>, and without /arm/<arm>)
   POST /arm/<arm>/task/<task>/anthropic/v1/messages[/count_tokens]
        (also without /task/<task>, and without /arm/<arm>)
   POST /arm/<arm>/task/<task>/v1/responses  (also without /v1, /task/<task>, /arm/<arm>)
   GET  /arm/<arm>/v1/models
   GET  /probe, /arm/<arm>/probe        reachability check from inside a sandbox
+  GET  /arm/<arm>/task/<task>/held     seconds that trial's requests were held in the gates (+ passes in progress)
   GET  /files/<name>                   static artifacts (e.g. the tofu wheel)
 """
 import argparse
@@ -57,6 +81,7 @@ import collections
 import hashlib
 import itertools
 import json
+import math
 import os
 import random
 import re
@@ -65,6 +90,15 @@ from pathlib import Path
 
 from aiohttp import ClientSession, ClientTimeout, TCPConnector, web
 
+from evaluations.terminal_bench import relay_ingress
+
+PIN_FACES = ("chat", "anthropic", "responses")
+# FRIDAY's per-minute RPM/TPM validation text and the rate-limit codes of the OpenAI and
+# Anthropic dialects. FRIDAY also delivers them inside HTTP 200 bodies and SSE streams
+# (``response.failed``, an ``error`` event, a chat ``data:`` line carrying its 429 body),
+# where no status code reveals them; ``Relay.after_stream`` treats those as upstream 429s.
+_RATE_LIMIT_MARKERS = ("每分钟请求次数超过限制", "tpm超过限制", "rate_limit_exceeded", "rate_limit_error",
+                       "insufficient_quota", "exceeded your current quota")
 UPSTREAM = "https://api.openai.com/v1/chat/completions"
 ANTHROPIC_UPSTREAM = "https://api.openai.com/v1/anthropic/v1/messages"
 RESPONSES_UPSTREAM = "https://api.openai.com/v1/responses"
@@ -73,8 +107,10 @@ _RESPONSES_TERMINAL = ("response.completed", "response.incomplete", "response.fa
 _RESPONSES_EVENT_MARKERS = tuple(f'"{kind}"'.encode() for kind in ("response.created",) + _RESPONSES_TERMINAL) \
     + (b'"type":"error"', b'"type": "error"')
 _TOFU_BLOCK = re.compile(r"tofu-context:([a-z0-9_]+):start")
-# Ambient date carriers: Tofu's current_date block, Codex's environment_context.
-_DATE_MARKERS = ("tofu-context:current_date", "<current_date>", "Current date:")
+# Ambient date carriers: Tofu's current_date block, Codex's environment_context, Claude Code's
+# "# currentDate / Today's date is ..." reminder and OpenCode's <env> "Today's date: ..." line.
+_DATE_MARKERS = ("tofu-context:current_date", "<current_date>", "Current date:", "# currentDate",
+                 "Today's date")
 LONG_DIGITS = re.compile(r"\d{12,}")
 RETRY_STATUSES = {408, 429, 500, 502, 503, 504}
 # Anthropic's documented overload status joins the gateway's retryable set.
@@ -120,6 +156,18 @@ def load_keys(origin, provider_id, suffixes=None):
     return keys
 
 
+# Request body bytes per input token (cached included) of FRIDAY kimi-k3 at the 1st percentile of the relay logs of
+# 2026-11-12/13 for the harnesses FHE runs serve (Tofu on Messages 3.15, Codex on Responses 3.65), so an estimate
+# errs high for them (eval-quota rule 12; checked: 99.1% / 98.9% of logged calls). Another harness needs its own check.
+BYTES_PER_INPUT_TOKEN = {"messages": 3.1, "count_tokens": 3.1, "responses": 3.6, "chat": 3.1}
+
+
+def estimated_input_tokens(kind, body_bytes: int) -> int:
+    """Input tokens a request will count for, from its body size, erring high."""
+    ratio = BYTES_PER_INPUT_TOKEN.get(kind, min(BYTES_PER_INPUT_TOKEN.values()))
+    return math.ceil(body_bytes / ratio)
+
+
 class RequestWindow:
     """Upstream request starts in the trailing minute, shared by every face and key.
 
@@ -154,6 +202,53 @@ class RequestWindow:
     def in_window(self) -> int:
         now = self.clock()
         return sum(1 for start in self.starts if now - start < 60.0)
+
+    def fill(self):
+        """Count the whole budget as started now (a successor's view of a draining predecessor)."""
+        if self.limit:
+            self.starts.extend([self.clock()] * self.limit)
+
+
+class TokenWindow:
+    """Estimated input tokens of upstream request starts in the trailing minute, shared by every face and key.
+
+    ``limit`` is an externally assigned tokens-per-minute budget (None: none). A start waits until the window
+    has room for its estimate; an estimate larger than the whole budget starts alone in an empty window
+    rather than never.
+    """
+
+    def __init__(self, limit, clock=time.monotonic, sleep=asyncio.sleep):
+        self.limit = limit
+        self.clock = clock
+        self.sleep = sleep
+        self.starts = collections.deque()
+        self.lock = asyncio.Lock()
+
+    async def acquire(self, tokens: int) -> float:
+        """Record one start of ``tokens``; returns the seconds waited for budget."""
+        if not self.limit:
+            return 0.0
+        waited = 0.0
+        async with self.lock:
+            while True:
+                now = self.clock()
+                while self.starts and now - self.starts[0][0] >= 60.0:
+                    self.starts.popleft()
+                if not self.starts or sum(count for _, count in self.starts) + tokens <= self.limit:
+                    self.starts.append((now, tokens))
+                    return round(waited, 3)
+                pause = 60.0 - (now - self.starts[0][0])
+                await self.sleep(pause)
+                waited += pause
+
+    def in_window(self) -> int:
+        now = self.clock()
+        return sum(count for start, count in self.starts if now - start < 60.0)
+
+    def fill(self):
+        """Count the whole budget as started now (a successor's view of a draining predecessor)."""
+        if self.limit:
+            self.starts.append((self.clock(), self.limit))
 
 
 def injected_context(texts) -> dict:
@@ -396,6 +491,114 @@ class AnthropicStreamFacts:
             self.facts["stream_error"] = str(event.get("error"))[:300]
 
 
+def body_error(event) -> str | None:
+    """The error a JSON body or SSE event carries at top level (``error``, or FRIDAY's 429 body
+    ``{"status": 429, "message": ...}``); None for anything else, such as model content."""
+    if not isinstance(event, dict):
+        return None
+    if event.get("status") == 429:
+        return f"429 {event.get('message')}"[:300]
+    if event.get("error"):
+        return str(event["error"])[:300]
+    return None
+
+
+def chat_stream_usage(tail: bytes) -> dict | None:
+    """The last ``usage`` a chat SSE stream reported in a ``data:`` line, if any."""
+    for line in reversed(tail.split(b"\n")):
+        line = line.strip()
+        if line.startswith(b"data:") and b'"usage"' in line:
+            try:
+                usage = json.loads(line[5:].strip()).get("usage")
+            except Exception:
+                continue
+            if usage:
+                return usage
+    return None
+
+
+def chat_stream_error(tail: bytes) -> str | None:
+    """The last error a chat SSE stream carried in a ``data:`` line, if any."""
+    for line in reversed(tail.split(b"\n")):
+        line = line.strip()
+        if not line.startswith(b"data:") or (b'"error"' not in line and b'"status"' not in line):
+            continue
+        try:
+            error = body_error(json.loads(line[5:]))
+        except ValueError:
+            continue
+        if error:
+            return error
+    return None
+
+
+def is_rate_limit(error) -> bool:
+    text = str(error or "")
+    return text.startswith("429 ") or any(marker in text for marker in _RATE_LIMIT_MARKERS)
+
+
+def _pin_parent(body: dict, path: str, *, create: bool):
+    """(container, leaf) for a dotted path; ``(None, leaf)`` when absent and not created."""
+    *parents, leaf = path.split(".")
+    node = body
+    for name in parents:
+        child = node.get(name)
+        if not isinstance(child, dict):
+            if not create:
+                return None, leaf
+            child = node[name] = {}
+        node = child
+    return node, leaf
+
+
+def apply_pins(body: dict, pins: dict | None) -> dict:
+    """Remove ``omit`` paths, then set ``set`` paths; returns each touched path's previous value."""
+    replaced = {}
+    for path in (pins or {}).get("omit") or ():
+        node, leaf = _pin_parent(body, path, create=False)
+        if node is not None and leaf in node:
+            replaced[path] = node.pop(leaf)
+    for path, value in ((pins or {}).get("set") or {}).items():
+        node, leaf = _pin_parent(body, path, create=True)
+        replaced.setdefault(path, node.get(leaf))
+        node[leaf] = value
+    return replaced
+
+
+# Headers the relay sets itself: credentials are injected per key and never configured.
+_RELAY_OWNED_HEADERS = frozenset({"authorization", "x-api-key", "content-type", "accept-encoding"})
+
+
+def parse_upstream_headers(items) -> dict:
+    """``--upstream-header NAME=VALUE`` (repeatable), sent upstream on every face.
+
+    FRIDAY's namespaced routes need one (``x-context-provider: tokrouter`` / ``kunlun``,
+    the routing store's connection ``extra_headers``); without it the tokrouter GPT route
+    answers a hollow HTTP 200 with an empty message and zero tokens.
+    """
+    headers = {}
+    for item in items or ():
+        name, sep, value = item.partition("=")
+        name = name.strip()
+        if not sep or not name or not value:
+            raise SystemExit(f"--upstream-header {item!r}: expected NAME=VALUE")
+        if name.lower() in _RELAY_OWNED_HEADERS:
+            raise SystemExit(f"--upstream-header {name}: set by the relay itself (credentials stay per key)")
+        headers[name] = value
+    return headers
+
+
+def load_pins(path) -> dict:
+    """``--pin-file``: ``{face: {"set": {path: value}, "omit": [path]}}`` for faces in PIN_FACES."""
+    if not path:
+        return {}
+    pins = json.loads(Path(path).read_text(encoding="utf-8"))
+    unknown = sorted(set(pins) - set(PIN_FACES))
+    if unknown or not all(isinstance(rule, dict) and set(rule) <= {"set", "omit"} for rule in pins.values()):
+        raise SystemExit(f"{path}: faces must be {PIN_FACES} with only 'set'/'omit' (unknown: {unknown})")
+    return pins
+
+
 def anthropic_error(status: int, message: str) -> web.Response:
     return web.json_response({"type": "error", "error": {"type": "api_error", "message": message}}, status=status)
 
@@ -403,21 +606,45 @@ def anthropic_error(status: int, message: str) -> web.Response:
 class Relay:
     def __init__(self, args):
         self.args = args
+        key_file = getattr(args, "ingress_key_file", None)
+        self.ingress_key = relay_ingress.read_key_file(key_file) if key_file else None
         wanted = args.key_suffixes.split(",") if args.key_suffixes else None
         pairs = load_keys(args.origin, args.provider, wanted)
         if wanted is not None:
             pairs = [pair for pair in pairs if pair[0] in wanted]
         self.key_names = [name for name, _ in pairs]
         self.window = RequestWindow(getattr(args, "max_rpm", None))
+        self.tokens = TokenWindow(getattr(args, "max_tpm", None))
+        self.budget_file = Path(args.budget_file) if getattr(args, "budget_file", None) else None
+        self.budget_stamp = None
+        if self.budget_file is not None:
+            if self.budget_file.exists():
+                self.refresh_budgets()
+            else:
+                self.save_budgets()
+        if getattr(args, "assume_full_window", False):
+            self.window.fill()
+            self.tokens.fill()
         self.first_bodies = set()
         self.keys = [secret for _, secret in pairs]
         self.key_cycle = itertools.cycle(range(len(self.keys)))
         self.cool_until = [0.0] * len(self.keys)
         self.dead = set()
+        # Retired keys whose refusal carried FRIDAY's disabled-AppId signature.
+        self.disabled = set()
+        self.pins = load_pins(getattr(args, "pin_file", None))
+        self.upstream_headers = parse_upstream_headers(getattr(args, "upstream_header", None))
         self.log_path = Path(args.log)
         self.files = Path(args.files_dir) if args.files_dir else None
         self.inflight = {}
         self.session = None
+        # Seconds each trial's (arm, task) requests spent held in the gates before going upstream, for the
+        # runner's deadline extension (PREREG-2 Amendment 7): ended passes, rebuilt from this log at a restart,
+        # plus the passes in progress.
+        self.clock = time.monotonic
+        self.held = collections.defaultdict(float)
+        self.holding = {}
+        self.load_held()
 
     async def start(self, app):
         self.session = ClientSession(
@@ -433,6 +660,41 @@ class Relay:
         for key in self.keys:
             text = text.replace(key, "<key>")
         return LONG_DIGITS.sub("<digits>", text)
+
+    def load_held(self):
+        if not self.log_path.exists():
+            return
+        with self.log_path.open(encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(record, dict) and record.get("held_s"):
+                    self.held[(str(record.get("arm")), str(record.get("task")))] += float(record["held_s"])
+
+    def enter_gates(self, record):
+        """Start timing one pass through the key cool-down, request window and token window (their locks too)."""
+        gate = object()
+        self.holding[gate] = ((str(record.get("arm")), str(record.get("task"))), self.clock())
+        return gate
+
+    def leave_gates(self, gate, record):
+        trial, began = self.holding.pop(gate)
+        held = self.clock() - began
+        self.held[trial] += held
+        record["held_s"] = round(record.get("held_s", 0.0) + held, 3)
+
+    def held_seconds(self, trial):
+        """(seconds held so far, passes in progress) for one (arm, task)."""
+        now = self.clock()
+        current = [now - began for key, began in self.holding.values() if key == trial]
+        return round(self.held.get(trial, 0.0) + sum(current), 3), len(current)
+
+    async def held_total(self, request):
+        trial = (request.match_info["arm"], request.match_info["task"])
+        held, holding = self.held_seconds(trial)
+        return web.json_response({"arm": trial[0], "task": trial[1], "held_s": held, "holding": holding})
 
     def log(self, record):
         record["ts"] = round(time.time(), 3)
@@ -475,6 +737,11 @@ class Relay:
             body["reasoning_effort"] = self.args.reasoning_effort
         return original
 
+    def pin(self, face, body, record):
+        replaced = apply_pins(body, self.pins.get(face))
+        if replaced:
+            record["pinned"] = replaced
+
     async def pick_key(self, deadline):
         """Next live key not cooling down after a 429; waits for the earliest one otherwise."""
         while True:
@@ -501,16 +768,24 @@ class Relay:
         original = self.shape(body, arm)
         stream = bool(body.get("stream"))
         affinity_id = request.headers.get("Mt-Session-Id")
-        record = {"kind": "chat", "arm": arm, "peer": request.remote, "orig": original,
-                  "sent": {k: body.get(k) for k in ("temperature", "top_p", "max_tokens", "reasoning_effort")},
+        record = {"kind": "chat", "arm": arm, "task": request.match_info.get("task", ""),
+                  "peer": request.remote, "orig": original,
                   "n_messages": len(body.get("messages") or []), "n_tools": len(body.get("tools") or [])}
+        self.pin("chat", body, record)
+        # Chat-face harnesses inject their own system prompts and tools too: the same
+        # context inventory and first-body archive as the Anthropic and Responses faces.
+        record["context"] = prompt_context(body)
+        record["sent"] = {k: body.get(k) for k in ("temperature", "top_p", "max_tokens", "reasoning_effort",
+                                                    "thinking", "enable_thinking")}
         record["cache_affinity"] = "Mt-Session-Id" if affinity_id else ""
+        self.archive_first_body(record, body)
 
         def headers_for(key):
             headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json",
                        "Accept-Encoding": "identity"}
             if affinity_id:
                 headers["Mt-Session-Id"] = affinity_id
+            headers.update(self.upstream_headers)
             return headers
 
         def failure(status, error):
@@ -576,6 +851,8 @@ class Relay:
             self.archive_anthropic_body(record, body, forwarded)
         if kind == "messages" and not self.args.preserve_pi_effort_markers:
             record["pi_effort_fold"] = compact_pi_effort_markers(body)
+        if kind == "messages":
+            self.pin("anthropic", body, record)
         record["sent_effort"] = (body.get("output_config") or {}).get("effort")
         record["sent_thinking"] = body.get("thinking")
 
@@ -584,6 +861,7 @@ class Relay:
                        "Content-Type": "application/json", "Accept-Encoding": "identity"}
             headers.update(forwarded)
             headers.setdefault("anthropic-version", "2023-06-01")
+            headers.update(self.upstream_headers)
             return headers
 
         def failure(status, error):
@@ -614,6 +892,101 @@ class Relay:
             handle.write(text)
         record["first_body"] = path.name
 
+    def refresh_budgets(self):
+        """Apply ``--budget-file`` when it changed since it was last read (it is authoritative)."""
+        try:
+            stamp = self.budget_file.stat().st_mtime_ns
+        except OSError:
+            return
+        if stamp == self.budget_stamp:
+            return
+        budgets = json.loads(self.budget_file.read_text(encoding="utf-8"))
+        self.window.limit = budgets.get("max_rpm")
+        self.tokens.limit = budgets.get("max_tpm")
+        self.budget_stamp = stamp
+
+    def save_budgets(self):
+        payload = json.dumps({"max_rpm": self.window.limit, "max_tpm": self.tokens.limit,
+                              "written_by": "relay", "at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}) + "\n"
+        temporary = self.budget_file.with_name(self.budget_file.name + ".tmp")
+        temporary.write_text(payload, encoding="utf-8")
+        os.replace(temporary, self.budget_file)
+        self.budget_stamp = self.budget_file.stat().st_mtime_ns
+
+    def rate_limited(self, key_index, record, error_text=""):
+        """The shared eval-quota rules for a 429 (``.eval-runs/eval-quota.json``, rules 6 and 12).
+
+        The key (one AppId) rests until the next full minute plus 60 s, so no
+        429 is retried inside the minute that produced it. Other keys stay
+        usable. The first 429 of a pause also halves one budget for the rest of
+        this relay's life, as "resume at half" requires: the token budget when
+        the 429 names tpm and a token budget is set, otherwise ``--max-rpm``.
+        """
+        now, wall = time.monotonic(), time.time()
+        resume = now + ((wall // 60) + 1) * 60 + 60 - wall
+        fresh = self.cool_until[key_index] <= now
+        self.cool_until[key_index] = max(self.cool_until[key_index], resume)
+        if not fresh:
+            return
+        if self.budget_file is not None:
+            self.refresh_budgets()
+        budget = "tpm" if "tpm" in str(error_text).lower() and self.tokens.limit else "rpm"
+        if budget == "tpm":
+            self.tokens.limit = max(1, self.tokens.limit // 2)
+        elif self.window.limit:
+            self.window.limit = max(1, self.window.limit // 2)
+        if self.budget_file is not None:
+            self.save_budgets()
+        self.log({"kind": "rate_limited", "key": self.key_names[key_index], "arm": record.get("arm"),
+                  "task": record.get("task"), "pause_s": round(resume - now, 1), "halved": budget,
+                  "max_rpm_now": self.window.limit, "max_tpm_now": self.tokens.limit})
+
+    def after_stream(self, record, error):
+        """An error inside a 200 response; a rate limit there counts as an upstream 429.
+
+        The client already received the body as sent (its own retry logic runs),
+        but the quota rule applies as for an HTTP 429: the stop file, the key's
+        rest and the halved window. ``stream_429`` marks the record throttled.
+        """
+        if not error:
+            return
+        record.setdefault("stream_error", str(error)[:300])
+        if not is_rate_limit(error) or record.get("key") not in self.key_names:
+            return
+        record["stream_429"] = True
+        key_index = self.key_names.index(record["key"])
+        self.note_throttle(record, key_index)
+        self.rate_limited(key_index, record, error)
+
+    def note_throttle(self, record, key_index):
+        """With --stop-file, the first upstream 429 creates that file: runners stop starting trials.
+
+        The request itself is still retried after the key's cool-down; only new
+        trials stop, so a throttled in-flight trial finishes and is reported as
+        throttled instead of being cut off.
+        """
+        self.write_stop_file(record, key_index, "upstream_429")
+
+    def write_stop_file(self, record, key_index, reason: str):
+        """Create --stop-file once (the first event wins); runners start no new trial while it exists.
+
+        Written at the first upstream 429 and at any key retirement (HTTP 401/402/403): a retired key
+        serves no further request, so a trial started after it could only measure the outage.
+        """
+        path = getattr(self.args, "stop_file", None)
+        if not path:
+            return
+        try:
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            return
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump({"reason": reason, "ts": time.time(), "arm": record.get("arm"),
+                       "task": record.get("task"), "kind": record.get("kind"),
+                       "key": self.key_names[key_index]}, handle)
+        self.log({"kind": "stop_file_written", "path": str(path), "reason": reason, "arm": record.get("arm"),
+                  "task": record.get("task"), "key": self.key_names[key_index]})
+
     async def responses(self, request):
         """OpenAI Responses passthrough: the harness's request with only ``model`` pinned."""
         arm = request.match_info.get("arm", "-")
@@ -636,6 +1009,8 @@ class Relay:
                   "cache_affinity": "Mt-Session-Id" if affinity_id else "",
                   "body_bytes": request.content_length, "context": prompt_context(body)}
         body["model"] = self.args.responses_model
+        self.pin("responses", body, record)
+        record["sent_reasoning"] = body.get("reasoning")
         filled = getattr(self.args, "responses_max_output_tokens", None)
         if filled and body.get("max_output_tokens") is None:
             body["max_output_tokens"] = filled
@@ -647,6 +1022,7 @@ class Relay:
                        "Accept-Encoding": "identity"}
             if affinity_id:
                 headers["Mt-Session-Id"] = affinity_id
+            headers.update(self.upstream_headers)
             return headers
 
         def failure(status, error):
@@ -678,18 +1054,19 @@ class Relay:
                 "Cache-Control": "no-cache"})
             await response.prepare(request)
             async for chunk in upstream.content.iter_any():
-                await response.write(chunk)
                 facts.feed(chunk)
-            facts.close()
+                await response.write(chunk)
             await response.write_eof()
             return response
-        except (ConnectionResetError, asyncio.CancelledError) as error:
-            record["client_gone"] = type(error).__name__
+        except (ConnectionResetError, asyncio.CancelledError) as gone:
+            record["client_gone"] = type(gone).__name__
             raise
         finally:
             upstream.release()
+            facts.close()
             record.update(facts.facts)
             record["latency_s"] = round(time.monotonic() - started, 3)
+            self.after_stream(record, record.get("response_error") or record.get("stream_error"))
             self.log(record)
 
     async def dispatch(self, request, *, arm, url, body, headers_for, record, started, retry_statuses,
@@ -700,13 +1077,27 @@ class Relay:
         deadline = started + self.args.retry_budget
         try:
             while True:
-                key_index = await self.pick_key(deadline)
+                gate = self.enter_gates(record)
+                try:
+                    key_index = await self.pick_key(deadline)
+                    if key_index is not None:
+                        attempt += 1
+                        if self.budget_file is not None:
+                            self.refresh_budgets()
+                        waited = await self.window.acquire()
+                        if waited:
+                            record["rpm_wait_s"] = round(record.get("rpm_wait_s", 0.0) + waited, 3)
+                        if self.tokens.limit:
+                            estimate = estimated_input_tokens(record.get("kind"),
+                                                              record.get("body_bytes") or len(json.dumps(body)))
+                            record["tpm_estimate"] = estimate
+                            waited = await self.tokens.acquire(estimate)
+                            if waited:
+                                record["tpm_wait_s"] = round(record.get("tpm_wait_s", 0.0) + waited, 3)
+                finally:
+                    self.leave_gates(gate, record)
                 if key_index is None:
                     break
-                attempt += 1
-                waited = await self.window.acquire()
-                if waited:
-                    record["rpm_wait_s"] = round(record.get("rpm_wait_s", 0.0) + waited, 3)
                 try:
                     upstream = await self.session.post(url, json=body, headers=headers_for(self.keys[key_index]))
                 except (asyncio.TimeoutError, OSError, Exception) as error:  # transport failure
@@ -721,22 +1112,34 @@ class Relay:
                     upstream.release()
                     last = {"status": upstream.status, "error": text}
                     if upstream.status in (401, 402, 403):
+                        disabled = relay_ingress.is_key_disabled(upstream.status, text)
                         self.dead.add(key_index)
+                        if disabled:
+                            self.disabled.add(key_index)
                         self.log({"kind": "key_retired", "key": self.key_names[key_index],
-                                  "status": upstream.status, "error": text[:160]})
+                                  "status": upstream.status, "disabled": disabled, "error": text[:160]})
+                        self.write_stop_file(record, key_index, f"key_retired_{upstream.status}")
                         continue
                     if upstream.status not in retry_statuses:
                         break
                 record.setdefault("retries", []).append({"status": last["status"], "key": self.key_names[key_index],
                                                          "error": (last["error"] or "")[:160]})
                 if last["status"] == 429:
-                    # Per-minute RPM window: rest this key, try another one right away.
-                    self.cool_until[key_index] = time.monotonic() + 5 + random.random() * 5
+                    self.note_throttle(record, key_index)
+                    self.rate_limited(key_index, record, last["error"])
                     continue
                 if time.monotonic() + delay > deadline:
                     break
                 await asyncio.sleep(delay + random.random())
                 delay = min(delay * 2, 30.0)
+            if len(self.dead) == len(self.keys):
+                # No key can serve again in this relay's life: say so in a form clients do not retry.
+                disabled = bool(self.disabled)
+                record.update(status=403, attempts=attempt, latency_s=round(time.monotonic() - started, 3),
+                              error=relay_ingress.KEY_DISABLED if disabled else relay_ingress.KEY_RETIRED)
+                self.log(record)
+                dialect = "anthropic" if record.get("kind") in ("messages", "count_tokens") else "openai"
+                return relay_ingress.no_usable_key_response(dialect, disabled=disabled, keys=self.key_names)
             record.update(status=last["status"] or 502, attempts=attempt, error=last["error"],
                           latency_s=round(time.monotonic() - started, 3))
             self.log(record)
@@ -745,12 +1148,14 @@ class Relay:
             self.inflight[arm] -= 1
 
     async def forward(self, request, upstream, stream, record, started):
-        usage = None
+        usage = error = None
+        tail = b""
         try:
             if not stream:
                 data = await upstream.read()
                 try:
-                    usage = json.loads(data).get("usage")
+                    reply = json.loads(data)
+                    usage, error = reply.get("usage"), body_error(reply)
                 except Exception:
                     pass
                 response = web.Response(body=data, status=200, content_type="application/json")
@@ -759,27 +1164,22 @@ class Relay:
                 "Content-Type": upstream.headers.get("Content-Type", "text/event-stream"),
                 "Cache-Control": "no-cache"})
             await response.prepare(request)
-            tail = b""
             async for chunk in upstream.content.iter_any():
-                await response.write(chunk)
+                # Received before it is relayed: a client that leaves early (Pi closes
+                # once it has the answer) still leaves the usage and errors on record.
                 tail = (tail + chunk)[-8192:]
+                await response.write(chunk)
             await response.write_eof()
-            for line in reversed(tail.split(b"\n")):
-                line = line.strip()
-                if line.startswith(b"data:") and b'"usage"' in line:
-                    try:
-                        usage = json.loads(line[5:].strip()).get("usage")
-                    except Exception:
-                        pass
-                    if usage:
-                        break
             return response
-        except (ConnectionResetError, asyncio.CancelledError) as error:
-            record["client_gone"] = type(error).__name__
+        except (ConnectionResetError, asyncio.CancelledError) as gone:
+            record["client_gone"] = type(gone).__name__
             raise
         finally:
             upstream.release()
+            if tail:
+                error, usage = chat_stream_error(tail), chat_stream_usage(tail)
             record.update(usage=usage, latency_s=round(time.monotonic() - started, 3))
+            self.after_stream(record, error)
             self.log(record)
 
     async def forward_anthropic(self, request, upstream, stream, record, started):
@@ -801,45 +1201,49 @@ class Relay:
                 "Cache-Control": "no-cache"})
             await response.prepare(request)
             async for chunk in upstream.content.iter_any():
-                await response.write(chunk)
                 facts.feed(chunk)
-            facts.close()
+                await response.write(chunk)
             await response.write_eof()
             return response
-        except (ConnectionResetError, asyncio.CancelledError) as error:
-            record["client_gone"] = type(error).__name__
+        except (ConnectionResetError, asyncio.CancelledError) as gone:
+            record["client_gone"] = type(gone).__name__
             raise
         finally:
             upstream.release()
+            facts.close()
             record.update(facts.facts)
             record["latency_s"] = round(time.monotonic() - started, 3)
+            self.after_stream(record, record.get("stream_error"))
             self.log(record)
 
     async def stats(self, request):
         now = time.monotonic()
         return web.json_response({"inflight": self.inflight, "keys": self.key_names,
                                   "max_rpm": self.window.limit, "starts_last_minute": self.window.in_window(),
-                                  "dead": [self.key_names[i] for i in self.dead],
+                                  "max_tpm": self.tokens.limit, "tokens_last_minute": self.tokens.in_window(),
+                                  "dead": [self.key_names[i] for i in sorted(self.dead)],
+                                  "disabled": [self.key_names[i] for i in sorted(self.disabled)],
                                   "cooling": [self.key_names[i] for i, t in enumerate(self.cool_until) if t > now]})
 
 
 def build_app(relay: Relay) -> web.Application:
-    app = web.Application(client_max_size=64 * 1024 * 1024)
+    middlewares = [relay_ingress.ingress_middleware(relay.ingress_key, relay.log)] if relay.ingress_key else []
+    app = web.Application(client_max_size=64 * 1024 * 1024, middlewares=middlewares)
     app.on_startup.append(relay.start)
     app.on_cleanup.append(relay.stop)
-    for prefix in ("", "/arm/{arm}"):
+    for prefix in ("", "/arm/{arm}", "/arm/{arm}/task/{task}"):
         for path in ("/v1/chat/completions", "/chat/completions"):
             app.router.add_post(prefix + path, relay.chat)
         app.router.add_get(prefix + "/v1/models", relay.models)
         app.router.add_get(prefix + "/models", relay.models)
         app.router.add_get(prefix + "/probe", relay.probe)
-    for prefix in ("", "/arm/{arm}", "/arm/{arm}/task/{task}"):
         app.router.add_post(prefix + "/anthropic/v1/messages", relay.messages)
         app.router.add_post(prefix + "/anthropic/v1/messages/count_tokens", relay.count_tokens)
         for path in ("/v1/responses", "/responses"):
             app.router.add_post(prefix + path, relay.responses)
     app.router.add_get("/files/{name}", relay.file)
     app.router.add_get("/stats", relay.stats)
+    app.router.add_get("/arm/{arm}/task/{task}/held", relay.held_total)
     return app
 
 
@@ -859,8 +1263,23 @@ def main():
                         help="max_output_tokens for Responses requests that omit it (recorded per request)")
     parser.add_argument("--max-rpm", type=int,
                         help="owner-assigned budget: upstream request starts per trailing minute, all faces")
+    parser.add_argument("--max-tpm", type=int,
+                        help="owner-assigned budget: estimated input tokens of those starts per trailing minute "
+                             "(eval-quota cap_tpm)")
+    parser.add_argument("--budget-file",
+                        help="JSON {max_rpm, max_tpm}: read at start when present (else written from the flags), "
+                             "re-read when it changes, rewritten on every halving")
+    parser.add_argument("--assume-full-window", action="store_true",
+                        help="start as if both budgets were used in the last minute (a successor relay while its "
+                             "predecessor drains)")
     parser.add_argument("--first-body-dir",
                         help="write the first request body of each (arm, task) here (prompt text, mode 0600)")
+    parser.add_argument("--stop-file",
+                        help="created on the first upstream 429; runners given the same path start no new trials")
+    parser.add_argument("--upstream-header", action="append", default=[],
+                        help="NAME=VALUE sent upstream on every face, e.g. x-context-provider=tokrouter (no credentials)")
+    parser.add_argument("--pin-file",
+                        help='per-face request pins {"chat"|"anthropic"|"responses": {"set": {...}, "omit": [...]}}')
     parser.add_argument("--temperature", type=float)
     parser.add_argument("--top-p", type=float)
     parser.add_argument("--max-tokens", type=int)
@@ -875,7 +1294,11 @@ def main():
                              "unchanged (FRIDAY rejects them; used only to measure that)")
     parser.add_argument("--log", required=True)
     parser.add_argument("--files-dir")
+    parser.add_argument("--ingress-key-file",
+                        help="the run's relay key file (python -m evaluations.terminal_bench relay-key FILE): every "
+                             "request must carry the key; required unless --host is loopback")
     args = parser.parse_args()
+    relay_ingress.require_ingress_key(args.host, args.ingress_key_file)
     relay = Relay(args)
     asyncio.run(serve(build_app(relay), relay, args))
 
@@ -894,7 +1317,17 @@ async def serve(app, relay, args):
             await asyncio.sleep(0.2)
     print(f"relay listening on {args.host}:{args.port} keys={relay.key_names} model={args.model} "
           f"anthropic_model={args.anthropic_model} responses_model={args.responses_model} "
-          f"max_rpm={args.max_rpm} read_timeout={args.read_timeout}", flush=True)
+          f"max_rpm={relay.window.limit} max_tpm={relay.tokens.limit} read_timeout={args.read_timeout} "
+          f"pins={json.dumps(relay.pins)} "
+          f"ingress={'run-key' if relay.ingress_key else 'loopback-only'}", flush=True)
+    relay.log({"kind": "relay_start", "keys": relay.key_names, "model": args.model,
+               "anthropic_model": args.anthropic_model, "responses_model": args.responses_model,
+               "max_rpm": relay.window.limit, "max_tpm": relay.tokens.limit, "pins": relay.pins,
+               "temperature": args.temperature,
+               "top_p": args.top_p, "max_tokens": args.max_tokens, "reasoning_effort": args.reasoning_effort,
+               "responses_max_output_tokens": args.responses_max_output_tokens, "pid": os.getpid(),
+               "upstream_headers": relay.upstream_headers, "code": str(Path(__file__).resolve()),
+               "ingress": "run-key" if relay.ingress_key else "loopback-only"})
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):

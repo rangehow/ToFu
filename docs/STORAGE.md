@@ -489,6 +489,19 @@ round trips) and a thread pool (a concurrency knob that still pays every round
 trip). Specs: `tests/storage/test_storage_query_many.py` (SQLite, PostgreSQL,
 native) and the `query_many` cases of `tests/storage/test_storage_v2_client.py`.
 
+`PrefetchedReads(client, requests)` names reads that several owners will make;
+the first of them to ask sends all of them as one `query_many` on its own
+thread (a hand-off to another thread waits for the interpreter lock in a busy
+process), and the rest find their answers. An owner read path that accepts
+`reads=` queries it instead of the client. It answers exactly the listed
+(operation, payload) pairs, each
+as many times as it was listed (two owners reading one row list it twice);
+any other read, a read past those and every read after a failed exchange go
+to `client.query`, and an answered `StorageError` is raised as `query` would.
+It caches nothing beyond the object; its owner scopes freshness. The model
+round's boundary reads use it (`lib/tasks_pkg/round_reads.py`,
+[Harness performance](HARNESS_PERFORMANCE.md), "Round floor").
+
 - same command ID + same operation and canonical payload returns the committed
   response;
 - same command ID + different operation or payload is `database_conflict`

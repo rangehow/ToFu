@@ -31,7 +31,9 @@ from .constants import BenchmarkDefinition
 from .process import run_streaming
 
 
-_ASSET_SCHEMA = 1
+# 2: the OCI ref.name annotation is the fully qualified reference (_docker_reference); schema-1 payloads load
+# under a short name that Docker >= 29.9 does not resolve, so they are rebuilt.
+_ASSET_SCHEMA = 2
 _INDEX_SCHEMA = 1
 _DEFINITIONS_SCHEMA = 1
 _PRINT_LOCK = threading.Lock()
@@ -227,6 +229,19 @@ def _network_run(command: list[str], *, timeout: float, attempts: int = 6) -> st
             time.sleep(min(30.0, 2.0**attempt) + random.random())
     assert error is not None
     raise error
+
+
+def _docker_reference(image: str) -> str:
+    """Docker's normalized name for ``image`` (``docker.io/library/`` for bare names).
+
+    ``docker load`` keeps an OCI ref.name verbatim, while a Dockerfile ``FROM`` resolves
+    the normalized name; on Docker 29.9 a short loaded name is not found locally and the
+    build falls through to the (unreachable) registry.
+    """
+    first, slash, rest = image.partition("/")
+    if slash and ("." in first or ":" in first or first == "localhost"):
+        return image
+    return f"docker.io/{image}" if slash else f"docker.io/library/{image}"
 
 
 def _repository_without_tag(reference: str) -> str:
@@ -571,7 +586,7 @@ def _prepare_asset(
         descriptor = descriptors[0]
         if not isinstance(descriptor, dict) or descriptor.get("digest") != manifest_digest:
             raise RuntimeError(f"OCI index digest mismatch: {image}")
-        descriptor["annotations"] = {"org.opencontainers.image.ref.name": image}
+        descriptor["annotations"] = {"org.opencontainers.image.ref.name": _docker_reference(image)}
         atomic_write_json(index_path, index)
         _run(
             [str(archive_tool), "-cf", str(tar_path), "-C", str(oci_path), "."],

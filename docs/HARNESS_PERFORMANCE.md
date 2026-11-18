@@ -919,14 +919,11 @@ component:
 - About 9 ms of durable evidence work the references do not do (above). The
   durability contracts stay: tool intent before effect, ready and tool-round
   receipts before the next paid request, terminal before settlement.
-- Next structural targets, not changed here: one pipelined storage exchange
-  for the round's three reads (Turn head, requirements, working facts: three
-  owners); deriving the post-tool state snapshot from the previous request
-  snapshot plus the appended rows instead of re-sanitizing the history;
-  reusing a carrier thread for the provider post and the stream watchdog;
-  and the per-request sealing work in `prepare_request`, which incremental
-  request building made near-flat in history length but not cheaper per
-  request.
+- Next structural targets at the time: one pipelined storage exchange for
+  the round's three reads, the post-tool state snapshot, carrier reuse for
+  the provider post and the stream watchdog, and the per-request sealing work
+  in `prepare_request`. "Round floor" below took all but the post-tool
+  re-sanitize.
 
 ### Alternatives considered
 
@@ -940,6 +937,275 @@ component:
   new invalidation protocol for a cost the memo removes.
 - **Caching the PATH search by PATH alone**: misses a CLI installed later and
   silently disables the guard.
+
+## Round floor (2026-11-18)
+
+Owners: `lib/tools/gateway.py` (wire preflight), `lib/conversation_sync/settled_rows.py`
+(`rows_memo`), `lib/tasks_pkg/round_evidence.py`, `lib/storage/port.py`
+(`PrefetchedReads`), `lib/tasks_pkg/round_reads.py`, `lib/llm/_transport.py`
+(carrier pools); the chaos instance (`tests/chaos/instance.py`). Contracts:
+`docs/STORAGE.md` ("Commands, queries, and idempotency"),
+`docs/DEFENSIVE_PATTERNS.md` ("Fault contracts of the chaos suite").
+
+### Problem
+
+After "Round hops" a `noop` round was 60 ms, about 35 ms of it Python on the
+Turn thread. The profile's biggest named piece, request preparation, was
+mostly memo misses rather than work: incremental request building
+("Incremental request building") keys translation, fingerprints and schema
+counts on settled rows, but a diagnostic run that logged every `rows_memo`
+call in the deployment showed every whole-surface memo (`tool-bytes`,
+`tool-specs`, `tool-schema` fingerprint/sorted JSON, the token counter's
+`tool-schema-text`) missing on every round.
+
+### Changes
+
+1. **The wire preflight keeps a settled tool's identity.** Three tools carry a
+   private `decoded_result_schema` that the preflight projects into the
+   description; the projection was a fresh dict every round, settled against
+   the pre-preflight row and so never interchangeable with the previous
+   round's. It is now memoized on the settled source row, so the whole tool
+   surface is the previous round's rows and every memo over it answers
+   (`test_unchanged_tool_surface_keeps_its_wire_rows_across_rounds`).
+2. **`rows_memo` keeps one run per length.** The catalog (47 tools) counted
+   at slot adaptation and the projected wire subset (26) counted at ingress
+   share their leading rows; one run per first row made them evict each
+   other every round. Runs are now keyed by length too (exact identity still
+   decides a hit).
+3. **Inspector snapshots settle their tool schemas** against the previous
+   snapshot of the same kind, so a frame's detach shares the catalog instead
+   of copying 47 schemas per snapshot (the request wire's settled rows and
+   the dispatch pipeline's live list differ, hence one baseline per kind).
+4. **The round's boundary reads share one exchange.** The steer check's Turn
+   head, the execution requirements (attempt, the same Turn head, the
+   requirements record) and the working-fact aggregate were five RPCs from
+   three owners. `round_reads` names them when the round's preparation
+   starts; the first reader (the steer check, on the Turn thread) sends one
+   `query_many`; the owners' read paths accept the round's `PrefetchedReads`
+   and read anything else live (a continued Turn's source record, a
+   transient retry). Each answer serves the reads it was listed for, so a
+   second requirements read after compaction is live again.
+5. **The header wait and the stream watchdog run on reused daemon
+   carriers** (`_carrier_pool`, one `DemandExecutor` per role): every
+   submission starts at once, one idle carrier per role is kept, a refused
+   carrier still fails before anything is sent (`LocalRequestPreparationError`
+   at `thread_start`).
+
+### Where a round goes now
+
+`noop`, py-spy shares of the Turn thread before (`prof0`, the base tip with
+"Round hops") and after (all changes), ms at each run's TurnTrace time per
+request (63.6 / 58.0 ms; both runs at host load about 50-100, so the ms are
+larger than the quiet ABAB below). Artifacts:
+`output/harness_perf/round-floor-abab-20261118/profiles/`.
+
+| component | before | after |
+|---|---|---|
+| `prepare_request` (seal, translate, recount, fingerprints, raw-archive capture) | 15.1 % · 9.6 ms | 9.3 % · 5.4 ms |
+| round context (composer, compaction pipeline, inbox) | 8.8 % · 5.6 | 9.5 % · 5.5 |
+| tool execution (`read_files`, awaited) | 8.5 % · 5.4 | 11.0 % · 6.4 |
+| tool pipeline CPU | 6.5 % · 4.1 | 7.8 % · 4.5 |
+| post-tool state snapshot | 10.0 % · 6.4 | 5.9 % · 3.4 |
+| send and response headers (incl. stub service) | 5.1 % · 3.2 | 6.5 % · 3.8 |
+| storage reads (steers, requirements, working facts) | 6.6 % · 4.2 | 6.8 % · 3.9 |
+| `build_round_request` and request snapshot | 4.5 % · 2.9 | 4.7 % · 2.7 |
+| slot adaptation, admission count, dispatcher pick | 4.6 % · 2.9 | 4.0 % · 2.3 |
+| prompt admission count | 3.5 % · 2.2 | 4.2 % · 2.4 |
+| pre-request event barrier | 3.0 % · 1.9 | 2.8 % · 1.6 |
+| event append | 2.9 % · 1.8 | 2.9 % · 1.7 |
+| SSE parse | 1.8 % · 1.1 | 2.9 % · 1.7 |
+| MCP relay from a shard | 1.4 % · 0.9 | 2.4 % · 1.4 |
+| thread creation | 1.8 % · 1.1 | 0.2 % · 0.1 |
+
+### ABAB (`round_profile.py --no-spy`, 6 pairs, fresh roots, same engine)
+
+Arm A `8c45505061` (shared tip with "Round hops"), arm B this change. Pairs
+1-4 ran at host load 6-20, pairs 5-6 at 119-165. Median / p95 (n), ms; codex
+and pi from the fixed-stub reference run ("Round hops").
+
+| metric | A | B | codex | pi |
+|---|---|---|---|---|
+| `noop` steady round, all pairs | 60.2 / 287 (342) | **54.7** / 387 (342) | 38.3 | 3.0 |
+| `noop` steady round, quiet pairs 1-4 | 59.4 / 123 (228) | **53.0** / 78 (228) | | |
+| `run_command true` round, all pairs | 67.2 / 305 (72) | **64.7** / 419 (72) | 187.9 | 21.5 |
+| `run_command true` round, quiet pairs 1-4 | 66.8 / 99 (48) | **63.3** / 100 (48) | | |
+
+B was faster in every quiet pair (`noop` 59.5/58.3/61.3/59.4 →
+55.3/52.9/52.3/52.0, `true` 67.3/66.6/65.8/67.0 → 62.8/62.7/64.1/63.5); the
+two loaded pairs split. An earlier 5-pair run before change 5's watchdog half
+gave `noop` 60.7 → 55.6 and `true` 66.6 → 63.8 (n = 285 / 60). A separate
+5-pair AB of change 4 alone (B against B with round reads reverted) was
+neutral at one session: `noop` 52.3 → 52.1, `true` 62.3 → 62.2 (n = 285 / 60):
+it removes four storage round trips per round, but the steer check still
+waits for one round trip, now carrying all five reads. Artifacts:
+`output/harness_perf/round-floor-abab-20261118/`.
+
+### What remains (floor)
+
+Tofu's `noop` round is 53 ms against codex's 38 ms and pi's 3 ms; its `true`
+round is 63 ms against pi's 21.5 ms (codex 188 ms). In the after profile:
+
+- About 28 ms of Python on the Turn thread: request preparation 5.4 (sealing,
+  the Anthropic translation of the new rows, the recount, the raw-archive
+  capture; per row it is now memoized, what is left is per request), round
+  context 5.5 (composer refresh of the working-fact and programmatic-input
+  blocks, the compaction pipeline's measurement), tool pipeline 4.5, the
+  post-tool snapshot 3.4 (it still re-sanitizes the whole history through
+  `apply_wire_sanitize`, whose orphan repair and same-role merge are
+  whole-list passes, so a row-level memo would not be exact), request build
+  and snapshot 2.7, the two admission counts 4.7, SSE parse 1.7.
+- About 6 ms awaiting the `read_files` tool on its worker thread: each
+  hand-off between threads waits for the interpreter lock behind the Turn
+  thread's own work.
+- About 10 ms of durable evidence and cross-process work the references do
+  not have: storage reads 3.9, the pre-request barrier 1.6, event append
+  1.7, the shard's MCP relay 1.4, the provider send beyond the stub's
+  service 2.2. The durability contracts stay as they are.
+- pi's whole round is its loop over a 6.5 KB request; Tofu sends 95 KB with
+  sealed lineage, the Request Inspector's evidence and cache accounting per
+  request. Reaching codex's 38 ms needs the per-request Python above to
+  roughly halve again; reaching pi's 3 ms needs a different process model,
+  not a faster Python path.
+
+### Chaos suite (`make test-chaos`)
+
+The three failures named load-sensitive were not load: chaos instances ran
+from the checkout itself. The execution host re-verifies its source
+generation at every recovery, so any edit or landing during the 7-minute run
+(the shared checkout always has writers, and a worktree has its author)
+refused the recovery with `ExecutionSourceChanged`, and every later test on
+the module's shared instance met a dead host; concurrent instances also
+shared `<checkout>/data/mcp-bridge-relay.json`. Every instance now runs from
+its own export taken at start (`shared_project=True` keeps the production
+project topology for the node suite). The shard-loss spec assumed that a
+held provider stream occupies the primary; when earlier specs had left idle
+shards, a shard claimed it and the tool ran on the primary. It now runs two
+tool Turns at once (the primary enters at most one job), kills the shard of
+one and requires the other to complete. The full suite passed 45/45 while
+the worktree was being edited, and 47/47 on the merged tree.
+
+### Alternatives considered
+
+- **Memoizing the run by its full identity tuple per first row** (several
+  runs per row): unbounded growth when a list changes every round; one run
+  per length is bounded by the surface's sizes.
+- **Issuing the round reads at the end of the previous round's tools**, to
+  hide the round trip behind the post-tool snapshot: a steer or requirement
+  committed during a long tool would wait a whole round more.
+- **Sending the round's exchange from the provider executor** (the first
+  version of change 4): the send then waits for the interpreter lock behind
+  the Turn thread's hygiene work; profiled, the steer check waited longer
+  than for its own lone read.
+- **A row-level memo of the post-tool sanitize**: the sanitizer's whole-list
+  repairs (orphaned calls, same-role merges) make a per-row result inexact.
+- **Retrying or skipping the chaos failures**: they were real defects of the
+  instance and of one spec's premise.
+
+## Round floor II: settled-state reuse (2026-11-18)
+
+Owners: `lib/llm_sanitize/context_sections.py` (`TextMemo`,
+`text_memo_scope`, `memoized_text`), `lib/tasks_pkg/invocation.py` (scope),
+`lib/tasks_pkg/orchestrator/_root_agent_loop.py` (round boundary),
+`lib/tasks_pkg/context_composer/_policy_prefix.py`, `lib/llm_sanitize/lineage.py`,
+`lib/tasks_pkg/wire_fingerprint.py`, `lib/tasks_pkg/model_config.py`.
+Artifacts: `output/harness_perf/round-floor-ii-abab-20261118/`.
+
+### Problem
+
+After "Round floor" a `noop` round was 52 ms. A fresh py-spy profile showed
+that the largest piece of the remaining Turn-thread Python was the same
+whole-history text work redone several times per round, all of it a pure
+function of strings that had not changed:
+
+- the composer's `render_context` runs three times per round (working facts,
+  programmatic inputs, requirements); each migrated the policy prefix by
+  running the section regex and a SHA-256 for three block ids over every
+  composer message (`_verified_spans`), then re-parsed every section again
+  (`_managed_block_hashes`): 7.5 % of the Turn thread;
+- request and post-tool lineage (`MessageLineage`) parsed and hashed the same
+  sections and spans again for each request build and each snapshot;
+- `_md5` fingerprints hashed the same system and tool bytes each request;
+- the prefetch occurrence identity re-encoded the 100 KB
+  `_executableToolCatalog` (sorted JSON + SHA-256) twice per tool call, once
+  on the tool worker before the read and once on the Turn thread at
+  publication; it was the only large config value assembly left unsettled.
+
+### Changes
+
+1. **A Turn-scoped text memo.** `text_sections(text)` returns every marker
+   span of a string (`raw id, id, content hash, start, end`), memoized in a
+   `TextMemo` that `execute_invocation` opens for the invocation (it already
+   runs in its own copied context, so a child invocation gets its own memo).
+   A key holds the immutable `str` it was computed from, so a hit is the exact
+   result; `next_text_memo_round()` at each round's preparation keeps only
+   what the previous round used, so the memo is bounded by two rounds' texts
+   and dies with the invocation. Outside a scope every call computes as
+   before. `context_sections`, the policy-prefix migration, lineage span
+   hashes and `_md5` read through it; the migration now uses the shared
+   section scan instead of its own copy of the regex.
+2. **The executable catalog is settled at assembly**, like the contract and
+   search-text maps beside it, so the prefetch identity digests it once per
+   assembly (`_content` memoizes a settled value's digest on the row).
+
+`tests/context/test_text_section_memo.py` runs a multi-round composition
+(policy migration, changing blocks, request builds with lineage) with and
+without the memo and requires every message, manifest and request body to be
+byte-identical, each distinct text scanned once, and the memo emptied after
+two unused rounds. `tests/tasks_pkg/test_assembled_authority_settled.py`
+requires the three assembled maps to be settled.
+
+### ABAB (`round_profile.py --no-spy`, 6 pairs, fresh roots, host load 10-48)
+
+Arm A `d1f9865808` ("Round floor" merged), arm B `34b97a725f`. Median / p95
+(n), ms; codex and pi from the fixed-stub reference run ("Round hops").
+
+| metric | A | B | codex | pi |
+|---|---|---|---|---|
+| `noop` steady round | 51.9 / 60.0 (342) | **47.2** / 63.9 (342) | 38.3 | 3.0 |
+| `run_command true` round | 62.0 / 93.4 (72) | **57.4** / 86.3 (72) | 187.9 | 21.5 |
+
+B was faster in every pair: `noop` 49.4/52.5/51.7/52.5/51.2/52.0 →
+48.1/47.2/46.7/46.5/48.3/46.6, `true` 63.4/62.4/60.9/61.9/62.2/61.6 →
+57.9/57.0/56.8/57.4/57.7/58.7. In the profile `render_context` fell from
+7.5 % to 1.0 % of the Turn thread and the prefetch identity left the tool
+worker's critical path.
+
+### What remains (floor)
+
+`noop` is 47 ms against codex's 38. In the after profile
+(`profiles/after`), per round:
+
+- request preparation 9 % (Anthropic translation of the new rows, the
+  recount, sealing, raw-archive capture, the request-diagnostic event);
+- awaiting the `read_files` worker 8 %: the worker runs about half of that
+  (project-guidance `Path.resolve`, the read, the prefetch identity of the
+  small values); the rest is the hand-off;
+- the pre-request barrier 8 %: it awaits the previous round's `ready` events,
+  which queue behind that round's post-tool state snapshot. Emitting the
+  snapshot after the `ready` position was measured: about 1 ms, inside the
+  noise, and it reorders the evidence log, so it was not taken;
+- send and response headers 7 %, the steer check's storage round trip 6 %,
+  tool pipeline CPU 8 % (freshness `stat`, settlement, aggregate budget);
+- the MCP relay 3 %: the round's tool partitions ask the execution host's
+  bridge whether MCP is connected, one relay connection per round (the
+  endpoint file read and a TCP connect each time). Only `mcp__` names can be
+  MCP tools, but the partitions feed several consumers that read the whole
+  write set, so a lazy MCP lookup is a wider change than this one;
+- event appends (projection capture, frame detach) 3 %.
+
+Not per round, but visible in the same profile: each execution shard's first
+Turn scans `importlib.metadata` entry points for experiment plugins (about
+50 ms of its time to first request), once per process.
+
+### Alternatives considered
+
+- **A process-wide text memo**: needs an eviction bound, a size knob; the
+  invocation scope with a round rotation is bounded by the live history.
+- **Storing section results on the composer message dicts**: messages are
+  mutable and their private fields reach snapshots; a `str`-keyed memo cannot
+  go stale.
+- **Deferring the post-tool snapshot behind the `ready` position**: measured
+  at about 1 ms, and it changes the event order the Inspector reads.
 
 ## Alternatives considered
 

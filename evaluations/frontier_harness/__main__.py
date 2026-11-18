@@ -24,6 +24,8 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--out-dir", type=Path, required=True, help="new or empty directory")
     prepare.add_argument("--deep-swe-repo", type=Path,
                          help="checkout of datacurve-ai/deep-swe at the FHE corpus pin (needed for DeepSWE tasks)")
+    prepare.add_argument("--pyknotid-repo", type=Path,
+                         help="pyknotid clone with tag 0.5.3: build-cython-ext's offline /app/pyknotid.bundle")
     prepare.add_argument("--tasks", help="comma-separated task names (default: all 30)")
     export = commands.add_parser("export", help="native run -> FHE trial.json runs, scored by the FHE normalizer")
     export.add_argument("--native-dir", type=Path, required=True, help="native runner work dir")
@@ -34,6 +36,8 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--run-id", required=True)
     export.add_argument("--provider", required=True, help="model serving route, recorded in run.json")
     export.add_argument("--no-normalizer", action="store_true", help="write trial.json files only")
+    export.add_argument("--exclude-throttled", action="store_true",
+                        help="PREREG sensitivity variant: omit trials that saw an upstream 429")
     return parser
 
 
@@ -43,7 +47,8 @@ def main(argv: list[str] | None = None) -> int:
         from evaluations.frontier_harness.tasks import prepare_tasks
 
         manifest = prepare_tasks(args.fhe_repo, args.tb2_repo, args.out_dir,
-                                 args.tasks.split(",") if args.tasks else None, deep_swe_repo=args.deep_swe_repo)
+                                 args.tasks.split(",") if args.tasks else None, deep_swe_repo=args.deep_swe_repo,
+                                 pyknotid_repo=args.pyknotid_repo)
         print(json.dumps({"dataset_commit": manifest["dataset_commit"], "tasks": sorted(manifest["tasks"]),
                           "pending_repairs": manifest["pending_repairs"]}, indent=2))
         return 0
@@ -51,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
 
     summary = export(native_dir=args.native_dir, relay_log=args.relay_log, fhe_repo=args.fhe_repo,
                      out_root=args.out_root, label=args.label, run_id=args.run_id, provider=args.provider,
-                     run_normalizer=not args.no_normalizer)
+                     run_normalizer=not args.no_normalizer, exclude_throttled=args.exclude_throttled)
     print(json.dumps(summary, indent=2))
     return 0
 

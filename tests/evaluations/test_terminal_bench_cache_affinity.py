@@ -110,7 +110,9 @@ def test_relay_preserves_affinity_across_key_retry_without_editing_prompt(
         assert headers["authorization"] == "Bearer " + secret
         assert "x-unrelated" not in headers
         assert sent["body"] == payload
-    record = json.loads((tmp_path / "requests.jsonl").read_text())
+    rows = [json.loads(line) for line in (tmp_path / "requests.jsonl").read_text().splitlines()]
+    [record] = [row for row in rows if row.get("kind") == "chat"]
+    assert [row["kind"] for row in rows if row is not record] == ["rate_limited"]
     assert record["attempts"] == 2 and record["usage"] == usage
     assert record["cache_affinity"] == ("Mt-Session-Id" if session_id else "")
     assert "trial-session" not in (tmp_path / "requests.jsonl").read_text()

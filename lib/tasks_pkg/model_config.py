@@ -435,7 +435,11 @@ def _assemble_tool_list(cfg, project_path, project_enabled, task_id,
         tool_list = _kept
     # Preserve the complete task-level execution authority before any routed
     # exposure is applied. Composer exposure toggles never grant authority.
-    cfg['_executableToolCatalog'] = list(ctx.executable_tool_catalog)
+    # Settled like the contract and search maps below: the per-call prefetch
+    # identity digests it once per assembly instead of on every tool call.
+    from lib.conversation_sync.settled_rows import settle_or_none
+    _catalog = list(ctx.executable_tool_catalog)
+    cfg['_executableToolCatalog'] = settle_or_none(_catalog) or _catalog
     cfg['_requiredDirectToolNames'] = sorted(ctx.direct_wire_tool_names)
     try:
         from lib.context_experiment_flags import (

@@ -415,13 +415,14 @@ def test_the_notice_compares_the_code_each_generation_served_after_the_checkout_
 
 def test_next_step_says_what_will_happen_and_promises_no_resume(d, approvals, notices):
     d.grant()
-    result = d.restart()
-    step = result['next_step']
-    assert 'resumes afterwards' not in step and 'is interrupted by the restart' not in step
-    assert 'new turn' in step and 'notice' in step and 'end your turn' in step.lower()
-    assert 'never call restart_server again' in step.lower()
     d.running = [{'taskId': 'worker-task', 'convId': 'worker-a', 'elapsed': 9.0}]
     with pytest.raises(gate.DelegationRefused) as refused:
         d.restart(idempotency_key='restart-2')
     assert 'with Continue' not in str(refused.value)
     assert 'resume from their checkpoint' in str(refused.value)
+    d.running = []
+    result = d.restart()
+    step = result['next_step']
+    assert 'resumes afterwards' not in step and 'is interrupted by the restart' not in step
+    assert 'new turn' in step and 'notice' in step and 'end your turn' in step.lower()
+    assert 'never call restart_server again' in step.lower()

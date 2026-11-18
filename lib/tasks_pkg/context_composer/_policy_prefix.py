@@ -6,7 +6,7 @@ Turns.
 """
 from __future__ import annotations
 
-import re
+from lib.llm_sanitize.context_sections import text_sections
 
 from .registry import block_spec
 from ._sections import block_content_hash, _strip_to_body
@@ -14,12 +14,10 @@ from ._sections import block_content_hash, _strip_to_body
 _MIGRATABLE_POLICY_IDS = (
     'platform_static', 'parallel_execution', 'delegate_mode',
 )
-# Match outer producer envelopes first: a static-looking quote inside a project
-# or memory envelope is data, not another producer. The stored digest below is
-# additionally required before any content can move into a native policy role.
-_ENVELOPE = re.compile(
-    r'<!-- tofu-context:([^:\n]+):start -->.*?'
-    r'<!-- tofu-context:\1:end -->', re.DOTALL)
+# Outer producer envelopes (``text_sections``) are matched first: a
+# static-looking quote inside a project or memory envelope is data, not another
+# producer. The stored digest below is additionally required before any
+# content can move into a native policy role.
 
 
 def is_static_policy(block) -> bool:
@@ -63,10 +61,8 @@ def _verified_spans(message: dict, block_id: str) -> dict:
         # producer stores canonical-section digests in ``_contextBlocks``,
         # so the on-wire span (standalone or amalgamated envelope) must be
         # reduced to the same form before comparison.
-        matches = [match for match in _ENVELOPE.finditer(text)
-                   if match.group(1) == block_id
-                   and block_content_hash(block_id, _strip_to_body(match.group(0)))
-                   in digests]
+        matches = [(start, end) for raw_id, _id, digest, start, end in text_sections(text)
+                   if raw_id == block_id and digest in digests]
         if matches:
             spans[index] = matches
     return spans
@@ -78,8 +74,12 @@ def _migrate_policy_block(messages: list[dict], block_id: str) -> None:
     if not owned:
         return
     last_index = next(reversed(owned))
-    rendered = next(reversed(owned[last_index].values()))[-1].group(0)
+    last_part, last_spans = next(reversed(owned[last_index].items()))
     message = messages[last_index]
+    content = message.get('content')
+    part = (content if isinstance(content, list) else [content])[last_part]
+    start, end = last_spans[-1]
+    rendered = (part['text'] if isinstance(part, dict) else part)[start:end]
     policy_end = next((i for i, m in enumerate(messages)
                        if m.get('role') not in ('system', 'developer')), len(messages))
     if (len(owned) == 1 and last_index < policy_end
@@ -100,8 +100,8 @@ def _migrate_policy_block(messages: list[dict], block_id: str) -> None:
                 kept.append(part)
                 continue
             text = part['text'] if isinstance(part, dict) else part
-            for match in reversed(matches):
-                text = text[:match.start()] + text[match.end():]
+            for start, end in reversed(matches):
+                text = text[:start] + text[end:]
             if text:
                 kept.append({**part, 'text': text} if isinstance(part, dict) else text)
         if kept:

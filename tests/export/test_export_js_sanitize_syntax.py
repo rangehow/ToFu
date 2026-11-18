@@ -239,9 +239,16 @@ def test_public_settings_remove_only_the_maintainer_range_helper():
     assert epilogue == '  initSidebarSearch,\n'
 
 
-def test_the_export_stamps_the_mascot_token_and_its_static_tags_alike():
+def test_the_export_stamps_the_mascot_token_and_its_static_tags_alike(tmp_path, monkeypatch):
     """index.html's ?v= mascot tags must equal brand_logo.js LOGO_VER after export."""
-    logo = _sanitize('frontend/src/runtime/sections/core/brand_logo.js')
-    html = _sanitize('index.html')
+    from export_pkg import _state
+    from export_pkg._sanitize import _post_copy_sanitize
+    for rel in ('frontend/src/runtime/sections/core/brand_logo.js', 'index.html'):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(os.path.join(ROOT, rel), tmp_path / rel)
+    monkeypatch.setattr(_state, '_EXPORT_VERSION', '0.5.0')
+    _post_copy_sanitize(tmp_path, 'opensource')
+    logo = (tmp_path / 'frontend/src/runtime/sections/core/brand_logo.js').read_text(encoding='utf-8')
+    html = (tmp_path / 'index.html').read_text(encoding='utf-8')
     assert re.findall(r"var LOGO_VER = '([^']+)';", logo) == ['0.5.0']
     assert set(re.findall(r'\?v=([^"\'&\s]+)', html)) <= {'0.5.0'}

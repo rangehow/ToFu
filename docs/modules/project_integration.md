@@ -499,6 +499,23 @@ existing cold-verdict recovery. Alternatives rejected: treating a missing task r
 (an orphan that never persisted would then stay `working` forever; its `failed` outcome is
 specified); querying every shard's runtime (process-local registries are not an authority).
 Specification: `test_working_recovery_leaves_an_attempt_running_in_another_process_working`.
+A completed attempt has the same gap at its end. It commits its Turn settlement first, then
+its task result, then its delivery intent. A pass between the first two found the attempt no
+longer `running` and read the missing or non-terminal task result as `failed`. That is how
+5be3b87c (attempt 081e9ce7, 2026-11-18 06:22:12–13) was preserved on the fixed generation.
+Decision: a durable attempt that is `completed` settles the receipt `completed`, because its
+Turn settlement is the canonical verdict. Every other terminal attempt has the same window, so
+while its task result is not yet terminal the outcome comes from its committed Turn
+(`delivery._turn_outcome`), mirroring `workspace_outcome`: `interrupted` by `server_restart`
+pauses (`working`/`interrupted`, resumable), any other `interrupted` and a dispatch-authority
+`failed` cancel, and `failed`/`truncated` fail. Before this a restart's pause read in the window
+was preserved `failed`, which blocked the resumed Worker's delivery, and a person's Stop was
+recorded `failed`. A saved terminal task result keeps deciding as before; a Turn that already
+belongs to a later attempt falls back to it. Alternative rejected: keeping the receipt `working`
+until the task result is terminal, because an executor that dies in that window would then hold
+the receipt forever. Specifications:
+`test_a_receiver_pass_after_a_completed_attempt_settles_its_turn_keeps_the_delivery_deliverable`,
+`test_a_receiver_pass_after_any_terminal_attempt_settles_its_turn_records_what_its_turn_says`.
 Recovery of a receipt preserved this way needs no new operation, because a review cannot lift a
 `failed` outcome within its generation. Once the fix is live, a follow-up (or regenerate) starts a new attempt in the same
 checkout, which reopens the receipt `working`. Its completion captures the checkout's current

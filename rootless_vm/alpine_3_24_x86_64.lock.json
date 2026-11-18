@@ -21,45 +21,45 @@
       "size": 1571
     },
     {
-      "name": "ca-certificates-20260611-r0.apk",
-      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/ca-certificates-20260611-r0.apk",
-      "sha256": "abe8a3badeb99bd147a0c5cba70364e8774e6ae05c625a86c01f11532d9721c8",
-      "size": 129499
+      "name": "ca-certificates-20261020-r0.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/ca-certificates-20261020-r0.apk",
+      "sha256": "ca8de7a7469e2a04b9008eb728d6de1a6da691e09e3379d83dfd77bbfce4e3f9",
+      "size": 129361
     },
     {
-      "name": "containerd-2.3.5-r5.apk",
-      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/community/x86_64/containerd-2.3.5-r5.apk",
-      "sha256": "0e3bedd426aceac34665e6cd9515090fa2ff8437afd938025782ea36695e8c94",
-      "size": 17981014
+      "name": "containerd-2.3.7-r0.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/community/x86_64/containerd-2.3.7-r0.apk",
+      "sha256": "bdacf19d51ea00ab489458d22a954b8a72850a32febd779e0380826198deb74b",
+      "size": 18062085
     },
     {
-      "name": "docker-29.5.3-r1.apk",
-      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/community/x86_64/docker-29.5.3-r1.apk",
-      "sha256": "76b5e66479196373fa7e5fbc333f50ffc2bc68d5f1c6742382d4ce421ee338ae",
-      "size": 1330
+      "name": "docker-29.9.3-r1.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/community/x86_64/docker-29.9.3-r1.apk",
+      "sha256": "5a200862fe42ea2e56bf7785d674e1ed477c32ab08f5b6915c55b1ac7a6ab22f",
+      "size": 1332
     },
     {
-      "name": "docker-cli-29.5.3-r1.apk",
-      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/community/x86_64/docker-cli-29.5.3-r1.apk",
-      "sha256": "4083a7bc0b8200c3f5c7ac05a6161d4bb96778c22a75fcad6917ee051cb8d927",
-      "size": 10326785
+      "name": "docker-cli-29.9.3-r1.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/community/x86_64/docker-cli-29.9.3-r1.apk",
+      "sha256": "e221915ddf252d2b1dcdbae17a5fb5c42fe4a5ec3be9da03c316d068f76c037c",
+      "size": 10869641
     },
     {
-      "name": "docker-cli-buildx-0.34.1-r1.apk",
-      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/community/x86_64/docker-cli-buildx-0.34.1-r1.apk",
-      "sha256": "7106de97357b848d26b76a2b70f5f2a4b106adfaedfb8458850257d97db90306",
-      "size": 23635712
+      "name": "docker-cli-buildx-0.38.1-r0.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/community/x86_64/docker-cli-buildx-0.38.1-r0.apk",
+      "sha256": "7e00bd93a5eb2a8d9cdf2c5d169318e3b4d266ba7164d4c140ef6d73bd947de2",
+      "size": 24485482
     },
     {
-      "name": "docker-engine-29.5.3-r1.apk",
-      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/community/x86_64/docker-engine-29.5.3-r1.apk",
-      "sha256": "82db713b674fd0986779aafee835dfccf1cee86d2beabaafa0773674159484af",
-      "size": 30408960
+      "name": "docker-engine-29.9.3-r1.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/community/x86_64/docker-engine-29.9.3-r1.apk",
+      "sha256": "419852709705a0ec10d71bfd6a041be05d5de7ea128dcab161b5616e5d6fa7ce",
+      "size": 32585347
     },
     {
-      "name": "docker-openrc-29.5.3-r1.apk",
-      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/community/x86_64/docker-openrc-29.5.3-r1.apk",
-      "sha256": "538985cd2322041357cd06bd7cb0435453f22fa83163e0e1b1596c2e2d323559",
+      "name": "docker-openrc-29.9.3-r1.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/community/x86_64/docker-openrc-29.9.3-r1.apk",
+      "sha256": "b422364cbb35585282ad639d2ecf01b4211d99719b09df9e7dfa3a3ee205edca",
       "size": 2940
     },
     {
@@ -93,10 +93,10 @@
       "size": 98429
     },
     {
-      "name": "libcrypto3-3.5.8-r0.apk",
-      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/libcrypto3-3.5.8-r0.apk",
-      "sha256": "161223a16f042b8e469e9441291e071464fd91d4f4bbe6f496ee8d0abd4e0701",
-      "size": 1978546
+      "name": "libcrypto3-3.5.9-r0.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/libcrypto3-3.5.9-r0.apk",
+      "sha256": "6632d758d8f5e9ea3b650fe966f23bbf9a202f8b8dceecac93da135dec5e3689",
+      "size": 1980198
     },
     {
       "name": "libeconf-0.8.3-r0.apk",
@@ -123,10 +123,10 @@
       "size": 9023
     },
     {
-      "name": "libssl3-3.5.8-r0.apk",
-      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/libssl3-3.5.8-r0.apk",
-      "sha256": "aca521e5ae4a321322a9d47ed64a1775f5ab1ffd215d1e9fc0433c58f7bfd037",
-      "size": 379265
+      "name": "libssl3-3.5.9-r0.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/libssl3-3.5.9-r0.apk",
+      "sha256": "05e3393fb95aa5751ca2f9d242f659f6cff82c1cc7767cc2df4a086f7ad01877",
+      "size": 381860
     },
     {
       "name": "libmount-2.42.3-r1.apk",
@@ -147,10 +147,10 @@
       "size": 67237
     },
     {
-      "name": "libseccomp-2.6.0-r2.apk",
-      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/libseccomp-2.6.0-r2.apk",
-      "sha256": "2c7fb3ef531c96e980599bb3ff57b40f34d3ef9e2a51bfb831746c130f621415",
-      "size": 50295
+      "name": "libseccomp-2.6.1-r0.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/libseccomp-2.6.1-r0.apk",
+      "sha256": "b22ccfe8cb072e4c8d3bc17222eeda132e270ce6258c27622acb193bf27b48e1",
+      "size": 50518
     },
     {
       "name": "liburing-2.14-r0.apk",
@@ -171,10 +171,10 @@
       "size": 14470
     },
     {
-      "name": "musl-1.2.6-r2.apk",
-      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/musl-1.2.6-r2.apk",
-      "sha256": "573712e2f49c15bfc20a2699f204acdfc74c772722b15e7353d768057fae0e71",
-      "size": 415475
+      "name": "musl-1.2.6-r3.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/musl-1.2.6-r3.apk",
+      "sha256": "e142255d0fa397f14318996bc10378093dcc069dc3dd1b6818c8f28a789c21da",
+      "size": 415466
     },
     {
       "name": "ncurses-terminfo-base-6.6_p20260516-r0.apk",
@@ -195,10 +195,10 @@
       "size": 20036
     },
     {
-      "name": "pcre2-10.48-r0.apk",
-      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/pcre2-10.48-r0.apk",
-      "sha256": "cffaedb6cf404647619a8b0323958d293d9cd240e8f887c16bdf4b0a039f993a",
-      "size": 322467
+      "name": "pcre2-10.49-r0.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/pcre2-10.49-r0.apk",
+      "sha256": "2919897914820f42a17a8d7d37df310d2dfad1c82ebe5f539cc5c765f916752a",
+      "size": 323099
     },
     {
       "name": "qemu-guest-agent-11.0.3-r0.apk",
@@ -219,10 +219,10 @@
       "size": 127194
     },
     {
-      "name": "runc-1.4.3-r1.apk",
-      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/community/x86_64/runc-1.4.3-r1.apk",
-      "sha256": "1fb8426d88027efcb8f62a7919c5fbc58e2be819b46c42e4a792cbe18ea81d8c",
-      "size": 4097862
+      "name": "runc-1.4.4-r0.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/community/x86_64/runc-1.4.4-r0.apk",
+      "sha256": "15c42ae8f9a49934cca71986cce1c73ba9e3066c561561eb49867536b2bbfbb7",
+      "size": 3812201
     },
     {
       "name": "tini-static-0.19.0-r3.apk",
@@ -231,10 +231,10 @@
       "size": 32065
     },
     {
-      "name": "zlib-1.3.2-r0.apk",
-      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/zlib-1.3.2-r0.apk",
-      "sha256": "b636306cbf8a0c15493b38de608ba11605fd8f11ade631f5ece6f7fdf5a1e09e",
-      "size": 56195
+      "name": "zlib-1.4-r0.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/zlib-1.4-r0.apk",
+      "sha256": "7b05bc778b8b25cd880835b40114182bd4d1581717504d0129c810c0a14291cb",
+      "size": 56761
     }
   ]
 }

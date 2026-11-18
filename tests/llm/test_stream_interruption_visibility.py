@@ -44,9 +44,9 @@ def test_metadata_keeps_transport_alive_and_still_publishes_wait_status():
         stopped.set()
         watcher.cancel()
         producer.join(1)
-        watcher._thread.join(1)
+        watcher.join(1)
     assert not producer.is_alive()
-    assert not watcher._thread.is_alive()
+    assert watcher.join(0)
 
 
 def test_fresh_semantic_output_suppresses_wait_status():
@@ -64,7 +64,7 @@ def test_fresh_semantic_output_suppresses_wait_status():
         assert not watcher.idle_timed_out
     finally:
         watcher.cancel()
-        watcher._thread.join(1)
+        watcher.join(1)
 
 
 def test_unfinished_tool_arguments_publish_status_while_arriving():
@@ -97,7 +97,7 @@ def test_unfinished_tool_arguments_publish_status_while_arriving():
         stopped.set()
         watcher.cancel()
         producer.join(1)
-        watcher._thread.join(1)
+        watcher.join(1)
 
 
 def test_opened_tool_call_is_reported_at_once_after_other_output():

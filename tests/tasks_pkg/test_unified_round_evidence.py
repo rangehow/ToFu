@@ -150,3 +150,37 @@ def test_state_snapshots_share_twins_across_interleaved_request_snapshots():
                                            model='m')['messages'])
     for older, newer in zip(states, states[1:]):
         assert all(old is new for old, new in zip(older, newer[:len(older)]))
+
+
+def test_snapshot_tool_schemas_are_shared_across_rounds_of_each_kind():
+    """An unchanged catalog is the previous snapshot's settled rows, so a frame's
+    detachment shares it instead of copying every schema each round."""
+    from lib.conversation_sync.settled_rows import is_settled, settle
+    from lib.tasks_pkg.round_evidence import begin_round_evidence, build_round_evidence
+    task = {'id': 'tool-rows', 'convId': 'tool-rows-conv'}
+    history = [{'role': 'user', 'content': 'go'}]
+    schema = {'type': 'object', 'properties': {'path': {'type': 'string'}}}
+    wire_tools = list(settle([{'type': 'function', 'function': {
+        'name': 'read_files', 'parameters': schema}}]))
+    # The dispatch pipeline's list is live and differs from the request wire's.
+    def dispatch_tools():
+        return [{'type': 'function', 'function': {'name': name, 'parameters': json.loads(json.dumps(schema))}}
+                for name in ('read_files', 'write_file')]
+    seen = {'request': [], 'state': []}
+    for number in range(1, 4):
+        ref = begin_round_evidence(task, 'tool-rows', number)
+        seen['request'].append(build_round_evidence(
+            task, history, ref=ref, kind='request', model='m', prepared_messages=history,
+            tools=wire_tools)['tools'])
+        seen['state'].append(build_round_evidence(
+            task, history, ref=ref, kind='state', model='m', tools=dispatch_tools())['tools'])
+    for kind, rounds in seen.items():
+        assert all(map(is_settled, rounds[0])), kind
+        for later in rounds[1:]:
+            assert all(row is first for row, first in zip(later, rounds[0], strict=True)), kind
+    changed = dispatch_tools()
+    changed[1]['function']['description'] = 'new'
+    ref = begin_round_evidence(task, 'tool-rows', 4)
+    rows = build_round_evidence(task, history, ref=ref, kind='state', model='m', tools=changed)['tools']
+    assert rows[0] is seen['state'][0][0] and rows[1] is not seen['state'][0][1]
+    assert rows[1]['function']['description'] == 'new'

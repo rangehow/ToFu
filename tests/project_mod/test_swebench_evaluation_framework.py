@@ -849,3 +849,23 @@ def test_official_audit_requires_complete_error_free_report(host_tmp_path):
     report["error_instances"] = 1
     report_path.write_text(json.dumps(report))
     assert not audit_run(run_dir)["ok"]
+
+
+def test_rootless_image_asset_names_the_image_as_docker_resolves_it():
+    # A loaded OCI ref.name is kept verbatim; Docker 29.9 resolves FROM by the normalized name.
+    assert images._docker_reference("swebench/sweb.eval.x86_64.psf_1776_requests-1142:latest") == (
+        "docker.io/swebench/sweb.eval.x86_64.psf_1776_requests-1142:latest")
+    assert images._docker_reference("python:3.12") == "docker.io/library/python:3.12"
+    assert images._docker_reference("ghcr.io/org/image:1") == "ghcr.io/org/image:1"
+    assert images._docker_reference("localhost:5000/image:1") == "localhost:5000/image:1"
+    assert images._docker_reference("localhost/image:1") == "localhost/image:1"
+
+
+def test_rootless_image_assets_from_the_short_name_schema_are_rebuilt(tmp_path):
+    asset = tmp_path / "asset"
+    asset.mkdir()
+    (asset / "payload.iso").write_bytes(b"iso")
+    (asset / "asset.json").write_text(json.dumps({
+        "schema": 1, "image": "swebench/x:latest",
+        "iso_sha256": images.sha256_file(asset / "payload.iso")}))
+    assert images._valid_asset("swebench/x:latest", asset) is None

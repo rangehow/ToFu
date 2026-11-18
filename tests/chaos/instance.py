@@ -87,9 +87,11 @@ class ChaosInstance:
         self.tag = uuid.uuid4().hex
         # Every role runs from a private export of this checkout's runtime
         # source taken at start. Run from the checkout itself, the execution
-        # host published <checkout>/data/mcp-bridge-relay.json, so two
-        # instances at once (xdist workers) relayed MCP calls to each other's
-        # servers.
+        # host re-verified its source generation at every recovery, so an edit
+        # or landing during a run (the shared checkout always has writers)
+        # refused every later recovery of the instance; and it published
+        # <checkout>/data/mcp-bridge-relay.json, so two instances at once
+        # (xdist workers) relayed MCP calls to each other's servers.
         # shared_project: the production topology, where the manager, the API
         # host and the execution host share ONE project (bootstrap_pkg/
         # launcher.py gives every role BASE_DIR), so records published under

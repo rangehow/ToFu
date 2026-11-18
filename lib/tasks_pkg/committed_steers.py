@@ -56,12 +56,12 @@ def executes_attempt_here(attempt_id: str, *, user_id: Any) -> bool:
                for task in chat_task_runtime.snapshot_owned(user_id=owner))
 
 
-def _live_turn_records(task: dict[str, Any]) -> list[dict[str, Any]] | None:
+def _live_turn_records(task: dict[str, Any], reads: Any = None) -> list[dict[str, Any]] | None:
     """Committed steer records of the Turn this task executes, or None.
 
-    One metadata read per call. The projection is read only when a writer other
-    than this executor changed the Turn since the last view; the executor's own
-    writes leave its written view current.
+    One metadata read per call (``reads``: the round's shared exchange). The
+    projection is read only when a writer other than this executor changed the
+    Turn since the last view; the executor's own writes leave its view current.
     """
     from lib.tasks_pkg.conversation_delivery import completion_conversation_id
     conversation_id = completion_conversation_id(task)
@@ -71,7 +71,8 @@ def _live_turn_records(task: dict[str, Any]) -> list[dict[str, Any]] | None:
     from lib.tasks_pkg.manager import task_user_id
     from lib.turn_lifecycle import executor_written_steers, get_turn
     owner = task_user_id(task)
-    head = get_turn(conversation_id, turn_id, user_id=owner, include_projection=False)
+    head = get_turn(conversation_id, turn_id, user_id=owner, include_projection=False,
+                    **({'reads': reads} if reads is not None else {}))
     if not isinstance(head, Mapping) or head.get('currentAttemptId') != attempt_id:
         return None
     revision = head.get('projectionRevision')
@@ -173,8 +174,9 @@ def take_steers(task: dict[str, Any], local_items: Iterable[dict[str, Any]]) -> 
     cannot be read the drained items are delivered as before.
     """
     local_items = list(local_items)
+    from lib.tasks_pkg.round_reads import round_reads
     try:
-        records = _live_turn_records(task) or []
+        records = _live_turn_records(task, round_reads(task)) or []
     except Exception as error:
         logger.warning('[Steer] committed steers unreadable task=%s; delivering local steers only: %s',
                        str(task.get('id') or ''), error)

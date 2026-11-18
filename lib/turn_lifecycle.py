@@ -3768,16 +3768,18 @@ def _stored_turns_newest_first(conversation_id: str, *,
 
 def get_turn(conversation_id: str, turn_id: str, *, user_id: Any,
              include_projection: bool = True,
-             content_preview_chars: int | None = None) -> dict[str, Any]:
+             content_preview_chars: int | None = None, reads: Any = None) -> dict[str, Any]:
     """Read an owned Turn; context identity consumers can omit its body.
 
     ``content_preview_chars`` returns metadata plus ``contentPreview``: the
     first that many code points of the public projection's string content, or
     None. The authority reads the projection; the caller never decodes it.
+    ``reads`` (``lib.storage.port.PrefetchedReads``) answers a read its caller
+    already issued (``turn_read_request``) in a shared exchange.
     """
     user_id = require_user_id(user_id, context='get conversation turn')
     payload = _turn_read(conversation_id, turn_id, user_id, include_projection, content_preview_chars)
-    row = _turn_client().query('turn.get', payload)
+    row = (reads or _turn_client()).query('turn.get', payload)
     return _read_turn(row, conversation_id, turn_id, user_id, include_projection, content_preview_chars)
 
 
@@ -3802,6 +3804,25 @@ def get_turns(requests: list[tuple[str, str, bool, int | None]], *, user_id: Any
         except (LifecycleNotFound, StorageError) as error:
             results.append(error)
     return results
+
+
+def turn_read_request(conversation_id: str, turn_id: str, *, user_id: Any,
+                      include_projection: bool = True) -> tuple[str, dict[str, Any]]:
+    """The (operation, payload) ``get_turn`` sends, for a shared read exchange."""
+    user_id = require_user_id(user_id, context='get conversation turn')
+    return 'turn.get', _turn_read(conversation_id, turn_id, user_id, include_projection)
+
+
+def attempt_read_request(attempt_id: str, *, user_id: Any,
+                         include_execution_config: bool = False) -> tuple[str, dict[str, Any]]:
+    """The (operation, payload) ``get_attempt`` sends, for a shared read exchange."""
+    user_id = require_user_id(user_id, context='get turn attempt')
+    if type(include_execution_config) is not bool:
+        raise TypeError('Invalid execution config flag')
+    payload = {'attempt_id': attempt_id, 'user_id': user_id}
+    if include_execution_config:
+        payload['include_execution_config'] = True
+    return 'turn.attempt.get', payload
 
 
 def _turn_read(conversation_id: str, turn_id: str, user_id: int, include_projection: bool,
@@ -3864,14 +3885,11 @@ def _read_turn(row: Any, conversation_id: str, turn_id: str, user_id: int, inclu
     return public_turn_with_stable_segments(row)
 
 
-def get_attempt(attempt_id: str, *, user_id: Any, include_execution_config: bool = False) -> dict[str, Any]:
-    user_id = require_user_id(user_id, context='get turn attempt')
-    if type(include_execution_config) is not bool:
-        raise TypeError('Invalid execution config flag')
-    payload={'attempt_id':attempt_id,'user_id':user_id}
-    if include_execution_config:
-        payload['include_execution_config']=True
-    row = _turn_client().query('turn.attempt.get',payload)
+def get_attempt(attempt_id: str, *, user_id: Any, include_execution_config: bool = False,
+                reads: Any = None) -> dict[str, Any]:
+    operation, payload = attempt_read_request(
+        attempt_id, user_id=user_id, include_execution_config=include_execution_config)
+    row = (reads or _turn_client()).query(operation, payload)
     if row is None:
         raise LifecycleNotFound('Attempt not found')
     return row

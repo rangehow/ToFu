@@ -193,7 +193,8 @@ def test_a_value_in_a_shape_the_settings_page_never_saves_is_refused_before_any_
 def test_list_and_get_expose_only_writable_settings(s):
     s.grant()
     listed = owner_settings.call(s.task, s.scope, 'list', {})
-    assert sorted(listed['settings']) == sorted(owner_settings.WRITABLE_PATHS)
+    assert sorted(listed['settings']) == sorted([*owner_settings.WRITABLE_PATHS, owner_settings.RESTART_BLACKOUTS])
+    assert listed['settings'][owner_settings.RESTART_BLACKOUTS] == []
     assert listed['settings']['proxy_bypass_domains'] == ['corp.example']
     assert 'MT-SECRET-VALUE' not in json.dumps(listed)
     got = owner_settings.call(s.task, s.scope, 'get', {'path': 'model_defaults.fallback_model'})

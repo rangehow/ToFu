@@ -29,6 +29,38 @@ def test_no_lead_ceiling_names_a_login_credential_payment_or_publication_tool():
     assert sorted(name for name in _lead_tools() if _OWNER_ONLY.search(name)) == []
 
 
+def test_restart_is_every_leads_under_the_recorded_owner_decision():
+    """Owner decision 2026-11-18, 「我的权限要全部下放给负责人们」 (docs/ROUTER.md R9): every lead,
+    Project Routers included, restarts through the one delegation gate on its own judgment, never
+    a Worker. The decision and its rejected alternative (a request_restart to the Global Router)
+    are recorded; withdrawing restart from a lead needs a new owner decision there."""
+    from pathlib import Path
+    from lib.project_dispatch.contract import CONTRACT
+    from lib.router.owner_delegation import LEAD_DELEGATION_WORDS
+    from lib.router.policy import ROUTER_ONLY_TOOLS
+    from lib.tasks_pkg.coordinator_policy import COORDINATOR_TOOLS
+    decision = '我的权限要全部下放给负责人们'
+    router = (Path(__file__).resolve().parents[2] / 'docs' / 'ROUTER.md').read_text(encoding='utf-8')
+    assert decision in LEAD_DELEGATION_WORDS and decision in router
+    assert 'request_restart' in router and 'Restart single flight' in router
+    assert 'restart_server' in COORDINATOR_TOOLS and 'restart_server' not in ROUTER_ONLY_TOOLS
+    assert 'restart_server' in CONTRACT['workerDeniedTools']
+
+
+def test_restart_blackouts_are_the_owners_own_declaration(monkeypatch):
+    """A lead acting on its own judgment never sets or lifts the owner's restart blackout windows."""
+    from lib.lifecycle_approval import DelegationRefused
+    from lib.router import owner_settings
+    monkeypatch.setattr('lib.lifecycle_approval.check_delegation', lambda *args: {})
+    monkeypatch.setattr('lib.lifecycle_approval.record_delegated_refusal', lambda *args, **kwargs: None)
+    monkeypatch.setattr('lib.router.owner_delegation.router_requester', lambda task, scope: {})
+    with pytest.raises(DelegationRefused) as refused:
+        owner_settings.call({}, {'user_id': 1, 'conversation_id': 'router'}, 'set', {
+            'path': owner_settings.RESTART_BLACKOUTS, 'value': [], 'under_delegation': True,
+            'reason': 'lift', 'idempotency_key': 'k'})
+    assert refused.value.code == 'owner_delegation_trigger_invalid'
+
+
 def test_the_owners_delegation_covers_no_owner_only_scope():
     from lib.lifecycle_approval import DELEGATION_SCOPES
     assert [scope for scope in DELEGATION_SCOPES if _OWNER_ONLY.search(scope)] == []

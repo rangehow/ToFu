@@ -120,8 +120,10 @@ import json
 import math
 import os
 import secrets
+import socket
 import sys
 import time
+from datetime import datetime, timezone
 
 from lib.json_store import (
     JsonStoreReadError,
@@ -1335,6 +1337,176 @@ def _record_lead_audit(record: dict, *, action: str | None = None, source: str |
         'outcome': record.get('status'), 'code': record.get('code'), 'detail': record.get('detail')})
 
 
+# ── delegated restarts: one at a time, never in an owner's blackout (docs/ROUTER.md R9) ──
+#
+# A delegated restart holds the single flight from its acceptance until its outcome:
+# ``accepted`` while its preparation thread lives (``holder``: host and pid of the
+# process that runs it), ``restarting`` until the handover is observed settled. The
+# gate document is the lock, so every lead in every process sees one holder.
+
+def _holder() -> dict:
+    return {'host': socket.gethostname(), 'pid': os.getpid()}
+
+
+def _holder_alive(holder) -> bool:
+    """Whether the process running an ``accepted`` restart can still settle it.
+
+    Another host's holder counts until it settles (its process is not observable
+    here); a record from before the holder was recorded holds nothing.
+    """
+    if not isinstance(holder, dict) or not isinstance(holder.get('pid'), int):
+        return False
+    if holder.get('host') != socket.gethostname():
+        return True
+    try:
+        os.kill(holder['pid'], 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _restart_holding(record: dict) -> bool:
+    if record.get('scope') != 'restart':
+        return False
+    if record.get('status') == 'accepted':
+        return _holder_alive(record.get('holder'))
+    return record.get('status') == 'restarting' and _observed(dict(record))['status'] == 'restarting'
+
+
+def _settle_lost_restarts(document: dict, now: float) -> list:
+    """Settle ``accepted`` restarts whose holder process on this host exited before acceptance."""
+    lost = []
+    for record in _actions(document):
+        if (record.get('scope') == 'restart' and record.get('status') == 'accepted'
+                and isinstance(record.get('holder'), dict) and not _holder_alive(record['holder'])):
+            record.update(status='failed', code='restart_holder_exited', updatedAt=now,
+                          detail=(f'The process that prepared this restart (pid {record["holder"].get("pid")}) '
+                                  'exited before the restart was accepted; nothing was restarted by it.'))
+            lost.append(dict(record))
+    return lost
+
+
+def _iso_utc(seconds: float) -> str:
+    return datetime.fromtimestamp(seconds, tz=timezone.utc).isoformat(timespec='seconds')
+
+
+def _in_flight_refusal(holding: dict, owner_key: str) -> DelegationRefused:
+    requester = holding.get('requester') or {}
+    if holding.get('owner') != int(owner_key):
+        who = 'another owner\u2019s delegated restart holds it'
+    else:
+        who = (f'{requester.get("kind")} {requester.get("conversationId")} (Turn {requester.get("turnId")}) '
+               f'holds it: action {holding.get("id")}, {holding.get("status")} since '
+               f'{_iso_utc(holding.get("requestedAt") or 0)}, reason: {holding.get("reason")}')
+    return DelegationRefused(
+        'restart_in_progress',
+        f'Restart refused: one restart runs at a time and {who}. Nothing ran. Every lead hears that '
+        'restart\u2019s outcome in its project messages; ask for a new restart only if one is still needed '
+        'after it.')
+
+
+def _blackouts(document: dict) -> dict:
+    windows = document.setdefault('restartBlackouts', {})
+    if not isinstance(windows, dict) or any(not isinstance(value, list) for value in windows.values()):
+        raise JsonStoreReadError('lifecycle restart blackout store has invalid shape')
+    return windows
+
+
+def _active_blackout(document: dict, owner_key: str, now: float) -> dict | None:
+    for window in _blackouts(document).get(owner_key, ()):
+        if isinstance(window, dict) and window.get('startAt', math.inf) <= now < window.get('endAt', 0):
+            return window
+    return None
+
+
+def _blackout_refusal(window: dict) -> DelegationRefused:
+    return DelegationRefused(
+        'restart_blackout',
+        f'Restart refused: the owner declared no restarts from {window["start"]} to {window["end"]} '
+        f'({window["reason"]}). Nothing ran. Restart after {window["end"]}, or ask the owner to lift the window.')
+
+
+def _restart_admission(document: dict, owner_key: str, now: float) -> DelegationRefused | None:
+    """Why a new delegated restart may not start now, or None: one in flight, or a blackout."""
+    holding = next((record for record in _actions(document) if _restart_holding(record)), None)
+    if holding is not None:
+        return _in_flight_refusal(holding, owner_key)
+    window = _active_blackout(document, owner_key, now)
+    return _blackout_refusal(window) if window is not None else None
+
+
+def check_restart_admission(owner) -> None:
+    """Raise the refusal a new delegated restart of ``owner`` would get now (read-only).
+
+    :func:`begin_delegated_action` repeats this decision in the transaction
+    that records the restart, so two leads can never both hold it.
+    """
+    refusal = _restart_admission(_read_document(), _owner_key(owner), _now())
+    if refusal is not None:
+        raise refusal
+
+
+def _parse_moment(value, name: str) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError(f'{name} must be an ISO 8601 date-time with a UTC offset')
+    try:
+        moment = datetime.fromisoformat(value.strip().replace('Z', '+00:00'))
+    except ValueError as error:
+        raise ValueError(f'{name} must be an ISO 8601 date-time with a UTC offset: {value!r}') from error
+    if moment.tzinfo is None:
+        raise ValueError(f'{name} needs a UTC offset (for example +08:00): {value!r}')
+    return moment
+
+
+def restart_blackouts(owner, *, now: float | None = None) -> list:
+    """The owner's declared restart blackout windows that have not ended, earliest first."""
+    moment = _now() if now is None else now
+    windows = _blackouts(_read_document()).get(_owner_key(owner), [])
+    return sorted((dict(window) for window in windows if window.get('endAt', 0) > moment),
+                  key=lambda window: window['startAt'])
+
+
+def set_restart_blackouts(owner, windows: list, *, declared_by: dict) -> list:
+    """Replace the owner's restart blackout windows (``[]`` lifts them all).
+
+    Each window is ``{start, end, reason}``: ISO 8601 date-times with a UTC
+    offset, ``end`` after ``start`` and still ahead. A delegated restart is
+    refused while one is active, at its request and again at acceptance.
+    ``declared_by`` names who stored it (the acting Router and its audit record).
+    """
+    if not isinstance(windows, list):
+        raise ValueError('restart_blackouts takes a list of {start, end, reason} windows')
+    now = _now()
+    stored = []
+    for number, window in enumerate(windows, 1):
+        if not isinstance(window, dict) or set(window) - {'start', 'end', 'reason'}:
+            raise ValueError(f'window {number} must be an object with exactly start, end and reason')
+        start = _parse_moment(window.get('start'), f'window {number} start')
+        end = _parse_moment(window.get('end'), f'window {number} end')
+        reason = window.get('reason')
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError(f'window {number} needs a reason (why the owner wants no restart then)')
+        if end <= start or end.timestamp() <= now:
+            raise ValueError(f'window {number} must end after it starts and after now')
+        stored.append({'start': start.isoformat(timespec='seconds'), 'end': end.isoformat(timespec='seconds'),
+                       'startAt': start.timestamp(), 'endAt': end.timestamp(), 'reason': reason.strip(),
+                       'declaredBy': declared_by, 'declaredAt': now})
+    owner_key = _owner_key(owner)
+
+    def _mut(cur):
+        document = _document(cur)
+        _blackouts(document)[owner_key] = stored
+        return document
+
+    update_json_atomic(_APPROVALS_FILE, _mut, default=None, strict=True)
+    audit_log('owner_restart_blackouts_set', owner=int(owner_key), windows=[
+        {key: window[key] for key in ('start', 'end', 'reason')} for window in stored],
+        declared_by=declared_by)
+    return [dict(window) for window in stored]
+
+
 def begin_delegated_action(owner, requester: dict, *, scope: str, key: str, reason: str,
                            trigger: dict, target: dict, trigger_source: str | None = None) -> tuple[dict, bool]:
     """Check the grant and record the accepted action in one transaction.
@@ -1363,6 +1535,14 @@ def begin_delegated_action(owner, requester: dict, *, scope: str, key: str, reas
             return None
         record = _action_record(action_id, owner_key, requester, scope, reason=reason, trigger=trigger,
                                 target=target, grant=grant, now=now, status='accepted')
+        if scope == 'restart':
+            outcome['lost'] = _settle_lost_restarts(document, now)
+            refusal = _restart_admission(document, owner_key, now)
+            if refusal is not None:
+                outcome['refusal'] = refusal
+                # A lost holder's record was settled: keep that write.
+                return document if outcome['lost'] else None
+            record['holder'] = _holder()
         actions.append(record)
         document['delegatedActions'] = _prune_actions(actions)
         if scope == 'restart':
@@ -1372,6 +1552,10 @@ def begin_delegated_action(owner, requester: dict, *, scope: str, key: str, reas
         return document
 
     update_json_atomic(_APPROVALS_FILE, _mut, default=None, strict=True)
+    for lost in outcome.get('lost') or ():
+        audit_log('owner_delegation_action_settled', action_id=lost['id'], status=lost['status'],
+                  code=lost['code'], detail=lost['detail'], action='')
+        _record_lead_audit(lost)
     if 'refusal' in outcome:
         audit_log('owner_delegation_refused', owner=int(owner_key), scope=scope,
                   code=outcome['refusal'].code, router=requester['conversationId'],
@@ -1494,6 +1678,11 @@ def accept_delegated_restart(owner, action_id: str, requester: dict, *,
         except DelegationRefused as refusal:
             record.update(status='refused', code=refusal.code, detail=str(refusal), updatedAt=now)
             return True
+        window = _active_blackout(document, owner_key, now)
+        if window is not None:
+            refusal = _blackout_refusal(window)
+            record.update(status='refused', code=refusal.code, detail=str(refusal), updatedAt=now)
+            return True
         remaining = max(_cooldown_remaining(document.get('last_restart_at'), now),
                         _cooldown_remaining(legacy_last, now))
         if remaining > 0:
@@ -1534,7 +1723,9 @@ def accept_delegated_restart(owner, action_id: str, requester: dict, *,
 
 _OPEN_NOTICE_STATES = ('pending', 'delivering')
 _FINISHED_NOTICE_STATES = ('delivered', 'failed', 'undeliverable')
-_NOTICE_FACTS = frozenset({'acceptedAt', 'interrupted', 'oldCode', 'preparation', 'failure', 'updatedAt'})
+# ``peers``: the other leads told of a delegated restart, told its outcome too (owner_delegation).
+_NOTICE_FACTS = frozenset({'acceptedAt', 'interrupted', 'oldCode', 'preparation', 'failure', 'updatedAt',
+                           'readiness', 'peers', 'requesterProject'})
 
 
 def _restart_notices(document: dict) -> list:

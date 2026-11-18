@@ -104,7 +104,7 @@ def test_agent_specs_carry_no_credentials_and_same_endpoint_shape(tmp_path):
     assert all(agent["env"]["no_proxy"].startswith("r,") for agent in (tofu, opencode, pi))
     config = json.loads(opencode["log_files"]["opencode.json"])
     provider = config["provider"]["benchmark"]
-    assert provider["options"] == {"baseURL": "http://r/arm/opencode/v1"}
+    assert provider["options"] == {"baseURL": "http://r/arm/opencode/v1", "apiKey": "relay-held"}
     assert provider["models"]["glm-5.3-flash"]["limit"] == {"context": 262144, "output": 65536}
     assert opencode["env"]["OPENCODE_CONFIG"] == "/logs/agent/opencode.json"
     # Each baseline runs once, exactly as its upstream adapter runs it.

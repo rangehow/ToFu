@@ -35,7 +35,7 @@ SETTINGS = {
     'imageGenEnabled': False, 'imageGenMode': False, 'mcpToolExposure': 'auto',
     'memoryEnabled': True, 'model': MODEL, 'modelRef': MODEL_REF, 'planMode': False,
     'preferredProviderId': '', 'preset': MODEL, 'projectPath': '/project',
-    'projectPaths': ['/project'], 'provider_id': 'sankuai', 'readOnlyPaths': [],
+    'projectPaths': ['/project'], 'provider_id': 'example-corp', 'readOnlyPaths': [],
     'schedulerEnabled': False, 'searchMode': 'multi', 'thinkingDepth': None, 'uiLang': 'zh',
 }
 # The composer snapshot every browser send submits (_buildToolbarOverrides).
@@ -366,6 +366,8 @@ def test_ordinary_project_conversation_keeps_its_submitted_tool_settings(run, mo
     pinned = ingress(monkeypatch, accepted_human_config(r), turn_id='coordinator-turn',
                      attempt_id='coordinator-attempt')
     assert pinned['tools'] == TOOLBAR['tools']
+    # Desktop tools are outside only the Coordinator roles' ceilings.
+    assert pinned['desktopEnabled'] is True
 
 
 def test_failed_role_lookup_keeps_submitted_settings_for_tool_assembly(run, monkeypatch):

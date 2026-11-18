@@ -190,12 +190,11 @@ def pin_coordinator_request_policy(conversation_id: str, config: dict, owner_use
     owner/scheduled alternation from an authority-bearing drift that used to
     cold-rebuild the whole history on every other request.
 
-    ``desktopEnabled`` is inert for the same reason: the owner's attended Turn
-    resolves it true (lib/conv_config/_resolve.py) while scheduled turns and
-    continuations keep False, yet no desktop tool is in any coordinator-role
-    ceiling and await_device reaches every lead regardless. Pinning it False
-    also keeps the Workers this request delegates at the delegated-turn
-    default (docs/modules/remote_execution.md).
+    ``desktopEnabled`` is inert for the same reason: the owner's attended turn
+    resolves it to True (conv_config), scheduled turns and continuations carry
+    False, and no desktop tool name is in any role ceiling; await_device, the
+    one device tool a Coordinator or Router holds, is offered beside
+    delegate_project_work regardless of the flag.
     """
     from lib.project_dispatch.admission import KEY
     if KEY in config:

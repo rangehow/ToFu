@@ -116,6 +116,9 @@ def coordinator_grant_scope(assignment):
             'conversation_id': request['coordinatorId'], 'user_id': grant['owner']}
 
 
+WORKSPACE_CHECKPOINT_TOOL, WORKSPACE_SUBMIT_TOOL = 'integration_checkpoint', 'integration_submit'
+
+
 def granted_tools(profile, *, assignment=None):
     """The exact tool names a dispatch profile admits.
 
@@ -127,7 +130,11 @@ def granted_tools(profile, *, assignment=None):
     the Global Router's continuation holds the Router's tools, a Project
     Coordinator's holds its own, and every call keeps its own execution gate.
     A project Worker holds the scheduler family (owner verdict 2026-11-13)
-    whenever its policy was frozen. A profile holding ``spawn_agents`` also holds
+    whenever its policy was frozen, and with ``integration_checkpoint`` also
+    ``integration_submit`` (owner decision 2026-11-18): both only checkpoint the
+    Worker's own isolated workspace, and a request's continuations keep issuing
+    the policy its first Turn froze, before the submit was granted. A profile
+    holding ``spawn_agents`` also holds
     the artifact tools its swarm runs give their children
     (``lib.swarm.tools.ARTIFACT_TOOL_NAMES``): they are contextual, never catalog
     entries, and touch only that run's in-process store. A project Worker's
@@ -148,6 +155,8 @@ def granted_tools(profile, *, assignment=None):
         # family adds no capability; deriving it here reaches policies frozen before.
         from lib.scheduler.tool_defs import ROLE_SCHEDULER_TOOL_NAMES
         tools |= ROLE_SCHEDULER_TOOL_NAMES
+        if WORKSPACE_CHECKPOINT_TOOL in tools:
+            tools |= {WORKSPACE_SUBMIT_TOOL}
     if 'spawn_agents' in tools:
         from lib.swarm.tools import ARTIFACT_TOOL_NAMES
         tools |= ARTIFACT_TOOL_NAMES

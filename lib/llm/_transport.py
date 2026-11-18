@@ -10,6 +10,7 @@ import threading
 import time
 import weakref
 from concurrent.futures import Future
+from concurrent.futures import wait as wait_futures
 
 import httpx
 import requests
@@ -997,9 +998,28 @@ class StreamIdleWatchdog:
                     and self._attempt_deadline is None
                     and self._silence_deadline <= 0):
                 return
-            self._thread = threading.Thread(
-                target=self._run, name='stream-idle-watchdog', daemon=True)
-            self._thread.start()
+            entered = threading.Event()
+
+            def run():
+                entered.set()
+                self._run()
+
+            self._thread = _carrier_pool('stream-idle-watchdog').submit(run)
+            # Started or refused, never queued: wait for the carrier to enter
+            # (a parked carrier hands over at once) so that a refused thread
+            # surfaces here, before anything is sent, as it did with a thread.
+            self._thread.add_done_callback(lambda _future: entered.set())
+            entered.wait()
+            if self._thread.done() and self._thread.exception() is not None:
+                raise RuntimeError(str(self._thread.exception()))
+
+    def join(self, timeout=None) -> bool:
+        """Wait for the watcher's carrier job to end; True once it has (or never ran)."""
+        carrier = self._thread
+        if carrier is None:
+            return True
+        wait_futures((carrier,), timeout=timeout)
+        return carrier.done()
 
     def notify_activity(self):
         """Record upstream activity — resets the idle clock, keeps watching."""
@@ -1174,10 +1194,33 @@ async def async_abortable_sleep(seconds: float, abort_check=None,
         await asyncio.sleep(min(interval, max(0, remaining)))
 
 
+_carrier_pools: dict = {}
+_carrier_pools_lock = threading.Lock()
+
+
+def _carrier_pool(role: str):
+    """The demand executor that carries one per-request role (header wait, watchdog).
+
+    A thread per request cost a thread start on every model round. Every
+    submission starts at once (a busy carrier never queues work: another is
+    started on demand); one idle carrier per role is kept for the next
+    request, the rest retire when their job completes. Daemon carriers, as the
+    per-request threads were: an abandoned send never holds interpreter exit.
+    """
+    with _carrier_pools_lock:
+        pool = _carrier_pools.get(role)
+        if pool is None:
+            from tofu_workers.executor import DemandExecutor
+            pool = _carrier_pools[role] = DemandExecutor(
+                max_workers=1, queue_capacity=0, max_abandoned_workers=1,
+                thread_name_prefix=role, metric_pool=role, daemon_workers=True)
+        return pool
+
+
 def post_headers_abortable(post_fn, *, is_aborted, poll_interval=None,
                            first_byte_deadline=None, timeout_seconds=None,
                            deadline_cause='response_headers'):
-    """Run a blocking stream-open ``post_fn`` on a daemon thread while polling
+    """Run a blocking stream-open ``post_fn`` on a pooled daemon carrier while polling
     ``is_aborted``, so a Stop pressed during the response-header wait lands
     within one poll interval instead of whenever the upstream first speaks.
 
@@ -1224,10 +1267,8 @@ def post_headers_abortable(post_fn, *, is_aborted, poll_interval=None,
                         type(close_error).__name__,
                     )
 
-    worker = threading.Thread(
-        target=_run_post, name='llm-post-headers', daemon=True)
     try:
-        worker.start()
+        worker = _carrier_pool('llm-post-headers').submit(_run_post)
     except RuntimeError as error:
         # ``post_fn`` runs only on the worker, so nothing was sent.
         raise LocalRequestPreparationError(
@@ -1245,8 +1286,14 @@ def post_headers_abortable(post_fn, *, is_aborted, poll_interval=None,
                     timeout_seconds=timeout_seconds,
                     cause_type=deadline_cause)
             wait = min(wait, remaining)
-        worker.join(wait)
-        if not worker.is_alive():
+        wait_futures((worker,), timeout=wait)
+        if worker.done():
+            if worker.exception() is not None:
+                # ``_run_post`` captures every outcome, so a failed carrier
+                # Future means it never ran: a refused thread, nothing sent.
+                raise LocalRequestPreparationError(
+                    f'llm-post-headers thread could not start: {worker.exception()}',
+                    stage='thread_start') from worker.exception()
             break
         if is_aborted is not None and is_aborted():
             abandoned.set()

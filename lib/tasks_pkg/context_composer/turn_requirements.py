@@ -81,7 +81,10 @@ def refresh_turn_requirements(messages, *, task, model):
     if principal.require_owner(context='Task requirements') != owner:
         raise PermissionError('Task requirements owner mismatch')
     identity = source.identity
-    read = _RequirementsRead(task, partial(read_execution_requirements, *identity, principal=principal))
+    from lib.tasks_pkg.round_reads import round_reads
+    reads = round_reads(task)
+    read = _RequirementsRead(task, partial(read_execution_requirements, *identity, principal=principal,
+                                           **({'reads': reads} if reads is not None else {})))
     try:
         view = wait_for_persistence(task, read, label='turn requirements read',
                                     transient=_waits_for_storage, effect_free=True)

@@ -114,12 +114,15 @@ def test_error_diagnostics_expire_with_idle_timeout_disabled(monkeypatch, framin
 @pytest.mark.parametrize('already_running', [False, True])
 def test_diagnostic_deadline_uses_one_watcher_and_wakes_long_wait(monkeypatch, already_running):
     created = []
-    original = threading.Thread
-    def track_thread(*args, **kwargs):
-        worker = original(*args, **kwargs)
-        created.append(worker)
-        return worker
-    monkeypatch.setattr(_transport.threading, 'Thread', track_thread)
+    pool = _transport._carrier_pool('stream-idle-watchdog')
+
+    class TrackedPool:
+        def submit(self, function):
+            carrier = pool.submit(function)
+            created.append(carrier)
+            return carrier
+
+    monkeypatch.setattr(_transport, '_carrier_pool', lambda role: TrackedPool())
     expired = threading.Event()
     watcher = _transport.StreamIdleWatchdog(
         heartbeat_interval=60 if already_running else 0,
@@ -132,6 +135,5 @@ def test_diagnostic_deadline_uses_one_watcher_and_wakes_long_wait(monkeypatch, a
         assert len(created) == 1
     finally:
         watcher.cancel()
-        for worker in created:
-            worker.join(.3)
-    assert all(not worker.is_alive() for worker in created)
+        assert watcher.join(.3)
+    assert all(carrier.done() for carrier in created)

@@ -97,6 +97,14 @@ start work outside the grant and its Stop fence. A Worker submits its own
 checkpoint for review (owner decision 2026-11-18): in its isolated task
 workspace `integration_submit` only saves the final checkpoint for the automatic
 task delivery the Coordinator's accepting review publishes, and starts nothing.
+A grant holding `integration_checkpoint` therefore also admits
+`integration_submit` (`scope.granted_tools`): a request's continuations, restart
+resumes included, keep issuing the Worker policy its first Turn froze, so
+Workers of requests that began before the decision, and follow-ups of their
+Workers, would otherwise stay without it. On such a frozen grant the submit is
+executable and found by `search_tools`, not added to the direct wire. A grant
+without the checkpoint gains nothing. Specification:
+`tests/project_mod/test_worker_integration_submit.py`.
 Problem: Workers told to "submit when done" were refused and their leads
 re-ran the step by hand. Alternative rejected: a separate Worker toggle, which would reintroduce a
 second capability ceiling diverging from ordinary conversations.
@@ -1299,6 +1307,32 @@ Project Router's real commitment-due wake that dispatches a Worker, whose
 `integration_submit` from its isolated task workspace succeeds (Workers may
 submit their own checkpoint, `workerDeniedTools`), and a revocation mid-Turn
 that refuses the same Turn's next dispatch and `restart_server`.
+
+**A Project Router restarts Tofu itself, one restart at a time (lead audit
+2026-11-18, recommendation #3).** Problem: only the Global Router restarted, so
+every Project Router's restart (merged fixes live only after one) waited on a
+relay, although the owner gave his authority to the leads entirely
+(「我的权限要全部下放给负责人们」). Decision: a Project Router calls `restart_server`
+under the owner's full grant (`under_delegation: true` on its own judgment, or an
+owner trigger) through the same `owner_delegation.restart_server` path as the
+Global Router: the same machine pre-checks (HEAD's storage engine deployed or
+certified; the server manager on this checkout's source generation, refreshed
+first by the documented pre-step; the protected-step rule), one restart at a
+time across every lead (a concurrent request is refused `restart_in_progress`
+naming the holding lead; every other lead receives a project-message report
+when it starts and when it ends), refused inside an owner-declared blackout
+window (`restart_blackout`; the owner declares windows through the Global
+Router's `owner_settings` with his own words), and one audit record per
+request, refusals included, in the delegation history and `logs/lead-audit/`.
+An enumerated grant does not reach Project Routers. Alternatives rejected: (b)
+a `request_restart` tool asking the Global Router to restart (keeps the relay,
+a second path, and is not what the owner asked); a process-local lock (the
+execution host, its shards and the API host are separate processes). Full
+record: [ROUTER.md R9](ROUTER.md), "Restart single flight, blackout windows and
+readiness". Specifications: `tests/router/test_owner_delegation.py`, and in
+separate OS processes `tests/chaos/test_lead_restart_processes.py` (a Project
+Router restarts an isolated instance; a second lead's concurrent request is
+refused with the holder named and told the outcome).
 
 **A lead acts on another project's sessions under the delegation.** Under the
 full grant a Project Router reads (`get_conversation_status`) and continues,

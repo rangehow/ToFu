@@ -17,8 +17,12 @@ create_conversation, await_device and the scheduler family (440 bytes with the
 discovery pair). create_memory, a lead's lesson record (2026-11-16, docs/modules/
 context_engineering.md "Memory compounding"), makes it 29 tools, 534 bytes; it
 stays out of the core, so that route hides it too and the wire is unchanged.
+restart_server (2026-11-18) and channel_send to the owner's command chat (a
+Project Router's, R9 "Leads reach the owner directly") make it 31 tools, 562
+bytes; both stay out of the core and are hidden on that route.
 Assemblies keep the memory group enabled, as in production, so a fixture cannot
-hide a ceiling change behind a fail-closed memory group.
+hide a ceiling change behind a fail-closed memory group; the channel catalog
+shows the Project Router its send as a configured command chat does.
 
 Each surface goes through its real assembly, or the role policy over its whole
 ceiling, and the final wire projection, so a ceiling or core change that pushes
@@ -128,24 +132,37 @@ def watchdog(homes, monkeypatch):
 
 
 CLAUDE_HIDDEN = {'dispatch_project_assignment', 'create_conversation', 'await_device', 'restart_server',
-                 'schedule_create', 'schedule_list', 'schedule_manage', 'create_memory'}
+                 'schedule_create', 'schedule_list', 'schedule_manage', 'create_memory', 'channel_send'}
 
 
-def test_project_coordinator_human_turn_fits_the_budget_with_leads_and_memory_direct(coordinator):
-    """The 30 role tools join to 549 bytes. list_project_leads and search_memories are
+@pytest.fixture
+def project_router_with_command_chat(coordinator, monkeypatch):
+    """The production Project Router surface: the owner configured a command chat."""
+    from lib.channels.tools import CHANNEL_TOOLS
+    task, state = coordinator
+
+    def visible(owner, conversation, project_path=''):
+        lead = conversation == state['conversationId'] and project_path == state['projectPath']
+        return [tool for tool in CHANNEL_TOOLS if lead and tool['function']['name'] == 'channel_send']
+    monkeypatch.setattr('lib.channels.tools.visible_tools', visible)
+    return task, state
+
+
+def test_project_coordinator_human_turn_fits_the_budget_with_leads_and_memory_direct(
+        project_router_with_command_chat):
+    """The 31 role tools join to 562 bytes. list_project_leads and search_memories are
     in the core by owner request; to fit, the Claude route hides the three least used
-    tools, restart_server, the scheduler family and the lesson record, which stay
-    reachable through Tool Search and by exact name. channel_send is in the catalog only
-    where the owner has a command chat (lib.channels.tools), which this owner has not."""
-    task, _ = coordinator
+    tools, restart_server, the scheduler family, the lesson record and the command-chat
+    send, which stay reachable through Tool Search and by exact name."""
+    task, _ = project_router_with_command_chat
     tools = assemble(task)
-    assert set(_names(tools)) == COORDINATOR_TOOLS - DISCOVERY - {'channel_send'}
-    assert _joined_bytes(_names(tools)) == 549 > BUDGET
+    assert set(_names(tools)) == COORDINATOR_TOOLS - DISCOVERY
+    assert _joined_bytes(_names(tools)) == 562 > BUDGET
     assert set(task['_requiredDirectToolNames']) == COORDINATOR_DIRECT_TOOLS
     body, projection = _wire(task, tools)
     wire = _names(body['tools'])
     assert set(projection.budget_dropped_names) == CLAUDE_HIDDEN
-    assert set(wire) == (COORDINATOR_TOOLS - CLAUDE_HIDDEN - {'channel_send'})
+    assert set(wire) == (COORDINATOR_TOOLS - CLAUDE_HIDDEN)
     assert _joined_bytes(wire) == 440 <= BUDGET
     assert {'list_project_leads', 'search_memories', 'poll', *READERS} <= set(wire)
     assert set(_assert_hidden_tools_reachable(task, body, COORDINATOR_TOOLS)) == CLAUDE_HIDDEN

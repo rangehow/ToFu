@@ -41,7 +41,13 @@ def _tools():
             'name': name, 'description': f'{name} tool',
             'parameters': {'type': 'object', 'properties': {
                 'command': {'type': 'string'}}, 'required': ['command']}}}
-        for name in TOOLS_SPEC]))
+        for name in TOOLS_SPEC] + [
+        # Private catalog metadata the wire preflight projects into the description.
+        {'type': 'function', 'decoded_result_schema': {'type': 'object', 'properties': {
+            'rows': {'type': 'array'}}},
+         'function': {'name': 'read_tool_artifact', 'description': 'Read an artifact.',
+                      'parameters': {'type': 'object', 'properties': {
+                          'ref': {'type': 'string'}}, 'required': ['ref']}}}]))
 
 
 TOOLS = _tools()
@@ -194,6 +200,27 @@ def test_incremental_request_evidence_equals_full_rebuild(protocol, model):
     rows = task['_wireMessageRows']['messages']
     from lib.conversation_sync.settled_rows import is_settled
     assert all(map(is_settled, rows))
+
+
+@pytest.mark.parametrize('protocol', ['anthropic', 'openai'])
+def test_unchanged_tool_surface_keeps_its_wire_rows_across_rounds(protocol):
+    """Every round's projected wire tools are the previous round's rows, so the
+    per-row and whole-surface memos (translation, fingerprints, schema counts)
+    answer them; the preflight's result-schema projection included."""
+    messages = _initial()
+    task = {'id': 'surface-task', 'convId': 'conv-surface', '_userId': 1}
+    surfaces = []
+    for index in range(3):
+        _evidence(messages, task, protocol=protocol, model='claude-sonnet-4',
+                  incremental=True, round_num=index)
+        surfaces.append(list(task['_wireToolRows']['tools']))
+        _tool_round(messages, index, native=False)
+    projected = [row for row in surfaces[0] if 'read_tool_artifact' in json.dumps(row)]
+    assert projected and 'decoded_result_schema' not in projected[0]
+    assert 'Successful decoded JSON value' in projected[0]['function']['description']
+    for later in surfaces[1:]:
+        assert len(later) == len(surfaces[0])
+        assert all(row is first for row, first in zip(later, surfaces[0]))
 
 
 def test_unchanged_history_keeps_its_settled_rows_and_changes_replace_them():

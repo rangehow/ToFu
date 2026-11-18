@@ -124,6 +124,12 @@ def prepare_round_context(task, messages, *, round_num, tid, model,
     Both loop owners invoke this policy; no dispatch, reservation or terminal
     transition belongs here. Message receipts preserve the prepared checkpoint.
     """
+    # The round's boundary reads (steers, requirements, working facts) share
+    # one storage exchange that overlaps the hygiene below.
+    from lib.tasks_pkg.round_reads import begin_round_reads
+    begin_round_reads(task)
+    from lib.llm_sanitize.context_sections import next_text_memo_round
+    next_text_memo_round()
     # Before compaction, so a folded history carries the translated input too.
     with round_prep_step(task, 'inputs.translation'):
         from lib.tasks_pkg.input_translation import apply_input_translation
@@ -215,11 +221,13 @@ def admit_round_context(task, messages, tools, *, round_num, model,
             level=pending_notice['level'],
             initial_seconds=pending_notice['initial_seconds'],
             round_num=round_num)
+    from lib.tasks_pkg.round_reads import end_round_reads
     try:
         admission = enforce_dispatch_prompt_limit(messages, tools, task,
             round_num=round_num, model=model,
             precomputed_tool_schema_tokens=precomputed_tool_schema_tokens)
     except BaseException:
+        end_round_reads(task)
         if pending_notice is not None:
             # Roll back the pre-measure commit: the provider never saw this
             # notice, so the milestone, account and receipts stay unspent.
@@ -272,6 +280,7 @@ def admit_round_context(task, messages, tools, *, round_num, model,
                     round_num=round_num, model=model,
                     precomputed_tool_schema_tokens=admission.get(
                         '_toolSchemaLocalTokens'))
+    end_round_reads(task)
     from lib.tasks_pkg.context_dependencies import prepare
     prepare(task, messages)
     from lib.tasks_pkg.compaction.api import settle_compaction_request_size

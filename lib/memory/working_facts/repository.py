@@ -30,6 +30,17 @@ def digest(value):
         separators=(',', ':'), allow_nan=False).encode()).hexdigest()
 
 
+def record_payload(owner, tenant, conversation_id):
+    key = digest([owner, tenant, str(conversation_id)])
+    return {'namespace': 'working_facts_v1', 'key': key, 'user_id': owner}
+
+
+def facts_read_request(conversation_id: str, principal: PrincipalContext):
+    """The aggregate read (operation, payload) ``FactRepository.read`` sends."""
+    owner = principal.require_owner(context='working facts')
+    return 'record.get', record_payload(owner, principal.tenant_id, conversation_id)
+
+
 class FactRepository:
     def __init__(self, conversation_id: str, principal: PrincipalContext):
         from lib.response_assets import owned_conversation
@@ -42,13 +53,14 @@ class FactRepository:
             owned_conversation(self.conversation_id, self.owner)
         except PermissionError as exc:
             raise FactsUnavailable('Working facts unavailable') from exc
-        self.key = digest([self.owner, self.tenant, self.conversation_id])
+        self.key = record_payload(self.owner, self.tenant, self.conversation_id)['key']
 
     def payload(self):
         return {'namespace': 'working_facts_v1', 'key': self.key, 'user_id': self.owner}
 
-    def read(self):
-        row = get_storage_client().query('record.get', self.payload())
+    def read(self, reads=None):
+        """``reads`` answers ``facts_read_request`` already issued in a shared exchange."""
+        row = (reads or get_storage_client()).query('record.get', self.payload())
         if not row:
             return {'facts': {}}, 0
         value = row['value']

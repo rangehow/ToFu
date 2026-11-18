@@ -227,7 +227,7 @@ def homes(tmp_path, monkeypatch):
     monkeypatch.setattr(project_coordination, 'ProjectCoordinationRepository',
                         lambda owner: SimpleNamespace(read=read))
     monkeypatch.setattr(mcp_module, 'get_bridge', lambda owner: _NoMcp())
-    monkeypatch.setattr('lib.channels.tools.visible_tools', lambda owner, conversation: [])
+    monkeypatch.setattr('lib.channels.tools.visible_tools', lambda owner, conversation, project_path='': [])
     _reset_sticky_exposure_for_tests()
     yield {conversation: path for path, conversation in bindings.items()}
     _reset_sticky_exposure_for_tests()

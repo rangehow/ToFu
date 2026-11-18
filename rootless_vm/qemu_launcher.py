@@ -153,6 +153,11 @@ def _sanitized_environment() -> dict[str, str]:
         "HOME": "/",
         "LANG": "C",
         "LC_ALL": "C",
+        # The jail's address-space limit derives from the session memory budget, but glibc
+        # reserves one malloc arena per thread up to 8x the host CPU count: on a 180-CPU host
+        # QEMU's ~70 threads exceeded a 6 GiB limit and thread creation failed (EAGAIN). One
+        # arena makes the address space the budget covers independent of the host's CPU count.
+        "MALLOC_ARENA_MAX": "1",
         "PATH": "/usr/bin:/bin",
         "TMPDIR": "/tmp",
     }

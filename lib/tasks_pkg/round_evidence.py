@@ -136,7 +136,11 @@ def build_round_evidence(task: dict, messages: list, *, ref: dict,
     if params is not None:
         event['params'] = params
     if tools:
-        event['tools'] = tools
+        # Settled against the previous snapshot's schemas of the same kind, so
+        # the unchanged catalog is shared by the frame's detachment, not copied.
+        tools_key = '_snapshotTools' if kind == 'request' else '_stateSnapshotTools'
+        event['tools'] = task[tools_key] = settle_items(
+            list(tools), previous=task.get(tools_key))
     if kind == 'request' and not canonical:
         event.update(degraded=True, degradedReason='request-build-fallback')
     # Watermark for the reduced-scope post-tool dedup (FINDING C): the

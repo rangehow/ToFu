@@ -167,14 +167,18 @@ class TestHostThreadRefusalBeforeSend:
 
     @staticmethod
     def _refuse(monkeypatch, name):
+        import lib.llm._transport as transport
         real_start = threading.Thread.start
 
         def start(thread):
-            if thread.name == name:
+            # Pooled carriers are named ``<prefix>_<index>``.
+            if thread.name == name or thread.name.startswith(name + '_'):
                 raise RuntimeError("can't start new thread")
             return real_start(thread)
 
         monkeypatch.setattr(threading.Thread, 'start', start)
+        # A fresh carrier pool: a parked carrier would need no thread start.
+        monkeypatch.setattr(transport, '_carrier_pools', {})
 
     def test_refused_post_worker_is_a_typed_local_failure(self, monkeypatch):
         self._refuse(monkeypatch, 'llm-post-headers')
@@ -213,3 +217,36 @@ class TestHostThreadRefusalBeforeSend:
 
         assert caught.value.stage == 'thread_start'
         assert posts == []
+
+
+def test_consecutive_requests_reuse_one_header_carrier(monkeypatch):
+    """A model round no longer starts a thread for its header wait."""
+    import lib.llm._transport as transport
+    monkeypatch.setattr(transport, '_carrier_pools', {})
+    carriers = []
+    for _ in range(5):
+        post_headers_abortable(lambda: carriers.append(threading.current_thread()) or 'ok',
+                               is_aborted=lambda: False)
+    assert len(set(map(id, carriers))) == 1
+    assert carriers[0].daemon and carriers[0].name.startswith('llm-post-headers')
+
+
+def test_consecutive_watchdogs_reuse_one_carrier(monkeypatch):
+    import lib.llm._transport as transport
+    monkeypatch.setattr(transport, '_carrier_pools', {})
+    carriers = []
+    for _ in range(4):
+        watched = threading.Event()
+
+        def check():
+            carriers.append(threading.current_thread())
+            watched.set()
+            return False
+
+        watchdog = transport.StreamIdleWatchdog(abort_check=check, idle_timeout=0)
+        watchdog.start()
+        assert watched.wait(10)
+        watchdog.cancel()
+        assert watchdog.join(10)
+    assert len(set(map(id, carriers))) == 1
+    assert carriers[0].daemon and carriers[0].name.startswith('stream-idle-watchdog')

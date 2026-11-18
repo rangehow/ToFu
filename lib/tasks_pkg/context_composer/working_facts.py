@@ -73,7 +73,11 @@ def refresh_working_facts(messages, *, task, model):
     from lib.memory.working_facts import service
     from lib.memory.working_facts.repository import FactsUnavailable
     principal = PrincipalContext.from_payload(task['_principalContext'])
-    future = context_provider_executor.submit(partial(service.query_facts, str(task['convId']), principal=principal))
+    from lib.tasks_pkg.round_reads import round_reads
+    reads = round_reads(task)
+    future = context_provider_executor.submit(partial(
+        service.query_facts, str(task['convId']), principal=principal,
+        **({'reads': reads} if reads is not None else {})))
     deadline = time.monotonic() + limit('acquisitionSeconds')
     content, reason, provenance = '', 'not_applicable', {}
     try:

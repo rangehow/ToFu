@@ -17,22 +17,27 @@ trial executor inside the VM, and a host orchestrator that resumes safely.
 | `runner.py` | Concurrent trials, resumable attempts, `summary.json` |
 | `relay.py` | Model relay shared by every arm: same FRIDAY deployment, same keys, same sampling; chat, Anthropic Messages and Responses faces |
 | `../pi_contract.py` | Pi version pins, prebuilt runtime tree, guest `models.json` and launch program |
+| `third_party.py` | Kimi Code, Qwen Code, Goose, mini-swe-agent, Hermes Agent and oh-my-pi: version pins, pinned runtime artifacts, per-trial setup and launch programs |
 | `audit.py` | Benchmark-answer contamination flags for review |
+| `eval_matrix/` | EVAL-MATRIX pre-registration (`PREREG.md`) and `status_tables.py`, which regenerates per-cell score, CI, cost and tokens from `per_trial.csv` plus raw run dirs and relay logs |
 
 The VM-side entry point is the ingress native exec channel
 (`/native/exec|status|read|kill`) on the nlp/harbor branch named by
-`TOFU_TB_INGRESS_BRANCH` or `run --branch` (b35af6f). That branch only adds the
-channel; nothing in the trial path runs Harbor.
+`TOFU_TB_INGRESS_BRANCH` or `run --branch` (b35af6f). Nothing in the trial
+path runs Harbor. The per-VM-session ingress token (below) is not on this
+branch yet, so runs use the tokenless channel.
 
 ## Workflow
 
 ```bash
 PY=<interpreter with pssdk, aiohttp, dirhash>   # e.g. the Tofu app interpreter (.tofu_env.json)
 RUN=.eval-runs/<run-dir>
-# 1. relay (keys stay in this process; sandboxes see a key-less URL)
+# 0. the run's relay key (mode 0600; kept when it exists; never on a command line)
+env -u PYTHONPATH $PY -m evaluations.terminal_bench relay-key $RUN/relay.key
+# 1. relay (keys stay in this process; sandboxes see a key-less URL and present the run key)
 env -u PYTHONPATH $PY -m evaluations.terminal_bench.relay --port 18451 --model glm-5.3-flash-m17 \
   --temperature 1.0 --top-p 1.0 --max-tokens 65536 --reasoning-effort max \
-  --log $RUN/relay-requests.jsonl --files-dir $RUN/files
+  --log $RUN/relay-requests.jsonl --files-dir $RUN/files --ingress-key-file $RUN/relay.key
 # 1b. only for the claude-code arm: Anthropic bridge in front of the relay
 env -u PYTHONPATH $PY -m evaluations.terminal_bench.anthropic_bridge --port 18452 \
   --relay-url http://127.0.0.1:18451 --log $RUN/bridge-requests.jsonl
@@ -41,7 +46,7 @@ env -u PYTHONPATH $PY -m evaluations.terminal_bench run --work-dir $RUN/full --c
   --tasks-dir <tb2.1 tasks> --arms tofu,opencode[,pi,claude-code] --protocol vendor-6h \
   --relay-url http://<host-ip>:18451 --artifacts-manifest $RUN/artifacts.json \
   --endpoint https://model.internal.example.com/sandboxGateway/system/857 \
-  --image rootfs://harbor-pipeline-dind-v5 --proxy http://10.70.33.35:8080
+  --image rootfs://harbor-pipeline-dind-v5 --proxy http://10.70.33.35:8080 --relay-key-file $RUN/relay.key
   # add --anthropic-url http://<host-ip>:18452 when --arms includes claude-code
 # 3. score: merges fix-up dirs, attaches the audit, applies human contamination verdicts
 env -u PYTHONPATH $PY -m evaluations.terminal_bench.report $RUN/full [$RUN/<fixup> ...] \
@@ -51,6 +56,26 @@ env -u PYTHONPATH $PY -m evaluations.terminal_bench.report $RUN/full [$RUN/<fixu
   --tasks-dir <tb2.1 tasks> --review $RUN/review.json --review $OTHER/review.json \
   --output .eval-runs/<comparison>/report.json
 ```
+
+Relay ingress (`relay_ingress.py`, 2026-11-13). A relay listening beyond
+loopback needs `--ingress-key-file`; every route (model faces, `/models`,
+`/probe`, `/stats`, `/files`, `/held`, unknown paths) then answers HTTP 401
+before its handler and before any upstream call unless the request carries
+the key as `Authorization: Bearer` or `x-api-key`. Refusals are logged as
+`ingress_refused` (peer, method, path, which header was present; never a
+value). The runner (`--relay-key-file`, the same file) uploads each trial
+spec with the key in place of the agents' API-key placeholder `relay-held`
+and sends it on artifact downloads and `/held` reads; `spec.json` and
+`run.json` keep only the placeholder and the path. Operator tools that call
+a keyed relay send the header from the file, e.g.
+`(umask 077; printf 'Authorization: Bearer %s\n' "$(cat $RUN/relay.key)" > $RUN/relay.key.header)`
+once, then `curl -H @$RUN/relay.key.header ...`. A key FRIDAY reports
+disabled (HTTP 401 `App ID 已被禁用`) is retired like any 401/402/403
+key (`key_retired` with `disabled: true`, `/stats` `disabled`); once no key
+is left every request gets HTTP 403 `relay_key_disabled` (or
+`relay_key_retired`) with `x-should-retry: false` and no upstream call,
+instead of the retryable 502 `no live key` that Tofu's dispatch waits out
+without end.
 
 `report` refuses a dir whose protocol, model, context, image, endpoint, proxy
 or dataset commit differs from the first dir's, or that plans a task the first
@@ -106,6 +131,20 @@ Runtime artifacts (`artifacts.json`, served from `--files-dir`):
 
 ## Fairness and protocol controls
 
+- System CA store (protocol amendment 2026-11-12, Harbor parity; every arm,
+  every protocol): Harbor's agent installs bring a system CA store into each
+  task image (installing curl pulls in `ca-certificates`), so a trial whose
+  image has none of the bundle files Go's `crypto/x509` probes
+  (`harness.SYSTEM_CA_BUNDLE_FILES`) gets the pinned Mozilla bundle (curl.se
+  extract 2026-11-05, 118 roots; manifest entry `ca-bundle`) as
+  `/etc/ssl/certs/ca-certificates.crt`, as root in the install phase before
+  the arm's runtime is installed, outside the agent budget. Only that file is
+  added: no package, no hashed certificate directory. Each trial records
+  `system_ca_bundle.state` (`present`: the image's own store, or `installed`)
+  in `result.json`; those records are the authoritative list of affected
+  images. `run` refuses a manifest without `ca-bundle`. Found by goose, which
+  cannot build its HTTP client without a store (false 0.0 on bare
+  `ubuntu:24.04` images before any model call).
 - Same model, keys, relay, sampling and reasoning effort for every arm; the
   relay overrides `temperature`, `top_p`, `max_tokens` and (when
   `--reasoning-effort` is given) `reasoning_effort` on every request, and logs
@@ -230,9 +269,36 @@ Runtime artifacts (`artifacts.json`, served from `--files-dir`):
   - `--key-suffixes` now reveals only the matching credentials.
   - `--max-rpm` bounds upstream request starts per trailing minute, across
     every face and retry. It is an owner-assigned key budget.
+  - `--max-tpm` bounds the estimated input tokens of those starts the same way
+    (eval-quota rule 12: FRIDAY's second per-AppId+model limit, `…的tpm超过限制`).
+    The estimate is the body size over a per-face bytes-per-token ratio taken at
+    the 1st percentile of logged kimi-k3 calls (Messages 3.1, Responses 3.6), so
+    it errs high for Tofu and Codex (99.1% / 98.9% of logged calls); another
+    harness needs its own check. A 429 naming tpm halves the token budget, any
+    other 429 the request budget; without `--max-tpm` every 429 halves
+    `--max-rpm` as before.
+  - `--budget-file` keeps both budgets in a JSON file: read at start when it
+    exists, re-read whenever it changes (a guard or operator can lower a
+    budget without a restart) and rewritten on every halving, so a restarted
+    relay never resurrects a higher budget. `--assume-full-window` starts a
+    successor as if its draining predecessor had used both whole budgets in
+    the last minute.
+  - `--stop-file` is written once, at the first upstream 429 or the first key
+    retirement (HTTP 401/402/403: the key serves no further request), so
+    runners start no trial that could only measure the outage.
   - `--first-body-dir` keeps the first request of each (arm, task) at mode 0600.
-  - Every Anthropic and Responses record lists the `tofu-context` block ids and
-    date markers its prompt carries. This is the injected-context audit.
+  - Every chat, Anthropic and Responses record lists the `tofu-context` block ids
+    and date markers its prompt carries. This is the injected-context audit.
+  - `--pin-file` sets or omits request fields per face (dotted paths) for every
+    arm, so a model's reasoning and sampling are identical across harnesses;
+    each record lists what the pin replaced.
+  - FRIDAY also sends its per-minute 429 inside HTTP 200 bodies and SSE
+    streams (`response.failed` with `rate_limit_exceeded`, an Anthropic `error`
+    event, a chat `data:` line carrying its `{"status": 429}` body). The client
+    gets the stream as sent; the relay applies the 429 rule to it (stop file,
+    key rest, halved window) and marks the record `stream_429`, which the
+    throttle accounting counts. Observed 2026-11-12: Codex retried five such
+    streams within 6 s and failed its turn while the relay logged only 200s.
 - `--egress-allowlist FILE` freezes a host list in `run.json`. The trial proxy
   then refuses every other host, for agent and verifier alike. Entries match
   exactly, or as `*.suffix` subdomains, and never the apex of a wildcard.
@@ -259,6 +325,31 @@ Runtime artifacts (`artifacts.json`, served from `--files-dir`):
   runs, a separate verifier's collect and build budgets, and the fixed
   overhead. `run` refuses a `--max-alive-min` shorter than any planned trial's
   budget, so a sandbox session never ends mid-trial.
+- With `TOFU_857_LEASES` (the sandbox-857 ledger's `leases.py` CLI) and
+  `TOFU_857_LANE` set, every sandbox session is under the cluster lease
+  ledger (`runner.SandboxLeases`). Each new session acquires its lease before
+  its start; a refusal (ceiling or halve-and-hold) waits and asks again every
+  30 s, and never starts a VM. A failed or slow start is reported to the
+  ledger. A confirmed stop releases the lease; a stop that cannot be confirmed
+  keeps it open until the ledger reclaims it.
+- `--start-deadline TIME` (ISO 8601) holds every new attempt whose sandbox
+  start allowance (the gateway's 660 s start budget) plus trial budget would
+  end after TIME, so a run on a key with a planned end (a scheduled
+  revocation) starts nothing it cannot finish; held trials run in a later
+  invocation. It applies to one invocation and is never frozen in `run.json`;
+  like `--finish-by` it is checked again during the lease wait and after the
+  grant.
+  `--start-allowance-sec N` replaces the start budget and the fixed trial
+  overhead with N seconds before the agent starts (for example an observed
+  p95 of session start to agent start): the attempt must then fit N plus its
+  agent setup, agent, grace and verifier budgets.
+- `invalidate --work-dir W --arm A --task T --attempt N --rule R --evidence E
+  --decided-by D` records an operator's verdict that a finished, stopped
+  attempt measured an outage rather than the harness (the provider withdrew the
+  model mid-trial, or the relay was stopped for a production incident). The
+  attempt keeps every record (`invalidated.json` beside them); the runner
+  treats it as unmeasured, so the next attempt runs, and the FHE export scores
+  it `infra_invalid`.
 - The `fhe-v1` protocol is FrontierHarness Eval v1, documented in
   `evaluations/frontier_harness/README.md`:
   - `task.toml` agent and verifier budgets and container `cpus`/`memory_mb`;
@@ -267,6 +358,56 @@ Runtime artifacts (`artifacts.json`, served from `--files-dir`):
 - `kimi-k3` routes Tofu over FRIDAY's Anthropic face as `moonshot/kimi-k3`,
   provider `example-corp`. That is production's pin for the K3 line. The
   projection declares vision and video, as the production offering does.
+
+## Third-party arms (`third_party.py`)
+
+- `kimi-code` (`@moonshot-ai/kimi-code` 0.37.2), `hermes` (Hermes Agent
+  0.20.4, git `044acf2b`: 0.20.x is not on PyPI and its `setup.py` refuses
+  wheel builds, so its pinned source archive is a runtime artifact installed
+  as its own installer's hash-verified tier does, `uv sync --extra all
+  --locked` on Python 3.11) and `oh-my-pi` (17.4.0, its upstream release
+  binary `omp-linux-x64`, preinstalled; see Install)
+  at FrontierHarness Eval v1's published versions, plus `qwen-code`
+  (`@qwen-code/qwen-code` 0.27.2), `goose` (1.59.0 release binary) and
+  `mini-swe-agent` (2.4.6 on CPython 3.12). Each runs once as Harbor's
+  upstream adapter runs it (oh-my-pi as Harbor runs Pi), against the relay's
+  task-scoped chat route `/arm/<arm>-<label>/task/<task>/v1` with the
+  placeholder key `relay-held`, whatever face the run model uses for Tofu, so
+  every call is attributed to its trial (the harnesses use the base URL as a
+  path prefix; Goose composes it from host plus base path). Their exact
+  flags, environment and deviations are in `third_party.py`; each run's
+  adapter card records them with the results.
+- Install: the runtime (Node from the Pi pin, a static uv, or Goose's
+  release archive) is a sha256-pinned artifact like any other. The harness
+  package installs during the trial's `setup` phase into `/var/tmp/tofu-<arm>`:
+  before and outside the agent budget, as the image's user, through the trial
+  egress proxy, at its exact version, with transitive dependencies resolved
+  as of `DEPENDENCY_SNAPSHOT` (`npm --before`, `uv --exclude-newer`). The
+  resolved tree goes to `/logs/agent/setup` (`npm-ls.json`, `pip-freeze.txt`).
+  A failed setup is an install error, never a scored trial. Setup time counts
+  toward the trial's wall budget (`trial_budget_sec`).
+- oh-my-pi ships preinstalled instead: its single-file release executable
+  (the binary upstream's own installer installs), pinned by the release's
+  `SHA256SUMS.txt` digest and packed into a runtime archive (`bin/omp`,
+  root-owned 0755, zero timestamps), so its setup only writes its provider
+  file. Its per-trial `npm install` of the package and Bun (~412 MB) had hung
+  after its downloads until the setup budget expired, costing whole attempts.
+  The binary links glibc, as the npm Bun build it replaces did.
+- Nothing joins the task's `PATH`: each harness runs by absolute path, and
+  Python harnesses use uv's managed CPython, never the image's interpreter.
+- None of these arms has a source-guard projection, so a run that includes
+  them needs `--no-source-guard` and `--egress-allowlist`. Provider-hosted
+  web search does not exist for them on this relay: every fetch goes through
+  the trial proxy and its allowlist.
+- Runtimes: `python -m evaluations.terminal_bench.third_party fetch-runtimes
+  --files-dir <relay files dir> --manifest <artifacts.json> [--source <dir>]`
+  places the pinned archives (reusing a local copy with the pinned digest),
+  packs each single-file release (`RELEASE_FILES`) after checking it against
+  its pin (found in a `--source` directory under its asset name, e.g.
+  `omp-linux-x64` or `cacert-2026-11-05.pem`, otherwise downloaded), and adds
+  their manifest entries (`node`, `uv`, `goose`, `hermes-src`, `omp`,
+  `ca-bundle`). A packed archive's manifest digest is computed when it is
+  packed; packing is repeatable, so one file gives one digest.
 
 ## Claude Opus 5.5 at medium effort (`--protocol claude-6h-medium`)
 
@@ -333,6 +474,23 @@ sha256-pinned runtime trees copied in with `docker cp`; Tofu runs with
 `python3 -I` so a task's `lib/` package or `PYTHONPATH` cannot shadow it.
 **Alternative rejected:** per-trial `uv tool install` (network-dependent,
 version drift, Python 3.15 selection).
+
+**Problem:** the third-party arms (2026-11-12) arrived while the host was
+at its cgroup memory limit, with local installs and builds suspended, and
+each harness would otherwise need its own packaging contract like Pi's.
+**Decision:** keep the interpreter a pinned artifact (Node, a static uv,
+Goose's binary), so the earlier problems stay solved: no image interpreter
+is selected and no task mirror is used. Install only the harness package
+per trial, in a setup phase outside the agent budget, at an exact version
+with dependencies resolved as of one snapshot instant, and record the
+resolved tree. **Alternatives rejected:** Harbor's install scripts as they
+are (`curl | bash` from a moving branch, apt packages added to the task
+image, unpinned dependency trees); prebuilt trees per harness now (needs
+local builds; the recorded setup trees are what such a tree would freeze,
+once a matrix needs per-trial installs removed). Revisited the same day for
+oh-my-pi only: its per-trial npm install sometimes hung past the setup
+budget, and upstream publishes a pinned single-file binary that needs no
+build, so that binary is now the arm's runtime artifact.
 
 **Problem:** blocking answer sources at the tool level missed `curl`/`urllib`
 fetches. **Decision:** network-level proxy deny list plus an evidence audit
@@ -401,8 +559,56 @@ the host user, so a root-only mount would break a non-root Harbor host);
 leaving the mount 0777 because the guest is a VM (the uid boundary is inside
 the container, exactly where the agent's and the tests' code runs).
 
+**Problem:** the VM ingress serves `/native/exec|status|read|kill` as root,
+and the Harbor routes (`/run_sync|/run_async` run an uploaded task bundle,
+`/update_proxy` rewrites the environment later children inherit), to anything
+that reaches its port. A task container reached its own VM's ingress, and
+peer VMs' ingresses at `hostIp:mapped port` (EVAL-MATRIX-2 probes, 2026-11-13).
+`vm_trial.isolate_ingress` drops the own-VM and VM-subnet paths, but the
+mapped port is on the node network, which no in-VM rule can cover.
+**Status:** open on this branch. The decision below is implemented on
+`parked/native-exec-auth-20261116`, which stays parked until the owner settles
+his uncommitted `gateway.py` draft of the same change; until then
+`gateway.py` sends no token and `state.json` records no `ingress_auth`.
+**Decision (parked):** a per-VM-session token behind one default-deny boundary. The
+token is `gateway.native_session_token`: HMAC-SHA256 of the session id keyed
+by the sandbox secret. `SandboxSession.start` puts it only into the ingress's
+start environment; every native call sends it as `x-native-token`. The
+ingress (nlp/harbor `env_ingress.py`) refuses every route but `/health` and
+`/monitor/alive` without it, refuses the native channel outright when started
+without a token, and takes the token out of its own environment before
+anything it runs (the trial driver, docker) could inherit it; `vm_trial`
+passes only explicit `-e` values into containers. At start the session sends
+one tokenless call and every attempt's `state.json` records the answer as
+`ingress_auth`: `refused`, `served`, or `unknown: ...` when the ingress did
+not answer yet. On `INGRESS_BRANCH` a VM that served it (its boot-time branch
+sync failed, so the image's own ingress runs) gets no trial: `exec` raises
+`IngressUnprotectedError`, the attempt ends as `submit_error` and the VM is
+released. The start itself still succeeds, because the runner reports every
+start exception to the 857 ledger as a platform failure, which holds every
+Tofu lane. A burst seed's read-only token (`start_body(native_read_token=)`)
+opens `/native/read` only under `BURST_SEED_READ_ROOT`. Rollout covers new VM
+sessions only: a VM syncs its branch once at boot, so running VMs and runs
+frozen on the open branch are untouched. **Alternatives rejected:** iptables
+alone (cannot cover `hostIp:mapped port`); a random token per
+`SandboxSession` object (327ee106cd: a restarted runner, a start retry that
+reuses its body, and every separate `vmctl` command lost their VM); storing
+the token in `state.json` or a file (copied into evidence and reports); one
+static token for every VM (one leak opens every peer); keeping the channel
+open when no token is configured (old VMs never run new ingress code, so it
+only hides a misconfigured start); an unconfined read-only token (it reads
+`/proc/self/environ`, which holds the session token).
+
 ## Verification
 
+`pytest -q tests/evaluations/test_third_party_harnesses.py` (each third-party
+arm's launch program, setup and install check parse; flags and environment
+as Harbor's adapters; the setup phase runs before the install check and a
+failed setup is an install error; chat-face trial attribution; runtime pins
+refused on a digest mismatch),
+`pytest -q tests/evaluations/test_tb_system_ca_bundle.py` (the system CA
+store rule: spec contents, the manifest guard, installation as root before the
+arm's runtime only when the image has no store, the store probe's file test),
 `pytest -q tests/evaluations/test_terminal_bench_native.py` (offline: bundle
 excludes solutions, spec/protocol, launch contracts, proxy allow/deny/CONNECT,
 reward parsing, safe bundle extraction, summary, audit rules),

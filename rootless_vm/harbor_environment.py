@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from harbor.environments.base import EnvironmentPath
 
 from .host_paths import private_temporary_root, validate_host_path
-from .image_cache import PreparedImageCache, PreparedImageResult, PreparedImageSpec
+from .image_cache import GUEST_NIC_SETUP, PreparedImageCache, PreparedImageResult, PreparedImageSpec
 from .dockerfile import dockerfile_base_image as _dockerfile_base_image
 from .image_store import resolve_image_store_entry
 from .qemu import QemuRuntime
@@ -202,15 +202,7 @@ def _guest_network_setup_command(restricted_network: bool) -> str:
     loopback = "ip link set lo up"
     if not restricted_network:
         return loopback
-    return (
-        loopback
-        + " && iface=; for path in /sys/class/net/*; do "
-        "candidate=${path##*/}; [ \"$candidate\" = lo ] || "
-        "{ iface=$candidate; break; }; done; "
-        "test -n \"$iface\" && ip link set \"$iface\" up && "
-        "ip address replace 10.0.2.15/24 dev \"$iface\" && "
-        "ip route replace default via 10.0.2.2 dev \"$iface\""
-    )
+    return loopback + " && " + GUEST_NIC_SETUP
 
 
 def _oci_config(

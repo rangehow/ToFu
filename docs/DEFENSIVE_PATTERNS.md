@@ -1087,7 +1087,13 @@ two-process instance (`tests/chaos/instance.py`: resident storage host,
 resident execution host and a separate API host, each with its own data root,
 port, `TMPDIR` and environment allowlist) against a scripted Anthropic provider
 (`tests/chaos/fake_provider.py`). It injects one fault per test and asserts the
-contract below. Every instance process runs under the benchmark's medium
+contract below. Every role runs from a private export of the checkout's
+runtime source taken when the instance starts: run from the checkout itself,
+a recovered execution host refused the generation whenever a writer edited or
+landed during the run (`ExecutionSourceChanged`, after which every later test
+of the module met a dead host), and concurrent instances shared
+`<checkout>/data/mcp-bridge-relay.json`, so one instance's shards relayed MCP
+calls to another's servers. Every instance process runs under the benchmark's medium
 injector (`benchmarks/agent_storage/faultfs.c`) over the data root, with
 DolphinFS's ENOENT for I/O on open-but-unlinked files always on. `make
 test-chaos` is the bounded CI smoke: one instance per xdist worker, every wait
@@ -1133,12 +1139,8 @@ hides exactly the faults it exists to show). Findings and fixes:
 program, `python -m lib.desktop_agent`, on simulated host identities) against
 an isolated Home started in the production project topology
 (`ChaosInstance(shared_project=True)`: the manager, API host and execution
-host share one project, so the bridge relay records they publish under
-`<project>/data` are found by every role). Every `ChaosInstance` runs from a
-private export of the runtime source, never the checkout: an execution host
-run from the checkout published `<checkout>/data/mcp-bridge-relay.json`, and
-concurrent instances (xdist workers) relayed MCP calls to each other's
-servers.
+host share one project, the instance's export of the runtime source, so the bridge
+relay records they publish under `<project>/data` are found by every role).
 Nodes reach the Home only through a network edge (`tests/chaos/edge.py`): an
 HTTP proxy for an origin the node cannot resolve plus a CodeLab-style
 `/proxy/<port>` prefix, which can partition, heal and follow a moved Home.

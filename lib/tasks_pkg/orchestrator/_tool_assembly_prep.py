@@ -332,15 +332,15 @@ def _assemble_round_tools(cfg, task, mcfg):
         return [], False
 
     if is_dispatch_task(task):
-        from lib.project_dispatch.scope import granted_tools
+        from lib.project_dispatch.scope import WORKSPACE_SUBMIT_TOOL, granted_tools
         from lib.scheduler.tool_defs import ROLE_SCHEDULER_TOOL_NAMES
         # A continuation's grant admits its role's catalog, which the role surface above
         # already projected: it keeps its request Turn's tools and wire (docs/ROUTER.md R15).
         allowed = granted_tools(profile, assignment=assignment)
-        # A scheduler name a Worker's grant admits without listing it (derived for grants
-        # frozen before) is executable but not direct: search_tools/execute_tools
-        # reach it, and the frozen grant's wire, name budget and prompt prefix stay.
-        unlisted = (ROLE_SCHEDULER_TOOL_NAMES - set(profile['tools'])
+        # A scheduler name or the workspace submit a Worker's grant admits without listing
+        # it (derived for grants frozen before) is executable but not direct: search_tools/
+        # execute_tools reach it, and the frozen grant's wire, name budget and prompt prefix stay.
+        unlisted = ((ROLE_SCHEDULER_TOOL_NAMES | {WORKSPACE_SUBMIT_TOOL}) - set(profile['tools'])
                     if profile['mode'] == 'project' else frozenset())
         tool_list = [item for item in tool_list
                      if item['function']['name'] in allowed and item['function']['name'] not in unlisted]

@@ -251,6 +251,27 @@ def test_rows_memo_answers_exactly_the_same_settled_rows():
     assert calls == ['all', 'longer', 'shorter', 'twin', 0, 'live', 'live again', 'empty']
 
 
+def test_rows_memo_keeps_one_run_per_length_of_shared_leading_rows():
+    """A catalog and its projected subset share leading rows; alternating
+    between them each round must not evict the other's memo."""
+    rows = [settle({'tool': index}) for index in range(5)]
+    catalog, wire = rows, rows[:2] + rows[3:4]
+    calls = []
+
+    def compute(value):
+        return lambda: calls.append(value) or value
+
+    for _ in range(3):
+        assert rows_memo(catalog, 'k', compute('catalog')) == 'catalog'
+        assert rows_memo(wire, 'k', compute('wire')) == 'wire'
+    assert calls == ['catalog', 'wire']
+    # Same length, other rows: replaced, and answered from then on.
+    other = rows[:2] + rows[4:5]
+    assert rows_memo(other, 'k', compute('other')) == 'other'
+    assert rows_memo(other, 'k', compute('never')) == 'other'
+    assert rows_memo(catalog, 'k', compute('never')) == 'catalog'
+
+
 def test_run_memo_needs_a_settled_first_row_and_skips_one_row_runs():
     plain = [{'round': 0}, settle({'round': 1})]
     run_memo_put([settle({'round': 0})], 1, 'k', 'one')

@@ -21,6 +21,20 @@ from .session import NetworkMode, SandboxSession, SandboxSpec, qmp_start_timeout
 
 
 _SCHEMA = 4
+# Dockerfile (build-context) recipes. 6: GUEST_NIC_SETUP picks the device-backed NIC; schema-5 builds ran after
+# Docker created docker0, took it for the guest NIC, and their RUN steps lost the egress proxy (curl failed, the
+# build still succeeded), so those prepared images are rebuilt. Prebuilt-image recipes (_SCHEMA) build nothing.
+_BUILD_CONTEXT_SCHEMA = 6
+# The guest's QEMU NIC: the first interface backed by a device. Virtual ones (lo, docker0 and veth created once
+# Docker runs) have no /sys/class/net/<name>/device and sort before eth0.
+GUEST_NIC_SETUP = (
+    "iface=; for path in /sys/class/net/*; do "
+    "candidate=${path##*/}; [ -e \"$path/device\" ] && "
+    "{ iface=$candidate; break; }; done; test -n \"$iface\" && "
+    "ip link set \"$iface\" up && "
+    "ip address replace 10.0.2.15/24 dev \"$iface\" && "
+    "ip route replace default via 10.0.2.2 dev \"$iface\""
+)
 _MARKER = "prepared-image.json"
 _DISK = "prepared.qcow2"
 _MAX_BUILD_CONTEXT_BYTES = 1024**3
@@ -211,7 +225,7 @@ class PreparedImageCache:
         if self.build_context is not None:
             build_context_sha, _ = _build_context_digest(self.build_context)
         self.recipe = PreparedImageRecipe(
-            schema=5 if build_context_sha is not None else _SCHEMA,
+            schema=_BUILD_CONTEXT_SCHEMA if build_context_sha is not None else _SCHEMA,
             base_disk_sha256=base_sha,
             payload_iso_sha256=iso_sha,
             task_image=spec.task_image,
@@ -326,16 +340,7 @@ class PreparedImageCache:
         if self.build_context is not None:
             if session.egress_proxy is None or not session.egress_proxy.is_alive():
                 raise RuntimeError("Dockerfile preparation requires the restricted egress proxy")
-            self._checked_exec(
-                session,
-                "ip link set lo up && iface=; for path in /sys/class/net/*; do "
-                "candidate=${path##*/}; [ \"$candidate\" = lo ] || "
-                "{ iface=$candidate; break; }; done; test -n \"$iface\" && "
-                "ip link set \"$iface\" up && "
-                "ip address replace 10.0.2.15/24 dev \"$iface\" && "
-                "ip route replace default via 10.0.2.2 dev \"$iface\"",
-                30.0,
-            )
+            self._checked_exec(session, "ip link set lo up && " + GUEST_NIC_SETUP, 30.0)
             guest_context = f"/var/tmp/rootless-build-{uuid.uuid4().hex}"
             guest_tar = f"{guest_context}.tar"
             current_digest, _ = _build_context_digest(self.build_context)

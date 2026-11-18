@@ -201,6 +201,10 @@ test = [
     "pymupdf4llm==1.27.2.3",
     "zhconv>=1.4",
     "qrcode>=7.4",
+    # The evaluation runner's relay and task-pinning tests need the `eval` surface
+    # (duplicated — extras cannot compose); without it they skip.
+    "aiohttp>=3.9",
+    "dirhash>=0.5",
 ]
 dev = [
     # Collection imports browser fixtures even when visual tests are deselected.
@@ -240,6 +244,16 @@ dev = [
     "pymupdf4llm==1.27.2.3",
     "zhconv>=1.4",
     "qrcode>=7.4",
+    # Same `eval` duplication as `test`.
+    "aiohttp>=3.9",
+    "dirhash>=0.5",
+]
+# The native evaluation runner (evaluations/terminal_bench, evaluations/frontier_harness):
+# its model relay serves and calls HTTP with aiohttp, and FrontierHarness task
+# pinning hashes task trees with dirhash. The product never imports either.
+eval = [
+    "aiohttp>=3.9",
+    "dirhash>=0.5",
 ]
 # Browser automation is a worker capability. The API image intentionally
 # omits both this Python package and the Chromium payload; the personal image

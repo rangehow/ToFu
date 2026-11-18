@@ -9,7 +9,7 @@ from copy import deepcopy
 import hashlib
 
 from lib.conversation_sync.settled_rows import is_settled, memo_get, memo_put
-from lib.llm_sanitize.context_sections import context_sections
+from lib.llm_sanitize.context_sections import context_sections, memoized_text
 
 SPAN_FIELD = '_contextLineageSpans'
 BODY_FIELD = '_context_lineage'
@@ -185,7 +185,8 @@ class MessageLineage:
         _, ranges = self._hashes.setdefault(id(text), (text, {}))
         key = (start, end)
         if key not in ranges:
-            ranges[key] = span_hash(text[start:end])
+            ranges[key] = memoized_text(('span-sha256', text, start, end),
+                                        lambda: span_hash(text[start:end]))
         return ranges[key]
 
     def observe(self, stage, messages):

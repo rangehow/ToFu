@@ -19,7 +19,9 @@ from collections.abc import Mapping
 from functools import lru_cache
 from typing import Any, Callable
 
-from lib.conversation_sync.settled_rows import is_settled, memo_get, memo_put, rows_memo
+from lib.conversation_sync.settled_rows import (
+    is_settled, memo_get, memo_put, rows_memo, settle_or_none,
+)
 from lib.log import get_logger
 from lib.tools.background_guidance import (
     project_background_search_document,
@@ -1518,23 +1520,15 @@ def sanitize_wire_tools(
                 keep = {**keep, 'type': 'function'}
                 repaired_types.append(f'#{idx}:{name}')
             if not drop and 'decoded_result_schema' in keep:
-                # Private catalog metadata never becomes a provider extension.
-                # Invalid late metadata removes only the claim, not authority.
-                from lib.tools.contracts import serialize_decoded_result_schema
-                projected = dict(keep)
-                declared = projected.pop('decoded_result_schema')
-                if declared is not None and isinstance(keep.get('function'), dict):
-                    try:
-                        declared = serialize_decoded_result_schema(declared)
-                    except ValueError:
-                        declared = None
-                    if declared is not None:
-                        function = dict(keep['function'])
-                        function['description'] = (
-                            (function.get('description') or '') +
-                            '\nSuccessful decoded JSON value (producer declaration; '
-                            'coverage/freshness unknown): ' + declared)
-                        projected['function'] = function
+                # A clean settled row projects once: its settled projection
+                # keeps one identity across rounds for the per-row memos after.
+                projected = (memo_get(tool, _DECODED_RESULT_PROJECTION_KEY)
+                             if keep is tool and is_settled(tool) else None)
+                if projected is None:
+                    projected = _project_decoded_result_schema(keep)
+                    if keep is tool and is_settled(tool):
+                        projected = memo_put(tool, _DECODED_RESULT_PROJECTION_KEY,
+                                             settle_or_none(projected) or projected)
                 keep = projected
         if out is None and (drop or keep is not tool):
             out = list(tools[:idx])
@@ -1555,6 +1549,31 @@ def sanitize_wire_tools(
             '%s[ToolGateway] projected %d provider-compatible tool schemas: %s',
             log_prefix or '', len(repaired_schemas), repaired_schemas[:4])
     return out
+
+
+_DECODED_RESULT_PROJECTION_KEY = ('wire-preflight', 'decoded-result-projection')
+
+
+def _project_decoded_result_schema(keep):
+    """``keep`` without its private result declaration, described on the wire."""
+    # Private catalog metadata never becomes a provider extension.
+    # Invalid late metadata removes only the claim, not authority.
+    from lib.tools.contracts import serialize_decoded_result_schema
+    projected = dict(keep)
+    declared = projected.pop('decoded_result_schema')
+    if declared is not None and isinstance(keep.get('function'), dict):
+        try:
+            declared = serialize_decoded_result_schema(declared)
+        except ValueError:
+            declared = None
+        if declared is not None:
+            function = dict(keep['function'])
+            function['description'] = (
+                (function.get('description') or '') +
+                '\nSuccessful decoded JSON value (producer declaration; '
+                'coverage/freshness unknown): ' + declared)
+            projected['function'] = function
+    return projected
 
 
 def preflight_wire_tool_body(

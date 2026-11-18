@@ -5,11 +5,17 @@ amalgamated same-authority wrapper on-wire; only the body varies, so reuse
 and policy-migration digests both hash the canonical section form below.
 Single source of truth: ``_render`` (fresh renders + reuse scan) and
 ``_policy_prefix`` (migration digest evidence) must never drift apart.
+
+Section scans and span hashes are pure functions of immutable strings; inside
+a Turn invocation (``text_memo_scope``) they are memoized for the current and
+previous round (docs/HARNESS_PERFORMANCE.md, "Round floor II").
 """
 from __future__ import annotations
 
 import hashlib
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import NamedTuple
 
 
@@ -34,6 +40,82 @@ def block_content_hash(block_id: str, text: str) -> str:
         _canonical_section(block_id, text).encode('utf-8')).hexdigest()[:16]
 
 
+_MISSING = object()
+
+
+class TextMemo:
+    """Pure results of immutable texts, kept for the current and previous round.
+
+    A key holds the ``str`` it was computed from, and ``str`` is immutable, so
+    a hit is the exact result. ``next_round`` keeps only what the last round
+    used: the memo is bounded by two rounds' texts, and its owner (one Turn
+    invocation, ``text_memo_scope``) discards it at exit.
+    """
+
+    __slots__ = ('current', 'previous')
+
+    def __init__(self):
+        self.current: dict = {}
+        self.previous: dict = {}
+
+    def get(self, key, compute):
+        value = self.current.get(key, _MISSING)
+        if value is _MISSING:
+            value = self.previous.get(key, _MISSING)
+            if value is _MISSING:
+                value = compute()
+            self.current[key] = value
+        return value
+
+    def next_round(self) -> None:
+        self.previous, self.current = self.current, {}
+
+
+_TEXT_MEMO: ContextVar[TextMemo | None] = ContextVar('context_sections_text_memo', default=None)
+
+
+@contextmanager
+def text_memo_scope():
+    """Memoize text-pure section reads for the enclosed invocation."""
+    token = _TEXT_MEMO.set(TextMemo())
+    try:
+        yield
+    finally:
+        _TEXT_MEMO.reset(token)
+
+
+def next_text_memo_round() -> None:
+    """Round boundary of the active scope; texts unused for a round are dropped."""
+    memo = _TEXT_MEMO.get()
+    if memo is not None:
+        memo.next_round()
+
+
+def memoized_text(key: tuple, compute):
+    """``compute()``, a pure function of the ``str`` values in ``key``."""
+    memo = _TEXT_MEMO.get()
+    return compute() if memo is None else memo.get(key, compute)
+
+
+def _scan_sections(text: str) -> tuple:
+    rows = []
+    for match in _SECTION_PATTERN.finditer(text):
+        raw_id = match.group(1)
+        block_id = raw_id.strip()
+        rows.append((raw_id, block_id,
+                     block_content_hash(block_id, _strip_to_body(match.group(0))),
+                     match.start(), match.end()))
+    return tuple(rows)
+
+
+def text_sections(text: str) -> tuple:
+    """``(raw_id, id, content_hash, start, end)`` of every marker span in ``text``.
+
+    ``raw_id`` is the span's id exactly as written; ``id`` is it stripped.
+    """
+    return memoized_text(('sections', text), lambda: _scan_sections(text))
+
+
 def context_sections(content):
     """Read actual spans in text parts, never cached side metadata or tool results."""
     parts = content if isinstance(content, list) else [content]
@@ -41,11 +123,8 @@ def context_sections(content):
         text = part.get('text') if isinstance(part, dict) else part
         if not isinstance(text, str):
             continue
-        for match in _SECTION_PATTERN.finditer(text):
-            block_id = match.group(1).strip()
-            yield ContextSection(
-                block_id, block_content_hash(block_id, _strip_to_body(match.group(0))),
-                index, match.start(), match.end())
+        for _raw_id, block_id, digest, start, end in text_sections(text):
+            yield ContextSection(block_id, digest, index, start, end)
 
 
 def _canonical_section(block_id: str, body: str) -> str:

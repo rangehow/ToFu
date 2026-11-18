@@ -34,6 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 require_export_toolchain()
 
 pytestmark = pytest.mark.unit
+_AUDIT_SYNTHETIC_REPO_PATHS = {'tests/providers/test_x.py'}
 
 
 class SanitizeTriggerCompletenessTest(unittest.TestCase):

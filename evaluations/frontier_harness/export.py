@@ -26,6 +26,7 @@ import time
 from pathlib import Path
 
 from evaluations.frontier_harness.tasks import DEEPSWE_SUITE, FHE_COMMIT
+from evaluations.terminal_bench.runner import invalidation
 
 PRICING_VERSION = "kimi-k3-2026-08-20"
 MODEL_CALL_KINDS = ("messages", "responses", "chat")
@@ -102,11 +103,52 @@ def attempt_windows(states: list[dict]) -> list[tuple[float, float]]:
             for index, start in enumerate(starts)]
 
 
-def attempt_calls(records: list[dict], label: str, task: str, window: tuple[float, float]) -> list[dict]:
+def attempt_records(records: list[dict], label: str, task: str, window: tuple[float, float]) -> list[dict]:
+    """Every model-call record of one attempt, whatever its final status.
+
+    A record without a task (missing, or empty from a route that names none) is
+    attributed by its arm label and the attempt's time window alone.
+    """
     return [record for record in records
             if record.get("kind") in MODEL_CALL_KINDS and record.get("arm") == label
-            and record.get("task", task) == task and record.get("status") == 200
+            and (record.get("task") or task) == task
             and window[0] <= float(record.get("ts") or 0.0) <= window[1]]
+
+
+def attempt_calls(records: list[dict], label: str, task: str, window: tuple[float, float]) -> list[dict]:
+    return [record for record in attempt_records(records, label, task, window) if record.get("status") == 200]
+
+
+def throttle_facts(records: list[dict]) -> dict:
+    """Relay retries and upstream 429s of one attempt's model calls (PREREG: a 429 marks it throttled)."""
+    retries = [retry for record in records for retry in record.get("retries") or []]
+    upstream_429 = (sum(1 for retry in retries if retry.get("status") == 429)
+                    + sum(1 for record in records if record.get("status") == 429)
+                    # a rate limit FRIDAY sent inside an HTTP 200 stream (relay ``stream_429``)
+                    + sum(1 for record in records if record.get("stream_429")))
+    return {"relay_retries": len(retries), "upstream_429": upstream_429,
+            "failed_model_calls": sum(1 for record in records if record.get("status") != 200),
+            "rpm_wait_s": round(sum(float(record.get("rpm_wait_s") or 0.0) for record in records), 3),
+            "throttled": upstream_429 > 0}
+
+
+def rpm_summary(records: list[dict]) -> list[dict]:
+    """Upstream request starts per wall minute for each key and model, retries included."""
+    minutes: dict[tuple, dict[int, int]] = {}
+    for record in records:
+        if record.get("kind") not in MODEL_CALL_KINDS:
+            continue
+        start = float(record.get("ts") or 0.0) - float(record.get("latency_s") or 0.0)
+        key = (str(record.get("key")), str(record.get("sent_model") or (record.get("orig") or {}).get("model")))
+        bucket = minutes.setdefault(key, {})
+        bucket[int(start // 60)] = bucket.get(int(start // 60), 0) + int(record.get("attempts") or 1)
+    rows = []
+    for (key, model), counts in sorted(minutes.items()):
+        values = sorted(counts.values())
+        rows.append({"key": key, "model": model, "active_minutes": len(values), "requests": sum(values),
+                     "max_rpm": values[-1], "p95_rpm": values[min(len(values) - 1, int(0.95 * len(values)))],
+                     "mean_rpm_active": round(sum(values) / len(values), 2)})
+    return rows
 
 
 def task_ids(run: dict) -> dict[str, str]:
@@ -142,7 +184,8 @@ def fhe_status(arm: str, result: dict | None, calls_with_usage: int) -> tuple[st
 
 
 def export_arm(*, native_dir: Path, arm: str, records: list[dict], rates: dict, out_dir: Path, label: str,
-               run_id: str, provider: str, notes: list[str]) -> dict:
+               run_id: str, provider: str, notes: list[str], exclude_throttled: bool = False) -> dict:
+    """One FHE run directory for ``arm``; ``exclude_throttled`` omits trials with an upstream 429."""
     run = json.loads((native_dir / "run.json").read_text(encoding="utf-8"))
     ids = task_ids(run)
     relay_label = f"{arm}-{run['run_label']}"
@@ -166,7 +209,9 @@ def export_arm(*, native_dir: Path, arm: str, records: list[dict], rates: dict, 
             result_path = attempt_dir / "result.json"
             result = json.loads(result_path.read_text(encoding="utf-8")) if result_path.is_file() else None
             attempt = int(attempt_dir.name.split("-")[1])
-            calls = attempt_calls(records, relay_label, task, window)
+            every_call = attempt_records(records, relay_label, task, window)
+            calls = [record for record in every_call if record.get("status") == 200]
+            throttle = throttle_facts(every_call)
             usages = []
             for record in calls:
                 usage = call_usage(record)
@@ -179,6 +224,9 @@ def export_arm(*, native_dir: Path, arm: str, records: list[dict], rates: dict, 
                 if usage:
                     usages.append((usage, cost))
             status, reason = fhe_status(arm, result, len(usages))
+            verdict = invalidation(attempt_dir)
+            if verdict is not None:
+                status, reason = "infra_invalid", f"invalidated by the operator: {verdict.get('rule')}"
             phases = (result or {}).get("phases") or {}
             started_at = (phases.get("prepare") or {}).get("started")
             duration = (round(result["finished_at"] - started_at, 3)
@@ -206,8 +254,11 @@ def export_arm(*, native_dir: Path, arm: str, records: list[dict], rates: dict, 
                 "exit_code": ((phases.get("agent") or {}).get("exit_code")),
                 "agent_timed_out": bool((phases.get("agent") or {}).get("timed_out")),
                 "model_patch": ((phases.get("collect") or {}).get("artifacts") or {}).get(MODEL_PATCH),
+                **throttle,
                 "evidence": str(attempt_dir),
             }
+            if exclude_throttled and throttle["throttled"]:
+                continue
             directory = trials_root / f"{task}__a{attempt}"
             directory.mkdir(parents=True, exist_ok=True)
             (directory / "trial.json").write_text(json.dumps(trial, indent=2) + "\n", encoding="utf-8")
@@ -229,7 +280,8 @@ def normalize(fhe_repo: Path, out_dir: Path, label: str) -> str:
 
 
 def export(*, native_dir: Path, relay_log: Path, fhe_repo: Path, out_root: Path, label: str, run_id: str,
-           provider: str, run_normalizer: bool = True) -> dict:
+           provider: str, run_normalizer: bool = True, exclude_throttled: bool = False) -> dict:
+    """``exclude_throttled`` writes the PREREG sensitivity variant: trials with an upstream 429 omitted."""
     native_dir, out_root = Path(native_dir), Path(out_root)
     rates = load_rates(fhe_repo)
     records = [json.loads(line) for line in Path(relay_log).read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -247,17 +299,20 @@ def export(*, native_dir: Path, relay_log: Path, fhe_repo: Path, out_root: Path,
         notes.append("DeepSWE tasks are the deep-swe corpus at FHE's reproduction pin: the no-network agent "
                      "reaches only the relay; model.patch is collected from its container and graded in a "
                      "separate no-network container of the tests/Dockerfile image (Pier is not used).")
-    summary = {"run_id": run_id, "label": label, "arms": {}}
+    if exclude_throttled:
+        notes.append("Sensitivity variant: trials with any upstream 429 are omitted.")
+    summary = {"run_id": run_id, "label": label, "exclude_throttled": exclude_throttled,
+               "rpm": rpm_summary(records), "arms": {}}
     for arm in run["arms"]:
         out_dir = out_root / arm
         summary["arms"][arm] = export_arm(native_dir=native_dir, arm=arm, records=records, rates=rates,
                                           out_dir=out_dir, label=label, run_id=run_id, provider=provider,
-                                          notes=notes)
+                                          notes=notes, exclude_throttled=exclude_throttled)
         if run_normalizer:
             summary["arms"][arm]["normalizer"] = normalize(fhe_repo, out_dir, label)
     (out_root / "export-summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     return summary
 
 
-__all__ = ["attempt_calls", "attempt_windows", "call_cost", "call_usage", "export", "fhe_status",
-           "load_rates"]
+__all__ = ["attempt_calls", "attempt_records", "attempt_windows", "call_cost", "call_usage", "export",
+           "fhe_status", "load_rates", "rpm_summary", "throttle_facts"]

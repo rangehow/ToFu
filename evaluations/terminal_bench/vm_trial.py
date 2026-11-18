@@ -4,7 +4,9 @@
 Responsibility: from one JSON spec built by ``evaluations.terminal_bench.harness``,
 pull the task image, start a fresh container with the Harbor-compatible layout
 (``/logs/agent`` and ``/logs/verifier`` bind mounts, ``TEST_DIR=/tests``, tests
-uploaded only after the agent finished), install a prebuilt agent runtime, run
+uploaded only after the agent finished), install a prebuilt agent runtime (plus,
+for a third-party harness, its ``setup`` program: a per-trial install that runs
+before and outside the agent budget, where a failure is an install error), run
 the agent under a hard deadline, run ``tests/test.sh`` and write ``result.json``
 plus all evidence under the output directory, then pack it as ``<out>.tar.gz``.
 A schema 1.3 separate-verifier task (``spec["verifier"]``, DeepSWE) instead runs
@@ -22,15 +24,16 @@ Rewards are read only from regular files, never through a link.
 Every agent and verifier command runs as ``bash -lc`` (a login shell, like
 Harbor's ``setsid bash -lc``; ``setsid`` is omitted because without ``-w`` it
 forks and returns at once when the caller leads its process group, and the
-deadline kill below finds the tree by marker instead of by session). All container egress goes through ``EgressProxy``: it
-refuses benchmark-answer hosts and logs every request for the contamination
-audit.
+deadline kill below finds the tree by marker instead of by session). Container HTTP(S) egress is pointed at
+``EgressProxy`` (proxy variables): it refuses benchmark-answer hosts and logs every request for the contamination
+audit. The sandbox ingress (root on the VM) is unreachable from the container: ``isolate_ingress``.
 
 Entry point: ``python3 vm_trial.py SPEC_JSON``. Dependencies: Python >= 3.7
 standard library and the VM's docker CLI. The file is uploaded verbatim through
 the ingress native exec channel and must not import the repository.
 """
 import hashlib
+import ipaddress
 import json
 import os
 import select
@@ -61,6 +64,13 @@ KILL_GRACE_SEC = 30
 MARKED_SHELL = 'bash -lc "$1"\nexit $?'
 # Seconds between checks of an agent's completion marker while it runs.
 COMPLETION_POLL_SEC = 5
+# The relay's held-seconds total (PREREG-2 Amendment 7): seconds between re-reads while one of the trial's
+# requests is held at its deadline (the deadline cannot fall inside a hold; this bounds how late its end is
+# seen), and the liveness budget of one read.
+RELAY_HELD_POLL_SEC = 1
+RELAY_HELD_TRIES = 3
+RELAY_HELD_RETRY_SEC = 2
+RELAY_HELD_TIMEOUT_SEC = 10
 # A proxied connection without traffic in either direction for this long is dead.
 PROXY_IDLE_CLOSE_SEC = 900
 PROXY_HEAD_LIMIT = 65536
@@ -101,6 +111,46 @@ def run(argv, timeout=None, check=True, phase="docker"):
 
 def docker(*args, **kwargs):
     return run(["docker"] + list(args), **kwargs)
+
+
+# ---------------------------------------------------------------- VM ingress isolation
+
+# The sandbox VM's ingress (its /native/* channel runs commands as root on the VM) listens on every VM address at
+# INGRESS_PORT, and each peer VM's ingress on the same port of the VM subnet. A task container reached its own VM's
+# ingress (probe 2026-11-13 20:43), which defeats the root-only reward channel, so no task container may open a TCP
+# connection to INGRESS_PORT on the VM or its subnet (coordinator e3c81e2a). The relay, the egress proxy and servers
+# inside the container stay reachable.
+INGRESS_PORT = 8080
+
+
+def ingress_isolation_rules(container_subnet, vm_subnet, port=INGRESS_PORT):
+    """iptables arguments that drop task-container TCP to ``port`` on the VM itself (INPUT: the bridge gateway and the
+    VM's own addresses) and on the VM's subnet (DOCKER-USER: the FORWARD path to peer VMs)."""
+    return [["-I", "INPUT", "-s", container_subnet, "-p", "tcp", "--dport", str(port), "-j", "DROP"],
+            ["-I", "DOCKER-USER", "-s", container_subnet, "-d", vm_subnet, "-p", "tcp", "--dport", str(port),
+             "-j", "DROP"]]
+
+
+def vm_subnet():
+    """The subnet of the VM's default-route interface, where its peers' ingresses are."""
+    route = run(["ip", "-4", "-o", "route", "show", "default"], phase="network").stdout.decode().split()
+    device = route[route.index("dev") + 1]
+    address = run(["ip", "-4", "-o", "addr", "show", "dev", device], phase="network").stdout.decode().split()
+    return str(ipaddress.ip_interface(address[address.index("inet") + 1]).network)
+
+
+def isolate_ingress(network):
+    """Apply ingress_isolation_rules for the docker ``network`` the task container joins; returns what was applied.
+    Any failure raises: a trial never runs an agent that could reach the ingress."""
+    subnets = docker("network", "inspect", network, "--format", "{{range .IPAM.Config}}{{.Subnet}} {{end}}",
+                     phase="network").stdout.decode().split()
+    if not subnets:
+        raise InfraError("network", "docker network %s has no IPv4 subnet to isolate" % network)
+    record = {"port": INGRESS_PORT, "container_subnet": subnets[0], "vm_subnet": vm_subnet(), "rules": []}
+    for rule in ingress_isolation_rules(record["container_subnet"], record["vm_subnet"]):
+        run(["iptables", "-w"] + rule, phase="network")
+        record["rules"].append(" ".join(rule))
+    return record
 
 
 # ---------------------------------------------------------------- process trees
@@ -190,14 +240,64 @@ class CompletionMarker:
         return any(line.startswith(self.prefix) for line in lines)
 
 
+def relay_headers(spec, url):
+    """The run's relay key (the uploaded spec's ``relay_ingress``) for a URL on the relay; none elsewhere."""
+    ingress = spec.get("relay_ingress")
+    if ingress and url.startswith(ingress["origin"] + "/"):
+        return {"Authorization": "Bearer " + ingress["key"]}
+    return {}
+
+
+class RelayHold:
+    """Seconds the relay held this attempt's model requests in its gates (PREREG-2 Amendment 7).
+
+    The relay keeps one running total per arm and task, holds in progress included; the total read before the
+    agent starts belongs to earlier attempts and is subtracted. Calling returns ``(seconds, holding)``. The
+    extension never shrinks, and a read that still fails after ``RELAY_HELD_TRIES`` keeps the last value.
+    """
+
+    def __init__(self, url, headers=None):
+        self.url = url
+        self.headers = dict(headers or {})
+        self.reads = self.errors = 0
+        self.granted, self.holding = 0.0, False
+        self.base = self.read()[0]
+
+    def read(self):
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        for attempt in range(RELAY_HELD_TRIES):
+            self.reads += 1
+            try:
+                request = urllib.request.Request(self.url, headers=self.headers)
+                with opener.open(request, timeout=RELAY_HELD_TIMEOUT_SEC) as reply:
+                    body = json.loads(reply.read().decode("utf-8"))
+                return float(body["held_s"]), bool(body["holding"])
+            except (OSError, ValueError, KeyError) as error:
+                self.errors += 1
+                log("relay held seconds unreadable (%s: %s)" % (type(error).__name__, error))
+                if attempt + 1 == RELAY_HELD_TRIES:
+                    raise
+                time.sleep(RELAY_HELD_RETRY_SEC)
+
+    def __call__(self):
+        try:
+            held, self.holding = self.read()
+        except (OSError, ValueError, KeyError):
+            return self.granted, self.holding
+        self.granted = max(self.granted, round(held - self.base, 3))
+        return self.granted, self.holding
+
+
 def exec_with_deadline(container, program, env, marker, timeout_sec, stdout_path, stderr_path, workdir=None,
-                       completion=None, user=None):
+                       completion=None, user=None, extension=None):
     """Run ``bash -lc program`` under ``MARKED_SHELL`` in the container; stop the tree at the deadline.
 
     With ``completion`` (a ``CompletionMarker``) the run counts as finished once
     the agent has written its final record, even if its process lingers on
     children it started: nothing is killed, so daemons stay up for the verifier.
     ``user`` is passed to ``docker exec -u``; ``None`` runs as the image's user.
+    ``extension`` (a ``RelayHold``) moves the deadline to ``timeout_sec`` plus the seconds it reports, re-read
+    each time the deadline is reached; the tree is stopped once a read no longer moves it past now.
     """
     argv = ["docker", "exec"]
     if user is not None:
@@ -208,34 +308,43 @@ def exec_with_deadline(container, program, env, marker, timeout_sec, stdout_path
         argv += ["-e", "%s=%s" % (key, value)]
     argv += [container, "bash", "-c", MARKED_SHELL, marker, program]
     started = time.time()
+    granted, floor = 0.0, 0.0
+    extended = {} if extension is None else {"extension_s": 0.0}
     with open(stdout_path, "ab") as out, open(stderr_path, "ab") as err:
         proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=err)
         timed_out = False
         try:
-            if completion is None:
-                code = proc.wait(timeout=timeout_sec)
-            else:
-                while True:
-                    try:
-                        code = proc.wait(timeout=min(COMPLETION_POLL_SEC, max(timeout_sec - (time.time() - started), 0)))
-                        break
-                    except subprocess.TimeoutExpired:
-                        if completion.seen():
-                            return {"exit_code": None, "timed_out": False, "completed_by_marker": True,
-                                    "duration_s": round(time.time() - started, 1)}
-                        if time.time() - started >= timeout_sec:
-                            raise
+            while True:
+                left = max(timeout_sec + granted - (time.time() - started), floor, 0)
+                try:
+                    code = proc.wait(timeout=left if completion is None else min(COMPLETION_POLL_SEC, left))
+                    break
+                except subprocess.TimeoutExpired:
+                    if completion is not None and completion.seen():
+                        return dict({"exit_code": None, "timed_out": False, "completed_by_marker": True,
+                                     "duration_s": round(time.time() - started, 1)}, **extended)
+                    if time.time() - started < timeout_sec + granted:
+                        continue
+                    if extension is not None:
+                        granted, holding = extension()
+                        extended["extension_s"] = granted
+                        floor = RELAY_HELD_POLL_SEC if holding else 0.0
+                        if time.time() - started < timeout_sec + granted:
+                            continue
+                    raise
         except subprocess.TimeoutExpired:
             timed_out = True
+            extended["stopped_at_s"] = round(time.time() - started, 3)
             signalled, force_killed = kill_marked_tree(marker)
-            log("deadline %ss reached for %s; sent SIGTERM to %d processes, SIGKILL to %d"
-                % (timeout_sec, marker, signalled, force_killed))
+            log("deadline %ss (+%ss held) reached for %s; sent SIGTERM to %d processes, SIGKILL to %d"
+                % (timeout_sec, granted, marker, signalled, force_killed))
             try:
                 code = proc.wait(timeout=KILL_GRACE_SEC * 2)
             except subprocess.TimeoutExpired:
                 proc.kill()
                 code = proc.wait()
-    return {"exit_code": code, "timed_out": timed_out, "duration_s": round(time.time() - started, 1)}
+    return dict({"exit_code": code, "timed_out": timed_out, "duration_s": round(time.time() - started, 1)},
+                **extended)
 
 
 # ---------------------------------------------------------------- log directories
@@ -271,6 +380,19 @@ def read_regular_file(path):
             return handle.read().decode("utf-8")
         except OSError:
             return None
+
+
+def read_regular_bytes(path):
+    """Bytes of ``path`` when it is a regular file, else ``None``; never follows a link or blocks on a FIFO."""
+    try:
+        descriptor = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        os.close(descriptor)
+        return None
+    with os.fdopen(descriptor, "rb") as handle:
+        return handle.read()
 
 
 def collected_artifact(path, copied):
@@ -568,11 +690,14 @@ class Trial:
                 docker("network", "create", self.network)
                 gateway = docker("network", "inspect", self.network, "--format",
                                  "{{range .IPAM.Config}}{{.Gateway}} {{end}}").stdout.decode().split()
+            isolation = isolate_ingress(self.network or "bridge")
+            self.result["ingress_isolation"] = isolation
             proxy = self.spec["egress"]
             self.proxy = EgressProxy(gateway[0], proxy.get("upstream"), proxy.get("deny_hosts", []),
                                      proxy.get("deny_url_substrings", []), self.out / "egress.jsonl",
                                      allow_hosts=proxy.get("allow_hosts"))
-            entry.update(gateway=gateway[0], network=self.network or "bridge", proxy=self.proxy.address)
+            entry.update(gateway=gateway[0], network=self.network or "bridge", proxy=self.proxy.address,
+                         ingress_isolation=isolation)
 
     # -- container
     def start_container(self):
@@ -606,6 +731,29 @@ class Trial:
             agent_logs.chmod(0o755)
             entry.update(home=home or "/root", uid=uid, gid=gid, name=self.container)
             self.result["container_home"] = home or "/root"
+            self.place_agent_inputs(uid, gid)
+
+    def place_agent_inputs(self, uid, gid):
+        """Files the task definition promises the agent (``spec["agent_inputs"]``), checked and copied in.
+
+        Each source is a regular file of the unpacked task bundle whose sha256 must
+        match the pin; it lands at its target owned by the image user, before the
+        agent runtime is installed.
+        """
+        placed = []
+        for item in self.spec.get("agent_inputs") or []:
+            source = self.task_dir / item["source"]
+            data = read_regular_bytes(source)
+            if data is None or hashlib.sha256(data).hexdigest() != item["sha256"]:
+                raise InfraError("container", "agent input %s is missing or differs from its pin" % item["source"])
+            parent = str(Path(item["target"]).parent)
+            docker("exec", "-u", "0", self.container, "mkdir", "-p", parent, phase="container")
+            docker("cp", str(source), "%s:%s" % (self.container, item["target"]), phase="container")
+            docker("exec", "-u", "0", self.container, "chown", "%s:%s" % (uid, gid), item["target"],
+                   phase="container")
+            placed.append({"target": item["target"], "sha256": item["sha256"], "bytes": len(data)})
+        if placed:
+            self.result["agent_inputs"] = placed
 
     # -- agent runtime
     def fetch_artifact(self, artifact):
@@ -616,11 +764,13 @@ class Trial:
         cache.parent.mkdir(parents=True, exist_ok=True)
         archive = cache.parent / (artifact["sha256"] + ".tar.gz")
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        # The relay's files route needs the run's relay key, like its model routes.
+        request = urllib.request.Request(artifact["url"], headers=relay_headers(self.spec, artifact["url"]))
         last = None
         for attempt in range(DOWNLOAD_ATTEMPTS):
             try:
                 digest = hashlib.sha256()
-                with opener.open(artifact["url"], timeout=300) as response, open(archive, "wb") as handle:
+                with opener.open(request, timeout=300) as response, open(archive, "wb") as handle:
                     while True:
                         chunk = response.read(1 << 20)
                         if not chunk:
@@ -644,9 +794,35 @@ class Trial:
         archive.unlink()
         return root
 
+    def provide_system_ca_bundle(self, entry):
+        """Protocol amendment 2026-11-12: an image without a system CA store gets the pinned bundle as one.
+
+        Every arm gets this same step, as root before its runtime is installed, so
+        the agent and its tools see the store Harbor's installs would have brought.
+        ``state`` is ``present`` (the image's own bundle) or ``installed``.
+        """
+        bundle = self.spec.get("system_ca_bundle")
+        if not bundle:
+            return
+        found = docker("exec", "-u", "0", self.container, "sh", "-c",
+                       'for f in "$@"; do if [ -s "$f" ]; then echo "$f"; exit 0; fi; done; exit 1',
+                       "sh", *bundle["probe"], check=False, phase="install")
+        present = found.stdout.decode(errors="replace").strip() if found.returncode == 0 else ""
+        if not present:
+            source = self.fetch_artifact(bundle) / bundle["member"]
+            docker("exec", "-u", "0", self.container, "mkdir", "-p", os.path.dirname(bundle["target"]),
+                   phase="install")
+            docker("cp", str(source), "%s:%s" % (self.container, bundle["target"]), phase="install")
+            docker("exec", "-u", "0", self.container, "chmod", "0644", bundle["target"], phase="install")
+        record = {"state": "present" if present else "installed", "image_bundle": present or None,
+                  "sha256": None if present else bundle["sha256"]}
+        entry["system_ca_bundle"] = record
+        self.result["system_ca_bundle"] = record
+
     def install_agent(self):
         agent = self.spec["agent"]
         with self.phase("install") as entry:
+            self.provide_system_ca_bundle(entry)
             installed = []
             for artifact in agent.get("artifacts", []):
                 root = self.fetch_artifact(artifact)
@@ -658,6 +834,20 @@ class Trial:
                 path = self.out / "agent" / name
                 path.write_text(text, encoding="utf-8")
                 path.chmod(0o644)
+            setup = agent.get("setup")
+            if setup:
+                # A third-party harness installs into its per-trial home here: as the
+                # image's user, with the agent's environment, through the trial egress
+                # proxy (still in its "setup" phase), before and outside the agent budget.
+                outcome = exec_with_deadline(
+                    self.container, setup["program"], dict(agent.get("env") or {}),
+                    "tbn-setup-" + self.spec["trial_key"], setup["timeout_sec"],
+                    self.out / "setup-exec.stdout", self.out / "setup-exec.stderr")
+                entry["setup"] = outcome
+                if outcome["timed_out"] or outcome["exit_code"] != 0:
+                    raise InfraError("install", "setup failed (exit %s, timed out %s): %s" % (
+                        outcome["exit_code"], outcome["timed_out"],
+                        tail((self.out / "setup-exec.stderr").read_bytes(), 1500)))
             check = agent.get("install_check")
             if check:
                 probe = docker("exec", self.container, "bash", "-lc", check, check=False, timeout=300, phase="install")
@@ -689,12 +879,22 @@ class Trial:
             env["TB_WORKDIR"] = self.result["image"]["workdir"]
             done = agent.get("completion_marker")
             completion = CompletionMarker(self.out / "agent" / done["file"], done["line_prefix"]) if done else None
+            hold = None
+            if agent.get("relay_held_url"):
+                try:
+                    hold = RelayHold(agent["relay_held_url"], relay_headers(self.spec, agent["relay_held_url"]))
+                except (OSError, ValueError, KeyError) as error:
+                    raise InfraError("agent", "relay held seconds unreadable before the agent started: %s" % error)
             outcome = exec_with_deadline(
                 self.container, agent["program"], env, "tbn-agent-" + self.spec["trial_key"],
                 self.spec["agent_timeout_sec"] + agent.get("deadline_grace_sec", 0),
-                self.out / "agent-exec.stdout", self.out / "agent-exec.stderr", completion=completion)
+                self.out / "agent-exec.stdout", self.out / "agent-exec.stderr", completion=completion,
+                extension=hold)
             entry.update(outcome)
             entry["budget_sec"] = self.spec["agent_timeout_sec"]
+            if hold is not None:
+                entry.update(relay_held_base_s=hold.base, relay_held_reads=hold.reads,
+                             relay_held_errors=hold.errors)
             for item in agent.get("collect") or []:
                 source = item["container_path"].replace("$HOME", self.result["container_home"])
                 copied = docker("cp", "%s:%s" % (self.container, source), str(self.out / "agent" / item["name"]),

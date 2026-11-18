@@ -231,6 +231,9 @@ def test_a_router_continuation_sends_restarts_and_forwards_for_the_owner(
     # ── 2. The R4 release restart: refused without the owner's approval, run with it ───
     performed = []
     monkeypatch.setattr('lib.router.owner_delegation._start_detached', lambda work: work())
+    # The machine pre-checks read this host's engine and manager, which are production's.
+    monkeypatch.setattr('lib.router.owner_delegation._restart_readiness',
+                        lambda: {'engine': 'certified', 'supervisor': 'current'})
     monkeypatch.setattr('lib.server.server_reexec.prepare_server_reexec_frontend',
                         lambda: performed.append('prepare') or '')
     monkeypatch.setattr('lib.server.server_reexec.perform_server_reexec',

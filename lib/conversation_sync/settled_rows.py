@@ -374,9 +374,13 @@ def rows_memo(rows: Any, key: Any, compute: Any) -> Any:
         if held is None:
             held = memo_put(rows[0], (key, 'single'), (compute(),))
         return held[0]
-    length, held = run_memo_get(rows, key)
+    # One run per length: surfaces of different sizes that share their leading
+    # rows (a catalog and its projected wire subset) keep their own runs
+    # instead of replacing each other's every round.
+    run_key = (key, len(rows))
+    length, held = run_memo_get(rows, run_key)
     if length != len(rows):
-        held = run_memo_put(rows, len(rows), key, (compute(),))
+        held = run_memo_put(rows, len(rows), run_key, (compute(),))
     return held[0]
 
 

@@ -55,6 +55,37 @@ PENDING_REPAIRS = {
     "build-cython-ext": "instruction names /app/pyknotid.bundle (FHE offline repair); "
                         "no terminal-bench-2 revision or image creates it",
 }
+# build-cython-ext's "exact upstream 0.5.3 source ... offline as /app/pyknotid.bundle": the pins
+# FHE e837a70 skills/frontierharness-eval/isolated-evaluation-repairs.md records for that source.
+PYKNOTID_REPOSITORY = "https://github.com/SPOCKnots/pyknotid.git"
+PYKNOTID_TAG = "0.5.3"
+PYKNOTID_COMMIT = "441c807dbec2ee32e1da572e24e58d52a4eb7afa"
+PYKNOTID_TESTS_TREE = "25307f3fc7c3c1688e7ad36f8b435b41e20e610e"
+PYKNOTID_BUNDLE = "environment/agent-inputs/pyknotid.bundle"
+PYKNOTID_TARGET = "/app/pyknotid.bundle"
+
+
+def write_pyknotid_bundle(pyknotid_repo: Path, task_dir: Path) -> dict:
+    """Bundle tag 0.5.3 of a pyknotid clone into ``task_dir`` and declare it an agent input.
+
+    The clone must resolve the tag to the pinned commit and tests tree; the
+    bundle holds only ``refs/tags/0.5.3``, so ``git clone`` then ``git checkout
+    0.5.3`` (the instruction's steps) yields exactly that source.
+    """
+    commit = _git(pyknotid_repo, "rev-parse", f"refs/tags/{PYKNOTID_TAG}^{{commit}}")
+    tests = _git(pyknotid_repo, "rev-parse", f"{PYKNOTID_COMMIT}:tests") if commit == PYKNOTID_COMMIT else None
+    if commit != PYKNOTID_COMMIT or tests != PYKNOTID_TESTS_TREE:
+        raise ValueError(f"{pyknotid_repo}: tag {PYKNOTID_TAG} is {commit} with tests tree {tests}, expected "
+                         f"{PYKNOTID_COMMIT} / {PYKNOTID_TESTS_TREE}")
+    bundle = (task_dir / PYKNOTID_BUNDLE).resolve()  # git runs with -C <pyknotid_repo>
+    bundle.parent.mkdir(parents=True, exist_ok=True)
+    _git(pyknotid_repo, "bundle", "create", str(bundle), f"refs/tags/{PYKNOTID_TAG}")
+    digest = _sha256(bundle)
+    (task_dir / "agent-inputs.json").write_text(json.dumps(
+        [{"source": PYKNOTID_BUNDLE, "target": PYKNOTID_TARGET, "sha256": digest}], indent=2) + "\n",
+        encoding="utf-8")
+    return {"repair": "agent input /app/pyknotid.bundle", "source": PYKNOTID_REPOSITORY, "tag": PYKNOTID_TAG,
+            "commit": PYKNOTID_COMMIT, "tests_tree": PYKNOTID_TESTS_TREE, "bundle_sha256": digest}
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -93,11 +124,13 @@ def _same_definition(published: Path, source: Path) -> bool:
 
 
 def prepare_tasks(fhe_repo: Path, tb2_repo: Path, out_dir: Path, names: list[str] | None = None,
-                  deep_swe_repo: Path | None = None) -> dict:
+                  deep_swe_repo: Path | None = None, pyknotid_repo: Path | None = None) -> dict:
     """Write one runner task directory per selected v1 task (default: all), plus their pins.
 
     DeepSWE tasks need ``deep_swe_repo``, a checkout of the corpus at
-    ``DEEPSWE_COMMIT``. ``out_dir`` must be new or empty. Returns the manifest
+    ``DEEPSWE_COMMIT``; ``pyknotid_repo`` (a pyknotid clone with tag 0.5.3)
+    supplies build-cython-ext's offline bundle, otherwise that task stays a
+    pending repair. ``out_dir`` must be new or empty. Returns the manifest
     that is also written to ``out_dir/fhe-task-manifest.json``;
     ``out_dir/task_checksums.json`` is the ``--task-checksums`` file the native
     runner verifies before any trial.
@@ -143,6 +176,8 @@ def prepare_tasks(fhe_repo: Path, tb2_repo: Path, out_dir: Path, names: list[str
                 shutil.copyfile(published / filename, target / filename)
             row = {"source": f"fhe@{FHE_COMMIT[:12]}+tb2@{TB2_COMMIT[:12]}",
                    "tb2_tree": _git(tb2_repo, "rev-parse", f"HEAD:{name}")}
+            if name == "build-cython-ext" and pyknotid_repo is not None:
+                row["repair"] = write_pyknotid_bundle(Path(pyknotid_repo), target)
         tasks[name] = {
             "id": f"{suites[name]}/{name}", **row,
             "fhe_task_toml_sha256": _sha256(published / "task.toml"),
@@ -157,7 +192,8 @@ def prepare_tasks(fhe_repo: Path, tb2_repo: Path, out_dir: Path, names: list[str
         "tb2_repository": TB2_REPOSITORY, "tb2_commit": TB2_COMMIT,
         "deep_swe_repository": DEEPSWE_REPOSITORY, "deep_swe_commit": DEEPSWE_COMMIT if deep else None,
         "dataset_commit": identity, "allowed_hosts": sorted(FHE_V1_ALLOWED_HOSTS),
-        "pending_repairs": {name: note for name, note in PENDING_REPAIRS.items() if name in tasks},
+        "pending_repairs": {name: note for name, note in PENDING_REPAIRS.items()
+                            if name in tasks and "repair" not in tasks[name]},
         "tasks": tasks,
     }
     (out_dir / "fhe-task-manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n",

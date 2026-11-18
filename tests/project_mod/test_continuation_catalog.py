@@ -175,6 +175,9 @@ def lifecycle(tmp_path, monkeypatch):
                         lambda exclude_conv_id=None, *, user_id=None: [])
     detached = []
     monkeypatch.setattr('lib.router.owner_delegation._start_detached', detached.append)
+    # The machine pre-checks read this host's engine and manager, which are production's.
+    monkeypatch.setattr('lib.router.owner_delegation._restart_readiness',
+                        lambda: {'engine': 'certified', 'supervisor': 'current'})
     grantee = {'kind': 'global_router', 'conversationId': 'coordinator', 'bindingRevision': 1,
                'tenant': 'tenant-a'}
     return SimpleNamespace(gate=gate, detached=detached, grant=lambda: gate.set_delegation(

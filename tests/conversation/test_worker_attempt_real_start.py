@@ -95,6 +95,18 @@ def _run_controlled(task, plans):
         finalize_chat_task_aborted(task)
     elif outcome == 'provider_error':
         finalize_chat_task_error(task, {'kind': 'provider_error', 'message': 'HTTP 400 from the provider'})
+    elif outcome == 'revoked':
+        # Project-dispatch authority revoked the Worker's grant mid-run.
+        task['_abort_reason'] = 'dispatch_grant_revoked'
+        finalize_chat_task_aborted(task)
+    elif outcome == 'stop':
+        # A person's Stop of the running Worker.
+        task['_abort_reason'] = 'user_abort'
+        finalize_chat_task_aborted(task)
+    elif outcome == 'length':
+        stamp_chat_task_terminal(task, status='done', finish_reason='length')
+        append_event(task, {'type': 'done', 'finishReason': 'length'})
+        assert persist_task_result(task)
     else:
         task['content'] = 'Worker result for ' + task['_attemptId']
         append_event(task, {'type': 'delta', 'content': task['content']})
@@ -843,6 +855,142 @@ def test_a_follow_up_recovers_a_delivery_the_old_recovery_preserved_and_publishe
     assert (delivered['status'], delivered['checkpointSha']) == ('delivered', checkpoint), delivered
     assert _git(p.root, 'rev-parse', 'HEAD^') == head
     assert _git(p.root, 'show', 'HEAD:result.txt') == 'verified work'
+
+
+@pytest.mark.parametrize('window', ['before_its_task_result', 'before_its_delivery_intent'])
+def test_a_receiver_pass_after_a_completed_attempt_settles_its_turn_keeps_the_delivery_deliverable(
+        platform, monkeypatch, window):
+    """Regression for assignment 5be3b87c (attempt 081e9ce7, live on 6392798f36).
+
+    A completed attempt commits its Turn settlement first (06:22:12 ``checkpoint_settled``),
+    then its task result, then its delivery intent (06:22:12.3-13.4). The receiver runs in
+    the execution host, the attempt in a shard: a pass in that window saw no carrier and an
+    attempt no longer pending/running, read the task result that was not written (or not
+    yet terminal), settled the receipt 'failed' and preserved it ("Task did not complete").
+    The completion then found it preserved, and the review was refused at 06:22:26.
+    """
+    from lib import turn_lifecycle
+    from lib.integration_state_repository import find_workspace
+    from lib.tasks_pkg import workspace_delivery
+    from lib.tasks_pkg.manager import _persist
+    from lib.tasks_pkg.manager.runtime import chat_task_runtime
+    p = platform
+    assignment_id, _conversation = _delegate(p)
+    first = _execution(p, assignment_id)
+    seen = {}
+
+    def receiver_pass_in_the_execution_host():
+        with monkeypatch.context() as other_process:
+            other_process.setattr(chat_task_runtime, 'get', lambda task_id: None)
+            seen['attempt'] = turn_lifecycle.get_attempt(first['attemptId'], user_id=p.owner)['status']
+            _drain_receiver()
+        seen['receipt'] = _receipt(p, assignment_id)
+
+    module, name = ((_persist, '_upsert_task_row') if window == 'before_its_task_result'
+                    else (workspace_delivery, 'persist_terminal_workspace_intent'))
+    original = getattr(module, name)
+
+    def in_the_window(*args, **kwargs):
+        if not seen:
+            receiver_pass_in_the_execution_host()
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(module, name, in_the_window)
+    turn, _ = _run(p, first['attemptId'], tools=1, outcome='complete',
+                   write={'result.txt': 'verified work\n'})
+    assert _settlement(turn)[0] == 'completed', _settlement(turn)
+    assert seen['attempt'] == 'completed'
+    assert seen['receipt']['state'] != 'preserved', seen['receipt']
+    assert seen['receipt'].get('taskOutcome') in ('', 'completed'), seen['receipt']
+
+    settled = _receipt(p, assignment_id)
+    checkpoint = find_workspace(str(p.root), 'project-worker:' + assignment_id, user_id=p.owner)['checkpoint_sha']
+    assert (settled['state'], settled['taskOutcome'], settled['reason']) == (
+        'blocked', 'completed', 'project_publication_authority_missing'), settled
+    assert settled['executorTaskId'] == 'conversation-attempt:' + first['attemptId']
+    assert _git(p.root, 'show', checkpoint + ':result.txt') == 'verified work'
+    reviewed = _accept(p, assignment_id, turn, checkpoint)
+    assert 'error' not in reviewed, reviewed
+
+
+# What each terminal attempt's own settlement records, with no receiver pass in between.
+_OWN_SETTLEMENT = {
+    'restart': ('interrupted', 'working', 'interrupted'),
+    'stop': ('interrupted', 'preserved', 'cancelled'),
+    'revoked': ('failed', 'preserved', 'cancelled'),
+    'provider_error': ('failed', 'preserved', 'failed'),
+    'fence': ('failed', 'preserved', 'failed'),
+    'length': ('truncated', 'preserved', 'failed'),
+}
+
+
+@pytest.mark.parametrize('outcome', sorted(_OWN_SETTLEMENT))
+@pytest.mark.parametrize('window', ['none', 'before_its_task_result', 'before_its_delivery_intent'])
+def test_a_receiver_pass_after_any_terminal_attempt_settles_its_turn_records_what_its_turn_says(
+        platform, monkeypatch, outcome, window):
+    """The rest of the 5be3b87c window (assignment 8acdbd91 left it open).
+
+    Every terminal attempt commits its Turn settlement before its task result and its
+    delivery intent. A receiver pass in the execution host that cannot see the shard's
+    carrier read the absent task result as 'failed': a restart's pause became a
+    preserved denial that blocks the resumed Worker's delivery, and a person's Stop
+    was recorded 'failed'. The pass must record what the committed Turn says, exactly
+    as the attempt's own settlement does, and a restart-paused Worker still resumes
+    through boot recovery and delivers.
+    """
+    from lib import turn_lifecycle
+    from lib.integration_state_repository import find_workspace
+    from lib.project_dispatch.recovery import recover_project_dispatch
+    from lib.tasks_pkg import workspace_delivery
+    from lib.tasks_pkg.manager import _persist
+    from lib.tasks_pkg.manager.runtime import chat_task_runtime
+    p = platform
+    assignment_id, _conversation = _delegate(p)
+    first = _execution(p, assignment_id)
+    turn_status, state, task_outcome = _OWN_SETTLEMENT[outcome]
+    seen = {}
+
+    def receiver_pass_in_the_execution_host():
+        with monkeypatch.context() as other_process:
+            other_process.setattr(chat_task_runtime, 'get', lambda task_id: None)
+            seen['attempt'] = turn_lifecycle.get_attempt(first['attemptId'], user_id=p.owner)['status']
+            _drain_receiver()
+        seen['receipt'] = _receipt(p, assignment_id)
+
+    if window != 'none':
+        module, name = ((_persist, '_upsert_task_row') if window == 'before_its_task_result'
+                        else (workspace_delivery, 'persist_terminal_workspace_intent'))
+        original = getattr(module, name)
+
+        def in_the_window(*args, **kwargs):
+            if not seen:
+                receiver_pass_in_the_execution_host()
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(module, name, in_the_window)
+    turn, _ = _run(p, first['attemptId'], tools=1, outcome=outcome,
+                   write={'result.txt': 'first attempt\n'})
+    assert _settlement(turn)[0] == turn_status, _settlement(turn)
+    if window != 'none':
+        assert seen['attempt'] == turn_status
+        assert (seen['receipt']['state'], seen['receipt']['taskOutcome']) == (state, task_outcome), seen['receipt']
+    left = _receipt(p, assignment_id)
+    assert (left['state'], left['taskOutcome']) == (state, task_outcome), left
+    if outcome != 'restart':
+        return
+
+    if window != 'none':
+        monkeypatch.setattr(module, name, original)
+    assert recover_project_dispatch(p.owner, str(p.root))['accepted'] == 1
+    successor = _execution(p, assignment_id)['attemptId']
+    turn, _ = _run(p, successor, tools=1, outcome='complete', write={'result.txt': 'resumed attempt\n'})
+    assert _settlement(turn)[0] == 'completed', _settlement(turn)
+    settled = _receipt(p, assignment_id)
+    checkpoint = find_workspace(str(p.root), 'project-worker:' + assignment_id, user_id=p.owner)['checkpoint_sha']
+    assert (settled['state'], settled['taskOutcome'], settled['executorTaskId']) == (
+        'blocked', 'completed', 'conversation-attempt:' + successor), settled
+    assert _git(p.root, 'show', checkpoint + ':result.txt') == 'resumed attempt'
+    assert 'error' not in _accept(p, assignment_id, turn, checkpoint)
 
 
 def test_an_accept_its_delivery_cannot_publish_is_refused_and_never_recorded(platform, monkeypatch):

@@ -31,7 +31,8 @@ def _owned_turn(conversation_id, turn_id, principal):
 
 
 class TurnReview(ReviewRecords):
-    def __init__(self, conversation_id, turn_id, principal, *, turn=None, attempt=None):
+    def __init__(self, conversation_id, turn_id, principal, *, turn=None, attempt=None,
+                 client=None):
         self.conversation_id = conversation_id
         self.turn_id = turn_id
         from .continuity import review_source
@@ -43,7 +44,7 @@ class TurnReview(ReviewRecords):
         self.bound_attempt = turn.get('currentAttemptId')
         super().__init__(principal, 'turn_review_v1', {
             'requirements': [conversation_id, record_turn_id], 'decisions': [conversation_id, record_turn_id],
-        }, get_storage_client)
+        }, client or get_storage_client)
 
     def artifact(self, artifact_id):
         try:
@@ -120,33 +121,54 @@ def read_requirements(conversation_id: str, turn_id: str, *, principal: Principa
     return _requirements(conversation_id, turn_id, principal, turn=turn)
 
 
-def _requirements(conversation_id, turn_id, principal, *, turn=None, attempt=None):
-    review = TurnReview(conversation_id, turn_id, principal, turn=turn, attempt=attempt)
+def _requirements(conversation_id, turn_id, principal, *, turn=None, attempt=None, client=None):
+    review = TurnReview(conversation_id, turn_id, principal, turn=turn, attempt=attempt,
+                        client=client)
     requirements, revision = review.read('requirements')
     return {**project_criteria(requirements, revision),
             'outputs': [{key: slot[key] for key in ('id', 'label', 'artifactId')}
                         for slot in requirements.get('outputs', [])]}
 
 
+def execution_requirements_read_requests(conversation_id: str, turn_id: str, attempt_id: str, *,
+                                         principal: PrincipalContext) -> list:
+    """The reads ``read_execution_requirements`` sends, for a shared exchange.
+
+    The requirements record named is the Turn's own; a continued Turn whose
+    review source is another Turn reads that record by itself.
+    """
+    from lib.turn_lifecycle import attempt_read_request, turn_read_request
+    owner = principal.require_owner(context='Turn execution requirements')
+    record = ReviewRecords(principal, 'turn_review_v1', {'requirements': [conversation_id, turn_id]},
+                           get_storage_client)
+    return [attempt_read_request(attempt_id, user_id=owner, include_execution_config=True),
+            turn_read_request(conversation_id, turn_id, user_id=owner, include_projection=False),
+            ('record.get', record.payload('requirements'))]
+
+
 def read_execution_requirements(conversation_id: str, turn_id: str, attempt_id: str,
-                                task_id: str, *, principal: PrincipalContext) -> dict | None:
+                                task_id: str, *, principal: PrincipalContext,
+                                reads=None) -> dict | None:
     """Read one requirement snapshot for the currently bound ordinary execution.
 
     Task-supplied identifiers are correlations, never ownership evidence. The
     lifecycle facade checks owner, binding and current attempt before access.
     Other actors/lanes have their own policy and receive no ordinary review.
+    ``reads`` answers the ``execution_requirements_read_requests`` its caller
+    already issued in a shared exchange.
     """
     owner = principal.require_owner(context='Turn execution requirements')
-    attempt = get_attempt(attempt_id, user_id=owner, include_execution_config=True)
+    attempt = get_attempt(attempt_id, user_id=owner, include_execution_config=True, reads=reads)
     if (attempt['conversationId'], attempt['turnId'], attempt['taskId']) != (
             conversation_id, turn_id, task_id):
         raise LifecycleNotFound('Turn execution binding unavailable')
-    turn = get_turn(conversation_id, turn_id, user_id=owner, include_projection=False)
+    turn = get_turn(conversation_id, turn_id, user_id=owner, include_projection=False, reads=reads)
     if turn['currentAttemptId'] != attempt_id:
         raise LifecycleNotFound('Turn execution was superseded')
     if turn['actor'] != 'assistant' or turn['laneId'] != 'main':
         return None
-    return _requirements(conversation_id, turn_id, principal, turn=turn, attempt=attempt)
+    return _requirements(conversation_id, turn_id, principal, turn=turn, attempt=attempt,
+                         client=reads)
 
 
 def update_review(conversation_id: str, turn_id: str, command: dict, *, principal: PrincipalContext) -> dict:

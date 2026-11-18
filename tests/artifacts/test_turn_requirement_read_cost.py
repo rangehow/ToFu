@@ -91,3 +91,45 @@ def test_local_requirement_deadline_waits_as_storage_never_as_a_model_failure(su
     assert not worker.is_alive() and isinstance(outcome.get('error'), AbortedError)
     assert subject.task.get('error') is None
     assert pending.cancelled() and messages == before
+
+
+def test_round_reads_answer_steer_head_and_requirements_from_one_exchange(subject, storage, monkeypatch):
+    """The round's boundary reads share one pipelined exchange; each answer
+    serves the reads it was issued for, and any later read is live."""
+    from lib.storage.port import PrefetchedReads
+    from lib.turn_lifecycle import get_turn, turn_read_request
+    configure(subject)
+    attempt = subject.task['_attemptId']
+    live = turns.read_execution_requirements('turn-review', subject.turn_id, attempt,
+                                             subject.task['id'], principal=PRINCIPAL)
+    lone, exchanges = [], []
+    query, query_many = storage.client.query, storage.client.query_many
+
+    def counted_query(operation, payload=None, **kwargs):
+        lone.append(operation)
+        return query(operation, payload, **kwargs)
+
+    def counted_many(requests, **kwargs):
+        exchanges.append([operation for operation, _payload in requests])
+        return query_many(requests, **kwargs)
+
+    monkeypatch.setattr(storage.client, 'query', counted_query)
+    monkeypatch.setattr(storage.client, 'query_many', counted_many)
+
+    reads = PrefetchedReads(storage.client, [
+        turn_read_request('turn-review', subject.turn_id, user_id=1, include_projection=False),
+        *turns.execution_requirements_read_requests('turn-review', subject.turn_id, attempt,
+                                                    principal=PRINCIPAL)])
+    assert exchanges == []
+    head = get_turn('turn-review', subject.turn_id, user_id=1, include_projection=False, reads=reads)
+    # The first reader sent one exchange; the Turn head both owners read is fetched once.
+    assert exchanges == [['turn.get', 'turn.attempt.get', 'record.get']]
+    snapshot = turns.read_execution_requirements('turn-review', subject.turn_id, attempt,
+                                                 subject.task['id'], principal=PRINCIPAL, reads=reads)
+    assert head['currentAttemptId'] == attempt
+    assert snapshot == live
+    assert lone == []
+    again = turns.read_execution_requirements('turn-review', subject.turn_id, attempt,
+                                              subject.task['id'], principal=PRINCIPAL, reads=reads)
+    assert again == live
+    assert sorted(lone) == ['record.get', 'turn.attempt.get', 'turn.get']

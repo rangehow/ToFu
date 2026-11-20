@@ -19,11 +19,10 @@
 ### Changed
 - Native ABI CI routing: the oracle runs in the public workflow without the
   absent internal-only checker, so the kernel lane no longer depends on it.
-- Publication: 0.19.3 is published to both `rangehow/ToFu` and
-  `NiuTrans/ToFu`. The organization mirror keeps its existing `main`
-  (`9beb2923…`) as the merge's first parent; this is an owner-authorized
-  one-off admission of already-public foreign ancestry, with no force-push,
-  deletion or history rewrite.
+- Publication: 0.19.3 is published to `rangehow/ToFu` only. Owner decision
+  2026-11-20: the destination is the owner's personal repository, so
+  `NiuTrans/ToFu` was removed from the driver's Open publication targets and
+  is never pushed by this release.
 
 ### Fixed
 - The browser extension recovers startup-configuration serialization after a

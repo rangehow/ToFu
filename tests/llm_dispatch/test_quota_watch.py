@@ -74,7 +74,7 @@ def _slot(tail, model):
     from lib.llm_dispatch.slot import Slot
     credential = CREDENTIALS[tail]
     return Slot(key_name=f'{credential}:deployment-{model}', api_key=_api_key(tail), model=model,
-                capabilities={'text'}, provider_id='example-corp', route_credential_id=credential)
+                capabilities={'text'}, provider_id='default', route_credential_id=credential)
 
 
 def _error(kind, tail, model):
@@ -278,7 +278,7 @@ def test_route_groups_and_the_configured_pool_share_one_lane_per_appid_and_model
     def routed(group):
         # A conversation round's request-scoped candidate: the group pin is its provider_id.
         return Slot(key_name=f'ephemeral_{group}', api_key=_api_key('0733'), model='claude-opus-5.5',
-                    capabilities={'text'}, provider_id=f'route-group-{group}', routing_provider_id='example-corp',
+                    capabilities={'text'}, provider_id=f'route-group-{group}', routing_provider_id='default',
                     routing_owner_user_id=OWNER, request_scoped=True, route_credential_id=credential)
 
     error = _error('rpm', *CONTENDED)

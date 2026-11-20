@@ -39,7 +39,7 @@ def _slot(model, tail, *, base_url=_FRIDAY, latency=1000.0):
     return Slot(key_name=f'cred-{tail}:dep-{model}',
                 api_key=f'2000000000000000{tail}', model=model,
                 logical_model=model, capabilities={'text'},
-                provider_id='example-corp', base_url=base_url, latency_ema=latency)
+                provider_id='default', base_url=base_url, latency_ema=latency)
 
 
 def _dispatcher(*slots):

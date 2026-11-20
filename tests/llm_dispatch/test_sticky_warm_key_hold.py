@@ -106,9 +106,9 @@ def dispatcher_two_keys(monkeypatch, clock):
     conv_affinity._conv_keys.clear()
 
     slot0 = Slot(key_name='key_0', api_key='sk-0', model=_MODEL,
-                 capabilities={'text'}, provider_id='example-corp', latency_ema=10.0)
+                 capabilities={'text'}, provider_id='default', latency_ema=10.0)
     slot1 = Slot(key_name='key_1', api_key='sk-1', model=_MODEL,
-                 capabilities={'text'}, provider_id='example-corp', latency_ema=20.0)
+                 capabilities={'text'}, provider_id='default', latency_ema=20.0)
     d = LLMDispatcher()
     d.slots = [slot0, slot1]
     d._initialized = True

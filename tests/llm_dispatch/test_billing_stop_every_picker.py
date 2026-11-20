@@ -52,7 +52,7 @@ def _slot(credential, key_name=None, *, deployment='dep_195f'):
 
     return Slot(key_name=key_name or credential, api_key='synthetic-' + credential,
                 model=MODEL, capabilities={'text', 'vision'}, provider_id=PROV,
-                routing_owner_user_id=1, routing_provider_id='example-corp',
+                routing_owner_user_id=1, routing_provider_id='default',
                 route_credential_id=credential, route_deployment_id=deployment)
 
 

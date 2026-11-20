@@ -77,8 +77,8 @@ ANTHROPIC_URL = 'https://api.openai.com/v1/anthropic'
 
 # The merged provider card: ONE account, TWO faces.
 MERGED = {
-    'id': 'example-corp',
-    'name': 'YourProvider',
+    'id': 'default',
+    'name': 'Default',
     'base_url': OPENAI_URL,
     'extra_headers': {'X-Custom-Header': 'your-header-value'},
     'api_keys': ['k1', 'k2', 'k3'],

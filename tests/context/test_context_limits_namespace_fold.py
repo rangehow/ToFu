@@ -8,7 +8,7 @@ the account/face merge (charter #23) orphaned every entry learned under the
 duplicate anthropic CARD — measured on the fleet file:
 ``example_corp_anthropic::claude-opus-5 = 1110553`` (an EXPAND learned from a real
 accepted 1.1M prompt tonight) and ``example_corp_anthropic::aws.claude-opus-4.7``.
-Post-merge slots carry ``provider_id='example-corp'`` → both lookups miss → the
+Post-merge slots carry ``provider_id='default'`` → both lookups miss → the
 learned window is silently lost (over-compaction or fresh 400s until
 re-learned).
 

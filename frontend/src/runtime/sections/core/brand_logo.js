@@ -39,7 +39,7 @@
   /* Bump on every change to the mascot art (defeats the 24h icon cache).
    * index.html's two static tags carry this same token — keep them in sync;
    * tests/mcp_protocol/test_brand_mascot_single.py asserts they match. */
-  var LOGO_VER = '0.19.2';
+  var LOGO_VER = '20260729a';
 
   /* The one shipped mascot. */
   var LOGO_PATH = '/static/icons/tofu-welcome.svg';

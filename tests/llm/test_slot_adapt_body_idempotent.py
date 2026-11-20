@@ -43,7 +43,7 @@ _MODEL = 'aws.claude-opus-4.8'
 
 
 class _Slot:
-    def __init__(self, model, provider_id='example-corp', thinking_format='',
+    def __init__(self, model, provider_id='default', thinking_format='',
                  protocol='', responses_profile=''):
         self.model = model
         self.provider_id = provider_id
@@ -77,7 +77,7 @@ def _history():
 def _prebuilt_body():
     body = build_body(_MODEL, _history(), max_tokens=2048, thinking_enabled=True,
                       thinking_depth='medium', tools=_tools(), stream=True,
-                      provider_id='example-corp')
+                      provider_id='default')
     body['_task_id'] = 'taskX'
     return body
 

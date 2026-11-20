@@ -37,11 +37,11 @@ class ConvAffinityTest(unittest.TestCase):
         # is the second key.
         self._slot_a = Slot(
             key_name='key_A', api_key='sk-a', model='sticky-model',
-            capabilities={'text'}, provider_id='example-corp', latency_ema=10.0,
+            capabilities={'text'}, provider_id='default', latency_ema=10.0,
         )
         self._slot_b = Slot(
             key_name='key_B', api_key='sk-b', model='sticky-model',
-            capabilities={'text'}, provider_id='example-corp', latency_ema=20.0,
+            capabilities={'text'}, provider_id='default', latency_ema=20.0,
         )
         with self.d._lock:
             self.d.slots.extend([self._slot_a, self._slot_b])
@@ -109,7 +109,7 @@ class ConvAffinityTest(unittest.TestCase):
 
         auxiliary = Slot(
             key_name='aux_key', api_key='sk-aux', model='affinity-aux-model',
-            capabilities={'text'}, provider_id='example-corp', latency_ema=1.0,
+            capabilities={'text'}, provider_id='default', latency_ema=1.0,
         )
         with self.d._lock:
             self.d.slots.append(auxiliary)

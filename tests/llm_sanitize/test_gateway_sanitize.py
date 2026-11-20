@@ -123,7 +123,7 @@ class TestBuildBodyProviderGate:
         term, broken = self._term_and_broken()
         body = build_body('claude-opus-5',
                           [{'role': 'user', 'content': f'报道 {term} 的新闻'}],
-                          provider_id='example-corp')
+                          provider_id='default')
         text = body['messages'][0]['content']
         assert term not in text and broken in text
 

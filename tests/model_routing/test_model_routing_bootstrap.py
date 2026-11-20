@@ -225,7 +225,7 @@ def _seed_leaked_envelope_authority(repository, boundary) -> None:
     """
     plan = bootstrap_module.plan_legacy_migration({'providers': [{
         'id': 'yourprovider',
-        'name': 'YourProvider',
+        'name': 'Default',
         'brand': 'yourprovider',
         'base_url': 'https://api.openai.com/v1/anthropic',
         'protocol': 'anthropic',

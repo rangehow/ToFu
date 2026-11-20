@@ -119,16 +119,16 @@ class TestRouteMissingRuntimeSuppression:
 
         first = Slot(
             key_name='k0', api_key='fake-k0', model='moonshotai/kimi-k3',
-            provider_id='example-corp', capabilities={'text'})
+            provider_id='default', capabilities={'text'})
         second = Slot(
             key_name='k1', api_key='fake-k1', model='moonshotai/kimi-k3',
-            provider_id='example-corp', capabilities={'text'})
+            provider_id='default', capabilities={'text'})
         dispatcher = LLMDispatcher()
         dispatcher.slots = [first, second]
         dispatcher._initialized = True
 
         changed = dispatcher.mark_model_route_missing(
-            provider_id='example-corp', model='moonshotai/kimi-k3',
+            provider_id='default', model='moonshotai/kimi-k3',
             error='不支持的模型类型')
 
         assert changed == 2
@@ -319,10 +319,10 @@ def _cheap_pool(monkeypatch, *, healthy=True):
 
     monkeypatch.setattr('lib.key_stats.is_key_enabled', lambda *a, **k: True)
     dead = Slot(key_name='k0', api_key='sk-test-k0', model=_DEAD_WIRE,
-                provider_id='example-corp', protocol='anthropic',
+                provider_id='default', protocol='anthropic',
                 capabilities={'text', 'cheap'}, latency_ema=500)
     good = Slot(key_name='k1', api_key='sk-test-k1', model='good-cheap',
-                provider_id='example-corp', capabilities={'text', 'cheap'},
+                provider_id='default', capabilities={'text', 'cheap'},
                 latency_ema=5000)
     dispatcher = LLMDispatcher()
     dispatcher.slots = [dead, good] if healthy else [dead]

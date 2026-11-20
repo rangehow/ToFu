@@ -523,7 +523,7 @@ def _route_slot(pin, credential, key):
     return Slot(key_name=key, api_key='sk-test',
                 model='kunlunbedrock.claude-opus-5.5-m17',
                 capabilities={'text'}, provider_id=pin,
-                routing_provider_id='example-corp', route_credential_id=credential,
+                routing_provider_id='default', route_credential_id=credential,
                 route_deployment_id='dep-m17', request_scoped=True)
 
 
